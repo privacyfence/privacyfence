@@ -336,14 +336,14 @@ shipped, versus what was originally planned here:
    `> 90 days` refresh required) — done. `_fixture_freshness_lines()` in `scripts/
    qa_fixture_recorder.py` now tags each connector's freshness line with `[healthy]`/`[warning]`/
    `[refresh required]`; a connector with no recorded fixture at all reports `[refresh required]`.
-4. **Pytest markers on the TST-08–13 modules** — still folds into Phase 0 below once that phase's
-   marker list is registered; these five modules are the first backfill candidates. Not done here —
-   genuinely depends on Phase 0 landing first, not just deferred for scope reasons like the other
-   three items above were.
+4. **Pytest markers on the TST-08–13 modules** — done, as part of Phase 0 rather than as a Phase 1
+   follow-up, once that phase registered the marker list in `pyproject.toml`'s
+   `[tool.pytest.ini_options]`. These modules were the first backfill candidates and now carry
+   their marker. This item correctly read "not done here" when written — it depended on Phase 0
+   landing first — and simply outlived that being true.
 
-Of these four, only Apps Script fixture coverage and the Phase 0-dependent marker backfill remain
-open — treat what's left as a small, independent follow-up rather than reopening Phase 1 as a
-whole.
+Of these four, only Apps Script fixture coverage remains open — treat it as a small, independent
+follow-up rather than reopening Phase 1 as a whole.
 
 ### Exit criteria (met, except where noted)
 
@@ -1524,7 +1524,14 @@ established, rather than left as a link to a deleted file.
 
 ### Exit criteria (met)
 
-`docs/` contains exactly one `*plan*.md`: this document.
+No *platform-specific* plan document remains under `docs/` — the four this phase retired are gone,
+and their still-real open items live in `platform-support.md`'s "Known open items" instead.
+
+This phase's objective above says "return to one active plan doc," and that was true on the day it
+landed. It is not true now, and deliberately so: `release-publishing-kpi-plan.md` was added shortly
+afterwards and tracks genuinely unstarted work (its Phases 2–7). Two active plan documents is the
+correct current state, not drift this phase failed to clean up — so read this criterion as "no
+retired plan is still lying around," which is what it was actually testing.
 
 ---
 
@@ -1894,10 +1901,21 @@ combination.
   run actually blocks merge, confirmed rather than assumed (Phase 11, done — the target set is
   defined and scripted, applied to the live `main` ruleset, and proven to block a merge by a
   deliberately red scratch PR).
-- ✅ `docs/` contains exactly one `*plan*.md` — this document. `windows-support-plan.md`,
+- ✅ No retired plan document is still sitting in `docs/` — `windows-support-plan.md`,
   `windows-linux-support-plan.md`, `linux-local-deb-packaging-plan.md`, and
-  `manual-pre-release-test-plan.md` are retired (Phase 12); their still-real open items live in
-  `platform-support.md`'s "Known open items" instead.
+  `manual-pre-release-test-plan.md` are all gone (Phase 12); their still-real open items live in
+  `platform-support.md`'s "Known open items" instead. Two plan documents remain, both active and
+  both deliberate: this one, and `release-publishing-kpi-plan.md` (added after Phase 12 landed,
+  tracking its own unstarted Phases 2–7). An earlier wording of this bullet claimed `docs/` holds
+  "exactly one `*plan*.md`" and stayed ticked after that stopped being true.
+- **This document's own retirement** follows the convention Phase 1.10 set when it deleted the
+  completed remediation plan outright rather than marking it done in place: once Apps Script fixture
+  coverage closes — the one item still open anywhere in this plan — this file is retired the same
+  way Phase 12 retired the four above, with its durable content (the seven-layer taxonomy, "What
+  deliberately remains manual") folded into `testing-policy.md` first. Not yet, and not silently:
+  46 files across `src/`, `tests/`, `.github/workflows/`, `pyproject.toml` and `docs/` cite this
+  path today, and every one of them has to become a plain "(now-removed)" citation in the same
+  change. Budget for that sweep rather than discovering it halfway through.
 - The Windows autostart task actually survives a daemon crash, the same crash-restart parity Windows
   has had on every other platform's own autostart mechanism from the start. **Met** (Phase 13): a
   repeating `<TimeTrigger>` relaunches the daemon after a crash, not `<RestartOnFailure>` (measured not
