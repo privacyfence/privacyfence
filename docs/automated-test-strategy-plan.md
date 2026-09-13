@@ -1378,15 +1378,28 @@ job is the one a PR needs to pass to merge" — singular — and nothing landed 
 promotion of `platform-windows` (or by any later phase) had updated that setting or that sentence
 to match.
 
-### Status note (2026-09-12)
+### Status: done — including the live GitHub setting and a confirmed-by-experiment enforcement check
 
-The *policy* — the target required-check set, made explicit and reviewable — and the
-*documentation* consistency pass (remaining-work items 2 and 3 below) are done. Actually flipping
-the GitHub Settings → Branches toggle (item 1) and then confirming enforcement with a deliberately
-red scratch branch (item 4) are not: this plan's own automation has no GitHub credential scoped to
-branch-protection administration (that's a repo-admin action on GitHub itself, not something a
-commit or a PR merge can carry out), so those two steps are the explicit hand-off to a maintainer
-described below, not skipped work.
+**All four remaining-work items below are closed.** The policy (the target required-check set, made
+explicit and reviewable in `scripts/update_branch_protection.py`) and the documentation consistency
+pass landed as ordinary PRs; the two that could not — applying the set to the live repo, and then
+proving it actually blocks a merge — were completed by a maintainer on GitHub itself, since this
+plan's own automation has no credential scoped to branch-protection administration and a PR merge
+cannot carry out a repo-admin action.
+
+For anyone auditing this phase later: **do not re-open it off a stale reading of Settings →
+Branches**, which reports nothing on this repo because `main` is governed by a *ruleset*, not a
+classic branch-protection rule. That exact misreading has already produced one confident, wrong
+"branch protection is enforcing nothing" finding in review — see remaining-work item 1 below and
+`scripts/update_branch_protection.py`'s module docstring. The live state is at Settings → Rules →
+Rulesets → the `main` ruleset, and `python scripts/update_branch_protection.py show` prints it
+diffed against `REQUIRED_STATUS_CHECKS`.
+
+The one thing this phase still asks of a future PR is narrow and ongoing, not open work: any change
+to which jobs `tests.yml` runs on every PR — including renaming one, or changing
+`test-python-compat`'s Python-version matrix — updates `REQUIRED_STATUS_CHECKS` in that same PR, and
+a maintainer re-runs `apply` afterwards. A required context that no job reports under blocks every
+PR from merging, indefinitely.
 
 ### Already in this repo
 
@@ -1429,18 +1442,23 @@ described below, not skipped work.
    to `REQUIRED_STATUS_CHECKS`.
 2. ~~Confirm required-check granularity~~ — done above, by inspection.
 3. ~~Update `testing-policy.md`~~ — done above.
-4. After item 1 is applied, confirm enforcement rather than trusting the setting alone: push a
-   scratch branch with a deliberately failing test in one of the newly-required jobs and confirm
-   GitHub actually blocks that PR from merging.
+4. ~~After item 1 is applied, confirm enforcement rather than trusting the setting alone~~ —
+   **done**, by experiment rather than by reading the setting back a second time: a maintainer
+   pushed a scratch branch carrying a deliberate failure in one of the newly-required jobs, opened
+   a PR against `main`, and confirmed GitHub actually refused to merge it while that check was red.
+   The scratch branch and its PR were removed afterwards without merging, so nothing from this
+   check survives in the tree — which is why there is no commit or PR link to cite here, and why
+   this item reads as unverifiable from the repository alone. It isn't: it was verified on GitHub,
+   and this line is the record of it.
 
 ### Exit criteria
 
 Every job in `tests.yml` that runs on every PR and is meant to gate correctness (`test`,
 `platform-windows`, `platform-macos`, both `test-python-compat` matrix legs, `org-mode-smoke`,
 `static-analysis`'s blocking `ruff` step) is a required status check on `main`'s branch protection
-rule (pending remaining-work item 1); `testing-policy.md` names the real required set instead of
+rule (done — remaining-work item 1); `testing-policy.md` names the real required set instead of
 "the `test` job" (done); a deliberately red job on one of those checks has been confirmed, not
-assumed, to block merge (pending remaining-work item 4, which depends on item 1).
+assumed, to block merge (done — remaining-work item 4). **All exit criteria met.**
 
 ---
 
@@ -1723,10 +1741,11 @@ Phase 9  Retire obsolete manual QA                                (DONE — manu
 Phase 10 Observability and maintenance polish                    (DONE — tests/diagnostics.py's
    ↓                                                               generic per-tmp_path capture, wired
    ↓                                                               into every packaged/system CI job)
-Phase 11 Update branch-protection required checks                (policy/script/docs DONE — the
-   ↓                                                               live GitHub setting itself is a
-   ↓                                                               repo-admin hand-off, see Phase
-   ↓                                                               11's own status note)
+Phase 11 Update branch-protection required checks                (DONE — policy/script/docs, the
+   ↓                                                               live `main` ruleset, and a
+   ↓                                                               confirmed-by-experiment check
+   ↓                                                               that a red required job really
+   ↓                                                               does block a merge)
 Phase 12 Retire the platform-specific plan docs                  (DONE — all four docs deleted;
    ↓                                                                their two still-real open items
    ↓                                                                (Windows issue #121 gating +
@@ -1746,8 +1765,9 @@ Phase 13 Windows Task Scheduler real crash-restart-on-failure    (DONE -- new, f
 Phases 4 and 5 may proceed in parallel once Phase 3 is stable, as in the source strategy. Phase 7
 stays last for the same infrastructure-cost reason the source strategy gives. Phase 11 landed once
 Phases 2, 3, 6, 7, and 8 (the jobs its target required-check set names) were all done — its own
-status note explains why the GitHub-side toggle itself is a separate repo-admin hand-off rather
-than something this PR's own merge can complete. Phase 12 was meant to stay last, deleting docs only
+status note records why the GitHub-side ruleset change was a separate repo-admin step rather than
+something a PR merge could complete, and that it has since been made and verified. Phase 12 was
+meant to stay last, deleting docs only
 once every phase above it had actually shipped — and did, except that its own verification pass
 found a real, previously-unknown regression (Windows autostart registration silently broken) and
 fixed it, which is where Phase 13 came from: not a residual gap in the original plan, but new scope
@@ -1817,9 +1837,9 @@ plan's grounding pass found the work already done, and a note on which remain ge
     own explicit capture call for real installed/runtime state no `tmp_path` isolates
 26. ~~Update branch-protection required status checks~~ — **done** (Phase 11):
     `scripts/update_branch_protection.py` names and applies the target required-check set,
-    `testing-policy.md` names the real required set instead of "the `test` job." Actually running
-    `apply` against the live repo, and the enforcement check that follows it, are a repo-admin
-    hand-off outside of what a PR merge can do — see Phase 11's own status note.
+    `testing-policy.md` names the real required set instead of "the `test` job." Running `apply`
+    against the live repo, and the enforcement check that follows it, were a repo-admin hand-off
+    outside what a PR merge can do — both since completed on GitHub; see Phase 11's own status note.
 27. ~~Retire `windows-support-plan.md`, `windows-linux-support-plan.md`,
     `linux-local-deb-packaging-plan.md`, and `manual-pre-release-test-plan.md`~~ — **done** (Phase
     12) — last PR in the original 27-PR breakdown
@@ -1871,9 +1891,9 @@ combination.
   development machines.
 - GitHub's required-status-checks list on `main` names every blocking per-PR job, not just `test` —
   a red `platform-windows`/`platform-macos`/`test-python-compat`/`org-mode-smoke`/`static-analysis`
-  run actually blocks merge, confirmed rather than assumed (Phase 11's target set is defined and
-  scripted; applying it live and confirming enforcement is the repo-admin hand-off its status note
-  describes).
+  run actually blocks merge, confirmed rather than assumed (Phase 11, done — the target set is
+  defined and scripted, applied to the live `main` ruleset, and proven to block a merge by a
+  deliberately red scratch PR).
 - ✅ `docs/` contains exactly one `*plan*.md` — this document. `windows-support-plan.md`,
   `windows-linux-support-plan.md`, `linux-local-deb-packaging-plan.md`, and
   `manual-pre-release-test-plan.md` are retired (Phase 12); their still-real open items live in
