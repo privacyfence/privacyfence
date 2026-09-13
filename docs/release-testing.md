@@ -1,6 +1,6 @@
 # Release testing
 
-This document contains the release checks that still require human judgment. Automated correctness belongs in CI and is documented in [`testing-policy.md`](testing-policy.md). Remaining automation work belongs only in [`automated-test-strategy-plan.md`](automated-test-strategy-plan.md).
+This document contains the release checks that still require human judgment. Automated correctness belongs in CI and is documented in [`testing-policy.md`](testing-policy.md). Remaining automation work belongs only in the now-removed `automated-test-strategy-plan.md`.
 
 ## Before release
 

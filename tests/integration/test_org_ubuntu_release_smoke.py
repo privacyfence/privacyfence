@@ -1,5 +1,5 @@
 """Release-workflow smoke test for the Ubuntu org-mode service (TST-16;
-extended by docs/automated-test-strategy-plan.md Phase 8 -- see its
+extended by the now-removed automated-test-strategy-plan.md Phase 8 -- see its
 "Remaining work" for exactly what that phase added below and why).
 
 Every other org-mode test in this repo (tests/unit/web/test_server_org_
@@ -174,7 +174,7 @@ from tests.integration.mock_idp import MockIdp  # noqa: E402
 # --target install, not the .deb" docstring section), not a built artifact --
 # same taxonomy tier as tests/system/test_local_mode_system.py's own daemon/
 # MCP/approval/audit scenario, just against a real Ubuntu org-mode service
-# instead of local mode. Also what docs/automated-test-strategy-plan.md
+# instead of local mode. Also what the now-removed automated-test-strategy-plan.md
 # Phase 10's own CI-diagnostics capture (tests/diagnostics.py) keys off of.
 pytestmark = [pytest.mark.system, pytest.mark.timeout(300)]
 
@@ -663,7 +663,7 @@ class TestRunningOrgModeService:
         assert r.status_code == 401
 
     # -- An approval, exercised end to end, with audit-principal
-    # correctness (docs/automated-test-strategy-plan.md Phase 8) --------- #
+    # correctness (the now-removed automated-test-strategy-plan.md Phase 8) --------- #
 
     async def test_an_approval_is_exercised_by_the_correct_principal_and_audited_there(self):
         """``privacyfence_propose_auto_accept_rule_change`` (gate.py's

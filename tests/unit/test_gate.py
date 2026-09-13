@@ -10,7 +10,7 @@ The one invariant that matters more than
 any individual branch: gated_call must never return raw_data when
 filtered_data differs from it -- that's the actual privacy boundary.
 
-`automated-test-strategy-plan.md` Phase 5 cross-checked this module against the
+The now-removed `automated-test-strategy-plan.md` Phase 5 cross-checked this module against the
 full gate/policy matrix (auto->allowed, review->Allow/Deny, review+PII->Proceed/
 Cancel, popup/write->Allow/Deny, "Always allow"->proposed rule, matching/non-
 matching rule/grant, unattended allowed/forbidden) and found it already covered

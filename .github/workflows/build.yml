@@ -154,7 +154,7 @@ jobs:
       - name: Run packaged smoke test (TST-15)
         run: pytest tests/integration/test_macos_packaged_smoke.py -v
 
-      # docs/automated-test-strategy-plan.md Phase 10: tests/diagnostics.py's
+      # The now-removed automated-test-strategy-plan.md Phase 10: tests/diagnostics.py's
       # own capture (environment info, an installed-file manifest, and any
       # daemon.log/*.jsonl audit logs found under the failing test's own
       # tmp_path -- see test_macos_packaged_smoke.py's own `running_packaged_
@@ -229,7 +229,7 @@ jobs:
         with:
           prerelease: true
 
-  # the now-removed windows-support-plan.md Phase 6 (B5 in the now-removed windows-linux-support-
+  # The now-removed windows-support-plan.md Phase 6 (B5 in the now-removed windows-linux-support-
   # plan.md): the Windows analogue of the `build` job above. Runs in
   # parallel with it (and with `build-deb`/`sbom`) rather than depending on
   # it -- same "independent, tagged-source-tree-only" reasoning the `sbom`
@@ -306,7 +306,7 @@ jobs:
       #                              (base64 -w0 cert.pfx | Set-Clipboard, or
       #                              on Windows: certutil -encode)
       #   WINDOWS_CERTIFICATE_PWD  — the .pfx export password
-      # the now-removed windows-support-plan.md Phase 5.1's default decision: start with
+      # The now-removed windows-support-plan.md Phase 5.1's default decision: start with
       # an OV cert via a portable .pfx (this step), revisit an EV/HSM-backed
       # signing service later only if SmartScreen friction on first run
       # turns out to matter for real users.
@@ -333,7 +333,7 @@ jobs:
         shell: pwsh
         run: Remove-Item -Force -ErrorAction SilentlyContinue "$env:RUNNER_TEMP\certificate.pfx"
 
-      # docs/automated-test-strategy-plan.md Phase 6 item 6.2: the one place the actual packaged
+      # The now-removed automated-test-strategy-plan.md Phase 6 item 6.2: the one place the actual packaged
       # artifact -- not a source checkout, not a dev install -- gets exercised at all on Windows.
       # A real silent install (schtasks-registered autostart task included), the real installed
       # daemon started and driven through a daemon/MCP/approval/audit round trip, then a real
@@ -342,7 +342,7 @@ jobs:
       - name: Run packaged installer smoke test (Phase 6.2)
         run: pytest tests/integration/test_windows_packaged_smoke.py -v
 
-      # docs/automated-test-strategy-plan.md Phase 10: same tests/
+      # The now-removed automated-test-strategy-plan.md Phase 10: same tests/
       # diagnostics.py capture as the `build` job's identically-named step --
       # this module's own install_dir/home already live under each test's
       # own tmp_path, so the generic per-tmp_path manifest already covers
@@ -420,7 +420,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      # desktop-file-utils (desktop-file-validate): docs/automated-test-strategy-plan.md Phase 6
+      # desktop-file-utils (desktop-file-validate): the now-removed automated-test-strategy-plan.md Phase 6
       # item 6.3's own packaged-lifecycle test (below, after the build) validates the installed
       # /etc/xdg/autostart/privacyfence.desktop with it. patchelf: scripts/build_deb.sh strips the
       # build host's own RUNPATH out of the bundled CPython extension modules with it -- on this
@@ -483,7 +483,7 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: bash scripts/build_deb.sh
 
-      # docs/automated-test-strategy-plan.md Phase 6 item 6.3 (docs/linux-local-deb-packaging-
+      # The now-removed automated-test-strategy-plan.md Phase 6 item 6.3 (docs/linux-local-deb-packaging-
       # plan.md P7.1/P7.3): the one place the actual packaged artifact -- not a source checkout,
       # not the --target install the org-mode smoke test above uses -- gets exercised at all.
       # Real `dpkg -i`, `desktop-file-validate` on the installed autostart entry, the real
@@ -495,7 +495,7 @@ jobs:
       - name: Run packaged .deb lifecycle test (Phase 6.3)
         run: pytest tests/integration/test_deb_packaged_lifecycle.py -v
 
-      # docs/automated-test-strategy-plan.md Phase 10: same tests/
+      # The now-removed automated-test-strategy-plan.md Phase 10: same tests/
       # diagnostics.py capture as the `build`/`build-windows` jobs' own
       # steps -- placed after both pytest steps above (not just the .deb
       # lifecycle one) since `if: failure()` fires for either one; the

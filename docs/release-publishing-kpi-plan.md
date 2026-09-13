@@ -305,7 +305,7 @@ which shipped ahead of this note being updated: `deploy-download-worker.yml`'s `
 runs typecheck/`npm test`/dry-run bundle on `pull_request` too (same path filter as `push`), and
 `deploy` (`needs: verify`) still only runs on `main`/dispatch, so a PR that breaks the Worker fails
 its own checks instead of surfacing the break on `main` afterwards, and the Cloudflare credentials
-`deploy` needs never reach a fork PR's run. Same fix `docs/automated-test-strategy-plan.md`
+`deploy` needs never reach a fork PR's run. Same fix the now-removed `automated-test-strategy-plan.md`
 Phase 2.1 applied to `platform-windows` and Phase 8 to `org-mode-smoke`.
 
 One thing that fix deliberately does *not* do, and the reason this item is worth reading rather

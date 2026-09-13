@@ -481,7 +481,7 @@ class CheckResult:
         self.fixture_relpath = fixture_relpath
 
 
-# 1.9 (docs/automated-test-strategy-plan.md Phase 1 residual work): thresholds
+# 1.9 (the now-removed automated-test-strategy-plan.md Phase 1 residual work): thresholds
 # a maintainer glancing at the printed/pasted report can act on without doing
 # the day-count arithmetic themselves. Deliberately just these two cutoffs,
 # matching the plan's own wording -- a third "critically stale" tier would be
@@ -1542,7 +1542,7 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 
 
 # ---------------------------------------------------------------------------- #
-# Bounded lifecycle tests (1.8, docs/automated-test-strategy-plan.md Phase 1
+# Bounded lifecycle tests (1.8, the now-removed automated-test-strategy-plan.md Phase 1
 # residual work) -- create a fresh, uniquely-tagged QA object, read it back,
 # update it, read it back again, then (calendar/jira/tasks only -- see
 # lifecycle_confluence's own docstring for why Confluence is the exception)
@@ -1589,7 +1589,7 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 # tasks_client.py expose a delete_*() method at all, and no connectors/*.py
 # registers a delete tool for any provider -- a deliberate product-safety
 # choice that nothing MCP-reachable ever deletes a user's real data (see
-# docs/automated-test-strategy-plan.md's own note on this). Cleanup here
+# The now-removed automated-test-strategy-plan.md's own note on this). Cleanup here
 # reaches past that boundary on purpose for calendar/jira/tasks, the same
 # way RawCapture/RawCaptureExecute above reach into each client's internal
 # request/service choke point: this script already runs with real QA-account
