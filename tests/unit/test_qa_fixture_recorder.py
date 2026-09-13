@@ -49,6 +49,7 @@ from privacyfence.drive_client import DriveClient  # noqa: E402
 from privacyfence.calendar_client import CalendarClient  # noqa: E402
 from privacyfence.contacts_client import ContactsClient  # noqa: E402
 from privacyfence.tasks_client import TasksClient  # noqa: E402
+from privacyfence.apps_script_client import AppsScriptClient  # noqa: E402
 from privacyfence.slack_client import SlackClient  # noqa: E402
 from privacyfence.telegram_client import TelegramPrivacyFenceClient  # noqa: E402
 
@@ -461,6 +462,79 @@ class TestRedactTelegramMessages:
 
     def test_missing_peer_fields_do_not_raise(self):
         assert recorder.redact_telegram_messages([{"id": 1}]) == [{"id": 1}]
+
+
+class TestRedactAppsScriptContent:
+    """Apps Script hangs a lastModifyUser object off every file
+    getContent returns, carrying the account's display name under a *bare*
+    "name" key and its Workspace domain under "domain" -- neither reachable
+    by redact()'s key lists, and "name" deliberately so (it's also the
+    script file's own name one level up). Same gap shape as Slack's generic
+    "user" key, found the same way: building the real response shape and
+    checking the redacted output before recording anything.
+    """
+
+    def _raw(self):
+        return {
+            "scriptId": "1real_script_id",
+            "files": [{
+                "name": "Code",
+                "type": "SERVER_JS",
+                "source": "function qaSeed() { return 1; }",
+                "lastModifyUser": {
+                    "domain": "realcompany.example",
+                    "email": "qa.person@realcompany.example",
+                    "name": "QA Person",
+                    "photoUrl": "https://lh3.googleusercontent.com/a/real-photo",
+                },
+            }],
+        }
+
+    def test_identity_fields_on_each_file_redacted(self):
+        out = recorder.redact_apps_script_content(self._raw())
+
+        user = out["files"][0]["lastModifyUser"]
+        assert user["domain"] == recorder._REDACTED_APPS_SCRIPT_DOMAIN
+        assert user["email"] == recorder._REDACTED_EMAIL
+        assert user["name"] == recorder._REDACTED_NAME
+        assert user["photoUrl"] == recorder._REDACTED_STRUCTURAL_URL
+
+    def test_file_name_type_and_source_are_left_alone(self):
+        # The bare "name" this pass rewrites is the *user's*, one level
+        # deeper than the file's own "name" -- which is real content the
+        # fixture exists to cover, and must survive untouched.
+        out = recorder.redact_apps_script_content(self._raw())
+
+        assert out["files"][0]["name"] == "Code"
+        assert out["files"][0]["type"] == "SERVER_JS"
+        assert out["files"][0]["source"] == "function qaSeed() { return 1; }"
+
+    def test_top_level_last_modify_user_redacted(self):
+        raw = {"scriptId": "s1", "lastModifyUser": {"name": "QA Person"}, "files": []}
+        out = recorder.redact_apps_script_content(raw)
+        assert out["lastModifyUser"]["name"] == recorder._REDACTED_NAME
+
+    def test_missing_user_and_files_do_not_raise(self):
+        assert recorder.redact_apps_script_content({"scriptId": "s1"}) == {"scriptId": "s1"}
+        assert recorder.redact_apps_script_content({"files": [{"name": "Code"}]}) == {
+            "files": [{"name": "Code"}]
+        }
+
+    def test_does_not_mutate_input(self):
+        raw = self._raw()
+        recorder.redact_apps_script_content(raw)
+        assert raw["files"][0]["lastModifyUser"]["name"] == "QA Person"
+
+    def test_script_id_is_genericized_by_the_structural_pass(self):
+        # Not this pass's job -- "scriptId" is an opaque resource id, so it
+        # belongs to deidentify_structural_fields() like every other id --
+        # but it *is* a real, account-specific value, so assert the two
+        # passes together actually cover it rather than assuming.
+        out = recorder.deidentify_structural_fields(
+            recorder.redact(recorder.redact_apps_script_content(self._raw()))
+        )
+        assert out["scriptId"] != "1real_script_id"
+        assert out["scriptId"].startswith("qa-placeholder-id-")
 
 
 # ---------------------------------------------------------------------------- #
@@ -1060,6 +1134,129 @@ class TestCheckTasks:
         get_task = next(r for r in results if r.method == "get_task")
         assert not get_task.ok
         assert get_task.raw is None
+
+
+class TestCheckAppsScript:
+    SEED_TITLE = "PrivacyFence QA seed script [QATEST]"
+
+    def _content(self, script_id="1real_script_id"):
+        return {
+            "scriptId": script_id,
+            "files": [
+                {
+                    "name": "Code",
+                    "type": "SERVER_JS",
+                    "source": "function qaSeed() { return 1; }",
+                    "lastModifyUser": {
+                        "domain": "realcompany.example",
+                        "email": "qa.person@realcompany.example",
+                        "name": "QA Person",
+                        "photoUrl": "https://lh3.googleusercontent.com/a/real-photo",
+                    },
+                },
+                {"name": "appsscript", "type": "JSON", "source": "{}"},
+            ],
+        }
+
+    def _client(self, script_responses, drive_responses=None):
+        client = AppsScriptClient(client_config={}, token_file="/tmp/unused-token.json")
+        client._local.service = _offline_google_service("script", "v1", script_responses)
+        if drive_responses is not None:
+            client._local.drive_service = _offline_google_service("drive", "v3", drive_responses)
+        return client
+
+    def test_tagged_seed_project_records_successfully(self, monkeypatch):
+        client = self._client([{"scriptId": "1real_script_id", "title": self.SEED_TITLE}, self._content()])
+        monkeypatch.setattr(recorder, "_build_apps_script_client", lambda: client)
+
+        results = recorder.check_apps_script(
+            record=True,
+            manifest={"apps_script": {"seed_script_id": "1real_script_id", "seed_script_title": self.SEED_TITLE}},
+        )
+
+        get_content = next(r for r in results if r.method == "get_content")
+        assert get_content.ok
+        assert get_content.raw["files"][0]["source"] == "function qaSeed() { return 1; }"
+        assert get_content.raw["files"][0]["lastModifyUser"]["name"] == recorder._REDACTED_NAME
+        assert get_content.raw["files"][0]["lastModifyUser"]["domain"] == recorder._REDACTED_APPS_SCRIPT_DOMAIN
+        assert get_content.raw["scriptId"] != "1real_script_id"
+
+    def test_resolves_script_id_by_title_when_not_configured(self, monkeypatch):
+        # list_projects goes through Drive (mimeType filter), not the Apps
+        # Script API -- so the resolve step needs the *drive* service, and
+        # the two calls after it the script one.
+        client = self._client(
+            [{"scriptId": "1real_script_id", "title": self.SEED_TITLE}, self._content()],
+            drive_responses=[{"files": [
+                {"id": "1unrelated", "name": "Some real unrelated script"},
+                {"id": "1real_script_id", "name": "PrivacyFence QA seed script [QATEST]"},
+            ]}],
+        )
+        monkeypatch.setattr(recorder, "_build_apps_script_client", lambda: client)
+
+        results = recorder.check_apps_script(record=True, manifest={})
+
+        get_content = next(r for r in results if r.method == "get_content")
+        assert get_content.ok
+        assert get_content.raw is not None
+
+    def test_unresolvable_title_fails_without_recording(self, monkeypatch):
+        client = self._client([], drive_responses=[{"files": [{"id": "1x", "name": "Something else"}]}])
+        monkeypatch.setattr(recorder, "_build_apps_script_client", lambda: client)
+
+        results = recorder.check_apps_script(record=True, manifest={})
+
+        get_content = next(r for r in results if r.method == "get_content")
+        assert not get_content.ok
+        assert get_content.raw is None
+        assert "no standalone script project found" in get_content.note
+
+    def test_untagged_project_title_is_refused(self, monkeypatch):
+        # The tag lives on the project title, which getContent never
+        # returns -- so this is the case that proves the separate
+        # projects.get is what actually gates recording.
+        client = self._client([
+            {"scriptId": "1real_script_id", "title": "Some real unrelated script"},
+            self._content(),
+        ])
+        monkeypatch.setattr(recorder, "_build_apps_script_client", lambda: client)
+
+        results = recorder.check_apps_script(
+            record=True, manifest={"apps_script": {"seed_script_id": "1real_script_id"}},
+        )
+
+        get_content = next(r for r in results if r.method == "get_content")
+        assert not get_content.ok
+        assert get_content.raw is None
+        assert "does not carry [QATEST]" in get_content.note
+
+    def test_project_with_no_files_is_refused(self, monkeypatch):
+        client = self._client([
+            {"scriptId": "1real_script_id", "title": self.SEED_TITLE},
+            {"scriptId": "1real_script_id", "files": []},
+        ])
+        monkeypatch.setattr(recorder, "_build_apps_script_client", lambda: client)
+
+        results = recorder.check_apps_script(
+            record=True, manifest={"apps_script": {"seed_script_id": "1real_script_id"}},
+        )
+
+        get_content = next(r for r in results if r.method == "get_content")
+        assert not get_content.ok
+        assert get_content.raw is None
+        assert "missing popup field(s)" in get_content.note
+
+    def test_check_mode_never_produces_a_fixture(self, monkeypatch):
+        client = self._client([{"scriptId": "1real_script_id", "title": self.SEED_TITLE}, self._content()])
+        monkeypatch.setattr(recorder, "_build_apps_script_client", lambda: client)
+
+        results = recorder.check_apps_script(
+            record=False, manifest={"apps_script": {"seed_script_id": "1real_script_id"}},
+        )
+
+        get_content = next(r for r in results if r.method == "get_content")
+        assert get_content.ok
+        assert get_content.raw is None
 
 
 class TestCheckSlack:

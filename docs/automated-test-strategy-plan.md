@@ -2,8 +2,8 @@
 
 Phased plan to get PrivacyFence to a state where it can be released with confidence — across
 macOS/Windows/Linux local mode, Linux org mode, the browser-based approval UI, MCP clients, and
-ten live third-party connectors (eleven once Apps Script has a fixture — see Phase 1's residual
-gap) — without the maintainer manually reproducing that whole matrix by hand on every release.
+eleven live third-party connectors — without the maintainer manually reproducing that whole matrix
+by hand on every release.
 This document is deliberately an *implementation* plan, not a restatement of the strategy: every
 phase below is checked against what this repo already has today (a script, a test module, a CI
 job) before describing new work, so the plan says only what's actually left to build.
@@ -16,8 +16,9 @@ and this revision. Its residual work (1.8 bounded lifecycle tests, 1.9 fixture f
 has since landed too, in a follow-up PR — as has the pytest-marker backfill on the TST-08–13
 modules, which landed as part of Phase 0 rather than as a Phase 1 follow-up (see below). See
 [Phase 1](#phase-1--complete-live-connector-ci-—-done)
-below for what shipped, what deviated from the original design, and the one item still open (Apps
-Script fixture coverage, blocked on a live QA Apps Script project to record against).
+below for what shipped and what deviated from the original design. Its last open item — Apps Script
+fixture coverage — has since closed too, once a QA Apps Script project existed to record against;
+see that phase's residual work item 1.
 [Phase 0](#phase-0--establish-the-test-taxonomy) is also now done — see that section's own status
 note. [Phase 2](#phase-2--cross-platform-core-ci) (cross-platform core CI) has since landed too, in
 PR #293, and is now also fully done, including 2.4 — closed by an explicit decision (keep the full
@@ -246,11 +247,12 @@ shipped, versus what was originally planned here:
   `tests/unit/test_qa_fixture_recorder.py`, checked against a new `EXPECTED_FIXTURES` static
   manifest in `scripts/qa_fixture_recorder.py` itself (which also self-checks at import time that
   `EXPECTED_FIXTURES`'s keys equal `CONNECTOR_CHECKS`'s, so a connector added to one without the
-  other fails loudly). **Apps Script was not added** — `EXPECTED_FIXTURES`/`CONNECTOR_CHECKS` cover
-  exactly the same ten connectors as before (`confluence`, `jira`, `salesforce`, `gmail`, `drive`,
-  `calendar`, `contacts`, `tasks`, `slack`, `telegram`); `src/privacyfence/connectors/apps_script.py`
-  still ships with no `tests/fixtures/live/apps_script/` directory and no recorder entry. This is
-  the one residual gap from this phase's original scope — see below.
+  other fails loudly). **Apps Script was not added at the time** — `EXPECTED_FIXTURES`/
+  `CONNECTOR_CHECKS` covered exactly the same ten connectors as before (`confluence`, `jira`,
+  `salesforce`, `gmail`, `drive`, `calendar`, `contacts`, `tasks`, `slack`, `telegram`), since
+  `src/privacyfence/connectors/apps_script.py` had no QA script project to record against. That was
+  the one residual gap from this phase's original scope, and has since been closed — see residual
+  work item 1 below.
 - **1.3 (TST-09)** — `tests/integration/test_deferred_approval_round_trip.py` landed as planned,
   same posture as `test_mcp_daemon_contract.py`, covering both the accept and the deny outcome of
   the full deferred-approval protocol (hold-window timeout → `approval_pending` → HTTP decide → a
@@ -300,15 +302,25 @@ shipped, versus what was originally planned here:
 
 ### Residual work
 
-1. **Apps Script fixture coverage** — genuinely still open. Add `apps_script` to both
-   `CONNECTOR_CHECKS` and `EXPECTED_FIXTURES` in `scripts/qa_fixture_recorder.py` and record its
-   first fixture once a QA Apps Script project exists. Small, standalone follow-up — no dependency
-   on anything else in this plan. Blocked on a live QA Apps Script project existing to record
-   against (both edits have to land together — `EXPECTED_FIXTURES`/`CONNECTOR_CHECKS` self-check at
-   import time, so adding `apps_script` to one without a fixture already committed for the other
-   fails every PR, not just this connector's). Since Phase 9's rewrite of
-   the now-removed `manual-pre-release-test-plan.md` no longer enumerates connectors by name or count, this item no
-   longer needs a matching doc edit there.
+1. **Apps Script fixture coverage** — done. `scripts/qa_fixture_recorder.py` gained
+   `check_apps_script()` (plus `_build_apps_script_client()`), registered in both `CONNECTOR_CHECKS`
+   and `EXPECTED_FIXTURES`, with `tests/fixtures/live/apps_script/get_content.json` recorded from a
+   standalone `[QATEST]`-tagged QA script project — all in one commit, since those two dicts
+   self-check at import time and `TestFixturePresence` asserts the file exists, so `apps_script` in
+   one without a fixture for the other fails every PR in the repo, not just this connector's.
+   `get_content` is the recorded path because it is this connector's highest-risk read (a project's
+   entire source, `review`-gated for that reason), not the auto-approved `list_projects` or the
+   status-only `get_execution_log`. Two details this turned up that the original one-line plan item
+   didn't anticipate: `projects.getContent`'s response carries no project title at all, so the
+   `[QATEST]` gate takes a separate `projects.get` (the same call the approval popup's "Project" row
+   comes from, so the gate checks the preview's own source); and every file in that response carries
+   a `lastModifyUser` object whose *bare* `"name"` key is the real account's display name —
+   unreachable by `redact()`'s deliberately narrow name-key list, and deliberately so — which needed
+   a connector-specific `redact_apps_script_content()` pass, the same shape as the existing Gmail-
+   headers and Slack-`user` passes. The seed project must be **standalone**, not container-bound:
+   `list_projects` resolves through Drive's `mimeType` filter, which never returns bound scripts.
+   Since Phase 9's rewrite of the now-removed `manual-pre-release-test-plan.md` no longer enumerates
+   connectors by name or count, this item needed no matching doc edit there.
 2. **1.8 — bounded lifecycle tests for write-capable providers** (create/read/update/delete a
    uniquely-tagged QA object, verify cleanup) — done. `scripts/qa_fixture_recorder.py`'s
    `--lifecycle` mode (`LIFECYCLE_CHECKS`) covers `calendar`, `confluence`, `jira`, and `tasks` — the
@@ -341,17 +353,15 @@ shipped, versus what was originally planned here:
    genuinely depends on Phase 0 landing first, not just deferred for scope reasons like the other
    three items above were.
 
-Of these four, only Apps Script fixture coverage and the Phase 0-dependent marker backfill remain
-open — treat what's left as a small, independent follow-up rather than reopening Phase 1 as a
-whole.
+Of these four, only the Phase 0-dependent marker backfill remains open — treat what's left as a
+small, independent follow-up rather than reopening Phase 1 as a whole.
 
 ### Exit criteria (met, except where noted)
 
 - ✅ `connector-live-check.yml` runs successfully on the self-hosted runner; no connector credential
   is ever a GitHub Actions secret; it cannot execute from an untrusted PR.
-- ⚠️ Every connector *except Apps Script* has at least one recorded live fixture, and deleting a
-  connector's last fixture fails ordinary PR CI (`TestFixturePresence`). Apps Script itself is the
-  one residual gap above.
+- ✅ Every connector has at least one recorded live fixture, and deleting a connector's last fixture
+  fails ordinary PR CI (`TestFixturePresence`).
 - ✅ TST-09 through TST-13 pass.
 - ✅ `testing-policy.md` describes both CI trust tiers.
 - ✅ The remediation plan's Phase 3.12, and the whole plan, are complete — the document
@@ -1682,8 +1692,8 @@ Phase 0  Taxonomy / doc foundation                               (DONE — testi
    ↓                                                               seven-layer section + ownership
    ↓                                                               table, pyproject.toml markers)
 Phase 1  Live connector CI + Security Remediation 3.12 closure   (DONE — PR #283/#278/#284;
-   ↓                                                               1.8/1.9 also done as a follow-up;
-   ↓                                                               Apps Script fixture still open)
+   ↓                                                               1.8/1.9 and the Apps Script
+   ↓                                                               fixture also done as follow-ups)
 Phase 2  Cross-platform core CI                                  (DONE — Windows job promoted/
    ↓                                                               renamed, macOS job added,
    ↓                                                               tests/platform/ suite + marker;
@@ -1761,8 +1771,8 @@ plan's grounding pass found the work already done, and a note on which remain ge
 1. ~~Test taxonomy + policy foundation~~ — **done** (Phase 0)
 2. ~~Connector live workflow~~ — **done**, PR #283 (Phase 1.1)
 3. ~~TST-08 fixture completeness + coverage guard~~ — **done**, PR #278 (Phase 1.2); Apps Script
-   fixture coverage itself is not, and is small enough to fold into PR 3 below rather than stay its
-   own row
+   fixture coverage followed separately, once a QA script project existed to record against (Phase
+   1's residual work, item 1)
 4. ~~TST-09 deferred approval test~~ — **done**, PR #278 (Phase 1.3)
 5. ~~TST-10 cross-principal step-up tests~~ — **done**, PR #278 (Phase 1.4)
 6. ~~TST-11 deterministic synchronization~~ — **done** for the two files that turned out to need it,
@@ -1771,9 +1781,8 @@ plan's grounding pass found the work already done, and a note on which remain ge
 8. ~~TST-13 systemic invariant tests~~ — **done**, PR #278 (Phase 1.7)
 9. ~~Security remediation closure/documentation~~ — **done**, PR #284 (Phase 1.10–1.11)
 10. ~~Connector fixture freshness/reporting + bounded lifecycle tests~~ — **done** (Phase 1's
-    residual work, items 1.8/1.9). Apps Script fixture coverage itself is not — blocked on a live QA
-    Apps Script project to record against, and folded into whichever future PR sets that up rather
-    than staying its own tracked row.
+    residual work, items 1.8/1.9), as is Apps Script fixture coverage (item 1), which landed in the
+    same PR that provisioned the QA script project it records against.
 11. ~~Windows permanent portability CI~~ — **done** (Phase 2.1), rename/promote only
 12. ~~macOS portability CI + targeted platform suite~~ — **done** (Phase 2.2–2.3): new
     `platform-macos` job, `tests/platform/` directory, `platform` pytest marker. Narrowing
@@ -1848,8 +1857,8 @@ combination.
   done).
 - Browser behavior is tested automatically against real Chromium, covering PII, responsive, and
   light/dark surfaces, not just the approval round trip already covered (Phase 4, done).
-- Every connector is periodically exercised against dedicated QA accounts (Phase 1, done for ten of
-  eleven — Apps Script fixture coverage is the one open item).
+- Every connector is periodically exercised against dedicated QA accounts (Phase 1, done for all
+  eleven).
 - Provider API drift is detected automatically and produces a reviewable PR (Phase 1, done).
 - The Security & Quality Remediation Plan's Phase 3.12 is complete and the overall plan is closed
   (Phase 1, done — the plan document itself was removed from `docs/` rather than left
