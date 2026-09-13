@@ -14,6 +14,11 @@ from __future__ import annotations
 
 from urllib.parse import urlsplit
 
+# Deliberate ruff F401 violation (unused import) -- scratch branch proving that the
+# `static-analysis` required status check actually blocks a PR from merging.
+# docs/automated-test-strategy-plan.md Phase 11, remaining-work item 4. Never merged.
+import json
+
 # Schemes a mail client or browser will actually open as a link. Anything
 # else has its href dropped by the caller (the link text still renders,
 # just not as a clickable link) rather than emitting a link a recipient
