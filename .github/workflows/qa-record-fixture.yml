@@ -13,31 +13,22 @@ name: Record QA fixture
 # fixed drift branch, neither of which fits "record the one new connector
 # onto the branch that adds it".
 #
-# Never `pull_request` -- the rule connector-live-check.yml states, for the
-# reason it gives: this is the only runner where the QA connectors' live
-# OAuth credentials exist (see docs/connector-live-check-setup.md Phase B,
-# docs/testing-policy.md's "Runner-local live tier"), and a fork's PR ref is
-# exactly the kind of ref a non-maintainer controls. workflow_dispatch is
-# the intended trigger and requires write access by definition.
+# workflow_dispatch only. Never `pull_request`, never `push` -- the rule
+# connector-live-check.yml states, for the reason it gives: this is the
+# only runner where the QA connectors' live OAuth credentials exist (see
+# docs/connector-live-check-setup.md Phase B, docs/testing-policy.md's
+# "Runner-local live tier"), and a fork's PR ref is exactly the kind of ref
+# a non-maintainer controls. Dispatching requires write access by
+# definition.
 #
-# TEMPORARY -- remove the `push:` trigger below once
-# tests/fixtures/live/apps_script/get_content.json is committed.
-#
-# It exists because workflow_dispatch is only offered for workflows already
-# on the default branch, so this file cannot be dispatched while it lives
-# only on the branch that introduces it -- and that branch's CI is red
-# until this workflow records the very fixture it needs. `push` is the one
-# trigger that runs a workflow from the branch's own copy of the file.
-#
-# It is pinned to that single branch name rather than a glob: pushing any
-# branch to this repo already requires write access (a fork cannot), so the
-# trust boundary matches workflow_dispatch's, but an unpinned pattern would
-# also mean this job fires on pushes nobody asked it to run on. The bot's
-# own fixture push cannot re-trigger it -- GITHUB_TOKEN pushes never start
-# a workflow run -- so there is no loop here either.
+# Note that GitHub only offers workflow_dispatch for workflows already on
+# the default branch, so this is dispatchable once it has merged, not from
+# a feature branch that adds it. Bootstrapping it for apps_script needed a
+# single-branch `push:` trigger, added and removed again in this branch's
+# own history (see the "Trigger the QA fixture recorder from this branch's
+# own push" commit for the reasoning, if the same corner ever comes up for
+# a future connector).
 on:
-  push:
-    branches: ['claude/charming-newton-xxu3wd']
   workflow_dispatch:
     inputs:
       connector:
@@ -67,13 +58,16 @@ jobs:
     timeout-minutes: 20
 
     env:
-      # `inputs` is empty on a push event, so this needs its own default --
-      # without one the run below becomes `--record ""`, which the recorder
-      # reports as "has no recorder implementation yet" on stderr and then
-      # *exits 0* (it has no failed results to report), i.e. a green job
-      # that recorded nothing. Read through the shell's environment rather
-      # than interpolated into the script, so a dispatch input can't inject
-      # shell.
+      # Read through the shell's environment rather than interpolated into
+      # the script below, so a dispatch input can't inject shell.
+      #
+      # The `||` default is belt-and-braces rather than dead: workflow_
+      # dispatch does supply this input, but any path that leaves it empty
+      # turns the run below into `--record ""`, which the recorder reports
+      # as "has no recorder implementation yet" on stderr and then *exits
+      # 0* (it has no failed results to report) -- a green job that
+      # recorded nothing. Worth a default and the guard step below rather
+      # than trusting that no such path ever appears.
       CONNECTOR: ${{ inputs.connector || 'apps_script' }}
 
     steps:
