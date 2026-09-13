@@ -31,11 +31,18 @@ never through S3 credentials, so run 8 said nothing about them, and the alternat
 mid-release. Keep that in mind when either credential is next rotated: a green
 `deploy-download-worker.yml` is not evidence about the R2 pair, and vice versa.
 
-**Next: Phase 2**, which has not been started — `scripts/r2_release.py` still only has its original
-`channel` and `upload` subcommands, with no `finalize`/`verify`/`promote` and no manifest schema.
-Phase 3 depends on Phase 2 having published real manifests; Phase 4 is independent of both and can
-run in parallel. Use this doc to scope a single session/PR to one phase — e.g. "implement phase 2 of
-the release publishing plan" refers to a phase heading below.
+**Phase 2 is implemented, but its exit criteria are not met yet.** `scripts/r2_release.py` now has
+`finalize`/`verify`/`promote` alongside `channel`/`upload`, writes the schema-1 manifest, and
+`build.yml` has a `finalize-release` job; the unit tests covering all of it are green. What is
+still outstanding is the half only a release can prove: **no real tag has been pushed since**, so
+nothing has yet written a `manifest.json` or a `latest.json` into R2. Until that happens, Phase 2
+is code-complete and unproven, in the same way the R2 credentials were before they were checked by
+hand.
+
+Phase 3 depends on Phase 2 having published real manifests, so it is blocked on that tag; Phase 4
+is independent of both and can run in parallel now. Use this doc to scope a single session/PR to
+one phase — e.g. "implement phase 2 of the release publishing plan" refers to a phase heading
+below.
 
 ## Goal
 
@@ -383,10 +390,31 @@ Rollout doc's "Phase B".
   transactional from the user's perspective. This is additive — no existing `build.yml` job
   changes its own upload behavior.
 
-**Exit criteria:** unit tests green; a real tag push (or a manual `workflow_dispatch` rerun
-against an already-tagged commit) produces `releases/<channel>/<version>/manifest.json` and
-updates `<channel>/latest.json` in R2 — verified by hand once. A deliberately-broken run (one
-installer missing) leaves `latest.json` unchanged — verified by test, not just by hand.
+**Two decisions this phase settled**, both worth knowing before touching this code again:
+
+- **The manifest lists installers only.** SBOMs, the org-config scripts and the sdist/wheel are
+  uploaded to the same prefix but never enter `artifacts[]`. This is what keeps the KPI definition
+  above true: `cloudflare/downloads/src/index.ts` counts *every* artifact it serves and
+  `queryStats()` sums every row without filtering on `artifact_kind`, so anything listed in a
+  manifest is, by construction, countable. Leaving non-installers out is therefore a correctness
+  property, not a tidiness preference — the alternative was adding a kind filter to Phase 1's
+  already-deployed stats query. It also means `finalize-release` needs nothing from
+  `publish-pypi.yml`, whose sdist/wheel it could not have waited for anyway (`needs:` does not
+  reach across workflow files).
+- **SHA-256 is recorded as R2 object metadata at upload time, not computed at finalize time.**
+  `finalize` runs in its own job on a clean runner, where none of the installers built by the
+  other three jobs exist on disk; reading the digest back from `head_object()` is what makes both
+  the manifest and the immutability guard one metadata call per object instead of a re-download.
+  `sbom` is a hard dependency after all: SBOMs are not in the manifest, but a tag whose SBOM
+  generation failed has not fully shipped and should not become `latest` either.
+
+**Exit criteria:** unit tests green — **met** (`tests/unit/test_r2_release.py`, covering the
+manifest shape against the Worker's own fixtures, the ordering guarantee, the immutability guard,
+and every `verify` failure mode). A real tag push (or a manual `workflow_dispatch` rerun against
+an already-tagged commit) produces `releases/<channel>/<version>/manifest.json` and updates
+`<channel>/latest.json` in R2 — **not yet met, no tag has been pushed since this landed**. A
+deliberately-broken run (one installer missing) leaves `latest.json` unchanged — **met**, by test
+rather than by hand.
 
 ## Phase 3 — Wire the Worker to real release data
 
