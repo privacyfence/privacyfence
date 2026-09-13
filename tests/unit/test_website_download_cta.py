@@ -1,5 +1,5 @@
 """Guards the Phase 6 cutover: the homepage's primary CTAs point at the download page, and that
-page exists (docs/release-publishing-kpi-plan.md Phase 6).
+page exists (docs/downloads-and-release-kpi.md).
 
 Deliberately a static test rather than a browser one. tests/integration/test_download_page.py
 covers what the page *does*, but it needs Chromium and skips without it -- and the failure this

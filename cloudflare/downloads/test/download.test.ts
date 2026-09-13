@@ -1,7 +1,8 @@
 /**
  * Integration tests against the Worker's own `fetch()` handler, running inside the real Workers
- * runtime (workerd via Miniflare) with the R2/D1 fixtures test/setup.ts seeds. Covers every bullet
- * in docs/release-publishing-kpi-plan.md Phase 1's test list.
+ * runtime (workerd via Miniflare) with the R2/D1 fixtures test/setup.ts seeds. Covers channel
+ * resolution, artifact classification and every counting rule in
+ * docs/downloads-and-release-kpi.md "Counting semantics".
  */
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";

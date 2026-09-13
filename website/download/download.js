@@ -3,7 +3,7 @@
  *
  * Nothing about a release is hardcoded here -- filenames, sizes, checksums and which platforms
  * exist all come from `GET /api/releases/<channel>`, so shipping a new build (or adding a
- * platform) needs no website change. See docs/release-publishing-kpi-plan.md Phase 5.
+ * platform) needs no website change. See docs/downloads-and-release-kpi.md.
  *
  * Every download button points at downloads.privacyfence.eu, never at R2 or GitHub: the Worker is
  * the only public path to the artifacts, and it is what counts real installer downloads.

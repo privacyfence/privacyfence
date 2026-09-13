@@ -1,6 +1,6 @@
 name: Deploy download Worker
 
-# docs/release-publishing-kpi-plan.md Phase 1. Deploys cloudflare/downloads/ -- the Worker
+# docs/downloads-and-release-kpi.md. Deploys cloudflare/downloads/ -- the Worker
 # backing https://downloads.privacyfence.eu -- whenever it changes on `main`. Deliberately
 # separate from build.yml/publish-pypi.yml: this Worker ships on every merge to `main`, not on a
 # release tag, and has nothing to do with the daemon's own version/release mechanics.
@@ -89,8 +89,8 @@ jobs:
 
       # Idempotent: a rerun against migrations already applied is a no-op (see wrangler's own
       # d1 migrations apply docs). `--remote` targets the real, already-provisioned
-      # `privacyfence-downloads` D1 database (docs/release-publishing-kpi-plan.md's
-      # Prerequisites section) -- never `--local`, which would apply to an ephemeral runner-only
+      # `privacyfence-downloads` D1 database (docs/downloads-and-release-kpi.md's
+      # "Cloudflare resources" table) -- never `--local`, which would apply to an ephemeral runner-only
       # database instead. Non-interactive in CI, per wrangler's own CI/CD detection --
       # confirmation is skipped automatically, a backup is still captured.
       #
@@ -112,7 +112,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_DOWNLOADS_WORKER_ACCOUNT_ID }}
 
       # HEAD, never GET -- a release-CI smoke check must never itself inflate the download KPI
-      # (docs/release-publishing-kpi-plan.md's cross-cutting notes), though /health touches
+      # (docs/downloads-and-release-kpi.md's KPI section), though /health touches
       # neither R2 nor D1 either way.
       - name: Smoke-test /health
         run: |

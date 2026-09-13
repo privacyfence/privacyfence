@@ -140,7 +140,7 @@ h3 { font-size: 21px; line-height: 1.25; letter-spacing: -.02em; margin: 17px 0 
   *, *::before, *::after { transition: none !important; }
 }
 
-/* ---- Download page (docs/release-publishing-kpi-plan.md Phase 5) ---------------------------
+/* ---- Download page (docs/downloads-and-release-kpi.md) -------------------------------------
    Cards are built at runtime from the release manifest, so these styles key off structure
    rather than any particular platform or filename. */
 

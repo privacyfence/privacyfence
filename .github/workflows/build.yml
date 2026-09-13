@@ -652,7 +652,7 @@ jobs:
             sbom-shim-npm.cdx.json
           prerelease: false
 
-  # docs/release-publishing-kpi-plan.md Phase 2. Every job above uploads its own artifacts to
+  # docs/downloads-and-release-kpi.md. Every job above uploads its own artifacts to
   # releases/<channel>/<version>/ independently; this job is what turns that pile of objects into
   # a *published* release, by writing the manifest and then moving the channel's latest.json onto
   # it.
@@ -712,7 +712,7 @@ jobs:
           python3 scripts/r2_release.py finalize --version "${{ steps.release.outputs.version }}"
 
       # HEAD, never GET: a release-CI check must never inflate the download KPI it is verifying
-      # (docs/release-publishing-kpi-plan.md's cross-cutting notes). This confirms the Worker can
+      # (docs/downloads-and-release-kpi.md's KPI section). This confirms the Worker can
       # actually resolve what finalize just published, which is the end-to-end assertion neither
       # the unit tests nor the R2 upload can make on their own.
       - name: Smoke-test the published download routes (HEAD only)

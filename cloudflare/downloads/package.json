@@ -1,7 +1,7 @@
 {
   "name": "privacyfence-downloads-worker",
   "version": "0.0.0-dev",
-  "description": "Cloudflare Worker backing downloads.privacyfence.eu -- streams release installers from the private R2 archive and counts real downloads in D1, without ever exposing R2 credentials or a direct bucket URL to the browser. See docs/release-publishing-kpi-plan.md Phase 1.",
+  "description": "Cloudflare Worker backing downloads.privacyfence.eu -- streams release installers from the private R2 archive and counts real downloads in D1, without ever exposing R2 credentials or a direct bucket URL to the browser. See docs/downloads-and-release-kpi.md.",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",

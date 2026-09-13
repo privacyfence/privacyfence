@@ -1,26 +1,25 @@
 #:schema node_modules/wrangler/config-schema.json
 # Cloudflare Worker backing https://downloads.privacyfence.eu -- see
-# docs/release-publishing-kpi-plan.md Phase 1 ("Worker infrastructure") and its
-# Prerequisites section for the provisioned account/zone/bucket/database identifiers this
-# file references.
+# docs/downloads-and-release-kpi.md and its "Cloudflare resources" table for the
+# provisioned account/zone/bucket/database identifiers this file references.
 name = "privacyfence-downloads"
 main = "src/index.ts"
 compatibility_date = "2026-08-22"
 
-# `*.workers.dev` is left enabled in the dashboard during Phase 1/2 rollout (see the plan's
-# Prerequisites section) so the Worker is reachable for testing before the custom domain is
-# fully validated end-to-end. This file nonetheless commits the production-final routing from
-# day one -- `workers_dev = false` plus the custom domain below -- so a later `wrangler deploy`
-# from CI can never silently re-enable the workers.dev URL once the dashboard toggle is flipped
-# off after Phase 3 validation; there is deliberately no path in this repo that turns it back on.
+# `workers_dev = false` plus the custom domain below is the production-final routing, and it was
+# committed from day one -- before the dashboard toggle was flipped off -- so that a later
+# `wrangler deploy` from CI could never silently re-enable a `*.workers.dev` URL. It took effect
+# on the first successful deploy, so that URL no longer exists; there is deliberately no path in
+# this repo that turns it back on.
 workers_dev = false
 
 [[routes]]
 pattern = "downloads.privacyfence.eu"
 custom_domain = true
 
-# Binding names must match the dashboard-provisioned resources exactly (see the plan's
-# Prerequisites section) -- the Worker never carries its own R2/S3 credentials; both bindings
+# Binding names must match the dashboard-provisioned resources exactly (see
+# docs/downloads-and-release-kpi.md's "Cloudflare resources" table) -- the Worker never carries
+# its own R2/S3 credentials; both bindings
 # are the only path this Worker has to the underlying storage.
 [[r2_buckets]]
 binding = "RELEASES"

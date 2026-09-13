@@ -4,7 +4,7 @@
   // Installer downloads now come from two places and the headline number is their sum:
   // GitHub Releases (counted by scripts/release_stats.py into release-stats.json) and
   // downloads.privacyfence.eu (counted in D1 by the Worker). See
-  // docs/release-publishing-kpi-plan.md Phase 5.
+  // docs/downloads-and-release-kpi.md.
   //
   // Only the GitHub half is required. The Cloudflare half resolves to 0 if its API is
   // unreachable, so a Worker outage understates the total for a while rather than hiding the

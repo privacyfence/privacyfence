@@ -1,6 +1,6 @@
 // Ambient binding types for this Worker, matching wrangler.toml's [[r2_buckets]]/[[d1_databases]]
 // blocks exactly. Committed by hand rather than generated, since the two bindings are fixed and
-// documented in docs/release-publishing-kpi-plan.md's Prerequisites section; regenerate with
+// documented in docs/downloads-and-release-kpi.md's "Cloudflare resources" table; regenerate with
 // `npx wrangler types` instead if a binding is ever added or renamed.
 
 interface Env {

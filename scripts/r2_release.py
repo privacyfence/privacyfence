@@ -103,7 +103,7 @@ _SHA256_METADATA_KEY = "sha256"
 
 # Installer filename -> manifest identity. **Installers only**: SBOMs, the org-config scripts and
 # the sdist/wheel are uploaded to the same prefix but deliberately never enter the manifest, so
-# the Worker cannot serve them from /download/ and cannot count them. That keeps this plan's KPI
+# the Worker cannot serve them from /download/ and cannot count them. That keeps the KPI
 # definition ("SBOMs, checksums, org-admin scripts, metadata requests, source archives ... never
 # count as downloads") true by construction rather than by a filter someone has to remember to
 # apply -- cloudflare/downloads/src/index.ts counts every artifact it serves, and queryStats() sums

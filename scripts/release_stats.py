@@ -5,7 +5,7 @@ Before this script existed, `.github/workflows/pages.yml` summed every release a
 `download_count` inline, in a heredoc with no test coverage -- including SBOMs (`*.spdx.json`,
 `*.cdx.json`), the org-config scripts (`*.py`), and the sdist/wheel (`*.whl`, `*.tar.gz`), none of
 which are installers a user downloaded. That inflated the GitHub half of the KPI this repo actually
-wants: "PrivacyFence installer downloads" (see docs/release-publishing-kpi-plan.md's Goal section).
+wants: "PrivacyFence installer downloads" (see docs/downloads-and-release-kpi.md's KPI section).
 
 This script fixes that by reusing `classify_installer()` from `scripts/r2_release.py` -- the same
 DMG / `-setup.exe` / `.deb` filename patterns that already decide what a tagged release's manifest
@@ -41,7 +41,7 @@ API_ROOT = "https://api.github.com"
 
 
 def is_installer_asset(filename: str) -> bool:
-    """True for exactly the files release-publishing-kpi-plan.md Phase 4 counts as installer
+    """True for exactly the files docs/downloads-and-release-kpi.md counts as installer
     downloads (DMG / -setup.exe / .deb) -- everything else (SBOMs, checksums, org-config
     scripts, sdist/wheel, and anything else attached to a release) is excluded."""
     return classify_installer(filename) is not None
