@@ -565,10 +565,31 @@ metadata failure falls back to GitHub Releases so the page is never a dead end. 
 calling the live Worker is deliberate: a test that hit production would need the network, would be
 flaky on a deploy, and would inflate the very counter this plan exists to keep honest.
 
+**Two corrections after seeing it in production** (2026-09-13):
+
+- **The pre-release section follows whichever channel has a build**, trying `rc`, then `beta`, then
+  `alpha`, and naming the channel from the manifest. This phase's wording said "a beta section
+  using beta metadata", and implementing that literally left the section permanently hidden: this
+  project has only ever shipped alphas, so `/api/releases/beta` correctly 404s while a perfectly
+  good build sits published one channel over. Preferring the most production-ready channel means a
+  tester is offered a release candidate over an alpha when both exist.
+- **The download counter is no longer described as "through this page".** `download_counts` records
+  every installer the Worker serves, whatever sent the visitor there, so crediting the page
+  overstated it — and did so most visibly when the only recorded downloads came from a `curl`
+  verification.
+
 **Exit criteria:** `privacyfence.eu/download/` live and correct in production; homepage
 unchanged; every download from that page increments Cloudflare's counters as in Phase 3.
-**Not yet met** — the code has landed but Pages has not deployed it, so nothing has been clicked in
-production. Confirm on the deployed page before trusting Phase 6's cutover.
+**Partially met** — the page is live and serving (after the `pages.yml` build-list fix below), but
+no download has yet been made *through it*: the two counted so far came from Phase 3's manual
+verification.
+
+**A deploy gap this phase originally missed, worth keeping:** `pages.yml` builds `_site` from a
+hand-written list of files rather than the `website/` directory, so `website/download/` shipped as
+a 404 while Phase 6 had already repointed the homepage CTAs at it. Every test passed — they
+asserted the page's source files existed and served `website/` from disk, both of which are true of
+a page that is never deployed. `tests/unit/test_website_download_cta.py` now asserts every file
+under `website/` appears in that build step.
 
 ## Phase 6 — Cutover
 

@@ -174,18 +174,18 @@ h3 { font-size: 21px; line-height: 1.25; letter-spacing: -.02em; margin: 17px 0 
 .download-fallback p { margin: 0; color: var(--muted); }
 .download-fallback a.text-link { margin-top: 0; }
 
-.verify-block, .beta-block { margin-top: 64px; padding: 34px 32px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
-.verify-block h2, .beta-block h2 { font-size: 26px; letter-spacing: -.025em; margin-bottom: 12px; }
-.verify-block p, .beta-block p { color: var(--muted); margin: 0; max-width: 720px; }
+.verify-block, .prerelease-block { margin-top: 64px; padding: 34px 32px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.verify-block h2, .prerelease-block h2 { font-size: 26px; letter-spacing: -.025em; margin-bottom: 12px; }
+.verify-block p, .prerelease-block p { color: var(--muted); margin: 0; max-width: 720px; }
 .verify-commands { margin: 20px 0 0; padding: 16px 18px; background: var(--surface-soft); border-radius: 12px; overflow-x: auto; }
 .verify-commands code { font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: #3c5d59; white-space: pre; }
 .verify-os { color: var(--muted); font-weight: 600; }
-.beta-note { margin-top: 18px !important; font-size: 14px; }
+.prerelease-note { margin-top: 18px !important; font-size: 14px; }
 
 .download-stats { margin-top: 46px; color: var(--muted); font-size: 14px; text-align: center; }
 
 @media (max-width: 720px) {
   .download-page { padding: 40px 0 80px; }
-  .verify-block, .beta-block { padding: 26px 22px; margin-top: 46px; }
+  .verify-block, .prerelease-block { padding: 26px 22px; margin-top: 46px; }
   .download-card { padding: 22px 20px; }
 }

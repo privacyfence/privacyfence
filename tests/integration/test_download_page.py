@@ -141,12 +141,18 @@ def _open_download_page(
     website_server,
     *,
     stable=STABLE_MANIFEST,
-    beta=BETA_MANIFEST,
+    prereleases=None,
     stats=None,
     user_agent=None,
 ):
-    """Opens the download page with every Worker API call stubbed. Passing None for stable/beta/
-    stats makes that endpoint fail, which is how the failure-path tests are written."""
+    """Opens the download page with every Worker API call stubbed.
+
+    `prereleases` maps a channel name to its manifest; every channel not named answers 404, which
+    is what an unpublished channel really does. Passing None for stable/stats makes that endpoint
+    fail, which is how the failure-path tests are written.
+    """
+    if prereleases is None:
+        prereleases = {"beta": BETA_MANIFEST}
     context = browser.new_context(**({"user_agent": user_agent} if user_agent else {}))
     page = context.new_page()
 
@@ -160,7 +166,8 @@ def _open_download_page(
         return handler
 
     page.route(f"{API_ORIGIN}/api/releases/stable", route_json(stable))
-    page.route(f"{API_ORIGIN}/api/releases/beta", route_json(beta))
+    for channel in ("rc", "beta", "alpha"):
+        page.route(f"{API_ORIGIN}/api/releases/{channel}", route_json(prereleases.get(channel)))
     page.route(f"{API_ORIGIN}/api/stats/downloads", route_json(stats))
 
     page.goto(f"{website_server}/download/", wait_until="networkidle")
@@ -188,8 +195,9 @@ class TestStableDownloads:
             for href in hrefs:
                 assert href.startswith(f"{API_ORIGIN}/download/"), href
 
-            # The stable grid specifically serves the stable channel (the beta block below it
-            # serves beta, which is why the assertion above is channel-agnostic).
+            # The stable grid specifically serves the stable channel (the pre-release block
+            # below it serves whichever pre-release channel has a build, which is why the
+            # assertion above is channel-agnostic).
             stable_hrefs = page.eval_on_selector_all(
                 ".download-grid:not(.compact) .download-button", "links => links.map(a => a.href)"
             )
@@ -261,23 +269,75 @@ class TestOsDetection:
             context.close()
 
 
-class TestBetaSection:
-    def test_uses_beta_metadata_when_a_pre_release_exists(self, browser, website_server):
+ALPHA_MANIFEST = {
+    "schema": 1,
+    "version": "4.0.0a14",
+    "channel": "alpha",
+    "published_at": "2026-09-13T16:37:00Z",
+    "artifacts": [
+        {
+            "id": "linux-x64",
+            "kind": "installer",
+            "platform": "linux",
+            "architecture": "x64",
+            "filename": "privacyfence_4.0.0a14_amd64.deb",
+            "key": "releases/alpha/4.0.0a14/privacyfence_4.0.0a14_amd64.deb",
+            "size": 47028460,
+            "sha256": "e" * 64,
+        }
+    ],
+}
+
+RC_MANIFEST = {**BETA_MANIFEST, "version": "4.4.0rc1", "channel": "rc"}
+
+
+class TestPreReleaseSection:
+    def test_uses_the_manifest_metadata_when_a_pre_release_exists(self, browser, website_server):
         context, page = _open_download_page(browser, website_server)
         try:
-            assert page.is_visible("#beta-block")
-            assert "4.4.0b1" in page.inner_text("#beta-summary")
-            hrefs = page.eval_on_selector_all("#beta-grid .download-button", "links => links.map(a => a.href)")
+            assert page.is_visible("#prerelease-block")
+            assert "4.4.0b1" in page.inner_text("#prerelease-summary")
+            hrefs = page.eval_on_selector_all("#prerelease-grid .download-button", "links => links.map(a => a.href)")
             assert hrefs == [f"{API_ORIGIN}/download/beta/macos-arm64"]
+        finally:
+            context.close()
+
+    def test_falls_back_to_alpha_when_no_beta_or_rc_exists(self, browser, website_server):
+        # The state this project was actually in when the page first shipped: only alphas had ever
+        # been released, so hardcoding beta left the section hidden with a perfectly good build
+        # published one channel over.
+        context, page = _open_download_page(browser, website_server, prereleases={"alpha": ALPHA_MANIFEST})
+        try:
+            assert page.is_visible("#prerelease-block")
+            summary = page.inner_text("#prerelease-summary")
+            assert "4.0.0a14" in summary
+            assert "alpha" in summary, "the section must name the channel it actually found"
+            hrefs = page.eval_on_selector_all("#prerelease-grid .download-button", "links => links.map(a => a.href)")
+            assert hrefs == [f"{API_ORIGIN}/download/alpha/linux-x64"]
+        finally:
+            context.close()
+
+    def test_prefers_the_most_production_ready_channel_available(self, browser, website_server):
+        # rc beats beta beats alpha: handing a tester a release candidate over an alpha is the
+        # safer default when more than one pre-release is published.
+        context, page = _open_download_page(
+            browser,
+            website_server,
+            prereleases={"rc": RC_MANIFEST, "beta": BETA_MANIFEST, "alpha": ALPHA_MANIFEST},
+        )
+        try:
+            summary = page.inner_text("#prerelease-summary")
+            assert "4.4.0rc1" in summary
+            assert "rc" in summary
         finally:
             context.close()
 
     def test_stays_hidden_when_no_pre_release_is_published(self, browser, website_server):
         # An empty channel answers 404 in production; showing an invitation to download nothing
         # would be worse than showing no section at all.
-        context, page = _open_download_page(browser, website_server, beta=None)
+        context, page = _open_download_page(browser, website_server, prereleases={})
         try:
-            assert page.is_hidden("#beta-block")
+            assert page.is_hidden("#prerelease-block")
         finally:
             context.close()
 

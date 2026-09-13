@@ -20,6 +20,13 @@
     'linux-x64': { name: 'Linux', detail: 'Debian / Ubuntu, 64-bit', match: /linux/i },
   };
 
+  // Which pre-release channel to offer testers, most production-ready first. A release candidate
+  // is a safer thing to hand someone than an alpha, so the page offers whichever mature channel
+  // actually has a release rather than assuming "pre-release" means "beta" -- this project has
+  // shipped only alphas so far, and hardcoding beta left the section permanently hidden with a
+  // perfectly good build published one channel over.
+  const PRERELEASE_CHANNELS = ['rc', 'beta', 'alpha'];
+
   const numberFormat = new Intl.NumberFormat('en');
 
   function formatSize(bytes) {
@@ -126,13 +133,14 @@
     }
   }
 
-  function renderBeta(manifest) {
-    const block = document.getElementById('beta-block');
-    const grid = document.getElementById('beta-grid');
-    if (!block || !grid || !(manifest.artifacts || []).length) return;
+  function renderPreRelease(manifest) {
+    const block = document.getElementById('prerelease-block');
+    const grid = document.getElementById('prerelease-grid');
+    if (!block || !grid || !manifest || !(manifest.artifacts || []).length) return;
 
-    const summary = document.getElementById('beta-summary');
+    const summary = document.getElementById('prerelease-summary');
     if (summary) {
+      // Names the channel from the manifest rather than the page, so an alpha is called an alpha.
       summary.textContent = `${manifest.version} is available on the ${manifest.channel} channel.`;
     }
     for (const artifact of manifest.artifacts) {
@@ -158,10 +166,21 @@
   // exists to deliver.
   fetchJson('/api/releases/stable').then(renderStable).catch(showFallback);
 
-  // A channel with nothing published answers 404, which is a normal state rather than an error --
-  // the section simply stays hidden.
-  fetchJson('/api/releases/beta')
-    .then(renderBeta)
+  /** The first pre-release channel with something published, or null if none has anything. */
+  async function firstPublishedPreRelease() {
+    for (const channel of PRERELEASE_CHANNELS) {
+      try {
+        return await fetchJson(`/api/releases/${channel}`);
+      } catch {
+        // 404 means nothing is published on that channel, which is a normal state rather than an
+        // error -- try the next one down.
+      }
+    }
+    return null;
+  }
+
+  firstPublishedPreRelease()
+    .then(renderPreRelease)
     .catch(() => {});
 
   // Download counts are enhancement-only: a stats outage must never affect the downloads
@@ -170,7 +189,9 @@
     .then((stats) => {
       const line = document.getElementById('download-stats');
       if (!line || !stats || !stats.total) return;
-      line.textContent = `${numberFormat.format(stats.total)} installers downloaded through this page.`;
+      // Not "through this page": the counter records every installer download the Worker serves,
+      // whatever sent the visitor there, so claiming the page's own credit would overstate it.
+      line.textContent = `${numberFormat.format(stats.total)} installers downloaded so far.`;
       line.hidden = false;
     })
     .catch(() => {});
