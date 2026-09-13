@@ -1,38 +1,41 @@
 # Release Publishing & Download KPI — Phased Implementation Plan
 
-Status: Phase 1 code is implemented (`cloudflare/downloads/`,
-`.github/workflows/deploy-download-worker.yml`) and Phase 1.1 is done, but Phase 1's own exit
-criteria are **not yet met**: every `deploy-download-worker.yml` run on `main` so far (5/5, most
-recently 2026-09-13 13:09Z) fails in the `deploy` job's "Apply D1 migrations" step, before
-`wrangler deploy` or the `/health` smoke test ever run. `verify` (typecheck/tests/dry-run bundle,
-no credentials involved) passes every time; only the credentialed `deploy` job fails. There have
-been **two different causes**, and they must be fixed in order:
+Status: **Phases 0, 1 and 1.1 are done.** `deploy-download-worker.yml` run 8
+(`workflow_dispatch` on `main` at `54942a1`, 2026-09-13 14:43Z) is the first green one: "Apply D1
+migrations", "Deploy Worker" and "Smoke-test /health" all passed, so the `download_counts` table
+exists in the real D1 database, the Worker is deployed and bound to `downloads.privacyfence.eu`
+(custom domain), and that host answers `/health` with 200. Phase 1's exit criteria are met.
+
+Getting there took 5 failed runs and two unrelated credential faults, recorded here because the
+lesson outlived them: **a stored secret is not a working credential, and CI is where that
+difference shows up.**
 
 1. **Runs 1–4 (through 2026-09-13 08:21Z): an unauthorized token.** The job received a non-empty
    token and Cloudflare rejected it — `7403`, `The given account is not valid or is not authorized
    to access this service`, against account `326657b4f70af041996d60fd6b8f83fa`'s D1 API. This
-   contradicts Phase 0's "confirmed present" note below: the secret had a value, but that value was
+   contradicted Phase 0's "confirmed present" note: the secret had a value, but that value was
    never authorized for this account's D1/Workers resources.
-2. **Run 5 (2026-09-13 13:09Z, current): no token at all.** The secret rename that landed in
-   `95993a1` (#349) updated the workflow to read `CF_DOWNLOADS_WORKER_API_TOKEN` /
-   `CF_DOWNLOADS_WORKER_ACCOUNT_ID`, but the GitHub secrets were never re-created under those
-   names, so the step now runs with both env vars empty (`In a non-interactive environment, it's
-   necessary to set a CLOUDFLARE_API_TOKEN environment variable`). Re-creating the secrets with the
-   *old* token value would simply return to cause 1.
+2. **Run 5 (2026-09-13 13:09Z): no token at all.** The secret rename in `95993a1` (#349) updated the
+   workflow to read `CF_DOWNLOADS_WORKER_API_TOKEN` / `CF_DOWNLOADS_WORKER_ACCOUNT_ID`, but the
+   GitHub secrets were never re-created under those names, so the step ran with both env vars empty.
 
-**Fixing both is manual Cloudflare-dashboard/GitHub-settings work, not a code change**: create an
-**account-owned API token** with the permissions listed under Prerequisites below, verify it against
-the account's own API before storing it, put it in the `CF_DOWNLOADS_WORKER_API_TOKEN` secret
-alongside `CF_DOWNLOADS_WORKER_ACCOUNT_ID`, and re-run `deploy-download-worker.yml`
-(`workflow_dispatch`) to confirm a green run before treating Phase 1 as exited.
+Both were fixed by hand, not in code: an **account-owned API token** (see Prerequisites below for
+the token type, permission table and pre-flight verification) stored under the renamed secrets.
 
-The same rename applies to the release-archive credentials (`CF_RELEASES_R2_*`, see the Prerequisites
-section), which no workflow has exercised since — **the next tag push will fail on every R2 upload
-step** unless those are re-created under their new names too, with `CF_RELEASES_R2_ENDPOINT` as a
-repository *variable* rather than a secret. Phase 2 has not been started (`scripts/r2_release.py` still only has its original `channel`
-and `upload` subcommands — no `finalize`/`verify`/`promote`, no manifest schema). Use this doc to
-scope a single session/PR to one phase — e.g. "implement phase 2 of the release publishing plan"
-refers to a phase heading below.
+**The release-archive R2 credentials are in place and verified too** (2026-09-13), out-of-band
+rather than by CI: `CF_RELEASES_R2_ACCESS_KEY_ID` / `CF_RELEASES_R2_SECRET_ACCESS_KEY` /
+`CF_RELEASES_R2_ENDPOINT` were re-created under their renamed keys and checked directly against
+`privacyfence-releases`. That out-of-band step was necessary because no workflow exercises them
+until a tag push — `deploy-download-worker.yml` reaches R2 through the Worker's `RELEASES` binding,
+never through S3 credentials, so run 8 said nothing about them, and the alternative was finding out
+mid-release. Keep that in mind when either credential is next rotated: a green
+`deploy-download-worker.yml` is not evidence about the R2 pair, and vice versa.
+
+**Next: Phase 2**, which has not been started — `scripts/r2_release.py` still only has its original
+`channel` and `upload` subcommands, with no `finalize`/`verify`/`promote` and no manifest schema.
+Phase 3 depends on Phase 2 having published real manifests; Phase 4 is independent of both and can
+run in parallel. Use this doc to scope a single session/PR to one phase — e.g. "implement phase 2 of
+the release publishing plan" refers to a phase heading below.
 
 ## Goal
 
@@ -135,12 +138,11 @@ done and confirmed before Phase 1 starts. Concrete resource identifiers, for dir
   The second call is the one that distinguishes a good token from the one that failed four times.
 
 - **GitHub secrets**: `CF_DOWNLOADS_WORKER_API_TOKEN` (the account-owned token above) and
-  `CF_DOWNLOADS_WORKER_ACCOUNT_ID` (`326657b4f70af041996d60fd6b8f83fa`). As of 2026-09-13 **neither
-  exists under these names** — the rename in `95993a1` (#349) updated every reference in code but
-  the secrets themselves were never re-created, so `deploy` now runs with both env vars empty; the
-  older token stored under the pre-rename names was itself unauthorized. See the Status note at the
-  top of this doc and Phase 0 below. Delete the stale `CLOUDFLARE_API_TOKEN` /
-  `CLOUDFLARE_ACCOUNT_ID` secrets once the new ones are in place — nothing reads them any more.
+  `CF_DOWNLOADS_WORKER_ACCOUNT_ID` (`326657b4f70af041996d60fd6b8f83fa`). Both are in place and
+  proven working as of run 8 (2026-09-13 14:43Z) — see the Status note at the top of this doc for
+  the two faults that preceded that. If the pre-rename `CLOUDFLARE_API_TOKEN` /
+  `CLOUDFLARE_ACCOUNT_ID` secrets are still present, delete them — nothing reads them any more, and
+  the token behind them was the unauthorized one.
   These are named and stored separately from, and additional to, the existing
   `CF_RELEASES_R2_ACCESS_KEY_ID` / `CF_RELEASES_R2_SECRET_ACCESS_KEY` / `CF_RELEASES_R2_ENDPOINT`
   used by the release-upload pipeline (`scripts/r2_release.py`) — do not conflate or remove those;
@@ -172,27 +174,27 @@ secrets were never re-created under their new names. This phase's "implementatio
 should have meant a successful `wrangler` call, not just a non-empty secret; re-verify by hand next
 time before marking a Cloudflare-side precondition confirmed.
 
-**Action needed (manual; nothing here is a code change):**
+**Resolved (2026-09-13 14:43Z, run 8).** Both faults were fixed by hand, in this order, and the
+re-run went green on all three credentialed steps:
 
-1. Create an **account-owned API token** (Manage Account → Account API Tokens) with the permission
-   table under Prerequisites above, and verify it with the two `curl` calls recorded there *before*
-   storing it anywhere. Do not reuse the old token value — it is the one that returned 7403, and a
-   user token cannot be converted into an account-owned one.
-2. Store it as `CF_DOWNLOADS_WORKER_API_TOKEN`, with `CF_DOWNLOADS_WORKER_ACCOUNT_ID` alongside it;
-   delete the pre-rename `CLOUDFLARE_*` secrets.
-3. Re-create the release-archive credentials under their new names too
+1. An **account-owned API token** (Manage Account → Account API Tokens) created with the permission
+   table under Prerequisites above, and verified against
+   `/accounts/<id>/tokens/verify` and the account's D1 list endpoint *before* being stored. The old
+   token was not reused — it was the one returning 7403, and a user token cannot be converted into
+   an account-owned one.
+2. Stored as `CF_DOWNLOADS_WORKER_API_TOKEN`, with `CF_DOWNLOADS_WORKER_ACCOUNT_ID` alongside it.
+3. The release-archive credentials re-created under their new names at the same time
    (`CF_RELEASES_R2_ACCESS_KEY_ID` / `CF_RELEASES_R2_SECRET_ACCESS_KEY` as secrets,
-   `CF_RELEASES_R2_ENDPOINT` as a repository **variable**) — otherwise the next tag push fails on
-   every R2 upload step, independently of anything the Worker does. Mint that key pair as an
-   account-owned token too, for the same reason as step 1.
-4. Re-run `deploy-download-worker.yml` via `workflow_dispatch` and confirm all three credentialed
-   steps pass before Phase 1 is considered exited.
+   `CF_RELEASES_R2_ENDPOINT` as a repository **variable**), then verified out-of-band against the
+   bucket — see the Status note at the top for why CI could not do it: no workflow exercises them
+   before a tag push, because the Worker reaches R2 through its `RELEASES` binding rather than S3
+   credentials.
+4. `deploy-download-worker.yml` re-run via `workflow_dispatch`.
 
-Note for step 4: `wrangler.toml` commits `workers_dev = false`, so the first successful deploy
-disables the `*.workers.dev` URL, and the job's `/health` smoke test only ever probes
-`downloads.privacyfence.eu`. The custom domain therefore has to be genuinely live — a successful
-deploy with a misconfigured domain still fails the job, and Phase 1's exit criteria below should be
-read as requiring the custom domain, not the `*.workers.dev` fallback they mention.
+Worth keeping in mind for any future deploy: `wrangler.toml` commits `workers_dev = false`, so that
+first successful deploy disabled the `*.workers.dev` URL, and the job's `/health` smoke test only
+ever probes `downloads.privacyfence.eu`. The custom domain has to be genuinely live — a successful
+deploy with a misconfigured domain still fails the job.
 
 ## Phase 1 — Worker infrastructure
 
@@ -258,12 +260,11 @@ is not touched yet.
   access is via the Worker binding, never embedded S3 credentials.
 
 **Exit criteria:** `deploy-download-worker.yml` runs green on merge to `main`;
-`https://downloads.privacyfence.eu/health` returns 200; all Worker unit tests pass in CI. **Not yet
-met** — see the Status note at the top of this doc and the Phase 0 update above: `verify` (the
-unit-test bullet) is green, but `deploy` has failed on every run so far — first on an unauthorized
-Cloudflare API token, now on secrets that no longer exist under their renamed keys — before
-`wrangler deploy` or the `/health` check ever run. Re-check this criterion once the account-owned
-token and both secret families are in place.
+`https://downloads.privacyfence.eu/health` returns 200; all Worker unit tests pass in CI. **Met** —
+run 8 (`workflow_dispatch` on `main` at `54942a1`, 2026-09-13 14:43Z), after the credential fixes
+recorded in the Phase 0 update above. `verify` had been green throughout; `deploy` passed "Apply D1
+migrations", "Deploy Worker" (bound to `downloads.privacyfence.eu` as a custom domain) and
+"Smoke-test /health" for the first time on that run.
 
 (The `/health` bullet originally offered "or the still-enabled `*.workers.dev` URL while testing" as
 an alternative. That is not actually available: the committed `workers_dev = false` takes effect on
