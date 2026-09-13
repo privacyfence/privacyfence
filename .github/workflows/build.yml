@@ -651,3 +651,82 @@ jobs:
             sbom-python.cdx.json
             sbom-shim-npm.cdx.json
           prerelease: false
+
+  # docs/release-publishing-kpi-plan.md Phase 2. Every job above uploads its own artifacts to
+  # releases/<channel>/<version>/ independently; this job is what turns that pile of objects into
+  # a *published* release, by writing the manifest and then moving the channel's latest.json onto
+  # it.
+  #
+  # Publication is transactional from a downloader's point of view: scripts/r2_release.py's
+  # `finalize` writes manifest.json, verifies every artifact it references really is in R2 with
+  # the recorded size and SHA-256, and only then rewrites latest.json. A release missing any
+  # mandatory installer fails here with latest.json untouched, so an incomplete release can sit in
+  # the bucket without ever becoming the one the Worker serves.
+  #
+  # `needs` covers all four artifact-producing jobs. The three installer jobs are obvious -- their
+  # output is what the manifest lists. `sbom` is included even though SBOMs deliberately never
+  # enter the manifest (installers only, so the download KPI counts installers by construction):
+  # a tag whose SBOM generation failed has not fully shipped, and should not become "latest"
+  # either. A failure in any of them leaves the previous release as latest, which is the safe
+  # outcome.
+  #
+  # Not included, and deliberately: publish-pypi.yml's sdist/wheel. They live in a separate
+  # workflow that `needs:` cannot reach across, and they are not installers, so they are not in
+  # the manifest -- which means this job has no reason to wait for them.
+  finalize-release:
+    needs: [build, build-windows, build-deb, sbom]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    # Unlike the four jobs above, this one attaches nothing to the GitHub Release -- it only reads
+    # the repo and talks to R2 over its own credentials, so it has no reason to hold write access.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see CLAUDE.md)
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+
+      # Same lightweight resolution the `sbom` job uses: read the tag-derived version straight
+      # from setuptools_scm rather than `pip install -e .`-ing the package just to import
+      # __version__, which this job has no other use for.
+      - name: Determine version
+        id: release
+        run: |
+          pip install --quiet setuptools_scm
+          VERSION="$(python3 -m setuptools_scm)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Finalizing version=$VERSION channel=$(python3 scripts/r2_release.py channel "$VERSION")"
+
+      - name: Publish release manifest and promote to latest
+        env:
+          CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
+          CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
+          CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
+          R2_BUCKET: privacyfence-releases
+        run: |
+          python3 -m pip install --quiet boto3
+          python3 scripts/r2_release.py finalize --version "${{ steps.release.outputs.version }}"
+
+      # HEAD, never GET: a release-CI check must never inflate the download KPI it is verifying
+      # (docs/release-publishing-kpi-plan.md's cross-cutting notes). This confirms the Worker can
+      # actually resolve what finalize just published, which is the end-to-end assertion neither
+      # the unit tests nor the R2 upload can make on their own.
+      - name: Smoke-test the published download routes (HEAD only)
+        run: |
+          CHANNEL="$(python3 scripts/r2_release.py channel "${{ steps.release.outputs.version }}")"
+          failed=0
+          for artifact in macos-arm64 windows-x64 linux-x64; do
+            url="https://downloads.privacyfence.eu/download/$CHANNEL/$artifact"
+            status="$(curl -s -o /dev/null -w '%{http_code}' --head --location "$url")"
+            if [ "$status" != "200" ]; then
+              echo "::error::HEAD $url returned $status, expected 200"
+              failed=1
+            else
+              echo "ok: $artifact"
+            fi
+          done
+          exit $failed
