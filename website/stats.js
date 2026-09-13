@@ -16,8 +16,9 @@
 
       // Social proof should help, not advertise an empty launch.
       // Show the counters only once they are meaningful.
-      if ((data.downloads || 0) >= 50 || (data.stars || 0) >= 10) {
-        document.getElementById('download-count').textContent = format.format(data.downloads || 0);
+      const githubInstallerDownloads = data.github_installer_downloads || 0;
+      if (githubInstallerDownloads >= 50 || (data.stars || 0) >= 10) {
+        document.getElementById('download-count').textContent = format.format(githubInstallerDownloads);
         document.getElementById('star-count').textContent = format.format(data.stars || 0);
         document.getElementById('stats').hidden = false;
       }
