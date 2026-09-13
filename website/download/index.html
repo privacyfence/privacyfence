@@ -64,13 +64,14 @@ sha256sum &lt;file&gt;                <span class="verify-os">Linux</span>
 Get-FileHash &lt;file&gt; -Algorithm SHA256   <span class="verify-os">Windows</span></code></pre>
     </section>
 
-    <!-- Hidden until beta metadata actually loads: a pre-release channel with nothing published
-         should show nothing at all rather than an empty invitation. -->
-    <section class="beta-block" id="beta-block" aria-labelledby="beta-heading" hidden>
-      <h2 id="beta-heading">Want to test the next version?</h2>
-      <p id="beta-summary"></p>
-      <div class="download-grid compact" id="beta-grid"></div>
-      <p class="beta-note">
+    <!-- Hidden until some pre-release channel actually has a release. download.js tries rc, then
+         beta, then alpha: a channel with nothing published should show nothing at all rather
+         than an empty invitation. -->
+    <section class="prerelease-block" id="prerelease-block" aria-labelledby="prerelease-heading" hidden>
+      <h2 id="prerelease-heading">Want to test the next version?</h2>
+      <p id="prerelease-summary"></p>
+      <div class="download-grid compact" id="prerelease-grid"></div>
+      <p class="prerelease-note">
         Pre-release builds get the same checks as stable, but they are newer and less proven.
         Install them alongside nothing you rely on.
       </p>
