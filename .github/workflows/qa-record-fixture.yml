@@ -13,14 +13,31 @@ name: Record QA fixture
 # fixed drift branch, neither of which fits "record the one new connector
 # onto the branch that adds it".
 #
-# workflow_dispatch only. Never `pull_request`, never `push` -- the same
-# rule connector-live-check.yml states and for the same reason: this is the
-# only runner where the QA connectors' live OAuth credentials exist (see
-# docs/connector-live-check-setup.md Phase B, docs/testing-policy.md's
-# "Runner-local live tier"), and no ref a non-maintainer controls may ever
-# cause a job to run there. Dispatching requires write access by
-# definition.
+# Never `pull_request` -- the rule connector-live-check.yml states, for the
+# reason it gives: this is the only runner where the QA connectors' live
+# OAuth credentials exist (see docs/connector-live-check-setup.md Phase B,
+# docs/testing-policy.md's "Runner-local live tier"), and a fork's PR ref is
+# exactly the kind of ref a non-maintainer controls. workflow_dispatch is
+# the intended trigger and requires write access by definition.
+#
+# TEMPORARY -- remove the `push:` trigger below once
+# tests/fixtures/live/apps_script/get_content.json is committed.
+#
+# It exists because workflow_dispatch is only offered for workflows already
+# on the default branch, so this file cannot be dispatched while it lives
+# only on the branch that introduces it -- and that branch's CI is red
+# until this workflow records the very fixture it needs. `push` is the one
+# trigger that runs a workflow from the branch's own copy of the file.
+#
+# It is pinned to that single branch name rather than a glob: pushing any
+# branch to this repo already requires write access (a fork cannot), so the
+# trust boundary matches workflow_dispatch's, but an unpinned pattern would
+# also mean this job fires on pushes nobody asked it to run on. The bot's
+# own fixture push cannot re-trigger it -- GITHUB_TOKEN pushes never start
+# a workflow run -- so there is no loop here either.
 on:
+  push:
+    branches: ['claude/charming-newton-xxu3wd']
   workflow_dispatch:
     inputs:
       connector:
@@ -48,6 +65,16 @@ jobs:
   record:
     runs-on: [self-hosted, privacyfence-test]
     timeout-minutes: 20
+
+    env:
+      # `inputs` is empty on a push event, so this needs its own default --
+      # without one the run below becomes `--record ""`, which the recorder
+      # reports as "has no recorder implementation yet" on stderr and then
+      # *exits 0* (it has no failed results to report), i.e. a green job
+      # that recorded nothing. Read through the shell's environment rather
+      # than interpolated into the script, so a dispatch input can't inject
+      # shell.
+      CONNECTOR: ${{ inputs.connector || 'apps_script' }}
 
     steps:
       - name: Refuse to run against a protected branch
@@ -95,6 +122,19 @@ jobs:
           cp -a "${secrets_dir}/org/org_config.json" org/org_config.json
           cp -a "${secrets_dir}/tests/fixtures/qa_environment.yaml" tests/fixtures/qa_environment.yaml
 
+      # Guards the same silent-success hole the CONNECTOR default above
+      # does, for the other way in: a mistyped dispatch input. The recorder
+      # treats an unknown connector as "nothing to do" and still exits 0,
+      # so an unrecognised name has to fail here instead.
+      - name: Check the connector has a recorder implementation
+        run: |
+          set -euo pipefail
+          if ! grep -q "^    \"${CONNECTOR}\": check_" scripts/qa_fixture_recorder.py; then
+            echo "##[error] '${CONNECTOR}' is not registered in CONNECTOR_CHECKS" \
+                 "in scripts/qa_fixture_recorder.py."
+            exit 1
+          fi
+
       # No continue-on-error, unlike connector-live-check.yml's --check
       # step: there, a non-zero exit means drift to remediate; here it
       # means the recorder refused to record (seed artifact missing, or its
@@ -105,7 +145,7 @@ jobs:
       - name: Record the fixture
         run: |
           .venv/bin/python scripts/qa_fixture_recorder.py \
-            --record "${{ inputs.connector }}" \
+            --record "${CONNECTOR}" \
             --report-file /tmp/qa-record-report.md
 
       # add-paths equivalent: only ever stage the recorded fixture itself.
@@ -118,13 +158,13 @@ jobs:
           set -euo pipefail
           git add -- 'tests/fixtures/live/**'
           if git diff --cached --quiet; then
-            echo "No fixture change for ${{ inputs.connector }} -- nothing to commit."
+            echo "No fixture change for ${CONNECTOR} -- nothing to commit."
             exit 0
           fi
           git -c user.name='github-actions[bot]' \
               -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
               commit \
-                -m "Record live ${{ inputs.connector }} fixture" \
+                -m "Record live ${CONNECTOR} fixture" \
                 -m "Recorded on the privacyfence-test runner by .github/workflows/qa-record-fixture.yml against the QA account's [QATEST]-tagged seed artifact. Identity fields and structural resource ids/URLs are de-identified by scripts/qa_fixture_recorder.py before writing; review this diff before merging, per docs/testing-policy.md 2.1."
           git push origin "HEAD:${GITHUB_REF_NAME}"
 
@@ -146,6 +186,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: qa-record-report-${{ inputs.connector }}
+          name: qa-record-report-${{ inputs.connector || 'apps_script' }}
           path: /tmp/qa-record-report.md
           retention-days: 90
