@@ -1,4 +1,4 @@
-"""Browser tests for website/download/ (docs/release-publishing-kpi-plan.md Phase 5).
+"""Browser tests for website/download/ (docs/downloads-and-release-kpi.md).
 
 The download page is built entirely at runtime from the Cloudflare Worker's release manifests, so
 nothing meaningful about it can be asserted by reading the HTML: the platform cards, filenames,
@@ -10,7 +10,7 @@ unavailable" -- rather than merely that some markup exists.
 
 Stubbing rather than calling the live Worker is deliberate: a test that hit
 downloads.privacyfence.eu would need the network, would be flaky on a Worker deploy, and -- worse
--- would increment the production download counter this plan exists to keep honest.
+-- would increment the very production download counter it is meant to keep honest.
 
 Same skip posture as test_browser_smoke.py: skipped when playwright or its Chromium build is
 missing rather than failing, since CI always has both.

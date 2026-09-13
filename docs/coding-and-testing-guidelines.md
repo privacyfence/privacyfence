@@ -155,7 +155,7 @@ npm run build
 ```
 
 For changes under `cloudflare/downloads/` (the downloads.privacyfence.eu Worker,
-[`release-publishing-kpi-plan.md`](release-publishing-kpi-plan.md) Phase 1), run:
+[`downloads-and-release-kpi.md`](downloads-and-release-kpi.md)), run:
 
 ```bash
 cd cloudflare/downloads
@@ -345,4 +345,4 @@ New `pytest.mark.system`/`pytest.mark.packaged` tests get CI-diagnostics capture
 
 Update standing documentation in the same PR as behavior changes. Standing docs describe current behavior, not implementation history. Do not add completed plans, phase narratives, migration diaries, or “previously/after X” explanations.
 
-The sole active plan is [`release-publishing-kpi-plan.md`](release-publishing-kpi-plan.md); a new plan document is worth creating only for actual phased work, and is removed once that work lands. A new testing gap belongs in [`testing-policy.md`](testing-policy.md) if it changes current policy, or in [`platform-support.md`](platform-support.md)'s "Known open items" if it's a standing open item — not in a plan document written to hold it.
+There is no active plan document today; a new one is worth creating only for actual phased work, and is removed once that work lands. A new testing gap belongs in [`testing-policy.md`](testing-policy.md) if it changes current policy, or in [`platform-support.md`](platform-support.md)'s "Known open items" if it's a standing open item — not in a plan document written to hold it.

@@ -1,7 +1,7 @@
 /**
  * Runs once before the suite and seeds R2/D1 with the hand-written fixtures under
- * test/fixtures/ (docs/release-publishing-kpi-plan.md Phase 1: "Since no real manifest exists
- * yet, use hand-written fixture manifest.json/latest.json files in the test harness only").
+ * test/fixtures/ -- deliberately hand-written fixtures rather than real release metadata, so the
+ * suite never depends on production infrastructure (docs/downloads-and-release-kpi.md).
  *
  * `isolatedStorage` (the vitest-pool-workers default) snapshots storage after setupFiles run and
  * resets every test back to that snapshot, so seeding once here is enough -- no test can see

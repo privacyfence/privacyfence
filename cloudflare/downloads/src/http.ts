@@ -15,7 +15,7 @@ export function methodNotAllowed(allowed: readonly string[]): Response {
 }
 
 // Only /api/* routes ever need browser CORS -- download routes are hit by <a>/<img>-style
-// navigation, never fetch()'d cross-origin (docs/release-publishing-kpi-plan.md Phase 1).
+// navigation, never fetch()'d cross-origin (docs/downloads-and-release-kpi.md).
 const ALLOWED_ORIGINS = new Set(["https://privacyfence.eu", "https://www.privacyfence.eu"]);
 
 function allowedOrigin(request: Request): string | null {

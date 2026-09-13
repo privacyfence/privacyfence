@@ -1,6 +1,6 @@
 /**
  * Worker backing https://downloads.privacyfence.eu -- the only public path to the private
- * `privacyfence-releases` R2 bucket (docs/release-publishing-kpi-plan.md Phase 1). The browser
+ * `privacyfence-releases` R2 bucket (docs/downloads-and-release-kpi.md). The browser
  * never receives R2 credentials or a direct bucket URL: every installer download streams
  * through this Worker, which also records a privacy-preserving download count in D1 (no IP,
  * cookie, fingerprint, or User-Agent -- see migrations/0001_download_counts.sql).

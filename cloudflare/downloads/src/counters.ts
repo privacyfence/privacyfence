@@ -15,7 +15,7 @@ export interface DownloadEvent {
 /**
  * Increments today's counter for `event`. Best-effort: a D1 failure is logged and swallowed
  * rather than thrown, since this must never affect the byte stream the caller has already
- * started sending back to the downloader (docs/release-publishing-kpi-plan.md Phase 1).
+ * started sending back to the downloader (docs/downloads-and-release-kpi.md § "Counting semantics").
  * Callers should invoke this via `ExecutionContext#waitUntil()` so it doesn't add latency to the
  * download response either.
  */

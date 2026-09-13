@@ -3,7 +3,7 @@ version: 2
 # Four ecosystems, matching the four places this repo declares a dependency version:
 # pyproject.toml (the daemon), mcpb/shim/package.json (the .mcpb shim),
 # cloudflare/downloads/package.json (the downloads.privacyfence.eu Worker,
-# docs/release-publishing-kpi-plan.md Phase 1), and the SHA-pinned `uses:`
+# docs/downloads-and-release-kpi.md), and the SHA-pinned `uses:`
 # lines in .github/workflows/*.yml themselves (see those files' own comments
 # on why they're pinned to a commit instead of a tag). A PR from any of
 # these four updates only the manifest/pin — it does not regenerate

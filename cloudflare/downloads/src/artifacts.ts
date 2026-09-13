@@ -60,7 +60,7 @@ export function resolveRange(range: R2Range, totalSize: number): ResolvedRange {
 /**
  * Whether a request for `range` (the result of `parseRangeHeader`) should count as a real
  * download start: a full request (no range), or a range that starts at byte 0
- * (docs/release-publishing-kpi-plan.md Phase 1's counting semantics). A `Range: bytes=N-` resume
+ * (docs/downloads-and-release-kpi.md § "Counting semantics"). A `Range: bytes=N-` resume
  * with N>0, or a `suffix` (tail) range, never counts.
  */
 export function isDownloadStart(range: R2Range | undefined): boolean {

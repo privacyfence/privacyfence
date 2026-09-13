@@ -168,13 +168,15 @@ Concretely, this means:
 
 Required secrets/vars (Settings → Secrets and variables → Actions), named for what they're for —
 the release archive's R2 credentials, distinct from the download Worker's own deploy credentials
-(see `docs/release-publishing-kpi-plan.md`'s Prerequisites section for those):
+(see [`docs/downloads-and-release-kpi.md`](docs/downloads-and-release-kpi.md)'s Credentials
+section for those):
 
 - `CF_RELEASES_R2_ACCESS_KEY_ID` / `CF_RELEASES_R2_SECRET_ACCESS_KEY` (secrets) — an R2 API token
   scoped to the `privacyfence-releases` bucket. Mint it as an **account-owned** token (Manage
   Account → Account API Tokens), not from a personal profile: this credential publishes every
   release, and a user token stops working when that user's access changes. Same rule as the
-  downloads Worker's own token — see `docs/release-publishing-kpi-plan.md`'s Prerequisites section.
+  downloads Worker's own token — see
+  [`docs/downloads-and-release-kpi.md`](docs/downloads-and-release-kpi.md)'s Credentials section.
 - `CF_RELEASES_R2_ENDPOINT` (repo/environment **variable**, not a secret — `build.yml` and
   `publish-pypi.yml` read it as `vars.`) — the bucket's S3-compatible endpoint URL.
 

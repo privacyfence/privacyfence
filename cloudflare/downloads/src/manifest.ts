@@ -1,8 +1,8 @@
 /**
- * Release manifest types and R2 lookups. Schema matches
- * docs/release-publishing-kpi-plan.md Phase 2 exactly (schema `1`) so this Worker needs no
- * changes when Phase 2's `scripts/r2_release.py finalize` starts writing real manifests --
- * Phase 1 only ever reads hand-written fixtures of the same shape (see test/fixtures.ts).
+ * Release manifest types and R2 lookups. Schema matches exactly what
+ * `scripts/r2_release.py finalize` writes (schema `1`) -- see docs/downloads-and-release-kpi.md
+ * "Publication is transactional". This Worker only ever reads manifests; the test suite reads
+ * hand-written fixtures of the same shape (see test/fixtures.ts).
  */
 import { channelForVersion, type Channel } from "./channel.js";
 
