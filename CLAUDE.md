@@ -161,8 +161,12 @@ the release archive's R2 credentials, distinct from the download Worker's own de
 (see `docs/release-publishing-kpi-plan.md`'s Prerequisites section for those):
 
 - `CF_RELEASES_R2_ACCESS_KEY_ID` / `CF_RELEASES_R2_SECRET_ACCESS_KEY` (secrets) — an R2 API token
-  scoped to the `privacyfence-releases` bucket.
-- `CF_RELEASES_R2_ENDPOINT` (repo/environment variable) — the bucket's S3-compatible endpoint URL.
+  scoped to the `privacyfence-releases` bucket. Mint it as an **account-owned** token (Manage
+  Account → Account API Tokens), not from a personal profile: this credential publishes every
+  release, and a user token stops working when that user's access changes. Same rule as the
+  downloads Worker's own token — see `docs/release-publishing-kpi-plan.md`'s Prerequisites section.
+- `CF_RELEASES_R2_ENDPOINT` (repo/environment **variable**, not a secret — `build.yml` and
+  `publish-pypi.yml` read it as `vars.`) — the bucket's S3-compatible endpoint URL.
 
 **Not yet decided: how an authorized alpha/beta tester actually gets a file out of the private
 bucket.** Nothing in this repo automates that today (no presigned-URL script, no Cloudflare Access
