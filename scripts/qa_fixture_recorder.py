@@ -80,6 +80,7 @@ from privacyfence.drive_client import DriveClient, DriveClientError  # noqa: E40
 from privacyfence.calendar_client import CalendarClient, CalendarClientError  # noqa: E402
 from privacyfence.contacts_client import ContactsClient, ContactsClientError  # noqa: E402
 from privacyfence.tasks_client import TasksClient, TasksClientError  # noqa: E402
+from privacyfence.apps_script_client import AppsScriptClient, AppsScriptClientError  # noqa: E402
 from privacyfence.slack_client import SlackClient, SlackClientError  # noqa: E402
 from privacyfence.slack_client import load_token_file as load_slack_token  # noqa: E402
 from privacyfence.telegram_client import TelegramClientError, TelegramPrivacyFenceClient  # noqa: E402
@@ -180,7 +181,7 @@ def redact(value: Any) -> Any:
 _STRUCTURAL_ID_KEYS = frozenset({
     "id", "key", "spaceid", "homepageid", "parentid", "resourcename",
     "thread_ts", "ts", "chat_id", "channel_id", "task_list_id",
-    "threadid", "historyid", "driveid", "icaluid",
+    "threadid", "historyid", "driveid", "icaluid", "scriptid",
     # Slack workspace/app identifiers -- app_id, bot_profile.team_id, the
     # top-level "team", block_id -- all real, all identify your workspace.
     "app_id", "team_id", "team", "block_id",
@@ -390,6 +391,52 @@ def redact_jira_issue(raw: dict[str, Any]) -> dict[str, Any]:
         person = fields.get(person_key)
         if isinstance(person, dict) and person.get("self"):
             person["self"] = _REDACTED_JIRA_USER_URL
+    return raw
+
+
+# Apps Script's projects.getContent response attaches a lastModifyUser
+# object -- {"domain", "email", "name", "photoUrl"} -- to every file it
+# returns. Two of those fields are real account identity that the generic
+# redact() structurally cannot reach: "name" is the account's display name
+# under a *bare* "name" key, which _REDACT_NAME_KEYS deliberately doesn't
+# match (a bare "name" is legitimate non-identity content elsewhere -- on
+# this very shape it's also the script file's own name, one level up), and
+# "domain" is the QA account's real Workspace domain, which no generic key
+# list covers at all. Same connector-specific pass as Gmail's headers list
+# and Slack's user key, for the same reason: identity addressed through a
+# generically-named key only this connector's shape puts there. "email" is
+# already covered by redact()'s own key list and "photoUrl" by
+# _is_structural_url_key()'s "url"-substring rule, but both are handled
+# here too -- keeping the whole user object's treatment in one place beats
+# leaving a reader to check two other passes to confirm it's covered.
+_REDACTED_APPS_SCRIPT_DOMAIN = "qa-placeholder.example.com"
+_APPS_SCRIPT_USER_KEY = "lastModifyUser"
+
+
+def _redact_apps_script_user(user: Any) -> Any:
+    if not isinstance(user, dict):
+        return user
+    redacted = dict(user)
+    if redacted.get("domain"):
+        redacted["domain"] = _REDACTED_APPS_SCRIPT_DOMAIN
+    if redacted.get("email"):
+        redacted["email"] = _REDACTED_EMAIL
+    if redacted.get("name"):
+        redacted["name"] = _REDACTED_NAME
+    if redacted.get("photoUrl"):
+        redacted["photoUrl"] = _REDACTED_STRUCTURAL_URL
+    return redacted
+
+
+def redact_apps_script_content(raw: dict[str, Any]) -> dict[str, Any]:
+    raw = copy.deepcopy(raw)
+    if raw.get(_APPS_SCRIPT_USER_KEY):
+        raw[_APPS_SCRIPT_USER_KEY] = _redact_apps_script_user(raw[_APPS_SCRIPT_USER_KEY])
+    for script_file in raw.get("files", []) or []:
+        if isinstance(script_file, dict) and script_file.get(_APPS_SCRIPT_USER_KEY):
+            script_file[_APPS_SCRIPT_USER_KEY] = _redact_apps_script_user(
+                script_file[_APPS_SCRIPT_USER_KEY]
+            )
     return raw
 
 
@@ -1196,6 +1243,84 @@ def check_tasks(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     return results
 
 
+def _build_apps_script_client() -> AppsScriptClient:
+    org_config = daemon_main.load_org_config()
+    client_config = daemon_main._google_client_config(org_config)
+    if not client_config:
+        raise SystemExit("Google organization config not installed -- run Authenticate… in PrivacyFence Settings (Connectors page) first.")
+    token_path = daemon_main._resolve_path(daemon_main.TOKEN_FILES["apps_script"])
+    return AppsScriptClient(client_config=client_config, token_file=token_path)
+
+
+def check_apps_script(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
+    # get_content is the highest-risk read this connector has -- it returns
+    # a script project's *entire* source, every .gs/.html file plus the
+    # appsscript.json manifest (connectors/apps_script.py gates it `review`
+    # for exactly that reason), so it's the one recorded here rather than
+    # the auto-approved list_projects or the status-only
+    # get_execution_log.
+    cfg = manifest.get("apps_script") or {}
+    seed_script_id = cfg.get("seed_script_id", "")
+    seed_script_title = cfg.get("seed_script_title", f"PrivacyFence QA seed script {QATEST_TAG}")
+
+    results: list[CheckResult] = []
+    client = _build_apps_script_client()
+    target = seed_script_id or seed_script_title
+
+    try:
+        if not seed_script_id:
+            # list_projects is a single .execute() (a Drive files.list call
+            # -- the Apps Script API has no list-my-projects endpoint, see
+            # apps_script_client.py's module docstring), so resolve-then-get
+            # is safe here, same as calendar/drive above. Standalone
+            # projects only: a container-bound script wouldn't be returned,
+            # which is why the seed project has to be a standalone one.
+            found = next(
+                (p for p in client.list_projects(max_results=1000) if p.name == seed_script_title),
+                None,
+            )
+            if found is None:
+                raise AppsScriptClientError(
+                    f"no standalone script project found matching title {seed_script_title!r}"
+                )
+            seed_script_id = found.id
+
+        # getContent's own response carries no title at all (scriptId +
+        # files, see ScriptContent), so unlike every other connector here
+        # the [QATEST] gate can't read the captured response itself -- it
+        # takes a separate projects.get. Not a detour: that same call is
+        # what connectors/apps_script.py._get_content builds its approval
+        # preview's "Project" row from, so gating on it checks the
+        # preview's own source rather than something only this script looks
+        # at.
+        metadata = client.get_project_metadata(seed_script_id)
+        with RawCaptureExecute() as cap:
+            content = client.get_content(seed_script_id)
+
+        tagged = QATEST_TAG in metadata.name
+        complete = bool(content.files) and all(f.name and f.type for f in content.files)
+        ok = tagged and complete
+        if not tagged:
+            note = (
+                f"fetched project title {metadata.name!r} does not carry {QATEST_TAG} "
+                "-- refusing to record"
+            )
+        elif not complete:
+            note = "missing popup field(s) -- no files, or a file missing name/type"
+        else:
+            note = f"project title, {len(content.files)} file(s) with name/type present"
+        raw = None
+        if record and ok and isinstance(cap.captured, dict):
+            raw = deidentify_structural_fields(redact(redact_apps_script_content(cap.captured)))
+        results.append(
+            CheckResult("apps_script", "get_content", target, ok, note, raw, "get_content.json")
+        )
+    except AppsScriptClientError as exc:
+        results.append(CheckResult("apps_script", "get_content", target, False, str(exc)))
+
+    return results
+
+
 def _build_slack_client() -> SlackClient:
     org_config = daemon_main.load_org_config()
     slack_org = org_config.get("slack") or {}
@@ -1374,6 +1499,7 @@ CONNECTOR_CHECKS: dict[str, Callable[[bool, dict[str, Any]], list[CheckResult]]]
     "calendar": check_calendar,
     "contacts": check_contacts,
     "tasks": check_tasks,
+    "apps_script": check_apps_script,
     "slack": check_slack,
     "telegram": check_telegram,
 }
@@ -1399,6 +1525,7 @@ EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {
     "calendar": ("get_event.json",),
     "contacts": ("get_contact.json",),
     "tasks": ("get_task.json",),
+    "apps_script": ("get_content.json",),
     "slack": ("get_thread_replies.json",),
     "telegram": ("get_messages.json",),
 }
@@ -1445,6 +1572,15 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 #     update-in-place-then-read-it-back pair the four connectors above do.
 #     Left for a future extension of this section rather than forced into a
 #     shape that doesn't fit.
+#   - apps_script -- write_content() is a whole-file-set replace, so it
+#     covers the update step, but AppsScriptClient exposes no way to create
+#     a script project (no projects.create wrapper, and connectors/
+#     apps_script.py registers no create tool), so there is no fresh,
+#     uniquely-tagged object to make and tear down. The only thing a
+#     lifecycle run could write to is the durable seed project itself --
+#     overwriting the very artifact check_apps_script() reads, which is
+#     exactly what this section's "never touch anything but what this run
+#     just created" rule exists to prevent.
 #   - salesforce, telegram -- SalesforceClient and the QA Telegram flow are
 #     read-only from PrivacyFence's side (see CONNECTOR_CHECKS above); there
 #     is nothing to create in the first place.

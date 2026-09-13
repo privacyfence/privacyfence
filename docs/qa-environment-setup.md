@@ -20,7 +20,15 @@ The manifest may contain resource ids, project keys, channel names, labels, or e
 
 Create representative resources for the connectors exercised by the live-check workflow, for example:
 
-- Google: test messages/files/events/contacts/tasks and any Apps Script project used by connector QA;
+- Google: test messages/files/events/contacts/tasks, and a **standalone** Apps Script project
+  (created at [script.google.com](https://script.google.com), not bound to a Sheet/Doc/Form) holding
+  one trivial synthetic function — `apps_script_list_projects` resolves projects through Drive's
+  `mimeType` filter, which only ever returns standalone ones, so a container-bound script can't be
+  targeted at all. The `[QATEST]` tag goes in the project's *title*. The QA account also needs the
+  per-user Apps Script API switch at
+  [script.google.com/home/usersettings](https://script.google.com/home/usersettings) turned on —
+  separate from enabling the API in the Cloud project, and a 403 until it is (see
+  [`google-cloud-setup.md`](google-cloud-setup.md));
 - Slack: dedicated test workspace/channels/messages;
 - Atlassian: dedicated Jira project/issues and Confluence space/pages;
 - Salesforce: dedicated sandbox/test records;
