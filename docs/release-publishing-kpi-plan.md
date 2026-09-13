@@ -22,13 +22,14 @@ difference shows up.**
 Both were fixed by hand, not in code: an **account-owned API token** (see Prerequisites below for
 the token type, permission table and pre-flight verification) stored under the renamed secrets.
 
-**Still unverified: the release-archive R2 credentials.** `CF_RELEASES_R2_ACCESS_KEY_ID` /
-`CF_RELEASES_R2_SECRET_ACCESS_KEY` / `CF_RELEASES_R2_ENDPOINT` were re-created under their renamed
-keys at the same time, but nothing has exercised them — `deploy-download-worker.yml` reaches R2
-through the Worker's `RELEASES` binding, never through S3 credentials, so run 8 says nothing about
-them. The first thing that would exercise them is a real tag push, i.e. mid-release. Verify them
-out-of-band first (a read-only `list_objects_v2` against `privacyfence-releases`, using the same
-three env vars `_r2_client()` reads), or expect to find out during a release.
+**The release-archive R2 credentials are in place and verified too** (2026-09-13), out-of-band
+rather than by CI: `CF_RELEASES_R2_ACCESS_KEY_ID` / `CF_RELEASES_R2_SECRET_ACCESS_KEY` /
+`CF_RELEASES_R2_ENDPOINT` were re-created under their renamed keys and checked directly against
+`privacyfence-releases`. That out-of-band step was necessary because no workflow exercises them
+until a tag push — `deploy-download-worker.yml` reaches R2 through the Worker's `RELEASES` binding,
+never through S3 credentials, so run 8 said nothing about them, and the alternative was finding out
+mid-release. Keep that in mind when either credential is next rotated: a green
+`deploy-download-worker.yml` is not evidence about the R2 pair, and vice versa.
 
 **Next: Phase 2**, which has not been started — `scripts/r2_release.py` still only has its original
 `channel` and `upload` subcommands, with no `finalize`/`verify`/`promote` and no manifest schema.
@@ -184,9 +185,10 @@ re-run went green on all three credentialed steps:
 2. Stored as `CF_DOWNLOADS_WORKER_API_TOKEN`, with `CF_DOWNLOADS_WORKER_ACCOUNT_ID` alongside it.
 3. The release-archive credentials re-created under their new names at the same time
    (`CF_RELEASES_R2_ACCESS_KEY_ID` / `CF_RELEASES_R2_SECRET_ACCESS_KEY` as secrets,
-   `CF_RELEASES_R2_ENDPOINT` as a repository **variable**). **These remain unverified** — see the
-   Status note at the top: no workflow has exercised them yet, because the Worker reaches R2 through
-   its `RELEASES` binding rather than S3 credentials.
+   `CF_RELEASES_R2_ENDPOINT` as a repository **variable**), then verified out-of-band against the
+   bucket — see the Status note at the top for why CI could not do it: no workflow exercises them
+   before a tag push, because the Worker reaches R2 through its `RELEASES` binding rather than S3
+   credentials.
 4. `deploy-download-worker.yml` re-run via `workflow_dispatch`.
 
 Worth keeping in mind for any future deploy: `wrangler.toml` commits `workers_dev = false`, so that
