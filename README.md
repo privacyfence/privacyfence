@@ -2,7 +2,7 @@
 
 **Human control and policy enforcement for AI access to enterprise data.**
 
-PrivacyFence is a local enterprise AI governance layer for macOS and Linux. It sits between an MCP-compatible AI assistant and the business systems it can access, so data reads and actions are reviewed, governed, and logged before they are executed.
+PrivacyFence is a local enterprise AI governance layer for macOS, Windows, and Linux. It sits between an MCP-compatible AI assistant and the business systems it can access, so data reads and actions are reviewed, governed, and logged before they are executed.
 
 Instead of granting an AI assistant broad, persistent access and relying on the assistant to use it safely, PrivacyFence applies an independent control point:
 
@@ -13,7 +13,7 @@ Instead of granting an AI assistant broad, persistent access and relying on the 
 - **Connector-level control** across common enterprise systems
 - **Local credential ownership**: credentials remain in the PrivacyFence daemon, not in the AI-facing shim
 
-> PrivacyFence runs on macOS and Linux and integrates with Claude through MCP. Its governance model is designed around a broader problem: controlling how AI assistants access and act on enterprise information.
+> PrivacyFence runs on macOS, Windows, and Linux and integrates with Claude through MCP. Its governance model is designed around a broader problem: controlling how AI assistants access and act on enterprise information.
 
 ---
 
@@ -279,8 +279,10 @@ doesn't remove, are in [Technical Reference](docs/TECHNICAL_REFERENCE.md#install
 4. Log out and back in — PrivacyFence starts automatically at the next graphical login (an XDG
    autostart entry, not a menu icon; there's no window to open, all interaction is through the web
    UI above). To start it immediately instead of waiting for that, run `privacyfence-app &`.
-5. Install **PrivacyFence.mcpb** into Claude Desktop (download it separately from the same
-   release).
+5. Connect an MCP client. Claude Desktop has no Linux build, so the `.mcpb`/Claude Desktop route
+   used on macOS and Windows doesn't apply here — instead, point an HTTP-capable client (Claude
+   Code, for example) directly at the daemon's local, token-authenticated `/mcp` endpoint. See
+   [Technical Reference](docs/TECHNICAL_REFERENCE.md#mcp-endpoint) for connection details.
 
 The package ships a self-contained PyInstaller build of the daemon — no `python3-*` packages
 required beyond what a normal Debian/Ubuntu desktop already has. `apt remove`/`dpkg -r` leaves
