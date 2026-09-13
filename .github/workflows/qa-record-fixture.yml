@@ -1,0 +1,185 @@
+name: Record QA fixture
+
+# On-demand counterpart to connector-live-check.yml: re-records *one*
+# connector's live fixture and commits it to the branch this run was
+# dispatched against.
+#
+# Why this exists separately from connector-live-check.yml, which can also
+# run --record: that workflow only records as *drift remediation* (its
+# record step is `if: steps.check.outcome == 'failure'`), so a connector
+# whose --check passes but which has no committed fixture yet -- exactly
+# the state a newly-added check_<connector>() is in -- is never recorded by
+# it. It also records every connector at once and opens its PR against a
+# fixed drift branch, neither of which fits "record the one new connector
+# onto the branch that adds it".
+#
+# workflow_dispatch only. Never `pull_request`, never `push` -- the rule
+# connector-live-check.yml states, for the reason it gives: this is the
+# only runner where the QA connectors' live OAuth credentials exist (see
+# docs/connector-live-check-setup.md Phase B, docs/testing-policy.md's
+# "Runner-local live tier"), and a fork's PR ref is exactly the kind of ref
+# a non-maintainer controls. Dispatching requires write access by
+# definition.
+#
+# Note that GitHub only offers workflow_dispatch for workflows already on
+# the default branch, so this is dispatchable once it has merged, not from
+# a feature branch that adds it. Bootstrapping it for apps_script needed a
+# single-branch `push:` trigger, added and removed again in this branch's
+# own history (see the "Trigger the QA fixture recorder from this branch's
+# own push" commit for the reasoning, if the same corner ever comes up for
+# a future connector).
+on:
+  workflow_dispatch:
+    inputs:
+      connector:
+        description: 'Connector to record (one of CONNECTOR_CHECKS in scripts/qa_fixture_recorder.py)'
+        required: true
+        default: apps_script
+        type: string
+
+permissions:
+  contents: write   # needed to commit the recorded fixture back to the branch
+
+concurrency:
+  # Deliberately the *same* group as connector-live-check.yml, not a group
+  # of its own: both jobs copy this runner's single persistent credential
+  # store into their own checkout and copy refreshed tokens back out again
+  # at the end. Two of them overlapping would race on that store and could
+  # write back a stale token over a freshly refreshed one.
+  group: connector-live-check
+  cancel-in-progress: false
+
+env:
+  QA_SECRETS_DIR: ~/privacyfence
+
+jobs:
+  record:
+    runs-on: [self-hosted, privacyfence-test]
+    timeout-minutes: 20
+
+    env:
+      # Read through the shell's environment rather than interpolated into
+      # the script below, so a dispatch input can't inject shell.
+      #
+      # The `||` default is belt-and-braces rather than dead: workflow_
+      # dispatch does supply this input, but any path that leaves it empty
+      # turns the run below into `--record ""`, which the recorder reports
+      # as "has no recorder implementation yet" on stderr and then *exits
+      # 0* (it has no failed results to report) -- a green job that
+      # recorded nothing. Worth a default and the guard step below rather
+      # than trusting that no such path ever appears.
+      CONNECTOR: ${{ inputs.connector || 'apps_script' }}
+
+    steps:
+      - name: Refuse to run against a protected branch
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            echo "##[error] This workflow commits the recorded fixture to the branch it runs on." \
+                 "Dispatch it against the feature branch that adds the connector, never main."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # fetch-depth: 0 for the same reason tests.yml/build.yml pass it:
+          # setuptools_scm resolves the version from tag history, and a
+          # shallow clone silently falls back to fallback_version (see
+          # CLAUDE.md, "Releasing").
+          fetch-depth: 0
+
+      # Rebuilt every run rather than kept as runner-local state, same
+      # reasoning as connector-live-check.yml's own venv step.
+      - name: Build this run's venv
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -e ".[test]"
+
+      # Mirrors connector-live-check.yml's copy-in step exactly -- see that
+      # workflow's comment for why QA_SECRETS_DIR lives outside the
+      # (every-run-wiped) Actions workspace and has to be copied in.
+      - name: Copy this runner's QA credentials into the checkout
+        run: |
+          set -euo pipefail
+          secrets_dir="$(eval echo "${QA_SECRETS_DIR}")"
+          for required in credentials org/org_config.json tests/fixtures/qa_environment.yaml; do
+            if [ ! -e "${secrets_dir}/${required}" ]; then
+              echo "##[error] ${secrets_dir}/${required} not found." \
+                   "See docs/connector-live-check-setup.md Phase B.3" \
+                   "for how this runner's QA credentials are provisioned."
+              exit 1
+            fi
+          done
+          mkdir -p org tests/fixtures
+          cp -a "${secrets_dir}/credentials/." credentials/
+          cp -a "${secrets_dir}/org/org_config.json" org/org_config.json
+          cp -a "${secrets_dir}/tests/fixtures/qa_environment.yaml" tests/fixtures/qa_environment.yaml
+
+      # Guards the same silent-success hole the CONNECTOR default above
+      # does, for the other way in: a mistyped dispatch input. The recorder
+      # treats an unknown connector as "nothing to do" and still exits 0,
+      # so an unrecognised name has to fail here instead.
+      - name: Check the connector has a recorder implementation
+        run: |
+          set -euo pipefail
+          if ! grep -q "^    \"${CONNECTOR}\": check_" scripts/qa_fixture_recorder.py; then
+            echo "##[error] '${CONNECTOR}' is not registered in CONNECTOR_CHECKS" \
+                 "in scripts/qa_fixture_recorder.py."
+            exit 1
+          fi
+
+      # No continue-on-error, unlike connector-live-check.yml's --check
+      # step: there, a non-zero exit means drift to remediate; here it
+      # means the recorder refused to record (seed artifact missing, or its
+      # title/summary doesn't carry [QATEST]), and committing nothing while
+      # reporting success would be the one outcome worth avoiding.
+      # qa_fixture_recorder.py writes a fixture only for a result it marked
+      # ok, so a refused recording can never reach the commit step below.
+      - name: Record the fixture
+        run: |
+          .venv/bin/python scripts/qa_fixture_recorder.py \
+            --record "${CONNECTOR}" \
+            --report-file /tmp/qa-record-report.md
+
+      # add-paths equivalent: only ever stage the recorded fixture itself.
+      # The checkout also holds this runner's copied-in credentials and
+      # qa_environment.yaml at this point -- all three are git-ignored, but
+      # staging narrowly rather than relying on .gitignore keeps that a
+      # belt-and-braces guarantee rather than a single point of failure.
+      - name: Commit and push the recorded fixture
+        run: |
+          set -euo pipefail
+          git add -- 'tests/fixtures/live/**'
+          if git diff --cached --quiet; then
+            echo "No fixture change for ${CONNECTOR} -- nothing to commit."
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit \
+                -m "Record live ${CONNECTOR} fixture" \
+                -m "Recorded on the privacyfence-test runner by .github/workflows/qa-record-fixture.yml against the QA account's [QATEST]-tagged seed artifact. Identity fields and structural resource ids/URLs are de-identified by scripts/qa_fixture_recorder.py before writing; review this diff before merging, per docs/testing-policy.md 2.1."
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      # Mirrors connector-live-check.yml's copy-back step, and matters for
+      # the same reason: a *_client.py that refreshed an expired access
+      # token during this run persisted it into this disposable checkout,
+      # and losing it here would leave QA_SECRETS_DIR holding a token this
+      # run may already have spent.
+      - name: Copy any refreshed QA credentials back to this runner's persistent store
+        if: always()
+        run: |
+          set -euo pipefail
+          secrets_dir="$(eval echo "${QA_SECRETS_DIR}")"
+          if [ -d credentials ]; then
+            cp -a credentials/. "${secrets_dir}/credentials/"
+          fi
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qa-record-report-${{ inputs.connector || 'apps_script' }}
+          path: /tmp/qa-record-report.md
+          retention-days: 90

@@ -9,8 +9,10 @@ exercised for real -- same pattern as test_tasks_client.py/test_drive_client.py.
 """
 from __future__ import annotations
 
+import json
 import stat
 import threading
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import sys
@@ -495,3 +497,41 @@ class TestServiceIsThreadLocal:
             assert script_service is not drive_service
             calls = [c.args[0] for c in mock_build.call_args_list]
             assert calls == ["script", "drive"]
+
+
+# ---------------------------------------------------------------------------- #
+# Recorded live fixture
+# ---------------------------------------------------------------------------- #
+
+LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "apps_script"
+
+
+class TestLiveFixtureParsing:
+    """Replays a fixture recorded from the real, [QATEST]-tagged seed script
+    project by scripts/qa_fixture_recorder.py --record apps_script -- real
+    API shape, not hand-authored, with the per-file lastModifyUser identity
+    and the scriptId already de-identified. Skipped (not failed) until that
+    fixture exists; see tests/fixtures/live/README.md and
+    docs/testing-policy.md. Re-record via that script if this ever starts
+    failing after a genuine Apps Script API change.
+    """
+
+    def test_get_content_fixture_still_parses(self):
+        path = LIVE_FIXTURES_DIR / "get_content.json"
+        if not path.exists():
+            pytest.skip(
+                f"{path} not recorded yet -- run "
+                "`python3 scripts/qa_fixture_recorder.py --record apps_script` locally first"
+            )
+        raw = json.loads(path.read_text(encoding="utf-8"))
+
+        # get_content builds ScriptContent inline rather than through a
+        # static _parse_* helper the way DriveClient/TasksClient do, so the
+        # replay drives the real method with the fixture as its response --
+        # same coverage, one layer out.
+        service = MagicMock()
+        service.projects.return_value.getContent.return_value.execute.return_value = raw
+        content = make_client(service).get_content("s1")
+
+        assert content.files
+        assert all(f.name and f.type for f in content.files)
