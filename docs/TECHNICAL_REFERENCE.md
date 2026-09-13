@@ -1039,7 +1039,7 @@ than ERROR/`1`, so Task Scheduler logs a clean success on every ordinary tick. `
 the defaults, a laptop on battery power would not start PrivacyFence at sign-in and would stop it
 when unplugged — a privacy gate that quietly isn't running, with the MCP client simply finding no
 daemon. This closes
-[`automated-test-strategy-plan.md`](automated-test-strategy-plan.md) Phase 13, including its
+The now-removed `automated-test-strategy-plan.md` Phase 13, including its
 crash-restart half — measured, not assumed, on a real `windows-latest` runner: killing the
 Scheduler-started daemon produces a new pid, under the same signed-in account, before the
 `<TimeTrigger>`'s own next tick would otherwise be due. See
@@ -1091,6 +1091,6 @@ comparison:
 
 ## Testing
 
-[`testing-policy.md`](testing-policy.md) describes the checks that currently run. [`automated-test-strategy-plan.md`](automated-test-strategy-plan.md) is the only plan document and tracks automation gaps that still exist.
+[`testing-policy.md`](testing-policy.md) describes the checks that currently run, the seven-layer taxonomy they map to, and what deliberately stays manual. Standing open items that aren't phase-shaped work live in [`platform-support.md`](platform-support.md)'s "Known open items".
 
 The source files, tests, workflow definitions, build scripts, and configuration examples are authoritative if this reference drifts.

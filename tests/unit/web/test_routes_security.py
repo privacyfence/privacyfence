@@ -239,7 +239,7 @@ class TestDeleteCredential:
         assert len(wa.list_credentials(ALICE)) == 1
 
 
-# docs/automated-test-strategy-plan.md Phase 0: in-process ASGI TestClient,
+# The now-removed automated-test-strategy-plan.md Phase 0: in-process ASGI TestClient,
 # no real socket -- unit per testing-policy.md's seven-layer taxonomy.
 @pytest.mark.unit
 class TestCrossPrincipalIsolation:

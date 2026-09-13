@@ -2,7 +2,7 @@
 
 ## When to use this
 
-This is exploratory QA, not a routine release checklist. `docs/automated-test-strategy-plan.md`
+This is exploratory QA, not a routine release checklist. The now-removed `automated-test-strategy-plan.md`
 Phase 9 made that explicit: as of Phases 1–8, routine correctness — provider parsing, gate/policy
 state coverage, the approval UI's structural behavior, cross-platform and org-mode system behavior —
 is proven automatically, on every PR or on a self-hosted weekly schedule, and no longer needs a human
@@ -61,7 +61,7 @@ For each operation verify:
 ## 3. Gate behavior
 
 `tests/unit/test_gate.py` is the primary, deterministic proof for gate-state coverage —
-`automated-test-strategy-plan.md` Phase 5 cross-checked it against the full gate/policy matrix
+The now-removed `automated-test-strategy-plan.md` Phase 5 cross-checked it against the full gate/policy matrix
 (auto→allowed, review→Allow/Deny, review+PII→Proceed/Cancel, popup/write→Allow/Deny, "Always
 allow"→proposed rule, matching/non-matching rule or resource grant, unattended allowed/forbidden)
 and confirmed it's already exhaustive. This tier is **no longer required as routine release proof

@@ -210,8 +210,9 @@ testpaths = ["tests"]
 # A hung asyncio socket test (e.g. a fixture never closing a connection)
 # would otherwise block the whole suite indefinitely instead of failing.
 timeout = 30
-# docs/automated-test-strategy-plan.md Phase 0: the seven-layer taxonomy
-# testing-policy.md now describes. Registered here so `pytest -m <marker>`
+# The seven-layer taxonomy testing-policy.md describes (introduced by the
+# now-removed automated-test-strategy-plan.md's Phase 0, and now documented
+# there rather than here). Registered here so `pytest -m <marker>`
 # and `pytest -m "not live"` work and so an unregistered-marker typo fails
 # loudly (pytest's default `--strict-markers`-independent warning) rather
 # than silently matching nothing. Applied to new test modules as later
@@ -224,7 +225,7 @@ markers = [
     "browser: real Chromium via Playwright",
     "packaged: runs against a built installer/artifact",
     "live: touches a real third-party provider (self-hosted runner only)",
-    # docs/automated-test-strategy-plan.md Phase 2.3: OS-level path/process/
+    # The now-removed automated-test-strategy-plan.md Phase 2.3: OS-level path/process/
     # locking/daemon-discovery behavior, homed under tests/platform/ rather
     # than scattered across existing files. Deliberately a separate marker
     # from `system` -- Phase 0's own status note flagged this as an open

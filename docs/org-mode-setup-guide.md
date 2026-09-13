@@ -176,4 +176,4 @@ Validate the deployment through the public HTTPS origin:
 - audit entries contain the correct principal;
 - restart preserves intended persistent state.
 
-Automated org-mode coverage is described in [`testing-policy.md`](testing-policy.md); remaining automation gaps are tracked in [`automated-test-strategy-plan.md`](automated-test-strategy-plan.md).
+Automated org-mode coverage is described in [`testing-policy.md`](testing-policy.md); the one org-mode check that deliberately stays manual — a real end-to-end run against a live Ubuntu server with a real identity provider and a real connector — is listed in [`platform-support.md`](platform-support.md)'s "Known open items".

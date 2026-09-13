@@ -117,13 +117,13 @@ def _no_ambient_google_clients(monkeypatch):
 
 class TestResolvePath:
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (docs/automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
+        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
     )
     def test_absolute_path_is_returned_unchanged(self):
         assert daemon_main._resolve_path("/etc/hosts") == "/etc/hosts"
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (docs/automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
+        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
     )
     def test_relative_path_is_joined_with_project_root(self, monkeypatch):
         monkeypatch.setattr(daemon_main, "PROJECT_ROOT", "/tmp/pf-root")
@@ -877,7 +877,7 @@ class TestBuildConnectorsTelegram:
             (tmp_path / "credentials" / "telegram.session").write_bytes(b"")
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (docs/automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
+        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
     )
     def test_built_when_creds_and_session_present(self, monkeypatch, tmp_path):
         self._make_session(tmp_path, monkeypatch, exists=True)

@@ -1,6 +1,6 @@
 """Real Task Scheduler autostart verification for the Windows installer
-(docs/automated-test-strategy-plan.md Phase 7 item 2 and Phase 13 item 4;
-the now-removed windows-support-plan.md 8.2).
+(the now-removed automated-test-strategy-plan.md Phase 7 item 2 and Phase 13 item 4;
+The now-removed windows-support-plan.md 8.2).
 
 ``test_windows_packaged_smoke.py`` (Phase 6.2) already proves the installer
 registers *a* Task Scheduler autostart task (``schtasks /query`` against it)
@@ -514,7 +514,7 @@ def _real_home_state(request):
     identically-named fixture: skip rather than run if this account already
     has PrivacyFence state, and remove whatever this test creates.
 
-    Also doubles as this module's docs/automated-test-strategy-plan.md Phase
+    Also doubles as this module's the now-removed automated-test-strategy-plan.md Phase
     10 diagnostics capture, for the same reason that module's does -- the
     generic per-``tmp_path`` capture in ../conftest.py cannot see any of
     this, and a Scheduler-launched process has no redirected stdout of its
@@ -732,7 +732,7 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
 # default, let alone the suite's 30s one.
 @pytest.mark.timeout(600)
 async def test_crash_restart_relaunches_a_killed_daemon(_installed):
-    """docs/automated-test-strategy-plan.md Phase 13 item 4 -- the positive
+    """The now-removed automated-test-strategy-plan.md Phase 13 item 4 -- the positive
     assertion, and the direct successor of this module's own negative test,
     ``test_restart_on_failure_does_not_cover_a_crashed_daemon`` (preserved in
     git history, not this file). That test measured, rather than assumed,

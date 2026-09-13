@@ -1,5 +1,5 @@
 """Packaged-artifact lifecycle test for the Windows installer
-(docs/automated-test-strategy-plan.md Phase 6 item 6.2; docs/windows-support-
+(the now-removed automated-test-strategy-plan.md Phase 6 item 6.2; docs/windows-support-
 plan.md Phase 4/6).
 
 The same role ``tests/integration/test_macos_packaged_smoke.py`` (TST-15)

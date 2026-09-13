@@ -1,5 +1,5 @@
 """Real graphical-session autostart verification for the Linux ``.deb``
-(docs/automated-test-strategy-plan.md Phase 7 item 1; the now-removed linux-local-deb-
+(the now-removed automated-test-strategy-plan.md Phase 7 item 1; the now-removed linux-local-deb-
 packaging-plan.md P7.2).
 
 ``test_deb_packaged_lifecycle.py`` (Phase 6.3) already proves the install/
@@ -62,7 +62,7 @@ this, a GitHub-hosted ``ubuntu-latest`` runner, a real VM, passes it), with
 whatever else each specific test additionally needs (a just-built ``.deb``
 and passwordless root for the autostart test; ``Xvfb`` for the browser
 test). This is the flakiest, most expensive tier in
-``docs/automated-test-strategy-plan.md``'s whole taxonomy by design (see
+`the now-removed `automated-test-strategy-plan.md``'s whole taxonomy by design (see
 Phase 7's own objective) -- scheduled on packaging-related ``main`` changes,
 nightly/periodic runs, and release-candidate tags via its own
 ``.github/workflows/linux-graphical-session.yml``, deliberately kept out of
@@ -204,7 +204,7 @@ def _current_user() -> str:
 # --------------------------------------------------------------------------- #
 
 def _capture_real_home_diagnostics(request, real_home: Path, state_dir: Path) -> None:
-    """docs/automated-test-strategy-plan.md Phase 10: this module's own
+    """The now-removed automated-test-strategy-plan.md Phase 10: this module's own
     tests/diagnostics.py capture call, since ``_real_home_state`` (unlike
     every other packaged/system fixture in this repo) deliberately isolates
     nothing under ``tmp_path`` -- see this fixture's own docstring for why.

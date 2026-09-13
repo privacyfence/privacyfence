@@ -127,7 +127,7 @@ jobs:
             htmlcov/
           retention-days: 30
 
-      # Everything under test-results/ (docs/automated-test-strategy-plan.md
+      # Everything under test-results/ (the now-removed automated-test-strategy-plan.md
       # Phase 10): test_browser_smoke.py's own Phase 4.5
       # _capture_failure_artifacts fixture (screenshot/DOM/console/daemon-log,
       # under test-results/browser-smoke/) plus Phase 10's own generic
@@ -212,14 +212,14 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # the now-removed windows-support-plan.md Phase 6.2 (B5 in the now-removed windows-linux-
+  # The now-removed windows-support-plan.md Phase 6.2 (B5 in the now-removed windows-linux-
   # support-plan.md): a real-Windows confirmation that nothing path-
   # separator- or Path-handling-related breaks that the `test` job above
   # (already proven platform-independent on a second POSIX platform via
   # Linux CI) can't catch. Originally gated to workflow_dispatch only, with
   # Phase 6.2's own text leaving "keep it permanent" vs. "rely on build.yml's
   # release-time Windows job alone" as a decision for once it had actually
-  # been run for real. docs/automated-test-strategy-plan.md Phase 2.1 makes
+  # been run for real. The now-removed automated-test-strategy-plan.md Phase 2.1 makes
   # that call: promoted to a permanent per-PR leg (renamed test-windows ->
   # platform-windows to match) now that it's proven green.
   #
@@ -230,7 +230,7 @@ jobs:
   # modules with no platform marker (settings_controller.py, drive.py, a
   # shim-contract test, an audit-log test), none of which lived in
   # tests/platform/'s own subject matter -- a subset chosen ahead of time
-  # would have missed them. See automated-test-strategy-plan.md Phase 2's
+  # would have missed them. See the now-removed automated-test-strategy-plan.md Phase 2's
   # status note for the full reasoning.
   platform-windows:
     runs-on: windows-latest
@@ -264,7 +264,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # docs/automated-test-strategy-plan.md Phase 2.2: the macOS leg of the
+  # The now-removed automated-test-strategy-plan.md Phase 2.2: the macOS leg of the
   # same "does the runtime work on every desktop OS" question 2.1's
   # platform-windows job already answers for Windows -- runs the identical
   # core suite (same reasoning: catch macOS-specific breakage in the Python
@@ -304,7 +304,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # docs/automated-test-strategy-plan.md Phase 8 item 2: tests/integration/
+  # The now-removed automated-test-strategy-plan.md Phase 8 item 2: tests/integration/
   # test_org_ubuntu_release_smoke.py gates its whole module behind
   # PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS -- unset everywhere else in this
   # file, so the `test` job's own full-suite run above always skips it
