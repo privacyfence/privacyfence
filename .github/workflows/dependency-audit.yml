@@ -91,16 +91,20 @@ jobs:
       - name: Install uv
         run: pip install uv
 
-      # --universal + the other flags here must match scripts/update_dependency_locks.sh exactly --
-      # see that script's own comments for what each one does and why (in short: --universal is
-      # what lets one lock file carry Windows-only deps like mcp's `pywin32` alongside macOS/Linux
-      # ones, via environment markers pip evaluates at install time on whichever OS it's running on).
+      # Every flag here must match scripts/update_dependency_locks.sh exactly -- see that script's
+      # own comments for what each one does and why (in short: --universal is what lets one lock
+      # file carry Windows-only deps like mcp's `pywin32` alongside macOS/Linux ones, via
+      # environment markers pip evaluates at install time on whichever OS it's running on; the
+      # explicit --python-version pins the *floor* of that resolution to pyproject.toml's own
+      # `requires-python`, rather than to whatever Python version actions/setup-python happens to
+      # install above -- without it, this job's own 3.13 interpreter silently resolves a narrower
+      # dependency set than a contributor regenerating locally under an older supported Python).
       - name: Regenerate lock files into a scratch copy
         run: |
           mkdir -p /tmp/lockcheck
-          uv pip compile --universal --generate-hashes --no-strip-extras \
+          uv pip compile --universal --python-version 3.11 --generate-hashes --no-strip-extras \
             --output-file=/tmp/lockcheck/runtime.lock.txt pyproject.toml
-          uv pip compile --universal --generate-hashes --no-strip-extras \
+          uv pip compile --universal --python-version 3.11 --generate-hashes --no-strip-extras \
             --extra dev --extra test --extra lint \
             --output-file=/tmp/lockcheck/dev.lock.txt pyproject.toml
 

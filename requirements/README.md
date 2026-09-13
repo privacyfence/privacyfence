@@ -3,10 +3,10 @@
 Both files here are derived, `uv pip compile --universal`-generated output (SEC-19) — do not
 hand-edit either one; regenerate with
 [`scripts/update_dependency_locks.sh`](../scripts/update_dependency_locks.sh)
-(needs `uv` on PATH — see the script's own comments for why `--universal` matters here) after any
-`pyproject.toml` dependency change, and commit the result.
-`.github/workflows/dependency-audit.yml`'s `lockfile-freshness` job fails the build if a committed
-file has drifted from what `pyproject.toml` actually resolves to.
+(needs `uv` on PATH — see the script's own comments for why `--universal` and the explicit
+`--python-version` floor it also passes both matter here) after any `pyproject.toml` dependency
+change, and commit the result. `.github/workflows/dependency-audit.yml`'s `lockfile-freshness` job
+fails the build if a committed file has drifted from what `pyproject.toml` actually resolves to.
 
 - **`runtime.lock.txt`** — `pyproject.toml`'s `[project.dependencies]` only, no extras. This is not
   what a plain `pip install privacyfence` resolves — pip doesn't auto-discover or apply a lock file,
