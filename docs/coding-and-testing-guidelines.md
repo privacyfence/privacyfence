@@ -289,8 +289,8 @@ A new connector's test module should include, at minimum:
       shim<->`/mcp` contract without the other only fails there, not in either side's own unit
       tests.
 - [ ] If this PR changes a dependency in `pyproject.toml` (a version bound, a new package, an
-      extra): run `scripts/update_dependency_locks.sh` (needs `python3.13 -m pip install pip-tools`
-      — Python 3.13 specifically, see the script's own comments for why) and commit the resulting
+      extra): run `scripts/update_dependency_locks.sh` (needs `uv` on PATH, see the script's own
+      comments for why) and commit the resulting
       `requirements/*.lock.txt` — `dependency-audit.yml`'s `lockfile-freshness` job fails the build
       otherwise.
 
