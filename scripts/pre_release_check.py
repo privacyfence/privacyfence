@@ -38,8 +38,19 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def run(description: str, cmd: list[str], cwd: Path) -> bool:
     print(f"--- {description} ({' '.join(cmd)}) ---")
-    result = subprocess.run(cmd, cwd=cwd)
-    ok = result.returncode == 0
+    try:
+        result = subprocess.run(cmd, cwd=cwd)
+        ok = result.returncode == 0
+    except FileNotFoundError:
+        # A missing tool (e.g. no `npm` on PATH, or a venv that was never
+        # `pip install -e ".[dev,test,lint]"`d) used to blow up main() with
+        # a raw traceback -- killing the whole run and skipping every check
+        # after it, rather than reporting one FAIL and letting the rest
+        # (ruff, bandit, ...) still run. See README.md's "Run from source"
+        # for the venv setup and pyproject.toml's `[project.optional-
+        # dependencies]` for the `dev`/`test`/`lint` extras this needs.
+        print(f"error: '{cmd[0]}' not found on PATH -- is it installed?")
+        ok = False
     print(f"--- {description}: {'PASS' if ok else 'FAIL'} ---\n")
     return ok
 
