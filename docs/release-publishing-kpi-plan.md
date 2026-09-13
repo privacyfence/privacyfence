@@ -450,6 +450,20 @@ Rollout doc's "Phase D".
 **Exit criteria:** the deployed site's `release-stats.json` shows `github_installer_downloads`
 matching a manual count of installer-only assets on the current release list.
 
+**Implemented.** The filter+sum logic was extracted into `scripts/release_stats.py` rather than
+left inline, with `tests/unit/test_release_stats.py` covering it (`is_installer_asset`/
+`compute_stats` are pure functions, so no HTTP mocking is needed) — closing the coverage gap this
+phase's own wording flagged as merely acceptable if left inline. It reuses
+`classify_installer()` from Phase 2's `scripts/r2_release.py` rather than a second, separately
+maintained filename filter: a GitHub Release for a stable tag is built from the same DMG/
+`-setup.exe`/`.deb` files that script's manifest already classifies as installers, so one
+definition serves both the Cloudflare and GitHub halves of the KPI. `pages.yml` now calls
+`python3 scripts/release_stats.py --repo "$REPOSITORY" --output _site/release-stats.json` instead
+of its old inline heredoc, and `website/stats.js` reads `github_installer_downloads` instead of the
+old, ambiguous `downloads` field. **Not yet met**: this hasn't run in production yet (needs a push
+to `main` or the next scheduled `pages.yml` run) to confirm the deployed `release-stats.json`
+matches a manual count on the real release list.
+
 ## Phase 5 — Website download page
 
 Rollout doc's "Phase E". **Homepage CTAs are not touched in this phase** — `/download/` ships
