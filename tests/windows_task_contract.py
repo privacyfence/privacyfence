@@ -81,7 +81,7 @@ def assert_task_xml_matches_autostart_contract(xml_text: str, *, exec_path: str)
         f"<LogonTrigger> is scoped to one account; it must fire for any interactive logon\n{context}"
     )
 
-    # Real crash-restart (automated-test-strategy-plan.md Phase 13): the
+    # Real crash-restart (the now-removed automated-test-strategy-plan.md Phase 13): the
     # LogonTrigger above only ever fires once per sign-in, so it cannot
     # bring a daemon back after it dies mid-session -- and RestartOnFailure
     # (asserted below) was measured on a real windows-latest runner not to
@@ -170,7 +170,7 @@ def assert_task_xml_matches_autostart_contract(xml_text: str, *, exec_path: str)
     )
     # Crash-restart -- the Windows analogue of the macOS LaunchAgent's
     # KeepAlive/SuccessfulExit=false and the .deb's systemd
-    # Restart=on-failure (automated-test-strategy-plan.md Phase 13).
+    # Restart=on-failure (the now-removed automated-test-strategy-plan.md Phase 13).
     restart = settings.find(f"{TASK_NS}RestartOnFailure")
     assert restart is not None, (
         f"no <RestartOnFailure>: the crash-restart behavior this task is supposed to carry is not "

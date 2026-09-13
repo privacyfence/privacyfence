@@ -63,7 +63,7 @@ the packaged app:
    manual, per this plan's own governing rule. Runs against its own private
    copy of the bundle (``signed_app_copy``), not the one step 6 deletes --
    see that fixture's own docstring for why.
-8. **Upgrade in place** (docs/automated-test-strategy-plan.md Phase 6 item
+8. **Upgrade in place** (the now-removed automated-test-strategy-plan.md Phase 6 item
    20 -- deliberately not built in the same PR as steps 1-7): install
    version N, apply real state through the daemon's own MCP surface,
    replace the bundle with a synthetically-relabeled version N+1 at the
@@ -252,7 +252,7 @@ def _wait_for_file(path: Path, proc: subprocess.Popen, log_path: Path, timeout: 
     MCP token files, ``load_or_create_token()``/``web/mcp_auth.py``) --
     these are written before the server starts accepting connections, but
     poll rather than assume either is already flushed to disk the instant
-    the socket answers. ``log_path`` (docs/automated-test-strategy-plan.md
+    the socket answers. ``log_path`` (the now-removed automated-test-strategy-plan.md
     Phase 10) is the daemon's own redirected stdout/stderr, embedded in
     either failure message below -- same shape
     test_windows_packaged_smoke.py's identically-named helper already
@@ -371,7 +371,7 @@ def running_packaged_daemon(installed_app, tmp_path):
     fresh scratch ``$HOME`` per test. Thin wrapper around
     ``_running_daemon_at`` -- see that function's own docstring for the
     actual mechanism. ``home`` lives under this test's own ``tmp_path``
-    (docs/automated-test-strategy-plan.md Phase 10), not a bare
+    (the now-removed automated-test-strategy-plan.md Phase 10), not a bare
     ``tempfile.mkdtemp()`` this fixture used to manually ``shutil.rmtree()``
     on the way out -- pytest already owns ``tmp_path``'s own lifecycle
     (rotated, not deleted immediately), which is what lets a failing test's
