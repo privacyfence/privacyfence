@@ -31,18 +31,39 @@ never through S3 credentials, so run 8 said nothing about them, and the alternat
 mid-release. Keep that in mind when either credential is next rotated: a green
 `deploy-download-worker.yml` is not evidence about the R2 pair, and vice versa.
 
-**Phase 2 is implemented, but its exit criteria are not met yet.** `scripts/r2_release.py` now has
-`finalize`/`verify`/`promote` alongside `channel`/`upload`, writes the schema-1 manifest, and
-`build.yml` has a `finalize-release` job; the unit tests covering all of it are green. What is
-still outstanding is the half only a release can prove: **no real tag has been pushed since**, so
-nothing has yet written a `manifest.json` or a `latest.json` into R2. Until that happens, Phase 2
-is code-complete and unproven, in the same way the R2 credentials were before they were checked by
-hand.
+**Phase 2 is done, proven end-to-end by `v4.0.0a14`** (`build.yml` run 89, 2026-09-13 16:37Z). That
+run's `finalize-release` job wrote `releases/alpha/4.0.0a14/manifest.json`, verified every artifact
+it references against the size and SHA-256 recorded in R2, promoted `alpha/latest.json`, and then
+its `HEAD`-only smoke test resolved all three installers through the live Worker:
 
-Phase 3 depends on Phase 2 having published real manifests, so it is blocked on that tag; Phase 4
-is independent of both and can run in parallel now. Use this doc to scope a single session/PR to
-one phase — e.g. "implement phase 2 of the release publishing plan" refers to a phase heading
-below.
+```
+ok: macos-arm64
+ok: windows-x64
+ok: linux-x64
+```
+
+So the whole chain now works in production: tag → build → R2 upload → manifest → verify →
+`latest.json` → Worker resolution.
+
+**The release before it is worth keeping on the record, because it proved the safety property
+rather than the happy path.** `v4.0.0a13` (run 88) failed in `build-windows`, for a reason with
+nothing to do with this plan: `2aa93d2` had added a hash-pinned
+`pip install --require-hashes -r requirements/runtime.lock.txt` to the build jobs, and on Windows
+`mcp` pulls `pywin32`, which the then-Linux-only lock did not contain. `finalize-release` was
+skipped, exactly as designed — so `4.0.0a13`'s DMG, `.deb` and SBOMs sit in R2 to this day with
+**no manifest and no `latest.json` pointing at them**. An incomplete release existed in the bucket
+without ever becoming the one the Worker serves. That is the transactional guarantee working under
+real conditions, and it is better evidence than any test. (The lock gap was fixed separately by
+switching generation to `uv pip compile --universal`, which emits
+`pywin32==312 ; sys_platform == 'win32'` with hashes — see `#358`.)
+
+**Phase 3 is unblocked, and one of its bullets is already proven**: route resolution through
+`latest.json` → manifest → R2 object works for all three platforms. What remains is precisely what
+`HEAD` cannot exercise, because `HEAD` deliberately never counts — real `GET` streaming, the D1
+counter incrementing once per download start, `Range: bytes=0-` counting while a `bytes=N-` resume
+does not, and `/api/stats/downloads` reflecting reality. Phase 4 has landed but is likewise not yet
+confirmed in production (see its own section). Use this doc to scope a single session/PR to one
+phase — e.g. "implement phase 2 of the release publishing plan" refers to a phase heading below.
 
 ## Goal
 
@@ -412,7 +433,8 @@ Rollout doc's "Phase B".
 manifest shape against the Worker's own fixtures, the ordering guarantee, the immutability guard,
 and every `verify` failure mode). A real tag push (or a manual `workflow_dispatch` rerun against
 an already-tagged commit) produces `releases/<channel>/<version>/manifest.json` and updates
-`<channel>/latest.json` in R2 — **not yet met, no tag has been pushed since this landed**. A
+`<channel>/latest.json` in R2 — **met** by `v4.0.0a14` (run 89), including the `HEAD`-only smoke
+test resolving all three installers through the live Worker; see the Status note at the top. A
 deliberately-broken run (one installer missing) leaves `latest.json` unchanged — **met**, by test
 rather than by hand.
 
@@ -428,9 +450,30 @@ Rollout doc's "Phase C". Validation only — a PR only if bugs surface.
 - Fix anything found as a small patch to `cloudflare/downloads/src/index.ts`, with a regression
   test added to Phase 1's suite — don't let Phase 3 grow its own untested surface.
 
+**Starting point (2026-09-13).** `alpha/latest.json` points at `4.0.0a14`, so this phase has real
+data to work against without cutting a new tag. Two things are already confirmed in production and
+need no re-checking:
+
+- **Route resolution works for all three platforms** — run 89's `HEAD` smoke test resolved
+  `/download/alpha/{macos-arm64,windows-x64,linux-x64}` through `latest.json` → manifest → R2.
+- **`/health` returns `{"status":"ok"}`**, and the bare root `/` returns 404
+  `{"error":"no such route"}`. The 404 is correct, not a defect: `index.ts`'s handler serves
+  `/health`, `/api/*` and `/download/*` and falls through to `notFound("no such route")` for
+  everything else. Whether `/` should instead redirect to `privacyfence.eu/download/` is a Phase 5
+  product question, not a bug to fix here.
+
+What is left is exactly what `HEAD` cannot exercise, since `HEAD` never counts: real `GET`
+streaming, the D1 counter incrementing once per download start, `Range: bytes=0-` counting while a
+`bytes=N-` resume does not, and `/api/stats/downloads` reflecting reality. Run these against
+`alpha` rather than `stable` — `download_counts` records the channel, so the verification traffic
+stays separable from real user downloads, and a pre-release nobody is installing is the honest
+place to generate deliberate counts.
+
 **Exit criteria:** all download/counting "definition of done" bullets (see bottom of this doc)
-that depend on real data hold in production, still reachable only via `*.workers.dev` / with no
-website change yet.
+that depend on real data hold in production, with no website change yet. (The original wording
+offered `*.workers.dev` as the access path; that URL no longer exists — the committed
+`workers_dev = false` took effect on Phase 1's first successful deploy, so this phase is verified
+against `downloads.privacyfence.eu`.)
 
 ## Phase 4 — Fix the GitHub download KPI
 
