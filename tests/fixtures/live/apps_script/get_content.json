@@ -1,0 +1,39 @@
+{
+  "files": [
+    {
+      "createTime": "2026-09-13T13:35:02.898Z",
+      "functionSet": {},
+      "lastModifyUser": {
+        "domain": "qa-placeholder.example.com",
+        "email": "qa-placeholder@example.com",
+        "name": "QA Placeholder",
+        "photoUrl": "https://example.com/qa-placeholder"
+      },
+      "name": "appsscript",
+      "source": "{\n  \"timeZone\": \"Europe/Budapest\",\n  \"dependencies\": {\n  },\n  \"exceptionLogging\": \"STACKDRIVER\",\n  \"runtimeVersion\": \"V8\"\n}",
+      "type": "JSON",
+      "updateTime": "2026-09-13T13:35:29.762Z"
+    },
+    {
+      "createTime": "2026-09-13T13:35:02.898Z",
+      "functionSet": {
+        "values": [
+          {
+            "name": "myFunction"
+          }
+        ]
+      },
+      "lastModifyUser": {
+        "domain": "qa-placeholder.example.com",
+        "email": "qa-placeholder@example.com",
+        "name": "QA Placeholder",
+        "photoUrl": "https://example.com/qa-placeholder"
+      },
+      "name": "Code",
+      "source": "function myFunction() {\n  Logger.log(\"Hello World!\")\n}\n",
+      "type": "SERVER_JS",
+      "updateTime": "2026-09-13T13:35:29.762Z"
+    }
+  ],
+  "scriptId": "qa-placeholder-id-1"
+}

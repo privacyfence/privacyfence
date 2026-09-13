@@ -38,6 +38,8 @@ For each: click the API in the search results, then click **Enable**.
 
 > **Note:** This project deliberately never requests Admin SDK / Workspace-directory scopes. `calendar_list_rooms` (room/resource booking) is served from a static room directory synced separately — see "Room directory sync" below — precisely so that the OAuth client every employee authorizes day to day can never read the Workspace directory.
 
+> **Note:** The Apps Script API is the one API in this table that enabling here is *not* sufficient for. Each individual user must also turn on **Google Apps Script API** at [script.google.com/home/usersettings](https://script.google.com/home/usersettings) — a per-user switch Google keeps entirely separate from this project's API Library, and off by default. Until they do, every `apps_script_*` call fails with a 403 (`User has not enabled the Apps Script API`) even though the project has the API enabled and the user's OAuth token is otherwise valid. It costs one click, but nothing in the Cloud console surfaces it, so include it in whatever setup instructions your users get.
+
 > **Note:** The Apps Script connector also requests a narrow `drive.metadata.readonly` scope (name/id/timestamps only, never file content) purely to list a user's own standalone script projects — the Apps Script API itself has no "list my projects" endpoint. It runs no script code: there is deliberately no `run`/execute tool. See `apps_script_client.py`'s module docstring.
 
 ### 3. Configure the OAuth consent screen
