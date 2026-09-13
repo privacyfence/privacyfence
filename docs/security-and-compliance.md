@@ -135,7 +135,7 @@ See [`org-mode-operational-readiness.md`](org-mode-operational-readiness.md).
 
 Current automated security evidence includes unit/integration tests, browser/CSP tests, coverage-floor enforcement, static analysis, Python compatibility checks, scheduled live-provider checks, and release/platform smoke coverage described in [`testing-policy.md`](testing-policy.md).
 
-Remaining automation gaps are tracked only in [`automated-test-strategy-plan.md`](automated-test-strategy-plan.md).
+What is deliberately left to human judgment rather than automated, and why, is in [`testing-policy.md`](testing-policy.md)'s "What deliberately remains manual".
 
 ## Vendor risk criteria
 

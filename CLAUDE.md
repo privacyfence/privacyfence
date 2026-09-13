@@ -65,7 +65,7 @@ build_mcpb.sh` reads the real version only to stamp the `.mcpb` manifest itself
 
 ### Packaged-artifact release gating
 
-`docs/automated-test-strategy-plan.md` Phase 6.4: every published DMG/installer/`.deb` is started
+The now-removed `automated-test-strategy-plan.md` Phase 6.4: every published DMG/installer/`.deb` is started
 and exercised, automatically, before it (or anything else from the same tag) actually ships.
 
 Within `build.yml`, this needs no cross-workflow trickery — each of the `build` (macOS),

@@ -480,7 +480,7 @@ class TestDownloadFile:
         reason="'Saved to'/path previews embed this test's '/tmp' destination_dir "
         "verbatim via os.path.join(), which keeps the given POSIX-style root but appends "
         "with a native (backslash) separator on Windows -- a genuine finding from "
-        "promoting this suite to Windows CI (docs/automated-test-strategy-plan.md "
+        "promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md "
         "Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
     )
     async def test_download_file_preview_and_args(self, gated_call_spy):
@@ -542,7 +542,7 @@ class TestDownloadFile:
         reason="'Saved to'/path previews embed this test's '/tmp' destination_dir "
         "verbatim via os.path.join(), which keeps the given POSIX-style root but appends "
         "with a native (backslash) separator on Windows -- a genuine finding from "
-        "promoting this suite to Windows CI (docs/automated-test-strategy-plan.md "
+        "promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md "
         "Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
     )
     async def test_google_doc_preview_reflects_export_extension(self, gated_call_spy):

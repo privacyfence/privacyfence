@@ -1465,7 +1465,7 @@ class TestRenderReport:
 
 
 # ---------------------------------------------------------------------------- #
-# Fixture freshness reporting (1.9, docs/automated-test-strategy-plan.md
+# Fixture freshness reporting (1.9, the now-removed automated-test-strategy-plan.md
 # Phase 1 residual work) -- < 60 days healthy / 60-90 days warning / > 90
 # days refresh required, folded into the same report --check/--record
 # already print.
@@ -1537,7 +1537,7 @@ class TestFixtureFreshnessLines:
 # and CI would stay green.
 # ---------------------------------------------------------------------------- #
 
-# docs/automated-test-strategy-plan.md Phase 0: static manifest cross-check,
+# The now-removed automated-test-strategy-plan.md Phase 0: static manifest cross-check,
 # no I/O -- unit per testing-policy.md's seven-layer taxonomy.
 @pytest.mark.unit
 class TestFixturePresence:
@@ -1577,7 +1577,7 @@ class TestFixturePresence:
 
 
 # ---------------------------------------------------------------------------- #
-# Bounded lifecycle tests (1.8, docs/automated-test-strategy-plan.md Phase 1
+# Bounded lifecycle tests (1.8, the now-removed automated-test-strategy-plan.md Phase 1
 # residual work). None of these use a mocked *_client.py's own SDK object the
 # way TestCheckConfluence/TestCheckJira/... above do -- those already prove
 # each check_<connector>() function correctly drives the real client through

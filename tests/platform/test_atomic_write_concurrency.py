@@ -1,6 +1,6 @@
 """Cross-process atomicity of secure_files.atomic_write_bytes() (SEC-09).
 
-docs/automated-test-strategy-plan.md Phase 2.3 -- "file handling." The
+The now-removed automated-test-strategy-plan.md Phase 2.3 -- "file handling." The
 existing coverage of secure_files.py (tests/unit/test_secure_files.py)
 proves atomic_write_bytes() writes to a sibling temp file and os.replace()s
 it into place, and that the destination's permissions/content are correct

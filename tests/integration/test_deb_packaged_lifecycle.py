@@ -1,8 +1,8 @@
 """Packaged-artifact lifecycle test for the Linux ``.deb``
-(docs/automated-test-strategy-plan.md Phase 6 item 6.3; the now-removed linux-local-deb-
+(the now-removed automated-test-strategy-plan.md Phase 6 item 6.3; the now-removed linux-local-deb-
 packaging-plan.md P7.1/P7.3).
 
-the now-removed ``linux-local-deb-packaging-plan.md`` Phase 7 already proved this
+The now-removed ``linux-local-deb-packaging-plan.md`` Phase 7 already proved this
 lifecycle by hand once (P7.1: install/validate/remove/purge; P7.3, partially:
 reinstalling the same build over itself leaves ``$HOME`` alone). This module
 turns that into a repeatable CI job, the same role
@@ -192,7 +192,7 @@ def _purge_if_present() -> None:
 
 
 def _capture_installed_file_manifest(request) -> None:
-    """docs/automated-test-strategy-plan.md Phase 10 item 1's "an
+    """The now-removed automated-test-strategy-plan.md Phase 10 item 1's "an
     installed-file manifest (packaged tests)" -- unlike
     test_windows_packaged_smoke.py's own install directory (already under
     that test's own ``tmp_path``, so tests/diagnostics.py's generic

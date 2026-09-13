@@ -763,7 +763,7 @@ def _start_org_web_server(
         # "Always allow"/propose-rule-change paths) would raise
         # "auto_accept config path not initialized" instead, the one time
         # this had a live end-to-end test in front of it (docs/
-        # automated-test-strategy-plan.md Phase 8).
+        # The now-removed automated-test-strategy-plan.md Phase 8).
         init_config_path(_resolve_path("config/settings.yaml"))
         return build_connectors(cfg, org_config)
 
@@ -1348,7 +1348,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     if not _acquire_instance_lock():
         # Windows' autostart task (installer/privacyfence-task.xml.tmpl)
         # carries a repeating <TimeTrigger> as its real crash-restart
-        # mechanism (automated-test-strategy-plan.md Phase 13): every tick
+        # mechanism (the now-removed automated-test-strategy-plan.md Phase 13): every tick
         # launches this daemon, and finding one already running is the
         # expected outcome on every tick but the one that actually needed a
         # relaunch, not a failure. Logging it at ERROR and exiting 1, as

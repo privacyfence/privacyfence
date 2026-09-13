@@ -7,7 +7,6 @@ This directory documents PrivacyFence as it works in the current source tree. Ru
 - [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md) — architecture, runtime, MCP transport, configuration, state, approvals, connectors, audit logging, and packaging.
 - [`security-and-compliance.md`](security-and-compliance.md) — security boundaries, authentication, authorization, privacy controls, audit integrity, and deployment considerations.
 - [`testing-policy.md`](testing-policy.md) — test layers, CI execution, live-provider checks, and what remains manual.
-- [`automated-test-strategy-plan.md`](automated-test-strategy-plan.md) — the cross-platform test-automation plan.
 - [`release-publishing-kpi-plan.md`](release-publishing-kpi-plan.md) — the release-publishing and download-KPI plan (the `downloads.privacyfence.eu` Worker, release manifests, and the download counter).
 
 ## User and operator guides
@@ -61,6 +60,6 @@ CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tes
 
 Documentation in this directory is a standing reference, not a changelog. Describe what the current implementation does and the boundaries it currently has. Do not preserve completed implementation plans, migration narratives, phase names, or “before/after” history in standing docs.
 
-The exceptions are the two active implementation plans, intentionally live documents while their tracked work remains open — [`automated-test-strategy-plan.md`](automated-test-strategy-plan.md) (cross-platform test automation) and [`release-publishing-kpi-plan.md`](release-publishing-kpi-plan.md) (the download Worker, release manifests, and the download KPI). Remove or convert each once its own work is complete rather than leaving it in `docs/`. Standing, platform-specific open items that aren't phase-shaped implementation work belong in `platform-support.md`'s "Known open items" section instead of a dedicated plan doc.
+The exception is an active implementation plan, intentionally a live document while its tracked work remains open — today that is [`release-publishing-kpi-plan.md`](release-publishing-kpi-plan.md) (the download Worker, release manifests, and the download KPI), and it is the only one. Remove or convert each once its own work is complete rather than leaving it in `docs/`: `automated-test-strategy-plan.md` was retired under exactly this rule once all fourteen of its phases had landed, with the parts still worth keeping — the core testing principle, the seven-layer taxonomy, and the full list of what deliberately stays manual — folded into [`testing-policy.md`](testing-policy.md) first. Standing, platform-specific open items that aren't phase-shaped implementation work belong in `platform-support.md`'s "Known open items" section instead of a dedicated plan doc.
 
 When behavior changes, update the nearest standing reference in the same pull request. Prefer stable module, command, route, configuration-key, and workflow names over line numbers or historical pull-request identifiers.

@@ -1,5 +1,5 @@
 """Shared CI-diagnostics capture for system/packaged-artifact test failures
-(docs/automated-test-strategy-plan.md Phase 10).
+(the now-removed automated-test-strategy-plan.md Phase 10).
 
 Phase 10's objective is "make test failures diagnosable entirely from cloud
 CI" -- this project is developed cloud-first, with no dedicated physical
