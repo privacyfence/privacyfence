@@ -189,16 +189,17 @@ jobs:
       # docstrings and docs/google-cloud-setup.md, docs/slack-setup.md, docs/salesforce-setup.md,
       # docs/atlassian-setup.md.
       #
-      # Requires these GitHub secrets/vars (Settings → Secrets and variables → Actions), same
-      # names r2-smoke-test.yml used before it was deleted:
-      #   CF_R2_ACCESS_KEY_ID / CF_R2_SECRET_ACCESS_KEY  — R2 API token (secrets)
-      #   CF_R2_ENDPOINT                                 — R2 S3-compatible endpoint URL (var)
+      # Requires these GitHub secrets/vars (Settings → Secrets and variables → Actions), named for
+      # what they're for -- the release archive's R2 credentials, as opposed to the download
+      # Worker's own CF_DOWNLOADS_WORKER_* deploy credentials (deploy-download-worker.yml):
+      #   CF_RELEASES_R2_ACCESS_KEY_ID / CF_RELEASES_R2_SECRET_ACCESS_KEY  — R2 API token (secrets)
+      #   CF_RELEASES_R2_ENDPOINT                                         — R2 endpoint URL (var)
       - name: Publish release artifacts to Cloudflare R2
         if: startsWith(github.ref, 'refs/tags/')
         env:
-          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
-          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
-          CF_R2_ENDPOINT: ${{ vars.CF_R2_ENDPOINT }}
+          CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
+          CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
+          CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
           R2_BUCKET: privacyfence-releases
         run: |
           python3 -m pip install --quiet --user boto3
@@ -371,9 +372,9 @@ jobs:
       - name: Publish release artifacts to Cloudflare R2
         if: startsWith(github.ref, 'refs/tags/')
         env:
-          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
-          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
-          CF_R2_ENDPOINT: ${{ vars.CF_R2_ENDPOINT }}
+          CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
+          CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
+          CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
           R2_BUCKET: privacyfence-releases
         shell: bash
         run: |
@@ -524,9 +525,9 @@ jobs:
       - name: Publish release artifacts to Cloudflare R2
         if: startsWith(github.ref, 'refs/tags/')
         env:
-          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
-          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
-          CF_R2_ENDPOINT: ${{ vars.CF_R2_ENDPOINT }}
+          CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
+          CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
+          CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
           R2_BUCKET: privacyfence-releases
         run: |
           python3 -m pip install --quiet boto3
@@ -630,9 +631,9 @@ jobs:
       - name: Publish SBOMs to Cloudflare R2
         if: startsWith(github.ref, 'refs/tags/')
         env:
-          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
-          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
-          CF_R2_ENDPOINT: ${{ vars.CF_R2_ENDPOINT }}
+          CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
+          CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
+          CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
           R2_BUCKET: privacyfence-releases
         run: |
           python3 -m pip install --quiet boto3

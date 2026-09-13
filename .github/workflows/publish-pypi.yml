@@ -228,9 +228,9 @@ jobs:
       # docstring for the bucket layout and why alpha/beta/rc stop here rather than reaching PyPI.
       - name: Publish sdist and wheel to Cloudflare R2
         env:
-          CF_R2_ACCESS_KEY_ID: ${{ secrets.CF_R2_ACCESS_KEY_ID }}
-          CF_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_R2_SECRET_ACCESS_KEY }}
-          CF_R2_ENDPOINT: ${{ vars.CF_R2_ENDPOINT }}
+          CF_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.CF_RELEASES_R2_ACCESS_KEY_ID }}
+          CF_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.CF_RELEASES_R2_SECRET_ACCESS_KEY }}
+          CF_RELEASES_R2_ENDPOINT: ${{ vars.CF_RELEASES_R2_ENDPOINT }}
           R2_BUCKET: privacyfence-releases
         run: |
           python3 -m pip install --quiet boto3

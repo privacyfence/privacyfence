@@ -93,17 +93,23 @@ jobs:
       # Prerequisites section) -- never `--local`, which would apply to an ephemeral runner-only
       # database instead. Non-interactive in CI, per wrangler's own CI/CD detection --
       # confirmation is skipped automatically, a backup is still captured.
+      #
+      # The env var names on the left (CLOUDFLARE_API_TOKEN/CLOUDFLARE_ACCOUNT_ID) are fixed by
+      # wrangler's own CLI -- it reads exactly those names from the environment -- so only the
+      # GitHub secret on the right (CF_DOWNLOADS_WORKER_*) is this repo's to name; it's kept
+      # distinct from the release archive's CF_RELEASES_R2_* secrets (scripts/r2_release.py),
+      # which are a different Cloudflare credential for a different purpose.
       - name: Apply D1 migrations
         run: npx wrangler d1 migrations apply DB --remote
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_DOWNLOADS_WORKER_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_DOWNLOADS_WORKER_ACCOUNT_ID }}
 
       - name: Deploy Worker
         run: npx wrangler deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_DOWNLOADS_WORKER_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_DOWNLOADS_WORKER_ACCOUNT_ID }}
 
       # HEAD, never GET -- a release-CI smoke check must never itself inflate the download KPI
       # (docs/release-publishing-kpi-plan.md's cross-cutting notes), though /health touches
