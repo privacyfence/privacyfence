@@ -633,11 +633,28 @@ header, hero, connectors section, closing CTA and footer).
 Rollout doc's "Phase G" — explicitly deferrable; only start once Phases 1–6 have been live long
 enough to trust the download counts.
 
-**Add:**
+**Deferred, with a condition rather than a feeling (2026-09-13).** "Long enough to trust the
+counts" needs a threshold someone can check, or it becomes an argument every time it is raised.
+Two must both hold:
+
+1. **A stable release exists.** Everything published so far is an alpha, so a history page today
+   would list one pre-release and nothing else — `/download/` already shows that, better.
+2. **The counts clear the bar the site itself already uses.** `website/stats.js` shows the download
+   figure only at `>= 50` installer downloads or `>= 10` stars, on the reasoning that social proof
+   should not advertise an empty launch. A history page is the same claim in longer form, so it
+   earns the same gate rather than a new arbitrary one. Current total: **2**, both from Phase 3's
+   manual verification — see the Phase 3 section.
+
+Checking condition 2 is one request: `GET https://downloads.privacyfence.eu/api/stats/downloads`.
+
+**Add, when those hold:**
 
 - `website/releases/index.html`, `website/releases/releases.js`, backed by `GET /api/releases`.
   Shows each version, channel, release date, available platforms, and links to release notes and
   downloads.
+- Add both files to `pages.yml`'s build step in the same PR. That step copies a hand-written file
+  list, and omitting them ships the page as a 404 — exactly how `/download/` first shipped;
+  `tests/unit/test_website_download_cta.py` now fails if any `website/` file is missing from it.
 
 ## Cross-cutting notes (apply to every phase)
 

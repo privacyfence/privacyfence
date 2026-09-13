@@ -144,17 +144,27 @@ credentials/endpoint plumbing worked and was deleted once `r2_release.py` existe
 R2 is the one archive that has *everything*, regardless of what's also public elsewhere — stable
 artifacts land here too, even though they're also on PyPI/GitHub Releases. The bucket itself is
 left at Cloudflare R2's default (private — no public bucket policy or custom domain configured by
-anything in this repo), which is deliberate: alpha/beta (and, per the same gate, rc) need
-restricted access, and a private bucket is the only channel-agnostic way to guarantee that without
-duplicating the per-channel logic into a bucket-policy layer too. Concretely, this means:
+anything in this repo). **Be exact about what that privacy buys, because this section used to claim
+more than it delivers:**
+
+- **It does** make the download Worker the only public path to any artifact. Nothing can enumerate
+  the bucket, hotlink an object, or fetch a release without passing through the route that counts
+  it — which is what makes the download KPI a full count rather than a partial sample.
+- **It does not** restrict *who* may download a pre-release. `cloudflare/downloads/src/index.ts`
+  serves `/download/<channel>/<artifact>` for every channel it knows, unauthenticated, and
+  `/api/releases` lists them all. A private bucket behind a public Worker is a private bucket with
+  a public door.
+
+Concretely, this means:
 
 - **Stable**: reaches PyPI/TestPyPI (see above) and gets a public GitHub Release with the DMG,
   org-config scripts, and SBOMs attached, exactly as before — R2 is an additional private mirror,
   not stable's only distribution point.
 - **Alpha / beta / rc**: never reach PyPI/TestPyPI, and their GitHub Release entry (still created,
   marked prerelease, so `update_checker.py`'s beta channel — which reads exactly that flag off the
-  releases list — keeps working) carries no file attachments. The actual DMG/SBOMs/sdist/wheel
-  exist only in the private R2 bucket.
+  releases list — keeps working) carries no file attachments. The actual DMG/SBOMs/sdist/wheel are
+  stored only in R2 — reachable through the Worker's own download routes, but listed on no public
+  index other than `privacyfence.eu/download/` itself.
 
 Required secrets/vars (Settings → Secrets and variables → Actions), named for what they're for —
 the release archive's R2 credentials, distinct from the download Worker's own deploy credentials
@@ -168,12 +178,39 @@ the release archive's R2 credentials, distinct from the download Worker's own de
 - `CF_RELEASES_R2_ENDPOINT` (repo/environment **variable**, not a secret — `build.yml` and
   `publish-pypi.yml` read it as `vars.`) — the bucket's S3-compatible endpoint URL.
 
-**Not yet decided: how an authorized alpha/beta tester actually gets a file out of the private
-bucket.** Nothing in this repo automates that today (no presigned-URL script, no Cloudflare Access
-policy) — `scripts/r2_release.py` only ever pushes files in. Whoever sets up the beta-testing
-program should pick one (a maintainer-run script that mints short-lived presigned URLs, or
-Cloudflare Access/Zero Trust gating allow-listed tester emails in front of the bucket) and document
-it here alongside this section.
+### Who can download a pre-release
+
+**Decided (2026-09-13): anyone can, through the Worker.** A tester needs no credential, no
+presigned URL and no Access policy — just the link, or the "Want to test the next version?" section
+on `privacyfence.eu/download/`, which offers whichever pre-release channel has a build.
+
+This section previously asked "how does an authorized alpha/beta tester get a file out of the
+private bucket?" as an open question. It was answered by accident, in the opposite direction from
+the one intended: Phase 1's Worker shipped `/download/<channel>/<artifact>` unauthenticated for
+every channel, so pre-releases have been publicly downloadable since the day it deployed. Phase 5
+then put them on the public website on purpose — the plan's own wording asks for a public
+"want to test the next version?" invitation, which is flatly incompatible with the restricted
+access this section used to assert. The plan won, in code, months before anyone noticed the
+contradiction in writing.
+
+Keeping it that way is deliberate, not merely inherited. An open-source governance tool wants
+testers more than it wants gatekeeping; the pre-release channels are already separated from stable
+everywhere it matters (no PyPI, no GitHub Release assets, distinct `latest.json`, distinct D1
+counter rows); and the honest alternative — asking people to test software you make hard to obtain
+— tends to produce no testers rather than careful ones.
+
+**What still holds:** every pre-release download goes through the Worker, so it is counted, and R2
+itself stays unreachable except through it.
+
+**To reverse this** and make pre-releases genuinely restricted, the change is in the Worker, not
+the bucket — the bucket is already private and gates nothing on its own:
+
+1. Gate `routeDownload`/`routeApi` on channel: serve `stable` publicly, require proof for the rest
+   (a shared token header, or Cloudflare Access in front of the pre-release paths).
+2. Drop or gate the pre-release section in `website/download/download.js`, which currently
+   advertises whatever `rc`/`beta`/`alpha` build exists to every visitor.
+
+Doing (1) without (2) leaves the website inviting people to a download that will refuse them.
 
 ## Branching & PRs
 
