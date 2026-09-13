@@ -582,8 +582,30 @@ revertible.
   `github.com/privacyfence/privacyfence/releases/latest` to `https://privacyfence.eu/download/`.
   GitHub stays linked separately for source/docs.
 
-**Exit criteria:** all three primary CTAs point at the Worker-backed download page; GitHub
-Releases still function as the documented secondary source.
+**Implemented**, with one deviation and one addition worth knowing:
+
+- The CTAs use a **relative** `href="download/"` rather than the absolute
+  `https://privacyfence.eu/download/` this section originally specified. Same destination on the
+  deployed site, but it also works on a Pages preview deploy and in local preview, and it matches
+  the internal-link convention the page already uses for its anchors. The URL form was incidental
+  to this phase's intent; pointing away from GitHub Releases was the point.
+- `tests/unit/test_website_download_cta.py` guards the cutover statically. This phase's failure
+  mode is asymmetric: revert the download page without the CTAs (or the reverse) and every
+  "Download" button on the homepage points at nothing. That deserves an assertion which runs on
+  every machine with no browser, so it is a plain unit test rather than an addition to Phase 5's
+  Chromium suite, which skips wherever Chromium is missing. Verified to fail on a CTA reverted to
+  GitHub Releases, and to pass once restored.
+
+**This phase shipped without the production validation window the plan assumed.** Phase 5's own
+exit criteria expect `/download/` confirmed live before the CTAs move; here both landed together at
+the user's direction. The page's GitHub Releases fallback is what limits the downside — a broken
+release API degrades the page rather than the CTA — but the homepage now depends on a page nobody
+has clicked in production. Check it on the deployed site promptly; reverting this commit alone
+restores the previous CTAs.
+
+**Exit criteria:** all three primary CTAs point at the Worker-backed download page — **met**;
+GitHub Releases still function as the documented secondary source — **met** (still linked from the
+header, hero, connectors section, closing CTA and footer).
 
 ## Phase 7 — Release history
 
