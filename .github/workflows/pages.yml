@@ -24,7 +24,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A `release` run's own ref is the tag (e.g. refs/tags/v4.0.0), not refs/heads/main -- and the
+  # github-pages environment's deployment branch/tag protection rule only allows main, so a `build`/
+  # `deploy` job running directly off a release event fails immediately, before any step, every time
+  # (verified: every release-triggered run of this workflow has failed this way; every main-ref run
+  # has succeeded). Nothing here needs the tag's content -- release_stats.py queries the GitHub API,
+  # not the checkout -- so instead of running on the tag ref, just re-dispatch this same workflow
+  # against main and let that already-working path do the actual build/deploy.
+  redispatch-release:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Re-run this workflow on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "${{ github.repository }}" --ref main
+
   build:
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -61,6 +80,7 @@ jobs:
           path: ./_site
 
   deploy:
+    if: github.event_name != 'release'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
