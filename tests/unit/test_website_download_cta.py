@@ -52,3 +52,29 @@ def test_github_remains_linked_for_source_and_docs():
     # The cutover repoints the download buttons; it must not quietly delist the project's own
     # source, which the plan keeps as a documented secondary source.
     assert "https://github.com/privacyfence/privacyfence" in INDEX.read_text(encoding="utf-8")
+
+
+PAGES_WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "pages.yml"
+
+
+def test_every_website_file_is_actually_deployed():
+    """Every file under website/ is copied by pages.yml's build step.
+
+    This is the test that was missing when the download page shipped: the page existed in the
+    repo, the homepage CTAs pointed at it, every other test passed -- and `/download/` was a 404
+    in production, because pages.yml copies a hand-written list of files rather than the
+    directory. Asserting the files exist locally proves nothing about what the public site
+    serves.
+
+    Deliberately checks the whole tree rather than the two download files, so the next file
+    added under website/ is caught the same way instead of repeating this exact outage.
+    """
+    workflow = PAGES_WORKFLOW.read_text(encoding="utf-8")
+    missing = [
+        path.relative_to(WEBSITE).as_posix()
+        for path in sorted(WEBSITE.rglob("*"))
+        if path.is_file() and f"website/{path.relative_to(WEBSITE).as_posix()}" not in workflow
+    ]
+    assert not missing, (
+        f"these website files are never copied into _site by pages.yml, so they 404 in production: {missing}"
+    )
