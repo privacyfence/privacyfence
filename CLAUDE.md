@@ -156,12 +156,13 @@ duplicating the per-channel logic into a bucket-policy layer too. Concretely, th
   releases list — keeps working) carries no file attachments. The actual DMG/SBOMs/sdist/wheel
   exist only in the private R2 bucket.
 
-Required secrets/vars (Settings → Secrets and variables → Actions), same names
-`r2-smoke-test.yml` used:
+Required secrets/vars (Settings → Secrets and variables → Actions), named for what they're for —
+the release archive's R2 credentials, distinct from the download Worker's own deploy credentials
+(see `docs/release-publishing-kpi-plan.md`'s Prerequisites section for those):
 
-- `CF_R2_ACCESS_KEY_ID` / `CF_R2_SECRET_ACCESS_KEY` (secrets) — an R2 API token scoped to the
-  `privacyfence-releases` bucket.
-- `CF_R2_ENDPOINT` (repo/environment variable) — the bucket's S3-compatible endpoint URL.
+- `CF_RELEASES_R2_ACCESS_KEY_ID` / `CF_RELEASES_R2_SECRET_ACCESS_KEY` (secrets) — an R2 API token
+  scoped to the `privacyfence-releases` bucket.
+- `CF_RELEASES_R2_ENDPOINT` (repo/environment variable) — the bucket's S3-compatible endpoint URL.
 
 **Not yet decided: how an authorized alpha/beta tester actually gets a file out of the private
 bucket.** Nothing in this repo automates that today (no presigned-URL script, no Cloudflare Access

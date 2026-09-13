@@ -33,10 +33,12 @@ carries its own copy of the version-parsing regex, mirroring update_checker.py's
 importing it, so a CI job can run it (e.g. the SBOM job in build.yml) without first installing the
 full package.
 
-Requires these environment variables (matching r2-smoke-test.yml's, before its deletion):
-    CF_R2_ACCESS_KEY_ID, CF_R2_SECRET_ACCESS_KEY  -- R2 API token
-    CF_R2_ENDPOINT                                -- R2 S3-compatible endpoint URL
-    R2_BUCKET                                     -- defaults to "privacyfence-releases"
+Requires these environment variables (matching r2-smoke-test.yml's, before its deletion; renamed
+from the original CF_R2_* to disambiguate from the download Worker's own CLOUDFLARE_* deploy
+credentials -- see this repo's CLAUDE.md "Cloudflare R2 release archive" section):
+    CF_RELEASES_R2_ACCESS_KEY_ID, CF_RELEASES_R2_SECRET_ACCESS_KEY  -- R2 API token
+    CF_RELEASES_R2_ENDPOINT                                         -- R2 S3-compatible endpoint URL
+    R2_BUCKET                                                       -- defaults to "privacyfence-releases"
 
 Examples:
     python3 scripts/r2_release.py channel 4.2.0b1
@@ -88,7 +90,7 @@ def _r2_client():
 
     missing = [
         name
-        for name in ("CF_R2_ACCESS_KEY_ID", "CF_R2_SECRET_ACCESS_KEY", "CF_R2_ENDPOINT")
+        for name in ("CF_RELEASES_R2_ACCESS_KEY_ID", "CF_RELEASES_R2_SECRET_ACCESS_KEY", "CF_RELEASES_R2_ENDPOINT")
         if not os.environ.get(name)
     ]
     if missing:
@@ -96,9 +98,9 @@ def _r2_client():
 
     return boto3.client(
         "s3",
-        endpoint_url=os.environ["CF_R2_ENDPOINT"],
-        aws_access_key_id=os.environ["CF_R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["CF_R2_SECRET_ACCESS_KEY"],
+        endpoint_url=os.environ["CF_RELEASES_R2_ENDPOINT"],
+        aws_access_key_id=os.environ["CF_RELEASES_R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["CF_RELEASES_R2_SECRET_ACCESS_KEY"],
         region_name="auto",
     )
 

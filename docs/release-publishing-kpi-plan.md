@@ -1,10 +1,24 @@
 # Release Publishing & Download KPI — Phased Implementation Plan
 
-Status: Phase 1 implemented (`cloudflare/downloads/`, `.github/workflows/deploy-download-worker.yml`)
-and pending its own exit criteria (a green `deploy-download-worker.yml` run on `main` and a manual
-`https://downloads.privacyfence.eu/health` check against the real Cloudflare account) — Phase 2 not
-yet started. Use this doc to scope a single session/PR to one phase — e.g. "implement phase 2 of
-the release publishing plan" refers to a phase heading below.
+Status: Phase 1 code is implemented (`cloudflare/downloads/`,
+`.github/workflows/deploy-download-worker.yml`) and Phase 1.1 is done, but Phase 1's own exit
+criteria are **not yet met**: every `deploy-download-worker.yml` run on `main` so far (4/4, most
+recently 2026-09-13) fails in the `deploy` job's "Apply D1 migrations" step with a Cloudflare API
+`7403` error — `The given account is not valid or is not authorized to access this service` —
+before `wrangler deploy` or the `/health` smoke test ever run. `verify` (typecheck/tests/dry-run
+bundle, no credentials involved) passes every time; only the credentialed `deploy` job fails. This
+contradicts Phase 0's "confirmed present" note below for the Cloudflare-side prerequisites — the
+secrets exist (the job receives non-empty values), but the API token itself isn't actually
+authorized for account `326657b4f70af041996d60fd6b8f83fa`'s D1/Workers resources, most likely
+because it was scoped to the wrong account or zone, or never had the Workers Edit + Account D1
+Edit permissions Phase 0 assumed. **Fixing this is a manual Cloudflare-dashboard step, not a code
+change**: regenerate or rescope the API token for that exact account with those permissions, put it
+in the (renamed, see below) `CF_DOWNLOADS_WORKER_API_TOKEN` secret, and re-run
+`deploy-download-worker.yml` (`workflow_dispatch`) to confirm a green run before treating Phase 1 as
+exited. Phase 2 has not been started (`scripts/r2_release.py` still only has its original `channel`
+and `upload` subcommands — no `finalize`/`verify`/`promote`, no manifest schema). Use this doc to
+scope a single session/PR to one phase — e.g. "implement phase 2 of the release publishing plan"
+refers to a phase heading below.
 
 ## Goal
 
@@ -71,21 +85,43 @@ done and confirmed before Phase 1 starts. Concrete resource identifiers, for dir
   `DB` → the D1 database); no Cloudflare Access in front of it; `*.workers.dev` left enabled for
   now (disabled only after Phase 3/production validation, together with `workers_dev = false` in
   the committed `wrangler.toml`).
-- **GitHub secrets**: `CLOUDFLARE_API_TOKEN` (scoped to Workers Edit + Account D1 Edit,
-  restricted to this account and the `privacyfence.eu` zone) and `CLOUDFLARE_ACCOUNT_ID` are
-  confirmed present in the repo's Actions secrets. These are separate from, and additional to,
-  the existing `CF_R2_ACCESS_KEY_ID` / `CF_R2_SECRET_ACCESS_KEY` / `CF_R2_ENDPOINT` used by the
-  release-upload pipeline — do not conflate or remove those.
+- **GitHub secrets**: `CF_DOWNLOADS_WORKER_API_TOKEN` (should be scoped to Workers Edit + Account
+  D1 Edit, restricted to this account and the `privacyfence.eu` zone) and
+  `CF_DOWNLOADS_WORKER_ACCOUNT_ID` are present in the repo's Actions secrets, but as of 2026-09-13
+  the token is **not actually authorized** against this account's D1/Workers resources — see the
+  Status note at the top of this doc and Phase 0 below; every `deploy-download-worker.yml` run has
+  failed on this. These are named and stored separately from, and additional to, the existing
+  `CF_RELEASES_R2_ACCESS_KEY_ID` / `CF_RELEASES_R2_SECRET_ACCESS_KEY` / `CF_RELEASES_R2_ENDPOINT`
+  used by the release-upload pipeline (`scripts/r2_release.py`) — do not conflate or remove those;
+  they're a different Cloudflare credential (R2, not Workers/D1) for a different purpose (the
+  private release archive, not the downloads Worker), which is also why the names no longer share
+  a `CLOUDFLARE_`/`CF_R2_` split that made them easy to confuse — both now carry the `CF_` prefix
+  plus which resource they're for (`RELEASES_R2` vs. `DOWNLOADS_WORKER`).
 
 ## Phase 0 — Preconditions check (no code)
 
 Confirmed (2026-09-12): R2 bucket `privacyfence-releases` is still private, D1 database
 `privacyfence-downloads` is empty, the `privacyfence-downloads` Worker's bindings are named
 exactly `RELEASES`/`DB`, the `downloads.privacyfence.eu` custom domain is attached, and both
-`CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` are present in GitHub alongside the existing
-`CF_R2_*` credentials. All identifiers needed for `wrangler.toml` (account ID, D1 database ID,
-bucket/database/binding names) are recorded above. No repo changes in this phase — it is
-implementation-ready; Phase 1 can start.
+`CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` (since renamed to `CF_DOWNLOADS_WORKER_API_TOKEN`/
+`CF_DOWNLOADS_WORKER_ACCOUNT_ID`, see Prerequisites above) are present in GitHub alongside the
+existing `CF_R2_*` (since renamed to `CF_RELEASES_R2_*`) credentials. All identifiers needed for
+`wrangler.toml` (account ID, D1 database ID, bucket/database/binding names) are recorded above. No
+repo changes in this phase — it is implementation-ready; Phase 1 can start.
+
+**Update (2026-09-13): "present" was confirmed, "authorized" was not, and Phase 1's actual CI runs
+have since shown it isn't.** All 4 `deploy-download-worker.yml` runs on `main` to date fail in
+`deploy`'s "Apply D1 migrations" step with Cloudflare API error `7403`
+("The given account is not valid or is not authorized to access this service") against
+`/accounts/326657b4f70af041996d60fd6b8f83fa/d1/database/1cb5c99c-6d34-4031-a5f6-2f3a406e4979/query`
+— the secret has a value, but that value's permissions don't actually cover this account's D1 (and,
+untested so far since the job never gets past migrations, possibly Workers) resources. This phase's
+"implementation-ready" verdict should have meant a successful `wrangler` call, not just a non-empty
+secret; re-verify by hand next time before marking a Cloudflare-side precondition confirmed.
+**Action needed (manual, Cloudflare dashboard):** regenerate/rescope the API token with Workers
+Edit + Account D1 Edit permissions on account `326657b4f70af041996d60fd6b8f83fa`, update the
+`CF_DOWNLOADS_WORKER_API_TOKEN` GitHub secret, then re-run `deploy-download-worker.yml` via
+`workflow_dispatch` to confirm before Phase 1 is considered exited.
 
 ## Phase 1 — Worker infrastructure
 
@@ -145,13 +181,17 @@ is not touched yet.
     files in the test harness only.
 - `.github/workflows/deploy-download-worker.yml`: triggers on `cloudflare/downloads/**` changes
   to `main`. Steps: checkout, node setup, `npm ci`, unit tests, `wrangler` typecheck/dry-run,
-  apply D1 migrations remotely, `wrangler deploy`, smoke-test `/health`. Uses
-  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` only — R2 access is via the Worker binding,
-  never embedded S3 credentials.
+  apply D1 migrations remotely, `wrangler deploy`, smoke-test `/health`. Uses only the
+  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` env vars wrangler's CLI itself requires (sourced
+  from the `CF_DOWNLOADS_WORKER_API_TOKEN` / `CF_DOWNLOADS_WORKER_ACCOUNT_ID` GitHub secrets) — R2
+  access is via the Worker binding, never embedded S3 credentials.
 
 **Exit criteria:** `deploy-download-worker.yml` runs green on merge to `main`;
 `https://downloads.privacyfence.eu/health` (or the still-enabled `*.workers.dev` URL while
-testing) returns 200; all Worker unit tests pass in CI.
+testing) returns 200; all Worker unit tests pass in CI. **Not yet met** — see the Status note at
+the top of this doc and the Phase 0 update above: `verify` (the unit-test bullet) is green, but
+`deploy` fails on every run so far on an unauthorized Cloudflare API token, before `wrangler
+deploy` or the `/health` check ever run. Re-check this criterion after the token is fixed.
 
 ## Phase 1.1 — Bring the Worker tree under the repo-wide CI gates — done
 
