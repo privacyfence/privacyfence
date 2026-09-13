@@ -139,3 +139,53 @@ h3 { font-size: 21px; line-height: 1.25; letter-spacing: -.02em; margin: 17px 0 
   html { scroll-behavior: auto; }
   *, *::before, *::after { transition: none !important; }
 }
+
+/* ---- Download page (docs/release-publishing-kpi-plan.md Phase 5) ---------------------------
+   Cards are built at runtime from the release manifest, so these styles key off structure
+   rather than any particular platform or filename. */
+
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+.download-page { padding: 60px 0 110px; }
+.download-intro { max-width: 720px; margin-bottom: 46px; }
+.download-intro h1 { font-size: clamp(40px, 5vw, 62px); margin: 14px 0 20px; }
+.download-intro .release-meta a.text-link { margin-top: 0; }
+
+.download-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+.download-grid.compact { margin-top: 20px; }
+.download-loading { color: var(--muted); }
+
+.download-card { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 26px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 6px 20px rgba(20,33,43,.04); }
+.download-card h3 { margin: 0; font-size: 22px; letter-spacing: -.02em; }
+.download-card .download-detail { margin: 0; color: var(--muted); font-size: 14px; }
+.download-card .download-button { margin-top: 10px; align-self: stretch; }
+.download-card .download-meta { margin: 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+
+/* The recommended card is emphasised, never isolated -- every platform stays visible and
+   equally reachable whatever the OS guess says. */
+.download-card.recommended { border-color: #badbd6; background: linear-gradient(145deg, #f4fbfa, #ffffff); }
+.download-badge { padding: 5px 10px; background: var(--accent-soft); color: var(--accent-dark); border-radius: 999px; font-size: 12px; font-weight: 700; }
+
+.download-checksum { width: 100%; margin-top: 2px; }
+.download-checksum summary { color: var(--accent-dark); font-size: 13px; font-weight: 700; cursor: pointer; }
+.download-checksum code { display: block; margin-top: 8px; padding: 9px 10px; background: var(--surface-soft); border-radius: 9px; font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: #3c5d59; overflow-wrap: anywhere; }
+
+.download-fallback { padding: 22px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.download-fallback p { margin: 0; color: var(--muted); }
+.download-fallback a.text-link { margin-top: 0; }
+
+.verify-block, .beta-block { margin-top: 64px; padding: 34px 32px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.verify-block h2, .beta-block h2 { font-size: 26px; letter-spacing: -.025em; margin-bottom: 12px; }
+.verify-block p, .beta-block p { color: var(--muted); margin: 0; max-width: 720px; }
+.verify-commands { margin: 20px 0 0; padding: 16px 18px; background: var(--surface-soft); border-radius: 12px; overflow-x: auto; }
+.verify-commands code { font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: #3c5d59; white-space: pre; }
+.verify-os { color: var(--muted); font-weight: 600; }
+.beta-note { margin-top: 18px !important; font-size: 14px; }
+
+.download-stats { margin-top: 46px; color: var(--muted); font-size: 14px; text-align: center; }
+
+@media (max-width: 720px) {
+  .download-page { padding: 40px 0 80px; }
+  .verify-block, .beta-block { padding: 26px 22px; margin-top: 46px; }
+  .download-card { padding: 22px 20px; }
+}

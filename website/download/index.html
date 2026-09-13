@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Download PrivacyFence</title>
+  <meta name="description" content="Download PrivacyFence for macOS, Windows and Linux. Every installer is published with a SHA-256 checksum you can verify before you run it.">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="icon" type="image/png" href="../assets/icon.png">
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../" aria-label="PrivacyFence home">
+      <img src="../assets/icon.png" alt="" width="38" height="38">
+      <span>PrivacyFence</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <a href="../#how-it-works">How it works</a>
+      <a href="../#privacy">Privacy</a>
+      <a href="https://github.com/privacyfence/privacyfence">GitHub</a>
+      <a class="nav-cta" href="https://github.com/privacyfence/privacyfence/releases">All releases</a>
+    </nav>
+  </header>
+
+  <main id="top" class="shell download-page">
+    <section class="download-intro">
+      <span class="kicker">Download</span>
+      <h1>Get PrivacyFence</h1>
+      <p class="lede">
+        Free and open source, under Apache 2.0. PrivacyFence runs locally on your own machine —
+        nothing you approve or deny leaves it.
+      </p>
+      <div class="release-meta" id="release-meta" aria-live="polite"></div>
+    </section>
+
+    <!-- Populated entirely from the release manifest: filenames, sizes and checksums are never
+         hardcoded here, so a new build needs no website change. Until the fetch resolves this
+         shows a loading row rather than an empty page. -->
+    <section aria-labelledby="stable-heading">
+      <h2 id="stable-heading" class="visually-hidden">Stable downloads</h2>
+      <div class="download-grid" id="download-grid">
+        <p class="download-loading" id="download-loading">Loading the latest release…</p>
+      </div>
+
+      <!-- Shown only if the release metadata cannot be loaded. The page must never become a dead
+           end: GitHub Releases stays a working secondary source. -->
+      <div class="download-fallback" id="download-fallback" hidden>
+        <p>
+          We couldn't load the release list just now. You can still download PrivacyFence from
+          <a class="text-link" href="https://github.com/privacyfence/privacyfence/releases/latest">GitHub Releases</a>.
+        </p>
+      </div>
+    </section>
+
+    <section class="verify-block" aria-labelledby="verify-heading">
+      <h2 id="verify-heading">Verify what you downloaded</h2>
+      <p>
+        Every installer above lists the SHA-256 its build produced. Compare it against the file you
+        received before running it — if the two differ, do not run the file.
+      </p>
+      <pre class="verify-commands"><code>shasum -a 256 &lt;file&gt;            <span class="verify-os">macOS</span>
+sha256sum &lt;file&gt;                <span class="verify-os">Linux</span>
+Get-FileHash &lt;file&gt; -Algorithm SHA256   <span class="verify-os">Windows</span></code></pre>
+    </section>
+
+    <!-- Hidden until beta metadata actually loads: a pre-release channel with nothing published
+         should show nothing at all rather than an empty invitation. -->
+    <section class="beta-block" id="beta-block" aria-labelledby="beta-heading" hidden>
+      <h2 id="beta-heading">Want to test the next version?</h2>
+      <p id="beta-summary"></p>
+      <div class="download-grid compact" id="beta-grid"></div>
+      <p class="beta-note">
+        Pre-release builds get the same checks as stable, but they are newer and less proven.
+        Install them alongside nothing you rely on.
+      </p>
+    </section>
+
+    <p class="download-stats" id="download-stats" hidden></p>
+  </main>
+
+  <footer class="site-footer shell">
+    <div class="footer-brand"><img src="../assets/icon.png" alt="" width="28" height="28"><span>PrivacyFence</span></div>
+    <p>Independent open-source software for human control of AI access to enterprise services.</p>
+    <div><a href="https://github.com/privacyfence/privacyfence">GitHub</a><a href="https://github.com/privacyfence/privacyfence/blob/main/LICENSE">Apache 2.0</a></div>
+  </footer>
+
+  <script src="download.js" defer></script>
+</body>
+</html>

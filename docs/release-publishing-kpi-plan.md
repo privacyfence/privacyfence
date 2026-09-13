@@ -462,12 +462,30 @@ need no re-checking:
   everything else. Whether `/` should instead redirect to `privacyfence.eu/download/` is a Phase 5
   product question, not a bug to fix here.
 
-What is left is exactly what `HEAD` cannot exercise, since `HEAD` never counts: real `GET`
-streaming, the D1 counter incrementing once per download start, `Range: bytes=0-` counting while a
-`bytes=N-` resume does not, and `/api/stats/downloads` reflecting reality. Run these against
-`alpha` rather than `stable` — `download_counts` records the channel, so the verification traffic
-stays separable from real user downloads, and a pre-release nobody is installing is the honest
-place to generate deliberate counts.
+**Verified in production against `alpha`/`4.0.0a14` (2026-09-13).** Counters started at
+`{"total":0}`, so every number below is unambiguously from this run:
+
+| Request | Result | Counted? |
+| ------- | ------ | -------- |
+| `GET /download/alpha/linux-x64` | `200`, 47,028,460 B, `application/vnd.debian.binary-package` | yes |
+| `HEAD /download/alpha/linux-x64` | `200` | no |
+| `GET` with `Range: bytes=0-1023` | `206` | yes |
+| `GET` with `Range: bytes=1024-` | `206` | **no** |
+| `GET /api/releases/alpha` | `200` | no |
+
+Final state: `{"total":2,"by_channel":{"alpha":2},"by_platform":[{"linux","x64",2}]}` — exactly the
+two download starts, attributed to the right channel and platform. The `bytes=1024-` row is the one
+that matters most: a naive implementation counts every `206` and inflates the KPI every time
+someone's download drops and resumes. `isDownloadStart()` gets it right against the live Worker,
+not just under Miniflare.
+
+Running this against `alpha` rather than `stable` was deliberate — `download_counts` records the
+channel, so this deliberate verification traffic stays separable from real user downloads forever.
+
+Two definition-of-done bullets are structurally guaranteed rather than observable this way, and are
+worth recording as such: `download_counts` has no IP, cookie, fingerprint or User-Agent column at
+all (see `migrations/0001_download_counts.sql`), and the browser never reaches R2 directly, since
+every byte above came through the Worker.
 
 **Exit criteria:** all download/counting "definition of done" bullets (see bottom of this doc)
 that depend on real data hold in production, with no website change yet. (The original wording
@@ -532,8 +550,25 @@ and is validated in production standalone first.
   the download page itself.
 - `website/styles.css` — additions as needed for the new page.
 
+**Implemented.** `website/download/index.html` + `download.js` build every card at runtime from
+`GET /api/releases/<channel>` — filenames, sizes, checksums and which platforms exist all come from
+the manifest, so a new build needs no website change. `stats.js` now sums the GitHub and Cloudflare
+halves into one headline number, with the Cloudflare half resolving to 0 on failure so a Worker
+outage understates the total rather than hiding the social proof or blocking anything.
+
+`tests/integration/test_download_page.py` drives the real page in headless Chromium with the Worker
+API stubbed at the network layer (`page.route`), which is what lets it assert the behaviours this
+phase actually specifies rather than just that some markup exists — OS detection highlights exactly
+one card while all three stay visible, buttons point at the Worker, the beta block stays hidden when
+that channel 404s, stats vanish on a stats outage without touching the downloads, and a stable-
+metadata failure falls back to GitHub Releases so the page is never a dead end. Stubbing rather than
+calling the live Worker is deliberate: a test that hit production would need the network, would be
+flaky on a deploy, and would inflate the very counter this plan exists to keep honest.
+
 **Exit criteria:** `privacyfence.eu/download/` live and correct in production; homepage
 unchanged; every download from that page increments Cloudflare's counters as in Phase 3.
+**Not yet met** — the code has landed but Pages has not deployed it, so nothing has been clicked in
+production. Confirm on the deployed page before trusting Phase 6's cutover.
 
 ## Phase 6 — Cutover
 
@@ -547,8 +582,30 @@ revertible.
   `github.com/privacyfence/privacyfence/releases/latest` to `https://privacyfence.eu/download/`.
   GitHub stays linked separately for source/docs.
 
-**Exit criteria:** all three primary CTAs point at the Worker-backed download page; GitHub
-Releases still function as the documented secondary source.
+**Implemented**, with one deviation and one addition worth knowing:
+
+- The CTAs use a **relative** `href="download/"` rather than the absolute
+  `https://privacyfence.eu/download/` this section originally specified. Same destination on the
+  deployed site, but it also works on a Pages preview deploy and in local preview, and it matches
+  the internal-link convention the page already uses for its anchors. The URL form was incidental
+  to this phase's intent; pointing away from GitHub Releases was the point.
+- `tests/unit/test_website_download_cta.py` guards the cutover statically. This phase's failure
+  mode is asymmetric: revert the download page without the CTAs (or the reverse) and every
+  "Download" button on the homepage points at nothing. That deserves an assertion which runs on
+  every machine with no browser, so it is a plain unit test rather than an addition to Phase 5's
+  Chromium suite, which skips wherever Chromium is missing. Verified to fail on a CTA reverted to
+  GitHub Releases, and to pass once restored.
+
+**This phase shipped without the production validation window the plan assumed.** Phase 5's own
+exit criteria expect `/download/` confirmed live before the CTAs move; here both landed together at
+the user's direction. The page's GitHub Releases fallback is what limits the downside — a broken
+release API degrades the page rather than the CTA — but the homepage now depends on a page nobody
+has clicked in production. Check it on the deployed site promptly; reverting this commit alone
+restores the previous CTAs.
+
+**Exit criteria:** all three primary CTAs point at the Worker-backed download page — **met**;
+GitHub Releases still function as the documented secondary source — **met** (still linked from the
+header, hero, connectors section, closing CTA and footer).
 
 ## Phase 7 — Release history
 
