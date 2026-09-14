@@ -212,6 +212,61 @@ class _StreamableHTTPASGIApp:
         await self._session_manager.handle_request(scope, receive, send)
 
 
+_MCP_SESSION_ID_HEADER = b"mcp-session-id"
+
+
+class _SessionIdOnlyOnSuccess:
+    """Strips ``Mcp-Session-Id`` from any non-2xx response, so a refused
+    request cannot hand a client the id of a session that no longer exists.
+
+    Streamable HTTP requires the request that opens a session to be
+    ``initialize``. When a client opens with anything else, the SDK's session
+    manager still admits a session -- it allocates the id before it has parsed
+    the body far enough to know better -- answers 400, and discards that
+    session again (``_serve_opening_request``'s own
+    ``established = status < 400``). All correct, except that the 400 goes out
+    carrying the discarded session's id anyway:
+    ``StreamableHTTPServerTransport._create_error_response`` stamps
+    ``self.mcp_session_id`` on every error it builds, and by then the
+    transport has one.
+
+    That id is dead on arrival and a client has no way to know it. The
+    official client transport reads the header off *every* response before it
+    checks whether the response succeeded, adopts it, and stamps it on
+    everything it sends next -- all of which this daemon then answers,
+    ``initialize`` very much included, with 404 "Session not found". One
+    rejected frame becomes a connection that can never recover, for as long as
+    the client process lives.
+
+    ``mcpb/shim/src/sessionFetch.ts`` defends the bundled shim against the
+    same cascade from the client side, which is what reaches a user whose
+    daemon is older than this. This is the other half of it: a client pointed
+    straight at ``/mcp`` -- a documented setup, ``claude mcp add --transport
+    http privacyfence ...``, with no shim anywhere in it -- is protected here
+    or not at all.
+
+    A session id is only ever meaningful on a response that established or
+    used a session; on a failure it names, at best, something already gone.
+    Successful responses pass through untouched, so ordinary session handling
+    -- including the ``initialize`` response that legitimately carries a brand
+    new id -- is unaffected.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        async def send_without_dead_session_id(message) -> None:
+            if message["type"] == "http.response.start" and not 200 <= message["status"] < 300:
+                message = {**message, "headers": [
+                    (name, value) for name, value in message.get("headers", [])
+                    if name.lower() != _MCP_SESSION_ID_HEADER
+                ]}
+            await send(message)
+
+        await self._app(scope, receive, send_without_dead_session_id)
+
+
 def build_mcp_asgi_app(
     dispatcher: McpDispatcher, *, token: str | None = None, verifier: TokenVerifier | None = None,
     resource_metadata_url: AnyHttpUrl | None = None,
@@ -239,7 +294,8 @@ def build_mcp_asgi_app(
             raise ValueError("build_mcp_asgi_app needs either token or verifier")
         verifier = StaticTokenVerifier(token)
     protected = RequireAuthMiddleware(
-        _StreamableHTTPASGIApp(session_manager), required_scopes=[], resource_metadata_url=resource_metadata_url,
+        _SessionIdOnlyOnSuccess(_StreamableHTTPASGIApp(session_manager)),
+        required_scopes=[], resource_metadata_url=resource_metadata_url,
     )
     authenticated = AuthContextMiddleware(protected)
     app: ASGIApp = AuthenticationMiddleware(authenticated, backend=BearerAuthBackend(verifier))

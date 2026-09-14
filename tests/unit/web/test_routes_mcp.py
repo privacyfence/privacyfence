@@ -78,12 +78,31 @@ def _raw_client(dispatcher: McpDispatcher, *, token: str = TOKEN) -> httpx.Async
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver")
 
 
+@contextlib.asynccontextmanager
+async def _raw_client_on_a_running_app(dispatcher: McpDispatcher, *, token: str = TOKEN):
+    """Like ``_raw_client``, but with the session manager's own lifespan
+    running -- needed by anything that drives a request far enough for a
+    session to actually be opened for it (``_raw_client`` alone is only good
+    for requests rejected before that, like the auth tests above)."""
+    app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
+    async with mcp_lifespan(session_manager):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+            headers={"Authorization": f"Bearer {token}"},
+        ) as client:
+            yield client
+
+
 def _dispatcher(connectors: dict[str, Connector] | None = None, **kwargs) -> McpDispatcher:
     store = dict(connectors or {})
     return McpDispatcher(lambda: store, **kwargs)
 
 
 _INIT_BODY = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+_PING_BODY = {"jsonrpc": "2.0", "id": 0, "method": "ping"}
+# What a Streamable HTTP client sends on every POST; without them the
+# transport stops at a 406/415 long before session handling is reached.
+_WIRE_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
 
 
 # --------------------------------------------------------------------------- #
@@ -281,3 +300,45 @@ class TestSessionCleanup:
                 # lifespan's `finally` (routes_mcp.py's _session_lifespan)
                 # has already run.
         assert dispatcher.unattended_session_count() == 0
+
+
+# --------------------------------------------------------------------------- #
+# A refused request must not leave the client pinned to a dead session --
+# routes_mcp.py's _SessionIdOnlyOnSuccess. See its docstring for the full
+# cascade; mcpb/shim/src/sessionFetch.ts is the same guard on the client side,
+# for a shim talking to a daemon older than this.
+# --------------------------------------------------------------------------- #
+
+class TestDeadSessionIdIsNotHandedOut:
+    async def test_a_refused_opening_request_carries_no_session_id(self):
+        # Opening with anything but `initialize` is a 400 -- that part is
+        # correct and unchanged. What must not come back with it is the id of
+        # the session the manager admitted and has already discarded again.
+        async with _raw_client_on_a_running_app(_dispatcher()) as client:
+            resp = await client.post("/mcp", json=_PING_BODY, headers=_WIRE_HEADERS)
+        assert resp.status_code == 400
+        assert "mcp-session-id" not in resp.headers
+
+    async def test_initialize_still_works_after_a_refused_opening_request(self):
+        # The regression itself, replayed the way a real client produces it:
+        # adopt whatever session id the response offers -- without checking
+        # whether it succeeded, which is exactly what the official client
+        # transport does -- and send it on the next request. With the id
+        # withheld there is nothing to adopt, so the `initialize` that
+        # follows a rejected probe opens a session normally instead of being
+        # refused 404 "Session not found" on account of it.
+        async with _raw_client_on_a_running_app(_dispatcher()) as client:
+            probe = await client.post("/mcp", json=_PING_BODY, headers=_WIRE_HEADERS)
+            assert probe.status_code == 400
+            adopted = {"mcp-session-id": probe.headers["mcp-session-id"]} if "mcp-session-id" in probe.headers else {}
+            resp = await client.post("/mcp", json=_INIT_BODY, headers={**_WIRE_HEADERS, **adopted})
+        assert resp.status_code == 200
+        assert resp.headers["mcp-session-id"]
+
+    async def test_a_successful_response_keeps_its_session_id(self):
+        # The other side of the rule: a 2xx is where a session id is
+        # meaningful, and it passes through untouched.
+        async with _raw_client_on_a_running_app(_dispatcher()) as client:
+            resp = await client.post("/mcp", json=_INIT_BODY, headers=_WIRE_HEADERS)
+        assert resp.status_code == 200
+        assert resp.headers["mcp-session-id"]
