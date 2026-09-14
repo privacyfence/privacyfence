@@ -208,6 +208,25 @@ jobs:
             scripts/build_org_bundle.py \
             scripts/sync_room_directory.py
 
+      # The release body is CHANGELOG.md's section for this version, not GitHub's auto-generated
+      # list of merged pull requests (for 4.0.0 that list would have been ~127 lines). The notes are
+      # written and reviewed in an ordinary PR; tag day involves no writing.
+      #
+      # All four "stable only" release steps in this workflow (this one, `build-windows`'s,
+      # `build-deb`'s, and `sbom`'s) render the same section and pass it as `body_path`. They run in
+      # parallel against the same release and whichever finishes last wins -- which is harmless
+      # precisely because they all write identical text.
+      #
+      # action-gh-release overwrites an existing release's body when `body_path` resolves to
+      # non-empty content (`append_body` defaults to false), so this replaces whatever the GitHub UI
+      # generated when the release was pre-created. It silently keeps the existing body if the file
+      # can't be read, which is why rendering is its own step: a stable tag with no CHANGELOG
+      # section fails the job here instead of quietly shipping the auto-generated wall.
+      - name: Render release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
+        run: |
+          python3 scripts/changelog_section.py "${{ steps.release.outputs.version }}" > release-notes.md
+
       # Only a stable tag also gets a public GitHub Release with attached binaries -- alpha/beta/rc
       # stop at the private R2 upload above (see scripts/r2_release.py's module docstring for why).
       # The release entry itself (tag + notes, no files) still gets created for every channel,
@@ -221,6 +240,7 @@ jobs:
             dist/PrivacyFence-*.dmg
             scripts/build_org_bundle.py
             scripts/sync_room_directory.py
+          body_path: release-notes.md
           prerelease: false
 
       - name: Create GitHub Release notes (pre-release, no public assets)
@@ -382,6 +402,13 @@ jobs:
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/PrivacyFence-*-setup.exe
 
+      # Same render-then-attach as the `build` job above; see its own comment for why.
+      - name: Render release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
+        shell: bash
+        run: |
+          python3 scripts/changelog_section.py "${{ steps.release.outputs.version }}" > release-notes.md
+
       # Stable only, same gating as the `build` job's DMG attachment --
       # alpha/beta/rc installers stop at the private R2 upload above.
       - name: Attach release assets (stable only)
@@ -389,6 +416,7 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/PrivacyFence-*-setup.exe
+          body_path: release-notes.md
           prerelease: false
 
       - name: Create GitHub Release notes (pre-release, no public assets)
@@ -534,6 +562,12 @@ jobs:
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/privacyfence_*.deb
 
+      # Same render-then-attach as the `build` job above; see its own comment for why.
+      - name: Render release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
+        run: |
+          python3 scripts/changelog_section.py "${{ steps.release.outputs.version }}" > release-notes.md
+
       # Stable only, same as the `build` job's DMG attachment -- alpha/beta/rc `.deb`s stop at the
       # R2 upload above, no public GitHub Release asset.
       - name: Attach release assets (stable only)
@@ -541,6 +575,7 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/privacyfence_*.deb
+          body_path: release-notes.md
           prerelease: false
 
       - name: Create GitHub Release notes (pre-release, no public assets)
@@ -641,6 +676,12 @@ jobs:
             sbom-python.cdx.json \
             sbom-shim-npm.cdx.json
 
+      # Same render-then-attach as the `build` job above; see its own comment for why.
+      - name: Render release notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
+        run: |
+          python3 scripts/changelog_section.py "${{ steps.release.outputs.version }}" > release-notes.md
+
       # Stable only, same as the `build` job's DMG attachment -- alpha/beta/rc SBOMs stop at the
       # R2 upload above, no public GitHub Release asset.
       - name: Attach SBOMs to release (stable only)
@@ -650,6 +691,7 @@ jobs:
           files: |
             sbom-python.cdx.json
             sbom-shim-npm.cdx.json
+          body_path: release-notes.md
           prerelease: false
 
   # docs/downloads-and-release-kpi.md. Every job above uploads its own artifacts to

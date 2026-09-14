@@ -266,6 +266,9 @@ A new connector's test module should include, at minimum:
       `[tool.bandit]` in `pyproject.toml`). A new Bandit finding that's a genuine false positive
       gets a `# nosec BXXX -- <reason>` comment at its call site, not a suppression in
       `pyproject.toml`.
+- [ ] A user-visible change has a line under `CHANGELOG.md`'s `## [Unreleased]` heading (not under
+      a concrete version heading — see this repo's CLAUDE.md, "Release notes come from
+      CHANGELOG.md"). Internal-only changes don't need one.
 - [ ] Every new/changed tool call still resolves through `gated_call` or an explicit
       always-auto-approve connector, and leaves an audit trail either way.
 - [ ] No preview dict carries full content; no log line carries a credential or a message/document

@@ -1,0 +1,611 @@
+# Changelog
+
+<!--
+HOW TO USE THIS FILE
+
+1. `## [Unreleased]` is permanent. A feature branch adds its user-visible change under that
+   heading and nothing else. Do NOT open a concrete `## [X.Y.Z]` heading on a feature branch:
+   two branches in flight would both claim the same next version, which is the exact failure
+   CLAUDE.md records at commit d929510 ("Revert version bump -- will release together with other
+   pending CRs") from the era when versions were hand-bumped in two files. Only the PR that cuts
+   a release renames `## [Unreleased]` to `## [X.Y.Z] -- YYYY-MM-DD`, adds a fresh empty
+   `## [Unreleased]` above it, and updates the two link definitions at the bottom.
+
+2. This file is NEVER a version source. setuptools_scm derives the version from the git tag and
+   remains the only one -- see CLAUDE.md's "Releasing" section. Nothing may parse this file to
+   determine a version, and no version string lives in the source tree. The dependency runs the
+   other way: scripts/changelog_section.py reads a version *out* of this file to produce the
+   GitHub Release body for that tag (see .github/workflows/build.yml).
+
+3. Pre-release tags (`aN`/`bN`/`rcN`, and the older `-alphaN`/`-betaN` spellings) get no entry of
+   their own. Their content is folded into the final version they led to, per Keep a Changelog.
+
+4. Entries are ordered by version, NOT by date. The 3.4.x maintenance line and the 4.0 line ran
+   in parallel, so 3.4.5-3.4.7 (2026-09-02/03) were cut after v4.0.0-alpha1..alpha4
+   (2026-08-28/29). Sorting by date here would be actively misleading.
+-->
+
+All notable changes to PrivacyFence are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [4.0.0] — 2026-09-14
+
+PrivacyFence 4.0 moves the entire user interface off macOS-native AppKit and onto a local web
+server, ships on Windows and Debian/Ubuntu for the first time, and adds a centrally managed
+organization mode. If you are on 3.x, read "Upgrading from 3.x" at the end of this entry before
+installing — the menu bar icon you use today no longer exists.
+
+Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` pre-release.
+
+### Added
+
+- **Windows support.** A signed Inno Setup installer (`PrivacyFence-<version>-setup.exe`) installs
+  to `%ProgramFiles%\PrivacyFence\`, registers a Task Scheduler task so the daemon starts at
+  login, and starts it immediately. A repeating time trigger on that task brings the daemon back
+  after a crash.
+- **Debian/Ubuntu support.** A `.deb` package (`sudo apt install ./privacyfence_<version>_amd64.deb`)
+  installs to `/opt/privacyfence` and adds an XDG autostart entry, so the daemon starts at the next
+  graphical login. Install, remove, purge, and upgrade are exercised by an automated lifecycle test
+  on every release build.
+- **Organization mode** — a centrally managed deployment where people sign in with your own
+  identity provider over OIDC instead of authenticating connectors individually. Each principal
+  gets isolated connector credentials, approvals, and audit trail; write approvals can require a
+  WebAuthn step-up confirmation; and an application-level authorization allowlist sits on top of
+  whatever the IdP already enforces. Organization configuration bundles are Ed25519-signed and
+  verified before they are trusted.
+- **MCP over Streamable HTTP** at `/mcp`. An MCP client now talks to the daemon over HTTP rather
+  than through a local stdio process, which is what makes a shared, centrally hosted deployment
+  possible at all.
+- **`privacyfence_get_sign_in_link`** — a meta-tool that asks the daemon for a link to the
+  approval/settings UI, so you can get into the UI by asking Claude for the link instead of hunting
+  for a URL. See "Security" below for its deliberate lack of gating.
+- **Approval notifications**, with a configurable detail level, and **deferred approvals** so
+  several concurrent requests queue for review instead of blocking each other.
+- **Settings on the web** — connector authentication, privacy filter, auto-accept rules, and
+  organization configuration are all managed from the browser UI on every platform.
+- **`pip install privacyfence`.** Stable releases now publish an sdist and wheel to PyPI (staged
+  through TestPyPI first), authenticated with PyPI's Trusted Publisher OIDC rather than a stored
+  API token.
+- **CycloneDX SBOMs** — one for the Python runtime and one for the Node shim — generated and
+  published with every release.
+- **A download page and release archive.** `privacyfence.eu/download/` is served by a Cloudflare
+  Worker in front of a private R2 bucket that holds every artifact of every release, stable and
+  pre-release alike, and counts installer downloads as they are served. Pre-release channels are
+  offered there too, so testers need no credential to get a build.
+- **Organization-mode file delivery** — inline and staged download paths for attachments in a
+  centrally hosted deployment, where the file cannot simply be written to the user's own disk.
+- **Audit-log append integrity and centralized forwarding**, so a deployment can verify its log
+  has not been rewritten and ship entries to a central collector.
+
+### Changed
+
+- **The macOS UI is the same web UI as every other platform now.** There is no menu bar icon any
+  more, and no window to open: approvals and settings live in your browser, at the daemon's local
+  URL. This is the single most disruptive change for a 3.x user. PrivacyFence no longer has an
+  AppKit/PyObjC runtime dependency at all.
+- **Versions come from git tags.** `setuptools_scm` derives the version from the tag at build time;
+  there is no version string anywhere in the source tree and no version-bump commit. A shallow
+  clone with no tag history resolves to a placeholder version rather than a real one.
+- Attachment text extraction parses embedded XML with `defusedxml` instead of the standard
+  library's `ElementTree` — see "Security" below.
+- The project moved to the `privacyfence` GitHub organization, and the contact address is now
+  `info@privacyfence.eu`.
+
+### Removed
+
+- **The legacy Node stdio bridge (`bridge/`).** It is replaced by `PrivacyFence.mcpb`, whose shim
+  is a thin stdio-to-Streamable-HTTP transport proxy: it carries no tool-schema knowledge of its
+  own, so it never needs to be kept in step with the daemon's tool definitions the way the bridge
+  did.
+- The native macOS menu bar app and its AppKit approval/settings windows, superseded by the web UI
+  above.
+
+### Fixed
+
+- **The documented first-run sign-in path never worked.** The daemon has always logged the URL to
+  its approval UI on startup, and the README told you to read it there — but every logger in the
+  process runs through the secret-redacting formatter, which matched the word `bootstrap` and
+  scrubbed the code out of that line before it reached a terminal or a file. Restarting produced
+  an equally redacted line, and the menu bar fallback had already been removed with the rest of the
+  native UI. The link is now written to `~/.privacyfence/settings_url`, rewritten fresh on every
+  startup, and can also be fetched over MCP with `privacyfence_get_sign_in_link` (commit
+  `2a984a1`).
+- **The `.mcpb` shim failed silently in three ways**, each presenting to the user as "Claude cannot
+  connect to PrivacyFence" while the daemon log showed nothing at all: it refused to start on any
+  command-line flag it did not recognize, it never named what it was waiting on during a connection
+  wait (commit `7a9c98d`), it dropped a request outright when a forward failed instead of answering
+  it, and a rejected request could pin it to a session that was already dead.
+- Windows autostart registered the task but the daemon then killed itself at startup over its own
+  instance lock.
+- `atomic_write_bytes` retries `os.replace` on the transient `PermissionError` Windows raises when
+  another process still holds the destination open.
+- Ciphertext orphaned by a daemon restart is swept rather than left behind.
+- `--atlassian-oauth` no longer fails when Atlassian's accessible-resources response splits a single
+  site across entries; the callback URL uses the shared grant key.
+- Drive API calls catch every exception, not just `HttpError`.
+
+### Security
+
+- **`privacyfence_get_sign_in_link` is deliberately not gated.** It issues a single-use,
+  short-lived, localhost-only bootstrap credential for the approval UI, in local mode only, and it
+  does so without asking for approval first — because the approval would have to be granted in the
+  very UI the user cannot reach. An MCP client that can call this tool already holds
+  equivalent-or-greater access through every other tool the daemon exposes, so this is not a new
+  trust boundary. Every issue is recorded in the audit log under its own `sign_in_link_issued`
+  decision.
+- **Known limitation:** every tool advertised over `/mcp` carries the same read-only,
+  non-destructive annotations regardless of its real effect. Those are MCP client UI hints, not a
+  security boundary — the gate in the daemon is the real authorization. Whether that uniform
+  advertisement should change is tracked in
+  [issue #46](https://github.com/privacyfence/privacyfence/issues/46).
+- The `starlette` floor was raised to 1.3.1, covering five CVEs found live in the previously
+  permitted range. Two of them mattered directly here: an unvalidated `Host` header or request path
+  could shift `request.url`'s authority, which both session-auth origin checks compare against as
+  defense-in-depth behind the CSRF double-submit token.
+- Attachment XML (DOCX/PPTX parts) is parsed with `defusedxml`, and zip-member decompression is
+  capped — this content is attacker-controlled and is parsed *before* anyone approves anything.
+- A security remediation programme closed a numbered list of findings across the new web surface,
+  including: URL-scheme validation in the Markdown renderers; identity-rule spoofing through
+  substring matching; spreadsheet formula injection in the audit export; session-based
+  authentication replacing a persistent token; OIDC discovery-document validation with enforced
+  HTTPS; absolute lifetime caps on refresh tokens and sessions; sanitized exception messages at
+  client and log boundaries; a per-principal approval cap against denial of service; atomic writes
+  and restrictive directory permissions; nonce-based CSP with `object-src`/`frame-src` and
+  replace-not-extend header handling; HSTS, `Permissions-Policy`, and COOP headers;
+  standards-aware `Host`-header allowlist parsing; and dynamic-client-registration resource
+  controls on the org-mode OAuth provider.
+- Dependency lock files and a scheduled dependency audit now gate the build, for the Python
+  runtime and for the download Worker's own tree.
+
+### Upgrading from 3.x
+
+- **There is no menu bar icon.** Nothing opens when you launch the app, by design. To reach
+  approvals and settings, ask your MCP client for a sign-in link (`privacyfence_get_sign_in_link`)
+  and open it, or open the URL in `~/.privacyfence/settings_url`. Do not look in
+  `privacyfence.log` — it redacts the code in that link on purpose.
+- **Reinstall the Claude Desktop extension.** The 3.x bridge is gone; install the `PrivacyFence.mcpb`
+  from this release. On macOS the shim also starts the daemon for you, so there is no separate
+  "open the app first" step.
+- **Your configuration and audit log stay where they are** (`~/.privacyfence/`). There is no config
+  migration to run.
+- **Claude Desktop has no Linux build.** On Debian/Ubuntu, connect an MCP client that speaks
+  Streamable HTTP to the daemon's `/mcp` endpoint instead of using the `.mcpb`.
+- **Organization mode is opt-in.** A local install behaves as before unless you install an
+  organization configuration bundle.
+
+## [3.4.7] — 2026-09-03
+
+### Changed
+
+- `drive_get_file_content` reads a Google Doc through the Docs API's structured document instead of
+  a flattened plain-text export, and returns Markdown in the same dialect the Docs write tools
+  accept — so a document you read round-trips back into `drive_write_doc_content` or
+  `drive_docs_edit_content`. Headings, bold, italic, strikethrough, underline, inline code, links,
+  highlights (including nested combinations), horizontal rules, nested lists, and real GFM tables
+  with column alignment are all preserved. Non-default highlight and text colors come back as
+  separate `highlights`/`text_colors` lists, since Markdown has no syntax for an arbitrary color.
+
+  Note for anyone scripting against these tools: `find_text` still matches the document's plain,
+  unformatted text, not the Markdown this now returns.
+
+## [3.4.6] — 2026-09-02
+
+### Added
+
+- `drive_sheets_get_values` can read formulas and cell formatting, not just displayed values:
+  `value_render_option` chooses between the formatted value, the raw value, and the formula text,
+  and `include_formatting` returns a per-cell grid of bold/italic/colors/number format/alignment/
+  wrap alongside the values.
+
+## [3.4.5] — 2026-09-02
+
+### Added
+
+- `drive_sheets_format_range` gained cell text wrap (`wrap_strategy`) and vertical alignment
+  (`vertical_alignment`), matching the Sheets UI's Overflow/Clip/Wrap and Top/Middle/Bottom options.
+
+### Fixed
+
+- Nested inline Markdown in the Google Docs write tools (a highlight wrapping bold, for example)
+  silently dropped the inner formatting and leaked literal `**`/`==` into the document.
+- `---`, `***`, and `___` thematic breaks were inserted as literal text; they now render as a real
+  divider.
+
+## [3.4.4] — 2026-08-28
+
+### Fixed
+
+- Slack performance overhaul: search and the approval popups it feeds were unusably slow.
+
+## [3.4.3] — 2026-08-27
+
+### Fixed
+
+- The credit-card PII pattern no longer matches pair-grouped digit runs, which were producing false
+  positives on ordinary numbers.
+
+## [3.4.2] — 2026-08-27
+
+### Added
+
+- PII-refinement trials are captured in the audit log, so a redaction decision can be reviewed after
+  the fact.
+
+## [3.4.1] — 2026-08-26
+
+### Added
+
+- Google Apps Script connector.
+- Auto-accept Rules page: the rule-type field is a dropdown, grant rows offer right-click copy-ID,
+  and the ID hint is tool-specific.
+
+### Fixed
+
+- Re-reading a file PrivacyFence itself just wrote, unchanged, no longer asks for PII confirmation a
+  second time.
+
+## [3.4.0] — 2026-08-06
+
+Rolls up `v3.4.0-beta1` through `v3.4.0-beta3`.
+
+### Added
+
+- Weekly-cached Slack user/channel and Telegram chat directories, warmed in the background, with
+  manual refresh tools — names resolve without a round trip on every approval.
+- Multi-button "Always allow" offering each matching auto-accept candidate rather than a single
+  take-it-or-leave-it rule.
+- GFM tables in `edit_doc_content`, and support for escaped brackets in Markdown link text.
+
+### Changed
+
+- Approval and settings windows appear only once their WebKit content has loaded, instead of
+  flashing empty first, and their buttons moved into that content.
+- The remaining `osascript` confirmation and picker dialogs were ported onto the AppKit+WKWebView
+  bridge.
+- PDF text extraction uses `pypdf` instead of Quartz/PDFKit.
+
+### Fixed
+
+- Slack API rate limits are handled inside paginated directory calls rather than surfacing as an
+  error.
+
+## [3.3.1] — 2026-08-04
+
+### Added
+
+- `slack_search_messages` takes a `days` parameter for time-bounded searches.
+
+## [3.3.0] — 2026-08-04
+
+Rolls up `v3.3.0-beta1` and `v3.3.0-beta2`.
+
+### Added
+
+- Slack participant-based lookup in `slack_search_messages`, and Slack message permalink parsing.
+
+### Changed
+
+- The daemon and policy layer were decoupled from the native macOS UI — the first step toward the
+  web UI that lands in 4.0.
+- The native menu-bar settings were replaced by a webview settings window. The tray item is now
+  "Settings…".
+
+### Fixed
+
+- `settings.yaml` corruption caused by a PyObjC string subclass reaching the bridge payload.
+
+## [3.2.0] — 2026-08-03
+
+Rolls up `v3.2.0-beta`.
+
+### Added
+
+- Rich-text (Markdown) email bodies in Gmail drafts.
+- `slack_create_group_chat`, for starting a new group DM.
+
+### Changed
+
+- Attachment previews render extracted Markdown instead of a QuickLook thumbnail.
+- Drive/Sheets/Docs operation lists were consolidated into single sources of truth.
+
+### Fixed
+
+- The preview pane was missing on `confluence_download_attachment` and on Gmail drafts with
+  attachments.
+
+## [3.1.1] — 2026-07-31
+
+### Fixed
+
+- Confluence attachment download: wrong endpoint, missing OAuth scopes, and a missing UI label.
+
+## [3.1.0] — 2026-07-31
+
+### Added
+
+- `confluence_list_attachments` and `confluence_download_attachment`.
+- `gmail_*_with_attachments` draft tools.
+
+### Fixed
+
+- Confluence page bodies are converted to plain text before the approval popup and the PII scan, so
+  the review shows readable text rather than storage-format markup.
+
+## [3.0.0] — 2026-07-30
+
+### Added
+
+- **Attachment and file preview pipeline** — binary previews travel through the gate, images render
+  in the approval window, non-image files fall back to a thumbnail, and PII detection runs on
+  attachment, upload, and download content rather than text alone.
+- **Privacy Filter window** — set per-category allow/redact/block policy from the menu bar instead
+  of hand-editing configuration.
+- **Daily update check** against GitHub Releases, with a menu bar alert when a newer version exists.
+- Individually toggleable IP-address and financial-figure PII detection.
+- `slack_list_dms` and `slack_list_group_chats`, with participant filtering.
+- Category-based redaction for Contacts, Tasks, and Confluence, and a Calendar free/busy visibility
+  toggle.
+
+### Changed
+
+- **Approval window redesign** — card-stack rendering for the review and popup dialogs, with dark
+  mode following the system appearance.
+- "Allow for 5 min" folded into Allow, disclosed in a caption rather than occupying its own button.
+- The meeting-room directory syncs through a separate, narrowly scoped Google Cloud project instead
+  of requiring Workspace admin scope on the Calendar connector.
+
+### Fixed
+
+- `drive_download_file` is gated before content leaves the daemon, not after.
+- A crash (`EXC_BAD_ACCESS`) after many approval popups had been shown and dismissed — closed
+  windows were hidden rather than released.
+- The Privacy Filter window's "Change…" picker did nothing.
+- Google Docs table insertion used the wrong start index to find the table it had just created.
+- Calendar's "set working location" created a duplicate event instead of updating the existing one.
+- The audit log recorded a confirmed-but-no-op rule or grant removal as if it had changed something.
+- The update-check alert opens `http(s)` URLs only, falling back to the releases page otherwise.
+
+## [2.0.3] — 2026-07-29
+
+### Fixed
+
+- Gmail draft `To`/`Cc` headers are kept on one unfolded line; folding them was breaking replies in
+  Apple Mail.
+
+## [2.0.2] — 2026-07-21
+
+### Fixed
+
+- Real names are resolved for hand-authored auto-accept rule values, not only for grants.
+
+## [2.0.1] — 2026-07-21
+
+### Fixed
+
+- Daemon startup crash when an `auto_accept_rules` operation key was null.
+
+## [2.0.0] — 2026-07-21
+
+### Added
+
+- Connector-scoped auto-accept grants.
+- Preflight policy checks and an unattended-session mode for scheduled Cowork tasks.
+- Read and propose-write access to auto-accept rules and grants from the bridge.
+- Real per-connector brand icons in the approval dialog, and a redesigned approval pane (risk
+  spine, quieter "Claude says" copy, link-style buttons).
+- Richer Markdown formatting in the Google Docs write tools.
+
+### Changed
+
+- **The MCP bridge was rewritten in Node.js**, so the bundled `.mcpb` no longer ships a Python
+  runtime for the bridge process.
+- **macOS builds are code-signed and notarized**, removing the Gatekeeper workarounds earlier
+  releases needed.
+- Menu bar redesign: a rules-manager window, status colors, and label fixes.
+- `unattended_sessions.enabled` moved from `settings.yaml` to `org_config.json`.
+
+### Fixed
+
+- The bridge self-heals against a slow or not-yet-ready daemon instead of dying.
+- Stale reads from the IPC dedup cache after a same-arguments write.
+- Index drift when writing consecutive nested list items to Google Docs, and a table placeholder
+  stripped by the Docs API.
+- PII and content-flag badges rendered stacked at row 0.
+- Two segfaults: closing the Auto-accept Rules window, and a menu rebuild racing an open status-bar
+  dropdown.
+- Calendar-visibility auto-accept rules, and operations missing from the rules-manager window.
+
+## [1.0.0] — 2026-07-10
+
+First release with a stable connector and policy interface.
+
+### Changed
+
+- The README was split into a product overview plus a separate Technical Reference.
+
+### Fixed
+
+- Duplicate metadata removed from approval popup details.
+- HTML emails render as plain text in the review, rather than as markup.
+
+## [0.7.0] — 2026-07-10
+
+### Added
+
+- "Accept for 5 min" — a session-temporary auto-accept for repeated writes to the same file.
+- Calendar out-of-office and working-location events; Jira issue transitions and custom fields.
+- An `approved_sandbox_folder` rule covering `sheets.rename_sheet` and `sheets.format_range`.
+
+### Changed
+
+- Approval content across Gmail, Drive, Salesforce, Slack, Tasks, Calendar, Telegram, and Jira is
+  human-readable rather than raw JSON.
+- The PII detection gate applies to the read direction only.
+
+### Fixed
+
+- Sheets auto-accept rules never appeared in the menu.
+- A malformed all-day event in `calendar_set_working_location`.
+
+## [0.6.0] — 2026-07-09
+
+### Added
+
+- **PII detection gate** — likely personal data (Hungarian, English, German) triggers an extra
+  confirmation, and overrides a matching auto-accept rule rather than being skipped by it.
+- Gmail filter list/create/update and label list/create, including nested labels.
+- An `approved_task_list` auto-accept rule for Google Tasks writes.
+
+### Changed
+
+- PII detection is scoped to message content, not envelope metadata; email addresses and phone
+  numbers alone are no longer flagged.
+- `trusted_sender_domain` matches subdomains.
+
+### Fixed
+
+- Identical retried IPC calls are deduplicated, so one request no longer produces two approval
+  popups.
+- `gated_call` always leaves an audit entry.
+- Confluence OAuth tokens refresh on 403 and 404, not only 401.
+- A `calendar_get_event_details`/`calendar_update_event` crash from a bad `supportsAttachments`
+  argument.
+
+## [0.5.0] — 2026-07-07
+
+Rolls up `v0.5.0` through `v0.5.6` (2026-07-07 – 2026-07-08).
+
+### Added
+
+- A security, privacy, and compliance statement aimed at IT, GDPR, and AI Act reviewers.
+- Contact creation and label add/remove in the Contacts connector, with personal and Workspace
+  directory contacts kept separate.
+- A development-vs-installed setup guide and `dev_start.sh`, for running a source build alongside a
+  released one.
+- Coding and testing guidelines, plus a test-coverage overhaul across every connector, the IPC
+  transport, the menu bar, and the OAuth loopback.
+
+### Fixed
+
+- SSL errors and crashes caused by Google API service objects and TLS state being shared across
+  threads (Contacts, Gmail attachment fetches, and others).
+- Confluence space resolution crashed on a 404 instead of reporting "not found".
+- A `NoneType` crash in auto-accept rule lookup.
+
+## [0.4.0] — 2026-07-03
+
+Rolls up `v0.4.0` through `v0.4.11` (2026-07-03 – 2026-07-06).
+
+### Changed
+
+- **The project was renamed from Loopline to PrivacyFence.**
+- Approval popups were replaced by a branded native AppKit window.
+- The bridge is distributed as a one-click Claude Desktop extension (`.mcpb`) instead of being
+  registered by hand.
+- The configuration framework was redesigned: the setup wizard is gone, replaced by an organization
+  config bundle and browser-based OAuth.
+- All tools are advertised to the MCP client as read-only (see
+  [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the consequences of that
+  choice, still open in 4.0).
+
+### Added
+
+- Google Sheets support in the Drive connector.
+- `drive_upload_file` for binary uploads, accepting either a local path or `content_base64`.
+- `gmail_reply_draft` / `gmail_reply_all_draft` with real thread continuation.
+- Auto-accept rules extended to write operations, grouped by connector in the menu.
+
+### Fixed
+
+- Atlassian OAuth migrated to granular scopes (Confluence), with Jira reverted to classic scopes;
+  Confluence Cloud calls were missing the `/wiki` path segment.
+- The Salesforce OAuth redirect URI now satisfies its HTTPS-callback exception.
+- SSL certificate verification failed on machines other than the build machine.
+- An IPC line-length limit broke large file reads.
+- Jira and Confluence required re-authentication on every app restart.
+- Audit log directory mismatch, and a missing Excel export.
+
+## [0.3.1] — 2026-06-29
+
+Rolls up `v0.3.1` through `v0.3.11`, all released on 2026-06-29.
+
+### Added
+
+- `drive_download_file` — streams a large Drive file to disk and returns the path, instead of
+  capping content inline.
+- `drive_write_doc_content` — writes Markdown to a Google Doc with real rich formatting through the
+  Docs API.
+- Google Meet links and meeting-room booking on `calendar_create_event` / `calendar_update_event`,
+  plus `calendar_list_rooms`.
+- `gmail_archive_message`, and an optional `mark_unread` on `slack_send_message`.
+- A `day_of_week` field on Calendar event results, so the weekday is never computed from the
+  timestamp and got wrong.
+
+### Fixed
+
+- The accept workflow raced itself: approval tools now use a fresh blocking socket per call, so a
+  confirm or deny can no longer end in "IPC connection closed" with no way to retry.
+- `drive_download_file` on large files hit both an MCP timeout and an `httplib2` SSL bug; it streams
+  through an authorized `requests` session now.
+- Slack history, thread, and search tools called dict `.get()` on dataclass objects.
+- `create_event` no longer forces `timeZone=UTC` over an ISO string that already carries an offset.
+- Slack `mark_unread` resolves a user ID to its DM channel, and reports which scope is missing.
+
+## [0.2.0] — 2026-06-25
+
+Rolls up `v0.2.0` and `v0.2.1`.
+
+### Added
+
+- MCP tool annotations (`readOnlyHint`, `destructiveHint`) on every tool, so Claude Code and Cowork
+  stop graying out "Allow for all tasks".
+
+## [0.1.0] — 2026-06-25
+
+Initial development releases (`v0.1.0` – `v0.1.3`), published under the project's original name,
+**Loopline**.
+
+### Added
+
+- A local approval gate in front of Gmail, Drive, Calendar, Contacts, Tasks, Slack, Telegram, Jira,
+  Confluence, and Salesforce, driven from a macOS menu bar app with a setup wizard, and exposed to
+  an MCP client through a stdio bridge.
+- A Slack setup guide, and two-step-verification (2FA) handling for Telegram in the setup wizard.
+
+### Changed
+
+- Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
+  exactly what you see and no bot is visible to anyone else.
+
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/privacyfence/privacyfence/compare/v3.4.7...v4.0.0
+[3.4.7]: https://github.com/privacyfence/privacyfence/compare/v3.4.6...v3.4.7
+[3.4.6]: https://github.com/privacyfence/privacyfence/compare/v3.4.5...v3.4.6
+[3.4.5]: https://github.com/privacyfence/privacyfence/compare/v3.4.4...v3.4.5
+[3.4.4]: https://github.com/privacyfence/privacyfence/compare/v3.4.3...v3.4.4
+[3.4.3]: https://github.com/privacyfence/privacyfence/compare/v3.4.2...v3.4.3
+[3.4.2]: https://github.com/privacyfence/privacyfence/compare/v3.4.1...v3.4.2
+[3.4.1]: https://github.com/privacyfence/privacyfence/compare/v3.4.0...v3.4.1
+[3.4.0]: https://github.com/privacyfence/privacyfence/compare/v3.3.1...v3.4.0
+[3.3.1]: https://github.com/privacyfence/privacyfence/compare/v3.3.0...v3.3.1
+[3.3.0]: https://github.com/privacyfence/privacyfence/compare/v3.2.0...v3.3.0
+[3.2.0]: https://github.com/privacyfence/privacyfence/compare/v3.1.1...v3.2.0
+[3.1.1]: https://github.com/privacyfence/privacyfence/compare/v3.1.0...v3.1.1
+[3.1.0]: https://github.com/privacyfence/privacyfence/compare/v3.0.0...v3.1.0
+[3.0.0]: https://github.com/privacyfence/privacyfence/compare/v2.0.3...v3.0.0
+[2.0.3]: https://github.com/privacyfence/privacyfence/compare/v2.0.2...v2.0.3
+[2.0.2]: https://github.com/privacyfence/privacyfence/compare/v2.0.1...v2.0.2
+[2.0.1]: https://github.com/privacyfence/privacyfence/compare/v2.0.0...v2.0.1
+[2.0.0]: https://github.com/privacyfence/privacyfence/compare/v1.0.0...v2.0.0
+[1.0.0]: https://github.com/privacyfence/privacyfence/compare/v0.7.0...v1.0.0
+[0.7.0]: https://github.com/privacyfence/privacyfence/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/privacyfence/privacyfence/compare/v0.5.6...v0.6.0
+[0.5.0]: https://github.com/privacyfence/privacyfence/compare/v0.4.11...v0.5.6
+[0.4.0]: https://github.com/privacyfence/privacyfence/compare/v0.3.11...v0.4.11
+[0.3.1]: https://github.com/privacyfence/privacyfence/compare/v0.2.1...v0.3.11
+[0.2.0]: https://github.com/privacyfence/privacyfence/compare/v0.1.3...v0.2.1
+[0.1.0]: https://github.com/privacyfence/privacyfence/releases/tag/v0.1.3
