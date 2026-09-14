@@ -82,7 +82,11 @@ jobs:
           echo "Waiting for ${workflow_id}'s own run against commit ${GITHUB_SHA}..."
 
           while true; do
-            runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs" \
+            # --method GET is required here: gh api defaults to POST as soon as any -f/-F
+            # parameter is present (there's no POST route for listing workflow runs, so without
+            # this it 404s -- see `gh api --help`), and this endpoint takes head_sha/per_page as
+            # a GET query string, not a request body.
+            runs_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs" \
               -f "head_sha=${GITHUB_SHA}" -F "per_page=10")"
             # Most recent attempt for this exact commit, in case of a manual re-run.
             run="$(jq -c '.workflow_runs | sort_by(.id) | reverse | .[0] // empty' <<<"$runs_json")"
@@ -146,6 +150,10 @@ jobs:
       - name: Determine version and release channel
         id: release
         run: |
+          # This job doesn't `pip install -e .` the package (the `build` step above builds the
+          # sdist/wheel in an isolated venv that doesn't expose setuptools_scm out here) -- same
+          # situation as build.yml's own version-detection steps, which install it explicitly too.
+          pip install --quiet setuptools_scm
           VERSION="$(python3 -m setuptools_scm)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
