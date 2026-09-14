@@ -398,6 +398,82 @@ class TestListRules:
 
 
 # --------------------------------------------------------------------------- #
+# get_sign_in_link -- privacyfence_get_sign_in_link's handler. No bridge-era
+# equivalent (this tool is new, see mcp_tools.py's own module docstring).
+# --------------------------------------------------------------------------- #
+
+class TestGetSignInLink:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
+        init_audit_logger(str(tmp_path / "audit"))
+        self._audit_dir = tmp_path / "audit"
+
+    def _read_entries(self):
+        week_file = self._audit_dir / f"{current_week()}.jsonl"
+        if not week_file.exists():
+            return []
+        return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
+
+    def test_no_provider_wired_raises(self):
+        # The state every dispatcher starts in, and org mode's permanent
+        # state (daemon_main.py's _start_org_web_server never wires one --
+        # see McpDispatcher.set_bootstrap_link_provider's own docstring).
+        with pytest.raises(ValueError, match="organization mode"):
+            _dispatcher({}).get_sign_in_link("approvals")
+
+    def test_delegates_to_the_wired_provider_with_a_leading_slash_path(self):
+        calls = []
+        dispatcher = _dispatcher({})
+        dispatcher.set_bootstrap_link_provider(lambda path: calls.append(path) or f"http://x{path}?bootstrap=abc")
+
+        result = dispatcher.get_sign_in_link("settings")
+
+        assert calls == ["/settings"]
+        assert result == {"url": "http://x/settings?bootstrap=abc"}
+
+    def test_empty_page_defaults_to_approvals(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_bootstrap_link_provider(lambda path: f"http://x{path}")
+        assert dispatcher.get_sign_in_link("") == {"url": "http://x/approvals"}
+
+    def test_invalid_page_is_rejected_before_the_provider_is_called(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_bootstrap_link_provider(lambda path: pytest.fail("must not be called"))
+        with pytest.raises(ValueError, match="page must be"):
+            dispatcher.get_sign_in_link("not-a-real-page")
+
+    def test_provider_returning_none_raises_the_same_as_unwired(self):
+        # WebServer.mint_bootstrap_url() itself returns None in org mode
+        # (web/server.py) -- a provider wired to it, called through org
+        # mode's own web server by mistake, must fail the same clear way
+        # an unwired dispatcher already does, not hand back a None url.
+        dispatcher = _dispatcher({})
+        dispatcher.set_bootstrap_link_provider(lambda path: None)
+        with pytest.raises(ValueError, match="organization mode"):
+            dispatcher.get_sign_in_link("approvals")
+
+    def test_records_a_sign_in_link_issued_audit_entry(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_bootstrap_link_provider(lambda path: f"http://x{path}")
+
+        dispatcher.get_sign_in_link("approvals", "I'm locked out and need to check a pending approval")
+
+        entries = self._read_entries()
+        assert entries[0]["decision"] == "sign_in_link_issued"
+        assert entries[0]["claude_reason"] == "I'm locked out and need to check a pending approval"
+
+    def test_unset_provider_after_being_wired_raises_again(self):
+        # set_bootstrap_link_provider(None) is a real, documented value --
+        # the same "explicitly clear it" shape set_unattended_changed_
+        # listener already accepts -- not just an unused default.
+        dispatcher = _dispatcher({})
+        dispatcher.set_bootstrap_link_provider(lambda path: f"http://x{path}")
+        dispatcher.set_bootstrap_link_provider(None)
+        with pytest.raises(ValueError, match="organization mode"):
+            dispatcher.get_sign_in_link("approvals")
+
+
+# --------------------------------------------------------------------------- #
 # propose_rule_change -- ported from TestProposeRuleChangeDispatch
 # --------------------------------------------------------------------------- #
 

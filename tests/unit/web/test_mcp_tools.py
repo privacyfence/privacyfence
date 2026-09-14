@@ -215,6 +215,12 @@ class TestMetaToolManifest:
         assert schema["required"] == ["approval_ids"]
         assert schema["properties"]["approval_ids"]["type"] == "array"
 
+    def test_get_sign_in_link_page_is_an_approvals_or_settings_enum(self):
+        schema = mcp_tools.GET_SIGN_IN_LINK_TOOL.inputSchema
+        assert schema["properties"]["page"]["enum"] == ["approvals", "settings"]
+        assert schema["properties"]["page"]["default"] == "approvals"
+        assert schema["required"] == ["reason"]  # page itself stays optional, defaulting server-side
+
 
 # --------------------------------------------------------------------------- #
 # TST-02's three named behaviors, driven end to end over the real /mcp
@@ -310,6 +316,39 @@ class TestProposeRuleChangeDeniedWhenUnattended:
         assert result.isError is False
         assert result.structuredContent["confirmed"] is True
         assert self._popup_calls == ["Add auto-accept rule 'i_am_sender' to 'gmail.read_message'"]
+
+
+class TestGetSignInLinkOverRealTransport:
+    """End to end through the real /mcp Streamable HTTP transport -- unlike
+    test_mcp_dispatch.py's TestGetSignInLink, this proves routes_mcp.py's
+    own name == mcp_tools.GET_SIGN_IN_LINK_TOOL.name dispatch branch is
+    actually wired up, not just the dispatcher method it delegates to."""
+
+    async def test_no_provider_wired_is_a_tool_error(self):
+        dispatcher = _dispatcher({})  # bootstrap-link provider never set -- org-mode-like
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool(
+                "privacyfence_get_sign_in_link", {"page": "approvals", "reason": "locked out"},
+            )
+        assert result.isError is True
+        assert "organization mode" in result.content[0].text
+
+    async def test_wired_provider_returns_the_url_as_structured_content(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_bootstrap_link_provider(lambda path: f"http://localhost:8765{path}?bootstrap=abc123")
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool(
+                "privacyfence_get_sign_in_link", {"page": "settings", "reason": "need to check a rule"},
+            )
+        assert result.isError is False
+        assert result.structuredContent["url"] == "http://localhost:8765/settings?bootstrap=abc123"
+
+    async def test_page_defaults_to_approvals_when_omitted(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_bootstrap_link_provider(lambda path: f"http://localhost:8765{path}?bootstrap=abc123")
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("privacyfence_get_sign_in_link", {"reason": "locked out"})
+        assert result.structuredContent["url"] == "http://localhost:8765/approvals?bootstrap=abc123"
 
 
 class TestListAutoAcceptRulesDisclosureIsAudited:

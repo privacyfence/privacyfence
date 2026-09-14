@@ -566,16 +566,111 @@ class TestBootstrapMintEndpoint:
 
 
 class TestWebServerBootstrap:
-    def test_mint_bootstrap_url_embeds_a_fresh_code_under_the_given_path(self):
-        server = WebServer(WebApprovalUI(), host="localhost", port=1234, token=TOKEN)
+    def _server(self, tmp_path, monkeypatch):
+        # mint_bootstrap_url() writes a discovery file as of the fix below
+        # (TestBootstrapUrlFile) -- redirect paths.data_dir() the same way
+        # that class and TestMcpUrlFile do, so this doesn't leak a real
+        # ``approvals_url`` file into a dev checkout's own repo root
+        # (paths.data_dir()'s non-bundled fallback) every time this runs.
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return WebServer(WebApprovalUI(), host="localhost", port=1234, token=TOKEN)
+
+    def test_mint_bootstrap_url_embeds_a_fresh_code_under_the_given_path(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
         url = server.mint_bootstrap_url("/approvals")
         assert url.startswith("http://localhost:1234/approvals?bootstrap=")
 
-    def test_each_call_mints_a_different_code(self):
-        server = WebServer(WebApprovalUI(), host="localhost", port=1234, token=TOKEN)
+    def test_each_call_mints_a_different_code(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
         first = server.mint_bootstrap_url("/approvals")
         second = server.mint_bootstrap_url("/approvals")
         assert first != second
+
+
+# --------------------------------------------------------------------------- #
+# The bootstrap-link discovery files (approvals_url/settings_url) --
+# mint_bootstrap_url()'s only reliable way to actually deliver a usable
+# link to a human: daemon_main.py's startup log line for the same link is
+# always redacted (SEC-10's SecretRedactingFormatter matches the literal
+# word "bootstrap"), so a reader scraping privacyfence.log instead of one
+# of these files never gets a working code, restart or not. See
+# web/session_auth.py's unauthorized_html() for the reader-facing side of
+# this.
+# --------------------------------------------------------------------------- #
+
+class TestBootstrapUrlFile:
+    def _server(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return WebServer(WebApprovalUI(), host="localhost", port=0, token=TOKEN)
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, the now-removed windows-linux-support-plan.md's Track B3)",
+    )
+    def test_mint_writes_the_unredacted_link_to_its_own_file(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        url = server.mint_bootstrap_url("/approvals")
+
+        url_file = tmp_path / "approvals_url"
+        assert url_file.exists()
+        assert url_file.read_text(encoding="utf-8") == url
+        assert "bootstrap=" in url_file.read_text(encoding="utf-8")
+        assert oct(url_file.stat().st_mode)[-3:] == "600"
+
+    def test_settings_path_gets_its_own_file(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        url = server.mint_bootstrap_url("/settings")
+
+        assert (tmp_path / "settings_url").read_text(encoding="utf-8") == url
+        assert not (tmp_path / "approvals_url").exists()
+
+    def test_a_second_mint_overwrites_rather_than_appends(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        server.mint_bootstrap_url("/approvals")
+        second = server.mint_bootstrap_url("/approvals")
+
+        assert (tmp_path / "approvals_url").read_text(encoding="utf-8") == second
+
+    def test_stop_clears_every_path_that_was_ever_minted(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        server.mint_bootstrap_url("/approvals")
+        server.mint_bootstrap_url("/settings")
+
+        server.stop()
+
+        assert not (tmp_path / "approvals_url").exists()
+        assert not (tmp_path / "settings_url").exists()
+
+    def test_org_mode_never_writes_a_file(self, tmp_path, monkeypatch):
+        # bootstrap is None in org mode (module docstring) -- mint_bootstrap_
+        # url() already short-circuits to None before it would ever write
+        # one; this pins that no file appears either. Mirrors test_server_
+        # org_mode.py's own _org_auth() helper for building a real OrgAuth.
+        from privacyfence import org_identity as oi
+        from privacyfence import paths
+        from privacyfence.web.oauth_provider import OrgOAuthProvider
+        from privacyfence.web.org_session import OrgSessionStore
+        from privacyfence.web.server import OrgAuth
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(
+            "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"),
+        )
+        idp = oi.IdpConfig(
+            issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
+            authorization_endpoint="https://idp.example.com/authorize",
+            token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
+        )
+        issuer_url = "https://org.example.com"
+        provider = OrgOAuthProvider(idp, idp_callback_url=f"{issuer_url}/oauth/idp/callback")
+        org = OrgAuth(provider=provider, sessions=OrgSessionStore(), idp=idp, issuer_url=issuer_url)
+        server = WebServer(WebApprovalUI(), host="localhost", port=0, org=org)
+
+        assert server.mint_bootstrap_url("/approvals") is None
+        assert not (tmp_path / "approvals_url").exists()
 
 
 # --------------------------------------------------------------------------- #

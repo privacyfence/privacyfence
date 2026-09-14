@@ -242,14 +242,25 @@ PrivacyFence is currently an open-source macOS/Linux implementation rather than 
 
 ## Quick start
 
+Every local install (macOS/Windows/Linux) follows the same shape: **install the app (you don't
+need to open it yourself), connect an MCP client, ask that client to open PrivacyFence for you,
+then authenticate from there.** The platform-specific steps below are that shape applied to each
+installer. Centrally managed ("organization mode") deployments follow a different shape — see
+[Organization mode](#organization-mode-centrally-managed-deployment) below.
+
 ### Install from the DMG
 
 1. Download the latest `PrivacyFence-<version>.dmg` from [Releases](../../releases).
-2. Drag **PrivacyFenceApp.app** to `/Applications`.
-3. Install the organization configuration provided by your IT administrator.
-4. Authenticate the connectors you want from the **Connectors** page of PrivacyFence Settings (the
-   embedded web page — the daemon logs its URL on startup).
-5. Install **PrivacyFence.mcpb** into Claude Desktop.
+2. Drag **PrivacyFenceApp.app** to `/Applications`. Don't open it — there's no window to open
+   (local mode is headless, no menu bar icon), and step 3 below starts it for you.
+3. Install **PrivacyFence.mcpb** into Claude Desktop. The next time Claude Desktop loads the
+   extension, its shim starts the daemon automatically if it isn't already running.
+4. Ask Claude for a PrivacyFence sign-in link (it can call the `privacyfence_get_sign_in_link`
+   tool) and open the link it gives you. (If you'd rather not go through Claude: the same link is
+   also written to `~/.privacyfence/settings_url`, rewritten fresh on every startup —
+   `privacyfence.log` intentionally redacts this link's code, so don't look for it there.)
+5. From Settings: install the organization configuration provided by your IT administrator, if
+   any, and authenticate the connectors you want.
 
 Stable releases are code-signed and notarized by Apple, so this just works — no Gatekeeper
 warnings, no manual quarantine step. Pre-release (alpha/beta/rc) builds might not be, depending on
@@ -260,11 +271,17 @@ signing/notarization credential availability at build time. Full installation de
 
 1. Download the latest `PrivacyFence-<version>-setup.exe` from [Releases](../../releases).
 2. Run the installer. It installs PrivacyFence to `%ProgramFiles%\PrivacyFence\`, registers a Task
-   Scheduler task so the daemon starts at login, and starts the daemon immediately.
-3. Install the organization configuration provided by your IT administrator.
-4. Authenticate the connectors you want from the PrivacyFence settings page
-   (`http://localhost:8765/settings`, also reachable from its Start Menu shortcut).
-5. Install **PrivacyFence.mcpb**, installed alongside the daemon, into Claude Desktop.
+   Scheduler task so the daemon starts at login, and starts the daemon immediately — no separate
+   "install the mcpb first" step is needed to get it running (unlike macOS, above), though you
+   still need it installed to talk to Claude Desktop.
+3. Install **PrivacyFence.mcpb** into Claude Desktop.
+4. Ask Claude for a PrivacyFence sign-in link (`privacyfence_get_sign_in_link`) and open the link
+   it gives you — or open `~/.privacyfence/settings_url` yourself. (`privacyfence.log` redacts this
+   link's code, so don't look for it there. The Start Menu shortcut points at the bare,
+   cookie-authenticated URL, so it only works once you're already signed in via one of the above —
+   not as the first way in.)
+5. From Settings: install the organization configuration provided by your IT administrator, if
+   any, and authenticate the connectors you want.
 
 Stable releases are Authenticode-signed; pre-release (alpha/beta/rc) builds might not be, depending
 on signing certificate availability at build time. Full installation details, including what
@@ -277,16 +294,18 @@ uninstalling does and doesn't remove, are in
 2. `sudo apt install ./privacyfence_<version>_amd64.deb` (resolves any future declared
    dependencies automatically; a plain `sudo dpkg -i privacyfence_<version>_amd64.deb` works too —
    the package declares none today, see below).
-3. Install the organization configuration provided by your IT administrator, and authenticate the
-   connectors you want, from PrivacyFence Settings (`http://localhost:8765/settings` once the
-   daemon is running — see step 4).
-4. Log out and back in — PrivacyFence starts automatically at the next graphical login (an XDG
+3. Log out and back in — PrivacyFence starts automatically at the next graphical login (an XDG
    autostart entry, not a menu icon; there's no window to open, all interaction is through the web
-   UI above). To start it immediately instead of waiting for that, run `privacyfence-app &`.
-5. Connect an MCP client. Claude Desktop has no Linux build, so the `.mcpb`/Claude Desktop route
+   UI). To start it immediately instead of waiting for that, run `privacyfence-app &`.
+4. Connect an MCP client. Claude Desktop has no Linux build, so the `.mcpb`/Claude Desktop route
    used on macOS and Windows doesn't apply here — instead, point an HTTP-capable client (Claude
    Code, for example) directly at the daemon's local, token-authenticated `/mcp` endpoint. See
    [Technical Reference](docs/TECHNICAL_REFERENCE.md#mcp-endpoint) for connection details.
+5. Ask that client for a PrivacyFence sign-in link (`privacyfence_get_sign_in_link`) and open the
+   link it gives you — or open `~/.privacyfence/settings_url` yourself (`privacyfence.log` redacts
+   this link's code, so don't look for it there).
+6. From Settings: install the organization configuration provided by your IT administrator, if
+   any, and authenticate the connectors you want.
 
 The package ships a self-contained PyInstaller build of the daemon — no `python3-*` packages
 required beyond what a normal Debian/Ubuntu desktop already has. `apt remove`/`dpkg -r` leaves
@@ -323,6 +342,33 @@ pip install -e .
 ```
 
 Continue with the organization configuration and connector authentication steps in the [Technical Reference](docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
+
+### Organization mode (centrally managed deployment)
+
+Everything above is **local mode**: PrivacyFence runs on your own machine, and "the organization
+configuration" is an optional config bundle your IT administrator hands you to install yourself.
+**Organization mode** is a different deployment shape entirely — PrivacyFence runs once, centrally,
+as a service your whole org's users share, with sign-in through your organization's own identity
+provider instead of a one-time local link. If you were handed a URL like
+`https://pf.your-org.example.com` rather than an installer, this is what you're using.
+
+There's nothing to install on your own machine:
+
+1. An administrator deploys PrivacyFence centrally (one Linux host, reachable at your org's own
+   HTTPS hostname) — see the [org mode setup guide](docs/org-mode-setup-guide.md) if you're setting
+   this up yourself.
+2. Point Claude (Desktop, Cowork, or any Streamable HTTP MCP client) at
+   `https://pf.your-org.example.com/mcp` as an MCP server — no `.mcpb`, no token to copy.
+3. The first time it connects, Claude's own OAuth sign-in redirects you to your organization's
+   identity provider. Sign in there the same way you sign in to everything else at your org.
+4. From `https://pf.your-org.example.com/connect` (reached via that same sign-in — no
+   `privacyfence_get_sign_in_link`-style tool needed, since there's no one-time link in this mode
+   to begin with), authenticate the connectors you want.
+
+Organization mode has no local `/settings` surface and no bootstrap-link concept at all — asking
+Claude for a sign-in link (above) errors on purpose here, since sign-in is always through your
+IdP. See the [org mode setup guide](docs/org-mode-setup-guide.md) for the full deployment
+walkthrough.
 
 ---
 

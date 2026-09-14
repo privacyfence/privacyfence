@@ -661,11 +661,24 @@ def _maybe_start_web_server(
     # only meaningful once the server is actually listening -- set here,
     # not at registry construction.
     registry.set_base_url(server.base_url)
+    if mcp_dispatcher is not None:
+        # privacyfence_get_sign_in_link's own callback -- wired here rather
+        # than at McpDispatcher construction above because it needs this
+        # WebServer, which doesn't exist yet at that point. See
+        # McpDispatcher.set_bootstrap_link_provider's own docstring.
+        mcp_dispatcher.set_bootstrap_link_provider(server.mint_bootstrap_url)
     # SEC-06: each of
     # these is a fresh, single-use bootstrap link, not the persistent
     # secret itself -- see WebServer.mint_bootstrap_url()'s own docstring.
-    # Once it's expired or already used, a fresh one needs either a daemon
-    # restart or POST /api/bootstrap with the raw token as a Bearer header.
+    # The %s below always lands in this log redacted to bootstrap=
+    # [REDACTED] (SEC-10's SecretRedactingFormatter, setup_logging() above,
+    # matches the literal word "bootstrap" in every line this process
+    # logs) -- mint_bootstrap_url() itself writes the real, unredacted link
+    # to its own discovery file for that reason, which is what a human (or
+    # script) actually reading it back should use instead of this log
+    # line. Once a link is expired or already used, a fresh one needs
+    # either a daemon restart (rewrites both discovery files) or POST
+    # /api/bootstrap with the raw token as a Bearer header (no restart).
     logger.info(
         "Web approval UI active -- approvals open at %s",
         server.mint_bootstrap_url("/approvals"),
