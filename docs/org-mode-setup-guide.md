@@ -93,7 +93,7 @@ python3 scripts/build_org_bundle.py \
 
 Adjust `--server-bind-host`/`--server-port` (default `0.0.0.0:8765` — what the reverse proxy in [§6](#6-reverse-proxy) forwards to) and `--server-tls-cert`/`--server-tls-key` only if the daemon itself terminates TLS instead of the proxy. `--merge` lets you add one more service to an already-distributed bundle later without re-entering everything (re-run with the same `--sign-key`).
 
-Install the resulting `org_config.json` on the server at `~/.privacyfence/org/org_config.json` (the service account's `paths.org_dir()`) before first starting the daemon — either copy it there directly, or, once the daemon is already running, use **Install/Update Organization Config…** on the General page of PrivacyFence Settings (`/settings`), which validates and pins the signature the same way. To rotate a signing key, an administrator deletes the previously pinned `~/.privacyfence/org/org_config_signing_pubkey.txt` on the server first — otherwise the new bundle is rejected as failing verification against the old key.
+Install the resulting `org_config.json` on the server at `~/.privacyfence/org/org_config.json` (the service account's `paths.org_dir()`) before first starting the daemon, by copying it there — that is the only way to install it in org mode. There is no in-app equivalent: the local-mode Settings page's **Install/Update Organization Config…** action lives on `/settings`, which org mode deliberately never mounts (`web/server.py`'s module docstring, and `_build_org_app`'s route set). The daemon validates and pins the signature on startup either way. To rotate a signing key, an administrator deletes the previously pinned `~/.privacyfence/org/org_config_signing_pubkey.txt` on the server first — otherwise the new bundle is rejected as failing verification against the old key.
 
 ## 6. Reverse proxy
 
@@ -140,7 +140,7 @@ sudo systemctl enable --now privacyfence-org
 journalctl -u privacyfence-org -f
 ```
 
-Before starting, confirm `config/settings.yaml`'s `web.mcp.enabled` is `true` (the packaged default) — org mode's web server does not start at all if it's `false`, silently, since the MCP endpoint is the only thing org mode's server exists to serve (`daemon_main._maybe_start_web_server`). `web.settings.enabled` (also on by default) is what serves `/settings`, needed for the "Install/Update Organization Config…" and per-connector "Connect" flows below.
+Before starting, confirm `config/settings.yaml`'s `web.mcp.enabled` is `true` (the packaged default) — org mode's web server does not start at all if it's `false`, silently, since the MCP endpoint is the only thing org mode's server exists to serve (`daemon_main._maybe_start_web_server`). `web.settings.enabled` has no effect here: org mode returns from `_maybe_start_web_server` before that key is read, since `/settings` is never mounted in this mode. The per-connector "Connect" flow below is served by org mode's own `/connect` page, which is mounted unconditionally and needs no settings key turned on.
 
 Run a single active daemon per state directory: PrivacyFence takes a `portalocker`-backed single-instance lock on `~/.privacyfence/` and refuses to start a second process against the same directory.
 
