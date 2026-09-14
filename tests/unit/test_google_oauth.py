@@ -57,6 +57,18 @@ class TestAuthorizeUrl:
         assert "prompt=consent" in url
         assert len(code_verifier) >= 43  # RFC 7636's own minimum verifier length
 
+    def test_does_not_ask_for_incremental_authorization(self):
+        # include_granted_scopes=true makes Google issue a grant covering
+        # every scope this client already holds for the user. routes_connect
+        # .py wants the opposite (one grant and one token file per Google
+        # connector), and asking for it broke the exchange outright: the
+        # token came back with the accumulated union, and oauthlib rejected
+        # it as "Scope has changed from ... to ...". Found authorizing a
+        # second Google connector on a real deployment.
+        wrapped = google_oauth.web_client_config(_CLIENT_CONFIG)
+        url, _ = google_oauth.authorize_url(wrapped, ["scope-a"], REDIRECT_URI, "state-123")
+        assert "include_granted_scopes" not in url
+
     def test_each_call_gets_a_fresh_verifier(self):
         wrapped = google_oauth.web_client_config(_CLIENT_CONFIG)
         _, verifier1 = google_oauth.authorize_url(wrapped, ["s"], REDIRECT_URI, "state-1")
@@ -91,6 +103,52 @@ class TestExchangeCode:
 
         assert creds.token == "at-1"
         assert creds.refresh_token == "rt-1"
+
+    def test_a_wider_granted_scope_is_accepted(self):
+        # Google legitimately returns more than was asked for -- most often
+        # openid/userinfo.*, when one OAuth client serves both org mode's
+        # sign-in and its connectors. oauthlib raises rather than returning
+        # the token it already parsed; exchange_code recovers it.
+        wrapped = google_oauth.web_client_config(_CLIENT_CONFIG)
+        token = {
+            "access_token": "at-1", "refresh_token": "rt-1", "expires_at": 9999999999,
+            "scope": "scope-a openid", "token_type": "Bearer",
+        }
+        warning = Warning('Scope has changed from "scope-a" to "scope-a openid".')
+        warning.token = token
+        warning.new_scope = ["scope-a", "openid"]
+        with patch("google_auth_oauthlib.flow.Flow.fetch_token", side_effect=warning):
+            creds = google_oauth.exchange_code(wrapped, ["scope-a"], REDIRECT_URI, "auth-code", "verifier-abc")
+
+        assert creds.token == "at-1"
+        assert creds.refresh_token == "rt-1"
+        # The distinction credentials_from_session keeps both fields for:
+        # what was asked for, and what was actually granted.
+        assert creds.scopes == ["scope-a"]
+        assert creds.granted_scopes == "scope-a openid"
+
+    def test_a_narrower_granted_scope_is_still_a_failure(self):
+        # The half of oauthlib's check worth keeping: a grant missing
+        # something that was requested would otherwise surface much later,
+        # as an opaque permission error from the connector itself.
+        wrapped = google_oauth.web_client_config(_CLIENT_CONFIG)
+        warning = Warning('Scope has changed from "scope-a scope-b" to "scope-a".')
+        warning.token = {"access_token": "at-1", "expires_at": 9999999999}
+        warning.new_scope = ["scope-a"]
+        with patch("google_auth_oauthlib.flow.Flow.fetch_token", side_effect=warning):
+            with pytest.raises(google_oauth.GoogleOAuthError, match="scope-b"):
+                google_oauth.exchange_code(
+                    wrapped, ["scope-a", "scope-b"], REDIRECT_URI, "auth-code", "verifier-abc",
+                )
+
+    def test_a_warning_that_is_not_oauthlibs_scope_change_still_fails(self):
+        # Bare `Warning` is an ordinary Exception subclass anything could
+        # raise; only oauthlib's scope-change carries .token/.new_scope, and
+        # without them there is nothing to recover.
+        wrapped = google_oauth.web_client_config(_CLIENT_CONFIG)
+        with patch("google_auth_oauthlib.flow.Flow.fetch_token", side_effect=Warning("something else")):
+            with pytest.raises(google_oauth.GoogleOAuthError, match="something else"):
+                google_oauth.exchange_code(wrapped, ["scope-a"], REDIRECT_URI, "auth-code", "verifier-abc")
 
     def test_provider_failure_becomes_google_oauth_error(self):
         wrapped = google_oauth.web_client_config(_CLIENT_CONFIG)
