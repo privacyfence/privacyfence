@@ -815,11 +815,16 @@ def _start_org_web_server(
     step_up = org_mode.StepUpConfig.from_org_config(org_config)
     logger.info(
         "Org mode active -- MCP-over-HTTP at %s (OAuth 2.1, DCR at %s/register), IdP %s, "
-        "WebAuthn step-up %s, app-level authz policy %s",
+        "WebAuthn step-up %s, app-level authz policy %s, accepting Host %s",
         server.mcp_url, server.base_url, idp.issuer,
         f"enabled (scope={step_up.scope})" if step_up.enabled else "disabled",
         f"enabled ({len(authz_policy.allowed_domains)} allowed domain(s), "
         f"{len(authz_policy.required_groups)} required group(s))" if authz_policy.enabled else "disabled",
+        # The Host-allowlist set, named at startup: a reverse proxy
+        # forwarding a hostname this doesn't contain gets a flat 400 on
+        # every request, and without this line the only way to find out
+        # which names *are* accepted is to read web/server.py.
+        ", ".join(sorted(server.allowed_hosts)),
     )
     return server
 
