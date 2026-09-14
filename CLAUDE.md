@@ -41,8 +41,9 @@ whether it *also* reaches a public GitHub Release / PyPI/TestPyPI depends on the
 beta channel already ranks by): only a stable tag's DMG/SBOMs get attached to a public GitHub
 Release and only a stable tag's sdist/wheel reach PyPI/TestPyPI; a pre-release tag still gets a
 GitHub Release entry (marked prerelease, so `update_checker.py`'s beta channel — which reads
-exactly that flag — keeps working), just with no files attached to it. Nothing else anywhere needs
-editing or committing first. Between tags,
+exactly that flag — keeps working), just with no files attached to it. The one thing that does need to be
+committed first is the release notes — see "Release notes come from CHANGELOG.md" below. Nothing
+else anywhere needs editing or committing. Between tags,
 `__version__` is a `setuptools_scm`-synthesized dev version (`<next-version>.dev<n>+g<sha>`, e.g.
 `4.0.1.dev3+gabc1234`) — see `update_checker.py`'s module docstring for exactly how that's compared
 against real release tags.
@@ -62,6 +63,33 @@ has no tool-schema knowledge at all — see `mcpb/shim/src/index.ts`'s module do
 the original bridge it replaced, there's nothing here for the real version to be injected into at build time. `scripts/
 build_mcpb.sh` reads the real version only to stamp the `.mcpb` manifest itself
 (`mcpb/manifest.json.tmpl`'s `__VERSION__`), not anything inside the bundled `shim.js`.
+
+### Release notes come from CHANGELOG.md
+
+A stable tag's GitHub Release body is `CHANGELOG.md`'s section for that version, not GitHub's
+"generate release notes" button. Each of `build.yml`'s four stable-only release steps (in `build`,
+`build-windows`, `build-deb`, and `sbom`) runs `scripts/changelog_section.py <version>` and hands
+the result to `softprops/action-gh-release` as `body_path:`. They run in parallel against the same
+release and all write identical text, so the order they finish in doesn't matter.
+
+That makes the notes a pull-request deliverable rather than a tag-day one, and it puts one
+requirement on the PR that cuts a release: **rename `CHANGELOG.md`'s `## [Unreleased]` heading to
+`## [X.Y.Z] — YYYY-MM-DD`, add a fresh empty `## [Unreleased]` above it, and update the two link
+definitions at the bottom of the file — before tagging.** A stable tag with no matching section
+fails the release build at the render step, which is deliberate: `action-gh-release` silently keeps
+the release's existing body when `body_path` can't be read, so failing loudly is the only way not
+to ship the auto-generated pull-request wall by accident.
+
+Feature branches add under `## [Unreleased]` and never open a concrete version heading — that is
+the same `d929510` failure mode described above, in a different file.
+
+Pre-release tags (`aN`/`bN`/`rcN`) get no section of their own: per Keep a Changelog they fold into
+the version they lead to, which is why only the stable-channel steps render a body. Their release
+entries keep whatever body GitHub generated.
+
+`changelog_section.py` reads a version *out of* the changelog and never determines one —
+`setuptools_scm` remains the only version source, and nothing may parse `CHANGELOG.md` to find out
+what is being built.
 
 ### Packaged-artifact release gating
 
@@ -223,6 +251,9 @@ Doing (1) without (2) leaves the website inviting people to a download that will
 - `main` is protected — all changes land via PR (`CONTRIBUTING.md`). PRs merge with a real merge
   commit (`Merge pull request #N from <fork>/<branch>`), not squash — keep that in mind when writing
   commit messages on a feature branch, since they survive into `main`'s history individually.
+- User-visible changes get a line under `CHANGELOG.md`'s `## [Unreleased]` heading in the same PR.
+  Never open a concrete `## [X.Y.Z]` heading on a feature branch — see "Release notes come from
+  CHANGELOG.md" above.
 - Definition of done for a PR is the checklist in
   [`docs/coding-and-testing-guidelines.md` §2.7](docs/coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo).
 

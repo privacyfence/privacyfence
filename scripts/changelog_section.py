@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Print one version's section out of CHANGELOG.md.
+
+This is what makes the GitHub Release body and the changelog the same text. `.github/workflows/
+build.yml`'s four "Attach release assets (stable only)" steps each run this script and hand the
+result to `softprops/action-gh-release` as `body_path:`, so the notes are written once, reviewed
+in the pull request that writes them, and tag day involves no writing at all. Before this, the
+release body was whatever GitHub's "generate release notes" button produced -- a list of every
+merged pull request, which for 4.0.0 would have been about 127 lines nobody reads.
+
+Direction of the dependency matters: this reads a version *out of* the changelog, it never
+determines one. setuptools_scm remains the only version source (see this repo's CLAUDE.md
+"Releasing" section), there is no version string in the source tree, and nothing may parse
+CHANGELOG.md to find out what version is being built. The workflow passes in the version
+setuptools_scm already resolved.
+
+Stdlib only -- no PrivacyFence install required, matching scripts/r2_release.py. The build jobs
+call this before (or without) installing anything, and the Windows job calls it through `shell:
+bash` like every other cross-platform step there.
+
+Exits non-zero when the version has no section, which is deliberate: a stable tag whose notes
+nobody wrote should fail the release build loudly. The alternative is worse than an error --
+action-gh-release silently falls back to the release's existing body when `body_path` cannot be
+read, so a missing section would otherwise ship the auto-generated pull-request wall this script
+exists to replace.
+
+Pre-release tags (4.0.0a17 and friends) intentionally have no section of their own -- per Keep a
+Changelog they are folded into the version they lead to -- which is why the workflow only runs
+this for a stable channel.
+
+Examples:
+    python3 scripts/changelog_section.py 4.0.0
+        -> prints the [4.0.0] section body (without its own "## [4.0.0] -- date" heading)
+
+    python3 scripts/changelog_section.py v4.0.0 --changelog path/to/CHANGELOG.md
+        -> same; a leading "v" is tolerated the way scripts/r2_release.py tolerates it
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+DEFAULT_CHANGELOG = Path(__file__).resolve().parents[1] / "CHANGELOG.md"
+
+# "## [4.0.0] — 2026-09-14", "## [Unreleased]". Only the bracketed version is captured; whatever
+# follows it (an em-dashed date, nothing at all) is presentation.
+_VERSION_HEADING = re.compile(r"^##\s+\[([^\]]+)\]")
+
+# Any level-2-or-higher-precedence boundary that ends a section. A "### Added" subheading inside
+# the section must *not* match, so this is deliberately "## " exactly, not "#{1,2} ".
+_SECTION_END = re.compile(r"^##\s")
+
+_COMMENT_OPEN = "<!--"
+_COMMENT_CLOSE = "-->"
+
+
+def _content_lines(text: str) -> list[tuple[str, bool]]:
+    """Each line of the changelog, paired with whether a heading is recognizable on it.
+
+    HTML comments are dropped outright -- this file's own top-of-file comment quotes
+    "## [Unreleased]" while explaining the convention, and no comment belongs in a release body
+    anyway. Fenced code blocks are kept (an entry may legitimately show a command or a config
+    snippet) but never scanned for headings, so an example changelog inside a fence can't cut a
+    section short.
+    """
+    kept: list[tuple[str, bool]] = []
+    in_comment = False
+    in_fence = False
+    for line in text.splitlines():
+        if in_comment:
+            if _COMMENT_CLOSE in line:
+                in_comment = False
+            continue
+        if not in_fence and line.lstrip().startswith(_COMMENT_OPEN) and _COMMENT_CLOSE not in line:
+            in_comment = True
+            continue
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            kept.append((line, False))
+            continue
+        kept.append((line, not in_fence))
+    return kept
+
+
+def _normalize(version: str) -> str:
+    return version[1:] if version.startswith(("v", "V")) else version
+
+
+def known_versions(text: str) -> list[str]:
+    """Every version this changelog has a section for, in file order."""
+    return [
+        match.group(1)
+        for line, is_heading_line in _content_lines(text)
+        if is_heading_line and (match := _VERSION_HEADING.match(line))
+    ]
+
+
+def section(text: str, version: str) -> str:
+    """The body of ``version``'s section, without its own heading.
+
+    Raises ``LookupError`` if there is no such section. Surrounding blank lines are stripped so the
+    result is the release body exactly as it should render, with no leading gap under the title.
+    """
+    wanted = _normalize(version)
+    lines = _content_lines(text)
+
+    start: int | None = None
+    for index, (line, is_heading_line) in enumerate(lines):
+        match = _VERSION_HEADING.match(line) if is_heading_line else None
+        if match and _normalize(match.group(1)) == wanted:
+            start = index + 1  # the heading itself is the release title on GitHub; don't repeat it
+            break
+    if start is None:
+        raise LookupError(f"CHANGELOG.md has no section for {version}")
+
+    end = len(lines)
+    for index in range(start, len(lines)):
+        line, is_heading_line = lines[index]
+        if is_heading_line and _SECTION_END.match(line):
+            end = index
+            break
+
+    body = "\n".join(line for line, _ in lines[start:end]).strip("\n")
+    if not body:
+        raise LookupError(f"CHANGELOG.md's section for {version} is empty")
+    return body
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("version", help="Release version, e.g. 4.0.0 (a leading 'v' is tolerated)")
+    parser.add_argument(
+        "--changelog",
+        type=Path,
+        default=DEFAULT_CHANGELOG,
+        help=f"Changelog to read (default: {DEFAULT_CHANGELOG})",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        text = args.changelog.read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"error: cannot read {args.changelog}: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        print(section(text, args.version))
+    except LookupError as exc:
+        available = ", ".join(known_versions(text)) or "(none)"
+        print(f"error: {exc}\nSections in {args.changelog}: {available}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
