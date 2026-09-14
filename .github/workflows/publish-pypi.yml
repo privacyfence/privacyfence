@@ -53,56 +53,66 @@ jobs:
   # result immediately (the API query is keyed on commit SHA, not run recency) and the rerun
   # proceeds; if build.yml never succeeded for that commit, the rerun blocks here until someone
   # fixes and reruns "Build & Release" for that tag.
+  # BUG (found while shipping v4.0.0a13-a15): this job used to poll via `actions/github-script`.
+  # That action is referenced nowhere else in this repo's workflows -- every other action here
+  # (checkout, setup-python, upload-artifact, download-artifact, gh-action-pypi-publish) is also
+  # used by build.yml, which has kept running green the whole time. GitHub validates every `uses:`
+  # in a workflow file before scheduling *any* of its jobs, so a repo-level actions allowlist that
+  # was never updated for this one new action was enough to fail the entire run at startup --
+  # zero jobs ever created, nothing in the Checks API, no logs -- on every tag since it was added.
+  # Polling via the `gh` CLI instead needs no `uses:` action at all (it's preinstalled on
+  # ubuntu-latest and already authenticates from GH_TOKEN), so it can't be blocked the same way.
   wait_for_build:
     runs-on: ubuntu-latest
     permissions:
       actions: read   # only permission this job needs -- it never checks out the repo
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Wait for build.yml's run on this commit to succeed
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        with:
-          script: |
-            const workflowId = "build.yml";
-            const pollIntervalMs = 30_000;
-            // build.yml's `build` job alone (DMG + notarization + TST-15) has run well past ten
-            // minutes before; leave real headroom rather than risk a flaky timeout on release day.
-            const maxWaitMs = 60 * 60_000;
-            const start = Date.now();
-            const { owner, repo } = context.repo;
-            const sha = context.sha;
+        run: |
+          set -euo pipefail
+          workflow_id="build.yml"
+          poll_interval_s=30
+          # build.yml's `build` job alone (DMG + notarization + TST-15) has run well past ten
+          # minutes before; leave real headroom rather than risk a flaky timeout on release day.
+          max_wait_s=$((60 * 60))
+          start=$(date +%s)
 
-            core.info(`Waiting for ${workflowId}'s own run against commit ${sha}...`);
+          echo "Waiting for ${workflow_id}'s own run against commit ${GITHUB_SHA}..."
 
-            for (;;) {
-              const { data } = await github.rest.actions.listWorkflowRuns({
-                owner, repo, workflow_id: workflowId, head_sha: sha, per_page: 10,
-              });
-              if (data.workflow_runs.length > 0) {
-                // Most recent attempt for this exact commit, in case of a manual re-run.
-                const run = data.workflow_runs.sort((a, b) => b.id - a.id)[0];
-                core.info(`Found ${run.html_url} (status=${run.status}, conclusion=${run.conclusion})`);
-                if (run.status === "completed") {
-                  if (run.conclusion === "success") {
-                    core.info("build.yml succeeded for this commit -- proceeding to publish.");
-                    return;
-                  }
-                  core.setFailed(
-                    `build.yml's own run for this commit did not succeed ` +
-                    `(conclusion=${run.conclusion}): ${run.html_url}. Fix and re-run ` +
-                    `"Build & Release" for this tag, then re-run "Publish to PyPI".`,
-                  );
-                  return;
-                }
-              }
-              if (Date.now() - start > maxWaitMs) {
-                core.setFailed(
-                  `Timed out after ${Math.round(maxWaitMs / 60_000)} minutes waiting for ` +
-                  `${workflowId}'s run against ${sha} to complete.`,
-                );
-                return;
-              }
-              await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-            }
+          while true; do
+            runs_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs" \
+              -f "head_sha=${GITHUB_SHA}" -F "per_page=10")"
+            # Most recent attempt for this exact commit, in case of a manual re-run.
+            run="$(jq -c '.workflow_runs | sort_by(.id) | reverse | .[0] // empty' <<<"$runs_json")"
+
+            if [[ -n "$run" ]]; then
+              status="$(jq -r '.status' <<<"$run")"
+              conclusion="$(jq -r '.conclusion' <<<"$run")"
+              html_url="$(jq -r '.html_url' <<<"$run")"
+              echo "Found ${html_url} (status=${status}, conclusion=${conclusion})"
+
+              if [[ "$status" == "completed" ]]; then
+                if [[ "$conclusion" == "success" ]]; then
+                  echo "build.yml succeeded for this commit -- proceeding to publish."
+                  exit 0
+                fi
+                echo "::error::build.yml's own run for this commit did not succeed" \
+                  "(conclusion=${conclusion}): ${html_url}. Fix and re-run" \
+                  "\"Build & Release\" for this tag, then re-run \"Publish to PyPI\"."
+                exit 1
+              fi
+            fi
+
+            now=$(date +%s)
+            if (( now - start > max_wait_s )); then
+              echo "::error::Timed out after $((max_wait_s / 60)) minutes waiting for" \
+                "${workflow_id}'s run against ${GITHUB_SHA} to complete."
+              exit 1
+            fi
+            sleep "$poll_interval_s"
+          done
 
   build:
     runs-on: ubuntu-latest   # pure Python sdist/wheel -- no macOS-only step needed
