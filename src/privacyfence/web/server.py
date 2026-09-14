@@ -201,6 +201,40 @@ def _write_mcp_url_file(url: str) -> None:
     atomic_write_text(path, url)
 
 
+def _bootstrap_url_file_name(path: str) -> str:
+    """``/approvals`` -> ``approvals_url``, ``/settings`` -> ``settings_url``
+    -- the discovery-file name mint_bootstrap_url() writes each freshly
+    minted link under, mirroring MCP_URL_FILE_NAME's own naming for the
+    same directory."""
+    return f"{path.strip('/').replace('/', '_') or 'root'}_url"
+
+
+def _write_bootstrap_url_file(path: str, url: str) -> None:
+    """SEC-06's bootstrap link, written to disk the same way ``mcp_url`` is
+    (0600, alongside web_token/mcp_token) -- unlike that log line, this file
+    is never touched by SecretRedactingFormatter (daemon_main.py's
+    ``setup_logging``), which matches -- and scrubs -- the literal
+    ``bootstrap=<value>`` substring in *every* log line, startup line
+    included (SEC-10, "on principle"). Before this existed, "the daemon
+    logs its URL on startup" (this project's own onboarding docs) was
+    quietly false: a human reading privacyfence.log for that link only ever
+    found ``bootstrap=[REDACTED]``, no matter how many times the daemon was
+    restarted to try to get a fresh one -- see
+    web/session_auth.py's unauthorized_html(), which now points here
+    instead. Overwritten, not appended, on every mint -- only the newest
+    link is ever meaningful, since consuming or expiring the previous one
+    leaves it dead anyway."""
+    file_path = paths.data_dir() / _bootstrap_url_file_name(path)
+    atomic_write_text(file_path, url)
+
+
+def _clear_bootstrap_url_file(path: str) -> None:
+    """Mirrors _clear_mcp_url_file: called on WebServer.stop() for every
+    path this server ever minted a link for, so a reader after shutdown
+    finds no file rather than a stale, now-dead link."""
+    (paths.data_dir() / _bootstrap_url_file_name(path)).unlink(missing_ok=True)
+
+
 def _clear_mcp_url_file() -> None:
     """Called on WebServer.stop() so a shim launched after this daemon exits
     finds no file rather than a stale, now-dead URL -- the same reasoning
@@ -791,6 +825,12 @@ class WebServer:
         # code out of self.bootstrap.
         self.sessions = None if org is not None else LocalSessionStore()
         self.bootstrap = None if org is not None else BootstrapStore()
+        # Every path mint_bootstrap_url() has actually written a discovery
+        # file for -- stop() clears exactly these, never a hardcoded list,
+        # since which paths get minted (just /approvals, or /approvals and
+        # /settings too) depends on daemon_main.py's own config-driven
+        # use_web_settings check.
+        self._minted_bootstrap_paths: set[str] = set()
         self.mcp_dispatcher = mcp_dispatcher
         self.mcp_token = (
             None if org is not None
@@ -904,10 +944,19 @@ class WebServer:
         startup log lines are the only caller today -- never reuse the
         result: each call mints a brand-new code, and the previous one (if
         any) is simply left to expire on its own rather than being
-        invalidated early."""
+        invalidated early.
+
+        Also writes the link to its own discovery file
+        (``_write_bootstrap_url_file``) -- the log line daemon_main.py
+        prints alongside this call is always redacted (see that helper's
+        own docstring), so the file is the only channel that actually
+        delivers a usable link. ``stop()`` clears every path minted here."""
         if self.bootstrap is None:
             return None
-        return f"{self.base_url}{path}?bootstrap={self.bootstrap.mint()}"
+        url = f"{self.base_url}{path}?bootstrap={self.bootstrap.mint()}"
+        _write_bootstrap_url_file(path, url)
+        self._minted_bootstrap_paths.add(path)
+        return url
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._server.run, name="web-server", daemon=True)
@@ -922,3 +971,5 @@ class WebServer:
             self._thread.join(timeout=5)
         if self.mcp_url is not None:
             _clear_mcp_url_file()
+        for path in self._minted_bootstrap_paths:
+            _clear_bootstrap_url_file(path)

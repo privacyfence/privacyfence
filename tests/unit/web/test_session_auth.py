@@ -291,14 +291,35 @@ class TestVerifyBearerSecret:
 
 
 class TestUnauthorizedHtml:
+    def _scope(self):
+        return {
+            "type": "http", "headers": [], "method": "GET", "path": "/approvals",
+            "scheme": "http", "server": ("localhost", 8765),
+        }
+
     def test_is_no_store(self):
         # SEC-18: this page names a live bearer-secret command (the exact
         # ~/.privacyfence/web_token curl invocation) -- it must never be
         # cached, and previously carried no Cache-Control header at all.
-        scope = {
-            "type": "http", "headers": [], "method": "GET", "path": "/approvals",
-            "scheme": "http", "server": ("localhost", 8765),
-        }
-        response = sa.unauthorized_html(Request(scope))
+        response = sa.unauthorized_html(Request(self._scope()))
         assert response.status_code == 401
         assert response.headers["cache-control"] == "no-store"
+
+    def test_points_at_the_discovery_file_not_the_redacted_log(self):
+        # Regression coverage for the actual bug this page used to send
+        # readers straight into: privacyfence.log's startup line always
+        # reads bootstrap=[REDACTED] (SecretRedactingFormatter, SEC-10), so
+        # "open the newest sign-in link PrivacyFence logged" never worked --
+        # see web/server.py's _write_bootstrap_url_file for where the real
+        # link actually lands instead.
+        body = sa.unauthorized_html(Request(self._scope())).body.decode()
+        assert "approvals_url" in body
+        assert "settings_url" in body
+        assert "redact" in body.lower()
+        assert "PrivacyFence logged" not in body
+
+    def test_still_offers_the_on_demand_bootstrap_command(self):
+        body = sa.unauthorized_html(Request(self._scope())).body.decode()
+        assert "POST" in body
+        assert "/api/bootstrap" in body
+        assert "web_token" in body

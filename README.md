@@ -248,7 +248,9 @@ PrivacyFence is currently an open-source macOS/Linux implementation rather than 
 2. Drag **PrivacyFenceApp.app** to `/Applications`.
 3. Install the organization configuration provided by your IT administrator.
 4. Authenticate the connectors you want from the **Connectors** page of PrivacyFence Settings (the
-   embedded web page — the daemon logs its URL on startup).
+   embedded web page — its current sign-in link is at `~/.privacyfence/settings_url`, rewritten
+   fresh on every startup; `privacyfence.log` intentionally redacts this link's code, so read it
+   from that file, not the log).
 5. Install **PrivacyFence.mcpb** into Claude Desktop.
 
 Stable releases are code-signed and notarized by Apple, so this just works — no Gatekeeper

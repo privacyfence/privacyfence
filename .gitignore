@@ -23,6 +23,10 @@ update_check_cache.json
 # SEC-23: this install's own random id (daemon_main.get_or_create_deployment_id) --
 # dev-mode data_dir() is the repo root, same as the caches above.
 deployment_id
+# SEC-06 bootstrap-link discovery files (web/server.py's mint_bootstrap_url) --
+# same dev-mode-data_dir()-is-the-repo-root reasoning as deployment_id above.
+approvals_url
+settings_url
 
 # QA fixture manifest (keep only the .example) -- reveals which real
 # project/space/folder/calendar/list/channel/chat a QA environment uses,

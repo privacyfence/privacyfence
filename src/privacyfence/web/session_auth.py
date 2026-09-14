@@ -191,24 +191,37 @@ def unauthorized_html(request: Request) -> Response:
     single-use by design, see ``BootstrapStore.consume``) or a session that
     idle-/absolute-timed out, reopened by something like a browser
     restoring a previously-open tab verbatim rather than a fresh click on a
-    freshly-logged link. Restarting PrivacyFence is offered as the
-    fallback of last resort, not the first-and-only answer: ``POST
-    /api/bootstrap`` (this module's own docstring) exists precisely so a
-    stale link/expired session doesn't require one, and this page spells
-    out the actual command rather than just naming the endpoint -- a
-    reader who's landed here from a dead link is exactly the audience that
-    finding this self-explanatory matters most for. ``request`` supplies
-    only this page's own origin (scheme+host+port), the same one the
-    reader is already looking at, so the command below can be pasted
-    as-is."""
+    freshly-logged link.
+
+    This used to point readers at ``privacyfence.log`` for "the newest
+    sign-in link PrivacyFence logged" -- advice that never worked and never
+    will: daemon_main.py's startup log line embeds the link, but every
+    logger in the process is wrapped in SecretRedactingFormatter (SEC-10),
+    whose key=value pattern matches the literal word ``bootstrap`` and
+    scrubs the code to ``bootstrap=[REDACTED]`` before the line ever
+    reaches a file or a terminal -- restarting PrivacyFence changed nothing
+    about that, since the fresh line from the new process is redacted the
+    same way. The two things that actually work: the discovery file
+    ``web/server.py``'s ``mint_bootstrap_url()`` writes outside the logging
+    pipeline every time PrivacyFence (re)starts, and minting a fresh code
+    on demand via ``POST /api/bootstrap`` without restarting anything --
+    this page spells out the actual command for the latter rather than
+    just naming the endpoint, since a reader who's landed here from a dead
+    link is exactly the audience that finding this self-explanatory
+    matters most for. ``request`` supplies only this page's own origin
+    (scheme+host+port), the same one the reader is already looking at, so
+    the command below can be pasted as-is."""
     origin = f"{request.url.scheme}://{request.url.netloc}"
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
         "<p>Not authorized — this link has expired, was already used, or your "
         "session timed out.</p>"
-        "<p>Easiest fix: open the newest sign-in link PrivacyFence logged "
-        "(<code>~/.privacyfence/logs/privacyfence.log</code>) — every daemon "
-        "startup logs a fresh one.</p>"
+        "<p>Easiest fix: open the current sign-in link PrivacyFence just wrote to "
+        "<code>~/.privacyfence/approvals_url</code> (or <code>settings_url</code> for "
+        "Settings) — every startup, and every time an old one is superseded, replaces "
+        "it with a fresh one. (Not the log file: <code>privacyfence.log</code> "
+        "deliberately redacts this link's code for security, so it never contains a "
+        "usable one — restarting PrivacyFence doesn't change that.)</p>"
         "<p>Don't want to restart PrivacyFence just for that? From a terminal "
         "on this machine, mint a new one on demand and open the link it "
         "returns:</p>"
