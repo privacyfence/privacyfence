@@ -39,6 +39,14 @@ The local browser UI is not authenticated by a reusable token in the URL. The da
 
 Mutating requests require the authenticated session, same-origin checks, and CSRF validation. Session/bootstrap secrets are not intended for logging or propagation into connector data.
 
+### MCP-issued sign-in links
+
+`privacyfence_get_sign_in_link` is a meta-tool, available over `/mcp` like every connector tool, that mints a fresh bootstrap link for this same local web UI (`/approvals` or `/settings`) and returns it to the calling MCP client. It is dispatched directly rather than through the gated-call path every connector tool uses — deliberately: the human approval that path would require lives behind the very UI a locked-out user is trying to reach, so gating this tool on that UI would be circular.
+
+What bounds it instead: local mode only (it raises in org mode, which authenticates through IdP-backed OAuth rather than a bootstrap link, so it can never return a working credential there); the link it mints is the same single-use, short-lived bootstrap code every other sign-in path in this section uses, consumed by the first visit whether or not it succeeds; `page` is allowlisted to `approvals`/`settings`, never an arbitrary path; and the local web UI is bound to `localhost`, so the link is only useful from the same machine the MCP client and daemon are already both running on. Every call is written to the audit log under its own `sign_in_link_issued` decision, carrying the calling client's self-reported reason — the same disclosed-and-unverified posture every other tool's `reason` parameter has.
+
+Net effect: an MCP client — which already holds equivalent-or-greater access via every other tool this daemon exposes (policy changes, connector reads and writes) — can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. This is consistent with how a valid local `mcp_token` is already trusted for everything else `/mcp` exposes, not a new trust boundary. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
+
 ### Local MCP
 
 The local `/mcp` endpoint uses the generated bearer token stored in the user's PrivacyFence state so local MCP clients/shims can authenticate independently from the browser session.
