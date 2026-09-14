@@ -98,6 +98,48 @@ systemd unit, a real Caddy process, a real external IdP, or the packaged
 specifically -- see "Why a --target install, not the .deb" below for why the
 last of those isn't needed for what this test actually checks.
 
+Also deliberately NOT covered here, and worth being explicit about after
+two org-mode defects (found on the first real install, fixed in 8322c111
+and cfe3716c) shipped past a fully green run of this module: *connector-
+tool content* and *auto-accept rule application*, i.e. whether the tool
+list ``handle_list_tools`` (``web/routes_mcp.py``) advertises over
+``/mcp`` for a signed-in principal actually reflects that principal's own
+connectors rather than ``LOCAL_PRINCIPAL``'s (empty, on an org server --
+8322c111), and whether a rule configured in a principal's own
+``settings.yaml`` is actually live in their ``AutoAcceptEvaluator`` rather
+than silently ignored (cfe3716c). Both are genuinely server-side and, per
+``docs/testing-policy.md``'s "Gate/policy correctness" row, belong at the
+synthetic/unit tier rather than here -- and proving either one for real
+would need a connector to actually exist in a signed-in principal's
+``dispatcher.connectors``, which every connector client in this codebase
+(``GmailClient``, ``SlackClient``, ...) makes a real, hardcoded external
+API call to construct (``check_connection()``) with no config-driven way
+to point that call at a local mock the way ``mock_idp.py`` stands in for
+a real IdP -- and this codebase deliberately has no stub/no-op connector
+type wired into ``build_connectors()`` to fake one, so as not to grow a
+test-only code path in connector-construction, a security-sensitive area.
+This module's own zero-connector synthetic config (see
+``TestRunningOrgModeService``'s approval test docstring) means both
+defects were, and remain, structurally invisible to a real-subprocess run
+here: with no connector configured for anyone, a correctly- and an
+incorrectly-scoped ``handle_list_tools`` produce byte-identical output
+(``META_TOOLS`` and nothing else), and no gated tool call exists to prove
+``should_auto_accept()`` against. Both are instead proven, deterministically
+and in-process, exactly where they were fixed:
+``tests/unit/web/test_routes_mcp.py::TestListTools::
+test_org_mode_lists_the_signed_in_principals_own_connectors`` (and its
+sibling ``test_org_mode_does_not_advertise_the_local_principals_
+connectors``) for the tool-list scoping, and ``tests/unit/test_daemon_
+main.py::TestLoadPrincipalSettings::
+test_seeds_the_evaluator_so_configured_rules_actually_apply`` for the
+auto-accept evaluator seeding. A green run of *this* module proves the
+org-mode deployment shape (startup, Host handling, sessions, OAuth
+discovery, approvals, restart survival); it was never designed to, and
+still does not, prove that a signed-in principal's own connectors or
+rules are correct -- see ``docs/testing-policy.md`` for that boundary
+stated as policy rather than left for a reader to infer from a green
+checkmark.
+
 Why a --target install, not the .deb
 -------------------------------------
 ``paths.data_dir()`` resolves to the repo root itself for an editable dev
