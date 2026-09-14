@@ -32,6 +32,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands
+  (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
+  current-user-only install) and how to get there in File Explorer, instead of just saying to
+  install it with no path given. See issue #407.
+
 ### Fixed
 
 - Org mode's approval page no longer shows the WebAuthn step-up helper's JavaScript source as
