@@ -329,6 +329,16 @@ class TestWebServerOrgMode:
         server = WebServer(WebApprovalUI(), org=org)
         assert server.state_stream is None
 
+    def test_allowed_hosts_is_exposed_for_reporting(self, tmp_path, monkeypatch):
+        # daemon_main.py's org-mode startup line logs this set, so an admin
+        # whose reverse proxy forwards some other hostname can see which
+        # names the daemon actually accepts instead of only ever getting a
+        # bare "Invalid Host header" per request.
+        org = _org_auth(tmp_path, monkeypatch)
+        server = WebServer(WebApprovalUI(), host="0.0.0.0", port=443, org=org)
+        assert "pf.example.com" in server.allowed_hosts
+        assert {"0.0.0.0", "127.0.0.1", "::1"} <= server.allowed_hosts
+
     def test_issuer_hostname_is_added_to_the_allowed_hosts(self, tmp_path, monkeypatch):
         # Bound to 0.0.0.0 (a real org deployment's own bind host), which
         # alone wouldn't satisfy the Host-header allowlist for a request

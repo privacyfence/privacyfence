@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 Mode = Literal["local", "org"]
 
@@ -77,9 +78,27 @@ class ServerConfig:
         raw = raw if isinstance(raw, dict) else {}
         tls = raw.get("tls")
         tls = tls if isinstance(tls, dict) else {}
-        issuer_url = raw.get("issuer_url", "")
+        # Stripped before anything derives from it: web/server.py builds
+        # the Host allowlist from urlsplit(issuer_url).hostname, which
+        # keeps a stray trailing space *inside* the hostname
+        # ("pf.acme.example.com "), while routes_mcp.py's pydantic
+        # AnyHttpUrl normalizes the same string and accepts it. The daemon
+        # then starts cleanly and rejects every single request with
+        # "Invalid Host header" -- a message pointing at Host headers and
+        # reverse proxies rather than at the one config value at fault.
+        issuer_url = str(raw.get("issuer_url") or "").strip()
         if not issuer_url:
             raise ConfigurationError("org mode requires org_config.json's \"server\".\"issuer_url\"")
+        # Fail here, naming the key, rather than several frames later
+        # inside mount_org_oauth's AnyHttpUrl() -- and, for a scheme that
+        # parses but carries no hostname, rather than not at all (the
+        # Host allowlist silently gains nothing and every request 400s).
+        parsed = urlsplit(issuer_url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ConfigurationError(
+                "org_config.json's \"server\".\"issuer_url\" must be an absolute http(s) URL "
+                f"with a hostname (e.g. https://pf.acme.example.com), got {issuer_url!r}"
+            )
         return ServerConfig(
             bind_host=raw.get("bind_host", DEFAULT_BIND_HOST),
             port=int(raw.get("port", DEFAULT_PORT)),

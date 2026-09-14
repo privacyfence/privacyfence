@@ -33,6 +33,31 @@ class TestServerConfigFromOrgConfig:
         with pytest.raises(org_mode.ConfigurationError):
             org_mode.ServerConfig.from_org_config({})
 
+    @pytest.mark.parametrize("issuer_url", [
+        "pf.example.com",           # no scheme at all
+        "pf.example.com:8765",      # "pf.example.com" reads as the scheme
+        "ftp://pf.example.com",     # a scheme, but not one a browser follows
+        "https://",                 # parses, but there is no host in it
+    ])
+    def test_rejects_an_issuer_url_that_is_not_an_absolute_http_url(self, issuer_url):
+        # Every one of these used to start the daemon. The scheme-less
+        # spellings then died several frames later inside mount_org_oauth's
+        # AnyHttpUrl(); "https://" died nowhere at all -- it left the Host
+        # allowlist without the issuer host, so every request answered
+        # "Invalid Host header" and the config value at fault was named
+        # nowhere.
+        with pytest.raises(org_mode.ConfigurationError, match="issuer_url"):
+            org_mode.ServerConfig.from_org_config({"server": {"issuer_url": issuer_url}})
+
+    def test_issuer_url_is_stripped_of_surrounding_whitespace(self):
+        # The nastiest spelling of this bug, because nothing rejects it:
+        # pydantic's AnyHttpUrl normalizes the trailing space away, while
+        # urlsplit(...).hostname keeps it *in the hostname*
+        # ("pf.example.com "), so server.py's allowlist ends up holding a
+        # host no Host header can ever match.
+        config = org_mode.ServerConfig.from_org_config({"server": {"issuer_url": " https://pf.example.com "}})
+        assert config.issuer_url == "https://pf.example.com"
+
     def test_builds_config_with_defaults(self):
         config = org_mode.ServerConfig.from_org_config({"server": {"issuer_url": "https://pf.example.com"}})
         assert config.issuer_url == "https://pf.example.com"
