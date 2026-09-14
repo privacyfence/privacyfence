@@ -141,7 +141,7 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
     """
     del stepup_options_url  # reserved -- see docstring
     return (
-        PF_WEBAUTHN_JS
+        f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
         + f'<script nonce="{nonce}">(function(){{'
         "window.webkit = window.webkit || {};"
         "window.webkit.messageHandlers = window.webkit.messageHandlers || {};"

@@ -129,6 +129,22 @@ class TestPrincipalScopedList:
         assert r.status_code == 200
         assert "CARD" in r.text
 
+    def test_show_approval_wraps_the_webauthn_helper_js_in_a_script_tag(self):
+        """Regression: _org_bridge_shim used to concatenate PF_WEBAUTHN_JS
+        *before* its own <script> tag opened, so the helper functions
+        (pfB64uToBuf/pfWebauthnCreate/pfWebauthnGet) landed in the document
+        as literal visible text at the top of the rendered card instead of
+        executing -- see routes_org_approvals.py's own _org_bridge_shim."""
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get(f"/approvals/{approval.id}")
+        assert r.status_code == 200
+        body_start = r.text.index("<body>") + len("<body>")
+        assert r.text[body_start : body_start + len("<script")] == "<script"
+        assert "function pfB64uToBuf" not in r.text.split("<script", 1)[0]
+
 
 class TestDecideWithoutStepUp:
     def test_deny_a_read_succeeds(self):
