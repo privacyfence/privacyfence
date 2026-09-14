@@ -201,36 +201,41 @@ def unauthorized_html(request: Request) -> Response:
     scrubs the code to ``bootstrap=[REDACTED]`` before the line ever
     reaches a file or a terminal -- restarting PrivacyFence changed nothing
     about that, since the fresh line from the new process is redacted the
-    same way. The three things that actually work: the discovery file
-    ``web/server.py``'s ``mint_bootstrap_url()`` writes outside the logging
-    pipeline every time PrivacyFence (re)starts; asking a connected MCP
-    client (e.g. Claude) to call ``privacyfence_get_sign_in_link``
-    (web/mcp_tools.py), which mints one the same way and hands it straight
-    back in the conversation; and minting a fresh code on demand via
-    ``POST /api/bootstrap`` without restarting anything -- this page spells
-    out the actual command for that last one rather than just naming the
-    endpoint, since a reader who's landed here from a dead link is exactly
-    the audience that finding this self-explanatory matters most for.
-    ``request`` supplies only this page's own origin (scheme+host+port),
-    the same one the reader is already looking at, so the command below
-    can be pasted as-is."""
+    same way. The three things that actually work, in the order most
+    readers can actually use them: asking a connected MCP client (e.g.
+    Claude -- installed alongside PrivacyFence per README.md's Quick start,
+    so this is available even on a first run, before Settings has ever been
+    opened) to call ``privacyfence_get_sign_in_link`` (web/mcp_tools.py),
+    which mints one and hands it straight back in the conversation -- no
+    terminal at all; the discovery file ``web/server.py``'s
+    ``mint_bootstrap_url()`` writes outside the logging pipeline every time
+    PrivacyFence (re)starts, for a reader who'd rather grab it themselves;
+    and minting a fresh code on demand via ``POST /api/bootstrap`` without
+    restarting anything, for a reader with neither -- this page spells out
+    the actual command for that last one rather than just naming the
+    endpoint, since a reader who's landed here from a dead link and has no
+    MCP client connected yet is exactly the audience that finding this
+    self-explanatory matters most for. ``request`` supplies only this
+    page's own origin (scheme+host+port), the same one the reader is
+    already looking at, so the command below can be pasted as-is."""
     origin = f"{request.url.scheme}://{request.url.netloc}"
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
         "<p>Not authorized — this link has expired, was already used, or your "
         "session timed out.</p>"
-        "<p>Easiest fix: open the current sign-in link PrivacyFence just wrote to "
+        "<p>Easiest fix: ask Claude (or any other MCP client already connected to "
+        "PrivacyFence) to get you a sign-in link — it can call the "
+        "<code>privacyfence_get_sign_in_link</code> tool and hand you the result directly, "
+        "no terminal needed.</p>"
+        "<p>Prefer to grab it yourself? PrivacyFence just wrote the current one to "
         "<code>~/.privacyfence/approvals_url</code> (or <code>settings_url</code> for "
         "Settings) — every startup, and every time an old one is superseded, replaces "
         "it with a fresh one. (Not the log file: <code>privacyfence.log</code> "
         "deliberately redacts this link's code for security, so it never contains a "
         "usable one — restarting PrivacyFence doesn't change that.)</p>"
-        "<p>Have Claude (or any other MCP client already connected to PrivacyFence) open "
-        "for you? Ask it to get you a sign-in link — it can call the "
-        "<code>privacyfence_get_sign_in_link</code> tool and hand you the result directly.</p>"
-        "<p>Don't want to restart PrivacyFence just for that? From a terminal "
-        "on this machine, mint a new one on demand and open the link it "
-        "returns:</p>"
+        "<p>No MCP client connected yet, and don't want to restart PrivacyFence just for "
+        "this? From a terminal on this machine, mint a new one on demand and open the "
+        "link it returns:</p>"
         "<pre style=\"white-space:pre-wrap;background:#f0f0f0;padding:10px;"
         "border-radius:4px\">curl -s -X POST "
         "-H \"Authorization: Bearer $(cat ~/.privacyfence/web_token)\" "
