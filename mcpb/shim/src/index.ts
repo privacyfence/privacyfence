@@ -50,9 +50,30 @@ function setupLogging(): void {
   console.warn = console.error;
 }
 
-/** Validates flags; --config is daemon-side only, accepted here for CLI
- * compatibility with how the bridge was invoked. */
+/** Logs the flags this process was spawned with. ``--config`` is
+ * daemon-side only, accepted here for CLI compatibility with how the bridge
+ * was invoked; anything else is *ignored*, not rejected.
+ *
+ * Rejecting used to mean throwing out of main(), which exits before
+ * desktopSide.start() has read a single byte of stdin. The failure that
+ * produces is invisible from both sides at once: the host sees a server
+ * process that started and then died without ever answering ``initialize``
+ * (it reports a timeout, not a crash, since the spawn itself succeeded),
+ * and because the shim never got as far as opening its ``/mcp`` connection,
+ * the daemon's own log records nothing whatsoever -- no session, no
+ * request, no error. A user reading privacyfence.log to find out why Claude
+ * "cannot connect" finds an idle, healthy daemon and no trace of the
+ * attempt.
+ *
+ * An MCP host owns the argv of the servers it spawns and may add flags of
+ * its own at any time -- the same ``.mcpb`` launched a second way by a
+ * newer client is the case this was found on. Refusing to start over an
+ * argument this transport proxy has no use for anyway trades a working
+ * connection for exactly that silent failure, so unrecognized flags are
+ * logged to stderr (which the host captures into its own server log) and
+ * otherwise ignored. */
 export function parseArgs(argv: string[]): void {
+  const ignored: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--config") {
@@ -62,7 +83,12 @@ export function parseArgs(argv: string[]): void {
     if (arg?.startsWith("--config=")) {
       continue;
     }
-    throw new Error(`privacyfence-mcpb-shim: unrecognized argument: ${arg}`);
+    if (arg !== undefined) {
+      ignored.push(arg);
+    }
+  }
+  if (ignored.length > 0) {
+    console.error(`Ignoring unrecognized argument(s): ${ignored.join(" ")}`);
   }
 }
 
