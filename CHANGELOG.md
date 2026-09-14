@@ -34,6 +34,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Org mode's approval page no longer shows the WebAuthn step-up helper's JavaScript source as
+  literal visible text above the approval card. `_org_bridge_shim` concatenated it ahead of its
+  own `<script>` tag instead of inside one, so the browser rendered the function bodies as page
+  content and passkey step-up never actually ran.
 - Authorizing a Google connector in org mode no longer fails with `Scope has changed from "..." to
   "..."`. The authorization request asked Google for incremental authorization
   (`include_granted_scopes`), so the token came back covering every scope that OAuth client already
