@@ -251,8 +251,10 @@ PrivacyFence is currently an open-source macOS/Linux implementation rather than 
    embedded web page — the daemon logs its URL on startup).
 5. Install **PrivacyFence.mcpb** into Claude Desktop.
 
-Releases are code-signed and notarized by Apple, so this just works — no Gatekeeper warnings, no
-manual quarantine step. Full installation details are in [Technical Reference](docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
+Stable releases are code-signed and notarized by Apple, so this just works — no Gatekeeper
+warnings, no manual quarantine step. Pre-release (alpha/beta/rc) builds might not be, depending on
+signing/notarization credential availability at build time. Full installation details are in
+[Technical Reference](docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
 
 ### Install on Windows
 
@@ -264,8 +266,10 @@ manual quarantine step. Full installation details are in [Technical Reference](d
    (`http://localhost:8765/settings`, also reachable from its Start Menu shortcut).
 5. Install **PrivacyFence.mcpb**, installed alongside the daemon, into Claude Desktop.
 
-Releases are Authenticode-signed. Full installation details, including what uninstalling does and
-doesn't remove, are in [Technical Reference](docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
+Stable releases are Authenticode-signed; pre-release (alpha/beta/rc) builds might not be, depending
+on signing certificate availability at build time. Full installation details, including what
+uninstalling does and doesn't remove, are in
+[Technical Reference](docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
 
 ### Install from the `.deb` (Debian/Ubuntu desktop)
 
