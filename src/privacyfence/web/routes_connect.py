@@ -24,21 +24,28 @@ same distinction for local mode's own Connectors-page flow: each is a
 distinct OAuth grant with its own scopes and its own token file.
 
 **The one load-bearing subtlety this module exists to get right**: the
-``pf_org_session`` cookie is ``SameSite=Strict`` (org_session.py's own
-``set_session_cookie``), so it is *not* sent on the browser's GET that
-lands back on ``/oauth/callback/{service}`` after a redirect from Google/
-Slack/Salesforce/Atlassian -- that request is a cross-site-initiated
-top-level navigation from the provider's own domain, exactly the case
-``SameSite=Strict`` is designed to omit the cookie on. The callback route
-therefore never reads ``current_principal()``/the session cookie; it
-resolves the principal entirely from the single-use ``state`` value
-``_PendingAuthStore`` recorded at ``/oauth/start/{service}`` time -- where
-the cookie *is* present, since that request is a same-site navigation the
-user's own click on ``/connect`` made. This mirrors how ``routes_org_
-identity.py``'s own IdP callback needs no session check (there's no
-session yet at that point); this is the first flow in this codebase where
-an *already-authenticated* session has to survive a real third-party
-redirect round trip.
+browser's GET that lands back on ``/oauth/callback/{service}`` after a
+redirect from Google/Slack/Salesforce/Atlassian is a cross-site-initiated
+top-level navigation from the provider's own domain, and this route
+resolves the principal without depending on a session cookie arriving on
+it at all -- entirely from the single-use ``state`` value
+``_PendingAuthStore`` recorded at ``/oauth/start/{service}`` time, where
+the cookie is unambiguously present (that request is a same-site
+navigation the user's own click on ``/connect`` made).
+
+This was originally forced: ``pf_org_session`` was ``SameSite=Strict``,
+which omits the cookie on exactly that kind of landing. The cookie is
+``SameSite=Lax`` now -- Strict made the *sign-in* landing
+(routes_org_identity.py's ``/oauth/idp/login-callback`` -> post-login
+page) an infinite redirect loop, which no amount of ``state`` can fix
+for a callback whose job is to establish the session in the first place;
+see ``org_session.set_session_cookie``'s own comment. Under Lax the
+cookie would in fact now reach this callback, but resolving the principal
+from ``state`` is kept, and is the better design independent of cookie
+policy: it binds the callback to the specific authorization flow that
+started it rather than to whoever merely happens to be signed in in that
+browser, and it leaves this module correct whatever the cookie policy
+does next.
 
 **Atlassian's multi-site accounts** are handled with one deliberate
 simplification versus local mode: if the signed-in account can reach more

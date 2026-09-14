@@ -48,6 +48,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   becoming part of the hostname the Host allowlist is built from.
 - The org-mode startup log line now lists the `Host` header values the daemon accepts, so a reverse
   proxy forwarding a hostname the bundle doesn't name is diagnosable from `journalctl` alone.
+- Org-mode sign-in no longer ends in an infinite redirect loop. The browser session cookie was
+  `SameSite=Strict`, which a browser withholds on the landing request after the identity provider's
+  redirect — so the post-login page saw no session and bounced back to `/login`, where the
+  already-consented IdP sent the browser straight back. The cookie is now `SameSite=Lax`; CSRF
+  protection is unchanged (the double-submit token and `Origin` check guard every mutation).
 
 ## [4.0.0] — 2026-09-14
 

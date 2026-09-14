@@ -8,6 +8,9 @@ reads the session cookie at callback time -- see routes_connect.py's own
 module docstring on why that would be wrong. TestCallback's own tests
 below drive the callback with **no** cookie at all on that specific
 request, which is what actually proves the module doesn't depend on one.
+That stays true now that the cookie is SameSite=Lax and a real browser
+would send it here: not depending on it is the point, since the principal
+has to come from the flow that started, not from whoever is signed in.
 """
 from __future__ import annotations
 
@@ -215,9 +218,11 @@ class TestOAuthCallback:
         monkeypatch.setattr(registry, "evict", lambda pid: evicted.append(pid))
 
         # Step 2: the real-world cross-site redirect landing -- deliberately
-        # NO cookie on this request at all, mirroring what a real browser
-        # actually sends back for a SameSite=Strict cookie on a cross-site
-        # top-level navigation.
+        # NO cookie on this request at all. Under the SameSite=Strict this
+        # module was written against, that mirrored what a browser really
+        # sends; under Lax the cookie would now arrive, and withholding it
+        # here keeps proving the thing that matters either way -- the
+        # principal is resolved from `state`, never from the session.
         r = client.get(f"/oauth/callback/slack?code=auth-code-1&state={state}")
 
         assert r.status_code == 302
