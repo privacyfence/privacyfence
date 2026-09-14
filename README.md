@@ -374,6 +374,7 @@ walkthrough.
 
 ## Documentation
 
+- [Changelog](CHANGELOG.md) — what changed in each release, newest first, including how to upgrade from 3.x
 - [Technical Reference](docs/TECHNICAL_REFERENCE.md) — review model, connectors, policies, installation, configuration, and implementation notes
 - [Security, Privacy & Compliance](docs/security-and-compliance.md) — deployment model, data handling, organizational controls, GDPR, and EU AI Act positioning
 - [Google setup](docs/google-cloud-setup.md)

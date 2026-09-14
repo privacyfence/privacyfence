@@ -4,6 +4,7 @@ This directory documents PrivacyFence as it works in the current source tree. Ru
 
 ## Start here
 
+- [`../CHANGELOG.md`](../CHANGELOG.md) — release history. The history this directory deliberately doesn't carry (see "Documentation rules" below) lives there.
 - [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md) — architecture, runtime, MCP transport, configuration, state, approvals, connectors, audit logging, and packaging.
 - [`security-and-compliance.md`](security-and-compliance.md) — security boundaries, authentication, authorization, privacy controls, audit integrity, and deployment considerations.
 - [`testing-policy.md`](testing-policy.md) — test layers, CI execution, live-provider checks, and what remains manual.
@@ -58,7 +59,7 @@ CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tes
 
 ## Documentation rules
 
-Documentation in this directory is a standing reference, not a changelog. Describe what the current implementation does and the boundaries it currently has. Do not preserve completed implementation plans, migration narratives, phase names, or “before/after” history in standing docs.
+Documentation in this directory is a standing reference, not a changelog. Describe what the current implementation does and the boundaries it currently has. Do not preserve completed implementation plans, migration narratives, phase names, or “before/after” history in standing docs. That history has a home: [`../CHANGELOG.md`](../CHANGELOG.md) at the repository root, where a change is recorded once, under the release that shipped it.
 
 The exception is an active implementation plan, intentionally a live document while its tracked work remains open. There is no such plan today. Remove or convert each once its own work is complete rather than leaving it in `docs/`, keeping the parts still worth keeping: `automated-test-strategy-plan.md` was retired under exactly this rule once all fourteen of its phases had landed, with the core testing principle, the seven-layer taxonomy and the full list of what deliberately stays manual folded into [`testing-policy.md`](testing-policy.md) first; `release-publishing-kpi-plan.md` went the same way once its phases had shipped, folded into [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md), with its one unimplemented phase moved to a tracking issue rather than left in `docs/` as a plan nobody was working. Standing, platform-specific open items that aren't phase-shaped implementation work belong in `platform-support.md`'s "Known open items" section instead of a dedicated plan doc.
 
