@@ -2524,3 +2524,99 @@ class TestMain:
 
         assert result == 1
         assert "Fatal error" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------- #
+# _load_principal_settings
+# ---------------------------------------------------------------------------- #
+
+class TestLoadPrincipalSettings:
+    """Org mode's per-principal ConnectorRegistry factory is the only thing
+    that ever loads a non-local principal's settings.yaml, so it is also the
+    only place that can make those settings *live* for that principal.
+
+    Both assertions below are regressions: a non-local principal used to end
+    up with config_path=None (fixed earlier, covered by the first test), and
+    with a permanently empty AutoAcceptEvaluator regardless of what its own
+    settings.yaml said (fixed here, covered by the rest).
+    """
+
+    @staticmethod
+    def _seed(tmp_path, monkeypatch, principal_id: str, rules: dict) -> None:
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        config_dir = tmp_path / "users" / principal_id / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "settings.yaml").write_text(
+            yaml.safe_dump({"auto_accept_rules": rules, "auto_accept_grants": {}}),
+            encoding="utf-8",
+        )
+
+    def test_registers_the_principals_own_config_path(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings()
+            # Would raise "auto_accept config path not initialized" without it.
+            auto_accept.add_auto_accept_rule("gmail.send", "always_allow", None)
+            assert auto_accept.get_current_config()["auto_accept_rules"]["gmail.send"]
+
+    def test_seeds_the_evaluator_so_configured_rules_actually_apply(self, tmp_path, monkeypatch):
+        """The real bug: settings.yaml on disk said contacts.edit had a rule,
+        privacyfence_list_auto_accept_rules (get_current_config, read from
+        disk) agreed, but the evaluator gate.py and
+        privacyfence_check_policy both consult had an empty rule set -- so
+        the rule was silently inert and every call went to a human.
+        """
+        from privacyfence import auto_accept
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(
+            tmp_path, monkeypatch, "alice",
+            {"contacts.edit": [{"rule": "no_contact_info_change"}]},
+        )
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings()
+            evaluator = auto_accept.get_auto_accept_evaluator()
+
+            # A name-only edit matches the configured rule...
+            verdict, matched_rule, _ = evaluator.preflight_from_args(
+                "contacts.edit", {"display_name": "QA Contact"},
+            )
+            assert (verdict, matched_rule) == ("auto_accept", "no_contact_info_change")
+
+            # ...and the rule still discriminates: changing contact info does not.
+            verdict, _, _ = evaluator.preflight_from_args(
+                "contacts.edit", {"emails": ["qa@example.invalid"]},
+            )
+            assert verdict == "requires_review"
+
+    def test_one_principals_rules_do_not_leak_into_anothers_evaluator(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(
+            tmp_path, monkeypatch, "alice",
+            {"contacts.edit": [{"rule": "no_contact_info_change"}]},
+        )
+        self._seed(tmp_path, monkeypatch, "bob", {})
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings()
+            alice_verdict, _, _ = auto_accept.get_auto_accept_evaluator().preflight_from_args(
+                "contacts.edit", {"display_name": "QA Contact"},
+            )
+
+        with principal_scope(Principal(id="bob")):
+            daemon_main._load_principal_settings()
+            bob_verdict, _, _ = auto_accept.get_auto_accept_evaluator().preflight_from_args(
+                "contacts.edit", {"display_name": "QA Contact"},
+            )
+
+        assert alice_verdict == "auto_accept"
+        assert bob_verdict == "requires_review"
