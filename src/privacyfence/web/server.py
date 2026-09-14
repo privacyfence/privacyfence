@@ -871,6 +871,12 @@ class WebServer:
             issuer_host = urlsplit(org.issuer_url).hostname
             if issuer_host:
                 allowed_hosts = allowed_hosts | {issuer_host}
+        # Kept on the instance purely so a caller can report it: an
+        # issuer_url whose hostname isn't the one users actually address
+        # makes every request 400 with "Invalid Host header" and nothing
+        # anywhere names the hosts that *would* have worked. daemon_main.
+        # py's org-mode startup line logs this set for exactly that case.
+        self.allowed_hosts = allowed_hosts
         wrapped = build_app(
             web_ui,
             token=self.token,

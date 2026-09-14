@@ -34,6 +34,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Org mode now rejects an `org_config.json` whose `server.issuer_url` is not an absolute `http(s)`
+  URL with a hostname, naming that key, instead of starting and then answering every request with
+  `Invalid Host header`. Surrounding whitespace in the value is stripped rather than silently
+  becoming part of the hostname the Host allowlist is built from.
+- The org-mode startup log line now lists the `Host` header values the daemon accepts, so a reverse
+  proxy forwarding a hostname the bundle doesn't name is diagnosable from `journalctl` alone.
 - Org-mode sign-in no longer ends in an infinite redirect loop. The browser session cookie was
   `SameSite=Strict`, which a browser withholds on the landing request after the identity provider's
   redirect — so the post-login page saw no session and bounced back to `/login`, where the
