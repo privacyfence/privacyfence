@@ -4,7 +4,13 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { ensureDaemonRunning, findDaemonCmd, socketConnectable, waitForDaemonPatiently } from "../src/daemon.js";
+import {
+  describeTarget,
+  ensureDaemonRunning,
+  findDaemonCmd,
+  socketConnectable,
+  waitForDaemonPatiently,
+} from "../src/daemon.js";
 import { ShimExitError } from "../src/errors.js";
 import { getFreePort, makeTempMcpFiles } from "./testFiles.js";
 
@@ -286,6 +292,51 @@ describe("waitForDaemonPatiently", () => {
     } finally {
       clearTimeout(timer);
       lateServer?.close();
+      cleanup();
+    }
+  });
+});
+
+describe("describeTarget", () => {
+  // What a shim parked in waitForDaemonPatiently reports about itself. It
+  // is the only evidence such a shim leaves anywhere: it answers nothing on
+  // stdio, and the daemon logs nothing either, having never been connected
+  // to. Telling the two reasons apart is the whole point.
+  it("reports a missing discovery file as the daemon not running", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-target-"));
+    const missing = path.join(dir, "mcp_url");
+    assert.match(describeTarget(missing), /daemon not running/);
+  });
+
+  it("reports an empty discovery file distinctly", () => {
+    const { mcpUrlFile, writeUrl, cleanup } = makeTempMcpFiles();
+    try {
+      writeUrl("");
+      assert.match(describeTarget(mcpUrlFile), /is empty/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("reports a file that does not hold a URL", () => {
+    const { mcpUrlFile, writeUrl, cleanup } = makeTempMcpFiles();
+    try {
+      writeUrl("not-a-url");
+      assert.match(describeTarget(mcpUrlFile), /does not contain a URL/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("names the URL itself when one is present but nothing is listening", async () => {
+    const { mcpUrlFile, writeUrl, cleanup } = makeTempMcpFiles();
+    try {
+      const port = await getFreePort();
+      writeUrl(`http://127.0.0.1:${port}/mcp`);
+      const described = describeTarget(mcpUrlFile);
+      assert.match(described, /not accepting connections/);
+      assert.match(described, new RegExp(String(port)));
+    } finally {
       cleanup();
     }
   });

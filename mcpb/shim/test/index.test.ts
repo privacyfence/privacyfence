@@ -19,8 +19,18 @@ describe("parseArgs", () => {
     assert.doesNotThrow(() => parseArgs(["--config=/tmp/x.yaml"]));
   });
 
-  it("rejects an unrecognized flag", () => {
-    assert.throws(() => parseArgs(["--bogus"]), /unrecognized argument/);
+  // Regression: this used to throw, which exits main() before stdio is
+  // ever read -- the host sees a server that starts and then never answers
+  // initialize, and the daemon logs nothing at all, because no /mcp
+  // connection was ever opened. A host may add flags of its own to the
+  // servers it spawns; an argument this proxy has no use for must not cost
+  // the connection. See parseArgs' own doc comment.
+  it("ignores an unrecognized flag instead of refusing to start", () => {
+    assert.doesNotThrow(() => parseArgs(["--bogus"]));
+  });
+
+  it("ignores unrecognized flags alongside a --config it understands", () => {
+    assert.doesNotThrow(() => parseArgs(["--config", "/tmp/x.yaml", "--pool", "--session-id=abc"]));
   });
 });
 

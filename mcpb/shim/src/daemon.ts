@@ -155,6 +155,35 @@ export function socketConnectable(mcpUrlFile = MCP_URL_FILE): Promise<boolean> {
   });
 }
 
+/** What socketConnectable() is currently pointed at, for the retry log
+ * below: the URL the discovery file names, or why there is no usable URL at
+ * all. A shim parked in waitForDaemonPatiently answers nothing on stdio, so
+ * the host's readiness check times out and reports a mute server -- while
+ * the daemon's own log stays completely silent, since this process has yet
+ * to open a single /mcp connection for it to record. These stderr lines are
+ * the only evidence the attempt ever happened, which makes the distinction
+ * between "no discovery file" (daemon never started, or shut down -- stop()
+ * clears it) and "URL unreachable" (daemon still starting, or bound
+ * somewhere else) worth spelling out rather than logging a bare "waiting".
+ */
+export function describeTarget(mcpUrlFile = MCP_URL_FILE): string {
+  let text: string;
+  try {
+    text = fs.readFileSync(mcpUrlFile, "utf8").trim();
+  } catch {
+    return `no ${mcpUrlFile} yet -- daemon not running`;
+  }
+  if (!text) {
+    return `${mcpUrlFile} is empty`;
+  }
+  try {
+    new URL(text);
+  } catch {
+    return `${mcpUrlFile} does not contain a URL: ${text}`;
+  }
+  return `${text} not accepting connections`;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -180,7 +209,7 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
     return;
   }
 
-  console.error("Daemon not running — launching it now");
+  console.error(`Daemon not running (${describeTarget(mcpUrlFile)}) — launching it now`);
   const [cmd, ...args] = findCmd();
   if (!cmd) {
     throw new Error("findDaemonCmd() returned an empty command");
@@ -237,12 +266,16 @@ export async function waitForDaemonPatiently(opts: WaitForDaemonPatientlyOptions
     console.error(`${exc.message}\nWill keep retrying instead of giving up.`);
   }
 
+  const waitingSince = Date.now();
   for (;;) {
     await sleep(retryIntervalMs);
     if (await socketConnectable(mcpUrlFile)) {
       console.error("Daemon is ready");
       return;
     }
-    console.error("Still waiting for the PrivacyFence daemon to come up...");
+    const seconds = Math.round((Date.now() - waitingSince) / 1000);
+    console.error(
+      `Still waiting for the PrivacyFence daemon after ${seconds}s (${describeTarget(mcpUrlFile)})`,
+    );
   }
 }
