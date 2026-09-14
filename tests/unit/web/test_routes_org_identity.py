@@ -122,6 +122,31 @@ class TestLoginCallback:
         session_id = cb.cookies[org_session.SESSION_COOKIE]
         assert sessions.get(session_id).id == "alice"
 
+    def test_the_session_cookie_it_mints_is_usable_on_the_page_it_redirects_to(self, monkeypatch):
+        # The regression a real browser found and no test here could: this
+        # callback is reached by a top-level navigation the IdP initiated,
+        # and it redirects to a page that reads the session. A SameSite=
+        # Strict cookie is withheld on that landing, so the page saw no
+        # session, bounced back to /login, and the IdP -- already consented
+        # -- sent the browser straight back: an infinite redirect loop for
+        # a session that was valid the whole time.
+        #
+        # httpx's TestClient enforces no SameSite semantics at all, so this
+        # asserts the cookie *attribute* rather than trying to simulate the
+        # browser behavior it can't: Lax is what makes the landing work.
+        app, sessions = _app()
+        client = _client(app)
+        cb = self._drive_login(client, monkeypatch, claims={"sub": "alice", "email": "alice@example.com"})
+
+        set_cookie = cb.headers.get("set-cookie", "").lower()
+        assert "samesite=lax" in set_cookie
+        assert "samesite=strict" not in set_cookie
+        # ... and the redirect really does go to a session-reading page,
+        # which is what makes the attribute above load-bearing rather than
+        # cosmetic.
+        assert cb.headers["location"] == roi.DEFAULT_NEXT_PATH
+        assert sessions.get(cb.cookies[org_session.SESSION_COOKIE]) is not None
+
     def test_idp_error_param_fails_cleanly(self):
         app, _sessions = _app()
         client = _client(app)

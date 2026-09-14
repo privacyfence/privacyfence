@@ -1,5 +1,5 @@
 """Org-mode browser sessions (P7): the session cookie is Secure, HttpOnly,
-SameSite=Strict, with a short idle timeout. A server-side session store mapping an opaque, unguessable
+SameSite=Lax, with a short idle timeout. A server-side session store mapping an opaque, unguessable
 session id to the ``Principal`` that authenticated it via web/routes_org_
 identity.py's ``/login`` -- deliberately not the local-mode ``session_
 auth.py`` model of "the cookie's own value is the one shared secret
@@ -139,7 +139,31 @@ def set_session_cookie(response: Response, session_id: str) -> None:
     # HTTPS-mandatory (§10.2), so a Secure cookie is never silently dropped
     # here the way it would be forced to be over local mode's deliberate
     # plain-HTTP loopback transport (D1, §15).
-    response.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="strict", secure=True, path="/")
+    #
+    # samesite="lax", NOT "strict" -- the one place org mode's cookie
+    # policy has to differ from local mode's. This cookie is minted at the
+    # end of an OIDC round trip: routes_org_identity.py's /oauth/idp/
+    # login-callback sets it and redirects to the post-login page, and that
+    # redirect is still part of a top-level navigation the *IdP* initiated.
+    # A browser withholds a Strict cookie on that landing request, so the
+    # page it lands on sees no session, bounces back to /login, and the
+    # whole sign-in becomes an infinite redirect loop (the user's session
+    # meanwhile being perfectly valid -- typing the URL by hand, a
+    # navigation with no cross-site initiator, works).
+    #
+    # Lax gives up nothing that protects this app: it still withholds the
+    # cookie on cross-site POSTs and on every subresource request, and org
+    # mode's mutations are guarded by check_csrf's double-submit token and
+    # check_origin below regardless of what the cookie policy allows. What
+    # it permits is exactly what OIDC structurally requires -- a top-level
+    # GET landing after the IdP.
+    #
+    # routes_connect.py solved the sibling half of this problem the other
+    # way, by carrying the principal in a signed `state` so /oauth/callback/
+    # {service} needs no cookie at all. That works for a callback that only
+    # has to identify the flow; it does not help a callback whose whole job
+    # is to *establish* the session the next page then reads.
+    response.set_cookie(SESSION_COOKIE, session_id, httponly=True, samesite="lax", secure=True, path="/")
 
 
 def clear_session_cookie(response: Response) -> None:

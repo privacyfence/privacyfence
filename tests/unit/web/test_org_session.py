@@ -182,19 +182,33 @@ class TestCsrfAndOrigin:
 
 
 class TestSessionCookieHelpers:
-    def test_set_session_cookie_is_secure_httponly_samesite_strict(self):
+    def test_set_session_cookie_is_secure_httponly_samesite_lax(self):
         response = Response()
         os_.set_session_cookie(response, "sess-123")
         set_cookie = response.headers.get("set-cookie", "")
         assert "sess-123" in set_cookie
         assert "HttpOnly" in set_cookie
         assert "Secure" in set_cookie
-        assert "samesite=strict" in set_cookie.lower()
+        assert "samesite=lax" in set_cookie.lower()
         # Org mode is HTTPS-mandatory (module docstring), so -- unlike local
         # mode's deliberate plain-HTTP loopback transport -- Secure here
         # never risks the browser silently dropping the cookie. Contrast
         # web/session_auth.py's test_set_session_cookie_omits_secure_in_
         # local_mode: same flag, opposite mode-appropriate value.
+
+    def test_set_session_cookie_is_not_samesite_strict(self):
+        # Regression, found on a real browser against a real IdP: Strict
+        # made every sign-in an infinite redirect loop. The cookie is set
+        # by /oauth/idp/login-callback, which then redirects to the
+        # post-login page -- a landing request still belonging to a
+        # top-level navigation the IdP initiated, so a browser withholds a
+        # Strict cookie there. The page saw no session, bounced to /login,
+        # and the IdP (already consented) sent the browser straight back.
+        # Asserted separately from the attribute test above so the reason
+        # Strict is wrong here survives any future rewrite of that one.
+        response = Response()
+        os_.set_session_cookie(response, "sess-123")
+        assert "samesite=strict" not in response.headers.get("set-cookie", "").lower()
 
     def test_clear_session_cookie_expires_it(self):
         response = Response()

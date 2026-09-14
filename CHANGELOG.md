@@ -32,6 +32,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Org-mode sign-in no longer ends in an infinite redirect loop. The browser session cookie was
+  `SameSite=Strict`, which a browser withholds on the landing request after the identity provider's
+  redirect — so the post-login page saw no session and bounced back to `/login`, where the
+  already-consented IdP sent the browser straight back. The cookie is now `SameSite=Lax`; CSRF
+  protection is unchanged (the double-submit token and `Origin` check guard every mutation).
+
 ## [4.0.0] — 2026-09-14
 
 PrivacyFence 4.0 moves the entire user interface off macOS-native AppKit and onto a local web
