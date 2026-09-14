@@ -698,6 +698,56 @@ def _maybe_start_web_server(
     return server
 
 
+def _load_principal_settings() -> dict[str, Any]:
+    """Load ``settings.yaml`` for whichever principal is currently scoped,
+    and make it *live* for that principal -- both halves of what run_app()
+    does once for the local principal.
+
+    Called from org mode's per-principal ``ConnectorRegistry`` factory,
+    under the ``principal_scope`` that factory is already run inside. The
+    *relative* path is what makes ``_resolve_path()`` (and ``load_config``'s
+    own bootstrap-a-default-on-first-use behavior) resolve against that
+    principal's own ``users/<id>/config/settings.yaml`` rather than the
+    local principal's, per §9.2's storage layout.
+
+    Both side effects below exist because ``ConnectorRegistry.get()`` never
+    goes through ``run_app()`` for any principal other than local, so
+    nothing else ever performs them for an org principal:
+
+    - ``init_config_path()`` -- without it, every non-local principal's
+      ``auto_accept._REGISTRY`` entry kept its default ``config_path=None``
+      forever. Invisible until something actually tried to *persist* a
+      rule/grant for that principal -- ``add_auto_accept_rule``/
+      ``mutate_grants`` (gate.propose_rule_change's "Always allow"/
+      propose-rule-change paths) would raise "auto_accept config path not
+      initialized" instead.
+    - ``reload_rules(build_effective_rules(cfg))`` -- without it, that
+      principal's ``_AutoAcceptState.instance`` stayed ``None``, so
+      ``get_auto_accept_evaluator()`` lazily built an
+      ``AutoAcceptEvaluator({})``: an empty rule set, permanently, no
+      matter what that principal's ``settings.yaml`` actually said on disk.
+      Every configured auto-accept rule and resource grant was silently
+      inert in org mode -- ``gate.py``'s real ``should_auto_accept()`` sent
+      every call to a human popup, and ``privacyfence_check_policy``
+      reported "No auto-accept rule is configured for this operation" for
+      operations that plainly had one (``privacyfence_list_auto_accept_rules``,
+      which reads ``get_current_config()`` straight from disk rather than
+      the evaluator, kept showing the rule the whole time -- that
+      disagreement between the two meta-tools is the symptom this fixes).
+      Fail-safe, never fail-open, but it made unattended sessions and
+      auto-accept as a whole unusable for every org principal.
+
+    The sibling ``init_config_path`` omission was found and fixed on its own
+    (the now-removed automated-test-strategy-plan.md Phase 8); this one
+    survived it because no in-process org test had a principal whose
+    settings.yaml carried a rule *and* went through the real factory.
+    """
+    cfg = load_config("config/settings.yaml")
+    init_config_path(_resolve_path("config/settings.yaml"))
+    reload_rules(build_effective_rules(cfg))
+    return cfg
+
+
 def _start_org_web_server(
     web_config: dict[str, Any], org_config: dict[str, Any], connector_host: ConnectorHost,
     *, unattended_sessions_enabled: bool,
@@ -756,29 +806,13 @@ def _start_org_web_server(
     def _connectors_for_principal(_principal: Principal) -> list:
         # Loaded fresh per principal, under the principal_scope
         # ConnectorRegistry.get() already enters before calling this --
-        # the *relative* path is what makes _resolve_path() (and
-        # load_config's own bootstrap-a-default-on-first-use behavior)
-        # resolve against that principal's own users/<id>/config/
-        # settings.yaml rather than the local principal's, per §9.2's
-        # storage layout. Re-reading load_org_config() here (rather than
-        # closing over the org_config this function was called with)
-        # would also be defensible, but it's already loaded once by
-        # run_app() and passed down consistently everywhere else in this
-        # module, so this stays consistent with that.
-        cfg = load_config("config/settings.yaml")
-        # run_app() does this once, for the local principal, right after
-        # its own load_config() call -- ConnectorRegistry.get() never went
-        # through run_app() for any other principal, so without this,
-        # every non-local principal's auto_accept._REGISTRY entry kept its
-        # default config_path=None forever. Invisible until something
-        # actually tried to persist a rule/grant for that principal --
-        # add_auto_accept_rule/mutate_grants (gate.propose_rule_change's
-        # "Always allow"/propose-rule-change paths) would raise
-        # "auto_accept config path not initialized" instead, the one time
-        # this had a live end-to-end test in front of it (docs/
-        # The now-removed automated-test-strategy-plan.md Phase 8).
-        init_config_path(_resolve_path("config/settings.yaml"))
-        return build_connectors(cfg, org_config)
+        # see _load_principal_settings() for what that scope buys and why
+        # both of its side effects are needed. Re-reading load_org_config()
+        # here (rather than closing over the org_config this function was
+        # called with) would also be defensible, but it's already loaded
+        # once by run_app() and passed down consistently everywhere else in
+        # this module, so this stays consistent with that.
+        return build_connectors(_load_principal_settings(), org_config)
 
     connector_registry = ConnectorRegistry(factory=_connectors_for_principal)
 

@@ -53,6 +53,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   redirect — so the post-login page saw no session and bounced back to `/login`, where the
   already-consented IdP sent the browser straight back. The cookie is now `SameSite=Lax`; CSRF
   protection is unchanged (the double-submit token and `Origin` check guard every mutation).
+- Auto-accept rules and resource grants configured in an org-mode user's `settings.yaml` are now
+  actually applied. Every principal's rule evaluator was left empty regardless of what that user's
+  `settings.yaml` said, so each gated call went to a human approval even when a configured rule
+  covered it, and unattended sessions could make no progress at all. `privacyfence_check_policy`
+  reported `No auto-accept rule is configured for this operation` for operations that plainly had
+  one, while `privacyfence_list_auto_accept_rules` — which reads the file from disk — kept listing
+  it; the two meta-tools now agree. Local mode was never affected, and no call was ever
+  auto-accepted that shouldn't have been: the failure was always toward asking a human.
 
 ## [4.0.0] — 2026-09-14
 
