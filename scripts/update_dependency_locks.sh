@@ -65,15 +65,22 @@ PYTHON_FLOOR="3.11"
 # it matches what this file already looked like under the old pip-tools-based script and keeps the
 # `# via <package>` trail legible.
 #
-# No `--upgrade` needed here (unlike the old pip-tools invocation): `uv pip compile` always does a
-# full fresh resolution against whatever's on the index right now rather than treating an existing
-# output file as a constraint, so there's no equivalent "stale unless told otherwise" trap to guard
-# against.
-uv pip compile --universal --python-version "$PYTHON_FLOOR" --generate-hashes --no-strip-extras \
+# --upgrade: IS needed here, contrary to what an earlier version of this comment claimed. `uv pip
+# compile` does the opposite of a full fresh resolution when `--output-file` already names an
+# existing file: it reads that file's existing pins back in as preferences and keeps them unless
+# they're no longer resolvable, so re-running this script over its own prior output silently
+# reproduces the same (possibly stale) versions no matter how much time has passed or what's been
+# released upstream since. dependency-audit.yml's lockfile-freshness job doesn't have this problem
+# only because it compiles into a scratch file under /tmp that never already exists -- which means
+# without `--upgrade`, this script can report success while leaving the exact drift that job is
+# complaining about completely unfixed. `--upgrade` makes the ignore-existing-pins behavior
+# unconditional (it implies `--refresh` too), so this script's resolution always matches a from
+# scratch one, the same guarantee the CI job gets for free from never having a pre-existing file.
+uv pip compile --upgrade --universal --python-version "$PYTHON_FLOOR" --generate-hashes --no-strip-extras \
   --output-file=requirements/runtime.lock.txt \
   pyproject.toml
 
-uv pip compile --universal --python-version "$PYTHON_FLOOR" --generate-hashes --no-strip-extras \
+uv pip compile --upgrade --universal --python-version "$PYTHON_FLOOR" --generate-hashes --no-strip-extras \
   --extra dev --extra test --extra lint \
   --output-file=requirements/dev.lock.txt \
   pyproject.toml

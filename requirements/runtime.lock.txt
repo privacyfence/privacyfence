@@ -711,9 +711,9 @@ platformdirs==4.11.8 \
     --hash=sha256:52f2f181bbfde907966932cc8312d967d02976422d66d537ea16092b8e291081 \
     --hash=sha256:f23abafea7dd4276d1f29104b83598d7dcc567cafd07c9c951e66665645437fc
     # via zeep
-portalocker==4.3.1 \
-    --hash=sha256:083fe42eda7f79304ffc73da2a4c7d8492ad18750fa3c9679d851b25daf7d457 \
-    --hash=sha256:1f2aafc6b6e700706a80d63dc9fbd897c5db75e435792b3a2297eee06d28711c
+portalocker==4.3.2 \
+    --hash=sha256:42f0362e7343af78b25eb095c0cde300e746a0ab6647a835cc30764918490c93 \
+    --hash=sha256:8de4a1330f55b3c9a1d50ab1b70a765f2f136d6399ae206411117ed98c3b8e2b
     # via privacyfence (pyproject.toml)
 proto-plus==1.28.4 \
     --hash=sha256:4b01341272f8a348db3f003b6143109f83ab43091019d5181b3fcdf500ab32aa \
@@ -1223,9 +1223,9 @@ urllib3==2.7.0 \
     --hash=sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c \
     --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
     # via requests
-uvicorn==0.52.4 \
-    --hash=sha256:73acfee47a0b133c5de13d219492d62d8a31e935f4fe6e41a232451a15379f86 \
-    --hash=sha256:f86e41a149d7d05a9969337e3946a9c171c06a5d42680896daaba624aeac8da1
+uvicorn==0.53.0 \
+    --hash=sha256:a9356f0cb89b3b8621529c5d5eebd69bfe154f4c3f68b4cf2de47e45fa855c2e \
+    --hash=sha256:e8dca71ec86dce5f04e333f0d56cdedf942446e6643b9cea1af0d6d3a02cb03e
     # via
     #   privacyfence (pyproject.toml)
     #   mcp
