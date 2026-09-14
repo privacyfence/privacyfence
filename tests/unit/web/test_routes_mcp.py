@@ -17,7 +17,10 @@ import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from mcp.server.auth.provider import AccessToken, TokenVerifier
+
 from privacyfence.connector import Connector, ToolParam, ToolSpec
+from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.mcp_tools import META_TOOL_NAMES
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
@@ -53,12 +56,38 @@ class EchoConnector(Connector):
 TOKEN = "mcp-test-token"
 
 
+class _OrgVerifier(TokenVerifier):
+    """Stands in for web/oauth_provider.py's OrgOAuthProvider: mints a token
+    carrying a real ``subject``, which is what makes
+    mcp_auth.principal_from_access_token resolve a signed-in human rather
+    than LOCAL_PRINCIPAL. Local mode's StaticTokenVerifier never sets one."""
+
+    def __init__(self, principal_id: str) -> None:
+        self._principal_id = principal_id
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if token != TOKEN:
+            return None
+        return AccessToken(
+            token=token, client_id="claude-desktop", scopes=[], subject=self._principal_id,
+        )
+
+
 @contextlib.asynccontextmanager
-async def _connected_session(dispatcher: McpDispatcher, *, token: str = TOKEN):
+async def _connected_session(
+    dispatcher: McpDispatcher, *, token: str = TOKEN, verifier: TokenVerifier | None = None,
+):
     """Builds the /mcp app for ``dispatcher`` and yields a live, initialized
     ClientSession against it -- the happy-path fixture every wire-level test
-    below starts from."""
-    app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
+    below starts from.
+
+    ``verifier`` swaps local mode's StaticTokenVerifier for an org-mode one
+    (see _OrgVerifier), so a test can drive this surface as a signed-in
+    human rather than as LOCAL_PRINCIPAL."""
+    if verifier is not None:
+        app, session_manager = build_mcp_asgi_app(dispatcher, verifier=verifier)
+    else:
+        app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
     transport = httpx.ASGITransport(app=app)
 
     async with mcp_lifespan(session_manager):
@@ -167,6 +196,56 @@ class TestListTools:
             store["echo"] = EchoConnector()
             second = await session.list_tools()
             assert "echo_say" in {t.name for t in second.tools}
+
+    async def test_org_mode_lists_the_signed_in_principals_own_connectors(self):
+        """Regression: handle_list_tools ran outside principal_scope, so
+        ``dispatcher.connectors`` -- which in org mode is
+        ``connector_registry.get(current_principal()).connectors`` --
+        resolved against LOCAL_PRINCIPAL instead of the signed-in human.
+
+        On a real org server nobody authorizes services as "local", so
+        build_connectors() skipped every connector for that principal and
+        the advertised manifest collapsed to META_TOOLS alone: every
+        connector tool was invisible to org-mode clients, even though
+        handle_call_tool (correctly scoped all along) could resolve those
+        same connectors fine.
+
+        The existing tests above could not catch this -- their provider is
+        a plain ``lambda: store``, identical for every principal. This one
+        makes the provider principal-sensitive, the way org mode's really
+        is.
+        """
+        per_principal: dict[str, dict[str, Connector]] = {
+            "alice": {"echo": EchoConnector()},
+            LOCAL_PRINCIPAL.id: {},  # an org server's local principal: nothing authorized
+        }
+        dispatcher = McpDispatcher(lambda: per_principal.get(current_principal().id, {}))
+
+        async with _connected_session(dispatcher, verifier=_OrgVerifier("alice")) as session:
+            result = await session.list_tools()
+
+        names = {t.name for t in result.tools}
+        assert "echo_say" in names, "signed-in principal's connector tools must be advertised"
+        assert META_TOOL_NAMES <= names
+
+    async def test_org_mode_does_not_advertise_the_local_principals_connectors(self):
+        """The same scoping, in the other direction, and the sharper half of
+        the regression: the local principal here *does* own a connector, so
+        an unscoped handle_list_tools would advertise it to bob. Bob has
+        none of his own and must be shown none -- a signed-in human must
+        never be offered tools backed by someone else's credentials."""
+        per_principal: dict[str, dict[str, Connector]] = {
+            LOCAL_PRINCIPAL.id: {"echo": EchoConnector()},
+            "bob": {},
+        }
+        dispatcher = McpDispatcher(lambda: per_principal.get(current_principal().id, {}))
+
+        async with _connected_session(dispatcher, verifier=_OrgVerifier("bob")) as session:
+            result = await session.list_tools()
+
+        names = {t.name for t in result.tools}
+        assert "echo_say" not in names, "must not advertise another principal's connectors"
+        assert META_TOOL_NAMES <= names
 
 
 # --------------------------------------------------------------------------- #
