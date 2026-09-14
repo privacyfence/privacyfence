@@ -661,6 +661,12 @@ def _maybe_start_web_server(
     # only meaningful once the server is actually listening -- set here,
     # not at registry construction.
     registry.set_base_url(server.base_url)
+    if mcp_dispatcher is not None:
+        # privacyfence_get_sign_in_link's own callback -- wired here rather
+        # than at McpDispatcher construction above because it needs this
+        # WebServer, which doesn't exist yet at that point. See
+        # McpDispatcher.set_bootstrap_link_provider's own docstring.
+        mcp_dispatcher.set_bootstrap_link_provider(server.mint_bootstrap_url)
     # SEC-06: each of
     # these is a fresh, single-use bootstrap link, not the persistent
     # secret itself -- see WebServer.mint_bootstrap_url()'s own docstring.

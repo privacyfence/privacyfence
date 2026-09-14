@@ -323,3 +323,7 @@ class TestUnauthorizedHtml:
         assert "POST" in body
         assert "/api/bootstrap" in body
         assert "web_token" in body
+
+    def test_mentions_asking_a_connected_mcp_client(self):
+        body = sa.unauthorized_html(Request(self._scope())).body.decode()
+        assert "privacyfence_get_sign_in_link" in body

@@ -80,6 +80,15 @@ class McpDispatcher:
         # in which case every id this tool is asked about is simply
         # "unknown".
         self._registry = registry
+        # privacyfence_get_sign_in_link's own callback -- daemon_main.py
+        # wires this to WebServer.mint_bootstrap_url once the server that
+        # method belongs to actually exists (it's built after this
+        # dispatcher is), same two-step wiring set_unattended_changed_
+        # listener below already uses for a callback the constructor can't
+        # supply yet either. Stays None in org mode (no local-mode
+        # WebServer to wire it to at all) and in a test that never calls
+        # the setter -- get_sign_in_link's own docstring covers both.
+        self._bootstrap_link_provider: Callable[[str], str | None] | None = None
 
     @property
     def connectors(self) -> dict[str, Connector]:
@@ -87,6 +96,13 @@ class McpDispatcher:
 
     def set_unattended_changed_listener(self, callback: Callable[[], None] | None) -> None:
         self._unattended_changed_listener = callback
+
+    def set_bootstrap_link_provider(self, callback: Callable[[str], str | None] | None) -> None:
+        """``callback`` is ``WebServer.mint_bootstrap_url`` in production --
+        typed narrowly as ``str -> str | None`` here rather than importing
+        web/server.py (which would be a circular import: server.py already
+        imports this module's ``McpDispatcher``)."""
+        self._bootstrap_link_provider = callback
 
     # ------------------------------------------------------------------ #
     # Manifest
@@ -287,6 +303,48 @@ class McpDispatcher:
         except Exception as exc:
             logger.warning("Audit log write failed for list_rules: %s", exc)
         return result
+
+    def get_sign_in_link(self, page: str, claude_reason: str = "") -> dict:
+        """privacyfence_get_sign_in_link's handler: mint a fresh SEC-06
+        bootstrap link for local mode's own web UI, via whatever
+        ``set_bootstrap_link_provider`` was last wired to -- unset (org
+        mode, or a test that never wires one) raises the same
+        "not available in this configuration" ``ValueError`` posture
+        ``begin_unattended_session`` already takes for a disabled feature,
+        rather than returning a link that doesn't work."""
+        if self._bootstrap_link_provider is None:
+            raise ValueError(
+                "No sign-in link is available in this configuration -- organization mode signs "
+                "in through its own /login page instead of a one-time bootstrap link."
+            )
+        page = page or "approvals"
+        if page not in ("approvals", "settings"):
+            raise ValueError(f"page must be 'approvals' or 'settings', got {page!r}")
+        url = self._bootstrap_link_provider(f"/{page}")
+        if url is None:
+            raise ValueError(
+                "No sign-in link is available in this configuration -- organization mode signs "
+                "in through its own /login page instead of a one-time bootstrap link."
+            )
+        try:
+            get_audit_logger().record(AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                week=current_week(),
+                request_id=uuid.uuid4().hex[:12],
+                connector="",
+                tool="",
+                tool_name="",
+                summary=f"Issued a one-time sign-in link for /{page}",
+                sender="",
+                decision="sign_in_link_issued",
+                auto_accept_rule="",
+                latency_seconds=0.0,
+                pii_detected=False,
+                claude_reason=claude_reason,
+            ))
+        except Exception as exc:
+            logger.warning("Audit log write failed for get_sign_in_link: %s", exc)
+        return {"url": url}
 
     async def await_approval(self, approval_ids: list[str], timeout_seconds: int = 30) -> dict[str, str]:
         """privacyfence_await_approval's handler: long-poll ``approval_ids``

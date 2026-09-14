@@ -201,16 +201,19 @@ def unauthorized_html(request: Request) -> Response:
     scrubs the code to ``bootstrap=[REDACTED]`` before the line ever
     reaches a file or a terminal -- restarting PrivacyFence changed nothing
     about that, since the fresh line from the new process is redacted the
-    same way. The two things that actually work: the discovery file
+    same way. The three things that actually work: the discovery file
     ``web/server.py``'s ``mint_bootstrap_url()`` writes outside the logging
-    pipeline every time PrivacyFence (re)starts, and minting a fresh code
-    on demand via ``POST /api/bootstrap`` without restarting anything --
-    this page spells out the actual command for the latter rather than
-    just naming the endpoint, since a reader who's landed here from a dead
-    link is exactly the audience that finding this self-explanatory
-    matters most for. ``request`` supplies only this page's own origin
-    (scheme+host+port), the same one the reader is already looking at, so
-    the command below can be pasted as-is."""
+    pipeline every time PrivacyFence (re)starts; asking a connected MCP
+    client (e.g. Claude) to call ``privacyfence_get_sign_in_link``
+    (web/mcp_tools.py), which mints one the same way and hands it straight
+    back in the conversation; and minting a fresh code on demand via
+    ``POST /api/bootstrap`` without restarting anything -- this page spells
+    out the actual command for that last one rather than just naming the
+    endpoint, since a reader who's landed here from a dead link is exactly
+    the audience that finding this self-explanatory matters most for.
+    ``request`` supplies only this page's own origin (scheme+host+port),
+    the same one the reader is already looking at, so the command below
+    can be pasted as-is."""
     origin = f"{request.url.scheme}://{request.url.netloc}"
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
@@ -222,6 +225,9 @@ def unauthorized_html(request: Request) -> Response:
         "it with a fresh one. (Not the log file: <code>privacyfence.log</code> "
         "deliberately redacts this link's code for security, so it never contains a "
         "usable one — restarting PrivacyFence doesn't change that.)</p>"
+        "<p>Have Claude (or any other MCP client already connected to PrivacyFence) open "
+        "for you? Ask it to get you a sign-in link — it can call the "
+        "<code>privacyfence_get_sign_in_link</code> tool and hand you the result directly.</p>"
         "<p>Don't want to restart PrivacyFence just for that? From a terminal "
         "on this machine, mint a new one on demand and open the link it "
         "returns:</p>"

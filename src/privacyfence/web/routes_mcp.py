@@ -180,6 +180,8 @@ async def _dispatch_meta_tool(
         return await dispatcher.await_approval(
             arguments.get("approval_ids") or [], arguments.get("timeout_seconds", 30),
         )
+    if name == mcp_tools.GET_SIGN_IN_LINK_TOOL.name:
+        return dispatcher.get_sign_in_link(arguments.get("page", "approvals"), reason)
     raise ValueError(f"Unknown tool: {name!r}")  # pragma: no cover -- unreachable, META_TOOL_NAMES gates this
 
 

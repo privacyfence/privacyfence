@@ -1209,6 +1209,28 @@ class TestMaybeStartWebServer:
         # No second push into the dispatcher -- it polls connector_host.connectors.
         assert list(result.mcp_dispatcher.connectors) == [fake_connector.name]
 
+    def test_mcp_dispatcher_gets_a_working_sign_in_link_provider(self, monkeypatch, tmp_path):
+        # privacyfence_get_sign_in_link's own wiring: McpDispatcher.
+        # set_bootstrap_link_provider(server.mint_bootstrap_url), done here
+        # since the dispatcher exists before the WebServer it needs does.
+        self._no_bind(monkeypatch, tmp_path)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
+        )
+
+        link = result.mcp_dispatcher.get_sign_in_link("approvals")
+        assert link["url"].startswith(f"{result.base_url}/approvals?bootstrap=")
+
+    def test_no_mcp_dispatcher_means_nothing_to_wire(self, monkeypatch, tmp_path):
+        # web.mcp.enabled defaults False -- must not raise reaching for
+        # mcp_dispatcher.set_bootstrap_link_provider on a None dispatcher.
+        self._no_bind(monkeypatch, tmp_path)
+
+        result = daemon_main._maybe_start_web_server({}, self._connector_host(), unattended_sessions_enabled=False)
+
+        assert result.mcp_dispatcher is None
+
     # ------------------------------------------------------------------ #
     # web.settings.enabled -- P4's own rollback lever (§16.6), independent
     # of the approval surface (which, since P10, is always on).
