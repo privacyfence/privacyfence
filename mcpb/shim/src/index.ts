@@ -35,6 +35,7 @@ import { waitForDaemonPatiently } from "./daemon.js";
 import { ShimExitError } from "./errors.js";
 import { MCP_TOKEN_FILE, MCP_URL_FILE, readMcpToken, readMcpUrl } from "./protocol.js";
 import { proxyTransports } from "./proxy.js";
+import { sessionSafeFetch } from "./sessionFetch.js";
 
 /**
  * Redirect console.log/info/debug/warn to stderr. stdout is the MCP wire
@@ -129,6 +130,9 @@ export async function main(argv = process.argv.slice(2), opts: MainOptions = {})
     opts.daemonTransport ??
     new StreamableHTTPClientTransport(new URL(mcpUrl), {
       requestInit: { headers: { Authorization: `Bearer ${mcpToken}` } },
+      // Keeps a rejected request from leaving this connection pinned to a
+      // session the daemon has already discarded -- see sessionFetch.ts.
+      fetch: sessionSafeFetch(),
     });
   const desktopSide = opts.transport ?? new StdioServerTransport();
 
