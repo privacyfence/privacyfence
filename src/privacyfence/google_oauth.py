@@ -72,10 +72,70 @@ def authorize_url(client_config: dict[str, Any], scopes: list[str], redirect_uri
     ``code_verifier`` (keyed by ``state``) and hand it back to
     ``exchange_code`` below on the matching callback request."""
     flow = build_flow(client_config, scopes, redirect_uri)
-    url, _ = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent", state=state)
+    # No ``include_granted_scopes``. That is Google's incremental
+    # authorization: it asks Google to issue a grant covering every scope
+    # this OAuth client already holds for this user, which is the opposite
+    # of what web/routes_connect.py is built around -- five separate
+    # authorize buttons because "each is a distinct OAuth grant with its own
+    # scopes and its own token file". It also broke every exchange it
+    # touched: the token then comes back carrying that accumulated union,
+    # oauthlib compares it against what was requested, and raises "Scope has
+    # changed from ... to ..." instead of returning credentials. Authorizing
+    # a second Google connector failed for that reason alone; so did the
+    # first, whenever the same client also served org mode's OIDC sign-in
+    # (its openid/userinfo.* scopes are in the union too).
+    url, _ = flow.authorization_url(access_type="offline", prompt="consent", state=state)
     # Flow.authorization_url() always sets it (autogenerate_code_verifier=True).
     assert flow.code_verifier is not None  # nosec B101 -- invariant narrowing, not input validation
     return url, flow.code_verifier
+
+
+def _accept_granted_superset(flow: Flow, exc: Warning, *, requested: list[str]) -> None:
+    """Recover from oauthlib's "Scope has changed" refusal when Google
+    granted a *superset* of what was requested.
+
+    RFC 6749 §3.3 requires an authorization server to report the scope it
+    actually granted when it differs from the request; it does not make a
+    wider grant an error. oauthlib refuses anyway unless the process-wide
+    ``OAUTHLIB_RELAX_TOKEN_SCOPE`` is set -- and that env var is both a
+    blunt instrument (it silences this for every OAuth exchange in the
+    process, local mode's included) and unsafe to toggle around a single
+    call, since two concurrent authorizations would race on it.
+
+    So the check is done here instead, keeping the half of it that is
+    genuinely worth having: a grant *missing* something that was asked for
+    is still a hard failure, because the connector built on it would
+    otherwise fail later with a far less obvious permission error.
+
+    A wider grant still reaches Google legitimately -- most often because
+    one OAuth client serves both org mode's OIDC sign-in and its connectors,
+    so ``openid``/``userinfo.*`` ride along on every connector exchange.
+    That is a deployment's choice to make (see docs/org-mode-setup-guide.md
+    §4.2), not something this function should reject.
+
+    ``exc`` carries the already-parsed token oauthlib refused to return
+    (``exc.token``) and the granted scopes (``exc.new_scope``), so nothing
+    has to be re-fetched; assigning through ``OAuth2Session.token``'s own
+    setter is what ``fetch_token`` would have done, and is what makes
+    ``Flow.credentials`` constructible afterwards. The resulting
+    ``Credentials`` records the requested scopes as ``scopes`` and the wider
+    grant as ``granted_scopes``, which is exactly the distinction
+    ``credentials_from_session`` keeps those two fields for.
+    """
+    token = getattr(exc, "token", None)
+    granted = set(getattr(exc, "new_scope", None) or ())
+    if not token or not granted:  # not oauthlib's scope-change Warning after all
+        raise GoogleOAuthError(f"Google OAuth exchange failed: {exc}") from exc
+    missing = sorted(set(requested) - granted)
+    if missing:
+        raise GoogleOAuthError(
+            f"Google OAuth exchange failed: the granted scopes are missing {missing}"
+        ) from exc
+    logger.info(
+        "Google granted a wider scope than requested (extra: %s) -- accepting",
+        sorted(granted - set(requested)),
+    )
+    flow.oauth2session.token = token
 
 
 def exchange_code(
@@ -85,13 +145,21 @@ def exchange_code(
     ``GoogleOAuthError`` on failure -- ``Flow.fetch_token`` itself raises
     whatever ``requests_oauthlib``/``oauthlib`` raise for a rejected
     exchange (an expired/reused code, a redirect_uri mismatch, ...), which
-    isn't a stable, user-presentable type on its own."""
+    isn't a stable, user-presentable type on its own.
+
+    A granted scope wider than the requested one is not a failure -- see
+    ``_accept_granted_superset``, which is why the ``Warning`` arm below is
+    caught ahead of the general one (oauthlib raises the builtin
+    ``Warning``, an ordinary ``Exception`` subclass, for exactly that case).
+    """
     flow = Flow.from_client_config(
         client_config, scopes=scopes, redirect_uri=redirect_uri,
         code_verifier=code_verifier, autogenerate_code_verifier=False,
     )
     try:
         flow.fetch_token(code=code)
+    except Warning as exc:
+        _accept_granted_superset(flow, exc, requested=scopes)
     except Exception as exc:  # noqa: BLE001 -- any provider-side failure ends the same way
         raise GoogleOAuthError(f"Google OAuth exchange failed: {exc}") from exc
     return flow.credentials
