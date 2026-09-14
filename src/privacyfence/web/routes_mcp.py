@@ -100,11 +100,26 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
 
     @server.list_tools()
     async def handle_list_tools() -> list[types.Tool]:
-        tools = [
-            mcp_tools.to_mcp_tool(spec)
-            for connector in dispatcher.connectors.values()
-            for spec in connector.tool_specs()
-        ]
+        # Principal-scoped for the same reason handle_call_tool below is:
+        # ``dispatcher.connectors`` is
+        # ``connector_registry.get(current_principal()).connectors`` in org
+        # mode, so *which* connector set this enumerates depends entirely on
+        # the scope it runs in. Without this, current_principal() fell back
+        # to LOCAL_PRINCIPAL and the manifest was built from the local
+        # principal's connectors -- on an org server nobody authorizes
+        # services as "local", so build_connectors() skipped every one of
+        # them and the advertised manifest was META_TOOLS and nothing else.
+        # Every connector tool was invisible to org-mode clients, while
+        # handle_call_tool (correctly scoped) could resolve those same
+        # connectors perfectly well -- a client simply had no way to learn
+        # the tools existed to call them.
+        principal = principal_from_access_token(get_access_token())
+        with principal_scope(principal):
+            tools = [
+                mcp_tools.to_mcp_tool(spec)
+                for connector in dispatcher.connectors.values()
+                for spec in connector.tool_specs()
+            ]
         tools.extend(mcp_tools.META_TOOLS)
         return tools
 
@@ -117,8 +132,10 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
         # audit_log.py, pii_detector.py, privacy_filter.py,
         # resource_names.py) resolves against whatever this sets for the
         # rest of the call, including everything gate.py's gated_call()
-        # does. Always LOCAL_PRINCIPAL today -- see
-        # mcp_auth.principal_from_access_token's own docstring for why.
+        # does. LOCAL_PRINCIPAL in local mode; in org mode (P7 onwards) the
+        # real signed-in human -- see
+        # mcp_auth.principal_from_access_token's own docstring for how each
+        # is resolved.
         principal = principal_from_access_token(get_access_token())
         with principal_scope(principal):
             try:

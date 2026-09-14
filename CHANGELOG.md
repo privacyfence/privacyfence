@@ -61,6 +61,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one, while `privacyfence_list_auto_accept_rules` — which reads the file from disk — kept listing
   it; the two meta-tools now agree. Local mode was never affected, and no call was ever
   auto-accepted that shouldn't have been: the failure was always toward asking a human.
+- Org-mode clients are now offered their own connector tools over `/mcp`. The tool listing was
+  built outside the signed-in principal's scope, so it enumerated the *local* principal's
+  connectors; on an org server nobody authorizes services as `local`, so every connector was
+  skipped and the advertised tool list collapsed to PrivacyFence's own meta-tools. Gmail, Drive,
+  Slack and the rest were invisible to Claude in org mode — calls to them resolved correctly, but
+  no client could discover the tools existed to make one. Local mode was never affected, and a
+  principal is never shown tools backed by another principal's credentials.
 
 ## [4.0.0] — 2026-09-14
 
