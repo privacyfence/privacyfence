@@ -99,20 +99,107 @@ describe("findDaemonCmd", () => {
     assert.deepEqual(cmd, ["python", "-m", "privacyfence.daemon_main"]);
   });
 
-  it("uses the Windows Program Files default app path when platform is win32 and no defaultAppPath override is given", () => {
+  it("falls through to python when neither Windows default location exists, with no defaultAppPath override given", () => {
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-default-"));
-    // No defaultAppPath override: the real Windows default
-    // (C:\Program Files\PrivacyFence\privacyfence-app.exe) definitely
-    // doesn't exist on this (non-Windows) test host either, so this still
-    // exercises the platform-conditional default falling through to the
-    // python fallback -- confirming the default itself, not just that an
-    // override is honored, is platform-conditional.
+    // No defaultAppPath override, and a windowsEnv naming directories that
+    // don't exist: exercises the platform-conditional default falling
+    // through to the python fallback -- confirming the win32 branch is
+    // reached at all, not just that an override is honored.
     const cmd = findDaemonCmd({
       scriptPath: path.join(emptyDir, "shim.js"),
       pathEnv: emptyDir,
       platform: "win32",
+      windowsEnv: {
+        ProgramFiles: path.join(emptyDir, "no-such-program-files"),
+        LOCALAPPDATA: path.join(emptyDir, "no-such-localappdata"),
+      },
     });
     assert.deepEqual(cmd, ["python", "-m", "privacyfence.daemon_main"]);
+  });
+
+  it("finds privacyfence-app.exe under the elevated Program Files install location", () => {
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-pf-"));
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-pf-root-"));
+    const appDir = path.join(programFiles, "PrivacyFence");
+    fs.mkdirSync(appDir, { recursive: true });
+    const exe = path.join(appDir, "privacyfence-app.exe");
+    fs.writeFileSync(exe, "", { mode: 0o755 });
+
+    const cmd = findDaemonCmd({
+      scriptPath: path.join(emptyDir, "shim.js"),
+      pathEnv: emptyDir,
+      platform: "win32",
+      windowsEnv: {
+        ProgramFiles: programFiles,
+        LOCALAPPDATA: path.join(emptyDir, "no-such-localappdata"),
+      },
+    });
+    assert.deepEqual(cmd, [exe]);
+  });
+
+  it("falls back to the non-admin LOCALAPPDATA install location when Program Files doesn't have it", () => {
+    // The installer's default (PrivilegesRequired=lowest, no elevation)
+    // install location -- this is the case that regressed before
+    // privacyfence/privacyfence#410 was fixed, since the shim's old fallback
+    // only ever checked Program Files.
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-lad-"));
+    const localAppData = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-lad-root-"));
+    const appDir = path.join(localAppData, "Programs", "PrivacyFence");
+    fs.mkdirSync(appDir, { recursive: true });
+    const exe = path.join(appDir, "privacyfence-app.exe");
+    fs.writeFileSync(exe, "", { mode: 0o755 });
+
+    const cmd = findDaemonCmd({
+      scriptPath: path.join(emptyDir, "shim.js"),
+      pathEnv: emptyDir,
+      platform: "win32",
+      windowsEnv: {
+        ProgramFiles: path.join(emptyDir, "no-such-program-files"),
+        LOCALAPPDATA: localAppData,
+      },
+    });
+    assert.deepEqual(cmd, [exe]);
+  });
+
+  it("prefers Program Files over LOCALAPPDATA when both have the exe", () => {
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-both-"));
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-both-pf-"));
+    const localAppData = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-both-lad-"));
+    const pfExe = path.join(programFiles, "PrivacyFence", "privacyfence-app.exe");
+    const ladExe = path.join(localAppData, "Programs", "PrivacyFence", "privacyfence-app.exe");
+    fs.mkdirSync(path.dirname(pfExe), { recursive: true });
+    fs.mkdirSync(path.dirname(ladExe), { recursive: true });
+    fs.writeFileSync(pfExe, "", { mode: 0o755 });
+    fs.writeFileSync(ladExe, "", { mode: 0o755 });
+
+    const cmd = findDaemonCmd({
+      scriptPath: path.join(emptyDir, "shim.js"),
+      pathEnv: emptyDir,
+      platform: "win32",
+      windowsEnv: { ProgramFiles: programFiles, LOCALAPPDATA: localAppData },
+    });
+    assert.deepEqual(cmd, [pfExe]);
+  });
+
+  it("ignores windowsEnv on non-Windows platforms", () => {
+    // Confirms the win32 branch (and therefore windowsEnv) is genuinely
+    // platform-gated, not just usually irrelevant because the paths don't
+    // exist on a POSIX host.
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-notwin-"));
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-notwin-pf-"));
+    const appDir = path.join(programFiles, "PrivacyFence");
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(path.join(appDir, "privacyfence-app.exe"), "", { mode: 0o755 });
+
+    const cmd = findDaemonCmd({
+      scriptPath: path.join(emptyDir, "shim.js"),
+      pathEnv: emptyDir,
+      defaultAppPath: "/definitely/does/not/exist/privacyfence-app",
+      platform: "linux",
+      homeDir: emptyDir,
+      windowsEnv: { ProgramFiles: programFiles },
+    });
+    assert.deepEqual(cmd, ["python3", "-m", "privacyfence.daemon_main"]);
   });
 });
 
