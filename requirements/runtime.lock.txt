@@ -12,9 +12,9 @@ anyio==4.15.1 \
     #   mcp
     #   sse-starlette
     #   starlette
-atlassian-python-api==5.0.4 \
-    --hash=sha256:b1f58d68d3a3bd9b7b8bd5a2c1ed006113bc5c4bd90c75350f66428685fb613c \
-    --hash=sha256:c11cf53283c795d84ddfb593f3c7503f3b0b3c20191fc3061781b2665c10f6b3
+atlassian-python-api==5.0.5 \
+    --hash=sha256:647b650ff04f186bad1495caaed9772c249a2416a685fbacc1dfa340fa6376ab \
+    --hash=sha256:ae7f34349939ec0674ffb9bea812bc3f4acb4b6ace9a7cf1c15141719669f3bb
     # via privacyfence (pyproject.toml)
 attrs==26.1.0 \
     --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309 \
@@ -431,9 +431,9 @@ et-xmlfile==2.0.0 \
     --hash=sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa \
     --hash=sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54
     # via openpyxl
-google-api-core==2.36.0 \
-    --hash=sha256:32779307b52e64c9a9592a3621de6281676ecaeea299fe8524e4637ab7ac2531 \
-    --hash=sha256:e4d0b179260727ea5c42222426d9199285214dbef7bf48f8b16600c7f9a78944
+google-api-core==2.37.0 \
+    --hash=sha256:cf58f220aa797f1ffdda52194c4c7d72efeced09297c2976529f8135f6d85b9a \
+    --hash=sha256:d84042a0034cce9c4304e17d2e5e9966c2fcb1a851b73799291f687a67470c8b
     # via google-api-python-client
 google-api-python-client==2.200.0 \
     --hash=sha256:82aa18b851328ea04867fd51c5a0c8da2e1b86ec45ce08487e902e7726d4ee50 \
