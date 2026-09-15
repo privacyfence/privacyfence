@@ -49,6 +49,8 @@ The daemon exposes the MCP protocol over Streamable HTTP at `/mcp` using the off
 
 The MCP tool registry is built from the configured connectors. Tool calls are routed through the PrivacyFence gate before connector execution where policy requires review or confirmation.
 
+The `initialize` response carries a fixed server `instructions` string (`routes_mcp.py`'s `SERVER_INSTRUCTIONS`, issue #396 Part A) explaining what PrivacyFence is, that an empty or partial tool list means this install's connectors aren't set up yet rather than "nothing to do here", and to call `privacyfence_status` (below) before the first PrivacyFence-governed action in a conversation or when a human asks why a connector is missing. This is the mechanism that makes a fresh, un-onboarded install self-describing instead of silently empty — see the client-facing side of the same problem under "Meta-tools" below.
+
 ## Meta-tools
 
 Alongside the connector-derived tools, the daemon exposes eight `privacyfence_`-prefixed meta-tools over the same `/mcp` endpoint (`web/mcp_tools.py`'s `META_TOOLS`), dispatched by `routes_mcp.py`'s `_dispatch_meta_tool` to `McpDispatcher` methods (`web/mcp_dispatch.py`) that call back into `gate.py`/`auto_accept.py`. Each takes a `reason` string, logged the same self-reported, unverified way as every gated connector tool's own `reason` param.

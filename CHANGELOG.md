@@ -40,6 +40,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   authenticated (and, for the rest, whether they were never configured, never authenticated, or
   hit a real error), and in local mode mints a one-time link to PrivacyFence's own Settings page
   when nothing is authenticated yet. See issue #396.
+- The MCP server now returns `instructions` in its `initialize` response, telling the connecting
+  client what PrivacyFence is and that an empty or partial tool list means its connectors aren't
+  set up yet, not that PrivacyFence has nothing to do with the conversation — and when to call
+  `privacyfence_status` to find out more. Previously the `initialize` result carried no
+  instructions at all, so a fresh install had no way to explain its own silence. See issue #396.
 
 ### Changed
 

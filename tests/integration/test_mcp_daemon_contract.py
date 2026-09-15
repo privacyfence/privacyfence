@@ -140,7 +140,14 @@ async def test_real_mcp_client_lists_and_calls_the_real_daemons_tools_over_a_rea
     async with httpx.AsyncClient(headers=headers) as http_client:
         async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write, _get_session_id):
             async with ClientSession(read, write) as session:
-                await session.initialize()
+                init_result = await session.initialize()
+
+                # Issue #396 Part A: the instructions string is what tells a
+                # client that an empty/partial tool list means "not set up
+                # yet", not "nothing to do here" -- a real client (not just
+                # the in-process ASGI transport test) actually receives it.
+                assert init_result.instructions
+                assert "privacyfence_status" in init_result.instructions
 
                 tools = await session.list_tools()
                 names = {t.name for t in tools.tools}

@@ -23,7 +23,7 @@ from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.mcp_tools import META_TOOL_NAMES
-from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
+from privacyfence.web.routes_mcp import SERVER_INSTRUCTIONS, build_mcp_asgi_app, mcp_lifespan
 
 
 class EchoConnector(Connector):
@@ -162,6 +162,32 @@ class TestAuth:
         # tolerate.
         with pytest.raises(ValueError):
             build_mcp_asgi_app(_dispatcher())
+
+
+# --------------------------------------------------------------------------- #
+# Server instructions (issue #396 Part A) -- the wire-level counterpart of
+# tests/integration/test_mcp_daemon_contract.py's real-socket assertion.
+# --------------------------------------------------------------------------- #
+
+class TestServerInstructions:
+    async def test_initialize_result_carries_the_instructions(self):
+        dispatcher = _dispatcher()
+        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        async with mcp_lifespan(session_manager):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+                headers={"Authorization": f"Bearer {TOKEN}"},
+            ) as http_client:
+                async with streamable_http_client(
+                    "http://testserver/mcp", http_client=http_client,
+                ) as (read, write, _get_session_id):
+                    async with ClientSession(read, write) as session:
+                        result = await session.initialize()
+        assert result.instructions == SERVER_INSTRUCTIONS
+        # Named concretely, per Phase 2's own status tool docstring -- the
+        # instructions are what tells a client the tool exists and why to
+        # call it, not just that an empty tool list means "not set up".
+        assert "privacyfence_status" in result.instructions
 
 
 # --------------------------------------------------------------------------- #

@@ -59,6 +59,30 @@ logger = logging.getLogger(__name__)
 
 MCP_PATH = "/mcp"
 
+# Part A of issue #396: server instructions returned in the `initialize`
+# result (Server.instructions -> InitializationOptions.instructions,
+# confirmed against a real mcp==1.30.0 install -- no Server subclass needed
+# for this part, unlike the NotificationOptions(tools_changed=True) override
+# Part C's tools/list_changed support needs at this same construction site).
+# Deliberately short and factual, not "call privacyfence_status at the start
+# of every conversation": most conversations have nothing to do with
+# PrivacyFence, and every meta-tool call is a round trip a client pays for.
+SERVER_INSTRUCTIONS = (
+    "PrivacyFence is a privacy/approval gateway between this client and the user's real "
+    "business systems (Gmail, Drive, Slack, and similar) -- it does not provide those services "
+    "itself, it governs access to connectors that do, applying policy and approval gates before "
+    "data moves.\n\n"
+    "An empty tool list, or one with only privacyfence_-prefixed meta-tools and no connector "
+    "tools (gmail_*, drive_*, slack_*, ...), means this install's connectors aren't set up or "
+    "authenticated yet -- it does NOT mean PrivacyFence has nothing to do with the current "
+    "request. Call privacyfence_status before the first PrivacyFence-governed action in a "
+    "conversation, or whenever the user asks why a connector isn't available: it reports the "
+    "real setup state and, if nothing is authenticated yet, a link the user can open to finish "
+    "setup. It is the one tool guaranteed to exist even when every other tool is missing.\n\n"
+    "Most conversations have nothing to do with PrivacyFence and should not call any "
+    "privacyfence_* tool at all."
+)
+
 
 def _session_key(server: MCPServer) -> str:
     """The current request's session key -- a fresh ``uuid4`` handed out
@@ -96,6 +120,7 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
 
     server: MCPServer = MCPServer(
         "privacyfence", version=PRIVACYFENCE_VERSION, lifespan=_session_lifespan,
+        instructions=SERVER_INSTRUCTIONS,
     )
 
     @server.list_tools()
@@ -391,6 +416,7 @@ def protected_resource_metadata_url(issuer_url: str) -> AnyHttpUrl:
 
 __all__ = [
     "MCP_PATH",
+    "SERVER_INSTRUCTIONS",
     "build_mcp_server",
     "build_mcp_asgi_app",
     "mount_mcp",
