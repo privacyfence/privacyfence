@@ -277,6 +277,7 @@ shortcut above. See [Auto-accept grants](TECHNICAL_REFERENCE.md#auto-accept-gran
 | `calendar_create_out_of_office` | |
 | `calendar_set_working_location` | |
 | `calendar_set_event_visibility` | `personal_calendar` (that calendar) |
+| `calendar_set_event_color` | `personal_calendar` (that calendar) |
 
 `calendar_create_out_of_office`/`calendar_set_working_location` are a separate case: neither tool
 takes a `calendar_id` (both always act on your own primary calendar), so `personal_calendar` has
