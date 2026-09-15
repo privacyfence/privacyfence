@@ -264,7 +264,7 @@ A new connector's test module should include, at minimum:
       blocks on both; `mypy` runs in the same job but is informational only for now, except for
       the modules with a `[[tool.mypy.overrides]]` entry — see `[tool.ruff.lint]`/`[tool.mypy]`/
       `[tool.bandit]` in `pyproject.toml`). A new Bandit finding that's a genuine false positive
-      gets a `# nosec BXXX -- <reason>` comment at its call site, not a suppression in
+      gets a `# nosec BXXX  # <reason>` comment at its call site, not a suppression in
       `pyproject.toml`.
 - [ ] A user-visible change has a line under `CHANGELOG.md`'s `## [Unreleased]` heading (not under
       a concrete version heading — see this repo's CLAUDE.md, "Release notes come from
