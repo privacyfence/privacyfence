@@ -80,6 +80,11 @@ class TestDataDir:
 
     def test_bundled_mode_resolves_under_home_and_creates_it(self, monkeypatch, tmp_path):
         monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        # Exercises the POSIX branch specifically -- real Windows CI has a
+        # real os.name of "nt", which would otherwise take data_dir() down
+        # windows_data_dir()'s branch instead and ignore the Path.home()
+        # mock below.
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         result = paths.data_dir()
@@ -148,6 +153,9 @@ class TestDataDir:
         # source checkout, so this must not fall through to the dev-mode
         # branch above and land inside site-packages itself.
         monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        # Same reasoning as test_bundled_mode_resolves_under_home_and_
+        # creates_it above -- this exercises the POSIX branch specifically.
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
         fake_module_file = tmp_path / "lib" / "python3.13" / "site-packages" / "privacyfence" / "paths.py"
         fake_module_file.parent.mkdir(parents=True)
         monkeypatch.setattr(paths, "__file__", str(fake_module_file))
