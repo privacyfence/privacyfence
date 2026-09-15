@@ -270,11 +270,15 @@ signing/notarization credential availability at build time. Full installation de
 ### Install on Windows
 
 1. Download the latest `PrivacyFence-<version>-setup.exe` from [Releases](../../releases).
-2. Run the installer. It installs PrivacyFence to `%ProgramFiles%\PrivacyFence\`, registers a Task
-   Scheduler task so the daemon starts at login, and starts the daemon immediately — no separate
-   "install the mcpb first" step is needed to get it running (unlike macOS, above), though you
-   still need it installed to talk to Claude Desktop.
-3. Install **PrivacyFence.mcpb** into Claude Desktop.
+2. Run the installer. It installs PrivacyFence to `%ProgramFiles%\PrivacyFence\` — or, if you run
+   the installer without admin rights, to `%LOCALAPPDATA%\Programs\PrivacyFence\` instead, inside
+   your own user profile — registers a Task Scheduler task so the daemon starts at login, and
+   starts the daemon immediately — no separate "install the mcpb first" step is needed to get it
+   running (unlike macOS, above), though you still need it installed to talk to Claude Desktop.
+3. Install **PrivacyFence.mcpb** into Claude Desktop: open File Explorer, paste the install path
+   from step 2 into the address bar (`%ProgramFiles%\PrivacyFence\` or
+   `%LOCALAPPDATA%\Programs\PrivacyFence\`, whichever applies to you) and press Enter, then
+   double-click `PrivacyFence.mcpb` there — Claude Desktop opens and offers to install it.
 4. Ask Claude for a PrivacyFence sign-in link (`privacyfence_get_sign_in_link`) and open the link
    it gives you — or open `~/.privacyfence/settings_url` yourself. (`privacyfence.log` redacts this
    link's code, so don't look for it there. The Start Menu shortcut points at the bare,
