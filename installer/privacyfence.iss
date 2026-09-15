@@ -287,14 +287,19 @@ begin
       Log('RegisterAutostartTask: FAILED; PrivacyFence will not start ' +
           'automatically at logon.');
       if not WizardSilent() then
+        (* Every continuation line below starts with a quoted string or
+           ExpandConstant, never a bare #13#10 -- Inno's preprocessor (ISPP)
+           treats a line whose first non-blank character is '#' as a
+           directive line, and "unknown preprocessor directive" is a
+           compile-time error, not a Pascal one, so this bit it once
+           already (privacyfence/privacyfence#411's own CI). Each #13#10
+           pair stays glued to the end of the previous line instead. *)
         MsgBox(
           'PrivacyFence could not set up its Windows autostart task, so it ' +
-          'will not launch automatically the next time you sign in.' +
-          #13#10#13#10 +
+          'will not launch automatically the next time you sign in.' + #13#10 + #13#10 +
           'PrivacyFence is still running now. Until this is fixed, you''ll ' +
-          'need to start it manually after each reboot, from:' +
-          #13#10 + ExpandConstant('{app}\{#AppExeName}') +
-          #13#10#13#10 +
+          'need to start it manually after each reboot, from:' + #13#10 +
+          ExpandConstant('{app}\{#AppExeName}') + #13#10 + #13#10 +
           'Re-running this installer may resolve it -- if it keeps ' +
           'happening, please report it to the PrivacyFence project.',
           mbInformation, MB_OK);
