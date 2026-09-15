@@ -56,6 +56,16 @@ class TestIsInstalledPackage:
         assert paths._is_installed_package() is True
 
 
+class TestIsWindows:
+    def test_true_when_os_name_is_nt(self, monkeypatch):
+        monkeypatch.setattr(paths.os, "name", "nt")
+        assert paths.is_windows() is True
+
+    def test_false_when_os_name_is_posix(self, monkeypatch):
+        monkeypatch.setattr(paths.os, "name", "posix")
+        assert paths.is_windows() is False
+
+
 class TestDataDir:
     def test_dev_mode_resolves_to_project_root_relative_to_this_file(self, monkeypatch, tmp_path):
         monkeypatch.setattr(paths, "is_bundled", lambda: False)
@@ -70,6 +80,11 @@ class TestDataDir:
 
     def test_bundled_mode_resolves_under_home_and_creates_it(self, monkeypatch, tmp_path):
         monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        # Exercises the POSIX branch specifically -- real Windows CI has a
+        # real os.name of "nt", which would otherwise take data_dir() down
+        # windows_data_dir()'s branch instead and ignore the Path.home()
+        # mock below.
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         result = paths.data_dir()
@@ -109,12 +124,38 @@ class TestDataDir:
 
         assert stat.S_IMODE(result.stat().st_mode) == 0o700
 
+    def test_bundled_mode_on_windows_resolves_under_local_appdata(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        monkeypatch.setattr(paths, "is_windows", lambda: True)
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "AppData" / "Local"))
+
+        result = paths.data_dir()
+
+        assert result == tmp_path / "AppData" / "Local" / "PrivacyFence"
+        assert result.is_dir()
+        # Not the POSIX dotfile name -- see windows_data_dir()'s docstring.
+        assert not (tmp_path / ".privacyfence").exists()
+
+    def test_bundled_mode_on_windows_falls_back_to_home_when_localappdata_unset(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        monkeypatch.setattr(paths, "is_windows", lambda: True)
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        result = paths.data_dir()
+
+        assert result == tmp_path / "AppData" / "Local" / "PrivacyFence"
+        assert result.is_dir()
+
     def test_installed_package_resolves_under_home_and_creates_it(self, monkeypatch, tmp_path):
         # A real (non-editable) `pip install privacyfence` -- unbundled
         # (is_bundled() False, no PyInstaller involved) but still not a
         # source checkout, so this must not fall through to the dev-mode
         # branch above and land inside site-packages itself.
         monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        # Same reasoning as test_bundled_mode_resolves_under_home_and_
+        # creates_it above -- this exercises the POSIX branch specifically.
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
         fake_module_file = tmp_path / "lib" / "python3.13" / "site-packages" / "privacyfence" / "paths.py"
         fake_module_file.parent.mkdir(parents=True)
         monkeypatch.setattr(paths, "__file__", str(fake_module_file))

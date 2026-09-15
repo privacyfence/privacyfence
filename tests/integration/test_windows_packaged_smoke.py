@@ -53,7 +53,7 @@ as possible to how a real user would.
    ``unins000.exe`` -- package-owned files (the whole install directory) and
    the Task Scheduler task (removed by the ``.iss``'s own
    ``[UninstallRun]``) are gone afterward; per-user state under the
-   isolated ``%USERPROFILE%\\.privacyfence\\`` this test pointed the daemon
+   isolated ``%LOCALAPPDATA%\\PrivacyFence\\`` this test pointed the daemon
    at is untouched (``installer/privacyfence.iss``'s own ``[UninstallDelete]``
    comment: the installer never reaches into that directory at all).
 5. **Upgrade in place** (this plan's Phase 6 item 20 -- deliberately not built
@@ -172,10 +172,19 @@ def _clean_task_state():
 
 # --------------------------------------------------------------------------- #
 # Daemon process lifecycle -- same isolated-per-user-profile technique the
-# macOS/Linux packaged tests use for $HOME, adapted to Windows' USERPROFILE
-# (what Path.home()/os.path.expanduser resolve through there -- paths.py's
-# data_dir()).
+# macOS/Linux packaged tests use for $HOME, adapted to Windows: paths.py's
+# data_dir() resolves under %LOCALAPPDATA% there (see its own
+# windows_data_dir() docstring for why not the same ~/.privacyfence dotfile
+# POSIX uses, reused under %USERPROFILE%), so isolating a daemon run means
+# pointing LOCALAPPDATA at a scratch directory -- USERPROFILE/HOME are set
+# alongside it defensively (see _running_daemon's own comment).
 # --------------------------------------------------------------------------- #
+
+def _data_dir(home: Path) -> Path:
+    """Mirrors paths.py's ``windows_data_dir()`` for an isolated ``home``
+    this module controls: ``<home>/AppData/Local/PrivacyFence``, the same
+    shape ``_running_daemon`` points ``LOCALAPPDATA`` at below."""
+    return home / "AppData" / "Local" / "PrivacyFence"
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -237,7 +246,7 @@ def _prepare_home(home: Path, *, port: int) -> None:
     ``test_windows_upgrade_in_place_preserves_user_state`` exists to make
     (same reasoning, same fix, as ``test_deb_packaged_lifecycle.py``'s
     identically-named helper)."""
-    config_dir = home / ".privacyfence" / "config"
+    config_dir = _data_dir(home) / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     settings_path = config_dir / "settings.yaml"
     if settings_path.exists():
@@ -253,19 +262,23 @@ def _running_daemon(exe: Path, home: Path):
     """Starts the real installed ``privacyfence-app.exe`` alias (not
     ``PrivacyFenceApp.exe`` directly -- proving the alias itself resolves
     and execs correctly is part of what this module is for) with an
-    isolated ``%USERPROFILE%``, returning a context manager that always
+    isolated ``%LOCALAPPDATA%``, returning a context manager that always
     terminates it on the way out."""
     assert exe.is_file(), f"{exe} missing -- was the installer actually run?"
     port = _free_port()
     home.mkdir(parents=True, exist_ok=True)
     _prepare_home(home, port=port)
-    # Path.home()/os.path.expanduser() resolve through USERPROFILE on
-    # Windows, not HOME -- see paths.py's data_dir() and
-    # The now-removed windows-support-plan.md Phase 6.3's own note on the analogous
-    # ~-expansion fix. HOME is set alongside it defensively; it costs
-    # nothing and some third-party code (this daemon's own dependencies
-    # included) still checks it first.
-    env = {**os.environ, "USERPROFILE": str(home), "HOME": str(home)}
+    # paths.py's data_dir() resolves under LOCALAPPDATA on Windows (its
+    # windows_data_dir() branch), so that's the one variable that actually
+    # isolates this run -- not USERPROFILE/HOME, which don't drive it
+    # anymore. Both are still set alongside it defensively (some
+    # third-party code, this daemon's own dependencies included, still
+    # checks HOME first) and cost nothing to set.
+    env = {
+        **os.environ,
+        "LOCALAPPDATA": str(home / "AppData" / "Local"),
+        "USERPROFILE": str(home), "HOME": str(home),
+    }
     log_path = home / "daemon.log"
 
     @contextlib.contextmanager
@@ -274,7 +287,7 @@ def _running_daemon(exe: Path, home: Path):
             proc = subprocess.Popen([str(exe)], env=env, stdout=log_fh, stderr=subprocess.STDOUT)
             try:
                 _wait_until_connectable("localhost", port)
-                data_dir = home / ".privacyfence"
+                data_dir = _data_dir(home)
                 web_token = _wait_for_file(data_dir / WEB_TOKEN_FILE_NAME, proc, log_path)
                 mcp_token = _wait_for_file(data_dir / MCP_TOKEN_FILE_NAME, proc, log_path)
                 yield RunningDaemon(proc, home, port, web_token, mcp_token)
@@ -389,7 +402,7 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         assert deny_result.isError is True
 
         # -- Audit log confirms both real decisions ------------------------------
-        audit_dir = daemon.home / ".privacyfence" / "logs" / "audit"
+        audit_dir = _data_dir(daemon.home) / "logs" / "audit"
         decisions = []
         for jsonl_path in sorted(audit_dir.glob("*.jsonl")):
             for line in jsonl_path.read_text(encoding="utf-8").splitlines():
@@ -455,7 +468,7 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     with _running_daemon(alias_exe, home) as daemon:
         await _run_daemon_mcp_approval_audit_scenario(daemon)
 
-    settings_path = home / ".privacyfence" / "config" / "settings.yaml"
+    settings_path = _data_dir(home) / "config" / "settings.yaml"
     assert "allowed.example.com" in settings_path.read_text(encoding="utf-8")
 
     # ── Uninstall (silent) ─────────────────────────────────────────────────
@@ -481,10 +494,10 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     # [UninstallRun]) ──────────────────────────────────────────────────────
     assert not _task_exists(), f"Task Scheduler task {TASK_NAME!r} should be gone after uninstall"
 
-    # ── User state under the isolated %USERPROFILE% is untouched
+    # ── User state under the isolated %LOCALAPPDATA% is untouched
     # (installer/privacyfence.iss's own [UninstallDelete] comment: the
-    # installer never reaches into %USERPROFILE%\.privacyfence) ────────────
-    assert settings_path.exists(), "uninstall must never touch %USERPROFILE%\\.privacyfence"
+    # installer never reaches into %LOCALAPPDATA%\PrivacyFence) ────────────
+    assert settings_path.exists(), "uninstall must never touch %LOCALAPPDATA%\\PrivacyFence"
     assert "allowed.example.com" in settings_path.read_text(encoding="utf-8")
 
 
@@ -585,7 +598,7 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
             await _quit(web_client, session_id)
         assert daemon.process.wait(timeout=15) == 0
 
-    settings_path = home / ".privacyfence" / "config" / "settings.yaml"
+    settings_path = _data_dir(home) / "config" / "settings.yaml"
     assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
 
     # ── Build and silently install a synthetically-bumped version N+1 over
@@ -611,7 +624,7 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     assert _task_exists(), f"Task Scheduler task {TASK_NAME!r} should still be registered after an upgrade install"
 
     # ── State survived the upgrade untouched (the same isolated
-    # %USERPROFILE% the installer itself never reaches into) ────────────────
+    # %LOCALAPPDATA% the installer itself never reaches into) ─────────────
     assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
 
     # ── The upgraded binary still starts and serves, without clobbering the

@@ -43,9 +43,11 @@ calls) once, at import time.
 
 An earlier version of this bootstrap instead faked ``sys.frozen``/
 ``sys._MEIPASS`` (the two attributes ``paths.is_bundled()`` checks) to flip
-``data_dir()`` onto its real ``Path.home() / ".privacyfence"`` branch, the
-same branch a genuine packaged ``.app``/installer takes. That broke real
-Windows CI: `pywin32`'s own ``pywintypes.py`` special-cases ``sys.frozen``
+``data_dir()`` onto its real per-user-data-directory branch (``Path.home()
+/ ".privacyfence"`` on POSIX, ``%LOCALAPPDATA%\\PrivacyFence`` on Windows --
+see that function's own docstring), the same branch a genuine packaged
+``.app``/installer takes. That broke real Windows CI: `pywin32`'s own
+``pywintypes.py`` special-cases ``sys.frozen``
 to mean "this is a real PyInstaller freeze with `pywintypes` bundled
 alongside it," and raises ``ImportError: Module 'pywintypes' isn't in
 frozen sys.path`` the moment anything imports it (here, transitively, via

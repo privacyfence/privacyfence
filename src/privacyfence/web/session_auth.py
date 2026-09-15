@@ -51,6 +51,8 @@ from dataclasses import dataclass
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
+from .. import paths
+
 SESSION_COOKIE = "pf_session"
 BOOTSTRAP_QUERY_PARAM = "bootstrap"
 
@@ -217,8 +219,28 @@ def unauthorized_html(request: Request) -> Response:
     MCP client connected yet is exactly the audience that finding this
     self-explanatory matters most for. ``request`` supplies only this
     page's own origin (scheme+host+port), the same one the reader is
-    already looking at, so the command below can be pasted as-is."""
+    already looking at, so the command below can be pasted as-is.
+
+    The discovery-file path and the shell command are both platform-
+    dependent -- ``paths.data_dir()`` resolves to the real, live directory
+    this install actually writes ``approvals_url``/``web_token`` into
+    (``~/.privacyfence`` on POSIX, ``%LOCALAPPDATA%\\PrivacyFence`` on
+    Windows, see that function's own docstring), and the paste-able command
+    is PowerShell's ``Get-Content`` on Windows rather than bash's
+    ``$(cat ...)``, which isn't valid there."""
     origin = f"{request.url.scheme}://{request.url.netloc}"
+    data_dir = paths.data_dir()
+    if paths.is_windows():
+        approvals_url_path = f"{data_dir}\\approvals_url"
+        web_token_path = f"{data_dir}\\web_token"
+        command = (
+            f'curl.exe -s -X POST -H "Authorization: Bearer $(Get-Content \'{web_token_path}\')" '
+            f"{origin}/api/bootstrap"
+        )
+    else:
+        approvals_url_path = f"{data_dir}/approvals_url"
+        web_token_path = f"{data_dir}/web_token"
+        command = f'curl -s -X POST -H "Authorization: Bearer $(cat {web_token_path})" {origin}/api/bootstrap'
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
         "<p>Not authorized — this link has expired, was already used, or your "
@@ -228,7 +250,7 @@ def unauthorized_html(request: Request) -> Response:
         "<code>privacyfence_get_sign_in_link</code> tool and hand you the result directly, "
         "no terminal needed.</p>"
         "<p>Prefer to grab it yourself? PrivacyFence just wrote the current one to "
-        "<code>~/.privacyfence/approvals_url</code> (or <code>settings_url</code> for "
+        f"<code>{approvals_url_path}</code> (or <code>settings_url</code> for "
         "Settings) — every startup, and every time an old one is superseded, replaces "
         "it with a fresh one. (Not the log file: <code>privacyfence.log</code> "
         "deliberately redacts this link's code for security, so it never contains a "
@@ -237,9 +259,7 @@ def unauthorized_html(request: Request) -> Response:
         "this? From a terminal on this machine, mint a new one on demand and open the "
         "link it returns:</p>"
         "<pre style=\"white-space:pre-wrap;background:#f0f0f0;padding:10px;"
-        "border-radius:4px\">curl -s -X POST "
-        "-H \"Authorization: Bearer $(cat ~/.privacyfence/web_token)\" "
-        f"{origin}/api/bootstrap</pre>"
+        f"border-radius:4px\">{command}</pre>"
         "</body></html>",
         status_code=401,
         # SEC-18: this

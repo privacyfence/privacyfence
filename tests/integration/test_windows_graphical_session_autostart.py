@@ -165,6 +165,7 @@ from tests.integration.test_windows_packaged_smoke import (  # noqa: E402
     WEB_TOKEN_FILE_NAME,
     _bootstrap_session,
     _built_installers,
+    _data_dir,
     _free_port,
     _prepare_home,
     _propose_trusted_sender_rule,
@@ -348,7 +349,7 @@ def _daemon_log_tail(home: Path, *, max_chars: int = 4000) -> str:
     Task Scheduler starts it.
 
     ``daemon_main.setup_logging`` writes to ``<data dir>/logs/
-    privacyfence.log`` -- for a bundled app, ``%USERPROFILE%\\.privacyfence\\
+    privacyfence.log`` -- for a bundled app, ``%LOCALAPPDATA%\\PrivacyFence\\
     logs\\privacyfence.log`` -- and ``main()`` logs an explicit
     ``Fatal error: ...`` with a traceback there before returning 1. A
     Scheduler-launched process has no console and no redirected stdout, so
@@ -356,7 +357,7 @@ def _daemon_log_tail(home: Path, *, max_chars: int = 4000) -> str:
     stdout to a file it can quote on failure) this file is the *only* place
     a daemon that died on startup says why. ``Last Result: 1`` from
     ``schtasks /query`` says only that it did."""
-    log_path = home / ".privacyfence" / "logs" / "privacyfence.log"
+    log_path = _data_dir(home) / "logs" / "privacyfence.log"
     if not log_path.exists():
         return f"({log_path} missing -- the daemon never got as far as setting up logging)"
     text = log_path.read_text(errors="replace")
@@ -509,7 +510,9 @@ def _real_home_state(request):
 
     Task Scheduler launches the action itself, with no injected environment
     -- that is the whole point here -- so there is nowhere to redirect
-    ``%USERPROFILE%`` to even if this module wanted to. Same posture, and
+    ``%LOCALAPPDATA%`` (what the daemon's ``data_dir()`` actually resolves
+    through on Windows -- see ``_data_dir()`` below) to even if this module
+    wanted to. Same posture, and
     same safeguards, as ``test_linux_graphical_session_autostart.py``'s own
     identically-named fixture: skip rather than run if this account already
     has PrivacyFence state, and remove whatever this test creates.
@@ -521,7 +524,7 @@ def _real_home_state(request):
     own to collect either, so this reaches for what Task Scheduler knows
     (the task's own stored definition and last-run result) instead."""
     real_home = Path.home()
-    state_dir = real_home / ".privacyfence"
+    state_dir = _data_dir(real_home)
     if state_dir.exists():
         pytest.skip(
             f"{state_dir} already exists -- this test boots the daemon into the real profile with "
@@ -619,7 +622,7 @@ def _installed(_real_home_state, tmp_path):
     # must never fire under /VERYSILENT (test_windows_packaged_smoke.py's
     # own lifecycle test relies on the same fact); only Task Scheduler
     # should ever start the daemon in this module.
-    assert not (home / ".privacyfence" / WEB_TOKEN_FILE_NAME).exists(), (
+    assert not (_data_dir(home) / WEB_TOKEN_FILE_NAME).exists(), (
         "a silent install must never itself start the daemon -- only the autostart task should"
     )
 
@@ -691,8 +694,8 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
 
     pid, _owner = _start_task_and_wait_for_daemon(_installed)
 
-    web_token = _wait_for_path_content(_installed.home / ".privacyfence" / WEB_TOKEN_FILE_NAME, timeout=20)
-    mcp_token = _wait_for_path_content(_installed.home / ".privacyfence" / MCP_TOKEN_FILE_NAME, timeout=20)
+    web_token = _wait_for_path_content(_data_dir(_installed.home) / WEB_TOKEN_FILE_NAME, timeout=20)
+    mcp_token = _wait_for_path_content(_data_dir(_installed.home) / MCP_TOKEN_FILE_NAME, timeout=20)
     _wait_until_connectable("localhost", _installed.port)
 
     base_url = f"http://localhost:{_installed.port}"
@@ -720,7 +723,7 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
         f"{ALIAS_EXE_NAME} (pid {pid}) still running after Quit PrivacyFence"
     )
 
-    settings_path = _installed.home / ".privacyfence" / "config" / "settings.yaml"
+    settings_path = _data_dir(_installed.home) / "config" / "settings.yaml"
     assert "autologon.example.com" in settings_path.read_text(encoding="utf-8")
 
 

@@ -41,6 +41,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Windows installs now store per-user state (config, credentials, the audit log) under
+  `%LOCALAPPDATA%\PrivacyFence` instead of a literal `.privacyfence` folder dropped into
+  `%USERPROFILE%`. A dot-prefixed name isn't a hiding convention Windows Explorer honors the way
+  it is on POSIX, so it showed up as an ordinary, oddly-named folder sitting directly in the
+  user's profile root; `%LOCALAPPDATA%` is the idiomatic per-machine "Known Folder" location
+  (hidden by default, and the *Local* rather than *Roaming* one since this directory holds
+  credentials and audit logs that shouldn't follow a roaming profile). No migration is provided —
+  the Windows build has not had a stable release yet.
 - On Windows, the daemon staying down after a reboot is no longer silent on either side. The
   installer now warns (instead of only logging) when it can't register the Task Scheduler
   autostart task, and the Claude Desktop shim's own fallback launch now checks the non-admin

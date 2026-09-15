@@ -807,13 +807,26 @@ def _fallback_log_dir() -> str:
     run_app() has called init_audit_logger() -- which shouldn't happen in
     practice, but this is the same last-resort fallback the original bare
     ``_INSTANCE`` singleton had, just principal-aware now (P6): the local
-    principal keeps the exact original hardcoded path, so an install that
-    somehow only ever hit
-    this fallback stays byte-identical; any other principal falls back to
-    its own storage root instead of writing into the local principal's
-    directory."""
+    principal keeps the exact original hardcoded shape -- the real home
+    directory's own ``.privacyfence/audit`` (an ``audit`` sibling of
+    ``data_dir()`` rather than nested under ``logs/``), *not*
+    ``paths.data_dir()`` itself, which in a source checkout resolves to the
+    project root rather than the real per-user directory this fallback has
+    always meant (an install that somehow only ever hit this fallback stays
+    writing to the same place it always did, dev checkout included); any
+    other principal falls back to its own storage root instead of writing
+    into the local principal's directory.
+
+    Windows gets the equivalent fix on the same terms: ``paths.
+    windows_data_dir()`` unconditionally, mirroring the POSIX branch's own
+    unconditional real-home-directory use rather than routing through
+    ``data_dir()``'s dev/bundled branching -- see that function's own
+    docstring for why ``~/.privacyfence`` reused verbatim under
+    ``%USERPROFILE%`` isn't the right Windows convention."""
     principal = current_principal()
     if principal.id == LOCAL_PRINCIPAL_ID:
+        if paths.is_windows():
+            return str(paths.windows_data_dir() / "audit")
         return os.path.join(os.path.expanduser("~"), ".privacyfence", "audit")
     return str(paths.user_dir(principal) / "logs" / "audit")
 

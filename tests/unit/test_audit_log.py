@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from freezegun import freeze_time
 
+from privacyfence import paths
 from privacyfence.audit_log import (
     APPROVED_LIKE_DECISIONS,
     CURRENT_SCHEMA_VERSION,
@@ -409,9 +410,20 @@ class TestSingletonAccess:
     def test_get_audit_logger_lazily_creates_fallback(self, monkeypatch, tmp_path):
         fallback_home = tmp_path / "home"
         monkeypatch.setattr("os.path.expanduser", lambda p: str(fallback_home))
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
         logger = get_audit_logger()
         assert isinstance(logger, AuditLogger)
         assert str(logger._log_dir) == str(fallback_home / ".privacyfence" / "audit")
+
+    def test_get_audit_logger_lazily_creates_fallback_on_windows(self, monkeypatch, tmp_path):
+        # Windows gets its own unconditional (not data_dir()-routed --
+        # see _fallback_log_dir()'s docstring) fallback location, same
+        # posture as the POSIX branch above.
+        monkeypatch.setattr(paths, "is_windows", lambda: True)
+        monkeypatch.setattr(paths, "windows_data_dir", lambda: tmp_path / "AppData" / "Local" / "PrivacyFence")
+        logger = get_audit_logger()
+        assert isinstance(logger, AuditLogger)
+        assert str(logger._log_dir) == str(tmp_path / "AppData" / "Local" / "PrivacyFence" / "audit")
 
 
 class TestComputeSecurityConfigHash:

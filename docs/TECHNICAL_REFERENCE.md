@@ -1051,9 +1051,13 @@ nothing, and that it really relaunches it after a crash; the `<LogonTrigger>`'s 
 human check on a real machine (`release-testing.md`), because a hosted runner cannot produce the
 Terminal Services session logon the trigger subscribes to.
 
-Per-user state (credentials, settings, the audit log) lives under `%USERPROFILE%\.privacyfence\`,
-created by the app on first run — the installer never touches it, and uninstalling removes only the
-program files and the scheduled task.
+Per-user state (credentials, settings, the audit log) lives under `%LOCALAPPDATA%\PrivacyFence\`
+(`paths.py`'s `data_dir()`, via its `_windows_data_dir()` branch — not the same `~/.privacyfence`
+dotfile POSIX uses reused verbatim under `%USERPROFILE%`, since a dot-prefixed name isn't a hiding
+convention Explorer honors the way it is on POSIX; `%LOCALAPPDATA%` rather than the Roaming
+`%APPDATA%` because this directory holds credentials and audit logs that shouldn't follow a roaming
+profile across machines), created by the app on first run — the installer never touches it, and
+uninstalling removes only the program files and the scheduled task.
 
 **File-permissions caveat, accepted for v1**: elsewhere on this codebase, credential/token files are
 written with `chmod(0o600/0o700)` to lock them down to the owning user. On Windows, `chmod` is a
