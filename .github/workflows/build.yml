@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: macos-latest   # arm64 Apple Silicon runner
     permissions:
-      contents: write
+      contents: read
     env:
       # Name of the notarytool keychain profile created fresh on each runner
       # by the "Import notarization credentials" step below — not a secret,
@@ -208,59 +208,18 @@ jobs:
             scripts/build_org_bundle.py \
             scripts/sync_room_directory.py
 
-      # The release body is CHANGELOG.md's section for this version, not GitHub's auto-generated
-      # list of merged pull requests (for 4.0.0 that list would have been ~127 lines). The notes are
-      # written and reviewed in an ordinary PR; tag day involves no writing.
-      #
-      # All four "stable only" release steps in this workflow (this one, `build-windows`'s,
-      # `build-deb`'s, and `sbom`'s) render the same section and pass it as `body_path`. They run in
-      # parallel against the same release and whichever finishes last wins -- which is harmless
-      # precisely because they all write identical text.
-      #
-      # action-gh-release overwrites an existing release's body when `body_path` resolves to
-      # non-empty content (`append_body` defaults to false), so this replaces whatever the GitHub UI
-      # generated when the release was pre-created. It silently keeps the existing body if the file
-      # can't be read, which is why rendering is its own step: a stable tag with no CHANGELOG
-      # section fails the job here instead of quietly shipping the auto-generated wall.
-      - name: Render release notes from CHANGELOG.md
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
-        run: |
-          python3 scripts/changelog_section.py "${{ steps.release.outputs.version }}" > release-notes.md
-
-      # Only a stable tag also gets a public GitHub Release with attached binaries -- alpha/beta/rc
-      # stop at the private R2 upload above (see scripts/r2_release.py's module docstring for why).
-      # The release entry itself (tag + notes, no files) still gets created for every channel,
-      # marked prerelease, so update_checker.py's beta update channel -- which reads exactly that
-      # flag off the releases list -- keeps working without the underlying DMG being public.
-      - name: Attach release assets (stable only)
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          files: |
-            dist/PrivacyFence-*.dmg
-            scripts/build_org_bundle.py
-            scripts/sync_room_directory.py
-          body_path: release-notes.md
-          prerelease: false
-
-      - name: Create GitHub Release notes (pre-release, no public assets)
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel != 'stable'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          prerelease: true
-
   # The now-removed windows-support-plan.md Phase 6 (B5 in the now-removed windows-linux-support-
   # plan.md): the Windows analogue of the `build` job above. Runs in
   # parallel with it (and with `build-deb`/`sbom`) rather than depending on
   # it -- same "independent, tagged-source-tree-only" reasoning the `sbom`
-  # job's own comment gives, and the same already-established pattern of
-  # multiple jobs each attaching their own files to the one GitHub Release
-  # for this tag (this job's own release steps below, `build`'s,
-  # `build-deb`'s, and `sbom`'s).
+  # job's own comment gives. Each of `build`/`build-windows`/`build-deb`/`sbom` only uploads its
+  # own workflow artifact; `finalize-release` below is the one place that downloads all four and
+  # attaches them to the tag's GitHub Release, so the release either gets everything or nothing --
+  # see that job's own comment for why (privacyfence/privacyfence#373).
   build-windows:
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -402,42 +361,19 @@ jobs:
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/PrivacyFence-*-setup.exe
 
-      # Same render-then-attach as the `build` job above; see its own comment for why.
-      - name: Render release notes from CHANGELOG.md
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
-        shell: bash
-        run: |
-          python3 scripts/changelog_section.py "${{ steps.release.outputs.version }}" > release-notes.md
-
-      # Stable only, same gating as the `build` job's DMG attachment --
-      # alpha/beta/rc installers stop at the private R2 upload above.
-      - name: Attach release assets (stable only)
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          files: dist/PrivacyFence-*-setup.exe
-          body_path: release-notes.md
-          prerelease: false
-
-      - name: Create GitHub Release notes (pre-release, no public assets)
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel != 'stable'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          prerelease: true
-
   # Linux `.deb` leg (the now-removed linux-local-deb-packaging-plan.md P5.1) -- the Linux equivalent of the
   # `build` job above. Independent of it (doesn't need the macOS runner, code signing, or
   # notarization -- `.deb`s aren't gated on a trusted-publisher story the way Gatekeeper/
   # SmartScreen gate the DMG/Windows installer, per that plan's P5.2), so it runs in parallel
   # rather than blocking on (or being blocked by) the DMG build. Together with the `build` and
   # `build-windows` jobs, a tag push ends up with one GitHub Release carrying the DMG, the
-  # `.mcpb`, the Windows installer, and the `.deb`.
+  # `.mcpb`, the Windows installer, and the `.deb` -- all attached together by `finalize-release`.
   build-deb:
     runs-on: ubuntu-latest   # amd64 -- arm64 is a follow-up once there's a concrete request, not
                               # a build-script change (P4.2: PyInstaller needs a real arm64 build
                               # host, it doesn't cross-compile)
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -562,28 +498,6 @@ jobs:
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/privacyfence_*.deb
 
-      # Same render-then-attach as the `build` job above; see its own comment for why.
-      - name: Render release notes from CHANGELOG.md
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
-        run: |
-          python3 scripts/changelog_section.py "${{ steps.release.outputs.version }}" > release-notes.md
-
-      # Stable only, same as the `build` job's DMG attachment -- alpha/beta/rc `.deb`s stop at the
-      # R2 upload above, no public GitHub Release asset.
-      - name: Attach release assets (stable only)
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          files: dist/privacyfence_*.deb
-          body_path: release-notes.md
-          prerelease: false
-
-      - name: Create GitHub Release notes (pre-release, no public assets)
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel != 'stable'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          prerelease: true
-
   # One CycloneDX SBOM per ecosystem this repo ships code from. Independent of the `build`,
   # `build-windows`, and `build-deb` jobs above -- doesn't need the macOS
   # runner, code signing, or notarization, just the same tagged source tree
@@ -592,7 +506,7 @@ jobs:
   sbom:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -676,53 +590,51 @@ jobs:
             sbom-python.cdx.json \
             sbom-shim-npm.cdx.json
 
-      # Same render-then-attach as the `build` job above; see its own comment for why.
-      - name: Render release notes from CHANGELOG.md
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
-        run: |
-          python3 scripts/changelog_section.py "${{ steps.release.outputs.version }}" > release-notes.md
-
-      # Stable only, same as the `build` job's DMG attachment -- alpha/beta/rc SBOMs stop at the
-      # R2 upload above, no public GitHub Release asset.
-      - name: Attach SBOMs to release (stable only)
-        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.channel == 'stable'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          files: |
-            sbom-python.cdx.json
-            sbom-shim-npm.cdx.json
-          body_path: release-notes.md
-          prerelease: false
-
   # docs/downloads-and-release-kpi.md. Every job above uploads its own artifacts to
-  # releases/<channel>/<version>/ independently; this job is what turns that pile of objects into
-  # a *published* release, by writing the manifest and then moving the channel's latest.json onto
-  # it.
+  # releases/<channel>/<version>/ (R2) and as its own workflow artifact (for the GitHub Release
+  # attachment below) independently; this job is what turns that pile of objects into a
+  # *published* release, on both surfaces, only once every job has actually succeeded.
   #
-  # Publication is transactional from a downloader's point of view: scripts/r2_release.py's
+  # R2 publication is transactional from a downloader's point of view: scripts/r2_release.py's
   # `finalize` writes manifest.json, verifies every artifact it references really is in R2 with
   # the recorded size and SHA-256, and only then rewrites latest.json. A release missing any
   # mandatory installer fails here with latest.json untouched, so an incomplete release can sit in
   # the bucket without ever becoming the one the Worker serves.
   #
+  # The GitHub Release used to have no equivalent guarantee: `build`/`build-windows`/`build-deb`/
+  # `sbom` each used to attach their own asset directly, in parallel, as an ordinary step inside
+  # themselves -- so a job that failed *after* a sibling had already attached its own asset (e.g.
+  # `build-windows` failing on notarization after `build` had already published the DMG) left a
+  # public GitHub Release carrying only some of a stable release's files, even though `needs`
+  # below already meant R2 correctly refused to promote that same release to "latest". This job
+  # closes that asymmetry (privacyfence/privacyfence#373): every artifact-producing job only
+  # uploads a *workflow* artifact (`actions/upload-artifact`, not `action-gh-release`) now, and
+  # this job downloads all of them and does the one `action-gh-release` call itself, after
+  # `needs:` has already proven all four jobs succeeded -- so the GitHub Release is as atomic as
+  # the R2 promotion: either it gets the complete file set, or (this job failing, or one of its
+  # `needs` failing) it doesn't get touched at all.
+  #
   # `needs` covers all four artifact-producing jobs. The three installer jobs are obvious -- their
-  # output is what the manifest lists. `sbom` is included even though SBOMs deliberately never
-  # enter the manifest (installers only, so the download KPI counts installers by construction):
-  # a tag whose SBOM generation failed has not fully shipped, and should not become "latest"
-  # either. A failure in any of them leaves the previous release as latest, which is the safe
-  # outcome.
+  # output is what both the release manifest and the GitHub Release list. `sbom` is included even
+  # though SBOMs deliberately never enter the R2 manifest (installers only, so the download KPI
+  # counts installers by construction): a tag whose SBOM generation failed has not fully shipped,
+  # and should not become "latest" (nor get a GitHub Release) either. A failure in any of them
+  # leaves the previous release as latest and the previous GitHub Release as the newest one, which
+  # is the safe outcome on both surfaces.
   #
   # Not included, and deliberately: publish-pypi.yml's sdist/wheel. They live in a separate
   # workflow that `needs:` cannot reach across, and they are not installers, so they are not in
-  # the manifest -- which means this job has no reason to wait for them.
+  # the manifest or attached to the GitHub Release -- which means this job has no reason to wait
+  # for them.
   finalize-release:
     needs: [build, build-windows, build-deb, sbom]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    # Unlike the four jobs above, this one attaches nothing to the GitHub Release -- it only reads
-    # the repo and talks to R2 over its own credentials, so it has no reason to hold write access.
+    # Needs `contents: write` now (unlike before privacyfence/privacyfence#373, when this job only
+    # read the repo and talked to R2): it's the one place that calls action-gh-release, to attach
+    # the complete artifact set (or, on a pre-release tag, to create the asset-less release entry).
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -734,14 +646,72 @@ jobs:
 
       # Same lightweight resolution the `sbom` job uses: read the tag-derived version straight
       # from setuptools_scm rather than `pip install -e .`-ing the package just to import
-      # __version__, which this job has no other use for.
-      - name: Determine version
+      # __version__, which this job has no other use for. Channel is needed here too now (unlike
+      # before privacyfence/privacyfence#373): it decides whether the GitHub Release below gets
+      # the full artifact set or stays asset-less.
+      - name: Determine version and release channel
         id: release
         run: |
           pip install --quiet setuptools_scm
           VERSION="$(python3 -m setuptools_scm)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Finalizing version=$VERSION channel=$(python3 scripts/r2_release.py channel "$VERSION")"
+          CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "Finalizing version=$VERSION channel=$CHANNEL"
+
+      # Pulls together the four workflow artifacts `build`/`build-windows`/`build-deb`/`sbom`
+      # uploaded above (`PrivacyFence-dmg`, `PrivacyFence-windows-installer`, `PrivacyFence-deb`,
+      # `PrivacyFence-sbom`) into one flat directory -- `merge-multiple: true` so files land
+      # directly under `release-assets/` rather than one subdirectory per artifact name, matching
+      # the flat file list the "Attach release assets" step below references.
+      - name: Download build artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: PrivacyFence-*
+          path: release-assets
+          merge-multiple: true
+
+      # The release body is CHANGELOG.md's section for this version, not GitHub's auto-generated
+      # list of merged pull requests (for 4.0.0 that list would have been ~127 lines). The notes
+      # are written and reviewed in an ordinary PR; tag day involves no writing.
+      #
+      # action-gh-release overwrites an existing release's body when `body_path` resolves to
+      # non-empty content (`append_body` defaults to false), so this replaces whatever the GitHub
+      # UI generated when the release was pre-created. It silently keeps the existing body if the
+      # file can't be read, which is why rendering is its own step: a stable tag with no CHANGELOG
+      # section fails the job here instead of quietly shipping the auto-generated wall.
+      - name: Render release notes from CHANGELOG.md
+        if: steps.release.outputs.channel == 'stable'
+        run: |
+          python3 scripts/changelog_section.py "${{ steps.release.outputs.version }}" > release-notes.md
+
+      # Only a stable tag also gets a public GitHub Release with attached binaries -- alpha/beta/rc
+      # stop at the private R2 upload each build job already did (see scripts/r2_release.py's
+      # module docstring for why). One call, the complete file set -- see this job's own top
+      # comment for why that's the point of doing it here rather than in each build job.
+      - name: Attach release assets (stable only)
+        if: steps.release.outputs.channel == 'stable'
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: |
+            release-assets/PrivacyFence-*.dmg
+            scripts/build_org_bundle.py
+            scripts/sync_room_directory.py
+            release-assets/PrivacyFence-*-setup.exe
+            release-assets/privacyfence_*.deb
+            release-assets/sbom-python.cdx.json
+            release-assets/sbom-shim-npm.cdx.json
+          body_path: release-notes.md
+          prerelease: false
+
+      # The release entry itself (tag + notes, no files) still gets created for every channel,
+      # marked prerelease, so update_checker.py's beta update channel -- which reads exactly that
+      # flag off the releases list -- keeps working without any underlying binary being public.
+      - name: Create GitHub Release notes (pre-release, no public assets)
+        if: steps.release.outputs.channel != 'stable'
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          prerelease: true
 
       - name: Publish release manifest and promote to latest
         env:
@@ -759,7 +729,7 @@ jobs:
       # the unit tests nor the R2 upload can make on their own.
       - name: Smoke-test the published download routes (HEAD only)
         run: |
-          CHANNEL="$(python3 scripts/r2_release.py channel "${{ steps.release.outputs.version }}")"
+          CHANNEL="${{ steps.release.outputs.channel }}"
           failed=0
           for artifact in macos-arm64 windows-x64 linux-x64; do
             url="https://downloads.privacyfence.eu/download/$CHANNEL/$artifact"
