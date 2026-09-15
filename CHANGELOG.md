@@ -32,12 +32,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The Windows installer now offers to open the bundled `.mcpb` at the end of setup (checked by
+  default, alongside "Launch PrivacyFence now"), so Claude Desktop's install prompt appears
+  automatically for most users instead of requiring them to locate the file in File Explorer
+  first. See issue #407.
+
 ### Changed
 
 - The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands
   (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
   current-user-only install) and how to get there in File Explorer, instead of just saying to
-  install it with no path given. See issue #407.
+  install it with no path given, for the case where the new automatic prompt above was declined.
+  See issue #407.
 
 ### Fixed
 
