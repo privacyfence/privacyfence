@@ -671,7 +671,7 @@ class TestRefreshConnectors:
     def test_updates_connectors_and_pushes_to_connector_host_after_drain(self, controller, monkeypatch):
         recorded = []
         monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
-        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: [SimpleNamespace(name="drive")])
+        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: ([SimpleNamespace(name="drive")], {}))
 
         controller.refresh_connectors()
 
@@ -689,7 +689,7 @@ class TestRefreshConnectors:
 
         def _build_connectors(cfg, org):
             seen_org_configs.append(org)
-            return [SimpleNamespace(name="drive")]
+            return [SimpleNamespace(name="drive")], {}
 
         monkeypatch.setattr(daemon_main, "build_connectors", _build_connectors)
         monkeypatch.setattr(
@@ -1699,6 +1699,88 @@ class TestSnapshotStructure:
         rule_titles = {s["title"] for s in state["rules"]["sections_by_connector"]["tasks"]}
         assert "Trusted Task Lists" in grant_titles
         assert rule_titles == {"Create task", "Update task", "Complete task", "Uncomplete task", "Move task"}
+
+
+class TestConnectorsStateBlockedBy:
+    """_connectors_state()'s blocked_by field (issue #396 Phase 1) -- what
+    tells a connected connector, a deliberately disabled one, and one that
+    failed to build apart, instead of every un-built connector reading the
+    same "not connected" way to a client. Sourced from build_connectors()'s
+    own per-connector failure map, threaded in via
+    SettingsController._connector_failures (populated at __init__ and
+    refreshed by refresh_connectors())."""
+
+    def _row(self, controller, key: str) -> dict:
+        rows = {row["key"]: row for row in controller.snapshot()["connectors"]}
+        return rows[key]
+
+    def test_none_for_a_connected_connector(self, controller):
+        controller._connectors = ["gmail"]
+        # A stale failure entry can linger from before the connector
+        # authenticated -- refresh_connectors() replaces the whole map on
+        # every run, but nothing should surface it once authed is true.
+        controller._connector_failures = {"gmail": "no_org_config"}
+
+        row = self._row(controller, "gmail")
+
+        assert row["authed"] is True
+        assert row["blocked_by"] is None
+
+    def test_none_for_a_deliberately_disabled_connector_even_without_a_failure_entry(self, controller):
+        cfg = controller._load_config()
+        cfg.setdefault("connectors", {})["gmail"] = {"enabled": False}
+        controller._save_config(cfg)
+
+        row = self._row(controller, "gmail")
+
+        assert row["enabled"] is False
+        assert row["blocked_by"] is None
+
+    def test_no_org_config_for_an_enabled_unbuilt_connector(self, controller):
+        controller._connector_failures = {"gmail": "no_org_config"}
+
+        row = self._row(controller, "gmail")
+
+        assert row["authed"] is False
+        assert row["enabled"] is True
+        assert row["blocked_by"] == "no_org_config"
+
+    def test_not_authenticated_for_an_enabled_unbuilt_connector(self, controller):
+        controller._connector_failures = {"slack": "not_authenticated"}
+
+        row = self._row(controller, "slack")
+
+        assert row["blocked_by"] == "not_authenticated"
+
+    def test_redacted_message_passed_through_for_an_enabled_unbuilt_connector(self, controller):
+        controller._connector_failures = {"salesforce": "Tool call failed. See the PrivacyFence log for details."}
+
+        row = self._row(controller, "salesforce")
+
+        assert row["blocked_by"] == "Tool call failed. See the PrivacyFence log for details."
+
+    def test_none_for_a_connector_that_hasnt_failed_or_connected(self, controller):
+        # No entry at all in _connector_failures -- e.g. before the first
+        # refresh_connectors() run has populated it for this connector.
+        row = self._row(controller, "jira")
+
+        assert row["blocked_by"] is None
+
+    def test_refresh_connectors_replaces_the_failure_map(self, monkeypatch, controller):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(
+            daemon_main, "build_connectors",
+            lambda cfg, org: ([], {"gmail": "no_org_config"}),
+        )
+
+        controller.refresh_connectors()
+
+        assert wait_until(lambda: len(recorded) == 1)
+        func, args, kwargs = recorded[0]
+        func(*args, **kwargs)
+
+        assert self._row(controller, "gmail")["blocked_by"] == "no_org_config"
 
 
 class TestGrantIdHint:

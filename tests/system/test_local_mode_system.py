@@ -159,7 +159,7 @@ class SystemTestConnector(Connector):
         )
 
 
-daemon_main.build_connectors = lambda config, org_config: [SystemTestConnector()]
+daemon_main.build_connectors = lambda config, org_config: ([SystemTestConnector()], {})
 sys.exit(daemon_main.main([]))
 """
 

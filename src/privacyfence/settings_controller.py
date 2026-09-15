@@ -631,6 +631,7 @@ class SettingsController:
         connectors: list[str],
         connector_host: Any,
         connector_objs: list[Any] | None = None,
+        connector_failures: dict[str, str] | None = None,
     ) -> None:
         self._config_path = config_path
         self._connectors = connectors
@@ -640,6 +641,13 @@ class SettingsController:
         # startup from daemon_main.py's already-built connectors, refreshed
         # whenever refresh_connectors() re-authenticates/toggles one.
         self._connector_objs: dict[str, Any] = {c.name: c for c in (connector_objs or [])}
+        # name -> "no_org_config" | "not_authenticated" | a redacted
+        # message, for every *enabled* connector build_connectors() didn't
+        # end up producing (issue #396 Phase 1) -- read by _connectors_state
+        # below as each row's blocked_by, so "never set up" and "auth
+        # expired" stop looking identical to a client asking why a
+        # connector is missing. Same refresh cadence as _connector_objs.
+        self._connector_failures: dict[str, str] = dict(connector_failures or {})
         self._resolver = get_resolver()
         # Latest known update-check outcome -- None until the first check
         # completes (or forever, if update checking is disabled). The
@@ -996,7 +1004,7 @@ class SettingsController:
         ConnectorHost, so authenticating or toggling a connector takes
         effect immediately instead of requiring a restart."""
 
-        def work() -> list:
+        def work() -> tuple[list, dict[str, str]]:
             from .daemon_main import build_connectors, load_org_config
             cfg = self._load_config()
             try:
@@ -1010,8 +1018,10 @@ class SettingsController:
 
         def done(ok: bool, result: Any) -> None:
             if ok:
+                result, failures = result
                 self._connectors = [c.name for c in result]
                 self._connector_objs = {c.name: c for c in result}
+                self._connector_failures = failures
                 if self.connector_host is not None:
                     self.connector_host.set_connectors(result)
             self._push_snapshot()
@@ -1629,6 +1639,16 @@ class SettingsController:
                 "enabled": enabled,
                 "busy": busy,
                 "has_org": has_org,
+                # None for a connected connector, a deliberately disabled
+                # one (never attempted, so build_connectors() never raised
+                # for it -- "enabled" above already says that), or one this
+                # row simply hasn't been through a build for yet; otherwise
+                # "no_org_config" | "not_authenticated" | a redacted
+                # message, from build_connectors()'s own per-connector
+                # failure map (issue #396 Phase 1).
+                "blocked_by": (
+                    None if connected or not enabled else self._connector_failures.get(cname)
+                ),
                 "auth_label": "Reconnect…" if connected else "Authenticate…",
             })
         return rows
