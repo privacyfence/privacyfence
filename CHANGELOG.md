@@ -41,6 +41,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The `/approvals` and `/settings` pages no longer get logged out from under a tab that's been
+  open and actively watching (live SSE indicator, incoming approvals rendering) for longer than
+  the 30-minute idle timeout. The session was only ever touched once, when the stream connected —
+  watching it registered as zero activity — so the next click or refresh after 30 minutes returned
+  401 even though the page still reported itself as live. The stream now refreshes its own session
+  on every poll tick; an open connection is itself proof the tab is open, so the 24-hour absolute
+  cap is the only cap left for a tab that's never closed. The live indicator also now reports
+  "session expired" instead of a permanent, misleading "reconnecting…" once the browser gives up
+  for good, and the expired-session page leads with "ask Claude for a new sign-in link" rather
+  than burying it a paragraph down. See issue #423.
 - Windows installs now store per-user state (config, credentials, the audit log) under
   `%LOCALAPPDATA%\PrivacyFence` instead of a literal `.privacyfence` folder dropped into
   `%USERPROFILE%`. A dot-prefixed name isn't a hiding convention Windows Explorer honors the way
