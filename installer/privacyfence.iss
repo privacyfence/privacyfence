@@ -128,7 +128,7 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#TaskName}"" /f"; \
 ; Explicitly scope what uninstall does NOT touch (Phase 4.3): per-user data
 ; -- credentials, settings, the audit log -- lives under
 ; %LOCALAPPDATA%\PrivacyFence\ (paths.py's data_dir(), via its
-; _windows_data_dir() branch -- see that function's own docstring for why
+; windows_data_dir() branch -- see that function's own docstring for why
 ; that's a different convention from the POSIX ~/.privacyfence dotfile
 ; rather than the same name reused under %USERPROFILE%), created by the app
 ; on first run. Uninstalling removes the program files (handled
