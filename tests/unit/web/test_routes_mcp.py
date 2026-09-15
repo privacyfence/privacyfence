@@ -12,18 +12,20 @@ from __future__ import annotations
 
 import contextlib
 
+import anyio
 import httpx
 import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
+from mcp.server.session import ServerSession
 
 from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.mcp_tools import META_TOOL_NAMES
-from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
+from privacyfence.web.routes_mcp import SERVER_INSTRUCTIONS, build_mcp_asgi_app, mcp_lifespan
 
 
 class EchoConnector(Connector):
@@ -162,6 +164,144 @@ class TestAuth:
         # tolerate.
         with pytest.raises(ValueError):
             build_mcp_asgi_app(_dispatcher())
+
+
+# --------------------------------------------------------------------------- #
+# Server instructions (issue #396 Part A) -- the wire-level counterpart of
+# tests/integration/test_mcp_daemon_contract.py's real-socket assertion.
+# --------------------------------------------------------------------------- #
+
+class TestServerInstructions:
+    async def test_initialize_result_carries_the_instructions(self):
+        dispatcher = _dispatcher()
+        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        async with mcp_lifespan(session_manager):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+                headers={"Authorization": f"Bearer {TOKEN}"},
+            ) as http_client:
+                async with streamable_http_client(
+                    "http://testserver/mcp", http_client=http_client,
+                ) as (read, write, _get_session_id):
+                    async with ClientSession(read, write) as session:
+                        result = await session.initialize()
+        assert result.instructions == SERVER_INSTRUCTIONS
+        # Named concretely, per Phase 2's own status tool docstring -- the
+        # instructions are what tells a client the tool exists and why to
+        # call it, not just that an empty tool list means "not set up".
+        assert "privacyfence_status" in result.instructions
+
+
+class TestToolsListChangedCapability:
+    """Issue #396 Part C: StreamableHTTPSessionManager always calls
+    Server.create_initialization_options() with no arguments (confirmed
+    against mcp==1.30.0, Phase 0's own spike), so NotificationOptions()'s
+    own tools_changed=False default is what a real client would see without
+    _PrivacyFenceServer's override -- this is what proves that override
+    actually reaches a real initialize() response."""
+
+    async def test_initialize_result_advertises_tools_list_changed(self):
+        dispatcher = _dispatcher()
+        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        async with mcp_lifespan(session_manager):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+                headers={"Authorization": f"Bearer {TOKEN}"},
+            ) as http_client:
+                async with streamable_http_client(
+                    "http://testserver/mcp", http_client=http_client,
+                ) as (read, write, _get_session_id):
+                    async with ClientSession(read, write) as session:
+                        result = await session.initialize()
+        assert result.capabilities.tools is not None
+        assert result.capabilities.tools.listChanged is True
+
+    async def test_build_mcp_server_wires_a_tools_changed_broadcaster(self):
+        # build_mcp_server (called by build_mcp_asgi_app above) is the one
+        # place that actually owns the live-ServerSession registry
+        # notify_tools_changed() needs -- confirm it registers itself on
+        # the dispatcher rather than leaving notify_tools_changed() a
+        # permanent no-op.
+        dispatcher = _dispatcher()
+        assert dispatcher._tools_changed_broadcaster is None
+        build_mcp_asgi_app(dispatcher, token=TOKEN)
+        assert dispatcher._tools_changed_broadcaster is not None
+
+    def test_broadcast_with_no_running_loop_is_a_silent_no_op(self):
+        # notify_tools_changed() can, in principle, be called from a
+        # background thread with no asyncio loop of its own (see
+        # _broadcast_tools_changed's own comment) -- this is a plain, non-
+        # async test specifically so there is no running loop here either.
+        dispatcher = _dispatcher()
+        build_mcp_asgi_app(dispatcher, token=TOKEN)
+        dispatcher.notify_tools_changed()  # must not raise
+
+    async def test_broadcast_calls_send_tool_list_changed_on_the_captured_session(self, monkeypatch):
+        # A full send-to-a-real-client round trip (message actually
+        # observed via ClientSession's own message_handler) is what
+        # tests/integration/test_mcp_daemon_contract.py proves, over a real
+        # socket where a persistent server-push stream is unambiguous. This
+        # unit-level test instead confirms the piece that's actually this
+        # module's own responsibility: the captured ServerSession's
+        # send_tool_list_changed() is awaited at all once
+        # notify_tools_changed() fires.
+        calls = []
+
+        async def _record(self):
+            calls.append(self)
+
+        monkeypatch.setattr(ServerSession, "send_tool_list_changed", _record)
+
+        dispatcher = _dispatcher()
+        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        async with mcp_lifespan(session_manager):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+                headers={"Authorization": f"Bearer {TOKEN}"},
+            ) as http_client:
+                async with streamable_http_client(
+                    "http://testserver/mcp", http_client=http_client,
+                ) as (read, write, _get_session_id):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        # Captures this session's live ServerSession
+                        # server-side (see build_mcp_server's own comment).
+                        await session.list_tools()
+
+                        dispatcher.notify_tools_changed()
+
+                        for _ in range(50):
+                            if calls:
+                                break
+                            await anyio.sleep(0.02)
+
+        assert len(calls) == 1
+
+    async def test_one_sessions_send_failure_does_not_stop_the_broadcast(self, monkeypatch):
+        # A session that's gone stale/closing must not take the whole
+        # broadcast down with it -- _send_tool_list_changed's own try/except
+        # is what this proves.
+        async def _raise(self):
+            raise RuntimeError("session is closing")
+
+        monkeypatch.setattr(ServerSession, "send_tool_list_changed", _raise)
+
+        dispatcher = _dispatcher()
+        app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
+        async with mcp_lifespan(session_manager):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+                headers={"Authorization": f"Bearer {TOKEN}"},
+            ) as http_client:
+                async with streamable_http_client(
+                    "http://testserver/mcp", http_client=http_client,
+                ) as (read, write, _get_session_id):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        await session.list_tools()
+
+                        dispatcher.notify_tools_changed()  # must not raise
+                        await anyio.sleep(0.05)  # let the scheduled task actually run
 
 
 # --------------------------------------------------------------------------- #
@@ -333,6 +473,19 @@ class TestMetaTools:
             result = await session.call_tool("privacyfence_begin_unattended_session", {"reason": "x"})
         assert result.isError is True
         assert "disabled" in result.content[0].text
+
+    async def test_status_round_trips(self):
+        # issue #396 Phase 2: no provider wired here, so status() falls
+        # back to reporting the one connector this dispatcher can actually
+        # see (test_mcp_dispatch.py's TestStatus covers the provider-backed
+        # shape in detail) -- this just proves the wire round trip reaches
+        # McpDispatcher.status() at all.
+        dispatcher = _dispatcher({"echo": EchoConnector()})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("privacyfence_status", {"reason": "planning"})
+        assert result.isError is False
+        assert result.structuredContent["mode"] == "local"
+        assert result.structuredContent["setup_complete"] is True
 
     async def test_await_approval_round_trips_to_the_registry(self):
         # P3: privacyfence_await_approval, reaching the same registry a real

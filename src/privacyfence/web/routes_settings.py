@@ -1,6 +1,12 @@
 """Settings on the web (W3/W4):
 ``GET /settings`` serves settings_window_html.build_html(), wrapped in
 web_shell.wrap() so it reads as the same application as ``/approvals``;
+``GET /settings/connectors`` serves the identical document with its
+Connectors section pre-selected server-side (issue #396 Part C -- the
+first-run destination privacyfence_status and
+privacyfence_get_sign_in_link(page="connectors") both mint a bootstrap link
+to, since Connectors is the screen that actually unblocks an un-onboarded
+install);
 ``POST /api/settings/{action}`` is the mechanical two-thirds of
 SettingsController's ~30 actions, dispatched through an **explicit
 allowlist** rather than the native dispatcher's bare
@@ -237,7 +243,7 @@ def build_routes(
     def _authenticated(request: Request) -> bool:
         return _session_authenticated(request, sessions)
 
-    async def settings_page(request: Request) -> Response:
+    async def _render_settings_page(request: Request, *, initial_section: str | None) -> Response:
         if not _authenticated(request):
             return _unauthorized_response(request)
         # SEC-08: one nonce
@@ -249,7 +255,7 @@ def build_routes(
         # to actually allow any of them.
         nonce = _csp_nonce_for(request)
         state = _snapshot(controller)
-        body = settings_window_html.build_html(state, nonce=nonce)
+        body = settings_window_html.build_html(state, nonce=nonce, initial_section=initial_section)
         csrf = request.cookies.get(_SESSION_COOKIE, "")
         body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
         # Read off this request's own fresh snapshot, not the notifications_
@@ -265,6 +271,19 @@ def build_routes(
             notifications_detail=general.get("notifications_detail", notifications_detail),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    async def settings_page(request: Request) -> Response:
+        return await _render_settings_page(request, initial_section=None)
+
+    async def settings_connectors_page(request: Request) -> Response:
+        # issue #396 Part C: a real route (not a #fragment) so the initial
+        # section survives web/server.py's _BootstrapMiddleware, which
+        # redirects a consumed ?bootstrap= code to `request.url.path` with
+        # its query string stripped but the path itself untouched -- see
+        # that middleware's own docstring. This is what privacyfence_status
+        # and privacyfence_get_sign_in_link(page="connectors") both mint a
+        # link to while an install is un-onboarded.
+        return await _render_settings_page(request, initial_section="connectors")
 
     def _check_mutation(request: Request, payload: Any) -> Response | None:
         if not isinstance(payload, dict) or not _csrf_matches(request, payload.get("csrf")):
@@ -351,6 +370,7 @@ def build_routes(
 
     return [
         Route("/settings", settings_page),
+        Route("/settings/connectors", settings_connectors_page),
         Route("/api/settings/quit_app", quit_action, methods=["POST"]),
         Route("/api/settings/org_config/upload", org_config_upload, methods=["POST"]),
         Route("/api/settings/audit_log/download", audit_log_download),

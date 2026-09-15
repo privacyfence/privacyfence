@@ -159,7 +159,7 @@ class SystemTestConnector(Connector):
         )
 
 
-daemon_main.build_connectors = lambda config, org_config: [SystemTestConnector()]
+daemon_main.build_connectors = lambda config, org_config: ([SystemTestConnector()], {})
 sys.exit(daemon_main.main([]))
 """
 
@@ -295,6 +295,23 @@ async def _call_tool(mcp_url: str, token: str, message: str):
                     "system_test_send", {"message": message, "reason": "system test round trip"},
                 )
                 return names, result
+
+
+async def _call_status_tool(mcp_url: str, token: str) -> dict:
+    """One real MCP session calling privacyfence_status -- issue #396 Part
+    B/C's own meta-tool, exercised here against a real daemon process
+    rather than the in-process dispatcher tests in
+    tests/unit/web/test_mcp_dispatch.py."""
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write, _get_session_id):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool(
+                    "privacyfence_status", {"reason": "system test: checking setup state"},
+                )
+                assert result.isError is not True, result
+                return result.structuredContent
 
 
 async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
@@ -439,3 +456,56 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
     # the process is gone, exactly as a real install's state should be.
     assert (sandbox / "config" / "settings.yaml").exists()
     assert (sandbox / "logs" / "audit").exists()
+
+
+async def test_local_mode_status_bootstrap_lands_on_connectors_page(tmp_path):
+    """Issue #396 Part B/C, end to end: a fresh install (this test's own
+    ``SystemTestConnector`` is never one of ``ALL_CONNECTORS``, so
+    ``privacyfence_status`` sees it as un-onboarded exactly like a real
+    fresh install with zero authenticated connectors) -> ``privacyfence_
+    status`` mints a real sign-in link -> following that link through the
+    real bootstrap exchange (the same ``?bootstrap=`` redirect
+    ``_bootstrap_session`` above drives, but via the URL the tool itself
+    handed back rather than a freshly-minted one) lands on ``/settings/
+    connectors`` with its Connectors section pre-selected -- the actual
+    screen an un-onboarded user needs, not ``/settings``'s own General
+    default.
+    """
+    port = _free_port()
+    sandbox = _prepare_sandbox(tmp_path, port=port)
+
+    with _daemon(sandbox) as (proc, log_path):
+        mcp_url = _wait_for_mcp_url(proc, sandbox, log_path)
+        parsed = urlparse(mcp_url)
+        _wait_until_connectable(parsed.hostname, parsed.port)
+        mcp_token = (sandbox / "mcp_token").read_text(encoding="utf-8").strip()
+
+        status = await _call_status_tool(mcp_url, mcp_token)
+        assert status["mode"] == "local"
+        assert status["setup_complete"] is False
+        assert status["next_step"] == "authenticate_connectors"
+        sign_in_url = status["sign_in_url"]
+        assert sign_in_url is not None
+        assert urlparse(sign_in_url).path == "/settings/connectors"
+
+        base_url = f"http://{parsed.hostname}:{parsed.port}"
+        async with httpx.AsyncClient(base_url=base_url, follow_redirects=True) as web_client:
+            # Unauthenticated first -- the same "no session cookie yet"
+            # state a browser opening this link cold is in.
+            assert (await web_client.get("/settings/connectors")).status_code == 401
+
+            connectors_page = await web_client.get(sign_in_url)
+            assert connectors_page.status_code == 200
+            assert 'window.__pfInitialSection = "connectors";' in connectors_page.text
+            assert web_client.cookies.get("pf_session")
+
+            quit_resp = await web_client.post(
+                "/api/settings/quit_app",
+                json={"csrf": web_client.cookies.get("pf_session"), "confirmed": True},
+            )
+            assert quit_resp.status_code == 200, quit_resp.text
+
+        exit_code = proc.wait(timeout=15)
+        assert exit_code == 0, (
+            f"daemon did not exit cleanly (code {exit_code}) -- log:\n{log_path.read_text(errors='replace')}"
+        )

@@ -58,7 +58,7 @@ def _print_rows(rows: list[dict], columns: list[tuple[str, str]]) -> None:
 async def main_async(which: str) -> int:
     config = load_config(os.path.join(PROJECT_ROOT, "config", "settings.yaml"))
     org_config = load_org_config()
-    connectors = build_connectors(config, org_config)
+    connectors, _failures = build_connectors(config, org_config)
 
     if which in ("tasks", "all"):
         print("Google Tasks — task lists (use the id for approved_task_list):")

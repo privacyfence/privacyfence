@@ -32,8 +32,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A new `privacyfence_status` meta-tool: the one tool guaranteed to exist even on a fresh,
+  un-onboarded install, so an empty or partial tool list reads as "not set up yet, here's how to
+  fix that" instead of "PrivacyFence has nothing to do with this". Reports which connectors are
+  authenticated (and, for the rest, whether they were never configured, never authenticated, or
+  hit a real error), and in local mode mints a one-time link to PrivacyFence's own Settings page
+  when nothing is authenticated yet. See issue #396.
+- The MCP server now returns `instructions` in its `initialize` response, telling the connecting
+  client what PrivacyFence is and that an empty or partial tool list means its connectors aren't
+  set up yet, not that PrivacyFence has nothing to do with the conversation — and when to call
+  `privacyfence_status` to find out more. Previously the `initialize` result carried no
+  instructions at all, so a fresh install had no way to explain its own silence. See issue #396.
+- `privacyfence_status` and `privacyfence_get_sign_in_link` (which now also accepts `page:
+  "connectors"`) hand back a link straight to Settings' Connectors section — a new `GET
+  /settings/connectors` route — instead of landing an un-onboarded user on the General page with
+  no indication of what to do next. That page also shows a short, dismissible welcome banner
+  explaining what PrivacyFence does and the order of setup steps while no connector is
+  authenticated yet. See issue #396.
+- Authenticating, disabling, or refreshing a connector now pushes a real MCP `tools/list_changed`
+  notification to every open Streamable HTTP session, so a client that already connected picks up
+  the new tool list without needing to reconnect. See issue #396.
+
 ### Changed
 
+- The README's Quick start steps for all three local-mode installers (DMG, Windows, `.deb`) now
+  say "ask Claude to set up PrivacyFence" instead of "ask Claude for a sign-in link" — the latter
+  named a specific tool (`privacyfence_get_sign_in_link`) a user had no way to know about unless
+  they'd already read this far; the former matches what a fresh install's own `initialize`
+  instructions already tell Claude to do on its own via `privacyfence_status`. The step also now
+  says the link lands on Settings' Connectors page rather than Settings in general. See issue #396.
 - The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands
   (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
   current-user-only install) and how to get there in File Explorer, instead of just saying to

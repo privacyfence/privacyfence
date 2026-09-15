@@ -431,6 +431,16 @@ class TestGetSignInLink:
         assert calls == ["/settings"]
         assert result == {"url": "http://x/settings?bootstrap=abc"}
 
+    def test_delegates_the_connectors_page_to_settings_connectors_path(self):
+        calls = []
+        dispatcher = _dispatcher({})
+        dispatcher.set_bootstrap_link_provider(lambda path: calls.append(path) or f"http://x{path}?bootstrap=abc")
+
+        result = dispatcher.get_sign_in_link("connectors")
+
+        assert calls == ["/settings/connectors"]
+        assert result == {"url": "http://x/settings/connectors?bootstrap=abc"}
+
     def test_empty_page_defaults_to_approvals(self):
         dispatcher = _dispatcher({})
         dispatcher.set_bootstrap_link_provider(lambda path: f"http://x{path}")
@@ -471,6 +481,168 @@ class TestGetSignInLink:
         dispatcher.set_bootstrap_link_provider(None)
         with pytest.raises(ValueError, match="organization mode"):
             dispatcher.get_sign_in_link("approvals")
+
+
+# --------------------------------------------------------------------------- #
+# status -- privacyfence_status's handler (issue #396 Phase 2). No
+# bridge-era equivalent, same as get_sign_in_link above.
+# --------------------------------------------------------------------------- #
+
+class TestStatus:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
+        init_audit_logger(str(tmp_path / "audit"))
+        self._audit_dir = tmp_path / "audit"
+
+    def _read_entries(self):
+        week_file = self._audit_dir / f"{current_week()}.jsonl"
+        if not week_file.exists():
+            return []
+        return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
+
+    @staticmethod
+    def _row(name, *, enabled=True, authenticated=False, blocked_by=None):
+        return {"name": name, "enabled": enabled, "authenticated": authenticated, "blocked_by": blocked_by}
+
+    def test_defaults_to_local_mode(self):
+        dispatcher = _dispatcher({})
+        assert dispatcher.status("checking")["mode"] == "local"
+
+    def test_reports_org_mode_when_constructed_that_way(self):
+        dispatcher = _dispatcher({}, mode="org")
+        assert dispatcher.status("checking")["mode"] == "org"
+
+    def test_no_connectors_state_provider_falls_back_to_built_connectors_only(self):
+        # org mode today, or a test that never wires one -- the only thing
+        # knowable without SettingsController's own config/failure state is
+        # which connectors this dispatcher can actually see built.
+        dispatcher = _dispatcher({"gmail": object()})
+        result = dispatcher.status("checking")
+        assert result["connectors"] == [self._row("gmail", authenticated=True)]
+        assert result["setup_complete"] is True
+
+    def test_setup_incomplete_when_no_connector_is_authenticated(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [
+            self._row("gmail", blocked_by="no_org_config"), self._row("slack", blocked_by="not_authenticated"),
+        ])
+        result = dispatcher.status("checking")
+        assert result["setup_complete"] is False
+        assert result["next_step"] == "authenticate_connectors"
+
+    def test_setup_complete_when_at_least_one_connector_is_authenticated(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [
+            self._row("gmail", authenticated=True), self._row("slack", blocked_by="not_authenticated"),
+        ])
+        result = dispatcher.status("checking")
+        assert result["setup_complete"] is True
+        assert result["next_step"] is None
+        assert "sign_in_url" not in result
+
+    def test_mints_a_sign_in_url_when_local_and_un_onboarded(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        dispatcher.set_bootstrap_link_provider(lambda path: f"http://x{path}?bootstrap=abc")
+        result = dispatcher.status("checking")
+        assert result["sign_in_url"] == "http://x/settings/connectors?bootstrap=abc"
+
+    def test_mints_to_the_connectors_path_specifically(self):
+        # issue #396 Part C: lands on the screen that actually unblocks an
+        # un-onboarded install, not plain /settings (which opens on
+        # General).
+        calls = []
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        dispatcher.set_bootstrap_link_provider(lambda path: calls.append(path) or f"http://x{path}")
+        dispatcher.status("checking")
+        assert calls == ["/settings/connectors"]
+
+    def test_sign_in_url_is_none_when_no_bootstrap_provider_is_wired(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        result = dispatcher.status("checking")
+        assert result["sign_in_url"] is None
+
+    def test_org_mode_never_mints_a_link_even_if_one_is_wired(self):
+        dispatcher = _dispatcher({}, mode="org")
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        dispatcher.set_bootstrap_link_provider(lambda path: pytest.fail("must not be called"))
+        result = dispatcher.status("checking")
+        assert result["sign_in_url"] is None
+        assert result["next_step"] == "contact_your_administrator"
+
+    def test_caches_the_minted_link_instead_of_reminting_every_call(self, monkeypatch):
+        from privacyfence.web import mcp_dispatch as mcp_dispatch_module
+
+        clock = {"now": 1_000.0}
+        monkeypatch.setattr(mcp_dispatch_module.time, "time", lambda: clock["now"])
+        calls = []
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        dispatcher.set_bootstrap_link_provider(lambda path: calls.append(1) or f"http://x{path}?bootstrap={len(calls)}")
+
+        first = dispatcher.status("checking")["sign_in_url"]
+        clock["now"] += 60  # still well inside the cache window
+        second = dispatcher.status("checking")["sign_in_url"]
+
+        assert first == second == "http://x/settings/connectors?bootstrap=1"
+        assert len(calls) == 1
+
+    def test_remints_once_the_cache_window_elapses(self, monkeypatch):
+        from privacyfence.web import mcp_dispatch as mcp_dispatch_module
+
+        clock = {"now": 1_000.0}
+        monkeypatch.setattr(mcp_dispatch_module.time, "time", lambda: clock["now"])
+        calls = []
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        dispatcher.set_bootstrap_link_provider(lambda path: calls.append(1) or f"http://x{path}?bootstrap={len(calls)}")
+
+        first = dispatcher.status("checking")["sign_in_url"]
+        clock["now"] += McpDispatcher._STATUS_LINK_CACHE_SECONDS + 1
+        second = dispatcher.status("checking")["sign_in_url"]
+
+        assert first == "http://x/settings/connectors?bootstrap=1"
+        assert second == "http://x/settings/connectors?bootstrap=2"
+        assert len(calls) == 2
+
+    def test_audits_sign_in_link_issued_only_on_a_fresh_mint(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        dispatcher.set_bootstrap_link_provider(lambda path: f"http://x{path}")
+
+        dispatcher.status("first check")
+        dispatcher.status("second check")  # served from cache -- not a fresh mint
+
+        entries = self._read_entries()
+        assert [e["decision"] for e in entries] == ["sign_in_link_issued", "status_checked"]
+        assert entries[0]["claude_reason"] == "first check"
+        assert entries[1]["claude_reason"] == "second check"
+
+    def test_audit_summary_names_the_connectors_path(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        dispatcher.set_bootstrap_link_provider(lambda path: f"http://x{path}")
+
+        dispatcher.status("checking")
+
+        entries = self._read_entries()
+        assert entries[0]["summary"] == "Issued a one-time sign-in link for /settings/connectors (via privacyfence_status)"
+
+    def test_audits_status_checked_when_already_set_up(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail", authenticated=True)])
+        dispatcher.status("just checking")
+        entries = self._read_entries()
+        assert entries[0]["decision"] == "status_checked"
+
+    def test_audits_status_checked_in_org_mode(self):
+        dispatcher = _dispatcher({}, mode="org")
+        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
+        dispatcher.status("just checking")
+        entries = self._read_entries()
+        assert entries[0]["decision"] == "status_checked"
 
 
 # --------------------------------------------------------------------------- #
@@ -577,6 +749,35 @@ class TestUnattendedSessions:
         dispatcher.begin_unattended_session("s1", "why")
         dispatcher.end_unattended_session("s1")
         assert len(events) == 2
+
+
+# --------------------------------------------------------------------------- #
+# notify_tools_changed -- issue #396 Part C. The actual notification send is
+# web/routes_mcp.py's own concern (its live ServerSession registry); this
+# dispatcher is just the wired seam SettingsController.refresh_connectors()
+# calls into, same shape as every other set_*_provider/listener above.
+# --------------------------------------------------------------------------- #
+
+class TestToolsChangedBroadcast:
+    def test_unwired_is_a_no_op(self):
+        dispatcher = _dispatcher({})
+        dispatcher.notify_tools_changed()  # must not raise
+
+    def test_wired_broadcaster_is_called(self):
+        dispatcher = _dispatcher({})
+        calls = []
+        dispatcher.set_tools_changed_broadcaster(lambda: calls.append(1))
+        dispatcher.notify_tools_changed()
+        dispatcher.notify_tools_changed()
+        assert len(calls) == 2
+
+    def test_unset_broadcaster_after_being_wired_goes_back_to_a_no_op(self):
+        dispatcher = _dispatcher({})
+        calls = []
+        dispatcher.set_tools_changed_broadcaster(lambda: calls.append(1))
+        dispatcher.set_tools_changed_broadcaster(None)
+        dispatcher.notify_tools_changed()  # must not raise
+        assert calls == []
 
 
 class TestAwaitApproval:

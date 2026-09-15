@@ -31,15 +31,19 @@ callback route calls ``evict(principal.id)`` right after writing a new
 service token, so the very next call for that principal rebuilds its
 connector set instead of waiting out ``idle_evict_seconds``.
 
-``factory`` is meant to be exactly the shape
-``daemon_main.build_connectors(config, org_config)`` already has --
-``build_connectors`` itself doesn't need to change for this to work
-correctly per-principal, because every path it resolves through (token
+``factory`` is meant to be a thin wrapper around
+``daemon_main.build_connectors(config, org_config)`` -- ``build_connectors``
+itself doesn't need to change *its connector-building logic* for this to
+work correctly per-principal, because every path it resolves through (token
 files via ``_resolve_path``, the Slack/Telegram cache files) now goes
 through ``paths.user_dir()``, which resolves against whichever principal
 ``ConnectorRegistry.get()`` below has entered via ``principal_scope`` at the
 time ``factory`` runs -- see paths.py's own ``user_dir()`` and
-daemon_main.py's ``_resolve_path``.
+daemon_main.py's ``_resolve_path``. (Issue #396 Phase 1 did add a second
+return value, a per-connector failure-reason map -- ``factory`` itself is
+still just ``list[Connector]``, so daemon_main.py's own
+``_connectors_for_principal`` unpacks and discards that map; see its
+docstring for why org mode has nowhere to surface it yet.)
 """
 from __future__ import annotations
 

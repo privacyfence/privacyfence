@@ -102,7 +102,7 @@ from .auto_accept import (
 from .pii_detector import init_pii_detection
 from .privacy_filter import check_consistency_warnings, init_privacy_filter
 from .resource_grants import build_effective_rules, migrate_rules_to_grants
-from .safe_errors import SecretRedactingFormatter
+from .safe_errors import SecretRedactingFormatter, public_message
 from .secure_files import (
     InsecurePermissionsError,
     atomic_write_bytes,
@@ -646,6 +646,23 @@ def _maybe_start_web_server(
             # all now depends on mcp_enabled, which SettingsController's own
             # constructor has no visibility into.
             controller.wire_unattended_listener(mcp_dispatcher)
+            # privacyfence_status's own per-connector view (issue #396
+            # Phase 2) -- same reasoning as set_bootstrap_link_provider
+            # below, a step ahead: SettingsController already tracks
+            # exactly the enabled/authenticated/blocked_by state that tool
+            # needs (Phase 1), so this dispatcher just asks for it rather
+            # than re-deriving it from the built connectors alone.
+            mcp_dispatcher.set_connectors_state_provider(controller.status_connectors)
+            # issue #396 Part C: refresh_connectors() (toggle/authenticate/
+            # explicit refresh) fans a real tools/list_changed notification
+            # out to every open MCP session through this same dispatcher --
+            # see McpDispatcher.notify_tools_changed's own docstring for why
+            # this dispatcher, not the WebServer built below, is the right
+            # thing to wire (the ServerSession registry that notification
+            # actually reaches lives in web/routes_mcp.py's
+            # build_mcp_server, wired to this same dispatcher instance
+            # there).
+            controller.set_connectors_changed_listener(mcp_dispatcher.notify_tools_changed)
 
     server = WebServer(
         web_ui,
@@ -811,8 +828,13 @@ def _start_org_web_server(
         # here (rather than closing over the org_config this function was
         # called with) would also be defensible, but it's already loaded
         # once by run_app() and passed down consistently everywhere else in
-        # this module, so this stays consistent with that.
-        return build_connectors(_load_principal_settings(), org_config)
+        # this module, so this stays consistent with that. Per-principal
+        # build failures aren't threaded anywhere yet -- org mode has no
+        # per-principal settings page for them to surface on (see
+        # SettingsController's own docstring) -- so they're discarded here;
+        # a later phase that needs them for org mode plugs in at this seam.
+        connectors, _failures = build_connectors(_load_principal_settings(), org_config)
+        return connectors
 
     connector_registry = ConnectorRegistry(factory=_connectors_for_principal)
 
@@ -828,6 +850,7 @@ def _start_org_web_server(
     sessions = OrgSessionStore()
     mcp_dispatcher = McpDispatcher(
         lambda: connector_registry.get(current_principal()).connectors,
+        mode="org",
         unattended_sessions_enabled=unattended_sessions_enabled,
         registry=approval_registry,
     )
@@ -876,7 +899,42 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
 # Connector construction (graceful: missing org config or auth → connector skipped)
 # ---------------------------------------------------------------------------- #
 
-def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list:
+def _classify_connector_failure(exc: BaseException) -> str:
+    """Turns a per-connector build failure into one of the three states
+    issue #396 needs told apart -- "never set up", "auth expired/revoked",
+    or an actual runtime error -- so a later surface (SettingsController's
+    connector rows now, a status meta-tool later) can say which, instead of
+    every un-built connector looking identical.
+
+    The first two categories are matched against text this codebase's own
+    call sites author themselves -- never third-party text, so safe to
+    pattern-match on:
+
+    - a bare ``FileNotFoundError`` (the real Google OAuth client's own
+      behavior when a token file is absent) or "Use Authenticate…" (every
+      *ClientError's/*OAuthError's own "no token found"/"is not
+      authenticated" message below and in slack_client.py/
+      salesforce_client.py/atlassian_oauth.py's own ``load_token_file()``
+      helpers -- all phrased around the same "Use Authenticate… in
+      PrivacyFence Settings" call to action) means never authenticated.
+    - "organization config not installed"/"app credentials not available"
+      (this function's own raises just below, for a service with no org
+      bundle section or, for Telegram, no baked-in app credentials) means
+      never configured.
+
+    Anything else falls back to ``safe_errors.public_message()``, which is
+    where a connector's own ``*ClientError`` (routinely wrapping a
+    third-party HTTP body -- SEC-10) gets redacted before it can reach a
+    client-facing surface."""
+    msg = str(exc)
+    if isinstance(exc, FileNotFoundError) or "Use Authenticate…" in msg:
+        return "not_authenticated"
+    if "organization config not installed" in msg or "app credentials not available" in msg:
+        return "no_org_config"
+    return public_message(exc)
+
+
+def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tuple[list, dict[str, str]]:
     """Builds every enabled, currently-authenticated connector for the
     *current principal* (P6): every credential/cache path below resolves through ``_resolve_path()``/
     ``user_dir()``, which is the local principal's own storage root (i.e.
@@ -885,8 +943,16 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
     connector_registry.py's ``ConnectorRegistry``, which is what actually
     does that once a second principal's connectors are buildable at all
     (P8). ``run_app()`` below still calls this directly, once, for the local
-    principal only -- that's what keeps local mode byte-identical."""
+    principal only -- that's what keeps local mode byte-identical.
+
+    Returns ``(connectors, failures)``: ``failures`` maps the name of every
+    *enabled* connector that didn't get built to why, via
+    ``_classify_connector_failure()`` above -- a deliberately disabled
+    connector (``enabled(name)`` false) never raises, so it never gets an
+    entry here; distinguishing "disabled" from "failed" is still possible,
+    just from ``config`` itself rather than from this return value."""
     connectors: list[Any] = []
+    failures: dict[str, str] = {}
     connectors_cfg: dict[str, dict] = config.get("connectors", {}) or {}
 
     def enabled(name: str) -> bool:
@@ -935,6 +1001,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(connector)
         except (GmailClientError, FileNotFoundError) as exc:
             logger.warning("Gmail connector disabled: %s", exc)
+            failures["gmail"] = _classify_connector_failure(exc)
 
     # Drive
     if enabled("drive"):
@@ -955,6 +1022,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(connector)
         except (DriveClientError, FileNotFoundError) as exc:
             logger.warning("Drive connector disabled: %s", exc)
+            failures["drive"] = _classify_connector_failure(exc)
 
     # Calendar
     if enabled("calendar"):
@@ -975,6 +1043,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(connector)
         except (CalendarClientError, FileNotFoundError) as exc:
             logger.warning("Calendar connector disabled: %s", exc)
+            failures["calendar"] = _classify_connector_failure(exc)
 
     # Contacts
     if enabled("contacts"):
@@ -992,6 +1061,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(connector)
         except (ContactsClientError, FileNotFoundError) as exc:
             logger.warning("Contacts connector disabled: %s", exc)
+            failures["contacts"] = _classify_connector_failure(exc)
 
     # Tasks
     if enabled("tasks"):
@@ -1007,6 +1077,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(TasksConnector(client))
         except (TasksClientError, FileNotFoundError) as exc:
             logger.warning("Tasks connector disabled: %s", exc)
+            failures["tasks"] = _classify_connector_failure(exc)
 
     # Apps Script
     if enabled("apps_script"):
@@ -1022,6 +1093,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(AppsScriptConnector(client))
         except (AppsScriptClientError, FileNotFoundError) as exc:
             logger.warning("Apps Script connector disabled: %s", exc)
+            failures["apps_script"] = _classify_connector_failure(exc)
 
     # Slack
     if enabled("slack"):
@@ -1048,6 +1120,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(connector)
         except (SlackClientError, FileNotFoundError) as exc:
             logger.warning("Slack connector disabled: %s", exc)
+            failures["slack"] = _classify_connector_failure(exc)
 
     # Salesforce
     if enabled("salesforce"):
@@ -1063,6 +1136,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(SalesforceConnector(client))
         except (SalesforceClientError, FileNotFoundError) as exc:
             logger.warning("Salesforce connector disabled: %s", exc)
+            failures["salesforce"] = _classify_connector_failure(exc)
 
     # Jira / Confluence — share one Atlassian OAuth grant.
     atlassian_org = org_config.get("atlassian") or {}
@@ -1091,6 +1165,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(connector)
         except (JiraClientError, FileNotFoundError) as exc:
             logger.warning("Jira connector disabled: %s", exc)
+            failures["jira"] = _classify_connector_failure(exc)
 
     if enabled("confluence"):
         try:
@@ -1109,6 +1184,7 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(connector)
         except (ConfluenceClientError, FileNotFoundError) as exc:
             logger.warning("Confluence connector disabled: %s", exc)
+            failures["confluence"] = _classify_connector_failure(exc)
 
     # Telegram — the sole exception to browser OAuth (MTProto has no
     # equivalent for full user-session access). api_id/api_hash identify the
@@ -1143,8 +1219,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> list
             connectors.append(TelegramConnector(tg_client))
         except (TelegramClientError, FileNotFoundError, Exception) as exc:
             logger.warning("Telegram connector disabled: %s", exc)
+            failures["telegram"] = _classify_connector_failure(exc)
 
-    return connectors
+    return connectors, failures
 
 
 def _warm_connector_caches(connectors: list, web_loop: asyncio.AbstractEventLoop) -> None:
@@ -1496,7 +1573,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # already loaded earlier, ahead of init_privacy_filter(), so SEC-07's
     # org_managed fail-safe default is known before that call.
     log_org_config_bundle_hash(org_config)
-    connectors = build_connectors(config, org_config)
+    connectors, connector_failures = build_connectors(config, org_config)
     if not connectors:
         logger.warning("No connectors could be initialized; daemon still starting.")
 
@@ -1515,7 +1592,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     connector_names = [c.name for c in connectors]
     settings_controller = SettingsController(
         config_path=config_path, connectors=connector_names, connector_host=connector_host,
-        connector_objs=connectors,
+        connector_objs=connectors, connector_failures=connector_failures,
     )
 
     # Built after connector_host so the MCP dispatcher (if web.mcp.enabled)

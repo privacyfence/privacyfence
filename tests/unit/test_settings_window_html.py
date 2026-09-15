@@ -186,6 +186,47 @@ class TestConnectorRowTemplate:
         assert "'authenticate_connector'" in html
 
 
+class TestInitialSection:
+    """``initial_section`` (issue #396 Part C) -- web/routes_settings.py's
+    ``GET /settings/connectors`` passes this so an un-onboarded sign-in link
+    lands on Connectors instead of the client-side JS's own 'general'
+    default."""
+
+    def test_omitted_by_default(self):
+        html = build_html(_make_state())
+        assert "window.__pfInitialSection =" not in html
+
+    def test_embeds_the_given_section(self):
+        html = build_html(_make_state(), initial_section="connectors")
+        assert 'window.__pfInitialSection = "connectors";' in html
+
+    def test_js_falls_back_to_general_when_unset(self):
+        html = build_html(_make_state())
+        assert "section: (window.__pfInitialSection || 'general')" in html
+
+
+class TestWelcomeBanner:
+    """The un-onboarded welcome banner on the Connectors page (issue #396
+    Part C) -- client-rendered, so this only asserts on the shipped
+    template/logic, same as every other section's own tests in this file
+    (see the module docstring)."""
+
+    def test_rendered_only_when_no_connector_is_authenticated(self):
+        html = build_html(_make_state())
+        assert "renderWelcomeBanner" in html
+        assert "state.connectors.some(function (c) { return c.authed; })" in html
+
+    def test_dismissible_client_side(self):
+        html = build_html(_make_state())
+        assert "welcomeBannerDismissed" in html
+        assert "data-dismiss-welcome" in html
+
+    def test_explains_what_privacyfence_does_and_the_setup_order(self):
+        html = build_html(_make_state())
+        assert "Welcome to PrivacyFence" in html
+        assert "organization config bundle" in html
+
+
 class TestRulesAndGrantsTemplate:
     def test_rule_row_fields_wired(self):
         html = build_html(_make_state())
