@@ -1435,6 +1435,20 @@ class TestMaybeStartWebServer:
         rows = {row["name"]: row for row in status["connectors"]}
         assert rows["slack"]["blocked_by"] == "not_authenticated"
 
+    def test_mcp_dispatcher_gets_wired_to_notify_the_controller_of_connector_changes(self, monkeypatch, tmp_path):
+        # issue #396 Part C: SettingsController.refresh_connectors() needs a
+        # way to reach McpDispatcher.notify_tools_changed once both objects
+        # exist -- wired here alongside status_connectors above.
+        self._no_bind(monkeypatch, tmp_path)
+        controller = self._controller(tmp_path, monkeypatch)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, controller=controller,
+        )
+
+        assert controller._connectors_changed_listener == result.mcp_dispatcher.notify_tools_changed
+
     def test_no_controller_means_status_falls_back_to_built_connectors_only(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
 

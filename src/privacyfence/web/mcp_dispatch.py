@@ -122,6 +122,18 @@ class McpDispatcher:
         # back to reporting only the connectors it can actually see as
         # already-authenticated, which is the best it can do without this.
         self._connectors_state_provider: Callable[[], list[dict[str, Any]]] | None = None
+        # issue #396 Part C: fans a real MCP ``tools/list_changed``
+        # notification out to every live Streamable HTTP session --
+        # wired to web/routes_mcp.py's own broadcaster (which is the one
+        # module that actually holds each session's live ``ServerSession``,
+        # see build_mcp_server's own docstring) once that transport is
+        # actually up. None in org mode today (routes_mcp.py's org-mode
+        # build path doesn't wire one -- no per-principal live-session
+        # story exists yet), and in any test that never calls
+        # set_tools_changed_broadcaster -- notify_tools_changed() is then
+        # simply a no-op, the same posture every other unwired seam here
+        # already takes.
+        self._tools_changed_broadcaster: Callable[[], None] | None = None
 
     @property
     def connectors(self) -> dict[str, Connector]:
@@ -143,6 +155,28 @@ class McpDispatcher:
         ``set_bootstrap_link_provider`` above, rather than importing
         settings_controller.py just for the annotation."""
         self._connectors_state_provider = callback
+
+    def set_tools_changed_broadcaster(self, callback: Callable[[], None] | None) -> None:
+        """``callback`` is ``build_mcp_server``'s own local
+        ``_broadcast_tools_changed`` closure (web/routes_mcp.py) --
+        untyped/unimported here for the same circular-import reason
+        ``set_bootstrap_link_provider`` above gives, and because that
+        closure's own state (the live ``ServerSession`` per MCP session)
+        has no business living on this dispatcher."""
+        self._tools_changed_broadcaster = callback
+
+    def notify_tools_changed(self) -> None:
+        """Called by ``SettingsController.refresh_connectors()`` (via
+        ``set_connectors_changed_listener``, wired in daemon_main.py)
+        whenever the live connector set actually changes -- fans a real
+        ``tools/list_changed`` notification out to every open MCP session,
+        closing issue #396's own "I set it all up and Claude still can't
+        see it" gap. A no-op wherever no broadcaster is wired (org mode
+        today, or any test that never calls
+        set_tools_changed_broadcaster) -- there is nothing live to notify
+        in that case."""
+        if self._tools_changed_broadcaster is not None:
+            self._tools_changed_broadcaster()
 
     # ------------------------------------------------------------------ #
     # Manifest
@@ -344,6 +378,16 @@ class McpDispatcher:
             logger.warning("Audit log write failed for list_rules: %s", exc)
         return result
 
+    # issue #396 Part C: privacyfence_get_sign_in_link's ``page`` values map
+    # onto real paths rather than a bare f"/{page}" interpolation, since
+    # "connectors" isn't a route of its own -- it's Settings landing
+    # directly on its Connectors section (see settings_window_html.py's
+    # ``ui.section`` and web/routes_settings.py's ``/settings/connectors``
+    # route).
+    _SIGN_IN_LINK_PAGES: dict[str, str] = {
+        "approvals": "/approvals", "settings": "/settings", "connectors": "/settings/connectors",
+    }
+
     def get_sign_in_link(self, page: str, claude_reason: str = "") -> dict:
         """privacyfence_get_sign_in_link's handler: mint a fresh SEC-06
         bootstrap link for local mode's own web UI, via whatever
@@ -358,9 +402,10 @@ class McpDispatcher:
                 "in through its own /login page instead of a one-time bootstrap link."
             )
         page = page or "approvals"
-        if page not in ("approvals", "settings"):
-            raise ValueError(f"page must be 'approvals' or 'settings', got {page!r}")
-        url = self._bootstrap_link_provider(f"/{page}")
+        path = self._SIGN_IN_LINK_PAGES.get(page)
+        if path is None:
+            raise ValueError(f"page must be one of {sorted(self._SIGN_IN_LINK_PAGES)}, got {page!r}")
+        url = self._bootstrap_link_provider(path)
         if url is None:
             raise ValueError(
                 "No sign-in link is available in this configuration -- organization mode signs "
@@ -374,7 +419,7 @@ class McpDispatcher:
                 connector="",
                 tool="",
                 tool_name="",
-                summary=f"Issued a one-time sign-in link for /{page}",
+                summary=f"Issued a one-time sign-in link for {path}",
                 sender="",
                 decision="sign_in_link_issued",
                 auto_accept_rule="",
@@ -474,7 +519,10 @@ class McpDispatcher:
             cached_url, minted_at = self._status_link_cache
             if now - minted_at < self._STATUS_LINK_CACHE_SECONDS:
                 return cached_url, False
-        url = self._bootstrap_link_provider("/settings")
+        # issue #396 Part C: lands directly on Settings' Connectors section
+        # -- the screen that actually unblocks an un-onboarded install --
+        # rather than plain /settings, which opens on General.
+        url = self._bootstrap_link_provider(self._SIGN_IN_LINK_PAGES["connectors"])
         if url is None:
             self._status_link_cache = None
             return None, False
@@ -492,7 +540,7 @@ class McpDispatcher:
                 tool="",
                 tool_name="",
                 summary=(
-                    "Issued a one-time sign-in link for /settings (via privacyfence_status)"
+                    "Issued a one-time sign-in link for /settings/connectors (via privacyfence_status)"
                     if decision == "sign_in_link_issued" else "Checked PrivacyFence setup status"
                 ),
                 sender="",

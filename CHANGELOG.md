@@ -45,6 +45,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   set up yet, not that PrivacyFence has nothing to do with the conversation — and when to call
   `privacyfence_status` to find out more. Previously the `initialize` result carried no
   instructions at all, so a fresh install had no way to explain its own silence. See issue #396.
+- `privacyfence_status` and `privacyfence_get_sign_in_link` (which now also accepts `page:
+  "connectors"`) hand back a link straight to Settings' Connectors section — a new `GET
+  /settings/connectors` route — instead of landing an un-onboarded user on the General page with
+  no indication of what to do next. That page also shows a short, dismissible welcome banner
+  explaining what PrivacyFence does and the order of setup steps while no connector is
+  authenticated yet. See issue #396.
+- Authenticating, disabling, or refreshing a connector now pushes a real MCP `tools/list_changed`
+  notification to every open Streamable HTTP session, so a client that already connected picks up
+  the new tool list without needing to reconnect. See issue #396.
 
 ### Changed
 

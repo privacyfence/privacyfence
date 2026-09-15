@@ -680,6 +680,13 @@ class SettingsController:
         # other background outcome reaches an open browser tab exactly the
         # way it already reaches an open native window.
         self._change_listeners: list[Callable[[dict[str, Any]], None]] = []
+        # issue #396 Part C: fired by refresh_connectors()'s own done()
+        # callback whenever the live connector set actually gets swapped --
+        # wired to McpDispatcher.notify_tools_changed by daemon_main.py once
+        # an MCP dispatcher exists (see set_connectors_changed_listener's
+        # own docstring), so an open MCP client learns about newly (or no
+        # longer) authenticated connectors without needing to reconnect.
+        self._connectors_changed_listener: Callable[[], None] | None = None
 
         set_rules_changed_listener(self._on_rules_changed)
 
@@ -691,6 +698,20 @@ class SettingsController:
         used to do itself, unconditionally, with ipc_server.py's IPCServer
         before P5 retired it."""
         dispatcher.set_unattended_changed_listener(self._on_unattended_changed)
+
+    def set_connectors_changed_listener(self, callback: Callable[[], None] | None) -> None:
+        """``callback`` is ``McpDispatcher.notify_tools_changed`` in
+        production (issue #396 Part C) -- called, on the main thread, right
+        after refresh_connectors() swaps in a freshly-built connector set,
+        so an already-connected MCP client is told its tool list changed
+        instead of needing a restart to see it. Wired by daemon_main.py
+        once an MCP dispatcher exists, the same "wired a step after both
+        objects exist" shape wire_unattended_listener above and
+        McpDispatcher.set_bootstrap_link_provider both already use. ``None``
+        (org mode's per-principal path today, or a test that never wires
+        one) makes refresh_connectors() simply skip the notification --
+        the connector set still changes, nothing is told about it."""
+        self._connectors_changed_listener = callback
 
     # ------------------------------------------------------------------ #
     # Cross-thread change notifications
@@ -1024,6 +1045,13 @@ class SettingsController:
                 self._connector_failures = failures
                 if self.connector_host is not None:
                     self.connector_host.set_connectors(result)
+                # issue #396 Part C: after the live set is actually swapped,
+                # not before -- a listener that asks for fresh connector
+                # state (McpDispatcher.notify_tools_changed's own broadcast
+                # is fire-and-forget, but the principle holds) must see the
+                # new set, not the one refresh_connectors() is replacing.
+                if self._connectors_changed_listener is not None:
+                    self._connectors_changed_listener()
             self._push_snapshot()
 
         _run_async(work, done)

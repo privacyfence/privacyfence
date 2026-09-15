@@ -24,6 +24,7 @@ package (test-only, see pyproject.toml's [project.optional-dependencies]
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 import socket
 import time
@@ -36,11 +37,12 @@ import pytest
 mcp_client = pytest.importorskip(
     "mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'"
 )
-from mcp import ClientSession  # noqa: E402
+from mcp import ClientSession, types  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
 from privacyfence import paths as paths_module  # noqa: E402
 from privacyfence.connector import Connector, ToolParam, ToolSpec  # noqa: E402
+from privacyfence.web import state_stream as state_stream_module  # noqa: E402
 from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
 from privacyfence.web.server import WebServer  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
@@ -121,7 +123,7 @@ def running_mcp_server(mcp_home, monkeypatch):
     server.start()
     try:
         _wait_until_connectable("localhost", port)
-        yield connector, server
+        yield connector, server, dispatcher
     finally:
         server.stop()
 
@@ -134,7 +136,7 @@ async def test_real_mcp_client_lists_and_calls_the_real_daemons_tools_over_a_rea
     transport), discovers a tool the daemon actually registered and a real
     tool call round-trips through both sides' Streamable HTTP framing
     unmodified."""
-    connector, server = running_mcp_server
+    connector, server, _dispatcher = running_mcp_server
     headers = {"Authorization": f"Bearer {server.mcp_token}"}
 
     async with httpx.AsyncClient(headers=headers) as http_client:
@@ -161,3 +163,50 @@ async def test_real_mcp_client_lists_and_calls_the_real_daemons_tools_over_a_rea
                 assert result.structuredContent == {"echoed": {"message": "hello over a real socket"}}
 
     assert connector.calls == [("contract_test_echo", {"message": "hello over a real socket"})]
+
+
+async def test_connector_set_swap_pushes_a_real_tools_list_changed_notification(running_mcp_server):
+    """Issue #396 Part C, end to end: a real client sees
+    tools.listChanged=True at initialize (the NotificationOptions override
+    Phase 0's spike found necessary), and a connector-set swap -- the same
+    call SettingsController.refresh_connectors() makes in production --
+    actually reaches it as a real notifications/tools/list_changed message,
+    not just a call that doesn't raise.
+
+    ``state_stream.call_soon_threadsafe`` stands in for
+    ``settings_controller.call_on_main`` here: production reaches
+    ``dispatcher.notify_tools_changed()`` through that same marshaling seam
+    (see SettingsController.refresh_connectors's own done() callback), and
+    calling it directly from this test's own asyncio loop -- a different
+    loop/thread than the one WebServer's own ASGI app actually runs on --
+    would silently misbehave instead of proving anything.
+    """
+    connector, server, dispatcher = running_mcp_server
+    headers = {"Authorization": f"Bearer {server.mcp_token}"}
+    notifications: list[types.ServerNotification] = []
+
+    async def _message_handler(message):
+        if isinstance(message, types.ServerNotification):
+            notifications.append(message)
+
+    async with httpx.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write, _get_session_id):
+            async with ClientSession(read, write, message_handler=_message_handler) as session:
+                init_result = await session.initialize()
+                assert init_result.capabilities.tools is not None
+                assert init_result.capabilities.tools.listChanged is True
+
+                # Captures this session's live ServerSession server-side
+                # (routes_mcp.py's build_mcp_server) -- notify_tools_changed()
+                # has nothing to notify before at least one request handler
+                # has run for this session.
+                await session.list_tools()
+
+                state_stream_module.call_soon_threadsafe(dispatcher.notify_tools_changed)
+
+                deadline = time.monotonic() + 5.0
+                while time.monotonic() < deadline and not notifications:
+                    await asyncio.sleep(0.02)
+
+    assert len(notifications) == 1
+    assert isinstance(notifications[0].root, types.ToolListChangedNotification)

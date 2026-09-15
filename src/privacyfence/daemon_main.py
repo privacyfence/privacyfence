@@ -653,6 +653,16 @@ def _maybe_start_web_server(
             # needs (Phase 1), so this dispatcher just asks for it rather
             # than re-deriving it from the built connectors alone.
             mcp_dispatcher.set_connectors_state_provider(controller.status_connectors)
+            # issue #396 Part C: refresh_connectors() (toggle/authenticate/
+            # explicit refresh) fans a real tools/list_changed notification
+            # out to every open MCP session through this same dispatcher --
+            # see McpDispatcher.notify_tools_changed's own docstring for why
+            # this dispatcher, not the WebServer built below, is the right
+            # thing to wire (the ServerSession registry that notification
+            # actually reaches lives in web/routes_mcp.py's
+            # build_mcp_server, wired to this same dispatcher instance
+            # there).
+            controller.set_connectors_changed_listener(mcp_dispatcher.notify_tools_changed)
 
     server = WebServer(
         web_ui,

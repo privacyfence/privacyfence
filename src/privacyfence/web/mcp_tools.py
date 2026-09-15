@@ -264,16 +264,17 @@ AWAIT_APPROVAL_TOOL = types.Tool(
 GET_SIGN_IN_LINK_TOOL = types.Tool(
     name="privacyfence_get_sign_in_link",
     description=(
-        "Get a fresh, single-use sign-in link for PrivacyFence's own web UI (Approvals or "
-        "Settings) -- for a human who's locked out of it and asked you for a link, since this "
-        "process has no menu bar icon or other UI of its own (local mode is headless) and its "
-        "startup log line for this link is always redacted for security, so it's never usable "
-        "from there either. Returns {url}: open it in a browser on this same machine within a "
-        "few minutes, before someone else does -- it's consumed by the first visit, successful "
-        "or not, and expires on its own shortly after if unused. This does not open anything "
-        "itself; hand the url back to the human so *they* open it, since this only works from "
-        "the machine PrivacyFence is actually running on. Unavailable (errors) in organization "
-        "mode, which signs in through its own IdP-backed /login instead. "
+        "Get a fresh, single-use sign-in link for PrivacyFence's own web UI (Approvals, "
+        "Settings, or Settings' Connectors section directly) -- for a human who's locked out of "
+        "it and asked you for a link, since this process has no menu bar icon or other UI of its "
+        "own (local mode is headless) and its startup log line for this link is always redacted "
+        "for security, so it's never usable from there either. Returns {url}: open it in a "
+        "browser on this same machine within a few minutes, before someone else does -- it's "
+        "consumed by the first visit, successful or not, and expires on its own shortly after if "
+        "unused. This does not open anything itself; hand the url back to the human so *they* "
+        "open it, since this only works from the machine PrivacyFence is actually running on. "
+        "Unavailable (errors) in organization mode, which signs in through its own IdP-backed "
+        "/login instead. "
         "reason: one sentence on why this link is needed right now -- logged, self-reported, "
         "unverified, same as every other meta tool's reason param, since this hands out a "
         "working (if short-lived) credential for a human-facing surface."
@@ -281,7 +282,7 @@ GET_SIGN_IN_LINK_TOOL = types.Tool(
     inputSchema={
         "type": "object",
         "properties": {
-            "page": {"type": "string", "enum": ["approvals", "settings"], "default": "approvals"},
+            "page": {"type": "string", "enum": ["approvals", "settings", "connectors"], "default": "approvals"},
             "reason": {"type": "string"},
         },
         "required": ["reason"],
@@ -305,10 +306,11 @@ PRIVACYFENCE_STATUS_TOOL = types.Tool(
         "token expired -- or a short redacted reason); setup_complete is true once at least one "
         "connector is authenticated; next_step and message tell the model what to do next in "
         "plain language -- relay message to the human as-is when setup isn't complete. In local "
-        "mode, sign_in_url (when present) is a fresh, single-use link to PrivacyFence's own "
-        "Settings page -- hand it back to the human so *they* open it, exactly like "
-        "privacyfence_get_sign_in_link's own url; it is cached briefly rather than re-minted on "
-        "every call, so calling this repeatedly is cheap. Org mode has no sign_in_url -- it signs "
+        "mode, sign_in_url (when present) is a fresh, single-use link straight to PrivacyFence's "
+        "Settings' Connectors section -- hand it back to the human so *they* open it, exactly "
+        "like privacyfence_get_sign_in_link's own url with page='connectors'; it is cached "
+        "briefly rather than re-minted on every call, so calling this repeatedly is cheap. Org "
+        "mode has no sign_in_url -- it signs "
         "in through its own IdP, so an org-mode human who isn't set up should be pointed at their "
         "administrator instead. Makes no external API call and has no side effects other than "
         "its own audit entry. reason: one sentence on why this is being checked right now -- "

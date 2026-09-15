@@ -682,6 +682,54 @@ class TestRefreshConnectors:
         assert controller._connectors == ["drive"]
         assert controller._host_calls == [[SimpleNamespace(name="drive")]]
 
+    def test_connectors_changed_listener_fires_after_a_successful_refresh(self, controller, monkeypatch):
+        # issue #396 Part C: wired to McpDispatcher.notify_tools_changed in
+        # production (daemon_main.py) -- fires after the connector set is
+        # actually swapped, so a listener reading fresh state sees it.
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: ([SimpleNamespace(name="drive")], {}))
+        events = []
+        controller.set_connectors_changed_listener(lambda: events.append(1))
+
+        controller.refresh_connectors()
+
+        assert wait_until(lambda: len(recorded) == 1)
+        func, args, kwargs = recorded[0]
+        func(*args, **kwargs)
+
+        assert events == [1]
+
+    def test_connectors_changed_listener_does_not_fire_on_a_failed_refresh(self, controller, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+
+        def _raise(cfg, org):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(daemon_main, "build_connectors", _raise)
+        events = []
+        controller.set_connectors_changed_listener(lambda: events.append(1))
+
+        controller.refresh_connectors()
+
+        assert wait_until(lambda: len(recorded) == 1)
+        func, args, kwargs = recorded[0]
+        func(*args, **kwargs)
+
+        assert events == []
+
+    def test_unwired_listener_is_a_no_op(self, controller, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: ([SimpleNamespace(name="drive")], {}))
+
+        controller.refresh_connectors()
+
+        assert wait_until(lambda: len(recorded) == 1)
+        func, args, kwargs = recorded[0]
+        func(*args, **kwargs)  # must not raise with no listener wired
+
     def test_survives_a_broken_org_config_and_builds_with_an_empty_one(self, controller, monkeypatch):
         recorded = []
         monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
