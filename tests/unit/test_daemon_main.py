@@ -1337,6 +1337,18 @@ class TestMaybeStartWebServer:
         link = result.mcp_dispatcher.get_sign_in_link("approvals")
         assert link["url"].startswith(f"{result.base_url}/approvals?bootstrap=")
 
+    def test_mcp_dispatcher_defaults_to_local_mode(self, monkeypatch, tmp_path):
+        # privacyfence_status's own mode field (issue #396 Phase 2) --
+        # every call site in this class passes no org_config, so this must
+        # be "local", the byte-identical-to-before-P7 default.
+        self._no_bind(monkeypatch, tmp_path)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
+        )
+
+        assert result.mcp_dispatcher.status("checking")["mode"] == "local"
+
     def test_no_mcp_dispatcher_means_nothing_to_wire(self, monkeypatch, tmp_path):
         # web.mcp.enabled defaults False -- must not raise reaching for
         # mcp_dispatcher.set_bootstrap_link_provider on a None dispatcher.
@@ -1400,6 +1412,37 @@ class TestMaybeStartWebServer:
 
         assert result is not None
         assert result.controller is controller
+
+    def test_mcp_dispatcher_gets_the_controllers_connector_status_provider(self, monkeypatch, tmp_path):
+        # privacyfence_status's own connector view (issue #396 Phase 2) --
+        # wired to SettingsController.status_connectors alongside the
+        # unattended-session listener above, so the tool reports the same
+        # enabled/authenticated/blocked_by state the settings page does
+        # rather than re-deriving it from the built connectors alone.
+        self._no_bind(monkeypatch, tmp_path)
+        controller = self._controller(tmp_path, monkeypatch)
+        controller._connectors = ["gmail"]
+        controller._connector_failures = {"slack": "not_authenticated"}
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, controller=controller,
+        )
+
+        status = result.mcp_dispatcher.status("checking")
+        assert status["setup_complete"] is True
+        assert status["connectors"] == controller.status_connectors()
+        rows = {row["name"]: row for row in status["connectors"]}
+        assert rows["slack"]["blocked_by"] == "not_authenticated"
+
+    def test_no_controller_means_status_falls_back_to_built_connectors_only(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
+        )
+
+        assert result.mcp_dispatcher.status("checking")["connectors"] == []
 
     def test_allow_quit_defaults_true_and_is_configurable(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
@@ -1556,6 +1599,16 @@ class TestMaybeStartWebServerOrgMode:
                 unattended_sessions_enabled=False,
                 org_config={"mode": "org", "idp": {"issuer": "https://idp.example.com", "client_id": "c"}},
             )
+
+    def test_org_mode_reports_org_in_the_status_tool(self, monkeypatch, tmp_path):
+        # privacyfence_status's own mode field (issue #396 Phase 2) --
+        # this is the one branch that must not default to "local".
+        self._no_bind(monkeypatch, tmp_path)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._org_config(),
+        )
+        assert result.mcp_dispatcher.status("checking")["mode"] == "org"
 
     def test_no_org_config_defaults_to_local_mode(self, monkeypatch, tmp_path):
         # The critical byte-identical-to-before-this-phase guarantee:

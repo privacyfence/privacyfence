@@ -199,6 +199,8 @@ async def _dispatch_meta_tool(
         )
     if name == mcp_tools.GET_SIGN_IN_LINK_TOOL.name:
         return dispatcher.get_sign_in_link(arguments.get("page", "approvals"), reason)
+    if name == mcp_tools.PRIVACYFENCE_STATUS_TOOL.name:
+        return dispatcher.status(reason)
     raise ValueError(f"Unknown tool: {name!r}")  # pragma: no cover -- unreachable, META_TOOL_NAMES gates this
 
 

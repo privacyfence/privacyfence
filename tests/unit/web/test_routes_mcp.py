@@ -334,6 +334,19 @@ class TestMetaTools:
         assert result.isError is True
         assert "disabled" in result.content[0].text
 
+    async def test_status_round_trips(self):
+        # issue #396 Phase 2: no provider wired here, so status() falls
+        # back to reporting the one connector this dispatcher can actually
+        # see (test_mcp_dispatch.py's TestStatus covers the provider-backed
+        # shape in detail) -- this just proves the wire round trip reaches
+        # McpDispatcher.status() at all.
+        dispatcher = _dispatcher({"echo": EchoConnector()})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("privacyfence_status", {"reason": "planning"})
+        assert result.isError is False
+        assert result.structuredContent["mode"] == "local"
+        assert result.structuredContent["setup_complete"] is True
+
     async def test_await_approval_round_trips_to_the_registry(self):
         # P3: privacyfence_await_approval, reaching the same registry a real
         # deferred approval would have registered into. No registry wired

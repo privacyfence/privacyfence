@@ -646,6 +646,13 @@ def _maybe_start_web_server(
             # all now depends on mcp_enabled, which SettingsController's own
             # constructor has no visibility into.
             controller.wire_unattended_listener(mcp_dispatcher)
+            # privacyfence_status's own per-connector view (issue #396
+            # Phase 2) -- same reasoning as set_bootstrap_link_provider
+            # below, a step ahead: SettingsController already tracks
+            # exactly the enabled/authenticated/blocked_by state that tool
+            # needs (Phase 1), so this dispatcher just asks for it rather
+            # than re-deriving it from the built connectors alone.
+            mcp_dispatcher.set_connectors_state_provider(controller.status_connectors)
 
     server = WebServer(
         web_ui,
@@ -833,6 +840,7 @@ def _start_org_web_server(
     sessions = OrgSessionStore()
     mcp_dispatcher = McpDispatcher(
         lambda: connector_registry.get(current_principal()).connectors,
+        mode="org",
         unattended_sessions_enabled=unattended_sessions_enabled,
         registry=approval_registry,
     )

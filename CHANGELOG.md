@@ -32,6 +32,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A new `privacyfence_status` meta-tool: the one tool guaranteed to exist even on a fresh,
+  un-onboarded install, so an empty or partial tool list reads as "not set up yet, here's how to
+  fix that" instead of "PrivacyFence has nothing to do with this". Reports which connectors are
+  authenticated (and, for the rest, whether they were never configured, never authenticated, or
+  hit a real error), and in local mode mints a one-time link to PrivacyFence's own Settings page
+  when nothing is authenticated yet. See issue #396.
+
 ### Changed
 
 - The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands

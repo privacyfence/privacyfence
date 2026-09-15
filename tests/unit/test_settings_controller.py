@@ -1783,6 +1783,51 @@ class TestConnectorsStateBlockedBy:
         assert self._row(controller, "gmail")["blocked_by"] == "no_org_config"
 
 
+class TestStatusConnectors:
+    """status_connectors() (issue #396 Phase 2) -- the same per-connector
+    state _connectors_state() derives for the settings page, reshaped into
+    the {name, enabled, authenticated, blocked_by} rows privacyfence_status
+    documents. web/mcp_dispatch.py's McpDispatcher wires this in as its
+    connectors_state_provider; this suite just proves the reshape is
+    faithful to the underlying state _connectors_state() itself already has
+    its own dedicated coverage for (TestConnectorsStateBlockedBy above)."""
+
+    def _row(self, controller, name: str) -> dict:
+        rows = {row["name"]: row for row in controller.status_connectors()}
+        return rows[name]
+
+    def test_shape_has_exactly_the_documented_keys(self, controller):
+        row = self._row(controller, "gmail")
+        assert set(row) == {"name", "enabled", "authenticated", "blocked_by"}
+
+    def test_authenticated_mirrors_authed(self, controller):
+        controller._connectors = ["gmail"]
+        assert self._row(controller, "gmail")["authenticated"] is True
+        assert self._row(controller, "slack")["authenticated"] is False
+
+    def test_enabled_mirrors_the_connectors_state_row(self, controller):
+        cfg = controller._load_config()
+        cfg.setdefault("connectors", {})["gmail"] = {"enabled": False}
+        controller._save_config(cfg)
+        assert self._row(controller, "gmail")["enabled"] is False
+
+    def test_blocked_by_mirrors_the_connectors_state_row(self, controller):
+        controller._connector_failures = {"gmail": "no_org_config"}
+        assert self._row(controller, "gmail")["blocked_by"] == "no_org_config"
+
+    def test_reflects_a_live_refresh(self, monkeypatch, controller):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: ([], {"slack": "not_authenticated"}))
+
+        controller.refresh_connectors()
+        assert wait_until(lambda: len(recorded) == 1)
+        func, args, kwargs = recorded[0]
+        func(*args, **kwargs)
+
+        assert self._row(controller, "slack")["blocked_by"] == "not_authenticated"
+
+
 class TestGrantIdHint:
     """Bottom-of-page "ask Claude for the ID" tip (settings_controller.py's
     _grant_id_hint) -- there's no live "+ Add..." picker by resource name

@@ -221,6 +221,18 @@ class TestMetaToolManifest:
         assert schema["properties"]["page"]["default"] == "approvals"
         assert schema["required"] == ["reason"]  # page itself stays optional, defaulting server-side
 
+    def test_status_tool_requires_only_reason(self):
+        # issue #396 Phase 2: the one meta-tool guaranteed to exist even
+        # with zero connectors -- no params of its own beyond the shared
+        # audited "reason", same posture as list_rules/get_sign_in_link.
+        schema = mcp_tools.PRIVACYFENCE_STATUS_TOOL.inputSchema
+        assert schema["required"] == ["reason"]
+        assert set(schema["properties"]) == {"reason"}
+
+    def test_status_tool_is_in_the_meta_tool_manifest(self):
+        assert mcp_tools.PRIVACYFENCE_STATUS_TOOL in mcp_tools.META_TOOLS
+        assert mcp_tools.PRIVACYFENCE_STATUS_TOOL.name in mcp_tools.META_TOOL_NAMES
+
 
 # --------------------------------------------------------------------------- #
 # TST-02's three named behaviors, driven end to end over the real /mcp

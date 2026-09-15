@@ -1653,6 +1653,24 @@ class SettingsController:
             })
         return rows
 
+    def status_connectors(self) -> list[dict[str, Any]]:
+        """privacyfence_status's own connector view (issue #396 Phase 2,
+        web/mcp_dispatch.py's ``McpDispatcher.set_connectors_state_provider``
+        seam) -- the same underlying state ``_connectors_state`` above
+        derives for the settings page, reshaped into the
+        ``{name, enabled, authenticated, blocked_by}`` rows the MCP status
+        payload documents rather than the page's own
+        ``{key, label, icon, authed, busy, has_org, auth_label}`` shape."""
+        cfg = self._load_config()
+        org_config = self._org_config_or_empty()
+        return [
+            {
+                "name": row["key"], "enabled": row["enabled"],
+                "authenticated": row["authed"], "blocked_by": row["blocked_by"],
+            }
+            for row in self._connectors_state(cfg, org_config)
+        ]
+
     def _rules_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
         rules_cfg: dict[str, list[dict]] = cfg.get("auto_accept_rules", {}) or {}
         grants_cfg: dict[str, Any] = cfg.get("auto_accept_grants", {}) or {}
