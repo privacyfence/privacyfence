@@ -57,6 +57,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The README's Quick start steps for all three local-mode installers (DMG, Windows, `.deb`) now
+  say "ask Claude to set up PrivacyFence" instead of "ask Claude for a sign-in link" — the latter
+  named a specific tool (`privacyfence_get_sign_in_link`) a user had no way to know about unless
+  they'd already read this far; the former matches what a fresh install's own `initialize`
+  instructions already tell Claude to do on its own via `privacyfence_status`. The step also now
+  says the link lands on Settings' Connectors page rather than Settings in general. See issue #396.
 - The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands
   (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
   current-user-only install) and how to get there in File Explorer, instead of just saying to
