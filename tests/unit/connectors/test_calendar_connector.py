@@ -22,6 +22,7 @@ from privacyfence.calendar_client import (
     CalendarClientError,
     CalendarEvent,
     CalendarListEntry,
+    EventColor,
 )
 from privacyfence.connectors import calendar as calendar_module
 from privacyfence.connectors.calendar import CalendarConnector, _day_of_week
@@ -187,6 +188,23 @@ class TestAutoTools:
         entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
         assert '"decision": "auto_accepted"' in entries[0]
         client.get_event.assert_called_once_with("primary", "e1")
+
+    async def test_list_colors_auto_accepts_and_maps_response(self, tmp_path):
+        init_audit_logger(str(tmp_path))
+        connector, client = make_connector()
+        client.list_event_colors.return_value = [
+            EventColor(id="2", name="Sage", background="#7ae7bf", foreground="#1d1d1d"),
+            EventColor(id="11", name="Tomato", background="#dc2127", foreground="#1d1d1d"),
+        ]
+
+        result = await connector.call("calendar_list_colors", {})
+
+        assert result == [
+            {"id": "2", "name": "Sage", "background": "#7ae7bf", "foreground": "#1d1d1d"},
+            {"id": "11", "name": "Tomato", "background": "#dc2127", "foreground": "#1d1d1d"},
+        ]
+        entries = (tmp_path / f"{current_week()}.jsonl").read_text(encoding="utf-8").splitlines()
+        assert '"decision": "auto_accepted"' in entries[0]
 
 
 class TestFreeBusyFullDetailsToggle:
@@ -452,6 +470,43 @@ class TestCreateEvent:
         })
         assert result2["conference_link"] == "https://meet/xyz"
 
+    async def test_color_name_shown_in_preview_and_normalized_before_the_client_call(self, gated_call_spy):
+        connector, client = make_connector()
+        client.create_event.return_value = make_event(id="new1")
+
+        await connector.call("calendar_create_event", {
+            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+            "color": "Tomato",
+        })
+
+        assert gated_call_spy[0]["preview"]["Color"] == "Tomato"
+        assert gated_call_spy[0]["raw_data"]["color"] == "11"
+        client.create_event.assert_called_once_with(
+            "primary", "Sync", "t0", "t1", "", None, "", False, None, "11",
+        )
+
+    async def test_no_color_omits_preview_row(self, gated_call_spy):
+        connector, client = make_connector()
+        client.create_event.return_value = make_event(id="new1")
+
+        await connector.call("calendar_create_event", {
+            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+        })
+
+        assert "Color" not in gated_call_spy[0]["preview"]
+
+    async def test_invalid_color_rejected_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="color must be an event color id"):
+            await connector.call("calendar_create_event", {
+                "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+                "color": "Chartreuse",
+            })
+
+        assert gated_call_spy == []
+        client.create_event.assert_not_called()
+
 
 class TestUpdateEvent:
     async def test_preview_only_lists_actual_changes(self, gated_call_spy):
@@ -552,6 +607,64 @@ class TestUpdateEvent:
         await connector.call("calendar_update_event", {"calendar_id": "primary", "event_id": "e1"})
 
         assert gated_call_spy[0]["details_text"] == "no fields will be updated; description is unchanged."
+
+    async def test_color_change_shown_as_diff_in_preview(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(color_id="5")  # Banana
+        client.update_event.return_value = make_event()
+
+        await connector.call("calendar_update_event", {
+            "calendar_id": "primary", "event_id": "e1", "color": "Tomato",
+        })
+
+        assert gated_call_spy[0]["preview"]["Color"] == "Banana → Tomato"
+        assert gated_call_spy[0]["raw_data"]["color"] == "11"
+        client.update_event.assert_called_once_with(
+            "primary", "e1", None, None, None, None, None, False, None, "11",
+        )
+
+    async def test_color_unset_on_current_event_shows_default(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(color_id="")
+        client.update_event.return_value = make_event()
+
+        await connector.call("calendar_update_event", {
+            "calendar_id": "primary", "event_id": "e1", "color": "Sage",
+        })
+
+        assert gated_call_spy[0]["preview"]["Color"] == "(default) → Sage"
+
+    async def test_same_color_as_current_omits_preview_row(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(color_id="2")  # Sage
+        client.update_event.return_value = make_event()
+
+        await connector.call("calendar_update_event", {
+            "calendar_id": "primary", "event_id": "e1", "color": "Sage",
+        })
+
+        assert "Color" not in gated_call_spy[0]["preview"]
+
+    async def test_no_color_given_omits_preview_row(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(color_id="2")
+        client.update_event.return_value = make_event()
+
+        await connector.call("calendar_update_event", {"calendar_id": "primary", "event_id": "e1"})
+
+        assert "Color" not in gated_call_spy[0]["preview"]
+
+    async def test_invalid_color_rejected_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="color must be an event color id"):
+            await connector.call("calendar_update_event", {
+                "calendar_id": "primary", "event_id": "e1", "color": "Chartreuse",
+            })
+
+        assert gated_call_spy == []
+        client.get_event.assert_not_called()
+        client.update_event.assert_not_called()
 
 
 class TestCreateOutOfOffice:
@@ -727,6 +840,105 @@ class TestSetEventVisibility:
         assert gated_call_spy[0]["raw_data"]["attendees"] == ["bob@example.com"]
 
 
+class TestSetEventColor:
+    async def test_preview_shows_color_transition(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(color_id="5")  # Banana
+        client.set_event_color.return_value = make_event(color_id="11")
+
+        await connector.call(
+            "calendar_set_event_color",
+            {"calendar_id": "primary", "event_id": "e1", "color": "Tomato"},
+        )
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["gate"] == "popup"
+        assert kwargs["preview"]["Color"] == "Banana → Tomato"
+        assert kwargs["preview"]["Event"] == "Q3 Planning"
+        client.set_event_color.assert_called_once_with("primary", "e1", "11")
+
+    async def test_default_color_shown_when_event_has_none(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(color_id="")
+        client.set_event_color.return_value = make_event(color_id="1")
+
+        await connector.call(
+            "calendar_set_event_color",
+            {"calendar_id": "primary", "event_id": "e1", "color": "Lavender"},
+        )
+
+        assert gated_call_spy[0]["preview"]["Color"] == "(default) → Lavender"
+
+    async def test_name_normalized_before_gating(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event()
+        client.set_event_color.return_value = make_event()
+
+        await connector.call(
+            "calendar_set_event_color",
+            {"calendar_id": "primary", "event_id": "e1", "color": "  tomato  "},
+        )
+
+        assert gated_call_spy[0]["args"]["color"] == "11"
+        client.set_event_color.assert_called_once_with("primary", "e1", "11")
+
+    async def test_invalid_color_rejected_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="color must be an event color id"):
+            await connector.call(
+                "calendar_set_event_color",
+                {"calendar_id": "primary", "event_id": "e1", "color": "Chartreuse"},
+            )
+
+        assert gated_call_spy == []
+        client.get_event.assert_not_called()
+        client.set_event_color.assert_not_called()
+
+    async def test_missing_color_rejected_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="color is required"):
+            await connector.call(
+                "calendar_set_event_color",
+                {"calendar_id": "primary", "event_id": "e1", "color": ""},
+            )
+
+        assert gated_call_spy == []
+        client.get_event.assert_not_called()
+
+    async def test_result_shape(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event()
+        client.set_event_color.return_value = make_event(id="e1", color_id="11")
+
+        result = await connector.call(
+            "calendar_set_event_color",
+            {"calendar_id": "primary", "event_id": "e1", "color": "Tomato"},
+        )
+
+        assert result == {"id": "e1", "title": "Q3 Planning", "color_id": "11"}
+
+    async def test_raw_data_carries_organizer_and_attendees_for_auto_accept_rules(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(
+            organizer_email="alice@example.com",
+            attendees=[CalendarAttendee(email="bob@example.com", display_name="Bob", response_status="accepted")],
+        )
+        client.set_event_color.return_value = make_event()
+
+        await connector.call(
+            "calendar_set_event_color",
+            {"calendar_id": "primary", "event_id": "e1", "color": "Tomato"},
+        )
+
+        assert gated_call_spy[0]["raw_data"]["organizer_email"] == "alice@example.com"
+        assert gated_call_spy[0]["raw_data"]["attendees"] == ["bob@example.com"]
+        assert gated_call_spy[0]["args"] == {
+            "calendar_id": "primary", "event_id": "e1", "color": "11",
+        }
+
+
 class TestFieldCompleteness:
     """End to end: a fully-populated raw Calendar API event -> the real
     CalendarClient._parse_event -> the real connector's popup preview -- not
@@ -791,5 +1003,8 @@ class TestEveryToolIsAudited:
                 # visibility must be one of VALID_VISIBILITIES -- validated
                 # before gating.
                 "calendar_set_event_visibility": {"visibility": "private"},
+                # color must be a valid event color id/name -- validated
+                # before gating.
+                "calendar_set_event_color": {"color": "Tomato"},
             },
         )
