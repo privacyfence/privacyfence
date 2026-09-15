@@ -127,13 +127,15 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#TaskName}"" /f"; \
 [UninstallDelete]
 ; Explicitly scope what uninstall does NOT touch (Phase 4.3): per-user data
 ; -- credentials, settings, the audit log -- lives under
-; %USERPROFILE%\.privacyfence\ (paths.py's data_dir(), unchanged on Windows
-; since Path.home() resolves correctly there already), created by the app on
-; first run. Uninstalling removes the program files (handled automatically
-; by Inno Setup for everything under {app}) and the scheduled task
-; (UninstallRun, above) only -- there is deliberately no [UninstallDelete]
-; entry naming %USERPROFILE%\.privacyfence, unlike the entries a "clean
-; uninstall" for a typical app might add.
+; %LOCALAPPDATA%\PrivacyFence\ (paths.py's data_dir(), via its
+; _windows_data_dir() branch -- see that function's own docstring for why
+; that's a different convention from the POSIX ~/.privacyfence dotfile
+; rather than the same name reused under %USERPROFILE%), created by the app
+; on first run. Uninstalling removes the program files (handled
+; automatically by Inno Setup for everything under {app}) and the scheduled
+; task (UninstallRun, above) only -- there is deliberately no
+; [UninstallDelete] entry naming %LOCALAPPDATA%\PrivacyFence, unlike the
+; entries a "clean uninstall" for a typical app might add.
 
 [Code]
 (* Copies whatever schtasks.exe wrote on stdout/stderr into Setup's own log

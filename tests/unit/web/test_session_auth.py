@@ -5,6 +5,8 @@ per-principal identity org mode needs and local mode doesn't.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -327,3 +329,27 @@ class TestUnauthorizedHtml:
     def test_mentions_asking_a_connected_mcp_client(self):
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
         assert "privacyfence_get_sign_in_link" in body
+
+    def test_shows_the_posix_path_and_a_bash_command_by_default(self, monkeypatch):
+        monkeypatch.setattr(sa.paths, "data_dir", lambda: Path("/home/alice/.privacyfence"))
+        monkeypatch.setattr(sa.paths, "is_windows", lambda: False)
+
+        body = sa.unauthorized_html(Request(self._scope())).body.decode()
+
+        assert "/home/alice/.privacyfence/approvals_url" in body
+        assert "$(cat /home/alice/.privacyfence/web_token)" in body
+        assert "Get-Content" not in body
+
+    def test_shows_the_windows_path_and_a_powershell_command(self, monkeypatch):
+        # paths.is_windows() (not os.name itself -- see that function's own
+        # docstring) is the seam this branches on, so this test never
+        # touches the real os.name.
+        monkeypatch.setattr(sa.paths, "data_dir", lambda: Path(r"C:\Users\alice\AppData\Local\PrivacyFence"))
+        monkeypatch.setattr(sa.paths, "is_windows", lambda: True)
+
+        body = sa.unauthorized_html(Request(self._scope())).body.decode()
+
+        assert r"C:\Users\alice\AppData\Local\PrivacyFence\approvals_url" in body
+        assert "Get-Content" in body
+        assert r"C:\Users\alice\AppData\Local\PrivacyFence\web_token" in body
+        assert "$(cat " not in body

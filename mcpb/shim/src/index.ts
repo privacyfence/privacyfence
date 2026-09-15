@@ -94,9 +94,9 @@ export function parseArgs(argv: string[]): void {
 }
 
 export interface MainOptions {
-  /** Overridable for tests; defaults to the real ~/.privacyfence/mcp_url. */
+  /** Overridable for tests; defaults to the real <data dir>/mcp_url (see protocol.ts). */
   mcpUrlFile?: string;
-  /** Overridable for tests; defaults to the real ~/.privacyfence/mcp_token. */
+  /** Overridable for tests; defaults to the real <data dir>/mcp_token (see protocol.ts). */
   mcpTokenFile?: string;
   /** Overridable for tests (e.g. a fake Transport); defaults to a real
    * StreamableHTTPClientTransport pointed at the discovered mcp_url. */

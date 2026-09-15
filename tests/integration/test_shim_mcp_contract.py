@@ -116,15 +116,27 @@ def _wait_until_connectable(host: str, port: int, timeout: float = 5.0) -> None:
     raise TimeoutError(f"{host}:{port} never became connectable") from last_exc
 
 
+def _shim_data_dir(shim_home: Path) -> Path:
+    """The one directory both the (monkeypatched) Python side and the real
+    Node shim subprocess must agree is ``paths.data_dir()`` -- mirrors
+    protocol.ts's own ``dataDir()``: ``.privacyfence`` under ``shim_home``
+    on POSIX, ``PrivacyFence`` under it on Windows (where the shim finds it
+    via ``LOCALAPPDATA=<shim_home>``, set in the test's own spawn env --
+    see paths.py's ``is_windows()``/``windows_data_dir()`` for why the two
+    platforms don't share one path shape)."""
+    return shim_home / ("PrivacyFence" if paths_module.is_windows() else ".privacyfence")
+
+
 @pytest.fixture
 def shim_home():
-    """A tmp HOME whose ~/.privacyfence/mcp_url and ~/.privacyfence/mcp_token
-    both the real WebServer (monkeypatched to treat this directory as
-    paths.data_dir() below) and the real shim subprocess (which derives
-    them from $HOME exactly like production, via mcpb/shim/src/
-    protocol.ts's os.homedir()) will agree on."""
+    """A tmp HOME/LOCALAPPDATA root whose discovery files (mcp_url,
+    mcp_token) both the real WebServer (monkeypatched to treat
+    ``_shim_data_dir()`` of this directory as ``paths.data_dir()`` below)
+    and the real shim subprocess (which derives its own copy of that same
+    directory from ``$HOME``/``$LOCALAPPDATA`` exactly like production, via
+    mcpb/shim/src/protocol.ts's ``dataDir()``) will agree on."""
     directory = Path(f"/tmp/pf-shim-ct-{uuid.uuid4().hex[:8]}")
-    (directory / ".privacyfence").mkdir(parents=True)
+    _shim_data_dir(directory).mkdir(parents=True)
     yield directory
     shutil.rmtree(directory, ignore_errors=True)
 
@@ -133,9 +145,10 @@ def shim_home():
 async def running_mcp_server(shim_home, monkeypatch):
     # web/server.py and web/mcp_auth.py both resolve every file they write
     # (web_token, mcp_token, mcp_url) through paths.data_dir() -- patching
-    # that one function is enough to redirect all of them into shim_home's
-    # .privacyfence, matching what the real daemon does under a real HOME.
-    monkeypatch.setattr(paths_module, "data_dir", lambda: shim_home / ".privacyfence")
+    # that one function is enough to redirect all of them into
+    # _shim_data_dir(shim_home), matching what the real daemon does under a
+    # real HOME/LOCALAPPDATA.
+    monkeypatch.setattr(paths_module, "data_dir", lambda: _shim_data_dir(shim_home))
 
     connector = EchoConnector()
     dispatcher = McpDispatcher(lambda: {"contract_test": connector})
@@ -190,12 +203,12 @@ async def test_shim_proxies_a_real_initialize_and_tool_call_over_mcp(
     params = StdioServerParameters(
         command="node",
         args=[str(built_shim_entry)],
-        # protocol.ts resolves mcp_url/mcp_token via Node's os.homedir(),
-        # which reads $USERPROFILE on Windows and never consults $HOME at
-        # all there (unlike Python's os.path.expanduser(), which checks
-        # both) -- set both so the spawned shim agrees with shim_home
-        # regardless of which platform this runs on.
-        env={"HOME": str(shim_home), "USERPROFILE": str(shim_home)},
+        # protocol.ts's dataDir() resolves mcp_url/mcp_token via
+        # LOCALAPPDATA on Windows and Node's os.homedir() (which reads
+        # $USERPROFILE there, never $HOME) everywhere else -- set all
+        # three so the spawned shim agrees with shim_home/_shim_data_dir()
+        # regardless of which platform this actually runs on.
+        env={"HOME": str(shim_home), "USERPROFILE": str(shim_home), "LOCALAPPDATA": str(shim_home)},
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

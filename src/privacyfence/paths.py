@@ -2,13 +2,17 @@
 
 In a source checkout (editable dev install, or no install at all): data
 lives in the project root. In a bundled .app, or a real (non-editable)
-``pip``/``pipx install privacyfence``: data lives in ~/.privacyfence/ so it
-survives app updates/reinstalls -- see is_bundled() and
-_is_installed_package().
+``pip``/``pipx install privacyfence``: data lives under a per-user data
+directory so it survives app updates/reinstalls -- see is_bundled() and
+_is_installed_package(). On POSIX that's ``~/.privacyfence``; on Windows
+it's ``%LOCALAPPDATA%\\PrivacyFence`` -- see windows_data_dir() for why
+that's a different convention rather than the same dotfile name reused
+under ``%USERPROFILE%``.
 """
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sys
 from pathlib import Path
@@ -53,6 +57,18 @@ def is_bundled() -> bool:
     return getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")
 
 
+def is_windows() -> bool:
+    """Indirection around ``os.name == "nt"`` purely so tests can monkeypatch
+    this one function instead of ``os.name`` itself -- ``os.name`` is a
+    real global the test process's own machinery (pytest's Path-based
+    reporting included) keeps relying on for the rest of that same process,
+    so flipping it for the duration of a test is unsafe even when the test
+    restores it afterwards. Not underscore-prefixed: web/session_auth.py's
+    ``unauthorized_html`` also branches on it, to show a Windows reader the
+    right discovery-file path and shell command rather than a POSIX one."""
+    return os.name == "nt"
+
+
 def _is_installed_package() -> bool:
     """True for a normal (non-editable) ``pip``/``pipx install privacyfence``
     -- i.e. this file living under some ``site-packages``/``dist-packages``
@@ -69,6 +85,30 @@ def _is_installed_package() -> bool:
     return "site-packages" in Path(__file__).resolve().parts or "dist-packages" in Path(__file__).resolve().parts
 
 
+def windows_data_dir() -> Path:
+    """``%LOCALAPPDATA%\\PrivacyFence`` -- the per-machine "Known Folder"
+    Windows apps use for their own app data, as opposed to reusing
+    ``~/.privacyfence`` (a dotfile under ``%USERPROFILE%``) unchanged.
+
+    A dot-prefixed name is not a hiding convention on Windows the way it is
+    on POSIX -- Explorer doesn't treat it specially, so it would just show
+    up as an ordinary, oddly-named folder sitting directly in the user's
+    profile root. ``%LOCALAPPDATA%`` (itself hidden by default, unlike
+    ``%USERPROFILE%``) is the idiomatic location, and specifically the
+    *Local* rather than *Roaming* (``%APPDATA%``) one: this directory holds
+    credentials and audit logs alongside config, and those shouldn't follow
+    a roaming profile across machines the way small settings might.
+
+    Falls back to ``~\\AppData\\Local`` if ``LOCALAPPDATA`` isn't set (a
+    stripped-down environment invoking the process without a full user
+    profile) -- ``Path.home()`` resolves unconditionally, unlike the env
+    var.
+    """
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+    return base / "PrivacyFence"
+
+
 def data_dir() -> Path:
     """Root directory for org-wide/install-wide data (org config, the local
     web/MCP tokens, the instance lock) -- see user_dir() for a specific
@@ -78,10 +118,12 @@ def data_dir() -> Path:
     Created (or re-tightened, on an upgrade from a pre-SEC-09 install) to
     ``0700`` via ``secure_mkdir`` -- see that function's own docstring and
     ``docs/security-and-compliance.md``'s "Storage format and permissions"
-    section for what this closes.
+    section for what this closes. (``secure_mkdir``'s ``chmod`` is a no-op
+    best-effort on Windows, which has no POSIX permission bits to set --
+    see that function's own docstring.)
     """
     if is_bundled() or _is_installed_package():
-        d = Path.home() / ".privacyfence"
+        d = windows_data_dir() if is_windows() else Path.home() / ".privacyfence"
     else:
         d = Path(__file__).parent.parent.parent
     return secure_mkdir(d)

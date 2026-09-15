@@ -3,14 +3,22 @@
  * web/mcp_auth.py write on the daemon side (docs/https-connector-refactor-
  * plan.md §12's "Gap found while implementing P2" / D11):
  *
- * - ~/.privacyfence/mcp_url   -- written by WebServer.start() once the
+ * - <data dir>/mcp_url   -- written by WebServer.start() once the
  *   embedded HTTP server is actually bound, cleared on stop(). The direct
  *   successor of ipc.py's PORT_FILE (see bridge/src/protocol.ts) for a
  *   client that talks to /mcp instead of the old IPC socket.
- * - ~/.privacyfence/mcp_token -- the bearer secret for /mcp
+ * - <data dir>/mcp_token -- the bearer secret for /mcp
  *   (web/mcp_auth.py's load_or_create_mcp_token()), deliberately a
  *   *different* file/secret than ipc_token or web_token (§10.3's audience
  *   separation) -- see that module's own docstring.
+ *
+ * ``<data dir>`` mirrors paths.py's ``data_dir()``: ``~/.privacyfence`` on
+ * POSIX, ``%LOCALAPPDATA%\PrivacyFence`` on Windows (not the same dotfile
+ * name reused under ``%USERPROFILE%`` -- see that function's own docstring
+ * for why). This shim has no install-mode branch of its own (dev-checkout
+ * vs. bundled) because it only ever runs from a built ``.mcpb`` -- Claude
+ * Desktop never spawns it out of a source tree -- so it always resolves the
+ * per-user data dir, matching paths.py's bundled/installed branch.
  *
  * Both are read fresh on every launch (this process is spawned once per
  * Claude Desktop session and exits when it ends -- see index.ts), not
@@ -22,8 +30,23 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const MCP_URL_FILE = path.join(os.homedir(), ".privacyfence", "mcp_url");
-export const MCP_TOKEN_FILE = path.join(os.homedir(), ".privacyfence", "mcp_token");
+/** ``%LOCALAPPDATA%\PrivacyFence`` on Windows, falling back to
+ * ``~\AppData\Local\PrivacyFence`` if the env var isn't set -- same
+ * fallback reasoning as paths.py's ``windows_data_dir()``. Exported only
+ * for tests, which can't otherwise force the ``LOCALAPPDATA``-unset branch
+ * without mutating real process.env. */
+export function windowsDataDir(): string {
+  const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+  return path.join(localAppData, "PrivacyFence");
+}
+
+/** Exported only for tests -- see windowsDataDir()'s docstring. */
+export function dataDir(): string {
+  return process.platform === "win32" ? windowsDataDir() : path.join(os.homedir(), ".privacyfence");
+}
+
+export const MCP_URL_FILE = path.join(dataDir(), "mcp_url");
+export const MCP_TOKEN_FILE = path.join(dataDir(), "mcp_token");
 
 /** Reads and validates the daemon's current /mcp URL. Throws if the file is
  * missing, empty, or doesn't parse as an absolute URL -- callers only reach
