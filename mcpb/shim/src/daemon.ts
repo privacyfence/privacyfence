@@ -22,19 +22,45 @@ const CONNECT_TIMEOUT_MS = 10_000; // time to wait for daemon startup
 const CONNECT_INTERVAL_MS = 400;
 const PATIENT_RETRY_INTERVAL_MS = 2_000; // polling interval once the initial window has elapsed
 
-// Where the installer puts privacyfence-app on each platform (the now-removed docs/windows-
-// support-plan.md Phase 4.2's %ProgramFiles%\PrivacyFence\ install dir on
-// Windows; build_dmg.sh's Contents/MacOS/ on macOS). No Linux entry here --
-// a `.deb` install's /usr/bin/privacyfence-app is normally already on PATH
-// (caught by the which() lookup below), and the one Linux location that
-// isn't (~/.local/bin, a pipx install) is handled by its own fallback
-// further down instead of a single fixed path, since it's relative to
-// homeDir rather than a constant.
+// Where the installer puts privacyfence-app on each platform (build_dmg.sh's
+// Contents/MacOS/ on macOS). No Linux entry here -- a `.deb` install's
+// /usr/bin/privacyfence-app is normally already on PATH (caught by the
+// which() lookup below), and the one Linux location that isn't
+// (~/.local/bin, a pipx install) is handled by its own fallback further
+// down instead of a single fixed path, since it's relative to homeDir
+// rather than a constant. Windows has no entry here either, for a similar
+// reason -- see windowsDefaultAppPaths below, which checks two locations
+// instead of one fixed path.
 const DEFAULT_APP_PATH_BY_PLATFORM: Partial<Record<NodeJS.Platform, string>> = {
   darwin: "/Applications/PrivacyFenceApp.app/Contents/MacOS/privacyfence-app",
-  win32: "C:\\Program Files\\PrivacyFence\\privacyfence-app.exe",
 };
 const DEFAULT_APP_PATH = DEFAULT_APP_PATH_BY_PLATFORM.darwin as string;
+
+// Windows install locations for privacyfence-app.exe, checked in this
+// order. installer/privacyfence.iss defaults to a non-admin, per-user
+// install (`PrivilegesRequired=lowest`), which Inno Setup's {autopf}
+// resolves to %LOCALAPPDATA%\Programs\PrivacyFence\ rather than
+// %ProgramFiles%\PrivacyFence\ -- only an elevated ("for all users") install
+// lands in the latter. A single hardcoded Program-Files-only path here used
+// to leave the shim's own self-heal spawn unable to find the daemon on the
+// common non-admin install whenever the Task Scheduler autostart task
+// didn't fire for any reason, producing a silent hang instead of a clear
+// error (privacyfence/privacyfence#410). ProgramFiles and LOCALAPPDATA are
+// real env vars Windows always sets; both are still parameterized here
+// (rather than read via process.env directly) so tests can exercise this on
+// non-Windows CI hosts.
+function windowsDefaultAppPaths(env: NodeJS.ProcessEnv): string[] {
+  const candidates: string[] = [];
+  if (env.ProgramFiles) {
+    candidates.push(path.join(env.ProgramFiles, "PrivacyFence", "privacyfence-app.exe"));
+  }
+  if (env.LOCALAPPDATA) {
+    candidates.push(
+      path.join(env.LOCALAPPDATA, "Programs", "PrivacyFence", "privacyfence-app.exe")
+    );
+  }
+  return candidates;
+}
 
 function isExecutable(candidate: string): boolean {
   try {
@@ -59,8 +85,15 @@ export interface FindDaemonCmdOptions {
   scriptPath?: string;
   /** Defaults to process.env.PATH. */
   pathEnv?: string;
-  /** Defaults to the real PrivacyFenceApp.app path; overridable for tests. */
+  /** Defaults to the real per-platform default app path (macOS only --
+   * win32 has no single default, see windowsDefaultAppPaths); overridable
+   * for tests on any platform, including win32. */
   defaultAppPath?: string;
+  /** win32 only: environment consulted for ProgramFiles/LOCALAPPDATA when
+   * defaultAppPath isn't overridden. Defaults to process.env; overridable
+   * for tests since these are real Windows-only env vars that a non-Windows
+   * CI host won't have set. */
+  windowsEnv?: NodeJS.ProcessEnv;
   /** Defaults to os.homedir(); overridable for tests. */
   homeDir?: string;
   /** Defaults to process.platform; overridable for tests. */
@@ -81,8 +114,6 @@ export function findDaemonCmd(opts: FindDaemonCmdOptions = {}): string[] {
   const scriptPath = opts.scriptPath ?? process.argv[1] ?? process.execPath;
   const pathEnv = opts.pathEnv ?? process.env.PATH ?? "";
   const platform = opts.platform ?? process.platform;
-  const defaultAppPath =
-    opts.defaultAppPath ?? DEFAULT_APP_PATH_BY_PLATFORM[platform] ?? DEFAULT_APP_PATH;
   const homeDir = opts.homeDir ?? os.homedir();
 
   const here = path.dirname(path.resolve(scriptPath));
@@ -92,7 +123,20 @@ export function findDaemonCmd(opts: FindDaemonCmdOptions = {}): string[] {
   const found = which("privacyfence-app", pathEnv);
   if (found) return [found];
 
-  if (isExecutable(defaultAppPath)) return [defaultAppPath];
+  if (opts.defaultAppPath !== undefined) {
+    // An explicit override (real callers never pass one for win32; tests
+    // do, to exercise the fallthrough below without touching a real
+    // filesystem path) takes priority over the platform defaults.
+    if (isExecutable(opts.defaultAppPath)) return [opts.defaultAppPath];
+  } else if (platform === "win32") {
+    const windowsEnv = opts.windowsEnv ?? process.env;
+    for (const candidate of windowsDefaultAppPaths(windowsEnv)) {
+      if (isExecutable(candidate)) return [candidate];
+    }
+  } else {
+    const defaultAppPath = DEFAULT_APP_PATH_BY_PLATFORM[platform] ?? DEFAULT_APP_PATH;
+    if (isExecutable(defaultAppPath)) return [defaultAppPath];
+  }
 
   // Linux fallback: a `.deb` install puts a wrapper at /usr/bin/privacyfence-app
   // (normally already on PATH, so the which() lookup above would have found

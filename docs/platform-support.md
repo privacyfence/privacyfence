@@ -188,6 +188,16 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   per-machine install; on the single-user desktop this product targets, installing and signing-in
   accounts are the same one and nothing is wrong. The CI test installs to a machine-wide directory
   for exactly this reason.
+  This wrinkle stopped being harmless the day a real non-admin user hit two more bugs stacked on top
+  of it (privacyfence/privacyfence#410): `RegisterAutostartTask()`'s own failure was logged to the
+  Inno Setup install log only, with the install still reporting success, so a schtasks failure at
+  install time was invisible until the next reboot silently left no daemon running; and separately,
+  the mcpb shim's own `findDaemonCmd()` self-heal fallback (`daemon.ts`) hardcoded the *admin*
+  `%ProgramFiles%\PrivacyFence\` path only, so on the common non-admin install it couldn't find the
+  daemon at `%LOCALAPPDATA%\Programs\PrivacyFence\` either, whatever autostart did. Both are now
+  fixed: a failed `RegisterAutostartTask()` also raises a dialog (guarded by `WizardSilent` so a
+  scripted/silent install never blocks on it), and `findDaemonCmd()` checks both Windows install
+  locations, preferring `%ProgramFiles%` but falling back to `%LOCALAPPDATA%\Programs`.
   None of this needed a dedicated bullet on its own here for the manual-QA/issue-closure part of it:
   that content now lives in [`release-testing.md`](release-testing.md)'s human-checks list
   (Windows-specific bullets — a real installer run on a clean Windows VM, OAuth loopback, the

@@ -32,6 +32,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands
+  (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
+  current-user-only install) and how to get there in File Explorer, instead of just saying to
+  install it with no path given. See issue #407.
+
 ### Fixed
 
 - Windows installs now store per-user state (config, credentials, the audit log) under
@@ -42,6 +49,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (hidden by default, and the *Local* rather than *Roaming* one since this directory holds
   credentials and audit logs that shouldn't follow a roaming profile). No migration is provided —
   the Windows build has not had a stable release yet.
+- On Windows, the daemon staying down after a reboot is no longer silent on either side. The
+  installer now warns (instead of only logging) when it can't register the Task Scheduler
+  autostart task, and the Claude Desktop shim's own fallback launch now checks the non-admin
+  per-user install location (`%LOCALAPPDATA%\Programs\PrivacyFence\`) as well as
+  `%ProgramFiles%\PrivacyFence\` — previously it only checked the latter, so a default (non-admin)
+  install left both autostart *and* the shim's self-heal spawn unable to find the daemon, showing
+  up as an MCP "unable to connect" with nothing in Task Manager.
 - Org mode's approval page no longer shows the WebAuthn step-up helper's JavaScript source as
   literal visible text above the approval card. `_org_bridge_shim` concatenated it ahead of its
   own `<script>` tag instead of inside one, so the browser rendered the function bodies as page
