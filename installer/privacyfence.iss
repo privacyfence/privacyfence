@@ -270,9 +270,32 @@ begin
        user can start PrivacyFence from the Start menu meanwhile. It is
        logged as a failure rather than passed over silently so that the
        install log actually says so -- which is also what Phase 7's
-       graphical-session test reads back when it finds the task missing. *)
+       graphical-session test reads back when it finds the task missing.
+
+       That install log is not something an ordinary user will ever open,
+       though -- Log() alone left a real install (privacyfence/privacyfence#410)
+       reporting overall success while autostart silently never got wired
+       up, discovered only after the next reboot left the daemon not
+       running with no clue why. So a failure here also raises a dialog,
+       guarded by WizardSilent so an unattended/scripted install (this
+       repo's own /VERYSILENT integration tests included) never blocks on
+       a message box nobody is there to dismiss. *)
     if not RegisterAutostartTask() then
+    begin
       Log('RegisterAutostartTask: FAILED; PrivacyFence will not start ' +
           'automatically at logon.');
+      if not WizardSilent() then
+        MsgBox(
+          'PrivacyFence could not set up its Windows autostart task, so it ' +
+          'will not launch automatically the next time you sign in.' +
+          #13#10#13#10 +
+          'PrivacyFence is still running now. Until this is fixed, you''ll ' +
+          'need to start it manually after each reboot, from:' +
+          #13#10 + ExpandConstant('{app}\{#AppExeName}') +
+          #13#10#13#10 +
+          'Re-running this installer may resolve it -- if it keeps ' +
+          'happening, please report it to the PrivacyFence project.',
+          mbInformation, MB_OK);
+    end;
   end;
 end;
