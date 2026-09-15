@@ -99,6 +99,23 @@ def to_call_tool_result(value: Any) -> types.CallToolResult:
     return types.CallToolResult(content=content)
 
 
+def sign_in_link_result(value: dict[str, str]) -> types.CallToolResult:
+    """privacyfence_get_sign_in_link's own result shape -- everything else
+    goes through the generic ``to_call_tool_result`` above, whose text
+    content is a raw ``json.dumps({"url": ...})`` blob a human has to pick
+    the link out of by hand. This tool exists specifically to hand a human a
+    link to click, so its text content is a markdown link instead: any
+    client that renders tool text as markdown (most chat clients do) shows
+    it as something clickable rather than JSON to copy-paste from.
+    ``structuredContent`` is unchanged -- still the plain ``{"url": ...}``
+    dict, for a client that reads that instead of the text."""
+    url = value["url"]
+    text = f"[Click here to sign in to PrivacyFence]({url})\n\n{url}"
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text)], structuredContent=value,
+    )
+
+
 def error_result(message: str) -> types.CallToolResult:
     return types.CallToolResult(content=[types.TextContent(type="text", text=message)], isError=True)
 

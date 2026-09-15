@@ -38,6 +38,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
   current-user-only install) and how to get there in File Explorer, instead of just saying to
   install it with no path given. See issue #407.
+- `privacyfence_get_sign_in_link`'s result text is now a markdown link instead of a raw
+  `{"url": ...}` JSON blob, so a client that renders tool text as markdown shows something
+  clickable instead of a link a human has to copy out by hand. `structuredContent` is unchanged.
 
 ### Fixed
 

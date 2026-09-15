@@ -350,6 +350,19 @@ class TestGetSignInLinkOverRealTransport:
             result = await session.call_tool("privacyfence_get_sign_in_link", {"reason": "locked out"})
         assert result.structuredContent["url"] == "http://localhost:8765/approvals?bootstrap=abc123"
 
+    async def test_text_content_is_a_clickable_markdown_link_not_raw_json(self):
+        # Every other meta tool's text content is a json.dumps() blob (see
+        # to_call_tool_result) -- fine for a client that just reads
+        # structuredContent, but this tool exists specifically to hand a
+        # human a link to click, so it gets a markdown link instead of JSON
+        # a human would otherwise have to copy the url out of by hand.
+        dispatcher = _dispatcher({})
+        dispatcher.set_bootstrap_link_provider(lambda path: f"http://localhost:8765{path}?bootstrap=abc123")
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("privacyfence_get_sign_in_link", {"reason": "locked out"})
+        url = "http://localhost:8765/approvals?bootstrap=abc123"
+        assert result.content[0].text == f"[Click here to sign in to PrivacyFence]({url})\n\n{url}"
+
 
 class TestListAutoAcceptRulesDisclosureIsAudited:
     @pytest.fixture(autouse=True)
