@@ -102,6 +102,7 @@ REQUIRED_STATUS_CHECKS = [
     "platform-macos",
     "Test (Python 3.11, core suite)",
     "Test (Python 3.12, core suite)",
+    "Test (Python 3.14, core suite)",
     "static-analysis",
     "org-mode-smoke",
 ]
