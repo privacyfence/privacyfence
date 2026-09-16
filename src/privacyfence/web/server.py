@@ -86,11 +86,10 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import paths
+from .. import paths, privilege_separation
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, principal_scope
-from ..secure_files import atomic_write_text
 from ..settings_controller import SettingsController, set_main_dispatcher
 from ..web_approval_ui import WebApprovalUI
 from . import org_session
@@ -166,9 +165,16 @@ def _write_mcp_url_file(url: str) -> None:
     writes ~/.privacyfence/mcp_url when it binds, and clears it on
     shutdown -- the only new daemon-side surface P4b needs." 0600 for the
     same reason web_token/mcp_token are: not a secret itself, but written
-    alongside them under the same directory."""
-    path = paths.data_dir() / MCP_URL_FILE_NAME
-    atomic_write_text(path, url)
+    alongside them under the same directory.
+
+    ``handoff_dir()`` rather than ``data_dir()`` since #428 Phase 4: every
+    discovery file this module writes exists to be read by something in the
+    user's *own* session (the MCPB shim, the companion, a human following the
+    not-authorized page), so all of them stay on the user-reachable side of a
+    privilege-separated install. On every other install the two functions
+    return the same directory and nothing moves."""
+    path = paths.handoff_dir() / MCP_URL_FILE_NAME
+    privilege_separation.write_handoff_file(path, url)
 
 
 def _bootstrap_url_file_name(path: str) -> str:
@@ -194,15 +200,15 @@ def _write_bootstrap_url_file(path: str, url: str) -> None:
     instead. Overwritten, not appended, on every mint -- only the newest
     link is ever meaningful, since consuming or expiring the previous one
     leaves it dead anyway."""
-    file_path = paths.data_dir() / _bootstrap_url_file_name(path)
-    atomic_write_text(file_path, url)
+    file_path = paths.handoff_dir() / _bootstrap_url_file_name(path)
+    privilege_separation.write_handoff_file(file_path, url)
 
 
 def _clear_bootstrap_url_file(path: str) -> None:
     """Mirrors _clear_mcp_url_file: called on WebServer.stop() for every
     path this server ever minted a link for, so a reader after shutdown
     finds no file rather than a stale, now-dead link."""
-    (paths.data_dir() / _bootstrap_url_file_name(path)).unlink(missing_ok=True)
+    (paths.handoff_dir() / _bootstrap_url_file_name(path)).unlink(missing_ok=True)
 
 
 def _clear_mcp_url_file() -> None:
@@ -210,7 +216,7 @@ def _clear_mcp_url_file() -> None:
     finds no file rather than a stale, now-dead URL -- the same reasoning
     ipc_server.py's own shutdown has for not leaving a dangling PORT_FILE
     behind."""
-    (paths.data_dir() / MCP_URL_FILE_NAME).unlink(missing_ok=True)
+    (paths.handoff_dir() / MCP_URL_FILE_NAME).unlink(missing_ok=True)
 
 
 def _write_web_base_url_file(base_url: str) -> None:
@@ -219,12 +225,12 @@ def _write_web_base_url_file(base_url: str) -> None:
     importing this module -- written unconditionally alongside ``mcp_url``
     whenever this server runs local mode's own control channel (``self.
     control_channel is not None`` -- org mode has neither)."""
-    path = paths.data_dir() / WEB_BASE_URL_FILE_NAME
-    atomic_write_text(path, base_url)
+    path = paths.handoff_dir() / WEB_BASE_URL_FILE_NAME
+    privilege_separation.write_handoff_file(path, base_url)
 
 
 def _clear_web_base_url_file() -> None:
-    (paths.data_dir() / WEB_BASE_URL_FILE_NAME).unlink(missing_ok=True)
+    (paths.handoff_dir() / WEB_BASE_URL_FILE_NAME).unlink(missing_ok=True)
 
 
 class _SecurityHeadersMiddleware:

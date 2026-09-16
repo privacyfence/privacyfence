@@ -2,10 +2,12 @@
 
 ## Status
 
-Accepted; not yet implemented. [#428](https://github.com/privacyfence/privacyfence/issues/428)
-Phases 3–4 build what this decides, and
-[#426](https://github.com/privacyfence/privacyfence/issues/426) builds the half that makes it mean
-something. Supersedes [ADR 0001](0001-remove-macos-native-extra.md) in part — see "Relationship to
+Accepted; implemented on macOS. [#428](https://github.com/privacyfence/privacyfence/issues/428)
+Phase 3 built the companion app this decides, and Phase 4 built the privilege separation behind it
+— shipped opt-in on macOS (`scripts/macos_privilege_separation.sh`), still to come on Linux and
+Windows. [#426](https://github.com/privacyfence/privacyfence/issues/426) builds the half that makes
+it mean something, and is unblocked per platform only once that platform's Phase 4 has landed and
+soaked. Supersedes [ADR 0001](0001-remove-macos-native-extra.md) in part — see "Relationship to
 ADR 0001" below.
 
 ## Context

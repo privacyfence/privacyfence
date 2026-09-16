@@ -69,7 +69,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
-from .. import paths
+from .. import paths, privilege_separation
 from .session_auth import BootstrapStore
 
 logger = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ def read_base_url() -> str | None:
     WebServer.stop()) or is running in org mode, which has no local
     base_url() concept for a companion to reach at all (org mode is out of
     #428's scope -- ADR 0002's own "Out of scope")."""
-    path = paths.data_dir() / WEB_BASE_URL_FILE_NAME
+    path = paths.handoff_dir() / WEB_BASE_URL_FILE_NAME
     if not path.exists():
         return None
     return path.read_text(encoding=_ENCODING).strip() or None
@@ -137,8 +137,17 @@ def posix_socket_path() -> Path:
     lands in the system temp directory (always short) under a name keyed by
     a hash of the real authority directory, so it stays deterministic and
     reproducible from ``paths.authority_dir()`` alone, without needing a
-    discovery file of its own."""
-    return socket_path_under(paths.authority_dir())
+    discovery file of its own.
+
+    ``paths.control_socket_dir()`` rather than ``paths.authority_dir()``
+    directly since #428 Phase 4: the two are the same directory on an
+    ordinary install, but a privilege-separated one makes ``authority_dir()``
+    ``0700`` under the daemon's own service account, and the companion --
+    which runs as the logged-in human and is this channel's whole reason for
+    existing -- has to still be able to connect. See that function, and
+    ``paths.handoff_dir()``, for why relocating the socket gives up nothing
+    Phase 4 claims."""
+    return socket_path_under(paths.control_socket_dir())
 
 
 def pipe_name_for(data_dir: Path) -> str:
@@ -174,7 +183,11 @@ def companion_socket_path_under(data_dir: Path) -> Path:
     belongs among the human-authority files ``paths.authority_dir()``
     collects for #428 Phase 4), this is just the address a *daemon* reaches
     to ask a *companion* to open a browser tab -- nothing #428 Phase 4 needs
-    to re-own."""
+    to re-own. Rooted at ``paths.handoff_dir()`` in practice (see
+    ``companion_socket_path()``), which *is* ``data_dir()`` on an ordinary
+    install and the user-reachable subdirectory of it on a separated one --
+    where the companion, running as the logged-in human, could not create a
+    socket under the service-account-owned root at all."""
     preferred = data_dir / COMPANION_SOCKET_FILE_NAME
     if len(str(preferred).encode(_ENCODING)) < _MAX_SUN_PATH_BYTES:
         return preferred
@@ -183,7 +196,7 @@ def companion_socket_path_under(data_dir: Path) -> Path:
 
 
 def companion_socket_path() -> Path:
-    return companion_socket_path_under(paths.data_dir())
+    return companion_socket_path_under(paths.handoff_dir())
 
 
 def companion_pipe_name_for(data_dir: Path) -> str:
@@ -307,7 +320,15 @@ class _LineProtocolServer:
             sock_path.unlink()
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.bind(str(sock_path))
-        sock_path.chmod(0o600)
+        # 0600 while daemon, companion and agent are all one uid -- nothing
+        # else on the machine could connect anyway. 0660 on a #428 Phase 4
+        # install, where the two ends are two accounts and the shared
+        # ``_privacyfence`` group is what still lets them reach each other;
+        # connect(2) on a unix socket needs *write* permission on the node,
+        # so the group bits have to be rw, not r. See
+        # privilege_separation.socket_mode() for why this channel is
+        # deliberately not narrower than that.
+        sock_path.chmod(privilege_separation.socket_mode())
         sock.listen(8)
         # Short timeout, not a blocking accept() -- lets the accept loop
         # notice _stop_event between connections without needing a

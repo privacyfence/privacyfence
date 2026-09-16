@@ -6,7 +6,7 @@ PrivacyFence local mode is packaged for macOS, Windows, and Debian/Ubuntu Linux.
 
 | Platform | Distribution | Startup model | Release automation |
 |---|---|---|---|
-| macOS | signed/notarized DMG containing the PyInstaller app bundle and MCPB | packaged app/LaunchAgent path | `.github/workflows/build.yml` on `macos-latest` |
+| macOS | signed/notarized DMG containing the PyInstaller app bundle and MCPB | packaged app/LaunchAgent path, or an opt-in LaunchDaemon under a dedicated account (see below) | `.github/workflows/build.yml` on `macos-latest` |
 | Windows | Inno Setup installer containing the PyInstaller executable and MCPB | Task Scheduler entry created by the installer | `.github/workflows/build.yml` on `windows-latest` |
 | Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | XDG autostart desktop entry | `.github/workflows/build.yml` on `ubuntu-latest` |
 | Linux Python install | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
@@ -23,6 +23,38 @@ The daemon uses `portalocker` for the single-instance lock, so the locking abstr
 The macOS app is defined by `PrivacyFenceApp.spec`. Release builds are produced by `scripts/build_dmg.sh` and the macOS job in `.github/workflows/build.yml`.
 
 The packaged application keeps user state outside the application bundle. The release workflow signs and notarizes the app/DMG when the required signing credentials are configured.
+
+### Privilege separation (opt-in)
+
+By default the daemon starts in the logged-in user's session — the LaunchAgent path above — which is
+also the session the AI client it governs runs in. `scripts/macos_privilege_separation.sh enable`
+changes that: it creates a dedicated `_privacyfence` system account, moves the data directory from
+`~/.privacyfence` to `/Library/Application Support/PrivacyFence` owned by that account, and inverts
+the startup wiring — a **LaunchDaemon** (`installer/macos/com.privacyfence.daemon.plist.tmpl`) runs
+the daemon with no login session at all, while a **LaunchAgent**
+(`installer/macos/com.privacyfence.companion.plist.tmpl`) runs the companion app in each user
+session so a human still has a way in.
+
+Three parts of the layout matter to anything that has to find PrivacyFence's files:
+
+| Path | Owner | Mode | Holds |
+|---|---|---|---|
+| `/Library/Application Support/PrivacyFence` | `_privacyfence` | `0711` | everything; traversable but not listable |
+| `…/authority` | `_privacyfence` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
+| `…/handoff` | `_privacyfence:_privacyfence` | `2770` | `mcp_token`, `mcp_url`, the control-channel sockets |
+
+The installing user is added to the `_privacyfence` group, which is what keeps `handoff` reachable
+from their session — macOS evaluates group membership at login, so this needs a logout/login to take
+effect. `src/privacyfence/privilege_separation.py` resolves all of it from a marker file the
+installer writes, and the MCPB shim (`mcpb/shim/src/protocol.ts`) reads the same marker so Claude
+Desktop keeps finding the daemon. `… status` audits the result; `… disable` reverses it.
+
+Ships opt-in and stays that way for a full release
+([#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4) — the migration moves live
+connector OAuth tokens. Linux and Windows are unchanged; their equivalents are that phase's remaining
+work, and Windows in particular needs net-new NTFS ACL work that macOS's POSIX permissions do not.
+See [`security-and-compliance.md`](security-and-compliance.md#privilege-separation-macos-opt-in) for
+what the separation does and does not buy.
 
 ## Windows
 
@@ -212,3 +244,18 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   public `/mcp` URL. The `org-mode-smoke` CI job exercises the same daemon/MCP/approval/audit
   contract end to end, but against a synthetic, mocked identity provider — a different, narrower
   guarantee than a real deployment run.
+- **macOS privilege separation has no automated end-to-end coverage, and cannot have any from this
+  repo's CI**: provisioning it needs root on a macOS host, creates a real system account, and the
+  property it buys only exists once two real OS accounts are involved — a hosted runner can build
+  the artifact but not prove that `_privacyfence` actually owns `authority/` and that the logged-in
+  user actually cannot read it. What CI does prove, per PR, is the contract between the three
+  artifacts involved: `tests/unit/test_privilege_separation.py` asserts that
+  `scripts/macos_privilege_separation.sh`, the two launchd templates in `installer/macos/`, and
+  `src/privacyfence/privilege_separation.py` still agree on every account name, directory, mode and
+  marker field, and that every path the module resolves from a marker is the one the installer
+  provisions. The remaining half — enable on a real Mac, confirm the daemon comes up under the
+  service account, confirm the companion and the MCPB shim still reach it after a logout/login,
+  confirm `disable` restores the previous layout with connector tokens intact — is a manual check,
+  and belongs with the other per-platform human checks in
+  [`release-testing.md`](release-testing.md). Until that has been run on a release build, treat the
+  feature as what it ships as: opt-in.

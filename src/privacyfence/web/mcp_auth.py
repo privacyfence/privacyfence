@@ -31,9 +31,8 @@ import secrets
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
-from .. import paths
+from .. import paths, privilege_separation
 from ..principal import LOCAL_PRINCIPAL, Principal
-from ..secure_files import atomic_write_text
 
 MCP_TOKEN_FILE_NAME = "mcp_token"  # nosec B105  # a filename, not a credential value
 
@@ -41,13 +40,27 @@ MCP_TOKEN_FILE_NAME = "mcp_token"  # nosec B105  # a filename, not a credential 
 def load_or_create_mcp_token() -> str:
     """Reused across daemon restarts (same file) -- the agent's own
     long-lived credential, unlike the approval surface's session cookie."""
-    path = paths.data_dir() / MCP_TOKEN_FILE_NAME
+    # handoff_dir(), not data_dir(): this is the one credential #428 keeps
+    # deliberately reachable by the agent ("mcp_token stays reachable by the
+    # agent. It is the agent's own credential and the product doesn't work
+    # without it"), so on a privilege-separated install it lives in the
+    # directory the user's own session can still read rather than in the
+    # service-account-owned root. Identical path on every other install --
+    # handoff_dir() *is* data_dir() there.
+    path = paths.handoff_dir() / MCP_TOKEN_FILE_NAME
     if path.exists():
         token = path.read_text(encoding="utf-8").strip()
         if token:
+            # The one handoff file that isn't rewritten on every start, so
+            # the only one whose mode has to be re-asserted on the way past:
+            # a token carried over from a pre-#428-Phase-4 install arrives
+            # still 0600 and owned by the service account, which would leave
+            # the agent unable to read its own credential. No-op everywhere
+            # else.
+            privilege_separation.ensure_handoff_file_mode(path)
             return token
     token = secrets.token_hex(32)
-    atomic_write_text(path, token)
+    privilege_separation.write_handoff_file(path, token)
     return token
 
 

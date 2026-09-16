@@ -427,3 +427,54 @@ describe("describeTarget", () => {
     }
   });
 });
+
+describe("ensureDaemonRunning on a privilege-separated install (#428 Phase 4)", () => {
+  it("never spawns the daemon -- launchd owns it, and this process is the wrong account", async () => {
+    // Spawning here would start the daemon as the logged-in user, where
+    // privilege_separation.check_runtime_identity() refuses to run rather
+    // than seed a default policy over the real one. So the spawn cannot
+    // succeed; attempting it once per shim launch would only bury the real
+    // reason under a second failure.
+    const { mcpUrlFile, writeUrl, cleanup } = makeTempMcpFiles();
+    const port = await getFreePort();
+    const server = net.createServer();
+    setTimeout(() => {
+      server.listen(port, "127.0.0.1", () => writeUrl(`http://127.0.0.1:${port}/mcp`));
+    }, 150);
+    let findCmdCalled = false;
+    try {
+      await ensureDaemonRunning({
+        mcpUrlFile,
+        separationRoot: () => "/Library/Application Support/PrivacyFence",
+        findCmd: () => {
+          findCmdCalled = true;
+          return ["should-not-run"];
+        },
+        connectTimeoutMs: 3000,
+        connectIntervalMs: 50,
+      });
+      assert.equal(findCmdCalled, false);
+    } finally {
+      server.close();
+      cleanup();
+    }
+  });
+
+  it("still gives up after the connect window, so waitForDaemonPatiently keeps retrying", async () => {
+    const { mcpUrlFile, cleanup } = makeTempMcpFiles();
+    try {
+      await assert.rejects(
+        ensureDaemonRunning({
+          mcpUrlFile,
+          separationRoot: () => "/Library/Application Support/PrivacyFence",
+          findCmd: () => ["should-not-run"],
+          connectTimeoutMs: 120,
+          connectIntervalMs: 20,
+        }),
+        ShimExitError,
+      );
+    } finally {
+      cleanup();
+    }
+  });
+});

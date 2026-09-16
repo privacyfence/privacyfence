@@ -93,6 +93,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   starts one. Nothing installs or autostarts the companion yet, and it changes no default behavior on
   its own — that inversion, and the privilege separation it exists to serve, is Phase 4. See issue
   #428.
+- Issue #428 Phase 4, macOS: `scripts/macos_privilege_separation.sh enable` moves local mode's
+  trust boundary off the logged-in user's account. It creates a dedicated `_privacyfence` system
+  account, relocates the data directory from `~/.privacyfence` to
+  `/Library/Application Support/PrivacyFence` owned by it, and inverts the startup wiring ADR 0002
+  describes — the daemon becomes a LaunchDaemon with no login session, and the Phase 3 companion app
+  becomes the LaunchAgent that autostarts in yours. Four things the AI client could previously do,
+  it now cannot: edit the always-allow rules and PII policy in `config/settings.yaml`, write a
+  forged credential into `webauthn_credentials.json` (which is what makes the local passkey in issue
+  #426 mean anything), read the audit log's HMAC key, or read the daemon's connector credentials.
+  Minting a sign-in session stays deliberately reachable — the companion and the agent run as the
+  same user and no permission bit can tell them apart, so the design makes a session *insufficient*
+  rather than uncallable (ADR 0002 decision 6). The agent's own `mcp_token` also stays reachable, in
+  a group-shared `handoff` directory alongside the control-channel sockets; the MCPB shim and the
+  not-authorized page both follow it there. **Opt-in, and staying opt-in for a full release**: the
+  migration moves live connector OAuth tokens and `… disable` is the only way back. Root still
+  defeats all of it. `… status` audits the on-disk result, and the daemon refuses to start if it
+  finds itself running as the wrong account rather than silently seeding a default policy over the
+  real one. Linux and Windows are unchanged — the same phase for each is still to come. See issue
+  #428.
 - Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
   `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
   that want hardware-bound passkeys as a hard requirement before releasing a write approval.

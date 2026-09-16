@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+#428 Phase 4 (B5a): the PrivacyFence daemon as a LaunchDaemon, running under
+its own dedicated account.
+
+This replaces the per-user LaunchAgent (com.privacyfence.app.plist in the
+repo root) for installs that have opted into privilege separation. The
+difference that matters is UserName below: a LaunchAgent runs as whoever is
+logged in -- which is also who the AI agent PrivacyFence exists to govern
+runs as -- and a LaunchDaemon runs as the account it names, in no login
+session at all. That one line is what takes settings.yaml, the enrolled
+WebAuthn credentials and the audit log's HMAC key out of the agent's reach.
+
+Installed to /Library/LaunchDaemons/com.privacyfence.daemon.plist, root:wheel
+0644, by scripts/macos_privilege_separation.sh -- which fills in every
+placeholder below. Do not install this file by hand: launchd will start
+the daemon happily enough, but nothing will have created the service account,
+moved the data directory, or written the marker file every PrivacyFence
+process reads to agree on where that directory now is
+(src/privacyfence/privilege_separation.py).
+
+The companion app -- which is what a human actually interacts with once the
+daemon has no login session of its own -- is the separate LaunchAgent in
+com.privacyfence.companion.plist.tmpl. ADR 0002's "startup wiring inverts on
+all three platforms" is these two files, on this one.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__DAEMON_LABEL__</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__DAEMON_EXECUTABLE__</string>
+  </array>
+
+  <!-- The whole point of this file. Both are the dedicated system account
+       scripts/macos_privilege_separation.sh creates; GroupName is also the
+       group the installing human is added to, which is what lets the
+       companion and the daemon still reach each other's sockets under
+       handoff/ while everything else stays 0700. -->
+  <key>UserName</key>
+  <string>__SERVICE_ACCOUNT__</string>
+  <key>GroupName</key>
+  <string>__SERVICE_GROUP__</string>
+
+  <key>WorkingDirectory</key>
+  <string>__SYSTEM_ROOT__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Restart automatically if the daemon exits unexpectedly -- same
+       contract the LaunchAgent had, and the same one the Linux systemd unit
+       and the Windows Scheduled Task carry (see tests/windows_task_contract.py). -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+
+  <!-- A daemon with no login session has no Aqua session to draw in and
+       should not be scheduled as if it did. -->
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>__SYSTEM_ROOT__/logs/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>__SYSTEM_ROOT__/logs/launchd.log</string>
+</dict>
+</plist>

@@ -96,6 +96,14 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/privacy_filter.py": 100.0,
     # SEC-09: atomic, permission-safe credential/config writes.
     "src/privacyfence/secure_files.py": 100.0,
+    # #428 Phase 4: the module every process consults to decide where the
+    # human-authority files live and which account is supposed to own them.
+    # A gap here doesn't fail loudly -- it resolves the *un*separated layout
+    # on an install that thinks it is separated, which reads as "the policy
+    # reset itself" rather than as a permissions bug. 99.0 rather than a flat
+    # 100 only because of the platform branches this repo's Linux CI cannot
+    # execute (the pwd lookups a Windows build skips entirely).
+    "src/privacyfence/privilege_separation.py": 99.0,
     # SEC-11: OIDC discovery trust validation.
     "src/privacyfence/org_identity.py": 100.0,
     "src/privacyfence/web/routes_org_identity.py": 99.0,
