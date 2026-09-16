@@ -21,7 +21,9 @@ name: Linux graphical-session autostart
 # trigger.
 on:
   push:
-    branches: [main]
+    # releases/** is protected the same as main (see CLAUDE.md) and gets the same
+    # packaging-related push trigger.
+    branches: [main, "releases/**"]
     paths:
       - 'debian/**'
       - 'resources/linux/**'
