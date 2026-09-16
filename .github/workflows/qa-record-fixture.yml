@@ -74,9 +74,12 @@ jobs:
       - name: Refuse to run against a protected branch
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+          # releases/* is protected the same as main (see CLAUDE.md) -- this workflow commits
+          # straight to the branch it runs on, which a ruleset-protected branch must never accept
+          # outside a PR merge.
+          if [ "${GITHUB_REF_NAME}" = "main" ] || [[ "${GITHUB_REF_NAME}" == releases/* ]]; then
             echo "##[error] This workflow commits the recorded fixture to the branch it runs on." \
-                 "Dispatch it against the feature branch that adds the connector, never main."
+                 "Dispatch it against the feature branch that adds the connector, never main or a releases/* branch."
             exit 1
           fi
 
