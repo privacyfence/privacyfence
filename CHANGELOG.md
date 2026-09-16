@@ -144,7 +144,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to the other two platforms'.
   What is new is the permission model: Windows has no mode bits, so the layout is NTFS ACLs written
   with `icacls` and re-checked on every daemon start, with `/inheritance:r` first because
-  `%ProgramData%` otherwise grants every account on the machine read access by inheritance. The
+  `%ProgramData%` otherwise grants every account on the machine read access by inheritance, and
+  `/setowner` because an owner can rewrite an ACL whatever it says — and moving the data directory
+  out of `%LOCALAPPDATA%` would otherwise leave it owned by the account being excluded. The
   shared `handoff` directory ends up *tighter* than on POSIX — readable by the new
   `PrivacyFenceUsers` group, not writable, since both control channels are named pipes rather than
   socket files and nothing in your session needs to create anything there.

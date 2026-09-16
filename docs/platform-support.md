@@ -111,9 +111,16 @@ over is the permission model:
 | `…\authority` | service account, `SYSTEM`, `Administrators` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
 | `…\handoff` | the above, plus the `PrivacyFenceUsers` local group, read-only | `2770` | `mcp_token`, `mcp_url`, the discovery files |
 
-`icacls /inheritance:r` on each of those, before any grant, is the load-bearing step:
-`%ProgramData%` grants `Users` read-and-execute by inheritance, so a directory created under it is
-readable by every account on the machine until that inheritance is cut. The installing user is added
+Two steps before any grant are load-bearing, and both are easy to leave out. `icacls
+/inheritance:r` on each directory: `%ProgramData%` grants `Users` read-and-execute by inheritance,
+so a directory created under it is readable by every account on the machine until that inheritance
+is cut. And `icacls /setowner` on the tree to `Administrators`: an object's owner holds `WRITE_DAC`
+implicitly whatever its ACL says, and `enable` *moves* the data directory out of `%LOCALAPPDATA%` —
+a move preserves ownership, so without this the separated root would be owned by the very account
+being excluded, wearing an ACL that account could rewrite with one command and no elevation.
+Administrators rather than the service account, deliberately: it needs no privilege juggling, and
+it denies the daemon `WRITE_DAC` on its own boundary. Ownership is checked by `… status` and
+re-checked on every daemon start, alongside the grants. The installing user is added
 to `PrivacyFenceUsers`, which is what keeps `handoff\` reachable from their session — Windows puts
 group memberships in the logon token, so this needs a sign-out/sign-in to take effect, exactly like
 macOS and Linux. `src/privacyfence/windows_acl.py` is both the translation table above and the audit

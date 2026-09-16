@@ -1106,6 +1106,29 @@ class TestWindowsInstallerContract:
         assert "function Assert-ImageProtected" in self.SCRIPT
         assert "Assert-ImageProtected" in self.SCRIPT.split("function Invoke-Enable", 1)[1]
 
+    def test_takes_ownership_of_the_migrated_tree(self):
+        # The hole a real platform-windows run exposed: Move-Data moves the
+        # data directory out of %LOCALAPPDATA%, and a move preserves
+        # ownership -- so without this the separated root is owned by the
+        # human account being excluded, who can then rewrite every ACL below
+        # it with no elevation at all.
+        set_layout = self.SCRIPT.split("function Set-Layout", 1)[1].split("\nfunction ", 1)[0]
+
+        assert "'/setowner'" in set_layout
+        assert "$SidAdministrators" in set_layout
+        # And verified rather than hoped for: /c lets icacls continue past an
+        # entry it cannot rewrite, so a silent failure would leave a layout
+        # that looks right in every other respect.
+        assert "could not take ownership" in set_layout
+
+    def test_disable_hands_ownership_back(self):
+        disable = self.SCRIPT.split("function Invoke-Disable", 1)[1]
+
+        assert "'/setowner', $script:OwnerUser" in disable
+
+    def test_status_checks_the_owner(self):
+        assert "WRONG OWNER" in self.SCRIPT
+
     def test_severs_inheritance_before_granting_anything(self):
         # The single most load-bearing line in the script: %ProgramData%
         # grants Users read-and-execute by inheritance, so a directory
@@ -1326,6 +1349,51 @@ class TestWindowsLayoutAudit:
 
         assert len(problems) == 3
         assert all("no access-control list at all" in problem for problem in problems)
+
+    def test_reports_a_root_the_human_still_owns(self, separated_windows, monkeypatch):
+        # The Windows counterpart of "authority/ is 0700 under the human's
+        # own uid", and sharper: an owner holds WRITE_DAC implicitly, so a
+        # perfect ACL under the wrong owner is one command from being undone.
+        # `enable` *moves* the data directory out of %LOCALAPPDATA%, and a
+        # move preserves ownership -- so this is the default outcome without
+        # an explicit /setowner, not an exotic one.
+        self._install_dacls(monkeypatch, separated_windows)
+        monkeypatch.setattr(windows_acl, "read_owner", lambda _path: "MACHINE\\alice")
+
+        problems = privilege_separation.audit_layout()
+
+        assert len(problems) == 3
+        assert all("rewrite its access-control list" in problem for problem in problems)
+
+    def test_an_administrator_owned_layout_is_clean(self, separated_windows, monkeypatch):
+        self._install_dacls(monkeypatch, separated_windows)
+        monkeypatch.setattr(
+            windows_acl, "read_owner", lambda _path: "BUILTIN\\Administrators"
+        )
+
+        assert privilege_separation.audit_layout() == []
+
+    def test_an_owner_rights_ace_is_resolved_against_that_owner(
+        self, separated_windows, monkeypatch,
+    ):
+        # The whole reason audit_layout() reads the owner before the DACL
+        # rather than passing each check a bare ACE list -- found by a real
+        # platform-windows run, where an OWNER RIGHTS ACE Windows had put on
+        # the directory failed a correctly provisioned root.
+        owner_rights = windows_acl.Ace(
+            windows_acl.OWNER_RIGHTS_TRUSTEE, windows_acl.FILE_ALL_ACCESS
+        )
+        self._install_dacls(monkeypatch, separated_windows, {
+            separated_windows: [
+                windows_acl.Ace(self.ACCOUNT, windows_acl.FILE_ALL_ACCESS),
+                owner_rights,
+            ],
+        })
+        monkeypatch.setattr(
+            windows_acl, "read_owner", lambda _path: "BUILTIN\\Administrators"
+        )
+
+        assert privilege_separation.audit_layout() == []
 
     def test_checks_the_daemons_own_image_when_frozen(self, separated_windows, monkeypatch, tmp_path):
         # The check with no POSIX counterpart. Both the executable and the

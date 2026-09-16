@@ -434,6 +434,46 @@ function Set-Layout {
     }
     Move-HandoffFilesIn
 
+    # Ownership first, and it matters more than any grant below. An object's
+    # owner holds WRITE_DAC implicitly on Windows, whatever its ACL says --
+    # and Move-Data above *moved* this tree out of %LOCALAPPDATA%, which
+    # preserves ownership. Without this line the separated root ends up owned
+    # by the very human account the separation exists to exclude, wearing a
+    # perfect-looking ACL that account can rewrite with one command and no
+    # elevation.
+    #
+    # Administrators rather than the service account, for two reasons: it
+    # needs no privilege juggling (an elevated shell can always set it),
+    # and it denies the daemon WRITE_DAC on its own boundary -- a service
+    # that can rewrite the ACL protecting it from the agent is one
+    # compromise away from not having one. Administrators can already defeat
+    # all of this by taking ownership, which issue #428's "Honest limits"
+    # says in as many words, so nothing is given away.
+    #
+    # It also settles OWNER RIGHTS (S-1-3-4), an ACE Windows materializes on
+    # directories under a user profile that grants *whoever owns the object*
+    # and survives /inheritance:r. Owned by Administrators it is harmless;
+    # owned by the human it is a bypass. windows_acl.py resolves it against
+    # the real owner rather than trusting the ACE on its face.
+    Invoke-Icacls @($SystemRoot, '/setowner', $SidAdministrators, '/t', '/c', '/q') -IgnoreFailure
+    # -IgnoreFailure above, then verified here: /c lets icacls continue past
+    # an individual entry deep in the tree it cannot rewrite, which is worth
+    # tolerating, but the *root's* own owner is the thing everything below
+    # depends on. A silent failure there would leave a layout that looks
+    # right in every other respect, so it stops here -- the data has moved by
+    # now, and `disable` is the way back.
+    $newOwner = (Get-Acl -LiteralPath $SystemRoot).Owner
+    if (-not (Test-TrustedIdentity -Identity $newOwner)) {
+        Stop-WithError @"
+could not take ownership of $SystemRoot -- it is still owned by '$newOwner'.
+
+An object's owner can rewrite its access-control list at will, so leaving it
+owned by that account would make every permission below advisory. Nothing has
+been broken: run '$PSCommandPath disable' to move your data back, and re-run
+'enable' from a PowerShell started with 'Run as administrator'.
+"@
+    }
+
     # The root. /inheritance:r first, and it is the single most load-bearing
     # line in this file: %ProgramData% grants Users read-and-execute by
     # inheritance, so a directory created under it is readable by every account
@@ -678,9 +718,12 @@ function Invoke-Disable {
         Write-Note "moving $SystemRoot back to $legacy"
         Move-Item -LiteralPath $SystemRoot -Destination $legacy -Force
     }
-    # Back to what %LOCALAPPDATA% gives an ordinary directory: inherited from
-    # the user's own profile, which is what protected this data before
-    # separation and what will protect it again afterwards.
+    # Back to what %LOCALAPPDATA% gives an ordinary directory: owned by the
+    # human again and inherited from their own profile, which is what
+    # protected this data before separation and what will protect it again
+    # afterwards. The /setowner is the mirror of Set-Layout's own: without it
+    # the returned tree stays owned by Administrators, and `disable` would
+    # hand back a data directory its owner cannot fully control.
     #
     # -IgnoreFailure on both, unlike every icacls call in `enable`: the data
     # has already been moved by the time these run, so aborting here would
@@ -738,6 +781,17 @@ function Invoke-Status {
     }
 
     if (Test-Path -LiteralPath $SystemRoot) {
+        # Checked before any grant, and reported first: an owner outside this
+        # design can rewrite everything below it, so a clean ACL under the
+        # wrong owner is not a clean layout.
+        $rootOwner = (Get-Acl -LiteralPath $SystemRoot).Owner
+        if ((Test-TrustedIdentity -Identity $rootOwner) -or $rootOwner -ieq $ServiceAccount) {
+            Write-Host "  ok               $SystemRoot is owned by $rootOwner"
+        } else {
+            Write-Host "  WRONG OWNER      $SystemRoot is owned by '$rootOwner' -- an owner can rewrite the ACL at will"
+            $problems = 1
+        }
+
         $listable = @(Get-Acl -LiteralPath $SystemRoot | Select-Object -ExpandProperty Access |
             Where-Object { (Test-RuleGrantsRead -Rule $_) -and -not (Test-TrustedIdentity -Identity $_.IdentityReference.Value) -and $_.IdentityReference.Value -ine $ServiceAccount })
         if ($listable.Count -gt 0) {

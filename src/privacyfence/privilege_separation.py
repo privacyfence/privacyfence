@@ -751,6 +751,15 @@ def windows_layout_problems(state: Separation) -> list[str]:
     )
     problems: list[str] = []
     for path, check, extra in checks:
+        # Read before the DACL and passed into every check: an object's
+        # owner holds WRITE_DAC implicitly, so it decides both whether the
+        # ACL means anything at all (owner_problems) and what an OWNER
+        # RIGHTS ACE inside it actually grants (windows_acl.
+        # effective_trustee).
+        owner = windows_acl.read_owner(path)
+        problems.extend(
+            windows_acl.owner_problems(path, owner, service_account=state.service_account)
+        )
         aces = windows_acl.read_dacl(path)
         if aces is None:
             if windows_acl.has_null_dacl(path):
@@ -759,7 +768,9 @@ def windows_layout_problems(state: Separation) -> list[str]:
                     "this machine full control over it."
                 )
             continue
-        problems.extend(check(path, aces, service_account=state.service_account, **extra))
+        problems.extend(
+            check(path, aces, service_account=state.service_account, owner=owner, **extra)
+        )
     for image in daemon_image_paths():
         aces = windows_acl.read_dacl(image)
         if aces is not None:

@@ -110,13 +110,15 @@ MODULE_FLOORS: dict[str, float] = {
     # so a gap in the mask arithmetic below means the audit stops reporting a
     # data directory every account on the machine can enumerate.
     #
-    # 81.0 rather than a number in the nineties, and deliberately not raised
+    # 83.0 rather than a number in the nineties, and deliberately not raised
     # by adding pragmas: this module is half pure logic (every audit
-    # function, all of it covered) and half three pywin32 calls that cannot
+    # function, all of it covered) and half four pywin32 calls that cannot
     # execute on this repo's Linux CI at all. The floor protects the half
     # that can; tests/platform/test_windows_acls.py covers the other half on
-    # the platform-windows job, against real ACLs icacls wrote.
-    "src/privacyfence/windows_acl.py": 81.0,
+    # the platform-windows job, against real ACLs icacls wrote. (Raised from
+    # its initial 81.0 by the owner/OWNER RIGHTS resolution that first real
+    # Windows run made necessary -- all of it pure, all of it tested.)
+    "src/privacyfence/windows_acl.py": 83.0,
     # SEC-11: OIDC discovery trust validation.
     "src/privacyfence/org_identity.py": 100.0,
     "src/privacyfence/web/routes_org_identity.py": 99.0,

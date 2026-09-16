@@ -301,3 +301,122 @@ class TestWin32LookupsAreBestEffort:
 
     def test_lookup_account_sid_answers_none(self):
         assert windows_acl.lookup_account_sid(ACCOUNT) is None
+
+    def test_read_owner_answers_none(self, tmp_path):
+        assert windows_acl.read_owner(tmp_path) is None
+
+
+class TestOwnerRights:
+    """``OWNER RIGHTS`` (S-1-3-4) is not a principal — it grants whoever owns
+    the object — and a real ``platform-windows`` run is what put this class
+    here: an ACE Windows had materialized on a directory under a user
+    profile, which ``icacls /inheritance:r`` does not remove, made a
+    correctly provisioned root fail its own audit.
+
+    Reading it as a literal trustee calls that root broken. Ignoring it
+    calls a *human-owned* root fine, which is the bypass this whole phase
+    exists to close. So it is resolved against the real owner, and these are
+    the two directions that has to come out right in.
+    """
+
+    OWNER_RIGHTS_FULL = windows_acl.Ace(
+        windows_acl.OWNER_RIGHTS_TRUSTEE, windows_acl.FILE_ALL_ACCESS
+    )
+
+    def test_an_administrator_owned_root_accepts_it(self):
+        aces = [windows_acl.Ace(ACCOUNT, windows_acl.FILE_ALL_ACCESS), self.OWNER_RIGHTS_FULL]
+
+        assert windows_acl.root_problems(
+            PATH, aces, service_account=ACCOUNT, owner="BUILTIN\\Administrators",
+        ) == []
+
+    def test_a_service_account_owned_root_accepts_it(self):
+        aces = [windows_acl.Ace(ACCOUNT, windows_acl.FILE_ALL_ACCESS), self.OWNER_RIGHTS_FULL]
+
+        assert windows_acl.root_problems(
+            PATH, aces, service_account=ACCOUNT, owner=ACCOUNT,
+        ) == []
+
+    def test_a_human_owned_root_reports_it(self):
+        # The case that makes this worth resolving rather than trusting:
+        # identical DACL, and every byte of protection in it is void.
+        aces = [windows_acl.Ace(ACCOUNT, windows_acl.FILE_ALL_ACCESS), self.OWNER_RIGHTS_FULL]
+
+        problems = windows_acl.root_problems(
+            PATH, aces, service_account=ACCOUNT, owner="MACHINE\\alice",
+        )
+
+        assert len(problems) == 1
+        assert "list its contents" in problems[0]
+        # Names both the ACE to remove and who it currently reaches: one
+        # without the other sends the reader looking for an account that
+        # does not exist, or for an ACE they cannot find.
+        assert "'OWNER RIGHTS'" in problems[0]
+        assert "'MACHINE\\alice'" in problems[0]
+
+    def test_an_unknown_owner_is_treated_as_untrusted(self):
+        # read_owner() answering None must fail loud rather than silent: a
+        # reported grant that turns out harmless costs a log line, an
+        # accepted one that turns out to be a bypass costs the feature.
+        aces = [windows_acl.Ace(ACCOUNT, windows_acl.FILE_ALL_ACCESS), self.OWNER_RIGHTS_FULL]
+
+        assert len(windows_acl.root_problems(PATH, aces, service_account=ACCOUNT)) == 1
+
+    def test_it_resolves_in_the_authority_check_too(self):
+        aces = [windows_acl.Ace(ACCOUNT, windows_acl.FILE_ALL_ACCESS), self.OWNER_RIGHTS_FULL]
+
+        assert windows_acl.authority_problems(
+            PATH, aces, service_account=ACCOUNT, owner="BUILTIN\\Administrators",
+        ) == []
+        assert len(windows_acl.authority_problems(
+            PATH, aces, service_account=ACCOUNT, owner="MACHINE\\alice",
+        )) == 1
+
+    def test_it_can_satisfy_the_handoff_groups_read_grant(self):
+        # The other direction, and the reason effective_trustee() is applied
+        # to the "is anything *missing*" checks and not only to the "is
+        # anything extra" ones: an OWNER RIGHTS ACE on a group-owned handoff
+        # directory really is the group's read grant.
+        aces = [
+            windows_acl.Ace(ACCOUNT, windows_acl.FILE_ALL_ACCESS),
+            windows_acl.Ace(
+                windows_acl.OWNER_RIGHTS_TRUSTEE, windows_acl.FILE_GENERIC_READ_EXECUTE
+            ),
+        ]
+
+        assert windows_acl.handoff_problems(
+            PATH, aces, service_account=ACCOUNT, service_group=GROUP, owner=f"MACHINE\\{GROUP}",
+        ) == []
+
+
+class TestOwnerProblems:
+    """The check this module shipped without, because its own docstring
+    claimed Windows had no ownership question to ask.
+
+    It has a sharper one than POSIX: an object's owner holds ``WRITE_DAC``
+    implicitly, so an owner outside this design does not merely have what
+    the ACL grants — they can grant themselves the rest, with no elevation.
+    And ``enable`` *moves* the data directory out of ``%LOCALAPPDATA%``,
+    which preserves ownership, so without an explicit ``/setowner`` the
+    separated root is owned by exactly the account being excluded.
+    """
+
+    def test_an_administrator_owned_root_is_clean(self):
+        assert windows_acl.owner_problems(
+            PATH, "BUILTIN\\Administrators", service_account=ACCOUNT
+        ) == []
+
+    def test_a_service_account_owned_root_is_clean(self):
+        assert windows_acl.owner_problems(PATH, ACCOUNT, service_account=ACCOUNT) == []
+
+    def test_a_human_owned_root_is_reported(self):
+        problems = windows_acl.owner_problems(PATH, "MACHINE\\alice", service_account=ACCOUNT)
+
+        assert len(problems) == 1
+        assert "can rewrite its access-control list at will" in problems[0]
+        assert "'MACHINE\\alice'" in problems[0]
+
+    def test_an_unreadable_owner_is_skipped_rather_than_reported(self):
+        # Best-effort, same posture as every other probe here: the process
+        # running the audit may legitimately not be able to see a path.
+        assert windows_acl.owner_problems(PATH, None, service_account=ACCOUNT) == []

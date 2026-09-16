@@ -44,6 +44,17 @@ than raising on a platform or a path where the question has no answer.
 ``pywin32`` is not a new dependency -- ``web/control_channel.py``'s named
 pipes already need it, and it arrives transitively via ``mcp`` regardless.
 
+## Ownership is part of the answer, not a separate question
+
+An object's owner implicitly holds ``WRITE_DAC`` on Windows, whatever its
+DACL says -- so every grant below is advisory against whoever owns the
+directory, and a well-formed ACL on a human-owned root is separation that
+can be undone with one command and no elevation. ``read_owner()`` and
+``owner_problems()`` cover that, and it matters here specifically because
+``enable`` *moves* the data directory out of ``%LOCALAPPDATA%`` and a move
+preserves ownership. The related trap is ``OWNER RIGHTS`` (see that
+constant), an ACE that grants the owner rather than any fixed principal.
+
 ## What "trusted" means here
 
 ``SYSTEM`` and ``Administrators`` are ignored by every check below, which is
@@ -109,6 +120,21 @@ _TRAVERSE_BITS = FILE_EXECUTE | GENERIC_EXECUTE | GENERIC_ALL
 # why each one is here rather than merely unmentioned.
 TRUSTED_TRUSTEES = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators")
 
+# S-1-3-4. Not a principal at all: an ACE naming it grants its rights to
+# whoever currently *owns* the object, whoever that turns out to be. Windows
+# puts one on directories under a user profile, it survives
+# ``icacls /inheritance:r`` (it is not an inherited ACE -- the file system
+# materializes it at creation), and a real ``platform-windows`` run is what
+# established both of those facts rather than any documentation.
+#
+# It therefore cannot be judged on its own: ``OWNER RIGHTS:(F)`` is harmless
+# on a directory an administrator owns and a complete bypass on one the
+# logged-in human owns. Every check below resolves it against the object's
+# real owner before deciding -- see ``effective_trustee()`` -- and
+# ``owner_problems()`` is what makes sure that owner is someone this design
+# can accept in the first place.
+OWNER_RIGHTS_TRUSTEE = "OWNER RIGHTS"
+
 
 @dataclass(frozen=True)
 class Ace:
@@ -168,16 +194,54 @@ def is_trusted(trustee: str) -> bool:
     return any(trustee_matches(trustee, known) for known in TRUSTED_TRUSTEES)
 
 
-def _unexpected(aces: list[Ace], allowed_trustees: tuple[str, ...]) -> list[Ace]:
+def effective_trustee(trustee: str, owner: str | None) -> str:
+    """Who an ACE actually grants to.
+
+    Itself, for every ordinary trustee. For ``OWNER RIGHTS`` (see that
+    constant) it is the object's current owner, so the same ACE is read as
+    ``BUILTIN\\Administrators`` on an administrator-owned directory and as
+    ``MACHINE\\alice`` on one alice owns -- which is exactly the difference
+    between "fine" and "privilege separation is not in effect".
+
+    An unknown owner (``read_owner()`` could not answer) leaves the trustee
+    as the literal ``OWNER RIGHTS``, which no check treats as trusted. That
+    is the deliberate direction to fail in: reporting a grant that may turn
+    out to be harmless costs a confusing log line, and silently accepting
+    one that may be a bypass costs the whole feature.
+    """
+    if owner is not None and trustee_matches(trustee, OWNER_RIGHTS_TRUSTEE):
+        return owner
+    return trustee
+
+
+def describe_ace(ace: Ace, owner: str | None) -> str:
+    """How an ACE is named in a finding. Identical to its trustee, except
+    for an ``OWNER RIGHTS`` ACE, where naming only the literal trustee would
+    send a reader looking for an account that does not exist -- and naming
+    only the owner would hide which ACE to actually remove."""
+    resolved = effective_trustee(ace.trustee, owner)
+    if resolved == ace.trustee:
+        return f"'{ace.trustee}'"
+    return f"'{ace.trustee}' (which grants this object's owner, '{resolved}')"
+
+
+def _unexpected(
+    aces: list[Ace], allowed_trustees: tuple[str, ...], owner: str | None = None,
+) -> list[Ace]:
     return [
         ace for ace in aces
         if ace.grants_anything()
-        and not is_trusted(ace.trustee)
-        and not any(trustee_matches(ace.trustee, expected) for expected in allowed_trustees)
+        and not is_trusted(effective_trustee(ace.trustee, owner))
+        and not any(
+            trustee_matches(effective_trustee(ace.trustee, owner), expected)
+            for expected in allowed_trustees
+        )
     ]
 
 
-def root_problems(path: Path, aces: list[Ace], *, service_account: str) -> list[str]:
+def root_problems(
+    path: Path, aces: list[Ace], *, service_account: str, owner: str | None = None,
+) -> list[str]:
     """The Windows reading of ``0711``: anyone may traverse the root to
     reach ``handoff/``, nobody but the service account may enumerate what is
     in it.
@@ -192,23 +256,26 @@ def root_problems(path: Path, aces: list[Ace], *, service_account: str) -> list[
     """
     problems = []
     for ace in aces:
-        if is_trusted(ace.trustee) or trustee_matches(ace.trustee, service_account):
+        resolved = effective_trustee(ace.trustee, owner)
+        if is_trusted(resolved) or trustee_matches(resolved, service_account):
             continue
         if ace.grants_read():
             problems.append(
-                f"{path} grants '{ace.trustee}' permission to list its contents "
+                f"{path} grants {describe_ace(ace, owner)} permission to list its contents "
                 f"(mask {ace.mask:#010x}) -- the separated root is meant to be traversable "
                 "but not enumerable, so everything under it is discoverable by any account "
                 "on this machine."
             )
         elif ace.grants_write():
             problems.append(
-                f"{path} grants '{ace.trustee}' write access (mask {ace.mask:#010x}) -- only "
-                f"the '{service_account}' account should be able to change anything under the "
-                "separated root."
+                f"{path} grants {describe_ace(ace, owner)} write access (mask "
+                f"{ace.mask:#010x}) -- only the '{service_account}' account should be able to "
+                "change anything under the separated root."
             )
     if not any(
-        trustee_matches(ace.trustee, service_account) and ace.grants_write() for ace in aces
+        trustee_matches(effective_trustee(ace.trustee, owner), service_account)
+        and ace.grants_write()
+        for ace in aces
     ):
         problems.append(
             f"{path} grants '{service_account}' no write access -- the daemon cannot own its "
@@ -217,7 +284,9 @@ def root_problems(path: Path, aces: list[Ace], *, service_account: str) -> list[
     return problems
 
 
-def authority_problems(path: Path, aces: list[Ace], *, service_account: str) -> list[str]:
+def authority_problems(
+    path: Path, aces: list[Ace], *, service_account: str, owner: str | None = None,
+) -> list[str]:
     """The Windows reading of ``0700``, and the check that actually matters:
     ``authority/`` holds the policy the agent may not edit, the WebAuthn
     store #426 depends on being unforgeable, and the audit log's HMAC key.
@@ -227,15 +296,21 @@ def authority_problems(path: Path, aces: list[Ace], *, service_account: str) -> 
     which approvals it can already grant itself.
     """
     return [
-        f"{path} grants '{ace.trustee}' access (mask {ace.mask:#010x}) -- the human-authority "
-        f"files are meant to be reachable only by the '{service_account}' account, so the "
-        "privilege separation this install advertises is not actually in effect."
-        for ace in _unexpected(aces, (service_account,))
+        f"{path} grants {describe_ace(ace, owner)} access (mask {ace.mask:#010x}) -- the "
+        f"human-authority files are meant to be reachable only by the '{service_account}' "
+        "account, so the privilege separation this install advertises is not actually in "
+        "effect."
+        for ace in _unexpected(aces, (service_account,), owner)
     ]
 
 
 def handoff_problems(
-    path: Path, aces: list[Ace], *, service_account: str, service_group: str,
+    path: Path,
+    aces: list[Ace],
+    *,
+    service_account: str,
+    service_group: str,
+    owner: str | None = None,
 ) -> list[str]:
     """``handoff/`` is deliberately not a boundary (ADR 0002 decision 6), so
     this checks that it is *open enough* as much as that it is not open too
@@ -250,20 +325,22 @@ def handoff_problems(
     discovery files the companion and the MCPB shim read, for nothing gained.
     """
     problems = [
-        f"{path} grants '{ace.trustee}' access (mask {ace.mask:#010x}) -- the handoff directory "
-        f"is shared between the '{service_account}' account and the '{service_group}' group "
-        "only."
-        for ace in _unexpected(aces, (service_account, service_group))
+        f"{path} grants {describe_ace(ace, owner)} access (mask {ace.mask:#010x}) -- the "
+        f"handoff directory is shared between the '{service_account}' account and the "
+        f"'{service_group}' group only."
+        for ace in _unexpected(aces, (service_account, service_group), owner)
     ]
     for ace in aces:
-        if trustee_matches(ace.trustee, service_group) and ace.grants_write():
+        if trustee_matches(effective_trustee(ace.trustee, owner), service_group) and ace.grants_write():
             problems.append(
                 f"{path} grants the '{service_group}' group write access (mask "
                 f"{ace.mask:#010x}) -- it needs to read what the daemon publishes there, never "
                 "to rewrite it."
             )
     if not any(
-        trustee_matches(ace.trustee, service_group) and ace.grants_read() for ace in aces
+        trustee_matches(effective_trustee(ace.trustee, owner), service_group)
+        and ace.grants_read()
+        for ace in aces
     ):
         problems.append(
             f"{path} grants the '{service_group}' group no read access -- the companion app "
@@ -271,6 +348,40 @@ def handoff_problems(
             "will look like a daemon that is not running."
         )
     return problems
+
+
+def owner_problems(path: Path, owner: str | None, *, service_account: str) -> list[str]:
+    """The Windows counterpart of ``privilege_separation._authority_owner_
+    problem()``, and the check this module shipped without because its own
+    docstring claimed Windows had no ownership question to ask. It does, and
+    it is sharper than the POSIX one.
+
+    **An object's owner always implicitly holds ``WRITE_DAC``**, whatever
+    the DACL says. So an owner outside this design does not merely have
+    whatever the ACL grants them -- they can grant themselves the rest, with
+    no elevation and nothing to stop them. Every ``icacls`` line the
+    installer writes is advisory against the owner.
+
+    That is not theoretical here, and it is the reason this check exists:
+    ``enable`` *moves* the data directory out of ``%LOCALAPPDATA%``, and a
+    move preserves ownership -- so without an explicit ``/setowner`` the
+    separated root ends up owned by the very human account the separation is
+    supposed to exclude, with a perfect-looking ACL on top of it.
+    ``scripts/windows_privilege_separation.ps1`` sets the owner to
+    ``Administrators``; this is what notices when that did not happen, or was
+    undone later.
+
+    An owner that cannot be read is not reported -- same best-effort posture
+    as every other probe here.
+    """
+    if owner is None or is_trusted(owner) or trustee_matches(owner, service_account):
+        return []
+    return [
+        f"{path} is owned by '{owner}', not by '{service_account}' or an administrator -- an "
+        "object's owner can rewrite its access-control list at will, so every permission this "
+        "install relies on is one command away from being undone by the account it is meant to "
+        "exclude."
+    ]
 
 
 def image_problems(path: Path, aces: list[Ace], *, service_account: str) -> list[str]:
@@ -325,6 +436,23 @@ def describe_sid(sid) -> str:  # noqa: ANN001 -- a pywin32 PySID, no type stub
         except Exception:
             return "<unknown>"
     return f"{domain}\\{name}" if domain else name
+
+
+def read_owner(path: Path) -> str | None:
+    """``path``'s owning principal as ``DOMAIN\\Name``, or None where that
+    cannot be read (not Windows, no such path, no permission). Feeds both
+    ``owner_problems()`` and every ``OWNER RIGHTS`` resolution above."""
+    try:
+        import win32security
+
+        descriptor = win32security.GetFileSecurity(
+            str(path), win32security.OWNER_SECURITY_INFORMATION
+        )
+        sid = descriptor.GetSecurityDescriptorOwner()
+    except Exception as exc:
+        logger.debug("Could not read the owner of %s: %s", path, exc)
+        return None
+    return None if sid is None else describe_sid(sid)
 
 
 def read_dacl(path: Path) -> list[Ace] | None:
@@ -435,17 +563,22 @@ __all__ = [
     "FILE_ALL_ACCESS",
     "FILE_GENERIC_READ_EXECUTE",
     "FILE_TRAVERSE_ONLY",
+    "OWNER_RIGHTS_TRUSTEE",
     "TRUSTED_TRUSTEES",
     "authority_problems",
     "current_account_name",
+    "describe_ace",
     "describe_sid",
+    "effective_trustee",
     "handoff_problems",
     "has_null_dacl",
     "image_problems",
     "is_trusted",
     "lookup_account_sid",
     "normalize_trustee",
+    "owner_problems",
     "read_dacl",
+    "read_owner",
     "root_problems",
     "trustee_matches",
 ]

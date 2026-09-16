@@ -137,6 +137,12 @@ stating rather than leaving to be discovered:
   (Slack/Salesforce/Atlassian) to open a sign-in page at all — the case ADR 0002 decision 5 was
   written for, arriving where it was predicted. `enable` refuses to install the daemon half alone.
 
+One thing has no POSIX counterpart at all: **ownership is part of the boundary**. An object's owner
+on Windows can rewrite its ACL regardless of what that ACL says, so `enable` takes ownership of the
+data directory (to `Administrators`) rather than letting the move out of `%LOCALAPPDATA%` leave it
+with you — otherwise every permission above would be advisory against the one account it is meant
+to exclude. `… disable` hands ownership back.
+
 One thing is *tighter* on Windows than on POSIX: the shared handoff directory is readable by the
 group, not writable. POSIX has to grant `rwx` there because the companion creates its own socket
 file in it and `connect(2)` needs write permission on the node; both Windows control channels are

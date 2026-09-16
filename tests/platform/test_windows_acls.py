@@ -88,13 +88,82 @@ def me() -> str:
 @pytest.fixture
 def provisioned_root(tmp_path, me):
     """``tmp_path``, ACL'd exactly the way the installer ACLs the separated
-    root -- with this process standing in for the service account."""
+    root -- with this process standing in for the service account.
+
+    The ordering mirrors ``Set-Layout``'s, ownership included. That is not
+    cosmetic: the first real run of this file failed here, on an
+    ``OWNER RIGHTS`` ACE that Windows had put on the directory and that
+    ``/inheritance:r`` did not remove. Reproducing the installer's real
+    sequence is what makes the assertion below mean anything.
+    """
     root = tmp_path / "PrivacyFence"
     root.mkdir()
+    icacls(str(root), "/setowner", me, "/t", "/c", "/q")
     icacls(str(root), "/inheritance:r", "/q")
     icacls(str(root), "/grant:r", f"{me}:(OI)(CI)(F)", f"{SID_SYSTEM}:(OI)(CI)(F)", "/q")
     icacls(str(root), "/grant", f"{SID_USERS}:(X)", "/q")
     return root
+
+
+class TestOwnerRights:
+    """The failure a real Windows runner found that no model could.
+
+    ``OWNER RIGHTS`` (S-1-3-4) is not a principal: an ACE naming it grants
+    whoever currently owns the object. Windows materializes one on
+    directories under a user profile, and -- the part that made this a
+    product bug rather than a test artifact -- it is *not* an inherited ACE,
+    so ``icacls /inheritance:r`` leaves it in place. An audit reading it as
+    a literal trustee calls a correctly provisioned directory broken; an
+    audit ignoring it calls a human-owned root fine. Neither is acceptable,
+    so the real owner decides.
+    """
+
+    def test_it_survives_severing_inheritance_where_windows_put_one(self, tmp_path, me):
+        # Not asserted as "this always happens" -- it is profile- and
+        # machine-dependent, which is exactly why no amount of reading
+        # documentation produced it. Asserted as "if it is there, it is
+        # explicit, and the audit has to cope": a skip keeps this honest on
+        # a machine whose temp directory carries no such ACE.
+        root = tmp_path / "PrivacyFence"
+        root.mkdir()
+        icacls(str(root), "/inheritance:r", "/q")
+        icacls(str(root), "/grant:r", f"{me}:(OI)(CI)(F)", "/q")
+
+        aces = windows_acl.read_dacl(root)
+        owner_rights = [
+            ace for ace in aces
+            if windows_acl.trustee_matches(ace.trustee, windows_acl.OWNER_RIGHTS_TRUSTEE)
+        ]
+        if not owner_rights:
+            pytest.skip("this machine's temp directory carries no OWNER RIGHTS ACE")
+        assert not any(ace.inherited for ace in owner_rights), (
+            "OWNER RIGHTS survived /inheritance:r while marked inherited, which should be "
+            "impossible -- re-read why windows_acl resolves it against the owner"
+        )
+
+    def test_the_audit_resolves_it_against_the_real_owner(self, provisioned_root, me):
+        # The end-to-end claim: a directory ACL'd and owned the way the
+        # installer leaves it passes, OWNER RIGHTS ACE and all, because that
+        # ACE grants the owner and the owner is the service account's
+        # stand-in.
+        assert windows_acl.read_owner(provisioned_root) is not None
+        assert windows_acl.root_problems(
+            provisioned_root,
+            windows_acl.read_dacl(provisioned_root),
+            service_account=me,
+            owner=windows_acl.read_owner(provisioned_root),
+        ) == []
+
+    def test_read_owner_answers_this_process_for_a_directory_it_created(self, tmp_path, me):
+        owner = windows_acl.read_owner(tmp_path)
+
+        assert owner is not None
+        # Elevated processes create objects owned by Administrators rather
+        # than by the user, and GitHub's runner account is an administrator
+        # -- so either answer is correct here, and asserting only one would
+        # make this test a report on the runner's elevation rather than on
+        # read_owner().
+        assert windows_acl.trustee_matches(owner, me) or windows_acl.is_trusted(owner)
 
 
 class TestCurrentAccountName:
@@ -162,9 +231,14 @@ class TestReadDacl:
         self, provisioned_root, me,
     ):
         # The end-to-end claim of this file: a real directory, ACL'd by the
-        # real commands, passing the real audit.
+        # real commands, passing the real audit. ``owner=`` is not optional
+        # decoration -- see TestOwnerRights for the ACE that makes the same
+        # DACL mean two different things depending on it.
         assert windows_acl.root_problems(
-            provisioned_root, windows_acl.read_dacl(provisioned_root), service_account=me,
+            provisioned_root,
+            windows_acl.read_dacl(provisioned_root),
+            service_account=me,
+            owner=windows_acl.read_owner(provisioned_root),
         ) == []
 
     def test_the_audit_reports_a_root_that_kept_its_inheritance(self, tmp_path, me):
@@ -176,7 +250,10 @@ class TestReadDacl:
         icacls(str(root), "/grant", f"{me}:(OI)(CI)(F)", "/q")
 
         problems = windows_acl.root_problems(
-            root, windows_acl.read_dacl(root), service_account=me,
+            root,
+            windows_acl.read_dacl(root),
+            service_account=me,
+            owner=windows_acl.read_owner(root),
         )
 
         assert any("list its contents" in problem for problem in problems)
@@ -285,5 +362,9 @@ class TestHandoffInheritance:
 
     def test_the_audit_accepts_a_handoff_the_installer_would_have_written(self, handoff, me):
         assert windows_acl.handoff_problems(
-            handoff, windows_acl.read_dacl(handoff), service_account=me, service_group="Users",
+            handoff,
+            windows_acl.read_dacl(handoff),
+            service_account=me,
+            service_group="Users",
+            owner=windows_acl.read_owner(handoff),
         ) == []
