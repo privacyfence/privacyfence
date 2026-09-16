@@ -106,6 +106,24 @@ class TestSection:
         with pytest.raises(LookupError, match="no section for 9.9.9"):
             changelog_section.section(SAMPLE, "9.9.9")
 
+    def test_duplicate_headings_for_the_same_version_raise(self):
+        # The B9 trap: 4.0.0's section was opened early, so following CLAUDE.md's "rename
+        # [Unreleased]" step literally produces a *second* ## [4.0.0]. Without this guard the
+        # parser matched the first heading, stopped at the next ##, emitted whichever half came
+        # first and exited 0 -- a green build shipping half the notes.
+        duplicated = (
+            "# Changelog\n\n"
+            "## [4.0.0] — 2026-09-16\n\n- the entries the release PR just renamed\n\n"
+            "## [4.0.0] — 2026-09-14\n\n- the entries written early, including Upgrading from 3.x\n"
+        )
+        with pytest.raises(LookupError, match="2 headings for 4.0.0"):
+            changelog_section.section(duplicated, "4.0.0")
+
+    def test_duplicate_detection_tolerates_a_leading_v(self):
+        duplicated = "# Changelog\n\n## [1.0.0]\n\n- a\n\n## [1.0.0]\n\n- b\n"
+        with pytest.raises(LookupError, match="2 headings for v1.0.0"):
+            changelog_section.section(duplicated, "v1.0.0")
+
     def test_empty_section_raises(self):
         # The permanent, currently-empty "## [Unreleased]" heading: an empty release body would be
         # published as a silently blank release, so it's an error, not a valid answer.
@@ -132,6 +150,12 @@ class TestMain:
         err = capsys.readouterr().err
         assert "no section for 3.0.0" in err
         assert "2.1.0" in err
+
+    def test_duplicate_version_exits_non_zero_rather_than_shipping_half_the_notes(self, capsys, tmp_path):
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text("# Changelog\n\n## [2.1.0]\n\n- first\n\n## [2.1.0]\n\n- second\n", encoding="utf-8")
+        assert changelog_section.main(["2.1.0", "--changelog", str(path)]) == 1
+        assert "2 headings for 2.1.0" in capsys.readouterr().err
 
     def test_unreadable_changelog_exits_non_zero(self, capsys, tmp_path):
         assert changelog_section.main(["1.0.0", "--changelog", str(tmp_path / "nope.md")]) == 1
@@ -188,6 +212,13 @@ class TestRealChangelog:
             if version not in ("Unreleased", "4.0.0") and f"v{version}" not in tags
         ]
         assert missing == []
+
+    def test_no_version_has_two_sections(self):
+        # The state the 4.0.0 release PR must not land in. Caught here, in under a second, rather
+        # than on tag day by a release whose body is half the notes and whose build is green.
+        versions = changelog_section.known_versions(REAL_TEXT)
+        duplicated = sorted({v for v in versions if versions.count(v) > 1})
+        assert duplicated == [], f"CHANGELOG.md has more than one section for: {duplicated}"
 
     def test_every_section_has_content(self):
         for version in changelog_section.known_versions(REAL_TEXT):
