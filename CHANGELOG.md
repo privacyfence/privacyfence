@@ -164,6 +164,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   existing event, mirroring `calendar_set_event_visibility`. A new `calendar_list_colors` tool
   lists Calendar's fixed color palette (id, name e.g. "Tomato", hex background/foreground) so a
   color can be picked by name instead of a numeric id. See issue #414.
+- Python 3.14 is now covered by CI. The `test-python-compat` job's matrix runs the core suite on
+  3.11, 3.12 and 3.14 (3.13 is the full `test` job's own version), so the interpreter that is the
+  default `python3` on current Ubuntu releases is proven rather than merely implied by
+  `requires-python = ">=3.11"`.
 
 ### Changed
 
