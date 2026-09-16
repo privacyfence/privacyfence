@@ -607,9 +607,14 @@ class TestRunningOrgModeService:
         assert self.client.get("/login").status_code == 302
         assert self.client.get("/.well-known/oauth-authorization-server").status_code == 200
         assert self.client.get("/approvals").status_code == 302  # not signed in yet -> redirect to /login
+        assert self.client.get("/settings").status_code == 302  # #400 -- same, redirect to /login
 
     def test_local_mode_only_routes_are_not_mounted(self):
-        assert self.client.get("/settings").status_code == 404
+        # /settings itself is a real, read-only route in org mode now (#400)
+        # -- see test_org_mode_routes_are_mounted below -- but the local-mode
+        # dispatcher's own /api/settings/{action} endpoint, and the local-
+        # mode-only state stream, must still 404.
+        assert self.client.get("/api/settings/quit_app").status_code == 404
         assert self.client.get("/api/state/stream").status_code == 404
 
     # -- Per-principal session creation ------------------------------------ #

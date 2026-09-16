@@ -2894,3 +2894,58 @@ class TestLoadPrincipalSettings:
 
         assert alice_verdict == "auto_accept"
         assert bob_verdict == "requires_review"
+
+    def test_populates_the_privacy_filter_registry_for_the_principal(self, tmp_path, monkeypatch):
+        """#400 Phase 0: before this fix, privacy_filter._REGISTRY kept its
+        default empty-dict entry for every principal but whichever one a
+        local-mode run_app() happened to call init_privacy_filter() for --
+        category_policy()'s own "group absent from the registry" fallback is
+        a hardcoded "allow", the opposite of org mode's intended fail-closed
+        "block" default. Every org principal must get a real registry entry,
+        the same way _load_principal_settings() already makes auto-accept
+        rules live for them."""
+        from privacyfence import privacy_filter
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings()
+            # No "privacy" section anywhere -- absent-group fail-safe default
+            # must be "block" (org_managed=True), never "allow".
+            assert privacy_filter.category_policy("privacy", "body") == "block"
+
+    def test_uses_the_install_wide_config_when_given_not_the_principals_own_file(self, tmp_path, monkeypatch):
+        """The install-wide PII/privacy policy is meant to be one server-
+        controlled file, not each principal's own unconfigured per-user
+        settings.yaml (docs/org-mode-setup-guide.md §9: "there is no
+        per-user override") -- an admin's explicit override in the real
+        server config must reach every principal, not just whichever one's
+        own file happens to (never) carry a privacy section."""
+        from privacyfence import privacy_filter
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+        install_wide = {"privacy": {"default_policy": "allow"}}
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings(install_wide_config=install_wide)
+            assert privacy_filter.category_policy("privacy", "body") == "allow"
+
+    def test_two_principals_get_independent_privacy_filter_entries(self, tmp_path, monkeypatch):
+        from privacyfence import privacy_filter
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+        self._seed(tmp_path, monkeypatch, "bob", {})
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings(install_wide_config={"privacy": {"default_policy": "allow"}})
+            alice_policy = privacy_filter.category_policy("privacy", "body")
+
+        with principal_scope(Principal(id="bob")):
+            daemon_main._load_principal_settings(install_wide_config={"privacy": {"default_policy": "block"}})
+            bob_policy = privacy_filter.category_policy("privacy", "body")
+
+        assert alice_policy == "allow"
+        assert bob_policy == "block"

@@ -132,6 +132,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   absent from that file — unlike local mode's `allow`) and auto-accept rules/grants (per-principal,
   under that user's own `users/<principal>/config/settings.yaml`) actually live today, since
   neither has a browser page of its own yet. See issue #400.
+- Org mode now has a read-only `/settings` page, linked from `/approvals`'s footer: every
+  signed-in principal can review and remove their own auto-accept rules and trusted-resource
+  grants (never another principal's), and an admin (`Principal.is_admin`) additionally gets
+  `/settings/privacy`, a read-only view of the effective install-wide PII/privacy policy that
+  names which groups are explicitly configured versus silently relying on org mode's fail-safe
+  `block` default. Removing a rule or grant goes through the same CSRF/origin checks as
+  `/approvals` and is written to the audit log. Fixes a related bug found while building this:
+  every org principal but whichever one a `local`-mode `run_app()` happened to initialize for
+  privacy-filter purposes was silently falling through to an unconditional "allow" for every PII
+  category, the opposite of org mode's intended fail-closed default — every org principal's
+  privacy-filter state is now populated (from the real install-wide policy, not an unconfigured
+  per-user file) the same way their auto-accept rules already were. Editing either surface from
+  the browser remains out of scope for this first cut. See issue #400.
 
 ### Added
 
@@ -170,6 +183,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   existing event, mirroring `calendar_set_event_visibility`. A new `calendar_list_colors` tool
   lists Calendar's fixed color palette (id, name e.g. "Tomato", hex background/foreground) so a
   color can be picked by name instead of a numeric id. See issue #414.
+- Python 3.14 is now covered by CI. The `test-python-compat` job's matrix runs the core suite on
+  3.11, 3.12 and 3.14 (3.13 is the full `test` job's own version), so the interpreter that is the
+  default `python3` on current Ubuntu releases is proven rather than merely implied by
+  `requires-python = ">=3.11"`.
 
 ### Changed
 

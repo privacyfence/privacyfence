@@ -32,7 +32,8 @@ jobs:
     # typecheck and build) and runs on 3.13 only -- the version
     # pyproject.toml's [project.optional-dependencies].dev/build tooling
     # and the packaging workflows (build.yml) target. The other
-    # supported versions (3.11, the `requires-python` floor, and 3.12) are covered via
+    # supported versions (3.11, the `requires-python` floor, 3.12, and 3.14,
+    # the default interpreter on current Ubuntu releases) are covered via
     # the `test-python-compat` job below with a reduced, Node-free suite --
     # running the Node/shim steps again per Python version would be pure
     # cost with no signal, since the shim is a separate Node runtime not
@@ -160,8 +161,8 @@ jobs:
 
   # Prove the
   # package actually works on every Python version pyproject.toml's
-  # `requires-python = ">=3.11"` claims to support, not just the 3.13 the
-  # `test` job above happens to pin. Deliberately independent of `test`
+  # `requires-python = ">=3.11"` claims to support -- both below and above
+  # the 3.13 the `test` job above happens to pin. Deliberately independent of `test`
   # (no `needs:`) so this runs in parallel and a failure here doesn't hide
   # behind/wait on the full job.
   #
@@ -181,7 +182,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        # 3.13 is deliberately absent: that's the `test` job's own version,
+        # so a leg here would be a second, reduced run of a suite that job
+        # already runs in full. 3.14 is here because it is the default
+        # `python3` on current Ubuntu releases -- the interpreter a
+        # `pip install privacyfence` on a fresh box actually resolves
+        # against, which `requires-python = ">=3.11"` already claims to
+        # support and nothing proved until now.
+        python-version: ['3.11', '3.12', '3.14']
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -205,7 +213,7 @@ jobs:
       # Same Phase 10 capture as the `test` job's identically-named step --
       # the matrix leg's own Python version is folded into the artifact name
       # since `actions/upload-artifact` needs a unique name per matrix leg
-      # in the same job (both legs would otherwise upload to the same name).
+      # in the same job (every leg would otherwise upload to the same name).
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
