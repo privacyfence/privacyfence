@@ -104,8 +104,8 @@ what is being built.
 
 ### Packaged-artifact release gating
 
-Every published DMG/installer/`.deb` is started and exercised, automatically, before it (or anything
-else from the same tag) actually ships.
+The now-removed `automated-test-strategy-plan.md` Phase 6.4: every published DMG/installer/`.deb` is started
+and exercised, automatically, before it (or anything else from the same tag) actually ships.
 
 Within `build.yml`, this needs no cross-workflow trickery — each of the `build` (macOS),
 `build-windows`, and `build-deb` jobs runs its own packaged-artifact test
@@ -278,6 +278,22 @@ Doing (1) without (2) leaves the website inviting people to a download that will
   CHANGELOG.md" above.
 - Definition of done for a PR is the checklist in
   [`docs/coding-and-testing-guidelines.md` §2.7](docs/coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo).
+- `releases/*` (e.g. `releases/4.1-dev`) is a long-lived, cross-cycle integration branch, cut from
+  `main` when a batch of work for the next release needs to accumulate somewhere other than `main`
+  while `main` stays frozen for a prior release's remaining blockers (renamed from the original,
+  one-off `4.1-dev` for exactly this reuse — the pattern, not just that one branch, is what's
+  protected now). It's a deliberate exception to "feature branches go straight to `main`", not a
+  new standing convention: branches still fork from and PR into whichever `releases/*` branch is
+  current, using the normal `<type>/<kebab-case-description>` naming, and the `releases/*` branch
+  itself is deleted once it merges back into `main` in one PR.
+- `releases/*` is protected the same way `main` is — same ruleset (PR required, no force-push/
+  deletion, the same required status checks `scripts/update_branch_protection.py` manages for
+  `main`; run it with `--branch "releases/**"` to sync that ruleset too) and the same CI: every
+  `.github/workflows/*.yml` push trigger scoped to `branches: [main]` for a test/audit/lint job
+  also lists `"releases/**"`. This deliberately does **not** extend to the production-deploy
+  triggers (`pages.yml`'s website deploy, `deploy-download-worker.yml`'s Worker deploy + live D1
+  migrations) — those stay `main`-only, so merging into a `releases/*` branch never ships to
+  production ahead of that branch's eventual merge into `main`.
 
 ## Parallel sessions & worktrees
 

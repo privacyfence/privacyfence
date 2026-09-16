@@ -2,7 +2,10 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    # releases/** carries the same per-PR gating as main (see CLAUDE.md's "Branching & PRs" --
+    # these are long-lived cross-cycle integration branches, protected like main), so a post-merge
+    # push there gets the same push-triggered run main gets, not just the pull_request run.
+    branches: [main, "releases/**"]
   pull_request:
   workflow_dispatch:   # allow manual runs from the Actions tab
 
@@ -127,10 +130,11 @@ jobs:
             htmlcov/
           retention-days: 30
 
-      # Everything under test-results/: test_browser_smoke.py's own Phase 4.5
+      # Everything under test-results/ (the now-removed automated-test-strategy-plan.md
+      # Phase 10): test_browser_smoke.py's own Phase 4.5
       # _capture_failure_artifacts fixture (screenshot/DOM/console/daemon-log,
-      # under test-results/browser-smoke/) plus tests/diagnostics.py's own generic
-      # capture (wired in via tests/conftest.py's
+      # under test-results/browser-smoke/) plus Phase 10's own generic
+      # capture (tests/diagnostics.py, wired in via tests/conftest.py's
       # pytest_runtest_makereport) for any failing `packaged`/`system`-marked
       # test this job's own full-suite run reaches (tests/system/
       # test_local_mode_system.py, and any packaged-artifact test whose own
@@ -211,18 +215,26 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # A real-Windows confirmation that nothing path-separator- or Path-handling-related breaks that
-  # the `test` job above (already proven platform-independent on a second POSIX platform via Linux
-  # CI) can't catch. Originally gated to workflow_dispatch only, with "keep it permanent" vs. "rely
-  # on build.yml's release-time Windows job alone" left as a decision for once it had actually been
-  # run for real. That decision came down in favor of the former: promoted to a permanent per-PR
-  # leg (renamed test-windows -> platform-windows to match) now that it's proven green.
+  # The now-removed windows-support-plan.md Phase 6.2 (B5 in the now-removed windows-linux-
+  # support-plan.md): a real-Windows confirmation that nothing path-
+  # separator- or Path-handling-related breaks that the `test` job above
+  # (already proven platform-independent on a second POSIX platform via
+  # Linux CI) can't catch. Originally gated to workflow_dispatch only, with
+  # Phase 6.2's own text leaving "keep it permanent" vs. "rely on build.yml's
+  # release-time Windows job alone" as a decision for once it had actually
+  # been run for real. The now-removed automated-test-strategy-plan.md Phase 2.1 makes
+  # that call: promoted to a permanent per-PR leg (renamed test-windows ->
+  # platform-windows to match) now that it's proven green.
   #
-  # Deliberately still the full core suite, not narrowed to a targeted tests/platform/ subset --
-  # narrowing was considered and decided against: this job's own first real run found four genuine
-  # cross-platform bugs in ordinary modules with no platform marker (settings_controller.py,
-  # drive.py, a shim-contract test, an audit-log test), none of which lived in tests/platform/'s
-  # own subject matter -- a subset chosen ahead of time would have missed them.
+  # Deliberately still the full core suite, not narrowed to Phase 2.3's
+  # targeted tests/platform/ subset -- Phase 2.4 considered narrowing and
+  # decided against it: this job's own first real run found four genuine
+  # cross-platform bugs (the now-removed windows-support-plan.md Phase 6.3) in ordinary
+  # modules with no platform marker (settings_controller.py, drive.py, a
+  # shim-contract test, an audit-log test), none of which lived in
+  # tests/platform/'s own subject matter -- a subset chosen ahead of time
+  # would have missed them. See the now-removed automated-test-strategy-plan.md Phase 2's
+  # status note for the full reasoning.
   platform-windows:
     runs-on: windows-latest
 
@@ -255,15 +267,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # The macOS leg of the
-  # same "does the runtime work on every desktop OS" question the
+  # The now-removed automated-test-strategy-plan.md Phase 2.2: the macOS leg of the
+  # same "does the runtime work on every desktop OS" question 2.1's
   # platform-windows job already answers for Windows -- runs the identical
   # core suite (same reasoning: catch macOS-specific breakage in the Python
   # core, not re-prove the Node-runtime shim, which build.yml's real DMG
   # build already exercises on macos-latest separately). Deliberately not
   # scoped to `scripts/build_dmg.sh`/signing/notarization -- that stays
   # build.yml's job, tag-triggered only; this job runs from source, on
-  # every PR, the same way platform-windows does. Same decision as
+  # every PR, the same way platform-windows does. Same Phase 2.4 decision as
   # platform-windows above: full core suite, not narrowed to tests/platform/.
   platform-macos:
     runs-on: macos-latest
@@ -295,13 +307,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # tests/integration/test_org_ubuntu_release_smoke.py gates its whole module behind
+  # The now-removed automated-test-strategy-plan.md Phase 8 item 2: tests/integration/
+  # test_org_ubuntu_release_smoke.py gates its whole module behind
   # PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS -- unset everywhere else in this
   # file, so the `test` job's own full-suite run above always skips it
-  # instantly. Previously, the only thing that ever set that variable
+  # instantly. Before Phase 8, the only thing that ever set that variable
   # was build.yml's tag-triggered build-deb job -- the same dispatch/tag-
-  # only gap platform-windows had before it was promoted to a permanent
-  # per-PR leg above. Promoted
+  # only gap platform-windows had before Phase 2.1 promoted it. Promoted
   # here the same way, as its own permanent per-PR leg: the module's own
   # "Why a --target install, not the .deb" section is what keeps this
   # cheap enough to run on every PR (a `pip install --target` of this
