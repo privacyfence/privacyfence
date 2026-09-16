@@ -76,15 +76,30 @@ class TestBuildAppOrgMode:
             r = client.get("/.well-known/oauth-authorization-server")
             assert r.status_code == 200
 
-    def test_settings_surface_is_not_mounted(self, tmp_path, monkeypatch):
-        # /settings' ~30-action surface stays out of org mode (see server.py's
-        # module docstring) -- unlike /approvals, which P9 (below) mounts as
-        # its own principal-aware route set.
+    def test_settings_dispatcher_surface_is_not_mounted(self, tmp_path, monkeypatch):
+        # /settings' ~30-action local-mode dispatcher surface stays out of
+        # org mode (see server.py's module docstring) -- unlike /approvals,
+        # which P9 (below) mounts as its own principal-aware route set.
+        # /api/settings/{action} (the generic dispatcher endpoint) must 404;
+        # /settings itself is real now (#400, see the read-only-surface test
+        # below), so this only checks the local-mode dispatcher's own path.
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
         client = TestClient(app, base_url=ISSUER)
-        assert client.get("/settings").status_code == 404
+        assert client.get("/api/settings/quit_app").status_code == 404
         assert client.get("/api/state/stream").status_code == 404
+
+    def test_readonly_settings_surface_is_mounted(self, tmp_path, monkeypatch):
+        # #400: /settings and /settings/privacy are real routes now -- a
+        # small, purpose-built read-only surface (web/routes_org_settings.py),
+        # not the local-mode dispatcher above. An unauthenticated request is
+        # redirected to /login, same as /approvals.
+        org = _org_auth(tmp_path, monkeypatch)
+        app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
+        client = TestClient(app, base_url=ISSUER, follow_redirects=False)
+        r = client.get("/settings")
+        assert r.status_code == 302
+        assert r.headers["location"] == "/login?next=/settings"
 
     def test_local_mode_approval_surface_is_not_what_gets_mounted(self, tmp_path, monkeypatch):
         # /approvals exists (P9), but it's web/routes_org_approvals.py's
