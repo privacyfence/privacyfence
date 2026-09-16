@@ -143,8 +143,21 @@ class StateStream:
     # Read side -- web/routes_settings.py's /api/state/stream route.
     # ------------------------------------------------------------------ #
 
-    async def subscribe(self, is_disconnected: Callable[[], Awaitable[bool]]):
-        """Async generator of SSE-formatted strings for one connection."""
+    async def subscribe(
+        self,
+        is_disconnected: Callable[[], Awaitable[bool]],
+        touch: Callable[[], bool] | None = None,
+    ):
+        """Async generator of SSE-formatted strings for one connection.
+
+        ``touch``, when given, is called once per poll tick (issue #423): a
+        long-lived connection is itself proof the tab is open, so the
+        session backing it is refreshed on the same cadence this loop
+        already wakes at, instead of only once when the connection was
+        opened. It returns whether the session is still live -- once it
+        returns False (idle- or absolute-expired), the loop breaks and the
+        connection closes, the same way a client disconnect does, rather
+        than streaming to a tab whose session no longer exists."""
         queue: asyncio.Queue = asyncio.Queue(maxsize=1)
         self._subscribers.add(queue)
         try:
@@ -156,6 +169,8 @@ class StateStream:
 
             while True:
                 if await is_disconnected():
+                    break
+                if touch is not None and not touch():
                     break
                 try:
                     event, data = await asyncio.wait_for(queue.get(), timeout=_APPROVALS_POLL_SECONDS)
