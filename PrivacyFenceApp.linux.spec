@@ -99,6 +99,41 @@ daemon_exe = EXE(
     target_arch=None,
 )
 
+# ── companion (#428 Phase 3, ADR 0002) ────────────────────────────────────────
+# A second entry point of this same bundle, not a new build/signing path (ADR 0002 decision 4)
+# -- built from the same DATAS/HIDDEN_IMPORTS as the daemon above (pystray/Pillow aren't in
+# either list: Linux never imports them -- see companion.py's own module docstring -- so nothing
+# platform-specific needs adding here the way the macOS spec's companion block does).
+
+companion_a = Analysis(
+    ["src/_companion_entry.py"],
+    pathex=[SRC],
+    binaries=[],
+    datas=datas,
+    hiddenimports=hidden_imports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+)
+
+companion_pyz = PYZ(companion_a.pure)
+
+companion_exe = EXE(
+    companion_pyz,
+    companion_a.scripts,
+    [],
+    exclude_binaries=True,
+    name="PrivacyFenceCompanion",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=True,
+    upx=True,
+    console=False,
+    target_arch=None,
+)
+
 # ── collect into onedir output ────────────────────────────────────────────────
 # No BUNDLE() step here (macOS-only .app bundling) -- dist/PrivacyFenceApp/ *is* the shippable
 # artifact; scripts/build_deb.sh stages it straight into the .deb under /opt/privacyfence.
@@ -107,6 +142,9 @@ coll = COLLECT(
     daemon_exe,
     daemon_a.binaries,
     daemon_a.datas,
+    companion_exe,
+    companion_a.binaries,
+    companion_a.datas,
     strip=True,
     upx=True,
     upx_exclude=[],

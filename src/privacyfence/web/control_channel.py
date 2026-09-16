@@ -30,14 +30,31 @@ companion app needs to exist as the thing that *can* speak it, and what
 Phase 4's privilege separation needs already file-permissioned/ACL'd the way
 a service-owned resource has to be.
 
-The protocol is deliberately minimal -- one command, because minting a
-bootstrap code is the one thing this channel replaces: a client sends a
-single line, ``MINT\\n``, and gets back either ``OK <code>\\n`` or
-``ERROR <reason>\\n``. The code itself is exactly what
+The protocol is deliberately minimal -- originally one command (``MINT``),
+because minting a bootstrap code was the one thing this channel replaced.
+Phase 3 (ADR 0002, ``docs/adr/0002-local-mode-trust-boundary-and-companion-
+app.md``) adds a second: ``QUIT``, so the companion's tray/menu-bar "Quit"
+item and Linux's XDG launcher "Quit" action can stop the daemon without a
+browser -- gated by the same ``allow_quit`` setting the web settings page's
+own Quit action already respects. A client sends a single line, ``MINT\\n``
+or ``QUIT\\n``, and gets back either ``OK[ <value>]\\n`` or
+``ERROR <reason>\\n``. The MINT code itself is exactly what
 ``session_auth.BootstrapStore.mint()`` always produced -- this channel is a
 new way to *reach* that call, not a new kind of credential. Redeeming the
 code is unchanged: a client still does that over the browser's own loopback
 HTTP, via ``?bootstrap=<code>`` (``web/server.py``'s ``_BootstrapMiddleware``).
+
+Phase 3 also adds a second, independent channel running in the *opposite*
+direction: ``CompanionChannelServer`` is owned by the companion app, not the
+daemon, and speaks one command, ``OPEN <url>``, that the daemon's own
+``oauth_loopback.py`` sends when it needs a browser opened for a connector
+OAuth flow (ADR 0002 decision 5) -- the thing #428 Phase 4 makes mandatory on
+Windows, where a service-hosted daemon runs in session 0 and cannot open a
+browser in the user's desktop session itself. It reuses this module's own
+``_LineProtocolServer`` (the POSIX-socket/Windows-named-pipe plumbing
+``ControlChannelServer`` itself is built on) rather than the daemon's own
+socket/pipe -- companion and daemon each own the address they *listen* on,
+and each is a *client* of the other's.
 """
 from __future__ import annotations
 
@@ -47,7 +64,10 @@ import logging
 import socket
 import tempfile
 import threading
+import webbrowser
 from pathlib import Path
+from typing import Callable
+from urllib.parse import urlsplit
 
 from .. import paths
 from .session_auth import BootstrapStore
@@ -64,6 +84,31 @@ _MAX_MESSAGE_BYTES = 4096
 _MAX_SUN_PATH_BYTES = 100
 
 SOCKET_FILE_NAME = "control.sock"
+
+# Phase 3: the companion's own listening address lives under a different
+# name (same directory), so the two channels' sockets/pipes can never
+# collide -- see CompanionChannelServer's own docstring.
+COMPANION_SOCKET_FILE_NAME = "companion.sock"
+
+# Phase 3: WebServer.start() writes this file (mirroring MCP_URL_FILE_NAME,
+# web/server.py) so the companion -- a separate process that never imports
+# web/server.py itself, see companion.py's own module docstring for why --
+# can learn this install's local-mode base URL (``http://127.0.0.1:<port>``)
+# without hardcoding the default port. Lives here, not in web/server.py,
+# specifically so companion.py can read it via this module alone.
+WEB_BASE_URL_FILE_NAME = "web_base_url"
+
+
+def read_base_url() -> str | None:
+    """The companion's own way to learn this install's local-mode base URL
+    -- None if the daemon isn't currently running (the file is cleared on
+    WebServer.stop()) or is running in org mode, which has no local
+    base_url() concept for a companion to reach at all (org mode is out of
+    #428's scope -- ADR 0002's own "Out of scope")."""
+    path = paths.data_dir() / WEB_BASE_URL_FILE_NAME
+    if not path.exists():
+        return None
+    return path.read_text(encoding=_ENCODING).strip() or None
 
 
 def socket_path_under(authority_dir: Path) -> Path:
@@ -120,24 +165,108 @@ def windows_pipe_name() -> str:
     return pipe_name_for(paths.data_dir())
 
 
-def _handle_request(bootstrap: BootstrapStore, line: str) -> str:
-    command = line.strip().split(maxsplit=1)[0].upper() if line.strip() else ""
-    if command != "MINT":
+def companion_socket_path_under(data_dir: Path) -> Path:
+    """The companion channel's own equivalent of ``socket_path_under()`` --
+    same fallback-when-too-long-for-AF_UNIX logic, a different file name so
+    it can never collide with the daemon's own ``control.sock``. Rooted
+    directly at ``data_dir``, not an ``authority`` subdirectory: unlike
+    ``control.sock`` (which authorizes minting a *human* session, so it
+    belongs among the human-authority files ``paths.authority_dir()``
+    collects for #428 Phase 4), this is just the address a *daemon* reaches
+    to ask a *companion* to open a browser tab -- nothing #428 Phase 4 needs
+    to re-own."""
+    preferred = data_dir / COMPANION_SOCKET_FILE_NAME
+    if len(str(preferred).encode(_ENCODING)) < _MAX_SUN_PATH_BYTES:
+        return preferred
+    digest = hashlib.sha256(str(preferred.parent).encode(_ENCODING)).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / f"privacyfence-companion-{digest}.sock"
+
+
+def companion_socket_path() -> Path:
+    return companion_socket_path_under(paths.data_dir())
+
+
+def companion_pipe_name_for(data_dir: Path) -> str:
+    digest = hashlib.sha256(str(data_dir).encode(_ENCODING)).hexdigest()[:16]
+    return f"\\\\.\\pipe\\PrivacyFence-Companion-{digest}"
+
+
+def companion_pipe_name() -> str:
+    return companion_pipe_name_for(paths.data_dir())
+
+
+def _handle_daemon_request(bootstrap: BootstrapStore, *, allow_quit: bool, line: str) -> str:
+    parts = line.strip().split(maxsplit=1)
+    command = parts[0].upper() if parts else ""
+    if command == "MINT":
+        return f"OK {bootstrap.mint()}\n"
+    if command == "QUIT":
+        if not allow_quit:
+            return "ERROR quit is disabled\n"
+        # Deferred import: daemon_main.py is the process entry point, which
+        # constructs the WebServer (and therefore this channel) itself --
+        # importing it back at module scope here would be circular, and
+        # would also make every test that constructs a ControlChannelServer
+        # directly (test_control_channel.py) drag in the whole daemon
+        # startup module for no reason. Mirrors settings_controller.py's own
+        # quit_app(), the web settings page's equivalent of this command.
+        from .. import daemon_main
+
+        daemon_main.request_shutdown()
+        return "OK\n"
+    return "ERROR unknown command\n"
+
+
+def _handle_companion_request(line: str) -> str:
+    """The companion channel's own dispatch -- one command, ``OPEN <url>``,
+    sent by the daemon (``request_open_url()`` below) and acted on here, in
+    the companion process, which is the one thing in this architecture that
+    still runs in the user's desktop session once #428 Phase 4 moves the
+    daemon to a service account. Scheme-restricted to http(s): this channel
+    is reachable by anything running as the same OS user (companion and
+    daemon are still the same uid pre-Phase-4, agent included -- ADR 0002
+    decision 1), so it's worth not handing that caller a way to open an
+    arbitrary ``file://``/custom-scheme URL for the one capability this
+    process trades away nothing else to gain."""
+    parts = line.strip().split(maxsplit=1)
+    command = parts[0].upper() if parts else ""
+    if command != "OPEN" or len(parts) != 2:
         return "ERROR unknown command\n"
-    return f"OK {bootstrap.mint()}\n"
+    url = parts[1].strip()
+    if urlsplit(url).scheme.lower() not in ("http", "https"):
+        return "ERROR unsupported scheme\n"
+    try:
+        opened = webbrowser.open(url)
+    except Exception:
+        logger.exception("Companion could not open a browser for %s", url)
+        return "ERROR could not open a browser\n"
+    return "OK\n" if opened else "ERROR could not open a browser\n"
 
 
-class ControlChannelServer:
-    """Runs the control channel on its own background thread -- started and
-    stopped alongside the rest of ``WebServer``'s lifecycle (see that
-    class's own ``start()``/``stop()``), sharing the same ``BootstrapStore``
-    the loopback HTTP app's ``_BootstrapMiddleware`` already consumes codes
-    from, so a code minted here is redeemed exactly like one minted at
-    startup by ``mint_bootstrap_url()``.
+class _LineProtocolServer:
+    """Shared POSIX-socket/Windows-named-pipe accept-loop plumbing for a
+    request/response, one-line-per-message local IPC server -- what
+    ``ControlChannelServer`` and ``CompanionChannelServer`` are both built
+    on. The two concrete classes exist (rather than callers constructing
+    this directly) because their names describe security-relevant roles --
+    which process listens for the daemon's own MINT/QUIT channel versus the
+    companion's own OPEN channel -- not because the low-level mechanics
+    differ between them; those stay in exactly one place so a fix like the
+    Windows ``FlushFileBuffers`` one below only has to be made once.
     """
 
-    def __init__(self, *, bootstrap: BootstrapStore) -> None:
-        self._bootstrap = bootstrap
+    def __init__(
+        self,
+        *,
+        handler: Callable[[str], str],
+        socket_path: Callable[[], Path],
+        pipe_name: Callable[[], str],
+        thread_name: str,
+    ) -> None:
+        self._handler = handler
+        self._socket_path_fn = socket_path
+        self._pipe_name_fn = pipe_name
+        self._thread_name = thread_name
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         # What a client needs to connect: the socket path (POSIX) or pipe
@@ -169,11 +298,11 @@ class ControlChannelServer:
     # -- POSIX: a Unix domain socket ---------------------------------------- #
 
     def _start_posix(self) -> None:
-        sock_path = posix_socket_path()
-        # Any file already at this path is stale: the caller (WebServer,
-        # constructed only after daemon_main.py's own single-instance lock
-        # succeeds) is the only local-mode process that will ever bind here,
-        # so nothing legitimate could still be listening on it.
+        sock_path = self._socket_path_fn()
+        # Any file already at this path is stale: the caller (WebServer or
+        # companion.py, constructed only after their own single-instance
+        # start-up has succeeded) is the only process that will ever bind
+        # here, so nothing legitimate could still be listening on it.
         with contextlib.suppress(OSError):
             sock_path.unlink()
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -186,7 +315,7 @@ class ControlChannelServer:
         sock.settimeout(0.5)
         self._posix_socket = sock
         self.address = str(sock_path)
-        self._thread = threading.Thread(target=self._accept_loop_posix, name="control-channel", daemon=True)
+        self._thread = threading.Thread(target=self._accept_loop_posix, name=self._thread_name, daemon=True)
         self._thread.start()
 
     def _accept_loop_posix(self) -> None:
@@ -209,7 +338,7 @@ class ControlChannelServer:
             return
         line = data.decode(_ENCODING, errors="replace")
         try:
-            response = _handle_request(self._bootstrap, line)
+            response = self._handler(line)
         except Exception:
             logger.exception("Control channel request failed")
             response = "ERROR internal error\n"
@@ -219,7 +348,7 @@ class ControlChannelServer:
     # -- Windows: a named pipe, ACL'd to the current user ------------------- #
 
     def _start_windows(self) -> None:
-        self.address = windows_pipe_name()
+        self.address = self._pipe_name_fn()
         self._windows_security_attributes = _current_user_security_attributes()
         # Created synchronously, on this (the caller's) thread, before the
         # accept-loop thread even starts -- the same "start() doesn't
@@ -231,7 +360,7 @@ class ControlChannelServer:
         # CreateNamedPipe call and find no instance there yet.
         first_handle = self._create_windows_pipe_instance()
         self._thread = threading.Thread(
-            target=self._accept_loop_windows, args=(first_handle,), name="control-channel", daemon=True,
+            target=self._accept_loop_windows, args=(first_handle,), name=self._thread_name, daemon=True,
         )
         self._thread.start()
 
@@ -314,7 +443,7 @@ class ControlChannelServer:
             return
         line = data.decode(_ENCODING, errors="replace")
         try:
-            response = _handle_request(self._bootstrap, line)
+            response = self._handler(line)
         except Exception:
             logger.exception("Control channel request failed")
             response = "ERROR internal error\n"
@@ -341,6 +470,72 @@ class ControlChannelServer:
             win32file.CloseHandle(handle)
 
 
+class ControlChannelServer:
+    """Runs the daemon's own control channel (``MINT``/``QUIT``) on its own
+    background thread -- started and stopped alongside the rest of
+    ``WebServer``'s lifecycle (see that class's own ``start()``/``stop()``),
+    sharing the same ``BootstrapStore`` the loopback HTTP app's
+    ``_BootstrapMiddleware`` already consumes codes from, so a code minted
+    here is redeemed exactly like one minted at startup by
+    ``mint_bootstrap_url()``. ``allow_quit`` mirrors the web settings page's
+    own flag (``settings.yaml``'s ``allow_quit``, default true): an
+    administrator who's disabled quitting from the browser has disabled it
+    here too, not just in one of the two places it's reachable from.
+    """
+
+    def __init__(self, *, bootstrap: BootstrapStore, allow_quit: bool = True) -> None:
+        self._bootstrap = bootstrap
+        self._allow_quit = allow_quit
+        self._impl = _LineProtocolServer(
+            handler=self._handle,
+            socket_path=posix_socket_path,
+            pipe_name=windows_pipe_name,
+            thread_name="control-channel",
+        )
+
+    def _handle(self, line: str) -> str:
+        return _handle_daemon_request(self._bootstrap, allow_quit=self._allow_quit, line=line)
+
+    @property
+    def address(self) -> str | None:
+        return self._impl.address
+
+    def start(self) -> None:
+        self._impl.start()
+
+    def stop(self) -> None:
+        self._impl.stop()
+
+
+class CompanionChannelServer:
+    """Runs the companion app's own control channel (``OPEN <url>``) --
+    started/stopped alongside the companion's tray/menu-bar loop
+    (``companion.py``), on an address only the companion itself listens on
+    (``companion_socket_path()``/``companion_pipe_name()``, never
+    ``ControlChannelServer``'s own). The daemon is this channel's client,
+    via ``request_open_url()`` below -- see this module's own docstring for
+    why the two channels run in opposite directions.
+    """
+
+    def __init__(self) -> None:
+        self._impl = _LineProtocolServer(
+            handler=_handle_companion_request,
+            socket_path=companion_socket_path,
+            pipe_name=companion_pipe_name,
+            thread_name="companion-channel",
+        )
+
+    @property
+    def address(self) -> str | None:
+        return self._impl.address
+
+    def start(self) -> None:
+        self._impl.start()
+
+    def stop(self) -> None:
+        self._impl.stop()
+
+
 def _current_user_security_attributes():  # noqa: ANN201 -- a pywin32 SECURITY_ATTRIBUTES, no type stub
     """A ``SECURITY_ATTRIBUTES`` whose DACL grants full access to the
     current process token's own user SID and nothing else -- the "real
@@ -348,7 +543,10 @@ def _current_user_security_attributes():  # noqa: ANN201 -- a pywin32 SECURITY_A
     Windows has no filesystem permission bits (``paths.py``'s own
     ``secure_mkdir`` docstring), so a named pipe's ACL is the actual
     access-control primitive here, not a chmod equivalent applied
-    afterwards."""
+    afterwards. Shared by both ``ControlChannelServer`` and
+    ``CompanionChannelServer``'s pipes -- both are ACL'd to "whoever this
+    process is running as", the same uid both channels' own docstrings are
+    explicit is the actual (pre-#428-Phase-4) trust boundary."""
     import ntsecuritycon
     import win32api
     import win32security
@@ -366,11 +564,130 @@ def _current_user_security_attributes():  # noqa: ANN201 -- a pywin32 SECURITY_A
     return security_attributes
 
 
+# --------------------------------------------------------------------------- #
+# Clients -- Phase 3: the companion app is the daemon's control channel's own
+# client (mint_bootstrap_code/request_quit), and the daemon is the
+# companion channel's client (request_open_url). Both directions share the
+# same low-level send-one-line-get-one-line-back mechanics
+# (send_line_posix/send_line_windows) -- the daemon's own Python, per ADR
+# 0002 decision 4, rather than a reimplementation.
+# --------------------------------------------------------------------------- #
+
+class ControlChannelError(Exception):
+    """Raised by ``mint_bootstrap_code()``/``request_quit()`` when the
+    daemon's control channel is unreachable (no companion-visible daemon
+    running) or replies with something other than a well-formed ``OK``."""
+
+
+def send_line_posix(socket_path: Path | str, message: str, *, timeout: float) -> str:
+    """Connect to a Unix domain socket, send ``message``, and return
+    whatever comes back -- the shared low-level half of every POSIX client
+    in this module (and, before Phase 3, of ``tests/control_channel_client.
+    py``'s own near-identical helper, kept there for its sandboxed-data-dir
+    resolution, not because the socket I/O itself needs to differ)."""
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(timeout)
+    try:
+        client.connect(str(socket_path))
+        client.sendall(message.encode(_ENCODING))
+        return client.recv(_MAX_MESSAGE_BYTES).decode(_ENCODING)
+    finally:
+        client.close()
+
+
+def send_line_windows(pipe_name: str, message: str, *, timeout: float) -> str:
+    """The named-pipe equivalent of ``send_line_posix()`` -- pywin32 is a
+    transitive runtime dependency already (via ``mcp.os.win32.utilities``),
+    so it's always importable here."""
+    import pywintypes
+    import win32file
+    import win32pipe
+
+    win32pipe.WaitNamedPipe(pipe_name, int(timeout * 1000))
+    handle = win32file.CreateFile(
+        pipe_name, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+        0, None, win32file.OPEN_EXISTING, 0, None,
+    )
+    try:
+        win32file.WriteFile(handle, message.encode(_ENCODING))
+        try:
+            _rc, data = win32file.ReadFile(handle, _MAX_MESSAGE_BYTES)
+        except pywintypes.error as exc:
+            raise ControlChannelError(f"control channel request failed to read a reply: {exc}") from exc
+    finally:
+        win32file.CloseHandle(handle)
+    return data.decode(_ENCODING)
+
+
+def _send_to_daemon(message: str, *, timeout: float) -> str:
+    if paths.is_windows():
+        return send_line_windows(windows_pipe_name(), message, timeout=timeout)
+    return send_line_posix(posix_socket_path(), message, timeout=timeout)
+
+
+def mint_bootstrap_code(*, timeout: float = 5.0) -> str:
+    """The companion's own way to get a fresh, single-use bootstrap code
+    without restarting the daemon or going through a browser at all --
+    what backs its "Open Approvals"/"Open Settings" actions (companion.py).
+    Raises ``ControlChannelError`` on anything other than a well-formed
+    ``OK <code>`` reply; raises ``OSError`` (uncaught) if no daemon is
+    listening at all -- callers that treat "no daemon running" as a normal,
+    expected case (companion.py's own) catch that themselves."""
+    reply = _send_to_daemon("MINT\n", timeout=timeout)
+    if not reply.startswith("OK "):
+        raise ControlChannelError(f"control channel mint failed: {reply!r}")
+    return reply[len("OK "):].strip()
+
+
+def request_quit(*, timeout: float = 5.0) -> None:
+    """Asks the daemon to shut down -- what backs the companion's "Quit"
+    tray item and Linux's XDG launcher "Quit" action. Raises
+    ``ControlChannelError`` if the daemon declines (``allow_quit`` is
+    disabled) or replies unexpectedly; raises ``OSError`` if no daemon is
+    listening at all, same as ``mint_bootstrap_code()``."""
+    reply = _send_to_daemon("QUIT\n", timeout=timeout)
+    if not reply.startswith("OK"):
+        raise ControlChannelError(f"control channel quit failed: {reply!r}")
+
+
+def request_open_url(url: str, *, timeout: float = 2.0) -> bool:
+    """Best-effort: asks a running companion to open ``url`` in the user's
+    browser (ADR 0002 decision 5) -- returns False (never raises) for
+    anything that means "no companion is running right now", which is the
+    normal case until a human starts one (Phase 3 doesn't autostart it --
+    that's Phase 4's job): no socket/pipe present, connection refused, or a
+    timeout. ``oauth_loopback.py``'s default browser opener falls back to
+    calling ``webbrowser.open()`` directly when this returns False, so a
+    missing companion never blocks a connector's OAuth flow."""
+    try:
+        if paths.is_windows():
+            reply = send_line_windows(companion_pipe_name(), f"OPEN {url}\n", timeout=timeout)
+        else:
+            reply = send_line_posix(companion_socket_path(), f"OPEN {url}\n", timeout=timeout)
+    except (OSError, ControlChannelError):
+        return False
+    return reply.startswith("OK")
+
+
 __all__ = [
+    "COMPANION_SOCKET_FILE_NAME",
     "SOCKET_FILE_NAME",
+    "WEB_BASE_URL_FILE_NAME",
+    "CompanionChannelServer",
+    "ControlChannelError",
     "ControlChannelServer",
+    "companion_pipe_name",
+    "companion_pipe_name_for",
+    "companion_socket_path",
+    "companion_socket_path_under",
+    "mint_bootstrap_code",
     "pipe_name_for",
     "posix_socket_path",
+    "read_base_url",
+    "request_open_url",
+    "request_quit",
+    "send_line_posix",
+    "send_line_windows",
     "socket_path_under",
     "windows_pipe_name",
 ]

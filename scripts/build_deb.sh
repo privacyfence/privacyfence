@@ -134,6 +134,7 @@ mkdir -p \
   "${STAGE}/opt/privacyfence" \
   "${STAGE}/usr/bin" \
   "${STAGE}/etc/xdg/autostart" \
+  "${STAGE}/usr/share/applications" \
   "${STAGE}/usr/share/icons/hicolor/512x512/apps" \
   "${STAGE}/usr/share/icons/hicolor/64x64/apps" \
   "${STAGE}/usr/share/icons/hicolor/32x32/apps" \
@@ -189,6 +190,12 @@ find "${STAGE}/opt/privacyfence" \( -name '*.so' -o -name '*.so.*' \) -type f -e
 
 install -m 0755 resources/linux/privacyfence-app-wrapper "${STAGE}/usr/bin/privacyfence-app"
 install -m 0644 resources/linux/privacyfence.desktop "${STAGE}/etc/xdg/autostart/privacyfence.desktop"
+# #428 Phase 3 (ADR 0002): the companion app's own wrapper/launcher entry -- see
+# resources/linux/privacyfence.desktop's own comment for why this is a second, separate .desktop
+# file rather than a change to the autostart one above.
+install -m 0755 resources/linux/privacyfence-companion-wrapper "${STAGE}/usr/bin/privacyfence-companion"
+install -m 0644 resources/linux/privacyfence-companion.desktop \
+  "${STAGE}/usr/share/applications/privacyfence-companion.desktop"
 install -m 0644 src/privacyfence/resources/icon_512.png "${STAGE}/usr/share/icons/hicolor/512x512/apps/privacyfence.png"
 install -m 0644 src/privacyfence/resources/icon_64.png "${STAGE}/usr/share/icons/hicolor/64x64/apps/privacyfence.png"
 install -m 0644 src/privacyfence/resources/icon_32.png "${STAGE}/usr/share/icons/hicolor/32x32/apps/privacyfence.png"

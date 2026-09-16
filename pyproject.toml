@@ -133,6 +133,15 @@ dependencies = [
     # platform, so every install gets it rather than branching the
     # dependency list by sys_platform.
     "portalocker>=2.8",
+    # #428 Phase 3 (ADR 0002 decision 4): the companion app's tray/menu-bar icon on macOS/
+    # Windows -- a base dependency, not an optional extra, so a plain `pip install privacyfence`
+    # can run the companion entry point (companion.py) out of the box on the platforms it
+    # applies to. Platform-marked rather than unconditional: Linux has no tray at all (see
+    # companion.py's own module docstring -- it gets an XDG launcher instead) and would gain
+    # nothing from either package. Pillow backs the icon image pystray.Icon() requires; also
+    # declared (for an unrelated, build-time-only reason) in the dev extra below.
+    "pystray>=0.19; sys_platform == 'darwin' or sys_platform == 'win32'",
+    "Pillow>=10.0; sys_platform == 'darwin' or sys_platform == 'win32'",
 ]
 
 # The PyPI sidebar. Without these the project page carries no link back to anything --
@@ -152,6 +161,8 @@ Security = "https://github.com/privacyfence/privacyfence/blob/main/SECURITY.md"
 
 [project.scripts]
 privacyfence-app = "privacyfence.daemon_main:main"
+# #428 Phase 3 (ADR 0002): the companion app -- see companion.py's own module docstring.
+privacyfence-companion = "privacyfence.companion:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
