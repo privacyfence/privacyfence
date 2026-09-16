@@ -85,7 +85,7 @@ from typing import Any
 import portalocker
 import yaml
 
-from . import audit_forwarding, org_bundle_signing, org_mode, privilege_separation
+from . import __version__, audit_forwarding, org_bundle_signing, org_mode, privilege_separation
 from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL_ID, current_principal
@@ -541,7 +541,9 @@ def setup_logging(config: dict[str, Any]) -> None:
     # safe_errors.py's module docstring for what this catches and why the
     # MCP-boundary public-message allowlist (routes_mcp.py) is a separate,
     # stricter layer rather than relying on this alone.
-    fmt = SecretRedactingFormatter("%(asctime)s %(levelname)-8s [%(name)s] %(message)s")
+    fmt = SecretRedactingFormatter(
+        f"%(asctime)s v{__version__} %(levelname)-8s [%(name)s] %(message)s"
+    )
     handlers: list[logging.Handler] = [
         logging.FileHandler(log_file, encoding="utf-8"),
         logging.StreamHandler(sys.stderr),
