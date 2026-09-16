@@ -76,6 +76,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default, alongside "Launch PrivacyFence now"), so Claude Desktop's install prompt appears
   automatically for most users instead of requiring them to locate the file in File Explorer
   first. See issue #407.
+- Python 3.14 is now covered by CI. The `test-python-compat` job's matrix runs the core suite on
+  3.11, 3.12 and 3.14 (3.13 is the full `test` job's own version), so the interpreter that is the
+  default `python3` on current Ubuntu releases is proven rather than merely implied by
+  `requires-python = ">=3.11"`.
 
 ### Changed
 
