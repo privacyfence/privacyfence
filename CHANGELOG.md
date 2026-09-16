@@ -67,6 +67,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pre-4.1 install's existing `settings.yaml`, WebAuthn credentials, `web_token`, and audit history
   are moved into the new location automatically on first startup under this version, so nothing is
   silently reset. See issue #428.
+- Issue #428 Phase 2: minting a fresh bootstrap code on demand — once a previous session or link has
+  already expired, without restarting the daemon — no longer goes through a persistent `web_token`
+  file presented as a `POST /api/bootstrap` Bearer header over the same loopback HTTP port a browser
+  uses. It now goes through a new control channel (`web/control_channel.py`): a Unix domain socket on
+  macOS/Linux, an ACL'd named pipe on Windows — neither reachable by a browser's own loopback
+  connection. `web_token` itself, and the `POST /api/bootstrap` route, are gone. Still no security
+  gain alone — the channel is reachable by anything running as the same OS user, agent included —
+  but it's the interface issue #428's Phase 3 (companion app) and Phase 4 (privilege separation) both
+  need to exist first. The not-authorized page's on-demand recovery command changed to match (`nc -U`
+  on macOS/Linux, PowerShell's `NamedPipeClientStream` on Windows — neither needs Python, matching
+  the previous `curl`-based command's own no-extra-install posture). See issue #428.
 
 ### Added
 

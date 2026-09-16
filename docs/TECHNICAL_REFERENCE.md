@@ -620,7 +620,7 @@ keys under `web:` in `settings.yaml`:
   own General page. That page also renders a short, dismissible welcome banner (client-side,
   `renderWelcomeBanner` in `settings_window_html.py`) whenever no connector is authenticated yet.
 
-Both pages share one origin, one session (the same local `web_token` §10 of the refactor plan
+Both pages share one origin, one session (the same local `pf_session` cookie §10 of the refactor plan
 already describes), and one shared chrome (`web_shell.py`): a header with Approvals/Settings
 navigation and a live-connection indicator bound to `GET /api/state/stream` — one SSE channel
 carrying both a `settings` event (`SettingsController.snapshot()`, pushed the moment something

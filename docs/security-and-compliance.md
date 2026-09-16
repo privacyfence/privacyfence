@@ -45,11 +45,13 @@ they hold.
 
 A local process running as the signed-in user can:
 
-- read `web_token` from the data directory's `authority` subdirectory ([#428](https://github.com/privacyfence/privacyfence/issues/428)
+- connect to the control channel under the data directory's `authority` subdirectory ([#428](https://github.com/privacyfence/privacyfence/issues/428)
   Phase 1 split this, and `config/settings.yaml`, enrolled WebAuthn credentials, and the audit log,
-  out of the rest of the data directory -- a pure file-layout change so far, since it still sits at
-  the same uid as everything else there) and `POST /api/bootstrap` to mint a fresh bootstrap code —
-  the not-authorized page prints that exact command, deliberately, for a locked-out human;
+  out of the rest of the data directory; Phase 2 replaced the persistent `web_token` file and its
+  `POST /api/bootstrap` HTTP route with a Unix domain socket (macOS/Linux) or an ACL'd named pipe
+  (Windows) — a *different interface* than a browser can reach, but still no security gain on its
+  own, since it still sits at the same uid as everything else there) and mint a fresh bootstrap
+  code — the not-authorized page prints that exact command, deliberately, for a locked-out human;
 - exchange the code for a `pf_session` cookie by visiting `/approvals?bootstrap=<code>`;
 - `POST /api/approvals/<id>/decide` and release a pending approval.
 
@@ -75,17 +77,18 @@ not as a boundary against local code execution.
 
 **Org mode does not share this**, for a structural reason rather than a difference in checks: the
 daemon runs on a server the organization operates, so an AI client on an employee's device has no
-loopback access to it, no `web_token` to read and no bootstrap endpoint to call —
+loopback access to it, no control channel to reach and no bootstrap endpoint to call —
 `privacyfence_get_sign_in_link` raises there outright. Authentication is IdP-backed, and where
 configured, WebAuthn step-up binds a write approval to a fresh user-verified assertion.
 
 **Closing this in local mode** takes two changes, both tracked: running the daemon under its own
 account so its state is neither readable nor writable by processes running as the user
-([#428](https://github.com/privacyfence/privacyfence/issues/428)), and giving the human a way into
-the web UI that does not route a credential through the AI client
-([#427](https://github.com/privacyfence/privacyfence/issues/427)). Local-mode WebAuthn step-up
-([#426](https://github.com/privacyfence/privacyfence/issues/426)) depends on both: a passkey enrolled
-in a credential store the agent can rewrite is not a control.
+([#428](https://github.com/privacyfence/privacyfence/issues/428) — Phases 1 and 2, a state-layout
+refactor and the control-channel interface itself, have landed; Phase 4's actual privilege
+separation is what closes this), and giving the human a way into the web UI that does not route a
+credential through the AI client ([#427](https://github.com/privacyfence/privacyfence/issues/427)).
+Local-mode WebAuthn step-up ([#426](https://github.com/privacyfence/privacyfence/issues/426))
+depends on both: a passkey enrolled in a credential store the agent can rewrite is not a control.
 
 ## Authentication boundaries
 
@@ -101,7 +104,7 @@ Mutating requests require the authenticated session, same-origin checks, and CSR
 
 What bounds it instead: local mode only (it raises in org mode, which authenticates through IdP-backed OAuth rather than a bootstrap link, so it can never return a working credential there); the link it mints is the same single-use, short-lived bootstrap code every other sign-in path in this section uses, consumed by the first visit whether or not it succeeds; `page` is allowlisted to `approvals`/`settings`, never an arbitrary path; and the local web UI is bound to `localhost`, so the link is only useful from the same machine the MCP client and daemon are already both running on. Every call is written to the audit log under its own `sign_in_link_issued` decision, carrying the calling client's self-reported reason — the same disclosed-and-unverified posture every other tool's `reason` parameter has.
 
-Net effect: an MCP client can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. The justification this paragraph used to give — that such a client already holds equivalent-or-greater access via every other tool this daemon exposes — holds for connector reads and writes, which are themselves gated. It understates one case: a session also reaches the approval UI, so it can *release* a gated call rather than merely request one, and that is the product's central control rather than one more tool. This is not a weakness introduced by this tool — see [Local-mode trust boundary](#local-mode-trust-boundary), where a process running as the user mints the same session from `web_token` without it — but it should not be described as a neutral consequence of existing trust either. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
+Net effect: an MCP client can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. The justification this paragraph used to give — that such a client already holds equivalent-or-greater access via every other tool this daemon exposes — holds for connector reads and writes, which are themselves gated. It understates one case: a session also reaches the approval UI, so it can *release* a gated call rather than merely request one, and that is the product's central control rather than one more tool. This is not a weakness introduced by this tool — see [Local-mode trust boundary](#local-mode-trust-boundary), where a process running as the user mints the same session through the control channel without it — but it should not be described as a neutral consequence of existing trust either. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
 
 ### Local MCP
 

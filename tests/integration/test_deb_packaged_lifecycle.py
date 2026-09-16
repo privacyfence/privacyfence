@@ -100,6 +100,7 @@ mcp_client = pytest.importorskip(
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
+from tests.control_channel_client import mint_bootstrap_code_posix, resolve_posix_socket_path  # noqa: E402
 from tests.diagnostics import failure_dir, suite_name_for  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -111,7 +112,6 @@ DAEMON_BIN = Path("/usr/bin/privacyfence-app")
 OPT_DIR = Path("/opt/privacyfence")
 AUTOSTART_DESKTOP_FILE = Path("/etc/xdg/autostart/privacyfence.desktop")
 
-WEB_TOKEN_FILE_NAME = "web_token"  # web/server.py's TOKEN_FILE_NAME
 MCP_TOKEN_FILE_NAME = "mcp_token"
 
 
@@ -252,6 +252,23 @@ def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None
     raise TimeoutError(f"{host}:{port} never became connectable") from last_exc
 
 
+def _wait_for_path(path: Path, proc: subprocess.Popen, log_path: Path, timeout: float = 20.0) -> None:
+    """Like ``_wait_for_file()`` but for a path with no meaningful text
+    content of its own -- the control channel's Unix domain socket, in
+    particular, whose ``read_text()`` wouldn't return anything sensible."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise AssertionError(
+                f"daemon exited early (code {proc.poll()}) instead of starting -- log:\n"
+                f"{log_path.read_text(errors='replace')}"
+            )
+        if path.exists():
+            return
+        time.sleep(0.1)
+    raise AssertionError(f"{path} never appeared within {timeout}s -- log:\n{log_path.read_text(errors='replace')}")
+
+
 def _wait_for_file(path: Path, proc: subprocess.Popen, log_path: Path, timeout: float = 20.0) -> str:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -269,13 +286,13 @@ def _wait_for_file(path: Path, proc: subprocess.Popen, log_path: Path, timeout: 
 
 
 class RunningDaemon:
-    def __init__(self, process: subprocess.Popen, home: Path, port: int, web_token: str, mcp_token: str):
+    def __init__(self, process: subprocess.Popen, home: Path, port: int, mcp_token: str):
         self.process = process
         self.home = home
+        self.data_dir = home / ".privacyfence"
         self.port = port
         self.base_url = f"http://localhost:{port}"
         self.mcp_url = f"{self.base_url}/mcp"
-        self.web_token = web_token
         self.mcp_token = mcp_token
 
 
@@ -291,7 +308,8 @@ def _prepare_home(home: Path, *, port: int) -> None:
     wholesale: overwriting it every boot would silently defeat the very
     state-survival assertions this module exists to make."""
     # #428 Phase 1: settings.yaml lives under an authority/ subdirectory of
-    # data_dir(), same as web_token/the audit dir below -- not data_dir() itself.
+    # data_dir(), same as the control channel's socket/the audit dir below --
+    # not data_dir() itself.
     config_dir = home / ".privacyfence" / "authority" / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     settings_path = config_dir / "settings.yaml"
@@ -321,9 +339,9 @@ def _running_daemon(home: Path):
         try:
             _wait_until_connectable("localhost", port)
             data_dir = home / ".privacyfence"
-            web_token = _wait_for_file(data_dir / "authority" / WEB_TOKEN_FILE_NAME, proc, log_path)
+            _wait_for_path(resolve_posix_socket_path(data_dir), proc, log_path)
             mcp_token = _wait_for_file(data_dir / MCP_TOKEN_FILE_NAME, proc, log_path)
-            yield RunningDaemon(proc, home, port, web_token, mcp_token)
+            yield RunningDaemon(proc, home, port, mcp_token)
         finally:
             if proc.poll() is None:
                 proc.terminate()
@@ -341,10 +359,12 @@ def _running_daemon(home: Path):
 # meta-tool that needs no connector (see module docstring's point 3).
 # --------------------------------------------------------------------------- #
 
-async def _bootstrap_session(web_client: httpx.AsyncClient, web_token: str, *, path: str = "/settings") -> str:
-    mint_resp = await web_client.post("/api/bootstrap", headers={"Authorization": f"Bearer {web_token}"})
-    assert mint_resp.status_code == 200, mint_resp.text
-    code = mint_resp.json()["bootstrap"]
+async def _bootstrap_session(web_client: httpx.AsyncClient, data_dir: Path, *, path: str = "/settings") -> str:
+    # #428 Phase 2: minted through the control channel (a real Unix domain
+    # socket against this daemon's own data directory), not a bearer-
+    # authenticated HTTP route -- see tests.control_channel_client's own
+    # module docstring.
+    code = mint_bootstrap_code_posix(resolve_posix_socket_path(data_dir))
     exchange_resp = await web_client.get(path, params={"bootstrap": code})
     assert exchange_resp.status_code == 200, exchange_resp.text
     session_id = web_client.cookies.get("pf_session")
@@ -420,7 +440,7 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         assert (await web_client.get("/approvals")).status_code == 401
         assert (await web_client.get("/settings")).status_code == 401
 
-        session_id = await _bootstrap_session(web_client, daemon.web_token)
+        session_id = await _bootstrap_session(web_client, daemon.data_dir)
         assert (await web_client.get("/settings")).status_code == 200
 
         # -- tools/list: the real MCP surface, no connector configured -----
@@ -586,7 +606,7 @@ async def test_upgrade_in_place_preserves_user_state(tmp_path):
     _dpkg("-i", str(deb_n))
     with _running_daemon(home) as daemon:
         async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
-            session_id = await _bootstrap_session(web_client, daemon.web_token)
+            session_id = await _bootstrap_session(web_client, daemon.data_dir)
             propose_task = asyncio.create_task(
                 _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["preupgrade.example.com"])
             )
@@ -616,7 +636,7 @@ async def test_upgrade_in_place_preserves_user_state(tmp_path):
     # the state it just inherited ─────────────────────────────────────────
     with _running_daemon(home) as daemon:
         async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
-            session_id = await _bootstrap_session(web_client, daemon.web_token)
+            session_id = await _bootstrap_session(web_client, daemon.data_dir)
             assert (await web_client.get("/settings")).status_code == 200
             await _quit(web_client, session_id)
         assert daemon.process.wait(timeout=15) == 0

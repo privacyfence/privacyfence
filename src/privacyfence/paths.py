@@ -249,11 +249,12 @@ def _migrate_legacy_audit_log_dir(root: Path, target: Path) -> None:
 
 def authority_dir(principal: "Principal | None" = None) -> Path:
     """Directory root for the files that back the *human's* authority in
-    local mode -- the web-approval bootstrap secret (``web_token``), the
-    privacy policy (``config/settings.yaml``), and enrolled WebAuthn
-    credentials (P426) -- as distinct from ``user_dir()``, which stays
-    reachable by the agent for its own ``mcp_token`` and connector
-    caches/credentials.
+    local mode -- the #428 Phase 2 control channel's socket (macOS/Linux;
+    Windows' named pipe lives outside the filesystem, see web/
+    control_channel.py), the privacy policy (``config/settings.yaml``), and
+    enrolled WebAuthn credentials (P426) -- as distinct from ``user_dir()``,
+    which stays reachable by the agent for its own ``mcp_token`` and
+    connector caches/credentials.
 
     Local mode's audit log (plus its HMAC key) is also human-authority state
     and also ends up under this same directory, but it isn't migrated by

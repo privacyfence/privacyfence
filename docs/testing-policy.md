@@ -300,8 +300,9 @@ manual steps. It includes:
   `python -m privacyfence.daemon_main` entry point as a genuinely separate OS process (every module
   above drives daemon/server code as a plain in-process call), and runs it through the full
   contract: `mcp_url`/lock-file discovery, `/approvals`/`/settings` reached via a real one-time
-  bootstrap exchange (`POST /api/bootstrap`, never a link scraped out of the log — `safe_errors.
-  SecretRedactingFormatter` deliberately redacts those), a gated MCP tool call resolved both Allow
+  bootstrap exchange (minted through the #428 Phase 2 control channel, never a link scraped out of
+  the log — `safe_errors.SecretRedactingFormatter` deliberately redacts those), a gated MCP tool
+  call resolved both Allow
   and Deny through the real HTTP decide route, the audit log read back from disk to confirm both
   decisions, and a graceful shutdown via the real "Quit PrivacyFence" action. Collected by every job
   that runs the full suite (`test`, `platform-windows`, `platform-macos`), so this one module proves

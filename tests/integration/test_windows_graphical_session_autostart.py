@@ -153,6 +153,7 @@ import pytest
 
 pytest.importorskip("mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'")
 
+from tests.control_channel_client import resolve_windows_pipe_name, windows_pipe_exists  # noqa: E402
 from tests.diagnostics import (  # noqa: E402
     capture_directory_manifest,
     copy_named_logs,
@@ -164,7 +165,6 @@ from tests.integration.test_windows_packaged_smoke import (  # noqa: E402
     ALIAS_EXE_NAME,
     MCP_TOKEN_FILE_NAME,
     TASK_NAME,
-    WEB_TOKEN_FILE_NAME,
     _bootstrap_session,
     _built_installers,
     _data_dir,
@@ -482,6 +482,19 @@ def _wait_for_path_content(path: Path, *, timeout: float) -> str:
     raise AssertionError(f"{path} never appeared/populated within {timeout}s")
 
 
+def _wait_for_pipe(pipe_name: str, *, timeout: float) -> None:
+    """Like ``_wait_for_path_content()`` but for the control channel's named
+    pipe -- not a filesystem object, so there's no path to poll or content
+    to read; ``windows_pipe_exists()`` (open-then-close) is the closest
+    equivalent liveness check."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if windows_pipe_exists(pipe_name):
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"named pipe {pipe_name} never appeared within {timeout}s")
+
+
 def _kill_alias_processes() -> None:
     """Best-effort: end any daemon this module's install left running, so a
     failed test never leaks a process holding the install directory open."""
@@ -624,7 +637,7 @@ def _installed(_real_home_state, tmp_path):
     # must never fire under /VERYSILENT (test_windows_packaged_smoke.py's
     # own lifecycle test relies on the same fact); only Task Scheduler
     # should ever start the daemon in this module.
-    assert not (_data_dir(home) / "authority" / WEB_TOKEN_FILE_NAME).exists(), (
+    assert not windows_pipe_exists(resolve_windows_pipe_name(_data_dir(home))), (
         "a silent install must never itself start the daemon -- only the autostart task should"
     )
 
@@ -696,7 +709,7 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
 
     pid, _owner = _start_task_and_wait_for_daemon(_installed)
 
-    web_token = _wait_for_path_content(_data_dir(_installed.home) / "authority" / WEB_TOKEN_FILE_NAME, timeout=20)
+    _wait_for_pipe(resolve_windows_pipe_name(_data_dir(_installed.home)), timeout=20)
     mcp_token = _wait_for_path_content(_data_dir(_installed.home) / MCP_TOKEN_FILE_NAME, timeout=20)
     _wait_until_connectable("localhost", _installed.port)
 
@@ -706,7 +719,7 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
     # ── Phase 3's own daemon/MCP/approval/audit contract shape, against a
     # daemon this test never itself started a process for ─────────────────
     async with httpx.AsyncClient(base_url=base_url, follow_redirects=True) as web_client:
-        session_id = await _bootstrap_session(web_client, web_token)
+        session_id = await _bootstrap_session(web_client, _data_dir(_installed.home))
         assert (await web_client.get("/settings")).status_code == 200
 
         allow_task = asyncio.create_task(

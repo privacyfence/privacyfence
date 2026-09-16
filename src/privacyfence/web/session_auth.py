@@ -30,15 +30,23 @@ per-principal identity org mode needs and local mode doesn't):
   exchange mints: an independent random id, a sliding idle timeout, and a
   hard absolute timeout from creation regardless of activity -- the
   "cookie with idle + absolute expiry" SEC-06 asks for. Nothing about a
-  session id is ever derived from, or comparable to, the long-lived local
-  secret (``web/server.py``'s ``load_or_create_token()``) any more; that
-  secret's only remaining job is authorizing ``POST /api/bootstrap`` (see
-  server.py) to mint a fresh bootstrap code on demand, via an
-  ``Authorization`` header, never a query string -- so a human who still
-  has filesystem access to this machine (the same trust boundary this
-  secret has always drawn) can get back in without restarting the daemon
-  once a session has expired, but nothing about that recovery path ever
-  touches a URL, browser history, or a log file again either.
+  session id is ever derived from, or comparable to, any other secret in
+  this install.
+
+**#428 Phase 2.** Minting a fresh code on demand -- once a previous session
+or link has already expired, without restarting the daemon -- used to mean
+presenting a persistent local secret (``web_token``) as an ``Authorization``
+header to ``POST /api/bootstrap``, over the same loopback HTTP port a
+browser uses. That secret's only remaining job, once SEC-06 got everything
+else off it, was authorizing that one endpoint -- and a chain doesn't get
+stronger by hardening its middle (ADR 0002's own framing): anything on the
+machine that could read the token file could reach the endpoint too, agent
+included. Phase 2 retires that design rather than reinforcing it:
+``web/control_channel.py``'s ``ControlChannelServer`` -- a Unix domain
+socket on macOS/Linux, an ACL'd named pipe on Windows -- is now the only way
+to mint a code on demand, and it isn't reachable over the loopback port a
+browser (or a page's own ``fetch()``) can speak at all. See that module's
+own docstring for the full reasoning.
 """
 from __future__ import annotations
 
@@ -216,41 +224,53 @@ def unauthorized_html(request: Request) -> Response:
     ``web/server.py``'s
     ``mint_bootstrap_url()`` writes outside the logging pipeline every time
     PrivacyFence (re)starts, for a reader who'd rather grab it themselves;
-    and minting a fresh code on demand via ``POST /api/bootstrap`` without
-    restarting anything, for a reader with neither -- this page spells out
-    the actual command for that last one rather than just naming the
-    endpoint, since a reader who's landed here from a dead link and has no
-    MCP client connected yet is exactly the audience that finding this
-    self-explanatory matters most for. ``request`` supplies only this
-    page's own origin (scheme+host+port), the same one the reader is
-    already looking at, so the command below can be pasted as-is.
+    and minting a fresh code on demand through the control channel (#428
+    Phase 2, ``web/control_channel.py``) without restarting anything, for a
+    reader with neither -- this page spells out the actual command for that
+    last one rather than just naming the channel, since a reader who's
+    landed here from a dead link and has no MCP client connected yet is
+    exactly the audience that finding this self-explanatory matters most
+    for. ``request`` is otherwise unused here: unlike the old bearer-header
+    ``curl`` command, the control channel is a local socket/pipe, not
+    another HTTP endpoint on this page's own origin, so there's no origin
+    left to splice into the recovery command.
 
-    The discovery-file path and the shell command are both platform-
+    The discovery-file path and the recovery command are both platform-
     dependent -- ``paths.data_dir()`` resolves to the real, live directory
     this install actually writes ``approvals_url`` into (``~/.privacyfence``
     on POSIX, ``%LOCALAPPDATA%\\PrivacyFence`` on Windows, see that
-    function's own docstring); ``web_token`` itself lives one level down, in
-    its ``authority`` subdirectory (#428 Phase 1's human-authority root --
-    the same one ``paths.authority_dir()`` returns, computed here as a plain
-    join rather than calling that function directly, since this is a pure
-    display string for an unauthenticated page and has no reason to also
-    create the directory or run its migration-on-first-use side effect on
-    every hit), and the paste-able command is PowerShell's ``Get-Content``
-    on Windows rather than bash's ``$(cat ...)``, which isn't valid there."""
-    origin = f"{request.url.scheme}://{request.url.netloc}"
+    function's own docstring). Neither command needs Python -- a packaged
+    install doesn't guarantee one on ``PATH`` any more than the pre-Phase-2
+    page's ``curl`` was guaranteed, so this leans on the same kind of
+    already-present OS tool instead: POSIX gets ``nc -U`` (the BSD ``nc``
+    macOS ships, and the ``netcat-openbsd`` build Debian/Ubuntu's default
+    ``nc`` symlinks to, both support connecting to a Unix domain socket via
+    ``-U``), Windows gets pure PowerShell against
+    ``System.IO.Pipes.NamedPipeClientStream`` (built into every supported
+    .NET runtime, so no extra install either)."""
     data_dir = paths.data_dir()
-    authority_dir = data_dir / "authority"
+    # Deferred import: control_channel.py imports BootstrapStore from this
+    # module, so importing it back at module scope here would be circular.
+    from .control_channel import socket_path_under, windows_pipe_name
+
     if paths.is_windows():
         approvals_url_path = f"{data_dir}\\approvals_url"
-        web_token_path = f"{authority_dir}\\web_token"
+        pipe_name = windows_pipe_name().rsplit("\\", 1)[-1]
         command = (
-            f'curl.exe -s -X POST -H "Authorization: Bearer $(Get-Content \'{web_token_path}\')" '
-            f"{origin}/api/bootstrap"
+            "$p=New-Object System.IO.Pipes.NamedPipeClientStream('.','" + pipe_name + "',"
+            "[System.IO.Pipes.PipeDirection]::InOut); $p.Connect(5000); "
+            "$w=New-Object System.IO.StreamWriter($p); $w.AutoFlush=$true; $w.WriteLine('MINT'); "
+            "(New-Object System.IO.StreamReader($p)).ReadLine()"
         )
     else:
         approvals_url_path = f"{data_dir}/approvals_url"
-        web_token_path = f"{authority_dir}/web_token"
-        command = f'curl -s -X POST -H "Authorization: Bearer $(cat {web_token_path})" {origin}/api/bootstrap'
+        # A plain join, not control_channel.posix_socket_path() -- that
+        # calls the real, side-effecting paths.authority_dir() (creates the
+        # directory, runs its migration-on-first-use), which this
+        # unauthenticated error page has no business triggering on every
+        # hit. socket_path_under() is the pure half of that same logic.
+        sock_path = socket_path_under(data_dir / "authority")
+        command = f"printf 'MINT\\n' | nc -U '{sock_path}'"
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
         "<p><strong>Not authorized.</strong> Ask Claude (or any other MCP client already "
@@ -273,9 +293,9 @@ def unauthorized_html(request: Request) -> Response:
         "</body></html>",
         status_code=401,
         # SEC-18: this
-        # page carries a live bearer-secret path (the exact curl command a
-        # reader is meant to copy-paste) -- no-store even on the 401 branch,
-        # not just the authenticated pages it stands in for.
+        # page carries a live control-channel path/pipe name (the exact
+        # command a reader is meant to copy-paste) -- no-store even on the
+        # 401 branch, not just the authenticated pages it stands in for.
         headers={"Cache-Control": "no-store"},
     )
 
@@ -309,22 +329,6 @@ def check_origin(request: Request) -> bool:
     return origin == f"{request.url.scheme}://{request.url.netloc}"
 
 
-def verify_bearer_secret(request: Request, secret: str) -> bool:
-    """Constant-time check of an ``Authorization: Bearer <secret>`` header
-    against the persistent local install secret (``web/server.py``'s
-    ``load_or_create_token()``) -- the one remaining use of that raw value
-    (SEC-06): minting a fresh bootstrap code on demand, via
-    ``POST /api/bootstrap``, without needing to restart the daemon just
-    because the previous one-time link already expired. Deliberately a
-    header, never a query parameter -- a query string is exactly what
-    SEC-06 is getting this secret out of."""
-    auth = request.headers.get("authorization", "")
-    prefix = "Bearer "
-    if not auth.startswith(prefix):
-        return False
-    return hmac.compare_digest(auth[len(prefix):], secret)
-
-
 __all__ = [
     "BOOTSTRAP_QUERY_PARAM",
     "BOOTSTRAP_TTL_SECONDS",
@@ -339,5 +343,4 @@ __all__ = [
     "clear_session_cookie",
     "set_session_cookie",
     "unauthorized_html",
-    "verify_bearer_secret",
 ]
