@@ -314,6 +314,25 @@ async def _call_status_tool(mcp_url: str, token: str) -> dict:
                 return result.structuredContent
 
 
+async def _call_get_sign_in_link_tool(mcp_url: str, token: str, *, page: str) -> dict:
+    """One real MCP session calling privacyfence_get_sign_in_link -- the
+    only tool that actually mints a bootstrap credential (privacyfence_
+    status deliberately never does, per issue #396's threat-model
+    follow-up: minting happens because a human asked, not because a model
+    checked status)."""
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write, _get_session_id):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool(
+                    "privacyfence_get_sign_in_link",
+                    {"page": page, "reason": "system test: human asked to sign in"},
+                )
+                assert result.isError is not True, result
+                return result.structuredContent
+
+
 async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
     """The full contract, driven against a real daemon process: startup and
     discovery, the real web approval/settings surfaces reached through the
@@ -463,13 +482,16 @@ async def test_local_mode_status_bootstrap_lands_on_connectors_page(tmp_path):
     ``SystemTestConnector`` is never one of ``ALL_CONNECTORS``, so
     ``privacyfence_status`` sees it as un-onboarded exactly like a real
     fresh install with zero authenticated connectors) -> ``privacyfence_
-    status`` mints a real sign-in link -> following that link through the
-    real bootstrap exchange (the same ``?bootstrap=`` redirect
-    ``_bootstrap_session`` above drives, but via the URL the tool itself
-    handed back rather than a freshly-minted one) lands on ``/settings/
-    connectors`` with its Connectors section pre-selected -- the actual
-    screen an un-onboarded user needs, not ``/settings``'s own General
-    default.
+    status`` reports ``ask_for_sign_in_link`` without minting anything
+    itself (issue #396's threat-model follow-up: status never mints a
+    live sign-in credential unprompted) -> the human's "yes" is simulated
+    by calling ``privacyfence_get_sign_in_link`` directly, which does mint
+    -> following that link through the real bootstrap exchange (the same
+    ``?bootstrap=`` redirect ``_bootstrap_session`` above drives, but via
+    the URL the tool itself handed back rather than a freshly-minted one)
+    lands on ``/settings/connectors`` with its Connectors section
+    pre-selected -- the actual screen an un-onboarded user needs, not
+    ``/settings``'s own General default.
     """
     port = _free_port()
     sandbox = _prepare_sandbox(tmp_path, port=port)
@@ -483,8 +505,11 @@ async def test_local_mode_status_bootstrap_lands_on_connectors_page(tmp_path):
         status = await _call_status_tool(mcp_url, mcp_token)
         assert status["mode"] == "local"
         assert status["setup_complete"] is False
-        assert status["next_step"] == "authenticate_connectors"
-        sign_in_url = status["sign_in_url"]
+        assert status["next_step"] == "ask_for_sign_in_link"
+        assert status["sign_in_url"] is None
+
+        link = await _call_get_sign_in_link_tool(mcp_url, mcp_token, page="connectors")
+        sign_in_url = link["url"]
         assert sign_in_url is not None
         assert urlparse(sign_in_url).path == "/settings/connectors"
 

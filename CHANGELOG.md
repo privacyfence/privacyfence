@@ -38,8 +38,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   un-onboarded install, so an empty or partial tool list reads as "not set up yet, here's how to
   fix that" instead of "PrivacyFence has nothing to do with this". Reports which connectors are
   authenticated (and, for the rest, whether they were never configured, never authenticated, or
-  hit a real error), and in local mode mints a one-time link to PrivacyFence's own Settings page
-  when nothing is authenticated yet. See issue #396.
+  hit a real error). It never mints a sign-in credential itself: in local mode, when nothing is
+  authenticated yet, it tells the model to offer the human a one-time sign-in link and only mint
+  one (via `privacyfence_get_sign_in_link`) if they say yes — a bootstrap code is a live
+  credential, and minting one because a model decided to check status rather than because a human
+  asked is a wider grant than this tool is meant to be. See issue #396.
 - The MCP server now returns `instructions` in its `initialize` response, telling the connecting
   client what PrivacyFence is and that an empty or partial tool list means its connectors aren't
   set up yet, not that PrivacyFence has nothing to do with the conversation — and when to call

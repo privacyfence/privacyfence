@@ -60,15 +60,6 @@ class McpDispatcher:
     _AWAIT_APPROVAL_MIN_TIMEOUT = 1
     _AWAIT_APPROVAL_MAX_TIMEOUT = 120
     _AWAIT_APPROVAL_POLL_SECONDS = 0.5
-    # privacyfence_status's own minted sign-in link is cached in-process for
-    # this long rather than re-minted on every call (issue #396 Phase 2) --
-    # each real mint rewrites WebServer's discovery file and leaves whatever
-    # code was there before to expire unused, so a model that calls status
-    # repeatedly while planning a task shouldn't churn through one bootstrap
-    # code per call. Comfortably under session_auth.BOOTSTRAP_TTL_SECONDS
-    # (10 minutes) so a cached link handed back here is never one a human
-    # opens only to find it just expired.
-    _STATUS_LINK_CACHE_SECONDS = 5 * 60
 
     def __init__(
         self,
@@ -107,10 +98,6 @@ class McpDispatcher:
         # privacyfence_status (below) reuses this same seam rather than a
         # second one of its own.
         self._bootstrap_link_provider: Callable[[str], str | None] | None = None
-        # (url, minted_at) for privacyfence_status's own cached sign-in link
-        # -- see _STATUS_LINK_CACHE_SECONDS above. None until the first
-        # mint, or after a mint that came back empty.
-        self._status_link_cache: tuple[str, float] | None = None
         # privacyfence_status's own per-connector view -- {name, enabled,
         # authenticated, blocked_by} rows, reusing SettingsController's
         # already-tracked connector/config/failure state (issue #396 Phase
@@ -472,24 +459,18 @@ class McpDispatcher:
             self._audit_status_check("status_checked", claude_reason)
             return result
 
-        result["next_step"] = "authenticate_connectors"
-        url, freshly_minted = self._mint_status_link()
-        result["sign_in_url"] = url
-        if url is not None:
-            result["message"] = (
-                "PrivacyFence is running, but nothing is authenticated yet -- an empty or partial "
-                "tool list means \"not set up\", not \"nothing to do here\". Share this sign-in "
-                "link with the human so they can open PrivacyFence's Settings and authenticate at "
-                "least one connector (Gmail, Slack, etc.); PrivacyFence-governed tools stay "
-                "unavailable until they do."
-            )
-        else:
-            result["message"] = (
-                "PrivacyFence is running, but nothing is authenticated yet, and no sign-in link "
-                "is currently available. Ask the human to open PrivacyFence's Settings directly "
-                "on this machine and authenticate at least one connector."
-            )
-        self._audit_status_check("sign_in_link_issued" if freshly_minted else "status_checked", claude_reason)
+        result["next_step"] = "ask_for_sign_in_link"
+        result["sign_in_url"] = None
+        result["message"] = (
+            "PrivacyFence is running, but nothing is authenticated yet -- an empty or partial "
+            "tool list means \"not set up\", not \"nothing to do here\". Offer the human a "
+            "one-time PrivacyFence sign-in link; if they say yes, call "
+            "privacyfence_get_sign_in_link with page=\"connectors\" to mint one and share it, so "
+            "they can open Settings and authenticate at least one connector (Gmail, Slack, etc.). "
+            "PrivacyFence-governed tools stay unavailable until they do. Don't mint a link "
+            "unless a human actually asks for one."
+        )
+        self._audit_status_check("status_checked", claude_reason)
         return result
 
     def _status_connector_rows(self) -> list[dict[str, Any]]:
@@ -506,31 +487,15 @@ class McpDispatcher:
             for name in sorted(self.connectors)
         ]
 
-    def _mint_status_link(self) -> tuple[str | None, bool]:
-        """Returns ``(url, freshly_minted)``. Reuses a cached link within
-        ``_STATUS_LINK_CACHE_SECONDS`` instead of minting a fresh SEC-06
-        bootstrap code (and rewriting WebServer's discovery file) on every
-        single status() call while un-onboarded -- see this class's own
-        comment on ``_status_link_cache`` for why."""
-        if self._bootstrap_link_provider is None:
-            return None, False
-        now = time.time()
-        if self._status_link_cache is not None:
-            cached_url, minted_at = self._status_link_cache
-            if now - minted_at < self._STATUS_LINK_CACHE_SECONDS:
-                return cached_url, False
-        # issue #396 Part C: lands directly on Settings' Connectors section
-        # -- the screen that actually unblocks an un-onboarded install --
-        # rather than plain /settings, which opens on General.
-        url = self._bootstrap_link_provider(self._SIGN_IN_LINK_PAGES["connectors"])
-        if url is None:
-            self._status_link_cache = None
-            return None, False
-        self._status_link_cache = (url, now)
-        return url, True
-
     @staticmethod
     def _audit_status_check(decision: str, claude_reason: str = "") -> None:
+        # ``decision`` is always "status_checked" -- privacyfence_status
+        # never mints a sign-in link itself (issue #396 threat-model
+        # follow-up: that credential is only ever issued because a human
+        # actually asked for one, via privacyfence_get_sign_in_link, which
+        # records its own "sign_in_link_issued" entry). Kept as a parameter
+        # rather than hardcoded so a future distinct status-only decision
+        # doesn't need this call site touched again.
         try:
             get_audit_logger().record(AuditEntry(
                 timestamp=datetime.now(timezone.utc).isoformat(),
@@ -539,10 +504,7 @@ class McpDispatcher:
                 connector="",
                 tool="",
                 tool_name="",
-                summary=(
-                    "Issued a one-time sign-in link for /settings/connectors (via privacyfence_status)"
-                    if decision == "sign_in_link_issued" else "Checked PrivacyFence setup status"
-                ),
+                summary="Checked PrivacyFence setup status",
                 sender="",
                 decision=decision,
                 auto_accept_rule="",
