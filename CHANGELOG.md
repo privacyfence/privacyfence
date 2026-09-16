@@ -252,6 +252,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now absolute (`github.com/.../blob/main/...` for docs, `raw.githubusercontent.com/.../main/...`
   for images), and the three `../../releases` download pointers now point at
   `privacyfence.eu/download/`, the canonical download surface. See issue #370.
+- `scripts/build_installer.ps1` no longer assumes `signtool.exe` is on `PATH` when
+  `WINDOWS_CERTIFICATE`/`WINDOWS_CERTIFICATE_PWD` are set. GitHub's `windows-latest` runner ships
+  the Windows SDK but does not add it to `PATH` outside a Visual Studio dev shell, so the first
+  signed Windows build would have failed at the signing step with "signtool.exe is not recognized"
+  the moment those secrets were configured — this path had never actually run in CI, since no
+  certificate has been available until now. The script now falls back to locating `signtool.exe`
+  under the SDK's own install layout when it isn't already on `PATH`.
 
 ## [4.0.0] — 2026-09-14
 
