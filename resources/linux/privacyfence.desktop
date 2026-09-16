@@ -15,4 +15,15 @@ X-GNOME-Autostart-enabled=true
 # graphical login -- mirrors the macOS bundle's LSUIElement=True ("headless
 # background daemon -- no Dock icon"). See
 # the now-removed docs/linux-local-deb-packaging-plan.md P3.1/P3.2.
+#
+# This file only ever autostarts the daemon (scripts/build_deb.sh installs
+# it to /etc/xdg/autostart/, nowhere an app-menu reads) -- it deliberately
+# keeps NoDisplay=true and this same Exec= rather than becoming the
+# application-menu entry itself. #428 Phase 3 (ADR 0002 decision 2)'s "Open
+# Approvals"/"Open Settings"/"Quit" launcher is the separate
+# privacyfence-companion.desktop alongside this file, installed to
+# /usr/share/applications/ instead -- a single .desktop file can't serve
+# both roles at once (autostart needs Exec=privacyfence-app; a menu click
+# needs Exec=privacyfence-companion), and getting that wrong here would
+# silently stop the daemon from autostarting at all.
 NoDisplay=true

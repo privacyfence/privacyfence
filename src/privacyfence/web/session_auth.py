@@ -230,7 +230,16 @@ def unauthorized_html(request: Request) -> Response:
     last one rather than just naming the channel, since a reader who's
     landed here from a dead link and has no MCP client connected yet is
     exactly the audience that finding this self-explanatory matters most
-    for. ``request`` is otherwise unused here: unlike the old bearer-header
+    for.
+
+    #428 Phase 3 (ADR 0002) adds a fifth path, and the page now leads with
+    it ahead of "ask Claude": PrivacyFence's optional companion app (a
+    tray/menu-bar icon on macOS/Windows, an Applications-menu entry on
+    Linux) mints and opens a fresh link itself, from its own Open Approvals/
+    Open Settings items -- no MCP client, no terminal. Nothing installs or
+    autostarts it yet, though (that's #428 Phase 4), so this page can't
+    assume it's running and still lists the other four. ``request`` is
+    otherwise unused here: unlike the old bearer-header
     ``curl`` command, the control channel is a local socket/pipe, not
     another HTTP endpoint on this page's own origin, so there's no origin
     left to splice into the recovery command.
@@ -273,7 +282,12 @@ def unauthorized_html(request: Request) -> Response:
         command = f"printf 'MINT\\n' | nc -U '{sock_path}'"
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
-        "<p><strong>Not authorized.</strong> Ask Claude (or any other MCP client already "
+        "<p><strong>Not authorized.</strong> If PrivacyFence's companion app is running -- a "
+        "tray/menu-bar icon on macOS/Windows, or its entry in your Applications menu on Linux -- "
+        "use its Open Approvals (or Open Settings) item to get back in directly, no MCP client or "
+        "terminal needed. Nothing installs or starts it automatically yet, so if that's not an "
+        "option:</p>"
+        "<p>Ask Claude (or any other MCP client already "
         "connected to PrivacyFence) to get you back in — it can call the "
         "<code>privacyfence_get_sign_in_link</code> tool and hand you a fresh sign-in link "
         "directly, no terminal needed. That's the fastest way back in on a headless "

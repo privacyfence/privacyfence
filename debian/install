@@ -18,6 +18,12 @@ resources/linux/privacyfence-app-wrapper usr/bin/privacyfence-app
 # install.
 resources/linux/privacyfence.desktop etc/xdg/autostart/
 
+# #428 Phase 3 (ADR 0002): the companion app's own wrapper and application-menu entry -- a
+# separate .desktop file from the autostart one above (see its own comment for why one file can't
+# serve both roles).
+resources/linux/privacyfence-companion-wrapper usr/bin/privacyfence-companion
+resources/linux/privacyfence-companion.desktop usr/share/applications/
+
 # Icon-theme locations, referenced by name (Icon=privacyfence) rather than absolute path from the
 # .desktop entry above.
 src/privacyfence/resources/icon_512.png usr/share/icons/hicolor/512x512/apps/privacyfence.png

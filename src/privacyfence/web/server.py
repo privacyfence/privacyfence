@@ -100,7 +100,7 @@ from . import routes_connect
 from . import routes_downloads
 from . import routes_org_identity
 from . import state_stream as _state_stream
-from .control_channel import ControlChannelServer
+from .control_channel import WEB_BASE_URL_FILE_NAME, ControlChannelServer
 from .csp import build_csp
 from .csp import new_nonce as _new_csp_nonce
 from .mcp_auth import load_or_create_mcp_token
@@ -213,6 +213,20 @@ def _clear_mcp_url_file() -> None:
     ipc_server.py's own shutdown has for not leaving a dangling PORT_FILE
     behind."""
     (paths.data_dir() / MCP_URL_FILE_NAME).unlink(missing_ok=True)
+
+
+def _write_web_base_url_file(base_url: str) -> None:
+    """#428 Phase 3: the companion's own way to learn this install's base
+    URL (see ``web/control_channel.py``'s ``read_base_url()``) without
+    importing this module -- written unconditionally alongside ``mcp_url``
+    whenever this server runs local mode's own control channel (``self.
+    control_channel is not None`` -- org mode has neither)."""
+    path = paths.data_dir() / WEB_BASE_URL_FILE_NAME
+    atomic_write_text(path, base_url)
+
+
+def _clear_web_base_url_file() -> None:
+    (paths.data_dir() / WEB_BASE_URL_FILE_NAME).unlink(missing_ok=True)
 
 
 class _SecurityHeadersMiddleware:
@@ -819,7 +833,7 @@ class WebServer:
             self.sessions = LocalSessionStore()
             bootstrap = BootstrapStore()
             self.bootstrap = bootstrap
-            self.control_channel = ControlChannelServer(bootstrap=bootstrap)
+            self.control_channel = ControlChannelServer(bootstrap=bootstrap, allow_quit=allow_quit)
         # Every path mint_bootstrap_url() has actually written a discovery
         # file for -- stop() clears exactly these, never a hardcoded list,
         # since which paths get minted (just /approvals, or /approvals and
@@ -966,6 +980,7 @@ class WebServer:
             _write_mcp_url_file(self.mcp_url)
         if self.control_channel is not None:
             self.control_channel.start()
+            _write_web_base_url_file(self.base_url)
 
     def stop(self) -> None:
         self._server.should_exit = True
@@ -973,6 +988,7 @@ class WebServer:
             self._thread.join(timeout=5)
         if self.control_channel is not None:
             self.control_channel.stop()
+            _clear_web_base_url_file()
         if self.mcp_url is not None:
             _clear_mcp_url_file()
         for path in self._minted_bootstrap_paths:

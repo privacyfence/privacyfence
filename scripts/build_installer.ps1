@@ -131,10 +131,11 @@ bash scripts/build_mcpb.sh
 if ($LASTEXITCODE -ne 0) { throw "build_mcpb.sh failed" }
 $McpbPath = "dist/${ProductName}-${Version}.mcpb"
 
-# -- 6. Optional code-signing of the daemon executables (Phase 5) -----------
-# Sign both PrivacyFenceApp.exe and privacyfence-app.exe -- signing only the
-# installer and not these would still show an unrecognized-publisher warning
-# if a user runs either directly rather than through the installer.
+# -- 6. Optional code-signing of the daemon + companion executables (Phase 5) -
+# Sign PrivacyFenceApp.exe, privacyfence-app.exe, and (#428 Phase 3, ADR 0002)
+# PrivacyFenceCompanion.exe -- signing only the installer and not these would
+# still show an unrecognized-publisher warning if a user runs any of them
+# directly rather than through the installer.
 $TimestampUrl = if ($env:SIGN_TIMESTAMP_URL) { $env:SIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
 $script:SignToolPath = $null
 function Get-SignToolPath {
@@ -156,8 +157,10 @@ function Invoke-Signing([string]$Path) {
         /tr $TimestampUrl /td sha256 "$Path"
     if ($LASTEXITCODE -ne 0) { throw "signtool failed on $Path" }
 }
+$CompanionExe = Join-Path $DistDir "PrivacyFenceCompanion.exe"
 Invoke-Signing $MainExe
 Invoke-Signing $AliasExe
+Invoke-Signing $CompanionExe
 
 # -- 7. Build the installer with Inno Setup ----------------------------------
 Write-Host "-> Running Inno Setup..."
