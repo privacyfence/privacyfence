@@ -134,7 +134,7 @@ class TestControlChannelServerPosix:
     def test_unknown_command_is_rejected(self, tmp_path, monkeypatch):
         server, _bootstrap = self._server(tmp_path, monkeypatch)
         try:
-            reply = _mint(server.address, message="QUIT\n")
+            reply = _mint(server.address, message="BOGUS\n")
             assert reply.startswith("ERROR")
         finally:
             server.stop()
@@ -161,3 +161,184 @@ class TestControlChannelServerPosix:
             assert _mint(server.address).startswith("OK ")
         finally:
             server.stop()
+
+
+class TestQuitCommand:
+    """#428 Phase 3 (ADR 0002): the companion's tray/launcher "Quit" action
+    and the web settings page's own Quit button both end up here -- and
+    both respect the same allow_quit flag."""
+
+    def _server(self, tmp_path, monkeypatch, *, allow_quit: bool = True):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore(), allow_quit=allow_quit)
+        server.start()
+        return server
+
+    def test_quit_triggers_daemon_shutdown(self, tmp_path, monkeypatch):
+        from privacyfence import daemon_main
+
+        called = []
+        monkeypatch.setattr(daemon_main, "request_shutdown", lambda: called.append(True))
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="QUIT\n")
+            assert reply.startswith("OK")
+            assert called == [True]
+        finally:
+            server.stop()
+
+    def test_quit_is_rejected_when_disabled(self, tmp_path, monkeypatch):
+        from privacyfence import daemon_main
+
+        called = []
+        monkeypatch.setattr(daemon_main, "request_shutdown", lambda: called.append(True))
+        server = self._server(tmp_path, monkeypatch, allow_quit=False)
+        try:
+            reply = _mint(server.address, message="QUIT\n")
+            assert reply.startswith("ERROR")
+            assert called == []
+        finally:
+            server.stop()
+
+
+class TestCompanionChannelServer:
+    """#428 Phase 3: the reverse-direction channel -- the daemon is the
+    client, the companion is the server -- used to hand a connector OAuth
+    URL to a process that can still reach the user's browser once #428
+    Phase 4 moves the daemon off the user's own desktop session."""
+
+    def _server(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        server = cc.CompanionChannelServer()
+        server.start()
+        return server
+
+    def test_open_calls_webbrowser_open(self, tmp_path, monkeypatch):
+        opened = []
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: opened.append(url) or True)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="OPEN https://example.com/callback\n")
+            assert reply.startswith("OK")
+            assert opened == ["https://example.com/callback"]
+        finally:
+            server.stop()
+
+    def test_open_rejects_non_http_schemes(self, tmp_path, monkeypatch):
+        opened = []
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: opened.append(url) or True)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="OPEN file:///etc/passwd\n")
+            assert reply.startswith("ERROR")
+            assert opened == []
+        finally:
+            server.stop()
+
+    def test_unknown_command_is_rejected(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="MINT\n")
+            assert reply.startswith("ERROR")
+        finally:
+            server.stop()
+
+    def test_companion_and_control_channel_addresses_never_collide(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        assert cc.posix_socket_path() != cc.companion_socket_path()
+
+
+class TestControlChannelClientFunctions:
+    """The companion's/daemon's own client-side helpers -- what
+    companion.py and oauth_loopback.py actually call, rather than
+    hand-rolling socket I/O themselves (ADR 0002 decision 4)."""
+
+    def test_mint_bootstrap_code_returns_a_bare_code(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore())
+        server.start()
+        try:
+            code = cc.mint_bootstrap_code()
+            assert code and " " not in code
+        finally:
+            server.stop()
+
+    def test_mint_bootstrap_code_raises_when_no_daemon_is_listening(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        with pytest.raises(OSError):
+            cc.mint_bootstrap_code(timeout=0.5)
+
+    def test_request_quit_triggers_shutdown(self, tmp_path, monkeypatch):
+        from privacyfence import daemon_main, paths
+
+        called = []
+        monkeypatch.setattr(daemon_main, "request_shutdown", lambda: called.append(True))
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore())
+        server.start()
+        try:
+            cc.request_quit()
+            assert called == [True]
+        finally:
+            server.stop()
+
+    def test_request_quit_raises_on_error_reply(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore(), allow_quit=False)
+        server.start()
+        try:
+            with pytest.raises(cc.ControlChannelError):
+                cc.request_quit()
+        finally:
+            server.stop()
+
+    def test_request_open_url_returns_false_when_no_companion_is_running(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        assert cc.request_open_url("https://example.com", timeout=0.5) is False
+
+    def test_request_open_url_returns_true_when_the_companion_opens_it(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: True)
+        server = cc.CompanionChannelServer()
+        server.start()
+        try:
+            assert cc.request_open_url("https://example.com/callback") is True
+        finally:
+            server.stop()
+
+
+class TestReadBaseUrl:
+    def test_none_when_no_daemon_has_written_it(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        assert cc.read_base_url() is None
+
+    def test_reads_back_what_was_written(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        (tmp_path / cc.WEB_BASE_URL_FILE_NAME).write_text("http://127.0.0.1:8765", encoding="utf-8")
+        assert cc.read_base_url() == "http://127.0.0.1:8765"

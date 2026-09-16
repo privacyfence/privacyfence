@@ -78,6 +78,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   need to exist first. The not-authorized page's on-demand recovery command changed to match (`nc -U`
   on macOS/Linux, PowerShell's `NamedPipeClientStream` on Windows — neither needs Python, matching
   the previous `curl`-based command's own no-extra-install posture). See issue #428.
+- Issue #428 Phase 3 (ADR 0002): a companion app — `privacyfence-companion`, a second entry point of
+  the same packaged application, not a new binary — gives a human a way into PrivacyFence's web UI
+  that doesn't route a sign-in credential through the AI client. On macOS/Windows it's a persistent
+  tray/menu-bar process (`pystray`, the one platform-conditional dependency ADR 0002 budgets for)
+  offering Open Approvals, Open Settings, and Quit; on Linux — no tray, by design — the same three
+  actions are a real (no longer `NoDisplay`) Applications-menu entry plus two Desktop Actions,
+  invoking `privacyfence-companion --action=...` once and exiting. It mints its own sign-in links
+  over the Phase 2 control channel and opens them in the default browser, and can ask the daemon to
+  quit over a new `QUIT` command on that same channel (gated by the existing `allow_quit` setting).
+  It also runs its own, opposite-direction channel that the daemon's connector OAuth flows
+  (`oauth_loopback.py`) now try first before opening a browser themselves — falling straight back to
+  today's direct `webbrowser.open()` when no companion is running, still the default until a human
+  starts one. Nothing installs or autostarts the companion yet, and it changes no default behavior on
+  its own — that inversion, and the privilege separation it exists to serve, is Phase 4. See issue
+  #428.
 - Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
   `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
   that want hardware-bound passkeys as a hard requirement before releasing a write approval.

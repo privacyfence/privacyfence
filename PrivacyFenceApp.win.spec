@@ -101,6 +101,43 @@ daemon_exe = EXE(
     icon=ICON,
 )
 
+# ── companion (#428 Phase 3, ADR 0002) ────────────────────────────────────────
+# A second entry point in the same onedir output -- PrivacyFenceCompanion.exe alongside
+# PrivacyFenceApp.exe. build_installer.ps1 signs it explicitly, the same optional step it already
+# runs on PrivacyFenceApp.exe/privacyfence-app.exe -- not a second build/signing path (ADR 0002
+# decision 4). The extra hidden import is pystray's Win32 tray-icon backend, which the daemon's
+# own Analysis above has no reason to declare -- best-effort, since this spec can only run (and
+# only be verified) on an actual Windows build host, never in this repo's own Linux-hosted CI.
+
+companion_a = Analysis(
+    ["src/_companion_entry.py"],
+    pathex=[SRC],
+    binaries=[],
+    datas=datas,
+    hiddenimports=hidden_imports + ["pystray._win32", "PIL.Image"],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+)
+
+companion_pyz = PYZ(companion_a.pure)
+
+companion_exe = EXE(
+    companion_pyz,
+    companion_a.scripts,
+    [],
+    exclude_binaries=True,
+    name="PrivacyFenceCompanion",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=False,
+    icon=ICON,
+)
+
 # ── onedir output ────────────────────────────────────────────────────────────
 # No BUNDLE() step -- that's macOS-only (.app/.icns). This onedir tree is
 # the whole Windows distributable, installed to %ProgramFiles%\PrivacyFence\
@@ -110,6 +147,9 @@ coll = COLLECT(
     daemon_exe,
     daemon_a.binaries,
     daemon_a.datas,
+    companion_exe,
+    companion_a.binaries,
+    companion_a.datas,
     strip=False,
     upx=True,
     upx_exclude=[],
