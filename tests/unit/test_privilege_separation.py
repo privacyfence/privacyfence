@@ -789,13 +789,14 @@ class TestInstallerContract:
         # layout at a root nothing reads.
         assert "uname -s" in self.SCRIPTS[platform]
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_has_a_non_interactive_auto_mode(self, platform):
-        # #428 D1 (4.1): both platforms' unattended auto-enable trigger --
-        # the .deb's postinst on Linux, the daemon's own admin-prompt on
-        # macOS -- passes --auto, and it has to make enable safe to run
-        # unattended (never die() a caller that can't recover interactively)
-        # without silently skipping require_root.
+        # #428 D1 (4.1): both POSIX platforms' unattended auto-enable
+        # trigger -- the .deb's postinst on Linux, the daemon's own
+        # admin-prompt on macOS -- passes --auto, and it has to make enable
+        # safe to run unattended (never die() a caller that can't recover
+        # interactively) without silently skipping require_root. Windows
+        # stays opt-in only -- D1 does not extend to it.
         assert "--auto" in self.SCRIPTS[platform]
         assert "AUTO=1" in self.SCRIPTS[platform]
 
