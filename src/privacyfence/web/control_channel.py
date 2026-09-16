@@ -189,7 +189,7 @@ class ControlChannelServer:
         self._thread.start()
 
     def _accept_loop_posix(self) -> None:
-        assert self._posix_socket is not None
+        assert self._posix_socket is not None  # nosec B101  # invariant narrowing, not input validation
         while not self._stop_event.is_set():
             try:
                 conn, _addr = self._posix_socket.accept()
@@ -229,7 +229,7 @@ class ControlChannelServer:
         import winerror
 
         pipe_name = self.address
-        assert pipe_name is not None
+        assert pipe_name is not None  # nosec B101  # invariant narrowing, not input validation
         security_attributes = _current_user_security_attributes()
         while not self._stop_event.is_set():
             try:
