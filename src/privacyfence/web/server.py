@@ -58,15 +58,20 @@ web/routes_org_approvals.py's own module docstring covers both.
 dispatcher wholesale was never the plan (see routes_connect.py's own
 module docstring for why a small, purpose-built page is the shape every
 other org-mode surface here already takes). What is mounted instead
-(web/routes_org_settings.py) is read-only except for removing a row:
-``GET /settings`` is every signed-in principal's own auto-accept rules and
-resource grants, and ``GET /settings/privacy`` is an admin-only
-(``Principal.is_admin`` -- #400 C3c finally gave that field a real
-consumer) view of the install-wide PII/privacy policy. Editing either from
-the browser, and the rest of routes_settings.py's ~30 actions (connector
-management, the update banner, Telegram's interactive auth -- see
-web/org_settings_scope.py's own ``NOT_APPLICABLE_ACTIONS`` for the ones
-that only ever meant something on a desktop install), remain unmounted.
+(web/routes_org_settings.py) is two purpose-built pages:
+``GET /settings``, every signed-in principal's own auto-accept rules and
+resource grants, read-only except for removing a row; and
+``GET /settings/privacy``, an admin-only (``Principal.is_admin`` -- #400
+C3c finally gave that field a real consumer) view of the install-wide
+PII/privacy policy, editable since #400 C3e through two ``POST
+/api/settings/privacy/...`` routes that write the server's own
+settings.yaml and hot-reload it for every principal
+(web/org_install_policy.py). The rest of routes_settings.py's ~30 actions
+(connector management, the update banner, Telegram's interactive auth --
+see web/org_settings_scope.py's own ``NOT_APPLICABLE_ACTIONS`` for the
+ones that only ever meant something on a desktop install) remain
+unmounted, as do the two admin-only actions that are install-wide but
+aren't privacy policy (``set_log_level``, ``toggle_calendar_free_busy``).
 """
 from __future__ import annotations
 
@@ -345,6 +350,14 @@ class OrgAuth:
     # same "every existing OrgAuth() caller keeps working" reason
     # connector_registry/org_config already do.
     install_wide_settings: dict = field(default_factory=dict)
+    # #400 C3e: where that dict was loaded from, so the admin privacy page
+    # can write it back. Separate from the dict rather than derived from it
+    # because nothing in a parsed settings.yaml records its own path.
+    # Empty means "read-only": routes_org_settings.py renders the policy
+    # without edit controls and rejects a hand-written write, which is
+    # exactly what an OrgAuth built by a test that never had a real
+    # settings.yaml on disk should do.
+    install_wide_settings_path: str = ""
 
 
 def _default_principal(_request: Request) -> Principal:
@@ -687,8 +700,8 @@ def _build_org_app(
 ) -> ASGIApp:
     """org mode's own route set -- see build_app()'s and this module's own
     docstrings for what's deliberately absent (the local-token settings
-    surface's ~30-action dispatcher, still -- only its own read-only,
-    purpose-built replacement is mounted, see routes_org_settings below).
+    surface's ~30-action dispatcher, still -- only its own purpose-built
+    replacement is mounted, see routes_org_settings below).
     ``/approvals`` and ``/security`` (P9,
     web/routes_org_approvals.py/web/routes_security.py) are mounted
     unconditionally here -- unlike ``/connect`` (below), they need nothing
@@ -752,6 +765,7 @@ def _build_org_app(
     # already required parameters of this function either way.
     extra_routes.extend(routes_org_settings.build_routes(
         sessions=org.sessions, install_wide_settings=org.install_wide_settings,
+        install_wide_settings_path=org.install_wide_settings_path,
     ))
 
     lifespan = None
