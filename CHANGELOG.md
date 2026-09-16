@@ -112,6 +112,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   finds itself running as the wrong account rather than silently seeding a default policy over the
   real one. Linux and Windows are unchanged — the same phase for each is still to come. See issue
   #428.
+- Issue #428 Phase 4, Linux: `sudo scripts/linux_privilege_separation.sh enable` does for Linux
+  what the macOS entry above does for macOS, in this platform's own idioms — a `privacyfence`
+  system account (`useradd --system`, no underscore prefix, which means nothing here), the data
+  directory relocated from `~/.privacyfence` to `/var/lib/privacyfence` (FHS 3.0 §5.8) owned by it,
+  and the startup wiring inverted: a **system** systemd unit
+  (`/etc/systemd/system/privacyfence-daemon.service`) runs the daemon with no desktop session,
+  while both pre-existing ways it used to start in yours — the `.deb`'s XDG autostart entry and the
+  repo's `--user` unit — are moved aside, since either would start a second daemon as you. It
+  closes exactly the same four things, and the layout, modes, marker file and `handoff` directory
+  are identical to macOS's; only the root and the account name differ. `privacyfence-companion`
+  grows a `--serve` mode, which an XDG autostart entry runs in each desktop session: the
+  companion's control channel alone, no tray and no new dependency. That one is not optional —
+  a daemon with no desktop session cannot open a browser, so without it connector OAuth for Slack,
+  Salesforce and Atlassian would have no way to show you a sign-in page. **Opt-in, and staying
+  opt-in for a full release**, same as macOS: the migration moves live connector OAuth tokens, and
+  `… disable` (which restores both startup paths it moved aside) is the only way back. Root still
+  defeats all of it. Windows remains unchanged — its phase needs net-new NTFS ACL work that neither
+  POSIX platform did. See issue #428.
 - Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
   `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
   that want hardware-bound passkeys as a hard requirement before releasing a write approval.

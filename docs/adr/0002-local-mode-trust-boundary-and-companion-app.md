@@ -2,10 +2,11 @@
 
 ## Status
 
-Accepted; implemented on macOS. [#428](https://github.com/privacyfence/privacyfence/issues/428)
+Accepted; implemented on macOS and Linux. [#428](https://github.com/privacyfence/privacyfence/issues/428)
 Phase 3 built the companion app this decides, and Phase 4 built the privilege separation behind it
-— shipped opt-in on macOS (`scripts/macos_privilege_separation.sh`), still to come on Linux and
-Windows. [#426](https://github.com/privacyfence/privacyfence/issues/426) builds the half that makes
+— shipped opt-in on macOS (`scripts/macos_privilege_separation.sh`) and Linux
+(`scripts/linux_privilege_separation.sh`), still to come on Windows.
+[#426](https://github.com/privacyfence/privacyfence/issues/426) builds the half that makes
 it mean something, and is unblocked per platform only once that platform's Phase 4 has landed and
 soaked. Supersedes [ADR 0001](0001-remove-macos-native-extra.md) in part — see "Relationship to
 ADR 0001" below.
@@ -122,6 +123,16 @@ Only the *opening* moves. The loopback redirect listener stays in the daemon: `1
 machine-wide, not per-session, so a service-hosted daemon still receives the provider's redirect
 from a browser running in the user's session, on the fixed port those three providers' allow-lists
 require.
+
+**Amended by #428 Phase 4 (B5b), 2026-09-16: this is not a Windows-only requirement, and Linux hit
+it first.** The reasoning above is right and its scope was wrong — Session 0 isolation is one way
+for a daemon to lose the user's desktop session, but a system systemd unit loses it just as
+completely, and B5b is what made that concrete before B5c existed. The consequence for decision 4's
+Linux budget is smaller than it sounds: what a separated Linux install autostarts is
+`privacyfence-companion --serve`, the `CompanionChannelServer` on its own, with no tray, no icon
+and still no new dependency. "No tray on Linux" is what that budget rules out; a socket is not a
+tray. The clickable Applications-menu entry stays exactly as decision 4 describes it, and remains
+one-shot.
 
 ### 6. Session minting is made insufficient, not uncallable
 

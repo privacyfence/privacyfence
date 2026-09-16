@@ -253,20 +253,23 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
     return;
   }
 
-  // #428 Phase 4: on a privilege-separated install the daemon belongs to
-  // launchd and to the _privacyfence account, and this process is neither.
+  // #428 Phase 4: on a privilege-separated install the daemon belongs to the
+  // service manager and to its own account, and this process is neither.
   // Spawning it here would start it as the logged-in user, where
   // privilege_separation.check_runtime_identity() refuses to run it rather
   // than seed a default policy over the real one -- so the spawn cannot
   // succeed, and trying it once per shim launch would just bury the real
-  // reason (launchd hasn't started it, or it crashed) under a second
-  // failure. Wait for launchd instead, and say what to look at.
+  // reason (the service manager hasn't started it, or it crashed) under a
+  // second failure. Wait for it instead, and say what to look at.
   if (separationRoot() !== null) {
+    const [manager, inspect] =
+      process.platform === "linux"
+        ? ["a systemd unit", "systemctl status privacyfence-daemon.service"]
+        : ["a LaunchDaemon", "sudo launchctl print system/com.privacyfence.daemon"];
     console.error(
-      `Daemon not running (${describeTarget(mcpUrlFile)}) — this install runs it as a ` +
-        "LaunchDaemon under its own account (#428 Phase 4), so waiting for launchd to " +
-        "start it rather than launching it here. If it never arrives: " +
-        "sudo launchctl print system/com.privacyfence.daemon",
+      `Daemon not running (${describeTarget(mcpUrlFile)}) — this install runs it as ` +
+        `${manager} under its own account (#428 Phase 4), so waiting for the service ` +
+        `manager to start it rather than launching it here. If it never arrives: ${inspect}`,
     );
     await waitForConnectable(mcpUrlFile, connectTimeoutMs, connectIntervalMs);
     return;

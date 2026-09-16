@@ -429,7 +429,7 @@ describe("describeTarget", () => {
 });
 
 describe("ensureDaemonRunning on a privilege-separated install (#428 Phase 4)", () => {
-  it("never spawns the daemon -- launchd owns it, and this process is the wrong account", async () => {
+  it("never spawns the daemon -- the service manager owns it, and this process is the wrong account", async () => {
     // Spawning here would start the daemon as the logged-in user, where
     // privilege_separation.check_runtime_identity() refuses to run rather
     // than seed a default policy over the real one. So the spawn cannot

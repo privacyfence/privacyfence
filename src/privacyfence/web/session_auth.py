@@ -195,6 +195,31 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE, path="/")
 
 
+def _companion_availability_sentence() -> str:
+    """Whether the reader can expect the companion to already be running,
+    which #428 Phase 4 changed -- differently per platform.
+
+    On a separated macOS/Windows install the tray item really is started for
+    them at login, so "it should already be there" is a useful instruction.
+    On Linux it is not: what a separated install autostarts is the invisible
+    ``--serve`` channel (companion.py), the thing that lets the daemon open a
+    browser for connector OAuth from outside the user's session. The
+    affordance this paragraph is pointing at -- the Applications-menu entry
+    -- is present whether or not anything has been separated, and is launched
+    by clicking it. Telling a Linux reader to look for something that started
+    itself would send them hunting for a tray icon this platform has never
+    had (ADR 0002 decision 4).
+    """
+    if not privilege_separation.is_enabled():
+        return "Nothing installs or starts it automatically yet, so "
+    if privilege_separation.current_platform() == "linux":
+        return (
+            "This install has no tray icon (ADR 0002 decision 4) -- the Applications-menu "
+            "entry is the way in. "
+        )
+    return "This install runs it at login for you (#428 Phase 4), so it should already be there. "
+
+
 def unauthorized_html(request: Request) -> Response:
     """The page a human actually lands on with no valid ``pf_session``
     cookie -- most commonly a bootstrap link that's already been used (it's
@@ -295,11 +320,7 @@ def unauthorized_html(request: Request) -> Response:
         "<p><strong>Not authorized.</strong> If PrivacyFence's companion app is running -- a "
         "tray/menu-bar icon on macOS/Windows, or its entry in your Applications menu on Linux -- "
         "use its Open Approvals (or Open Settings) item to get back in directly, no MCP client or "
-        "terminal needed. " + (
-            "This install runs it at login for you (#428 Phase 4), so it should already be there. "
-            if privilege_separation.is_enabled()
-            else "Nothing installs or starts it automatically yet, so "
-        ) + "if that's not an option:</p>"
+        "terminal needed. " + _companion_availability_sentence() + "if that's not an option:</p>"
         "<p>Ask Claude (or any other MCP client already "
         "connected to PrivacyFence) to get you back in — it can call the "
         "<code>privacyfence_get_sign_in_link</code> tool and hand you a fresh sign-in link "

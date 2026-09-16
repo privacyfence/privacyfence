@@ -24,6 +24,16 @@ resources/linux/privacyfence.desktop etc/xdg/autostart/
 resources/linux/privacyfence-companion-wrapper usr/bin/privacyfence-companion
 resources/linux/privacyfence-companion.desktop usr/share/applications/
 
+# #428 Phase 4 (B5b): the opt-in privilege-separation tool, plus the systemd unit and XDG autostart
+# templates it renders at `enable` time. /usr/sbin because it refuses to run without root; the
+# templates under /usr/share because a packaged install has no source checkout for the script to
+# find them next to (see the script's own TEMPLATE_DIR comment). scripts/build_deb.sh additionally
+# renames the script to /usr/sbin/privacyfence-privilege-separation, which dh_install cannot express
+# here.
+scripts/linux_privilege_separation.sh usr/sbin/
+installer/linux/privacyfence-daemon.service.tmpl usr/share/privacyfence/installer/linux/
+installer/linux/privacyfence-companion.desktop.tmpl usr/share/privacyfence/installer/linux/
+
 # Icon-theme locations, referenced by name (Icon=privacyfence) rather than absolute path from the
 # .desktop entry above.
 src/privacyfence/resources/icon_512.png usr/share/icons/hicolor/512x512/apps/privacyfence.png

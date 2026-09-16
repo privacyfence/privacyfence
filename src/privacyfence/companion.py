@@ -27,26 +27,36 @@ Platform behavior:
     (decision 5) -- what Windows' Session 0 isolation will require once
     #428 Phase 4 lands there. Requires ``pystray``/``Pillow``, declared
     platform-conditionally in ``pyproject.toml``.
-  - **Linux**: no tray (decision 4's dependency-budget call, and no
-    persistent process at all) -- ``main()`` instead dispatches once on a
-    single ``--action`` and exits, invoked by
-    ``resources/linux/privacyfence.desktop``'s main ``Exec=`` (Open
-    Approvals) and its ``Desktop Action`` entries (Settings, Quit). Linux
-    connector OAuth flows keep using ``oauth_loopback.py``'s own direct
-    ``webbrowser.open()`` fallback -- there's no persistent companion here
-    for the daemon to ask.
+  - **Linux**: no tray (decision 4's dependency-budget call) -- ``main()``
+    instead dispatches once on a single ``--action`` and exits, invoked by
+    ``resources/linux/privacyfence-companion.desktop``'s main ``Exec=``
+    (Open Approvals) and its ``Desktop Action`` entries (Settings, Quit).
+    ``--serve`` is the third shape, added by #428 Phase 4 (B5b): the
+    ``CompanionChannelServer`` alone, with no tray and no menu, so a
+    separated install's daemon -- which now runs as its own account with no
+    desktop session -- has something in the user's session to hand a
+    connector OAuth URL to. Still zero new dependencies, which is what
+    decision 4's Linux budget actually constrains; what it rules out is a
+    tray icon, not a socket. On an unseparated Linux install nothing starts
+    this and ``oauth_loopback.py``'s direct ``webbrowser.open()`` fallback
+    keeps working exactly as before.
 
 Startup wiring (what autostarts the daemon vs. the companion, on each
-platform) does not change in Phase 3 -- that inversion is #428 Phase 4's
-job (ADR 0002's own "Consequences"). Today the daemon still autostarts
-itself exactly as before; running this entry point is opt-in.
+platform) did not change in Phase 3 -- that inversion is #428 Phase 4's
+job (ADR 0002's own "Consequences"), and has now happened on macOS (a
+LaunchAgent running the tray) and Linux (an XDG autostart entry running
+``--serve``). On an install that has not opted into privilege separation
+the daemon still autostarts itself exactly as before, and running this
+entry point is opt-in.
 """
 from __future__ import annotations
 
 import argparse
 import logging
 import sys
+import threading
 import webbrowser
+from typing import Callable
 from pathlib import Path
 
 from .std_streams import ensure_std_streams
@@ -158,6 +168,42 @@ def _run_tray() -> int:
     return 0
 
 
+def _run_serve(wait: Callable[[], None] | None = None) -> int:
+    """``--serve``: the companion channel and nothing else, until killed.
+
+    #428 Phase 4 (B5b). A separated install's daemon runs under its own
+    account with no desktop session, so ``oauth_loopback.py``'s
+    ``webbrowser.open()`` has no browser to reach -- the same Session 0
+    problem ADR 0002 decision 5 anticipates for Windows, arriving on Linux
+    first because that is where Phase 4 landed second and where there is no
+    tray process already running a ``CompanionChannelServer``. This is that
+    server on its own: no ``pystray``, no icon, no menu, no imports beyond
+    what the one-shot ``--action`` path already pulls in.
+
+    Blocks on an Event nothing ever sets rather than a sleep loop: SIGTERM's
+    default disposition kills the process outright, which is how the XDG
+    autostart entry's session teardown ends this, so the only way ``wait``
+    returns in a real run is ``KeyboardInterrupt`` from a foreground
+    terminal. ``wait`` is injectable for the test that has to get back out
+    of here.
+    """
+    channel = CompanionChannelServer()
+    channel.start()
+    if channel.address is None:
+        logger.error("Could not start the companion's control channel -- nothing to serve.")
+        return 1
+    logger.info("Companion channel listening on %s", channel.address)
+    try:
+        (wait or threading.Event().wait)()
+    except KeyboardInterrupt:  # pragma: no cover -- interactive only
+        pass
+    finally:
+        # Tears the socket down cleanly rather than leaving a stale node
+        # behind for the next start to unlink.
+        channel.stop()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Same fix-up the frozen daemon entry point (src/_daemon_entry.py)
     # needs: a windowed (console=False) frozen build has no
@@ -172,17 +218,38 @@ def main(argv: list[str] | None = None) -> int:
         "--action", choices=_ACTIONS, default=None,
         help=(
             "Run one action and exit, instead of the persistent tray/menu-bar loop. "
-            "Required on Linux, which has no tray (ADR 0002 decision 4) -- see "
-            "resources/linux/privacyfence.desktop's Exec/Desktop Action lines."
+            "On Linux, which has no tray (ADR 0002 decision 4), either this or --serve "
+            "is required -- see resources/linux/privacyfence-companion.desktop's "
+            "Exec/Desktop Action lines."
+        ),
+    )
+    parser.add_argument(
+        "--serve", action="store_true",
+        help=(
+            "Run only the companion's control channel (no tray, no menu) and stay up, so a "
+            "privilege-separated daemon can hand this session a connector OAuth URL to open. "
+            "What the XDG autostart entry a separated Linux install writes runs -- see "
+            "scripts/linux_privilege_separation.sh."
         ),
     )
     args = parser.parse_args(argv)
 
+    if args.action is not None and args.serve:
+        # One runs and exits, the other stays up forever; there is no
+        # sensible order for "both", and silently picking one would make a
+        # mis-written .desktop Exec= look like it worked.
+        parser.error("--action and --serve are mutually exclusive")
+
     if args.action is not None:
         return 0 if _run_action(args.action) else 1
 
+    if args.serve:
+        return _run_serve()
+
     if sys.platform not in _TRAY_PLATFORMS:
-        parser.error("--action is required on this platform (no tray icon -- see ADR 0002 decision 4)")
+        parser.error(
+            "--action or --serve is required on this platform (no tray icon -- see ADR 0002 decision 4)"
+        )
     return _run_tray()
 
 

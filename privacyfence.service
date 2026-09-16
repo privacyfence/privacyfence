@@ -44,6 +44,17 @@
 # ExecStart assumes `pipx install privacyfence` (pipx's default bin
 # location). Adjust if installed elsewhere (a plain `pip install --user`,
 # or a dedicated venv).
+#
+# This unit runs the daemon as you, which is also who the AI client it
+# governs runs as -- issue #428's whole subject. #428 Phase 4 (B5b) makes
+# that opt-out-able: `sudo scripts/linux_privilege_separation.sh enable`
+# replaces this with a *system* unit
+# (installer/linux/privacyfence-daemon.service.tmpl,
+# /etc/systemd/system/privacyfence-daemon.service) running under a dedicated
+# `privacyfence` account, and moves this file to
+# privacyfence.service.disabled so it cannot start a second daemon in your
+# session at the next login. `... disable` puts it back. Nothing here changes
+# unless you run that script.
 
 [Unit]
 Description=PrivacyFence daemon

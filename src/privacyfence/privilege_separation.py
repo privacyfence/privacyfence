@@ -9,32 +9,52 @@ rather than a hunt through every call site. Phase 2 replaced the
 ``web_token`` file with a socket/pipe control channel. Phase 3 gave the human
 a companion app that can speak it. This module is the phase where the uid
 finally splits, and all four of issue #428's weaknesses close at once: the
-agent runs as the logged-in user, the daemon runs as ``_privacyfence``, and
-the human-authority files are ``0700`` under the latter.
+agent runs as the logged-in user, the daemon runs as a dedicated service
+account, and the human-authority files are ``0700`` under the latter.
 
-**macOS only, for now, and opt-in.** ``SUPPORTED_PLATFORMS`` is the single
-gate: on Linux and Windows every function here reports "not separated" and
-every path in ``paths.py`` resolves exactly as it did before this module
-existed, byte for byte. #428 P4's Linux (B5b) and Windows (B5c) phases add
-their platform to that tuple along with the installer that can actually
-provision it -- Windows in particular needs net-new NTFS ACL work that has
-no equivalent here, which is why macOS goes first: real POSIX permissions
-already work, so this platform validates the shape at the lowest cost.
+**macOS and Linux, opt-in on both.** ``SUPPORTED_PLATFORMS`` is the single
+gate: on Windows every function here reports "not separated" and every path
+in ``paths.py`` resolves exactly as it did before this module existed, byte
+for byte. #428 P4's Windows phase (B5c) adds that platform to the tuple
+along with the installer that can actually provision it -- it needs net-new
+NTFS ACL work that has no equivalent here, which is why the two POSIX
+platforms went first: real permission bits already work, so they validate
+the shape at the lowest cost.
 
 ## The layout
 
-``scripts/macos_privilege_separation.sh enable`` is what provisions this; it
-is the only supported way to turn it on, and it writes the marker file this
-module reads. Afterwards::
+The two platforms differ only in the three names ``PLATFORM_LAYOUTS`` below
+holds -- where the root is, and what the account and group are called.
+Everything else (the three directories, their modes, the marker, what goes
+in ``handoff/``) is identical, which is the point: one layout, provisioned
+by whichever installer a platform has.
 
-    /Library/Application Support/PrivacyFence      _privacyfence:_privacyfence  0711
-    ├── privilege-separation.json                  _privacyfence:_privacyfence  0644
-    ├── authority/                                 _privacyfence:_privacyfence  0700
+===========  ==================================  ===============
+Platform     System root                         Service account
+===========  ==================================  ===============
+macOS        /Library/Application Support/       ``_privacyfence``
+             PrivacyFence                        (Apple's hidden
+                                                 system-account
+                                                 convention)
+Linux        /var/lib/privacyfence               ``privacyfence``
+             (FHS 3.0 §5.8)                      (no underscore --
+                                                 that prefix means
+                                                 nothing here)
+===========  ==================================  ===============
+
+``scripts/macos_privilege_separation.sh enable`` and
+``scripts/linux_privilege_separation.sh enable`` are what provision this;
+they are the only supported way to turn it on, and they write the marker
+file this module reads. Afterwards, taking Linux's root as the example::
+
+    /var/lib/privacyfence                          privacyfence:privacyfence  0711
+    ├── privilege-separation.json                  privacyfence:privacyfence  0644
+    ├── authority/                                 privacyfence:privacyfence  0700
     │   ├── config/settings.yaml                     <- policy the agent may not edit
     │   ├── webauthn_credentials.json                <- #426's store, now unforgeable
     │   └── logs/audit/                              <- and its HMAC key
-    ├── credentials/, logs/, ...                   _privacyfence:_privacyfence  0700
-    └── handoff/                                   _privacyfence:_privacyfence  2770
+    ├── credentials/, logs/, ...                   privacyfence:privacyfence  0700
+    └── handoff/                                   privacyfence:privacyfence  2770
         ├── mcp_token, mcp_url                       <- the agent's own credential
         ├── web_base_url, *_url                      <- discovery files a human reads
         ├── control.sock                             <- daemon listens, companion connects
@@ -42,7 +62,7 @@ module reads. Afterwards::
 
 The root is ``0711``: traversable by anyone, listable by no one, so a process
 running as the logged-in user can reach ``handoff/`` without being able to
-enumerate anything else. ``handoff/`` is group-owned by ``_privacyfence``
+enumerate anything else. ``handoff/`` is group-owned by the service group
 with the setgid bit, and the human who ran the installer is added to that
 group -- that is what lets the companion create its own socket there and the
 daemon create ``mcp_token`` there, with both readable by the other and by
@@ -59,8 +79,8 @@ the whole of what Phase 4 claims.
 ## What this does not defend against
 
 An agent that can obtain root. ``sudo`` re-owns any file and reconfigures any
-LaunchDaemon; issue #428's "Honest limits" says so, and so does
-``docs/security-and-compliance.md``. The guarantee is against an agent
+LaunchDaemon or systemd unit; issue #428's "Honest limits" says so, and so
+does ``docs/security-and-compliance.md``. The guarantee is against an agent
 running with the user's *normal* privileges, which is the ordinary case, and
 it makes escalation require an authentication prompt a human sees.
 """
@@ -79,17 +99,27 @@ from . import secure_files
 
 logger = logging.getLogger(__name__)
 
-# The dedicated account the daemon runs as. Underscore-prefixed per Apple's
-# own convention for hidden system accounts (``_www``, ``_spotlight``, ...),
-# which is also what keeps it out of the login window and Users & Groups.
-SERVICE_ACCOUNT_NAME = "_privacyfence"
-SERVICE_GROUP_NAME = "_privacyfence"
+# The dedicated account the daemon runs as, per platform. On macOS it is
+# underscore-prefixed per Apple's own convention for hidden system accounts
+# (``_www``, ``_spotlight``, ...), which is also what keeps it out of the
+# login window and Users & Groups. On Linux that prefix means nothing at all
+# -- system accounts there are ordinary names distinguished only by their
+# sub-``UID_MIN`` id (``useradd --system``) -- so it would read as a typo
+# rather than a convention, and the plain name is what every Debian/Fedora
+# packaging guide would use.
+MACOS_SERVICE_ACCOUNT_NAME = "_privacyfence"
+LINUX_SERVICE_ACCOUNT_NAME = "privacyfence"
 
 # Where a separated install keeps everything ``paths.data_dir()`` used to put
 # under ``~/.privacyfence``. A service account cannot sensibly own something
 # inside a human's home directory -- the same reasoning #428 gives for
 # Windows having to move out of ``%LOCALAPPDATA%`` into ``%ProgramData%``.
+# macOS's is the system-wide twin of the ``~/Library/Application Support``
+# every app already uses; Linux's is FHS 3.0 §5.8's ``/var/lib/<package>``,
+# "variable state information" a program modifies as it runs, which is
+# exactly what this directory is.
 MACOS_SYSTEM_ROOT = Path("/Library/Application Support/PrivacyFence")
+LINUX_SYSTEM_ROOT = Path("/var/lib/privacyfence")
 
 # Written by the installer, read by every PrivacyFence process (daemon,
 # companion, and anything the human runs from a shell) so all of them agree
@@ -130,11 +160,60 @@ SOCKET_MODE_SHARED_UID = 0o600
 # daemon publishes there.
 HANDOFF_FILE_MODE_SEPARATED = 0o640
 
+
+@dataclass(frozen=True)
+class PlatformLayout:
+    """The three names, and the two commands, that differ between platforms.
+
+    Everything *else* about a separated install -- the directory structure,
+    the modes above, the marker's own format -- is identical everywhere, so
+    this is deliberately the whole of the per-platform surface. Adding B5c
+    means one more entry here plus the installer that can provision it.
+    """
+
+    system_root: Path
+    service_account: str
+    service_group: str
+    #: Repo-relative path of the script that provisions and audits it. Not
+    #: what the errors below quote -- see ``status_command`` -- but what the
+    #: contract test resolves to check that the two halves still agree.
+    installer: str
+    #: How to *inspect* a separated install, as a human would actually type
+    #: it. Deliberately not ``installer`` verbatim: on Linux the .deb puts
+    #: that same script on PATH as ``privacyfence-privilege-separation``, and
+    #: most Linux installs are the .deb, so quoting a repo-relative path at
+    #: someone reading a daemon log would name a file they do not have.
+    status_command: str
+    #: How the daemon is *supposed* to be started on a separated install --
+    #: the thing to do instead of whatever produced a wrong-account process.
+    start_command: str
+
+
 # #428 P4 ships per platform (B5a/B5b/B5c) rather than as one "x3 platforms"
-# phase, so macOS and Linux can land and soak even if Windows' net-new ACL
-# work runs long. Adding a platform here without its installer would make
-# every process on it look for a marker nothing can write.
-SUPPORTED_PLATFORMS = ("darwin",)
+# phase, so macOS and Linux could land and soak even if Windows' net-new ACL
+# work runs long. A platform is supported exactly when it has an entry here,
+# and an entry without a matching installer would make every process on that
+# platform look for a marker nothing can write.
+PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
+    "darwin": PlatformLayout(
+        system_root=MACOS_SYSTEM_ROOT,
+        service_account=MACOS_SERVICE_ACCOUNT_NAME,
+        service_group=MACOS_SERVICE_ACCOUNT_NAME,
+        installer="scripts/macos_privilege_separation.sh",
+        status_command="sudo scripts/macos_privilege_separation.sh status",
+        start_command="sudo launchctl kickstart -k system/com.privacyfence.daemon",
+    ),
+    "linux": PlatformLayout(
+        system_root=LINUX_SYSTEM_ROOT,
+        service_account=LINUX_SERVICE_ACCOUNT_NAME,
+        service_group=LINUX_SERVICE_ACCOUNT_NAME,
+        installer="scripts/linux_privilege_separation.sh",
+        status_command="sudo privacyfence-privilege-separation status",
+        start_command="sudo systemctl restart privacyfence-daemon.service",
+    ),
+}
+
+SUPPORTED_PLATFORMS = tuple(PLATFORM_LAYOUTS)
 
 
 class PrivilegeSeparationError(RuntimeError):
@@ -176,8 +255,10 @@ def current_platform() -> str:
     return sys.platform
 
 
-def platform_supported() -> bool:
-    return current_platform() in SUPPORTED_PLATFORMS
+def platform_layout() -> PlatformLayout | None:
+    """This platform's entry in ``PLATFORM_LAYOUTS``, or None on one #428 P4
+    hasn't shipped for yet."""
+    return PLATFORM_LAYOUTS.get(current_platform())
 
 
 def system_root() -> Path | None:
@@ -189,8 +270,9 @@ def system_root() -> Path | None:
     if override:
         # An override that isn't absolute would resolve differently per
         # process depending on each one's cwd -- the daemon's is set by its
-        # LaunchDaemon, the companion's by whatever launched it. Rejecting
-        # it outright beats half the install silently using a different root.
+        # LaunchDaemon/systemd unit, the companion's by whatever launched it.
+        # Rejecting it outright beats half the install silently using a
+        # different root.
         candidate = Path(override)
         if not candidate.is_absolute():
             logger.warning(
@@ -199,9 +281,8 @@ def system_root() -> Path | None:
             )
         else:
             return candidate
-    if not platform_supported():
-        return None
-    return MACOS_SYSTEM_ROOT
+    layout = platform_layout()
+    return None if layout is None else layout.system_root
 
 
 def marker_path() -> Path | None:
@@ -398,27 +479,35 @@ def check_runtime_identity() -> None:
     than the parsed result, is what distinguishes it from a genuinely
     unseparated install.
     """
+    layout = platform_layout()
     state = separation()
     if state is None:
         path = marker_path()
         if path is not None and path.exists():
+            how_to_inspect = (
+                f" Run '{layout.status_command}' to inspect the install."
+                if layout is not None
+                else ""
+            )
             raise PrivilegeSeparationError(
                 f"{path} exists but could not be interpreted by this version of PrivacyFence "
                 "(see the errors logged above). Refusing to start: continuing would resolve the "
                 "un-separated data directory and silently ignore the policy, passkeys and audit "
-                "log stored under the separated one. Re-run "
-                "'sudo scripts/macos_privilege_separation.sh status' to inspect the install."
+                f"log stored under the separated one.{how_to_inspect}"
             )
         return
     actual = current_user_name()
     if actual != state.service_account:
+        how_to_start = (
+            f" Start the daemon via its service ('{layout.start_command}') rather than directly."
+            if layout is not None
+            else ""
+        )
         raise PrivilegeSeparationError(
             f"This install runs the daemon under the dedicated {state.service_account!r} account "
             f"(#428 Phase 4), but this process is running as {actual!r}. Refusing to start: the "
             f"human-authority files under {state.authority_dir} are not readable as {actual!r}, so "
-            "starting would seed a fresh default policy and ignore the real one. Start the daemon "
-            "via its LaunchDaemon ('sudo launchctl kickstart -k system/com.privacyfence.daemon') "
-            "rather than directly."
+            f"starting would seed a fresh default policy and ignore the real one.{how_to_start}"
         )
 
 
