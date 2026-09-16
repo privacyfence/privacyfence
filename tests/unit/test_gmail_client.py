@@ -1702,11 +1702,9 @@ class TestSaveAttachmentBytes:
         # GmailClientError like every other failure in this method -- not a
         # bare OSError, which coding-and-testing-guidelines.md §1.4 requires
         # every *_client.py public method to never leak.
-        import privacyfence.gmail_client as gmail_client_module
-
         client = make_client(MagicMock())
         monkeypatch.setattr(
-            gmail_client_module.os, "makedirs",
+            "os.makedirs",
             MagicMock(side_effect=OSError(45, "Operation not supported")),
         )
 
