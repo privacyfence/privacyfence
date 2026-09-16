@@ -659,6 +659,9 @@ class TestBootstrapUrlFile:
         monkeypatch.setattr(
             "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"),
         )
+        monkeypatch.setattr(
+            "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"),
+        )
         idp = oi.IdpConfig(
             issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
             authorization_endpoint="https://idp.example.com/authorize",

@@ -25,6 +25,7 @@ from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.mcp_tools import META_TOOL_NAMES
+from privacyfence.web import routes_mcp as rm
 from privacyfence.web.routes_mcp import SERVER_INSTRUCTIONS, build_mcp_asgi_app, mcp_lifespan
 
 
@@ -574,3 +575,205 @@ class TestDeadSessionIdIsNotHandedOut:
             resp = await client.post("/mcp", json=_INIT_BODY, headers=_WIRE_HEADERS)
         assert resp.status_code == 200
         assert resp.headers["mcp-session-id"]
+
+
+# --------------------------------------------------------------------------- #
+# ...and a session id that *was* real must not pin the client to a dead
+# session either -- routes_mcp.py's _RehomeStaleInitialize. The other half of
+# the same problem: above, the id was never valid; here it was, and the
+# session behind it is gone (a restart, an eviction). Neither official client
+# transport clears a session id on a 404, so without this the connection can
+# never recover. See that class's docstring.
+# --------------------------------------------------------------------------- #
+
+class _SpyApp:
+    """Records the scope it was called with and the body it could read, so a
+    test can assert both that the header was (or wasn't) stripped and that the
+    request survived being buffered."""
+
+    def __init__(self) -> None:
+        self.scopes: list[dict] = []
+        self.bodies: list[bytes] = []
+
+    async def __call__(self, scope, receive, send) -> None:
+        self.scopes.append(scope)
+        body = b""
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                break
+            body += message.get("body", b"")
+            if not message.get("more_body", False):
+                break
+        self.bodies.append(body)
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    @property
+    def saw_session_id(self) -> bool:
+        return any(name.lower() == b"mcp-session-id" for name, _ in self.scopes[-1]["headers"])
+
+
+class _FakeSessionManager:
+    def __init__(self, *live: str) -> None:
+        self._server_instances = {session_id: object() for session_id in live}
+
+
+class _ManagerWithoutTheMapWeExpect:
+    """A hypothetical future SDK build that renamed its session map. The pin
+    is a range, so this must degrade to "change nothing", not to a crash."""
+
+
+def _scope(*, method="POST", session_id="stale-session", scope_type="http"):
+    headers = [(b"content-type", b"application/json")]
+    if session_id is not None:
+        headers.append((b"mcp-session-id", session_id.encode()))
+    return {"type": scope_type, "method": method, "headers": headers}
+
+
+def _receive_of(*messages):
+    queued = list(messages)
+
+    async def receive():
+        return queued.pop(0)
+
+    return receive
+
+
+def _body(raw: bytes, *, more=False):
+    return {"type": "http.request", "body": raw, "more_body": more}
+
+
+_INIT_RAW = b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+_PING_RAW = b'{"jsonrpc":"2.0","id":0,"method":"ping"}'
+
+
+async def _drive(app, scope, *messages):
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    await app(scope, _receive_of(*messages), send)
+    return sent
+
+
+class TestRehomingAStaleSessionId:
+    async def test_initialize_naming_a_dead_session_is_re_homed(self):
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        await _drive(middleware, _scope(), _body(_INIT_RAW))
+        assert not spy.saw_session_id
+        # Buffering the body to decide must not consume it.
+        assert spy.bodies[-1] == _INIT_RAW
+
+    async def test_a_batch_containing_an_initialize_is_re_homed(self):
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        batch = b'[{"jsonrpc":"2.0","id":0,"method":"ping"},' + _INIT_RAW + b"]"
+        await _drive(middleware, _scope(), _body(batch))
+        assert not spy.saw_session_id
+
+    async def test_a_body_split_across_chunks_is_reassembled_and_replayed(self):
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        await _drive(
+            middleware, _scope(),
+            _body(_INIT_RAW[:20], more=True), _body(_INIT_RAW[20:]),
+        )
+        assert not spy.saw_session_id
+        assert spy.bodies[-1] == _INIT_RAW
+
+    async def test_a_live_session_id_is_left_alone(self):
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager("stale-session"))
+        await _drive(middleware, _scope(), _body(_INIT_RAW))
+        assert spy.saw_session_id
+
+    async def test_anything_but_initialize_keeps_todays_404(self):
+        # A server session that never saw `initialize` refuses these anyway,
+        # so re-homing one would trade a clear 404 for a confusing 400.
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        await _drive(middleware, _scope(), _body(_PING_RAW))
+        assert spy.saw_session_id
+        assert spy.bodies[-1] == _PING_RAW
+
+    async def test_an_unparseable_body_is_passed_through(self):
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        await _drive(middleware, _scope(), _body(b"not json"))
+        assert spy.saw_session_id
+
+    async def test_an_empty_body_is_passed_through(self):
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        await _drive(middleware, _scope(), _body(b""))
+        assert spy.saw_session_id
+
+    async def test_an_oversized_body_is_passed_through_intact(self, monkeypatch):
+        monkeypatch.setattr(rm, "_MAX_BUFFERED_OPENING_BODY_BYTES", 8)
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        await _drive(middleware, _scope(), _body(_INIT_RAW))
+        assert spy.saw_session_id
+        assert spy.bodies[-1] == _INIT_RAW
+
+    async def test_a_client_that_disconnects_mid_body_is_passed_through(self):
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        await _drive(
+            middleware, _scope(),
+            _body(_INIT_RAW[:10], more=True), {"type": "http.disconnect"},
+        )
+        assert spy.saw_session_id
+
+    @pytest.mark.parametrize("method", ["GET", "DELETE"])
+    async def test_only_a_post_is_ever_re_homed(self, method):
+        # A GET reopens an SSE stream and a DELETE terminates a session: both
+        # genuinely need the session they name, and a fresh one cannot serve
+        # them.
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        await _drive(middleware, _scope(method=method), _body(b""))
+        assert spy.saw_session_id
+
+    async def test_a_request_with_no_session_id_is_passed_through(self):
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        await _drive(middleware, _scope(session_id=None), _body(_INIT_RAW))
+        assert not spy.saw_session_id
+
+    async def test_a_non_http_scope_is_passed_through(self):
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _FakeSessionManager())
+        await _drive(middleware, _scope(scope_type="lifespan"), _body(b""))
+        assert spy.scopes[-1]["type"] == "lifespan"
+
+    async def test_an_sdk_that_moved_its_session_map_changes_nothing(self):
+        spy = _SpyApp()
+        middleware = rm._RehomeStaleInitialize(spy, _ManagerWithoutTheMapWeExpect())
+        await _drive(middleware, _scope(), _body(_INIT_RAW))
+        assert spy.saw_session_id
+
+    async def test_end_to_end_a_dead_session_id_no_longer_refuses_initialize(self):
+        """What a client actually experiences after the daemon restarts: it
+        still holds the id of a session this process has never heard of."""
+        async with _raw_client_on_a_running_app(_dispatcher()) as client:
+            resp = await client.post(
+                "/mcp", json=_INIT_BODY,
+                headers={**_WIRE_HEADERS, "mcp-session-id": "a-session-from-before-the-restart"},
+            )
+        assert resp.status_code == 200
+        assert resp.headers["mcp-session-id"] != "a-session-from-before-the-restart"
+
+    async def test_end_to_end_a_live_session_still_serves_its_own_requests(self):
+        """The liveness check must not re-home a session that is perfectly
+        alive -- that would silently drop the session's state."""
+        async with _raw_client_on_a_running_app(_dispatcher()) as client:
+            opened = await client.post("/mcp", json=_INIT_BODY, headers=_WIRE_HEADERS)
+            session_id = opened.headers["mcp-session-id"]
+            again = await client.post(
+                "/mcp", json=_INIT_BODY, headers={**_WIRE_HEADERS, "mcp-session-id": session_id},
+            )
+        assert again.headers.get("mcp-session-id", session_id) == session_id
