@@ -281,6 +281,16 @@ class ControlChannelServer:
             try:
                 self._serve_one_windows(handle)
             finally:
+                # FlushFileBuffers blocks until the client has actually read
+                # everything WriteFile handed it -- without this,
+                # DisconnectNamedPipe can (and, under real load, reliably
+                # does) tear the pipe down before the client's own ReadFile
+                # completes, which the client then sees as
+                # ERROR_PIPE_NOT_CONNECTED ("no process is on the other end
+                # of the pipe") rather than as its actual reply. Documented
+                # Win32 named-pipe server behavior, not a defensive guess.
+                with contextlib.suppress(pywintypes.error):
+                    win32file.FlushFileBuffers(handle)
                 with contextlib.suppress(pywintypes.error):
                     win32pipe.DisconnectNamedPipe(handle)
                 win32file.CloseHandle(handle)
