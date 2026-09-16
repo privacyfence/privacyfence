@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import paths
-from .principal import LOCAL_PRINCIPAL_ID, PrincipalRegistry, current_principal
+from .principal import LOCAL_PRINCIPAL_ID, Principal, PrincipalRegistry, current_principal, principal_scope
 from .secure_files import atomic_write_bytes, atomic_write_json, secure_mkdir
 
 if TYPE_CHECKING:
@@ -840,6 +840,27 @@ _REGISTRY: PrincipalRegistry[AuditLogger] = PrincipalRegistry(lambda: AuditLogge
 
 def get_audit_logger() -> AuditLogger:
     return _REGISTRY.get()
+
+
+def set_security_config_hash_for_all_principals(value: str) -> list[str]:
+    """Push a new ``security_config_hash`` onto every principal's logger,
+    returning the ids updated (#400 C3e).
+
+    ``AuditLogger.set_security_config_hash`` covers local mode, where
+    settings_controller.py's ``_save_config`` is writing the one principal's
+    own settings.yaml. Org mode's install-wide policy edit is a change to
+    the policy governing *every* principal's decisions, so every
+    principal's logger has to start stamping the new fingerprint -- a
+    reviewer diffing a decision against the policy in force when it was
+    recorded (this field's whole purpose, SEC-23) gets a stale answer
+    otherwise.
+    """
+    updated: list[str] = []
+    for principal_id in _REGISTRY.principal_ids():
+        with principal_scope(Principal(id=principal_id)):
+            _REGISTRY.get().set_security_config_hash(value)
+        updated.append(principal_id)
+    return updated
 
 
 def init_audit_logger(

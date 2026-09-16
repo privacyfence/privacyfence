@@ -578,6 +578,7 @@ def _maybe_start_web_server(
     unattended_sessions_enabled: bool,
     controller: Any = None,
     org_config: dict[str, Any] | None = None,
+    config_path: str = "",
 ) -> Any:
     """Returns the started WebServer -- always, in local mode, since P10
     made the web approval UI the only one there is (see this section's own
@@ -641,7 +642,7 @@ def _maybe_start_web_server(
             return None
         return _start_org_web_server(
             web_config, org_config, connector_host, unattended_sessions_enabled=unattended_sessions_enabled,
-            install_wide_config=config,
+            install_wide_config=config, install_wide_config_path=config_path,
         )
 
     use_web_settings = bool(settings_config.get("enabled", False)) and controller is not None
@@ -818,6 +819,19 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
       they actually do edit. Falls back to ``cfg`` only when no install-wide
       config is given at all (a bare ``principal_scope()`` call in a test
       that doesn't care about privacy-filter behavior specifically).
+    - ``init_pii_detection()`` (#400 C3e) -- the exact same omission as the
+      one above, one module over, found while making the PII gate editable
+      from org mode's admin settings page. ``pii_detector._REGISTRY`` is a
+      ``PrincipalRegistry`` too, and ``run_app()``'s own call is the only
+      one there has ever been, so every org principal but the launcher's
+      got a default-constructed ``_PiiState`` -- detection on, both
+      optional categories on -- no matter what the install's settings.yaml
+      said. Unlike the privacy-filter case that default is fail-*closed*
+      (it detects more, not less), so nothing was ever let through that
+      shouldn't have been; what it did mean is that an admin who turned a
+      category off install-wide saw it stay on for everyone -- precisely
+      the disagreement a settings page that now *edits* this value cannot
+      ship with. Same install-wide source, for the same reason.
 
     The sibling ``init_config_path`` omission was found and fixed on its own; this one
     survived it because no in-process org test had a principal whose
@@ -826,13 +840,22 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     cfg = load_config(_resolve_authority_path("config/settings.yaml"))
     init_config_path(_resolve_authority_path("config/settings.yaml"))
     reload_rules(build_effective_rules(cfg))
-    init_privacy_filter(install_wide_config if install_wide_config is not None else cfg, org_managed=True)
+    install_wide = install_wide_config if install_wide_config is not None else cfg
+    init_privacy_filter(install_wide, org_managed=True)
+    pii_config = install_wide.get("pii_detection", {}) or {}
+    init_pii_detection(
+        pii_config.get("enabled", True),
+        detect_ip_addresses=pii_config.get("detect_ip_addresses", True),
+        detect_financial_figures=pii_config.get("detect_financial_figures", True),
+        audit_match_details=pii_config.get("audit_match_details", False),
+    )
     return cfg
 
 
 def _start_org_web_server(
     web_config: dict[str, Any], org_config: dict[str, Any], connector_host: ConnectorHost,
     *, unattended_sessions_enabled: bool, install_wide_config: dict[str, Any],
+    install_wide_config_path: str = "",
 ) -> Any:
     """org mode's own boot path (P7) -- a real OAuth 2.1 authorization server on ``/mcp``
     instead of the local shared-secret ``StaticTokenVerifier``. The
@@ -851,6 +874,12 @@ def _start_org_web_server(
     built lazily per principal instead of shared off the local principal's
     set (see connector_registry.py's own docstring for why this was left
     unwired until now).
+
+    ``install_wide_config_path`` (#400 C3e) is where that dict came from,
+    resolved -- carried on ``OrgAuth`` so the admin privacy page can write
+    the policy back to the same file. Empty when a caller has no real
+    settings.yaml behind the dict, which leaves that page read-only rather
+    than guessing at a path to overwrite.
 
     ``install_wide_config`` (#400 Phase 0) is run_app()'s own ``config`` --
     the *server's own* settings.yaml, already loaded once at startup for
@@ -942,6 +971,7 @@ def _start_org_web_server(
             provider=provider, sessions=sessions, idp=idp, issuer_url=server_config.issuer_url,
             connector_registry=connector_registry, org_config=org_config,
             install_wide_settings=install_wide_config,
+            install_wide_settings_path=install_wide_config_path,
         ),
         ssl_certfile=server_config.cert_file or None,
         ssl_keyfile=server_config.key_file or None,
@@ -1689,6 +1719,12 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     server = _maybe_start_web_server(
         config, connector_host, unattended_sessions_enabled=unattended_enabled, controller=settings_controller,
         org_config=org_config,
+        # #400 C3e: resolved, not the raw --config argument -- org mode's
+        # admin privacy page writes this file back, and it must land on the
+        # same path run_app() read `config` from. Local mode ignores it;
+        # its own settings.yaml writes go through SettingsController, which
+        # already holds the same resolved path (init_config_path, above).
+        config_path=_resolve_path(config_path),
     )
 
     # Every connector call now runs on the embedded web server's own ASGI

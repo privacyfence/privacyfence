@@ -15,14 +15,24 @@ always scoped to ``current_principal()``, never a path parameter naming
 someone else's id.
 
 ``GET /settings/privacy`` -- admin-only (``Principal.is_admin``, #400 C3c),
-read-only view of the install-wide PII/privacy policy: which
-``privacy``/``drive_privacy``/... group is explicitly configured versus
-silently relying on org mode's own fail-safe ``block`` default
-(``privacy_filter.init_privacy_filter``'s own ``fail_safe_default`` --
-see that function's docstring). Editing either surface from the browser is
-explicitly out of scope for this first cut (#400's issue: "Editing the
-install-wide policy from the browser can follow once [the restart/reload
-story] is decided").
+the install-wide PII/privacy policy: which ``privacy``/``drive_privacy``/...
+group is explicitly configured versus silently relying on org mode's own
+fail-safe ``block`` default (``privacy_filter.init_privacy_filter``'s own
+``fail_safe_default`` -- see that function's docstring), and, since #400
+C3e, **editable** rather than only shown. C3d shipped it read-only because
+the issue left the restart story open; ``web/org_install_policy.py`` is
+where that got answered (hot-reload, not a restart-required banner) and
+holds the whole write path -- validation, the atomic settings.yaml write,
+and making the change live for every principal rather than only the admin
+who made it. This module's two ``POST /api/settings/privacy/...`` routes
+are the HTTP shell around it: authenticate, CSRF/origin, authorize through
+``org_settings_scope.is_action_permitted`` under the same action names
+local mode dispatches, apply, audit.
+
+Every mutation here is audit-logged under the principal who made it
+(``_record_settings_audit``), which #400 calls for by name: "Changing an
+org's privacy policy is exactly the kind of act that belongs in the audit
+log under the principal who did it."
 
 Both pages reuse ``routes_org_approvals.py``'s minimal doctype+tokens.css
 shell rather than local mode's ``web_shell.wrap()`` -- this is an org-mode
@@ -42,13 +52,14 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import auto_accept, resource_grants
+from .. import auto_accept, pii_detector, resource_grants
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..principal import Principal, principal_scope
-from ..privacy_filter import PrivacyFilterConfigError
+from ..privacy_filter import VALID_POLICIES, PrivacyFilterConfigError
 from ..privacy_filter import _parse_group as _parse_privacy_group
 from ..settings_controller import OPERATION_LABELS, PRIVACY_CATEGORY_LABELS, PRIVACY_GROUP_LABELS
-from . import org_session
+from . import org_install_policy, org_session
+from .csp import nonce_for as _csp_nonce_for
 from .org_session import OrgSessionStore
 from .org_settings_scope import is_action_permitted
 
@@ -69,11 +80,20 @@ def _tokens_css() -> str:
     return _TOKENS_CSS
 
 
-def _page(title: str, body: str) -> str:
+def _page(title: str, body: str, *, nonce: str) -> str:
+    """``nonce`` is the response's own CSP nonce (web/csp.py). Without it
+    the ``<style>`` element below is dropped by
+    ``_SecurityHeadersMiddleware``'s ``style-src-elem 'nonce-...'`` and both
+    of these pages render unstyled -- which is how #400 C3d shipped them,
+    since the local-mode settings surface it was modelled on goes through
+    ``web_shell.wrap()`` and never builds a document head of its own. The
+    inline ``style="..."`` *attribute* in the footer below needs no nonce;
+    ``style-src-attr`` keeps ``'unsafe-inline'`` deliberately, see web/csp.py.
+    """
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PrivacyFence -- {html.escape(title)}</title>
-<style>{_tokens_css()}body{{background:var(--color-bg);color:var(--color-text);margin:0;
+<style nonce="{html.escape(nonce, quote=True)}">{_tokens_css()}body{{background:var(--color-bg);color:var(--color-text);margin:0;
 font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
 .pf-wrap{{max-width:720px;margin:0 auto;padding:24px 20px}}
 h1{{font-size:1.3rem}} h2{{font-size:1.05rem;margin-top:2em}}
@@ -81,7 +101,9 @@ table{{width:100%;border-collapse:collapse;margin:0.5em 0}}
 th,td{{text-align:left;padding:6px 8px;border-bottom:1px solid var(--color-border,#ddd);font-size:0.92em}}
 .pf-fallback{{color:var(--color-warning,#a94500);font-weight:600}}
 .pf-empty{{color:var(--color-muted,#777);font-style:italic}}
+.pf-note{{color:var(--color-muted,#777);font-size:0.9em}}
 form.pf-remove{{display:inline}}
+form.pf-set{{display:inline}}
 button.pf-remove{{font-size:0.85em;padding:2px 8px}}
 </style></head>
 <body><div class="pf-wrap">{body}
@@ -225,42 +247,183 @@ def _privacy_policy_view(install_wide_settings: dict[str, Any]) -> list[dict[str
         groups.append({
             "key": group, "label": label, "default_policy": parsed["default_policy"],
             "categories": categories, "falls_back_to_block_default": raw is None,
+            # The explicitly-configured value, as distinct from the resolved
+            # one above: a category with no entry of its own inherits the
+            # group default, and the editor has to render that as "inherit"
+            # rather than as a deliberate choice of whatever the default
+            # currently happens to be -- otherwise merely opening the page
+            # and saving would freeze every inherited category at today's
+            # default, silently decoupling it from the next change.
+            "explicit_default_policy": (raw or {}).get("default_policy") if isinstance(raw, dict) else None,
+            "explicit_categories": (
+                dict((raw or {}).get("categories") or {}) if isinstance(raw, dict) else {}
+            ),
         })
     return groups
 
 
-def _render_privacy_page(groups: list[dict[str, Any]]) -> str:
-    rows = []
+def _pii_view(install_wide_settings: dict[str, Any]) -> dict[str, Any]:
+    """The install-wide PII gate as ``daemon_main.run_app`` reads it out of
+    settings.yaml -- the master switch plus the two individually-toggleable
+    categories (``pii_detector.optional_category_keys()``). Read from the
+    config dict, not from ``pii_detector``'s own live registry: the registry
+    is per-principal, and what this page is about is the install-wide file
+    every principal's entry is built from.
+    """
+    pii_cfg = install_wide_settings.get("pii_detection", {}) or {}
+    enabled = bool(pii_cfg.get("enabled", True))
+    return {
+        "enabled": enabled,
+        "categories": [
+            {
+                "key": key,
+                "label": pii_detector.optional_category_label(key),
+                "enabled": bool(pii_cfg.get(key, True)),
+            }
+            for key in pii_detector.optional_category_keys()
+        ],
+    }
+
+
+def _policy_select(name: str, selected: str | None, *, include_inherit: bool) -> str:
+    options = []
+    if include_inherit:
+        options.append(
+            f"<option value=\"\"{' selected' if selected is None else ''}>(inherit group default)</option>"
+        )
+    for policy in VALID_POLICIES:
+        options.append(
+            f"<option value=\"{policy}\"{' selected' if policy == selected else ''}>{policy}</option>"
+        )
+    return f"<select name=\"{name}\">{''.join(options)}</select>"
+
+
+def _hidden(name: str, value: str) -> str:
+    return f"<input type=\"hidden\" name=\"{html.escape(name, quote=True)}\" value=\"{html.escape(value, quote=True)}\">"
+
+
+def _render_privacy_page(
+    groups: list[dict[str, Any]], pii: dict[str, Any], *, editable: bool, csrf: str,
+) -> str:
+    """``editable`` is False only when this daemon has no install-wide
+    settings.yaml path to write back to (``build_routes``'s own
+    ``install_wide_settings_path``, empty for a caller that never had a real
+    file behind the dict) -- then this renders exactly the read-only page
+    #400 C3d shipped, rather than drawing controls whose POST the write
+    routes would reject anyway. It is not the admin check: a non-admin never
+    reaches this function at all, the route 403s them first.
+    """
+    csrf_field = _hidden("csrf", csrf)
+    sections = []
     for g in groups:
         fallback_note = (
             "<span class=\"pf-fallback\">falling back to the org-mode block default "
             "(not present in settings.yaml)</span>"
             if g["falls_back_to_block_default"] else "explicitly configured"
         )
-        cat_rows = "".join(
-            f"<tr><td>{html.escape(c['label'])}</td><td>{html.escape(c['policy'])}</td></tr>"
-            for c in g["categories"]
-        )
-        cat_table = (
-            f"<table><thead><tr><th>Category</th><th>Policy</th></tr></thead><tbody>{cat_rows}</tbody></table>"
-            if cat_rows else ""
-        )
-        rows.append(
+        if editable:
+            default_control = (
+                f"<form class=\"pf-set\" method=\"post\" action=\"/api/settings/privacy/policy\">"
+                f"{csrf_field}{_hidden('action', 'set_default_policy')}{_hidden('group', g['key'])}"
+                f"{_policy_select('policy', g['default_policy'], include_inherit=False)}"
+                f"<button type=\"submit\">Save</button></form>"
+            )
+            cat_rows = "".join(
+                f"<tr><td>{html.escape(c['label'])}</td><td>"
+                f"<form class=\"pf-set\" method=\"post\" action=\"/api/settings/privacy/policy\">"
+                f"{csrf_field}{_hidden('action', 'set_category_policy')}{_hidden('group', g['key'])}"
+                f"{_hidden('category', c['key'])}"
+                f"{_policy_select('policy', g['explicit_categories'].get(c['key']), include_inherit=True)}"
+                f"<button type=\"submit\">Save</button></form>"
+                f"</td><td>{html.escape(c['policy'])}</td></tr>"
+                for c in g["categories"]
+            )
+            cat_table = (
+                "<table><thead><tr><th>Category</th><th>Configured</th><th>In effect</th></tr></thead>"
+                f"<tbody>{cat_rows}</tbody></table>" if cat_rows else ""
+            )
+        else:
+            default_control = f"<strong>{html.escape(g['default_policy'])}</strong>"
+            cat_rows = "".join(
+                f"<tr><td>{html.escape(c['label'])}</td><td>{html.escape(c['policy'])}</td></tr>"
+                for c in g["categories"]
+            )
+            cat_table = (
+                f"<table><thead><tr><th>Category</th><th>Policy</th></tr></thead>"
+                f"<tbody>{cat_rows}</tbody></table>" if cat_rows else ""
+            )
+        sections.append(
             f"<h3>{html.escape(g['label'])}</h3>"
-            f"<p>Default policy: <strong>{html.escape(g['default_policy'])}</strong> -- {fallback_note}</p>"
+            f"<p>Default policy: {default_control} -- {fallback_note}</p>"
             f"{cat_table}"
         )
-    return (
-        "<h1>Install-wide privacy / PII policy</h1>"
-        "<p>Read-only. This comes from the server's own <code>config/settings.yaml</code>; "
-        "there is no route yet to edit it from the browser -- see "
+
+    if editable:
+        pii_master = (
+            f"<form class=\"pf-set\" method=\"post\" action=\"/api/settings/privacy/pii\">"
+            f"{csrf_field}{_hidden('action', 'toggle_pii_detection')}"
+            f"{_hidden('enabled', 'false' if pii['enabled'] else 'true')}"
+            f"<button type=\"submit\">{'Disable' if pii['enabled'] else 'Enable'}</button></form>"
+        )
+        pii_rows = "".join(
+            f"<tr><td>{html.escape(c['label'])}</td>"
+            f"<td>{'on' if c['enabled'] else 'off'}</td><td>"
+            f"<form class=\"pf-set\" method=\"post\" action=\"/api/settings/privacy/pii\">"
+            f"{csrf_field}{_hidden('action', 'toggle_pii_category')}{_hidden('category_key', c['key'])}"
+            f"{_hidden('enabled', 'false' if c['enabled'] else 'true')}"
+            f"<button type=\"submit\"{'' if pii['enabled'] else ' disabled'}>"
+            f"{'Disable' if c['enabled'] else 'Enable'}</button></form></td></tr>"
+            for c in pii["categories"]
+        )
+    else:
+        pii_master = "<strong>on</strong>" if pii["enabled"] else "<strong>off</strong>"
+        pii_rows = "".join(
+            f"<tr><td>{html.escape(c['label'])}</td><td>{'on' if c['enabled'] else 'off'}</td></tr>"
+            for c in pii["categories"]
+        )
+    pii_note = "" if pii["enabled"] else (
+        "<p class=\"pf-note\">Individual categories are inert while PII detection is off.</p>"
+    )
+
+    intro = (
+        "<p>This is the server's own <code>config/settings.yaml</code>. It is install-wide: "
+        "there is no per-user override, and a change here applies to every principal "
+        "immediately -- no daemon restart. See <a href=\"/settings\">Settings</a> for "
+        "auto-accept rules and trusted resources, which are per-principal.</p>"
+        if editable else
+        "<p>Read-only: this daemon was started without a path to the "
+        "<code>config/settings.yaml</code> these values came from, so there is nothing here "
+        "to write back to. Change it on the server and restart the daemon. See "
         "<a href=\"/settings\">Settings</a> for auto-accept rules and trusted resources instead, "
         "which are per-principal.</p>"
-        + "".join(rows)
+    )
+    return (
+        "<h1>Install-wide privacy / PII policy</h1>"
+        + intro
+        + "<h2>PII detection</h2>"
+        + f"<p>Detection is currently {'on' if pii['enabled'] else 'off'}: {pii_master}</p>"
+        + (f"<table><tbody>{pii_rows}</tbody></table>" if pii_rows else "")
+        + pii_note
+        + "<h2>Privacy filter</h2>"
+        + "".join(sections)
     )
 
 
-def build_routes(*, sessions: OrgSessionStore, install_wide_settings: dict[str, Any]) -> list[Route]:
+def build_routes(
+    *,
+    sessions: OrgSessionStore,
+    install_wide_settings: dict[str, Any],
+    install_wide_settings_path: str = "",
+) -> list[Route]:
+    """``install_wide_settings_path`` is the resolved path of the *server's
+    own* settings.yaml -- the file ``install_wide_settings`` was loaded
+    from, threaded down from ``daemon_main.run_app``'s ``--config``. #400
+    C3e's write routes need it and nothing else here does, so it defaults
+    to empty: a caller that only wants the read surface (this module's own
+    tests, a hand-built ``OrgAuth``) keeps working, and a policy write
+    attempted without one is rejected with a 400 explaining exactly that
+    rather than guessing at a path to overwrite.
+    """
     def _current_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
 
@@ -290,7 +453,9 @@ def build_routes(*, sessions: OrgSessionStore, install_wide_settings: dict[str, 
             cfg = auto_accept.get_current_config()
         session_id = request.cookies.get(org_session.SESSION_COOKIE, "")
         body = _render_settings_page(cfg, principal=principal, csrf=session_id)
-        return HTMLResponse(_page("Settings", body), headers={"Cache-Control": "no-store"})
+        return HTMLResponse(
+            _page("Settings", body, nonce=_csp_nonce_for(request)), headers={"Cache-Control": "no-store"},
+        )
 
     async def privacy_page(request: Request) -> Response:
         principal = _current_principal(request)
@@ -300,8 +465,20 @@ def build_routes(*, sessions: OrgSessionStore, install_wide_settings: dict[str, 
             )
         if not principal.is_admin:
             return PlainTextResponse("Forbidden -- administrator access required.", status_code=403)
-        body = _render_privacy_page(_privacy_policy_view(install_wide_settings))
-        return HTMLResponse(_page("Privacy policy", body), headers={"Cache-Control": "no-store"})
+        body = _render_privacy_page(
+            _privacy_policy_view(install_wide_settings), _pii_view(install_wide_settings),
+            # A reachable admin page is an editable one: every control it
+            # draws posts an action `is_action_permitted` gates on
+            # `principal.is_admin` anyway, so rendering them read-only for
+            # someone who just passed that same check would only hide
+            # what they are allowed to do.
+            editable=bool(install_wide_settings_path),
+            csrf=request.cookies.get(org_session.SESSION_COOKIE, ""),
+        )
+        return HTMLResponse(
+            _page("Privacy policy", body, nonce=_csp_nonce_for(request)),
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def remove_rule(request: Request) -> Response:
         principal = _current_principal(request)
@@ -360,11 +537,73 @@ def build_routes(*, sessions: OrgSessionStore, install_wide_settings: dict[str, 
                 )
         return RedirectResponse("/settings", status_code=303, headers={"Cache-Control": "no-store"})
 
+    async def _apply_install_wide(request: Request, allowed: frozenset[str]) -> Response:
+        """The shared body of both install-wide write routes (#400 C3e).
+
+        The gate order matters and mirrors ``remove_rule``/``remove_grant``
+        above exactly: authenticated, then CSRF, then origin, then
+        authorization. ``is_action_permitted`` is the only thing here that
+        consults ``principal.is_admin`` -- the page's own 403 above governs
+        *rendering*, this governs *doing*, and a route that trusted the
+        former would be one hand-written POST away from letting any
+        signed-in principal rewrite the whole org's privacy policy.
+
+        ``allowed`` narrows which actions this particular route will apply,
+        so the form field naming the action can't be swapped for one of the
+        other route's: a value outside it 404s the same way
+        ``routes_settings.py``'s own allowlist check does for an unknown
+        action name.
+        """
+        principal = _current_principal(request)
+        if principal is None:
+            return RedirectResponse(
+                "/login?next=/settings/privacy", status_code=302, headers={"Cache-Control": "no-store"},
+            )
+        form = await request.form()
+        csrf = form.get("csrf")
+        if not org_session.check_csrf(request, csrf if isinstance(csrf, str) else None):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not org_session.check_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        action = str(form.get("action", ""))
+        if action not in allowed:
+            return JSONResponse({"error": "unknown action"}, status_code=404)
+        if not is_action_permitted(action, principal):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        # Text fields only: a multipart part carrying a file has no meaning
+        # on this endpoint, and dropping it here keeps `org_install_policy`
+        # a pure dict-of-strings consumer rather than one that has to know
+        # what an UploadFile is.
+        payload = {key: value for key, value in form.items() if key != "csrf" and isinstance(value, str)}
+        try:
+            summary = org_install_policy.apply_change(
+                install_wide_settings, install_wide_settings_path, action=action, payload=payload,
+            )
+        except org_install_policy.PolicyChangeRejected as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        except OSError as exc:
+            # The settings.yaml write itself failed -- nothing was applied
+            # (see apply_change's own docstring), so this is a 500 with the
+            # policy unchanged, not a partially-applied change.
+            logger.error("Could not write the install-wide settings.yaml: %s", exc)
+            return JSONResponse({"error": "could not write settings.yaml"}, status_code=500)
+        with principal_scope(principal):
+            _record_settings_audit(principal, f"{summary} (admin={principal.id})")
+        return RedirectResponse("/settings/privacy", status_code=303, headers={"Cache-Control": "no-store"})
+
+    async def set_privacy_policy(request: Request) -> Response:
+        return await _apply_install_wide(request, frozenset({"set_default_policy", "set_category_policy"}))
+
+    async def set_pii_policy(request: Request) -> Response:
+        return await _apply_install_wide(request, frozenset({"toggle_pii_detection", "toggle_pii_category"}))
+
     return [
         Route("/settings", settings_page),
         Route("/settings/privacy", privacy_page),
         Route("/api/settings/rules/remove", remove_rule, methods=["POST"]),
         Route("/api/settings/grants/remove", remove_grant, methods=["POST"]),
+        Route("/api/settings/privacy/policy", set_privacy_policy, methods=["POST"]),
+        Route("/api/settings/privacy/pii", set_pii_policy, methods=["POST"]),
     ]
 
 

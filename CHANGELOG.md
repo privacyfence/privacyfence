@@ -145,6 +145,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   privacy-filter state is now populated (from the real install-wide policy, not an unconfigured
   per-user file) the same way their auto-accept rules already were. Editing either surface from
   the browser remains out of scope for this first cut. See issue #400.
+- Org mode's `/settings/privacy` is now editable by an admin, not only readable: each privacy
+  group's default policy, each category's policy, the PII-detection master switch and its two
+  individually-toggleable categories. This closes the question the read-only first cut above left
+  open — whether the UI writes `settings.yaml` and demands a daemon restart, or the filter learns
+  to reload. It reloads: the change is written to the server's own `settings.yaml` atomically and
+  then applied to every principal in the running process, so it governs everyone's next request
+  with no restart. Every change is written to the audit log under the admin who made it, and every
+  audit entry recorded afterwards carries the new policy fingerprint
+  (`AuditEntry.security_config_hash`) rather than the one loaded at startup. The write endpoints
+  re-check `Principal.is_admin` themselves through `org_settings_scope.is_action_permitted` — the
+  page being reachable is not what authorizes the write — on top of the same CSRF and same-origin
+  checks `/approvals` uses. Fixes two bugs found while building it: the org `/settings` pages'
+  inline stylesheet carried no CSP nonce, so both rendered unstyled under the app's own
+  `style-src-elem` policy; and `pii_detector`'s per-principal state was never initialized from the
+  install-wide `settings.yaml` for any org principal, so a category an admin had turned off
+  install-wide stayed on for everyone (fail-closed, so nothing was let through that shouldn't have
+  been, but not something an editable page could ship on top of). Install-wide log level and the
+  Calendar free/busy toggle remain admin-only-in-principle but unwired — neither is privacy policy
+  and each needs a reload path of its own. See issue #400.
 
 ### Added
 

@@ -2949,3 +2949,33 @@ class TestLoadPrincipalSettings:
 
         assert alice_policy == "allow"
         assert bob_policy == "block"
+
+    def test_seeds_the_pii_gate_from_the_install_wide_config(self, tmp_path, monkeypatch):
+        """#400 C3e: the same omission as the privacy-filter one above, in
+        pii_detector. Its _REGISTRY is a PrincipalRegistry too and run_app()
+        is the only caller of init_pii_detection() there has ever been, so
+        an org principal got a default-constructed _PiiState -- detection
+        on, both optional categories on -- regardless of what the install's
+        settings.yaml said. Harmless on its own (that default detects more,
+        not less), but not something a page that now *edits* this value can
+        ship on top of."""
+        from privacyfence import pii_detector
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+        install_wide = {"pii_detection": {"enabled": False}}
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings(install_wide_config=install_wide)
+            assert pii_detector.is_pii_detection_enabled() is False
+
+    def test_an_optional_pii_category_disabled_install_wide_reaches_a_principal(self, tmp_path, monkeypatch):
+        from privacyfence import pii_detector
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+        install_wide = {"pii_detection": {"enabled": True, "detect_ip_addresses": False}}
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings(install_wide_config=install_wide)
+            assert "IP address" not in pii_detector.detect_pii_categories("ping 10.1.2.3 please")

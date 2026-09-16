@@ -37,11 +37,17 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .principal import PrincipalRegistry
+from .principal import Principal, PrincipalRegistry, principal_scope
 
 logger = logging.getLogger(__name__)
 
 _VALID_POLICIES = ("allow", "redact", "block")
+# Public alias for the same tuple. settings_controller.py has imported the
+# private name as PRIVACY_POLICIES since long before this; #400 C3e's
+# org-mode policy editor needs to validate an HTTP form value against it
+# too, and two modules reaching for a leading-underscore name is one too
+# many.
+VALID_POLICIES = _VALID_POLICIES
 _BLOCK_MARKER = "[BLOCKED BY PRIVACY FILTER]"
 
 _GROUP_NAMES = (
@@ -103,6 +109,51 @@ def init_privacy_filter(config: dict[str, Any], *, org_managed: bool = False) ->
     groups = {name: _parse_group(config.get(name), group=name, fail_safe_default=fail_safe_default)
               for name in _GROUP_NAMES}
     _REGISTRY.set(groups)
+
+
+def reload_for_all_principals(config: dict[str, Any], *, org_managed: bool = True) -> list[str]:
+    """Re-run ``init_privacy_filter`` for every principal this process has
+    already built a registry entry for, returning the ids refreshed (#400
+    C3e).
+
+    The privacy/PII policy is install-wide -- one ``settings.yaml`` on the
+    server, no per-user override (docs/org-mode-setup-guide.md §9, "Where PII
+    policy and auto-accept rules live"). ``init_privacy_filter`` alone only
+    ever writes the *current* principal's entry, so an admin editing it from
+    ``/settings/privacy`` would otherwise change it for their own session
+    and nobody else's -- every other signed-in principal would keep
+    enforcing the policy loaded when their entry was first built, with
+    nothing anywhere saying so. That is the failure mode #400's issue
+    means by "install-wide writes need a restart story": the answer here is
+    hot-reload, so this has to be the one that reaches everyone.
+
+    A principal who signs in *after* this returns needs no sweep of its
+    own: ``daemon_main._load_principal_settings`` builds their entry from
+    the same install-wide config dict, which
+    ``web/org_install_policy.py`` has already updated in place by the time
+    this is called.
+
+    ``org_managed`` defaults to True, unlike ``init_privacy_filter``'s own
+    default: every caller of this function is org mode's admin settings
+    surface, and getting that argument wrong would silently swap org
+    mode's fail-closed ``block`` default for a genuinely absent group back
+    to local mode's ``allow`` -- an *edit* that quietly widens what the
+    filter lets through, which is the one thing this function must not do.
+    """
+    fail_safe_default = "block" if org_managed else "allow"
+
+    def parsed() -> dict[str, dict[str, Any]]:
+        # Re-parsed per principal rather than parsed once and shared, so no
+        # two principals' registry entries alias the same mutable dict.
+        return {name: _parse_group(config.get(name), group=name, fail_safe_default=fail_safe_default)
+                for name in _GROUP_NAMES}
+
+    refreshed: list[str] = []
+    for principal_id in _REGISTRY.principal_ids():
+        with principal_scope(Principal(id=principal_id)):
+            _REGISTRY.set(parsed())
+        refreshed.append(principal_id)
+    return refreshed
 
 
 def _parse_group(raw: Any, *, group: str, fail_safe_default: str = "allow") -> dict[str, Any]:

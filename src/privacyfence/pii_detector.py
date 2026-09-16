@@ -51,7 +51,7 @@ import re
 from dataclasses import dataclass
 from typing import Callable
 
-from .principal import PrincipalRegistry
+from .principal import Principal, PrincipalRegistry, principal_scope
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +328,45 @@ def init_pii_detection(
         state.disabled_categories.add(_OPTIONAL_CATEGORIES["detect_ip_addresses"])
     if not detect_financial_figures:
         state.disabled_categories.add(_OPTIONAL_CATEGORIES["detect_financial_figures"])
+
+
+def reload_for_all_principals(pii_config: dict) -> list[str]:
+    """Re-run ``init_pii_detection`` from an install-wide ``pii_detection``
+    settings.yaml section for every principal this process has already
+    built a state object for, returning the ids refreshed (#400 C3e).
+
+    Org mode's PII gate is install-wide, exactly like the privacy filter's
+    policy (see ``privacy_filter.reload_for_all_principals``, whose
+    docstring explains why a per-principal ``init_xxx()`` is not enough for
+    a setting with no per-user dimension). ``changed_listener`` survives:
+    ``init_pii_detection`` mutates the existing ``_PiiState`` in place
+    rather than replacing it, so a principal whose listener was registered
+    at startup keeps it.
+    """
+    refreshed: list[str] = []
+    for principal_id in _REGISTRY.principal_ids():
+        with principal_scope(Principal(id=principal_id)):
+            init_pii_detection(
+                pii_config.get("enabled", True),
+                detect_ip_addresses=pii_config.get("detect_ip_addresses", True),
+                detect_financial_figures=pii_config.get("detect_financial_figures", True),
+                audit_match_details=pii_config.get("audit_match_details", False),
+            )
+        refreshed.append(principal_id)
+    return refreshed
+
+
+def optional_category_keys() -> tuple[str, ...]:
+    """The settings.yaml field names of the individually-toggleable
+    categories (``detect_ip_addresses``, ``detect_financial_figures``) --
+    exposed so a settings surface can render and validate them without
+    reaching into ``_OPTIONAL_CATEGORIES`` itself."""
+    return tuple(_OPTIONAL_CATEGORIES)
+
+
+def optional_category_label(category_key: str) -> str:
+    """The human-readable name of one ``optional_category_keys()`` member."""
+    return _OPTIONAL_CATEGORIES[category_key]
 
 
 def set_pii_detection_enabled(enabled: bool) -> None:
