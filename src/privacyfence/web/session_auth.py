@@ -59,7 +59,7 @@ from dataclasses import dataclass
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
-from .. import paths
+from .. import paths, privilege_separation
 
 SESSION_COOKIE = "pf_session"
 BOOTSTRAP_QUERY_PARAM = "bootstrap"
@@ -258,12 +258,18 @@ def unauthorized_html(request: Request) -> Response:
     ``System.IO.Pipes.NamedPipeClientStream`` (built into every supported
     .NET runtime, so no extra install either)."""
     data_dir = paths.data_dir()
+    # handoff_dir() for the files a *reader of this page* goes looking for:
+    # #428 Phase 4 moves them to a user-reachable subdirectory on a
+    # privilege-separated install, and this page's whole job is telling a
+    # locked-out human where to look. Identical to data_dir() everywhere
+    # else. Unlike authority_dir(), neither call runs a migration.
+    handoff = paths.handoff_dir()
     # Deferred import: control_channel.py imports BootstrapStore from this
     # module, so importing it back at module scope here would be circular.
     from .control_channel import socket_path_under, windows_pipe_name
 
     if paths.is_windows():
-        approvals_url_path = f"{data_dir}\\approvals_url"
+        approvals_url_path = f"{handoff}\\approvals_url"
         pipe_name = windows_pipe_name().rsplit("\\", 1)[-1]
         command = (
             "$p=New-Object System.IO.Pipes.NamedPipeClientStream('.','" + pipe_name + "',"
@@ -272,21 +278,28 @@ def unauthorized_html(request: Request) -> Response:
             "(New-Object System.IO.StreamReader($p)).ReadLine()"
         )
     else:
-        approvals_url_path = f"{data_dir}/approvals_url"
+        approvals_url_path = f"{handoff}/approvals_url"
         # A plain join, not control_channel.posix_socket_path() -- that
         # calls the real, side-effecting paths.authority_dir() (creates the
         # directory, runs its migration-on-first-use), which this
         # unauthenticated error page has no business triggering on every
         # hit. socket_path_under() is the pure half of that same logic.
-        sock_path = socket_path_under(data_dir / "authority")
+        # On a #428 Phase 4 install the socket isn't under ``authority`` at
+        # all (paths.control_socket_dir()) -- it moved to the handoff
+        # directory so a companion running as the human can still reach it.
+        sock_root = handoff if privilege_separation.is_enabled() else data_dir / "authority"
+        sock_path = socket_path_under(sock_root)
         command = f"printf 'MINT\\n' | nc -U '{sock_path}'"
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
         "<p><strong>Not authorized.</strong> If PrivacyFence's companion app is running -- a "
         "tray/menu-bar icon on macOS/Windows, or its entry in your Applications menu on Linux -- "
         "use its Open Approvals (or Open Settings) item to get back in directly, no MCP client or "
-        "terminal needed. Nothing installs or starts it automatically yet, so if that's not an "
-        "option:</p>"
+        "terminal needed. " + (
+            "This install runs it at login for you (#428 Phase 4), so it should already be there. "
+            if privilege_separation.is_enabled()
+            else "Nothing installs or starts it automatically yet, so "
+        ) + "if that's not an option:</p>"
         "<p>Ask Claude (or any other MCP client already "
         "connected to PrivacyFence) to get you back in — it can call the "
         "<code>privacyfence_get_sign_in_link</code> tool and hand you a fresh sign-in link "

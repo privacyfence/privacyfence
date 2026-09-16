@@ -16,6 +16,16 @@ Run only checks that automation cannot judge reliably:
 - complete a real first-time OAuth/consent flow when authentication setup changed or provider consent behavior is in question — on Windows specifically when a Windows-affecting change lands, confirm the OAuth loopback flow opens the default browser and completes a real connector auth through the installed app;
 - exercise one real MCP client against the packaged application when MCP discovery, the shim, packaging, or daemon startup changed — on Windows specifically, install the `.mcpb` into a real Claude Desktop on the same machine and confirm the shim finds and launches the installed daemon end to end;
 - verify OS-native installation/security presentation when installer, signing, notarization, SmartScreen/Gatekeeper/UAC, autostart, or login-session behavior changed — before a signed Windows release ships specifically: a real installer run on a clean Windows VM confirming SmartScreen/Authenticode presentation isn't an outright block, **a real sign-out/sign-in confirming the Task Scheduler `ONLOGON` trigger itself starts the daemon** (the one part of Windows autostart no CI job can cover — a hosted runner cannot produce the Terminal Services session logon the trigger subscribes to, so this human check is the only coverage it has; see `platform-support.md`'s "Known open items"), and an Add/Remove Programs uninstall confirming the program files and scheduled task are gone while `%USERPROFILE%\.privacyfence\` is untouched;
+- on macOS specifically, when a release changes privilege separation or anything it touches
+  (`privilege_separation.py`, `paths.py`'s data-directory resolution, the control channel, the
+  companion, or the MCPB shim's discovery): on a real Mac, run
+  `sudo scripts/macos_privilege_separation.sh enable`, confirm `… status` reports a clean layout
+  after a logout/login, confirm the daemon is running under `_privacyfence` (`ps -o user= -p …`) and
+  that your own account genuinely cannot read `/Library/Application Support/PrivacyFence/authority`,
+  confirm the menu-bar companion opens `/approvals` and a real MCP client still reaches `/mcp`, then
+  run `… disable` and confirm the previous layout is back with connector tokens intact. No CI job can
+  cover any of this — it needs root, a real system account and a real login session — so this check
+  is its only coverage; see `platform-support.md`'s "Known open items";
 - perform focused exploratory connector QA using [`connector-qa-testing.md`](connector-qa-testing.md) for a new connector, a major connector rewrite, or an unexplained provider regression.
 
 A signed Windows release specifically must not ship without the Windows-specific bullet above having actually been run against that release build — this is the human QA pass [privacyfence/privacyfence#121](https://github.com/privacyfence/privacyfence/issues/121) is gated on closing until.

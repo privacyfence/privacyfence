@@ -30,6 +30,7 @@ from privacyfence import (
     download_staging,
     pii_detector,
     privacy_filter,
+    privilege_separation,
     resource_names,
     settings_controller,
     web_approval_ui,
@@ -49,6 +50,12 @@ def _reset() -> None:
     download_staging._INSTANCE = None
     settings_controller._main_dispatch = None
     state_stream._loop = None
+    # #428 Phase 4: privilege_separation caches the parsed marker file for
+    # the life of the process (it can't change under a running daemon), so a
+    # test that provisions a fake separated layout would otherwise leave that
+    # answer cached for every test after it -- including the ones asserting
+    # the *un*separated paths.
+    privilege_separation.reset_cache()
     # daemon_main._shutdown_event (P10): a test that calls request_shutdown()
     # (directly, or via SettingsController.quit_app()) must not leave it set
     # for the next test's own _wait_for_shutdown() call to find already

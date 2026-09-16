@@ -551,6 +551,47 @@ class TestCheckStoragePermissions:
 
         assert caplog.text.count("SEC-09") == 1
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="POSIX permission bits only -- #428 Phase 4 is macOS/Linux; B5c is where Windows gets NTFS ACLs of its own",
+    )
+    def test_separated_layout_is_not_audited_against_the_flat_0700_rule(self, tmp_path, monkeypatch, caplog):
+        # #428 Phase 4 makes two of these directories deliberately looser than
+        # 0700 -- the system root 0711 so the logged-in user can traverse to
+        # the handoff directory, and the handoff directory 2770 so two
+        # accounts can hand each other a socket. Reporting the design as a
+        # defect on every startup would be noise; in org mode it would refuse
+        # to start over it.
+        handoff = tmp_path / "handoff"
+        handoff.mkdir()
+        tmp_path.chmod(0o711)
+        handoff.chmod(0o2770)
+        self._patch_dirs(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "handoff_dir", lambda: handoff)
+        monkeypatch.setattr(daemon_main.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(daemon_main.privilege_separation, "audit_layout", list)
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.check_storage_permissions(org_mode_active=True)  # must not raise
+
+        assert "SEC-09" not in caplog.text
+
+    def test_separated_layout_problems_are_reported_under_sec_09(self, tmp_path, monkeypatch, caplog):
+        # The separated layout gets its own audit instead -- including the one
+        # a mode check can't see: authority/ still owned by the human.
+        self._patch_dirs(monkeypatch, tmp_path)
+        tmp_path.chmod(0o700)
+        monkeypatch.setattr(daemon_main, "handoff_dir", lambda: tmp_path / "handoff")
+        monkeypatch.setattr(daemon_main.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(
+            daemon_main.privilege_separation, "audit_layout", lambda: ["authority is owned by 'alice'"],
+        )
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.check_storage_permissions(org_mode_active=False)
+
+        assert "SEC-09" in caplog.text
+        assert "owned by 'alice'" in caplog.text
+
 
 # ---------------------------------------------------------------------------- #
 # build_connectors: the Google-backed connectors (gmail, drive, calendar,
@@ -2735,6 +2776,28 @@ class TestMain:
 
         assert result == 1
         assert "Fatal error" in capsys.readouterr().err
+
+    def test_refuses_to_start_as_the_wrong_account_on_a_separated_install(self, monkeypatch, capsys):
+        # #428 Phase 4. This runs before load_config(), and has to: on a
+        # separated install started as the logged-in user, settings.yaml is
+        # unreadable under the service-owned authority directory and
+        # load_config()'s own first-run path would seed a fresh default over
+        # it -- a silent policy reset rather than a visible failure.
+        self._patch_config(monkeypatch)
+        loaded = []
+        monkeypatch.setattr(daemon_main, "load_config", lambda path: loaded.append(path) or {})
+        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
+
+        def refuse() -> None:
+            raise daemon_main.privilege_separation.PrivilegeSeparationError("wrong account")
+
+        monkeypatch.setattr(daemon_main.privilege_separation, "check_runtime_identity", refuse)
+
+        result = daemon_main.main([])
+
+        assert result == 1
+        assert "wrong account" in capsys.readouterr().err
+        assert loaded == []
 
 
 # ---------------------------------------------------------------------------- #

@@ -16,7 +16,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { ShimExitError } from "./errors.js";
-import { MCP_URL_FILE } from "./protocol.js";
+import { MCP_URL_FILE, privilegeSeparationRoot } from "./protocol.js";
 
 const CONNECT_TIMEOUT_MS = 10_000; // time to wait for daemon startup
 const CONNECT_INTERVAL_MS = 400;
@@ -235,6 +235,8 @@ export interface EnsureDaemonRunningOptions {
   findCmd?: () => string[];
   connectTimeoutMs?: number;
   connectIntervalMs?: number;
+  /** Overridable for tests; defaults to the real privilegeSeparationRoot(). */
+  separationRoot?: () => string | null;
 }
 
 /** Connect to the daemon's /mcp endpoint, launching it first if needed.
@@ -244,9 +246,29 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
   const findCmd = opts.findCmd ?? findDaemonCmd;
   const connectTimeoutMs = opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
   const connectIntervalMs = opts.connectIntervalMs ?? CONNECT_INTERVAL_MS;
+  const separationRoot = opts.separationRoot ?? privilegeSeparationRoot;
 
   if (await socketConnectable(mcpUrlFile)) {
     console.error("Daemon already running");
+    return;
+  }
+
+  // #428 Phase 4: on a privilege-separated install the daemon belongs to
+  // launchd and to the _privacyfence account, and this process is neither.
+  // Spawning it here would start it as the logged-in user, where
+  // privilege_separation.check_runtime_identity() refuses to run it rather
+  // than seed a default policy over the real one -- so the spawn cannot
+  // succeed, and trying it once per shim launch would just bury the real
+  // reason (launchd hasn't started it, or it crashed) under a second
+  // failure. Wait for launchd instead, and say what to look at.
+  if (separationRoot() !== null) {
+    console.error(
+      `Daemon not running (${describeTarget(mcpUrlFile)}) — this install runs it as a ` +
+        "LaunchDaemon under its own account (#428 Phase 4), so waiting for launchd to " +
+        "start it rather than launching it here. If it never arrives: " +
+        "sudo launchctl print system/com.privacyfence.daemon",
+    );
+    await waitForConnectable(mcpUrlFile, connectTimeoutMs, connectIntervalMs);
     return;
   }
 
@@ -261,6 +283,18 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
   });
   child.unref();
 
+  await waitForConnectable(mcpUrlFile, connectTimeoutMs, connectIntervalMs);
+}
+
+/** Poll until the daemon's /mcp endpoint answers, or the window elapses.
+ * Shared by the ordinary spawn-then-wait path and the #428 Phase 4
+ * wait-for-launchd one above, so both raise the same ShimExitError and
+ * therefore get waitForDaemonPatiently()'s same never-give-up retry. */
+async function waitForConnectable(
+  mcpUrlFile: string,
+  connectTimeoutMs: number,
+  connectIntervalMs: number,
+): Promise<void> {
   const deadline = Date.now() + connectTimeoutMs;
   while (Date.now() < deadline) {
     if (await socketConnectable(mcpUrlFile)) {
