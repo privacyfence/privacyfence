@@ -1696,6 +1696,23 @@ class TestSaveAttachmentBytes:
 
         assert (nested / "f.txt").read_bytes() == b"data"
 
+    def test_unwritable_destination_becomes_gmail_client_error(self, tmp_path, monkeypatch):
+        # A disk-level failure (permission denied, a read-only/synthetic
+        # mount point that rejects mkdir, etc.) must surface as
+        # GmailClientError like every other failure in this method -- not a
+        # bare OSError, which coding-and-testing-guidelines.md §1.4 requires
+        # every *_client.py public method to never leak.
+        import privacyfence.gmail_client as gmail_client_module
+
+        client = make_client(MagicMock())
+        monkeypatch.setattr(
+            gmail_client_module.os, "makedirs",
+            MagicMock(side_effect=OSError(45, "Operation not supported")),
+        )
+
+        with pytest.raises(GmailClientError, match="could not write"):
+            client.save_attachment_bytes(b"data", "f.txt", str(tmp_path))
+
 
 # ---------------------------------------------------------------------------- #
 # download_attachment

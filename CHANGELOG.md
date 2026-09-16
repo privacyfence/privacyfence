@@ -358,6 +358,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the moment those secrets were configured — this path had never actually run in CI, since no
   certificate has been available until now. The script now falls back to locating `signtool.exe`
   under the SDK's own install layout when it isn't already on `PATH`.
+- `drive_download_file`, `gmail_download_attachment`, and `confluence_download_attachment` no
+  longer fail with a bare, unhelpful "Tool call failed" when `destination_dir` can't actually be
+  written to (a permissions error, or — as observed on macOS — the synthetic `/home` mount point,
+  which rejects any direct `mkdir`/`open` under it with `[Errno 45] Operation not supported`). The
+  underlying `os.makedirs`/`open` failure is now caught and re-raised as the connector's own
+  `*ClientError` naming the path and asking for a different `destination_dir`, matching every other
+  failure path these methods already had — previously the raw `OSError` skipped that wrapping
+  entirely and fell through to the generic client-facing error message, leaving the calling agent
+  with no way to tell what went wrong or that retrying with a different directory would help.
 
 ## [4.0.0] — 2026-09-14
 
