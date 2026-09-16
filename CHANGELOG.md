@@ -32,6 +32,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- `docs/security-and-compliance.md` now states the local-mode trust boundary explicitly: it is the
+  operating-system user account, so a process running as the signed-in user — including an AI client
+  with shell access, which is the normal local-mode install — can mint a session and release a
+  pending approval without a browser. The CSRF, same-origin, TTL and expiry controls on that path are
+  defenses against a hostile web page and against leaked credentials, not against local code
+  execution, and the document previously left that easy to read more broadly than it holds. Nothing
+  about the implementation changed; this corrects what is claimed for it, and names the work that
+  closes the gap (issues #426, #427, #428). Org mode is unaffected — its daemon runs on a server the
+  client has no loopback access to.
+
 ### Added
 
 - The Windows installer now offers to open the bundled `.mcpb` at the end of setup (checked by

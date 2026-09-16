@@ -15,6 +15,10 @@ The primary goals are:
 - fail closed on invalid security configuration;
 - preserve enough audit evidence to reconstruct policy/approval decisions.
 
+These goals describe what the controls are built to do. How far each one extends depends on the
+deployment mode — see [Local-mode trust boundary](#local-mode-trust-boundary) for where the approval
+and fail-closed goals stop in local mode, which is the default.
+
 ## Deployment model
 
 PrivacyFence runs in one of two deployment modes, chosen by IT when the daemon is configured — not
@@ -31,6 +35,55 @@ There is no multi-tenant service and no PrivacyFence API that connector traffic 
 every tool call reaches the underlying provider (Google, Slack, Salesforce, Atlassian, Telegram)
 directly from that machine or server.
 
+## Local-mode trust boundary
+
+**In local mode the trust boundary is the operating-system user account.** The daemon, its state, the
+browser session and the AI client all run as the same user on the same machine, so a process running
+as that user can reach everything the approval UI depends on. This section states plainly what that
+does and does not mean, because the goals listed above are otherwise easy to read more broadly than
+they hold.
+
+A local process running as the signed-in user can:
+
+- read `web_token` from the data directory and `POST /api/bootstrap` to mint a fresh bootstrap code —
+  the not-authorized page prints that exact command, deliberately, for a locked-out human;
+- exchange the code for a `pf_session` cookie by visiting `/approvals?bootstrap=<code>`;
+- `POST /api/approvals/<id>/decide` and release a pending approval.
+
+No browser is involved at any step. The CSRF double-submit and same-origin checks on that last
+request are defenses against a hostile web page loaded in the user's browser: such a page cannot read
+the session cookie's value to echo it back, and cannot forge an `Origin` header. Neither constrains a
+local process, which holds the cookie and sets its own headers. The same distinction applies to every
+other control on this path — the bootstrap code's short TTL, its single-use consumption, and the
+session's idle and absolute expiry all limit how long a *leaked* credential stays useful, not who may
+mint one.
+
+This matters more here than it would in most single-user software, because the process most likely to
+do it is the one PrivacyFence exists to govern: an MCP client with shell access on the same machine is
+the normal local-mode install.
+
+**What the approval gate does defend against in local mode:** an AI client acting through `/mcp`
+alone; mistakes and unattended drift; a remote attacker without code execution on the machine; and a
+hostile web page in the user's browser. Those are real, and they are what the gate does day to day.
+
+**What it does not defend against in local mode:** a local process, running as the signed-in user,
+acting deliberately. Treat the approval gate there as a workflow control with a strong audit trail,
+not as a boundary against local code execution.
+
+**Org mode does not share this**, for a structural reason rather than a difference in checks: the
+daemon runs on a server the organization operates, so an AI client on an employee's device has no
+loopback access to it, no `web_token` to read and no bootstrap endpoint to call —
+`privacyfence_get_sign_in_link` raises there outright. Authentication is IdP-backed, and where
+configured, WebAuthn step-up binds a write approval to a fresh user-verified assertion.
+
+**Closing this in local mode** takes two changes, both tracked: running the daemon under its own
+account so its state is neither readable nor writable by processes running as the user
+([#428](https://github.com/privacyfence/privacyfence/issues/428)), and giving the human a way into
+the web UI that does not route a credential through the AI client
+([#427](https://github.com/privacyfence/privacyfence/issues/427)). Local-mode WebAuthn step-up
+([#426](https://github.com/privacyfence/privacyfence/issues/426)) depends on both: a passkey enrolled
+in a credential store the agent can rewrite is not a control.
+
 ## Authentication boundaries
 
 ### Local web UI
@@ -45,7 +98,7 @@ Mutating requests require the authenticated session, same-origin checks, and CSR
 
 What bounds it instead: local mode only (it raises in org mode, which authenticates through IdP-backed OAuth rather than a bootstrap link, so it can never return a working credential there); the link it mints is the same single-use, short-lived bootstrap code every other sign-in path in this section uses, consumed by the first visit whether or not it succeeds; `page` is allowlisted to `approvals`/`settings`, never an arbitrary path; and the local web UI is bound to `localhost`, so the link is only useful from the same machine the MCP client and daemon are already both running on. Every call is written to the audit log under its own `sign_in_link_issued` decision, carrying the calling client's self-reported reason — the same disclosed-and-unverified posture every other tool's `reason` parameter has.
 
-Net effect: an MCP client — which already holds equivalent-or-greater access via every other tool this daemon exposes (policy changes, connector reads and writes) — can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. This is consistent with how a valid local `mcp_token` is already trusted for everything else `/mcp` exposes, not a new trust boundary. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
+Net effect: an MCP client can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. The justification this paragraph used to give — that such a client already holds equivalent-or-greater access via every other tool this daemon exposes — holds for connector reads and writes, which are themselves gated. It understates one case: a session also reaches the approval UI, so it can *release* a gated call rather than merely request one, and that is the product's central control rather than one more tool. This is not a weakness introduced by this tool — see [Local-mode trust boundary](#local-mode-trust-boundary), where a process running as the user mints the same session from `web_token` without it — but it should not be described as a neutral consequence of existing trust either. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
 
 ### Local MCP
 
@@ -72,6 +125,10 @@ Tool calls pass through the common gate before connector execution where require
 Always-allow rules are explicit scoped policy objects, not global bypasses. Rule matching is documented in [`always-allow-rules-reference.md`](always-allow-rules-reference.md).
 
 Policy denials and unattended-mode restrictions fail before protected connector results are released.
+
+These are enforcement properties of the gate itself. In local mode they bind an AI client acting
+through `/mcp`; they do not bind a local process that reaches the web UI directly — see
+[Local-mode trust boundary](#local-mode-trust-boundary).
 
 ## PII and content privacy
 
@@ -113,7 +170,7 @@ See [`org-mode-download-delivery.md`](org-mode-download-delivery.md).
 
 PrivacyFence records gate/approval activity in its audit log, including principal information in org mode. Every entry is unconditionally chained to the one before it with a keyed hash (HMAC-SHA256) — this isn't an opt-in feature; `AuditLogger` computes it for every install, and `verify_chain()` (or `scripts/verify_audit_log.py`) detects a line inserted, edited, or removed after the fact.
 
-The chain's signing key lives next to the `.jsonl` files it protects, at the same file permissions. That defends against accidental corruption and against a party who gains write access to the log files specifically (e.g. a bug in some other export/backup path) without also reading the key — it does **not** defend against a party who already has full read/write access to the audit directory, since that party can read the key alongside the log and recompute a consistent chain over a tampered file. The real defense against that threat is a copy that leaves this trust boundary entirely — see the forwarding paragraph below.
+The chain's signing key lives next to the `.jsonl` files it protects, at the same file permissions. That defends against accidental corruption and against a party who gains write access to the log files specifically (e.g. a bug in some other export/backup path) without also reading the key — it does **not** defend against a party who already has full read/write access to the audit directory, since that party can read the key alongside the log and recompute a consistent chain over a tampered file. The real defense against that threat is a copy that leaves this trust boundary entirely — see the forwarding paragraph below. In local mode that party includes any process running as the signed-in user (see [Local-mode trust boundary](#local-mode-trust-boundary)), so forwarding carries more of the weight there than the file permissions do.
 
 Org deployments can use the implemented forwarding/export path for external retention/monitoring. Forwarding does not replace local operational decisions about retention, backup, and access control.
 
