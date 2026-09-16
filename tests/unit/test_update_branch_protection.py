@@ -116,6 +116,27 @@ class TestFindBranchRuleset:
         )
         assert ubp.find_branch_ruleset("privacyfence", "privacyfence", "main") is None
 
+    def test_default_branch_placeholder_does_not_match_a_non_default_branch(self, monkeypatch):
+        """~DEFAULT_BRANCH stands in for the repo's actual default branch (main) only -- querying
+        for a different branch or pattern (e.g. the releases/** ruleset) must not match a ruleset
+        that merely happens to carry the placeholder, or `--branch "releases/**"` would silently
+        read/write main's own ruleset instead."""
+        _wire(
+            monkeypatch,
+            listing=[{"id": 1, "target": "branch", "enforcement": "active"}],
+            detail=_ruleset(include=("~DEFAULT_BRANCH",)),
+        )
+        assert ubp.find_branch_ruleset("privacyfence", "privacyfence", "releases/**") is None
+
+    def test_matches_a_release_branch_glob_pattern(self, monkeypatch):
+        _wire(
+            monkeypatch,
+            listing=[{"id": 1, "target": "branch", "enforcement": "active"}],
+            detail=_ruleset(include=("refs/heads/releases/**",)),
+        )
+        found = ubp.find_branch_ruleset("privacyfence", "privacyfence", "releases/**")
+        assert found is not None
+
     def test_ignores_non_branch_targets(self, monkeypatch):
         monkeypatch.setattr(
             ubp.requests,
