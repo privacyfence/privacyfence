@@ -43,6 +43,20 @@ class TestWrap:
         html = web_shell.wrap('<div id="mine">x</div>', title="t", active="approvals")
         assert '<div id="mine">x</div>' in html
 
+    def test_onerror_tells_a_permanent_close_from_a_retrying_one(self):
+        # Issue #423 part 2: readyState CLOSED (a non-2xx response, e.g.
+        # this route's own 401 once the session has expired) never gets an
+        # automatic retry per the EventSource spec, unlike a transient
+        # network error -- the old handler set the same "reconnecting…"
+        # text for both, which lied forever on an expired tab.
+        html = web_shell.wrap("", title="t", active="approvals")
+        start = html.index("es.onerror = function ()")
+        end = html.index("es.addEventListener('settings'")
+        onerror_fn = html[start:end]
+        assert "EventSource.CLOSED" in onerror_fn
+        assert "session expired" in onerror_fn
+        assert "reconnecting…" in onerror_fn
+
     def test_favicon_is_the_bundled_shield_icon_as_a_data_uri(self):
         # No extra unauthenticated route/asset file for the browser's
         # automatic GET /favicon.ico -- same embedded-data-URI approach

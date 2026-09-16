@@ -102,7 +102,7 @@ from .routes_approvals import create_app as create_approvals_app
 from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, protected_resource_metadata_url
 from .routes_settings import build_routes as build_settings_routes
 from .session_auth import BOOTSTRAP_QUERY_PARAM, BootstrapStore, LocalSessionStore
-from .session_auth import authenticated as _session_authenticated
+from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
 from .session_auth import set_session_cookie as _set_session_cookie
 from .session_auth import unauthorized_html as _unauthorized_response
 from .session_auth import verify_bearer_secret
@@ -527,13 +527,25 @@ def _state_stream_route(stream: StateStream, *, sessions: LocalSessionStore) -> 
     it carries. Built here (not in state_stream.py itself) purely because
     every other route factory in this module already lives beside
     _HostAllowlistMiddleware/build_app -- state_stream.py stays focused on
-    the stream's own state and SSE-formatting logic."""
+    the stream's own state and SSE-formatting logic.
+
+    Issue #423: a tab holding this connection open for the whole idle
+    timeout used to get evicted anyway -- the old ``session_auth.
+    authenticated()`` helper only ever touched the session once, at
+    connect time, and the loop inside ``stream.subscribe`` never touched
+    it again no matter how long the tab stayed open and watching. The
+    session id is read here, once, so the same ``sessions.touch`` this
+    handler already runs for the initial auth check can be handed to
+    ``subscribe`` as its per-tick ``touch`` callback -- an open connection
+    is itself proof of activity, so the idle timer now resets on every
+    poll tick instead of only on reconnect."""
 
     async def handler(request: Request) -> Response:
-        if not _session_authenticated(request, sessions):
+        session_id = request.cookies.get(_SESSION_COOKIE, "")
+        if not session_id or not sessions.touch(session_id):
             return _unauthorized_response(request)
         return StreamingResponse(
-            stream.subscribe(request.is_disconnected),
+            stream.subscribe(request.is_disconnected, touch=lambda: sessions.touch(session_id)),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store"},
         )

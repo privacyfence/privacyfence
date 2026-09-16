@@ -209,7 +209,11 @@ def unauthorized_html(request: Request) -> Response:
     so this is available even on a first run, before Settings has ever been
     opened) to call ``privacyfence_get_sign_in_link`` (web/mcp_tools.py),
     which mints one and hands it straight back in the conversation -- no
-    terminal at all; the discovery file ``web/server.py``'s
+    terminal at all -- is also the one this page now leads with (issue
+    #423's proposed-fix part 3): P10 removed the menu bar, so "ask Claude"
+    is the intended recovery path on a headless install, not a fallback
+    buried under the "why you're here" line; the discovery file
+    ``web/server.py``'s
     ``mint_bootstrap_url()`` writes outside the logging pipeline every time
     PrivacyFence (re)starts, for a reader who'd rather grab it themselves;
     and minting a fresh code on demand via ``POST /api/bootstrap`` without
@@ -243,12 +247,12 @@ def unauthorized_html(request: Request) -> Response:
         command = f'curl -s -X POST -H "Authorization: Bearer $(cat {web_token_path})" {origin}/api/bootstrap'
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
-        "<p>Not authorized — this link has expired, was already used, or your "
-        "session timed out.</p>"
-        "<p>Easiest fix: ask Claude (or any other MCP client already connected to "
-        "PrivacyFence) to get you a sign-in link — it can call the "
-        "<code>privacyfence_get_sign_in_link</code> tool and hand you the result directly, "
-        "no terminal needed.</p>"
+        "<p><strong>Not authorized.</strong> Ask Claude (or any other MCP client already "
+        "connected to PrivacyFence) to get you back in — it can call the "
+        "<code>privacyfence_get_sign_in_link</code> tool and hand you a fresh sign-in link "
+        "directly, no terminal needed. That's the fastest way back in on a headless "
+        "install, so it leads here.</p>"
+        "<p>This link has expired, was already used, or your session timed out.</p>"
         "<p>Prefer to grab it yourself? PrivacyFence just wrote the current one to "
         f"<code>{approvals_url_path}</code> (or <code>settings_url</code> for "
         "Settings) — every startup, and every time an old one is superseded, replaces "
