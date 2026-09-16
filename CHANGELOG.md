@@ -125,6 +125,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Org mode: restarting the daemon no longer forces every connected MCP client through a full
+  browser sign-in. The OAuth refresh tokens `/mcp` clients hold are now persisted across a
+  restart, so the ordinary silent-refresh path survives one and a client re-authenticates with
+  nobody present. Previously every token store was in-process only: a restart emptied them, the
+  refresh path was unavailable along with everything else, and the client had to redo the whole
+  `authorize → IdP redirect → sign-in → code exchange` round trip. For a human at a browser that
+  was an annoyance; for a scheduled or background tool call it was a dead end, because there is
+  nobody there to complete a redirect. Each record is sealed under a key derived from the refresh
+  token itself rather than one the daemon keeps, so the file is inert without a token that was
+  already valid — encrypting under a daemon-held key would have moved the secret rather than
+  protected it. Access tokens (one hour, re-minted by the refresh) and browser sessions (a human
+  is present by definition) are still deliberately in-memory only, and every revocation path —
+  logout, `/revoke`, rotation, the 30-day chain cap — clears the persisted record too. See issue
+  #402.
 - The `/approvals` and `/settings` pages no longer get logged out from under a tab that's been
   open and actively watching (live SSE indicator, incoming approvals rendering) for longer than
   the 30-minute idle timeout. The session was only ever touched once, when the stream connected —

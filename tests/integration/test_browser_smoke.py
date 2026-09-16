@@ -252,6 +252,9 @@ def org_server(pf_home, tmp_path, monkeypatch):
     monkeypatch.setattr(
         "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "oauth_clients.json"),
     )
+    monkeypatch.setattr(
+        "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"),
+    )
     port = _free_port()
     issuer_url = f"http://localhost:{port}"
     idp = _idp()

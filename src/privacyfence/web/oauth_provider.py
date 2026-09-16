@@ -28,10 +28,21 @@ Storage: registered OAuth clients (DCR) are persisted to disk
 (``org_dir()/oauth_clients.json``) -- losing that on restart would mean
 every installed Claude connector has to re-register, which is real user
 friction DCR is supposed to spare people. Pending authorizations,
-authorization codes, access tokens and refresh tokens are in-memory only --
-short-lived by design (§5.4's decision-ledger precedent: state that's
-supposed to expire soon anyway doesn't need to survive a restart), so
-losing them on restart just means signing in again, not a security gap.
+authorization codes and access tokens are in-memory only -- short-lived by
+design (§5.4's decision-ledger precedent: state that's supposed to expire
+soon anyway doesn't need to survive a restart), so losing them on restart
+just means signing in again, not a security gap.
+
+Refresh tokens are the one exception (#402), and only since
+``sealed_refresh_store.py`` existed to hold them in a shape worth having:
+they are persisted to ``org_dir()/oauth_refresh.json``, each record sealed
+under a key derived from the token itself rather than one this daemon keeps.
+"Just sign in again" is a fair price for a human at a browser, but a
+*scheduled* tool call has nobody present to complete an IdP redirect, so
+losing the refresh chain turned a restart into an outage for exactly the
+callers that cannot recover on their own. See that module's docstring for
+why sealing to the bearer is not the same trade as encrypting at rest under
+a daemon-held key, and for what is deliberately left in the clear.
 
 Resource controls (SEC-16): ``/register`` is unauthenticated by design -- that's what "dynamic"
 means in DCR -- so this class, not the reverse proxy in front of it, is
@@ -75,6 +86,11 @@ from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
 from ..principal import Principal
 from ..secure_files import atomic_write_json
+from .sealed_refresh_store import (
+    REFRESH_STORE_FILE_NAME,
+    SealedRefreshRecord,
+    SealedRefreshStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +246,15 @@ class OrgOAuthProvider:
         # ... is provided") without a second index to keep in sync by hand.
         self._refresh_for_access: dict[str, str] = {}
         self._access_for_refresh: dict[str, str] = {}
+        self._sealed = SealedRefreshStore(_refresh_store_path())
+        # #402: the one restart-visible fact an operator cannot otherwise
+        # tell apart -- "every client reconnects silently" and "everybody is
+        # signing in again through the IdP" look identical from outside.
+        logger.info(
+            "Org OAuth: restored %d persisted refresh-token record(s); access tokens and "
+            "browser sessions are not persisted and will be re-established on demand",
+            self._sealed.restored_count,
+        )
 
     # ------------------------------------------------------------------ #
     # DCR client store
@@ -445,6 +470,11 @@ class OrgOAuthProvider:
     ) -> _OrgRefreshToken | None:
         with self._lock:
             rt = self._refresh_tokens.get(refresh_token)
+            if rt is None:
+                # #402: an empty in-memory map is the ordinary state right
+                # after a restart, not evidence the token is bad -- consult
+                # the sealed store before concluding otherwise.
+                rt = self._rehydrate_refresh_token_locked(refresh_token)
             if rt is None or rt.client_id != client.client_id:
                 return None
             # SEC-12: absolute lifetime, checked against the chain's
@@ -491,6 +521,25 @@ class OrgOAuthProvider:
         access token valid" in this class, not two that could drift."""
         return await self.load_access_token(token)
 
+    def revoke_all_for_principal(self, principal_id: str) -> int:
+        """Every token chain belonging to one principal, in memory *and* on
+        disk -- the OAuth half of ``OrgSessionStore.destroy_all_for``'s "sign
+        out everywhere", and the reason #402's persistence doesn't quietly
+        outlive a revocation. Returns how many refresh chains were removed.
+
+        Not part of the SDK's provider protocol; this is PrivacyFence's own,
+        same as ``handle_idp_callback``.
+        """
+        with self._lock:
+            mine = [tok for tok, rt in self._refresh_tokens.items() if rt.subject == principal_id]
+            for refresh_token_str in mine:
+                self._revoke_pair_locked(access_token=None, refresh_token_str=refresh_token_str)
+        # The loop above already discarded its own chains from the store (via
+        # _revoke_pair_locked), so what's left there are the records this
+        # process never rehydrated -- they have no in-memory counterpart to
+        # find by subject, and only the store itself can enumerate them.
+        return len(mine) + self._sealed.discard_all_for(principal_id)
+
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
         with self._lock:
             if isinstance(token, RefreshToken):
@@ -501,6 +550,30 @@ class OrgOAuthProvider:
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
+
+    def _rehydrate_refresh_token_locked(self, refresh_token: str) -> _OrgRefreshToken | None:
+        """Caller already holds ``self._lock``. Rebuilds one in-memory refresh
+        token from the sealed store and files it in ``_refresh_tokens``, so
+        every path downstream (the SEC-12 check below, the rotation in
+        ``exchange_refresh_token``, ``_revoke_pair_locked``'s cascade) finds
+        it exactly where it would have found a token this process minted
+        itself -- nothing else in this class has to know disk exists.
+
+        A rehydrated token has no paired access token: that one died with the
+        previous process. ``_revoke_pair_locked`` already tolerates a missing
+        half of the pair, so the first rotation simply mints a new pair.
+        """
+        record = self._sealed.get(refresh_token)
+        if record is None:
+            return None
+        rt = _OrgRefreshToken(
+            token=refresh_token, client_id=record.client_id, scopes=record.scopes,
+            expires_at=None, subject=record.subject, email=record.email,
+            display_name=record.display_name, is_admin=record.is_admin,
+            issued_at=record.issued_at,
+        )
+        self._refresh_tokens[refresh_token] = rt
+        return rt
 
     def _mint_tokens(
         self, *, client_id: str, scopes: list[str], resource: str | None, principal: Principal,
@@ -527,6 +600,18 @@ class OrgOAuthProvider:
             )
             self._refresh_for_access[access_token_str] = refresh_token_str
             self._access_for_refresh[refresh_token_str] = access_token_str
+        # #402: outside the lock deliberately -- this is the one disk write on
+        # the token path, and nothing above needs to be serialized with it.
+        # Only the refresh token is persisted; see the module docstring.
+        self._sealed.put(
+            refresh_token_str, principal_id=principal.id,
+            chain_expires_at=issued_at + _REFRESH_TOKEN_ABSOLUTE_LIFETIME_SECONDS,
+            record=SealedRefreshRecord(
+                client_id=client_id, scopes=scopes, subject=principal.id, email=principal.email,
+                display_name=principal.display_name, is_admin=principal.is_admin,
+                issued_at=issued_at,
+            ),
+        )
         return OAuthToken(
             access_token=access_token_str, token_type="Bearer",  # nosec B106  # the OAuth token_type, not a credential
             expires_in=_ACCESS_TOKEN_TTL_SECONDS,
@@ -546,12 +631,24 @@ class OrgOAuthProvider:
         if refresh_token_str is not None:
             self._refresh_tokens.pop(refresh_token_str, None)
             self._access_for_refresh.pop(refresh_token_str, None)
+            # #402: the single choke point that keeps "revoked in memory" and
+            # "revoked on disk" from drifting apart. Every revocation path in
+            # this class -- /revoke, rotation, access-token expiry, the SEC-12
+            # absolute-lifetime lapse -- already funnels through here, which
+            # is why persistence needed no new bookkeeping in any of them.
+            self._sealed.discard(refresh_token_str)
 
 
 def _clients_file_path() -> str:
     from ..paths import org_dir
 
     return str(org_dir() / CLIENTS_FILE_NAME)
+
+
+def _refresh_store_path() -> str:
+    from ..paths import org_dir
+
+    return str(org_dir() / REFRESH_STORE_FILE_NAME)
 
 
 __all__ = ["IDP_CALLBACK_PATH", "OrgOAuthProvider"]

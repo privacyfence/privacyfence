@@ -58,7 +58,20 @@ Do not restore only selected token/database/config files unless the implementati
 
 A service restart invalidates in-memory state such as currently pending approvals, connector-host caches, and active browser/SSE connections. Durable configuration/credentials/audit state remains on disk according to its own storage rules.
 
-Clients and browsers should reconnect to the restarted daemon. Requests that depended on an in-memory pending approval should be retried as a new request rather than assuming the old in-memory approval still exists.
+Requests that depended on an in-memory pending approval should be retried as a new request rather than assuming the old in-memory approval still exists.
+
+What survives a restart, and what does not:
+
+| State | Survives? | What a client sees |
+|---|---|---|
+| OAuth refresh tokens (`/mcp` clients) | **Yes** — persisted, sealed to the token itself (`web/sealed_refresh_store.py`) | The ordinary silent refresh; no human needed |
+| OAuth access tokens | No — one-hour lifetime, re-minted by the refresh above | One `401` with `WWW-Authenticate`, then a silent refresh |
+| Browser sessions (`pf_org_session`) | No — by design; a human is present to sign in again | A redirect to `/login` |
+| Streamable HTTP session ids | No | An `initialize` carrying the old id opens a fresh session rather than being refused |
+
+Refresh-token persistence is what makes a restart survivable for *unattended* callers: a scheduled or background tool call has nobody present to complete an IdP redirect, so before it, a restart ended that call rather than delaying it. Browser sessions are deliberately still in-memory, because the cost there is one sign-in by someone who is already sitting there.
+
+An operator can tell the two situations apart from the daemon's own startup log, which reports how many refresh-token records it restored. Zero on a daemon that had live clients means everyone is re-authenticating through the IdP, not reconnecting silently.
 
 ## Connector cache and principal capacity
 
