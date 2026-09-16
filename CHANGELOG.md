@@ -41,6 +41,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A pending approval's `message` field, and `privacyfence_await_approval`'s own tool description,
+  now explicitly tell the calling agent to relay the approval `url` to the user right away and
+  either await or schedule a follow-up check, instead of leaving the agent to sit on a
+  `approval_pending` result quietly. PrivacyFence itself was already returning the `url` and a
+  poll tool (`privacyfence_await_approval`) alongside every pending approval — this only
+  strengthens the in-band instructions an MCP client sees, since a daemon has no way to push a
+  notification into a chat turn on its own.
 - The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands
   (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
   current-user-only install) and how to get there in File Explorer, instead of just saying to
