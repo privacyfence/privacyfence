@@ -84,6 +84,7 @@ import pytest
 
 pytest.importorskip("mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'")
 
+from tests.control_channel_client import resolve_posix_socket_path  # noqa: E402
 from tests.diagnostics import (  # noqa: E402
     capture_directory_manifest,
     failure_dir,
@@ -93,7 +94,6 @@ from tests.diagnostics import (  # noqa: E402
 from tests.integration.test_deb_packaged_lifecycle import (  # noqa: E402
     MCP_TOKEN_FILE_NAME,
     OPT_DIR,
-    WEB_TOKEN_FILE_NAME,
     AUTOSTART_DESKTOP_FILE,
     _bootstrap_session,
     _built_debs,
@@ -296,7 +296,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     # graphical login's XDG autostart should ─────────────────────────────
     _dpkg("-i", str(deb_path))
     time.sleep(1.0)
-    assert not (home / ".privacyfence" / "authority" / WEB_TOKEN_FILE_NAME).exists(), (
+    assert not resolve_posix_socket_path(home / ".privacyfence").exists(), (
         "installing the .deb must never itself start the daemon -- only the next login should"
     )
 
@@ -382,7 +382,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     expected_exe = str(OPT_DIR / "PrivacyFenceApp")
     assert exe_link == expected_exe, f"systemd started {exe_link!r}, not the packaged binary at {expected_exe!r}"
 
-    web_token = _wait_for_path_content(home / ".privacyfence" / "authority" / WEB_TOKEN_FILE_NAME, timeout=20)
+    _wait_for_path(resolve_posix_socket_path(home / ".privacyfence"), timeout=20, what="control channel socket")
     mcp_token = _wait_for_path_content(home / ".privacyfence" / MCP_TOKEN_FILE_NAME, timeout=20)
     _wait_until_connectable("localhost", port)
 
@@ -392,7 +392,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     # ── Phase 3's own daemon/MCP/approval/audit contract shape, against a
     # daemon that this test never itself started a process for ───────────
     async with httpx.AsyncClient(base_url=base_url, follow_redirects=True) as web_client:
-        session_id = await _bootstrap_session(web_client, web_token)
+        session_id = await _bootstrap_session(web_client, home / ".privacyfence")
         assert (await web_client.get("/settings")).status_code == 200
 
         allow_task = asyncio.create_task(

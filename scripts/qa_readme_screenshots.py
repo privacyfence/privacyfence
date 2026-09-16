@@ -61,7 +61,7 @@ auto_accept_grants:
 _FAKE_CONNECTED = ["gmail", "drive", "slack", "calendar"]
 
 
-def _build_server(tmp_dir: Path, port: int, token: str):
+def _build_server(tmp_dir: Path, port: int):
     from privacyfence import daemon_main, settings_controller as sc
     from privacyfence.web.server import WebServer
     from privacyfence.web_approval_ui import WebApprovalUI
@@ -78,7 +78,7 @@ def _build_server(tmp_dir: Path, port: int, token: str):
     )
 
     web_ui = WebApprovalUI()
-    server = WebServer(web_ui, host="127.0.0.1", port=port, token=token, controller=controller)
+    server = WebServer(web_ui, host="127.0.0.1", port=port, controller=controller)
     server.start()
     return server
 
@@ -89,11 +89,9 @@ def _run(chromium_path: str | None) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     tmp_dir = Path(tempfile.mkdtemp(prefix="pf-qa-readme-shots-"))
     port = 18701
-    token = "qa-readme-screenshots-token-0123456789"
     try:
-        server = _build_server(tmp_dir, port, token)
+        server = _build_server(tmp_dir, port)
         time.sleep(0.3)
-        base = f"http://127.0.0.1:{port}"
 
         launch_kwargs = {"args": ["--no-sandbox"]}
         if chromium_path:
@@ -103,7 +101,7 @@ def _run(chromium_path: str | None) -> None:
             browser = p.chromium.launch(**launch_kwargs)
             page = browser.new_page(viewport={"width": 1000, "height": 720})
 
-            page.goto(f"{base}/settings?token={token}")
+            page.goto(server.mint_bootstrap_url("/settings"))
             page.wait_for_selector("#app")
             page.click("[data-nav='connectors']")
             page.wait_for_timeout(200)

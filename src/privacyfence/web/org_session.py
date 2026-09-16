@@ -62,9 +62,9 @@ class OrgSession:
 
 class OrgSessionStore:
     """In-memory -- a session dying with the daemon process is an accepted
-    cost (the same one local mode's own web_token/mcp_token files avoid
-    only because there's nothing to distribute across a restart there
-    either way), not a design gap: persisting live sessions across a
+    cost (the same one local mode's own mcp_token file avoids only because
+    there's nothing to distribute across a restart there either way), not a
+    design gap: persisting live sessions across a
     restart would mean persisting session ids in plaintext somewhere, which
     is a bigger new risk than "sign in again after a restart.\""""
 

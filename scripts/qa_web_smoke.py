@@ -73,7 +73,7 @@ def _render_report(results: list[ScenarioResult]) -> str:
     return "\n".join(lines)
 
 
-def _build_server(tmp_dir: Path, port: int, token: str):
+def _build_server(tmp_dir: Path, port: int):
     from privacyfence import daemon_main, settings_controller as sc
     from privacyfence.web.server import WebServer
     from privacyfence.web_approval_ui import WebApprovalUI
@@ -88,7 +88,7 @@ def _build_server(tmp_dir: Path, port: int, token: str):
     controller = sc.SettingsController(str(config_path), connectors=[], connector_host=connector_host)
 
     web_ui = WebApprovalUI()
-    server = WebServer(web_ui, host="127.0.0.1", port=port, token=token, controller=controller)
+    server = WebServer(web_ui, host="127.0.0.1", port=port, controller=controller)
     server.start()
     return server, web_ui, controller
 
@@ -119,9 +119,8 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
     results: list[ScenarioResult] = []
     tmp_dir = Path(tempfile.mkdtemp(prefix="pf-qa-web-"))
     port = 18700
-    token = "qa-web-smoke-token-0123456789"
     try:
-        server, web_ui, controller = _build_server(tmp_dir, port, token)
+        server, web_ui, controller = _build_server(tmp_dir, port)
         time.sleep(0.3)
         base = f"http://127.0.0.1:{port}"
 
@@ -145,7 +144,7 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
                     results.append(ScenarioResult(name, False, repr(exc), list(console_errors)))
 
             def settings_loads_and_round_trips() -> str:
-                page.goto(f"{base}/settings?token={token}")
+                page.goto(server.mint_bootstrap_url("/settings"))
                 page.wait_for_selector("#app")
                 before = controller.snapshot()["general"]["pii_enabled"]
                 page.click("[data-action='toggle_pii_detection']")
@@ -157,7 +156,7 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
             scenario("settings page loads, toggle round-trips", settings_loads_and_round_trips)
 
             def approvals_empty_state() -> str:
-                page.goto(f"{base}/approvals?token={token}")
+                page.goto(server.mint_bootstrap_url("/approvals"))
                 page.wait_for_selector(".pf-approvals-empty")
                 return "empty state rendered"
 
@@ -165,7 +164,7 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
 
             def approvals_row_and_deny() -> str:
                 t, box, card_id = _register_card(web_ui)
-                page.goto(f"{base}/approvals?token={token}")
+                page.goto(server.mint_bootstrap_url("/approvals"))
                 page.wait_for_selector(f'[data-approval-id="{card_id}"]', timeout=3000)
                 page.click(f'[data-deny="{card_id}"]')
                 t.join(timeout=2)
@@ -176,7 +175,7 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
 
             def card_decide_returns_to_list_with_toast() -> str:
                 t, box, card_id = _register_card(web_ui)
-                page.goto(f"{base}/approvals/{card_id}?token={token}")
+                page.goto(server.mint_bootstrap_url(f"/approvals/{card_id}"))
                 page.wait_for_selector("[data-pf-action='deny']", timeout=3000)
                 page.click("[data-pf-action='deny']")
                 page.wait_for_url(f"{base}/approvals", timeout=3000)
@@ -192,7 +191,7 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
             scenario("card decide -> return-to-list toast (regression: script order)", card_decide_returns_to_list_with_toast)
 
             def service_worker_registers() -> str:
-                page.goto(f"{base}/approvals?token={token}")
+                page.goto(server.mint_bootstrap_url("/approvals"))
                 page.wait_for_timeout(500)
                 states = page.evaluate(
                     "navigator.serviceWorker.getRegistrations()"

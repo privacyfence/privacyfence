@@ -1208,9 +1208,9 @@ class TestMaybeStartWebServer:
         # Never actually binds a real socket -- this suite proves the
         # wiring (which ApprovalUI gets installed, whether a server object
         # comes back, whether /mcp is mounted), not uvicorn's own serve
-        # loop. web_token/mcp_token also have to land under an isolated
-        # tmp_path, not paths.data_dir()'s real value (the repo root itself
-        # in dev mode) -- see web/server.py's load_or_create_token().
+        # loop. mcp_token also has to land under an isolated tmp_path, not
+        # paths.data_dir()'s real value (the repo root itself in dev mode)
+        # -- see web/mcp_auth.py's load_or_create_mcp_token().
         from privacyfence import paths
         from privacyfence.web.server import WebServer
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
