@@ -13,10 +13,12 @@ friends) -- not sourced from any connector's manifest, ported field-for-field
 from bridge/src/tools.ts's ``registerMetaTools`` (same names, same
 descriptions, same input shapes) since routes_mcp.py replaces the bridge as
 the thing serving them, not what they are (§8.1: "the other three move into
-web/routes_mcp.py against the connector registry directly"). One exception:
-``GET_SIGN_IN_LINK_TOOL`` has no bridge-era counterpart -- it's new, added
-once P10 (web/server.py's own module docstring) had left local mode's web
-UI headless with no menu bar link of its own to fall back on.
+web/routes_mcp.py against the connector registry directly"). Two exceptions
+have no bridge-era counterpart, both added once P10 (web/server.py's own
+module docstring) had left local mode's web UI headless with no menu bar
+link of its own to fall back on: ``GET_SIGN_IN_LINK_TOOL`` and, later
+(issue #396), ``PRIVACYFENCE_STATUS_TOOL`` -- the one meta-tool that tells
+a client *why* it might need that link in the first place.
 """
 from __future__ import annotations
 
@@ -292,16 +294,17 @@ AWAIT_APPROVAL_TOOL = types.Tool(
 GET_SIGN_IN_LINK_TOOL = types.Tool(
     name="privacyfence_get_sign_in_link",
     description=(
-        "Get a fresh, single-use sign-in link for PrivacyFence's own web UI (Approvals or "
-        "Settings) -- for a human who's locked out of it and asked you for a link, since this "
-        "process has no menu bar icon or other UI of its own (local mode is headless) and its "
-        "startup log line for this link is always redacted for security, so it's never usable "
-        "from there either. Returns {url}: open it in a browser on this same machine within a "
-        "few minutes, before someone else does -- it's consumed by the first visit, successful "
-        "or not, and expires on its own shortly after if unused. This does not open anything "
-        "itself; hand the url back to the human so *they* open it, since this only works from "
-        "the machine PrivacyFence is actually running on. Unavailable (errors) in organization "
-        "mode, which signs in through its own IdP-backed /login instead. "
+        "Get a fresh, single-use sign-in link for PrivacyFence's own web UI (Approvals, "
+        "Settings, or Settings' Connectors section directly) -- for a human who's locked out of "
+        "it and asked you for a link, since this process has no menu bar icon or other UI of its "
+        "own (local mode is headless) and its startup log line for this link is always redacted "
+        "for security, so it's never usable from there either. Returns {url}: open it in a "
+        "browser on this same machine within a few minutes, before someone else does -- it's "
+        "consumed by the first visit, successful or not, and expires on its own shortly after if "
+        "unused. This does not open anything itself; hand the url back to the human so *they* "
+        "open it, since this only works from the machine PrivacyFence is actually running on. "
+        "Unavailable (errors) in organization mode, which signs in through its own IdP-backed "
+        "/login instead. "
         "reason: one sentence on why this link is needed right now -- logged, self-reported, "
         "unverified, same as every other meta tool's reason param, since this hands out a "
         "working (if short-lived) credential for a human-facing surface."
@@ -309,12 +312,42 @@ GET_SIGN_IN_LINK_TOOL = types.Tool(
     inputSchema={
         "type": "object",
         "properties": {
-            "page": {"type": "string", "enum": ["approvals", "settings"], "default": "approvals"},
+            "page": {"type": "string", "enum": ["approvals", "settings", "connectors"], "default": "approvals"},
             "reason": {"type": "string"},
         },
         "required": ["reason"],
     },
     annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=False),
+)
+
+PRIVACYFENCE_STATUS_TOOL = types.Tool(
+    name="privacyfence_status",
+    description=(
+        "Check whether THIS PrivacyFence install is actually set up -- call this before the "
+        "first PrivacyFence-governed action in a conversation, or whenever a human asks why a "
+        "connector (gmail_*, drive_*, slack_*, ...) isn't available. An empty or partial tool "
+        "list from this server means connectors aren't authenticated yet, NOT that PrivacyFence "
+        "has nothing to do with the current request -- this is the one tool guaranteed to exist "
+        "even when every other tool is missing. Returns {mode, setup_complete, connectors, "
+        "next_step, message} and, whenever setup isn't complete, sign_in_url: mode is 'local' or "
+        "'org'; connectors is a list of {name, enabled, authenticated, blocked_by} (blocked_by is "
+        "null once authenticated or if a human deliberately disabled it, otherwise "
+        "'no_org_config' -- never configured -- 'not_authenticated' -- never signed in or the "
+        "token expired -- or a short redacted reason); setup_complete is true once at least one "
+        "connector is authenticated; next_step and message tell the model what to do next in "
+        "plain language -- relay message to the human as-is when setup isn't complete. This tool "
+        "never mints a sign-in credential itself, so sign_in_url is always null here. In local "
+        "mode when un-onboarded, next_step is 'ask_for_sign_in_link' -- offer the human a "
+        "one-time PrivacyFence sign-in link, and only if they say yes, call "
+        "privacyfence_get_sign_in_link with page='connectors' to actually mint and share one; in "
+        "org mode it's 'contact_your_administrator' -- org mode signs in through its own IdP and "
+        "has no local link to offer at all. Makes no external API call and has no side effects "
+        "other than its own audit entry. reason: one sentence on why this is being checked right "
+        "now -- logged, self-reported, unverified, same as every other meta tool's reason param, "
+        "since this discloses which connectors are authenticated."
+    ),
+    inputSchema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
+    annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
 )
 
 END_UNATTENDED_SESSION_TOOL = types.Tool(
@@ -339,5 +372,6 @@ META_TOOLS: tuple[types.Tool, ...] = (
     END_UNATTENDED_SESSION_TOOL,
     AWAIT_APPROVAL_TOOL,
     GET_SIGN_IN_LINK_TOOL,
+    PRIVACYFENCE_STATUS_TOOL,
 )
 META_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in META_TOOLS)

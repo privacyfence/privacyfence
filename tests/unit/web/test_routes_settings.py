@@ -134,6 +134,41 @@ class TestSettingsPage:
         assert 'NOTIFICATIONS_DETAIL = "detailed"' in after.text
 
 
+class TestConnectorsPage:
+    """GET /settings/connectors -- issue #396 Part C's first-run
+    destination: the same document as GET /settings, but with the
+    Connectors section pre-selected server-side rather than defaulting to
+    General, and no query string to lose across _BootstrapMiddleware's
+    redirect (see that class's own docstring in web/server.py)."""
+
+    def test_unauthenticated_is_rejected(self, client):
+        r = client.get("/settings/connectors")
+        assert r.status_code == 401
+
+    def test_authenticated_renders_the_shell_and_the_settings_document(self, client, sessions):
+        _authed(client, sessions)
+        r = client.get("/settings/connectors")
+        assert r.status_code == 200
+        assert "PrivacyFence — Settings" in r.text
+        assert "pf-shell-nav" in r.text
+        assert "__pfInitialState" in r.text
+
+    def test_initial_section_is_connectors(self, client, sessions):
+        _authed(client, sessions)
+        r = client.get("/settings/connectors")
+        assert "window.__pfInitialSection = \"connectors\";" in r.text
+
+    def test_plain_settings_page_carries_no_initial_section(self, client, sessions):
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert "window.__pfInitialSection =" not in r.text
+
+    def test_response_is_never_cached(self, client, sessions):
+        _authed(client, sessions)
+        r = client.get("/settings/connectors")
+        assert r.headers.get("cache-control") == "no-store"
+
+
 class TestActionDispatch:
     def test_unlisted_action_is_404_before_any_getattr(self, client, controller, sessions, monkeypatch):
         csrf = _authed(client, sessions)

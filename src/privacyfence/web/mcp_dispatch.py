@@ -65,10 +65,17 @@ class McpDispatcher:
         self,
         connectors_provider: Callable[[], dict[str, Connector]],
         *,
+        mode: str = "local",
         unattended_sessions_enabled: bool = False,
         registry: PendingApprovalRegistry | None = None,
     ) -> None:
         self._connectors_provider = connectors_provider
+        # "local" or "org" -- privacyfence_status's own mode field, and what
+        # decides whether it even attempts to mint a sign-in link (org mode
+        # never has one -- see get_sign_in_link's own docstring). daemon_main.py
+        # passes "org" from _start_org_web_server; every other call site (and
+        # every existing test) keeps the local-mode default.
+        self._mode = mode
         self._inflight: dict[str, tuple[Any, float]] = {}
         self._last_write_at: dict[tuple[str, str], float] = {}
         self._unattended_sessions_enabled = unattended_sessions_enabled
@@ -88,7 +95,32 @@ class McpDispatcher:
         # supply yet either. Stays None in org mode (no local-mode
         # WebServer to wire it to at all) and in a test that never calls
         # the setter -- get_sign_in_link's own docstring covers both.
+        # privacyfence_status (below) reuses this same seam rather than a
+        # second one of its own.
         self._bootstrap_link_provider: Callable[[str], str | None] | None = None
+        # privacyfence_status's own per-connector view -- {name, enabled,
+        # authenticated, blocked_by} rows, reusing SettingsController's
+        # already-tracked connector/config/failure state (issue #396 Phase
+        # 1) rather than this dispatcher trying to derive enabled/blocked_by
+        # itself from nothing but the built Connector objects it's handed.
+        # None in org mode (no per-principal settings surface exists yet to
+        # source this from -- see daemon_main._connectors_for_principal's
+        # own comment) and in a test that never wires one; status() falls
+        # back to reporting only the connectors it can actually see as
+        # already-authenticated, which is the best it can do without this.
+        self._connectors_state_provider: Callable[[], list[dict[str, Any]]] | None = None
+        # issue #396 Part C: fans a real MCP ``tools/list_changed``
+        # notification out to every live Streamable HTTP session --
+        # wired to web/routes_mcp.py's own broadcaster (which is the one
+        # module that actually holds each session's live ``ServerSession``,
+        # see build_mcp_server's own docstring) once that transport is
+        # actually up. None in org mode today (routes_mcp.py's org-mode
+        # build path doesn't wire one -- no per-principal live-session
+        # story exists yet), and in any test that never calls
+        # set_tools_changed_broadcaster -- notify_tools_changed() is then
+        # simply a no-op, the same posture every other unwired seam here
+        # already takes.
+        self._tools_changed_broadcaster: Callable[[], None] | None = None
 
     @property
     def connectors(self) -> dict[str, Connector]:
@@ -103,6 +135,35 @@ class McpDispatcher:
         web/server.py (which would be a circular import: server.py already
         imports this module's ``McpDispatcher``)."""
         self._bootstrap_link_provider = callback
+
+    def set_connectors_state_provider(self, callback: Callable[[], list[dict[str, Any]]] | None) -> None:
+        """``callback`` is ``SettingsController.status_connectors`` in
+        production -- typed narrowly as a bare ``Callable`` here, same as
+        ``set_bootstrap_link_provider`` above, rather than importing
+        settings_controller.py just for the annotation."""
+        self._connectors_state_provider = callback
+
+    def set_tools_changed_broadcaster(self, callback: Callable[[], None] | None) -> None:
+        """``callback`` is ``build_mcp_server``'s own local
+        ``_broadcast_tools_changed`` closure (web/routes_mcp.py) --
+        untyped/unimported here for the same circular-import reason
+        ``set_bootstrap_link_provider`` above gives, and because that
+        closure's own state (the live ``ServerSession`` per MCP session)
+        has no business living on this dispatcher."""
+        self._tools_changed_broadcaster = callback
+
+    def notify_tools_changed(self) -> None:
+        """Called by ``SettingsController.refresh_connectors()`` (via
+        ``set_connectors_changed_listener``, wired in daemon_main.py)
+        whenever the live connector set actually changes -- fans a real
+        ``tools/list_changed`` notification out to every open MCP session,
+        closing issue #396's own "I set it all up and Claude still can't
+        see it" gap. A no-op wherever no broadcaster is wired (org mode
+        today, or any test that never calls
+        set_tools_changed_broadcaster) -- there is nothing live to notify
+        in that case."""
+        if self._tools_changed_broadcaster is not None:
+            self._tools_changed_broadcaster()
 
     # ------------------------------------------------------------------ #
     # Manifest
@@ -304,6 +365,16 @@ class McpDispatcher:
             logger.warning("Audit log write failed for list_rules: %s", exc)
         return result
 
+    # issue #396 Part C: privacyfence_get_sign_in_link's ``page`` values map
+    # onto real paths rather than a bare f"/{page}" interpolation, since
+    # "connectors" isn't a route of its own -- it's Settings landing
+    # directly on its Connectors section (see settings_window_html.py's
+    # ``ui.section`` and web/routes_settings.py's ``/settings/connectors``
+    # route).
+    _SIGN_IN_LINK_PAGES: dict[str, str] = {
+        "approvals": "/approvals", "settings": "/settings", "connectors": "/settings/connectors",
+    }
+
     def get_sign_in_link(self, page: str, claude_reason: str = "") -> dict:
         """privacyfence_get_sign_in_link's handler: mint a fresh SEC-06
         bootstrap link for local mode's own web UI, via whatever
@@ -318,9 +389,10 @@ class McpDispatcher:
                 "in through its own /login page instead of a one-time bootstrap link."
             )
         page = page or "approvals"
-        if page not in ("approvals", "settings"):
-            raise ValueError(f"page must be 'approvals' or 'settings', got {page!r}")
-        url = self._bootstrap_link_provider(f"/{page}")
+        path = self._SIGN_IN_LINK_PAGES.get(page)
+        if path is None:
+            raise ValueError(f"page must be one of {sorted(self._SIGN_IN_LINK_PAGES)}, got {page!r}")
+        url = self._bootstrap_link_provider(path)
         if url is None:
             raise ValueError(
                 "No sign-in link is available in this configuration -- organization mode signs "
@@ -334,7 +406,7 @@ class McpDispatcher:
                 connector="",
                 tool="",
                 tool_name="",
-                summary=f"Issued a one-time sign-in link for /{page}",
+                summary=f"Issued a one-time sign-in link for {path}",
                 sender="",
                 decision="sign_in_link_issued",
                 auto_accept_rule="",
@@ -345,6 +417,103 @@ class McpDispatcher:
         except Exception as exc:
             logger.warning("Audit log write failed for get_sign_in_link: %s", exc)
         return {"url": url}
+
+    def status(self, claude_reason: str = "") -> dict:
+        """privacyfence_status's handler (issue #396 Phase 2): the one
+        meta-tool guaranteed to answer even when ``connectors == []`` makes
+        every other tool -- meta-tools included, for a client that only
+        lists them alongside real connector tools -- look identical to
+        "PrivacyFence has nothing to do with this". ``setup_complete`` is
+        true once at least one connector is authenticated; a partially set
+        up install (one connector authenticated, another not) still reports
+        ``setup_complete: true`` -- volunteering that a *specific* other
+        connector needs attention is left to the model reading the per-
+        connector rows, not this method deciding it's worth a nag (open
+        question #4 in the issue: whether partial setup deserves a nudge on
+        every call was left to a later pass)."""
+        connectors = self._status_connector_rows()
+        setup_complete = any(c["authenticated"] for c in connectors)
+        result: dict[str, Any] = {
+            "mode": self._mode, "setup_complete": setup_complete, "connectors": connectors,
+        }
+
+        if setup_complete:
+            result["next_step"] = None
+            result["message"] = (
+                "PrivacyFence is set up -- at least one connector is authenticated. An empty "
+                "tool list for a *different* connector means that one specifically isn't "
+                "authenticated yet, not that this install needs setting up from scratch."
+            )
+            self._audit_status_check("status_checked", claude_reason)
+            return result
+
+        if self._mode != "local":
+            result["next_step"] = "contact_your_administrator"
+            result["sign_in_url"] = None
+            result["message"] = (
+                "PrivacyFence is running in organization mode, but no connector is authenticated "
+                "for this account yet. There is no local sign-in link here -- organization mode "
+                "signs in through its own identity provider, so ask the human to check with their "
+                "administrator about getting connectors authorized for their account."
+            )
+            self._audit_status_check("status_checked", claude_reason)
+            return result
+
+        result["next_step"] = "ask_for_sign_in_link"
+        result["sign_in_url"] = None
+        result["message"] = (
+            "PrivacyFence is running, but nothing is authenticated yet -- an empty or partial "
+            "tool list means \"not set up\", not \"nothing to do here\". Offer the human a "
+            "one-time PrivacyFence sign-in link; if they say yes, call "
+            "privacyfence_get_sign_in_link with page=\"connectors\" to mint one and share it, so "
+            "they can open Settings and authenticate at least one connector (Gmail, Slack, etc.). "
+            "PrivacyFence-governed tools stay unavailable until they do. Don't mint a link "
+            "unless a human actually asks for one."
+        )
+        self._audit_status_check("status_checked", claude_reason)
+        return result
+
+    def _status_connector_rows(self) -> list[dict[str, Any]]:
+        if self._connectors_state_provider is not None:
+            return self._connectors_state_provider()
+        # No provider wired (org mode today -- see this constructor's own
+        # comment -- or a test that never called set_connectors_state_
+        # provider): the best available answer is "every connector this
+        # dispatcher can actually see is authenticated, nothing is known
+        # about any other", since only built Connector objects are visible
+        # at all without SettingsController's own config/failure state.
+        return [
+            {"name": name, "enabled": True, "authenticated": True, "blocked_by": None}
+            for name in sorted(self.connectors)
+        ]
+
+    @staticmethod
+    def _audit_status_check(decision: str, claude_reason: str = "") -> None:
+        # ``decision`` is always "status_checked" -- privacyfence_status
+        # never mints a sign-in link itself (issue #396 threat-model
+        # follow-up: that credential is only ever issued because a human
+        # actually asked for one, via privacyfence_get_sign_in_link, which
+        # records its own "sign_in_link_issued" entry). Kept as a parameter
+        # rather than hardcoded so a future distinct status-only decision
+        # doesn't need this call site touched again.
+        try:
+            get_audit_logger().record(AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                week=current_week(),
+                request_id=uuid.uuid4().hex[:12],
+                connector="",
+                tool="",
+                tool_name="",
+                summary="Checked PrivacyFence setup status",
+                sender="",
+                decision=decision,
+                auto_accept_rule="",
+                latency_seconds=0.0,
+                pii_detected=False,
+                claude_reason=claude_reason,
+            ))
+        except Exception as exc:
+            logger.warning("Audit log write failed for status: %s", exc)
 
     async def await_approval(self, approval_ids: list[str], timeout_seconds: int = 30) -> dict[str, str]:
         """privacyfence_await_approval's handler: long-poll ``approval_ids``

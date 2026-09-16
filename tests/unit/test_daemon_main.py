@@ -32,6 +32,7 @@ from privacyfence import daemon_main, org_mode
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.connectors.telegram import TelegramConnector
 from privacyfence.paths import data_dir
+from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -547,7 +548,7 @@ class TestBuildConnectorsGoogleFamily:
         fake = fake_client_class(result="user@example.com")
         monkeypatch.setattr(daemon_main, client_attr, fake)
 
-        connectors = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
+        connectors, _failures = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
 
         assert len(connectors) == 1
         assert connectors[0].name == name
@@ -558,7 +559,7 @@ class TestBuildConnectorsGoogleFamily:
         fake = fake_client_class(result="user@example.com")
         monkeypatch.setattr(daemon_main, client_attr, fake)
 
-        connectors = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -569,7 +570,7 @@ class TestBuildConnectorsGoogleFamily:
         monkeypatch.setattr(daemon_main, client_attr, fake)
         config = {"connectors": {name: {"enabled": False}}}
 
-        connectors = daemon_main.build_connectors(config, GOOGLE_ORG_CONFIG)
+        connectors, _failures = daemon_main.build_connectors(config, GOOGLE_ORG_CONFIG)
 
         assert connectors == []
         assert fake.instantiated is False
@@ -580,7 +581,7 @@ class TestBuildConnectorsGoogleFamily:
         fake = fake_client_class(connection_error=error_cls("token expired"))
         monkeypatch.setattr(daemon_main, client_attr, fake)
 
-        connectors = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
+        connectors, _failures = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
 
         assert connectors == []
 
@@ -591,7 +592,7 @@ class TestBuildConnectorsGoogleFamily:
         fake = fake_client_class(init_error=FileNotFoundError("no token file"))
         monkeypatch.setattr(daemon_main, client_attr, fake)
 
-        connectors = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
+        connectors, _failures = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
 
         assert connectors == []
 
@@ -606,7 +607,7 @@ class TestBuildConnectorsGoogleFamily:
         monkeypatch.setattr(daemon_main, "TasksClient", fake_client_class(result="user@example.com"))
         monkeypatch.setattr(daemon_main, "AppsScriptClient", fake_client_class(result="user@example.com"))
 
-        connectors = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
+        connectors, _failures = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
 
         names = {c.name for c in connectors}
         assert names == {"drive", "calendar", "contacts", "tasks", "apps_script"}
@@ -620,7 +621,7 @@ class TestBuildConnectorsCalendarFreeBusySetting:
     def test_defaults_to_true_when_unconfigured(self, monkeypatch):
         monkeypatch.setattr(daemon_main, "CalendarClient", fake_client_class(result="user@example.com"))
 
-        connectors = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
+        connectors, _failures = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
 
         assert connectors[0].free_busy_full_details is True
 
@@ -628,7 +629,7 @@ class TestBuildConnectorsCalendarFreeBusySetting:
         monkeypatch.setattr(daemon_main, "CalendarClient", fake_client_class(result="user@example.com"))
         config = {"calendar": {"free_busy_full_event_details": False}}
 
-        connectors = daemon_main.build_connectors(config, GOOGLE_ORG_CONFIG)
+        connectors, _failures = daemon_main.build_connectors(config, GOOGLE_ORG_CONFIG)
 
         assert connectors[0].free_busy_full_details is False
 
@@ -636,7 +637,7 @@ class TestBuildConnectorsCalendarFreeBusySetting:
         monkeypatch.setattr(daemon_main, "CalendarClient", fake_client_class(result="user@example.com"))
         config = {"calendar": {"free_busy_full_event_details": True}}
 
-        connectors = daemon_main.build_connectors(config, GOOGLE_ORG_CONFIG)
+        connectors, _failures = daemon_main.build_connectors(config, GOOGLE_ORG_CONFIG)
 
         assert connectors[0].free_busy_full_details is True
 
@@ -654,7 +655,7 @@ class TestBuildConnectorsSlack:
         fake = fake_client_class(result="my-workspace")
         monkeypatch.setattr(daemon_main, "SlackClient", fake)
 
-        connectors = daemon_main.build_connectors({}, self._org_config())
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
 
         assert len(connectors) == 1
         assert connectors[0].name == "slack"
@@ -674,7 +675,7 @@ class TestBuildConnectorsSlack:
         fake = fake_client_class(result="my-workspace")
         monkeypatch.setattr(daemon_main, "SlackClient", fake)
 
-        connectors = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -686,7 +687,7 @@ class TestBuildConnectorsSlack:
         fake = fake_client_class(result="my-workspace")
         monkeypatch.setattr(daemon_main, "SlackClient", fake)
 
-        connectors = daemon_main.build_connectors({}, self._org_config())
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
 
         assert connectors == []
         assert fake.instantiated is False
@@ -696,7 +697,7 @@ class TestBuildConnectorsSlack:
         fake = fake_client_class(connection_error=daemon_main.SlackClientError("revoked"))
         monkeypatch.setattr(daemon_main, "SlackClient", fake)
 
-        connectors = daemon_main.build_connectors({}, self._org_config())
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
 
         assert connectors == []
 
@@ -705,7 +706,7 @@ class TestBuildConnectorsSlack:
         fake = fake_client_class(result="my-workspace")
         monkeypatch.setattr(daemon_main, "SlackClient", fake)
 
-        connectors = daemon_main.build_connectors({"connectors": {"slack": {"enabled": False}}}, self._org_config())
+        connectors, _failures = daemon_main.build_connectors({"connectors": {"slack": {"enabled": False}}}, self._org_config())
 
         assert connectors == []
         assert fake.instantiated is False
@@ -727,7 +728,7 @@ class TestBuildConnectorsSalesforce:
         fake = fake_client_class(result="https://my.salesforce.com")
         monkeypatch.setattr(daemon_main, "SalesforceClient", fake)
 
-        connectors = daemon_main.build_connectors({}, self._org_config())
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
 
         assert len(connectors) == 1
         assert connectors[0].name == "salesforce"
@@ -743,7 +744,7 @@ class TestBuildConnectorsSalesforce:
         fake = fake_client_class(result="ok")
         monkeypatch.setattr(daemon_main, "SalesforceClient", fake)
 
-        connectors = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -755,7 +756,7 @@ class TestBuildConnectorsSalesforce:
         fake = fake_client_class(result="ok")
         monkeypatch.setattr(daemon_main, "SalesforceClient", fake)
 
-        connectors = daemon_main.build_connectors({}, self._org_config())
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
 
         assert connectors == []
 
@@ -764,7 +765,7 @@ class TestBuildConnectorsSalesforce:
         fake = fake_client_class(connection_error=daemon_main.SalesforceClientError("expired"))
         monkeypatch.setattr(daemon_main, "SalesforceClient", fake)
 
-        connectors = daemon_main.build_connectors({}, self._org_config())
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
 
         assert connectors == []
 
@@ -791,7 +792,7 @@ class TestBuildConnectorsAtlassian:
         monkeypatch.setattr(daemon_main, "JiraClient", jira_fake)
         monkeypatch.setattr(daemon_main, "ConfluenceClient", confluence_fake)
 
-        connectors = daemon_main.build_connectors({}, self._org_config())
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
 
         names = {c.name for c in connectors}
         assert names == {"jira", "confluence"}
@@ -821,7 +822,7 @@ class TestBuildConnectorsAtlassian:
         monkeypatch.setattr(daemon_main, "JiraClient", jira_fake)
         monkeypatch.setattr(daemon_main, "ConfluenceClient", confluence_fake)
 
-        connectors = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {})
 
         assert connectors == []
         assert jira_fake.instantiated is False
@@ -834,7 +835,7 @@ class TestBuildConnectorsAtlassian:
         monkeypatch.setattr(daemon_main, "JiraClient", jira_fake)
         monkeypatch.setattr(daemon_main, "ConfluenceClient", confluence_fake)
 
-        connectors = daemon_main.build_connectors({}, self._org_config())
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
 
         assert connectors == []
         assert jira_fake.instantiated is False
@@ -848,7 +849,7 @@ class TestBuildConnectorsAtlassian:
         monkeypatch.setattr(daemon_main, "ConfluenceClient", confluence_fake)
         config = {"connectors": {"jira": {"enabled": False}}}
 
-        connectors = daemon_main.build_connectors(config, self._org_config())
+        connectors, _failures = daemon_main.build_connectors(config, self._org_config())
 
         assert [c.name for c in connectors] == ["confluence"]
         assert jira_fake.instantiated is False
@@ -860,7 +861,7 @@ class TestBuildConnectorsAtlassian:
         monkeypatch.setattr(daemon_main, "JiraClient", jira_fake)
         monkeypatch.setattr(daemon_main, "ConfluenceClient", confluence_fake)
 
-        connectors = daemon_main.build_connectors({}, self._org_config())
+        connectors, _failures = daemon_main.build_connectors({}, self._org_config())
 
         assert [c.name for c in connectors] == ["confluence"]
 
@@ -885,7 +886,7 @@ class TestBuildConnectorsTelegram:
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {})
 
         assert len(connectors) == 1
         assert connectors[0].name == "telegram"
@@ -906,7 +907,7 @@ class TestBuildConnectorsTelegram:
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -917,7 +918,7 @@ class TestBuildConnectorsTelegram:
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -928,7 +929,7 @@ class TestBuildConnectorsTelegram:
         fake = fake_client_class()
         monkeypatch.setattr(daemon_main, "TelegramPrivacyFenceClient", fake)
 
-        connectors = daemon_main.build_connectors({"connectors": {"telegram": {"enabled": False}}}, {})
+        connectors, _failures = daemon_main.build_connectors({"connectors": {"telegram": {"enabled": False}}}, {})
 
         assert connectors == []
         assert fake.instantiated is False
@@ -944,7 +945,7 @@ class TestBuildConnectorsTelegram:
             fake_client_class(init_error=RuntimeError("unexpected MTProto failure")),
         )
 
-        connectors = daemon_main.build_connectors({}, {})
+        connectors, _failures = daemon_main.build_connectors({}, {})
 
         assert connectors == []
 
@@ -955,7 +956,8 @@ class TestBuildConnectorsTelegram:
 
 class TestBuildConnectorsCrossCutting:
     def test_no_connectors_configured_returns_empty_list_not_fatal(self):
-        assert daemon_main.build_connectors({}, {}) == []
+        connectors, _failures = daemon_main.build_connectors({}, {})
+        assert connectors == []
 
     def test_all_ten_connectors_built_together(self, monkeypatch, tmp_path):
         for attr in (
@@ -982,12 +984,125 @@ class TestBuildConnectorsCrossCutting:
             "salesforce": {"consumer_key": "x"},
             "atlassian": {"client_id": "x"},
         }
-        connectors = daemon_main.build_connectors({}, org_config)
+        connectors, _failures = daemon_main.build_connectors({}, org_config)
 
         assert {c.name for c in connectors} == {
             "gmail", "drive", "calendar", "contacts", "tasks", "apps_script",
             "slack", "salesforce", "jira", "confluence", "telegram",
         }
+
+
+# ---------------------------------------------------------------------------- #
+# build_connectors: per-connector failure reasons (issue #396 Phase 1) --
+# the data model a later status meta-tool needs to tell "never set up" /
+# "auth expired" / an actual runtime error apart, instead of every un-built
+# connector looking identical.
+# ---------------------------------------------------------------------------- #
+
+class TestClassifyConnectorFailure:
+    def test_file_not_found_is_not_authenticated_regardless_of_message(self):
+        assert daemon_main._classify_connector_failure(FileNotFoundError("nope")) == "not_authenticated"
+
+    def test_use_authenticate_call_to_action_is_not_authenticated(self):
+        exc = daemon_main.SlackClientError(
+            "No Slack token found at '/x'. Use Authenticate… in the PrivacyFence Settings to sign in."
+        )
+        assert daemon_main._classify_connector_failure(exc) == "not_authenticated"
+
+    def test_organization_config_not_installed_is_no_org_config(self):
+        exc = daemon_main.GmailClientError("Google organization config not installed")
+        assert daemon_main._classify_connector_failure(exc) == "no_org_config"
+
+    def test_app_credentials_not_available_is_no_org_config(self):
+        exc = daemon_main.TelegramClientError("Telegram app credentials not available in this build")
+        assert daemon_main._classify_connector_failure(exc) == "no_org_config"
+
+    def test_anything_else_falls_back_to_the_redacted_public_message(self):
+        # GmailClientError isn't on safe_errors.PUBLIC_SAFE_EXCEPTION_TYPES
+        # (SEC-10 -- it routinely wraps a third-party HTTP body), so a real
+        # check_connection()-style failure redacts down to the generic
+        # message rather than leaking whatever text it wrapped.
+        exc = daemon_main.GmailClientError("token expired: Bearer ya29.abcdefgh12345678")
+        assert daemon_main._classify_connector_failure(exc) == GENERIC_PUBLIC_MESSAGE
+
+
+class TestBuildConnectorsFailureReasons:
+    def test_no_failure_entry_for_a_successfully_built_connector(self, monkeypatch):
+        monkeypatch.setattr(daemon_main, "GmailClient", fake_client_class(result="user@example.com"))
+
+        connectors, failures = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
+
+        assert len(connectors) == 1
+        assert "gmail" not in failures
+
+    def test_no_failure_entry_for_a_deliberately_disabled_connector(self, monkeypatch):
+        fake = fake_client_class(result="user@example.com")
+        monkeypatch.setattr(daemon_main, "GmailClient", fake)
+        config = {"connectors": {"gmail": {"enabled": False}}}
+
+        connectors, failures = daemon_main.build_connectors(config, GOOGLE_ORG_CONFIG)
+
+        assert connectors == []
+        assert "gmail" not in failures
+        assert fake.instantiated is False
+
+    def test_no_org_config_reason_when_google_org_config_absent(self, monkeypatch):
+        monkeypatch.setattr(daemon_main, "GmailClient", fake_client_class(result="user@example.com"))
+
+        _connectors, failures = daemon_main.build_connectors({}, {})
+
+        assert failures["gmail"] == "no_org_config"
+
+    def test_not_authenticated_reason_when_token_file_missing(self, monkeypatch):
+        monkeypatch.setattr(
+            daemon_main, "GmailClient", fake_client_class(init_error=FileNotFoundError("no token file"))
+        )
+
+        _connectors, failures = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
+
+        assert failures["gmail"] == "not_authenticated"
+
+    def test_not_authenticated_reason_for_slacks_real_no_token_message(self, monkeypatch):
+        # Exercises slack_client.load_token_file's real message text (rather
+        # than a test-only stand-in), since _classify_connector_failure's
+        # "not_authenticated" bucket depends on its exact "Use Authenticate…"
+        # phrasing matching across every connector's own token loader.
+        monkeypatch.setattr(daemon_main, "SlackClient", fake_client_class(result="ws"))
+
+        _connectors, failures = daemon_main.build_connectors({}, {"slack": {"client_id": "abc"}})
+
+        assert failures["slack"] == "not_authenticated"
+
+    def test_redacted_reason_when_check_connection_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            daemon_main, "GmailClient",
+            fake_client_class(connection_error=daemon_main.GmailClientError("token expired")),
+        )
+
+        _connectors, failures = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
+
+        assert failures["gmail"] == GENERIC_PUBLIC_MESSAGE
+
+    def test_only_the_failing_connector_gets_a_failure_entry(self, monkeypatch):
+        # Every other Google-family client also needs faking out (not just
+        # Gmail/Drive) -- GOOGLE_ORG_CONFIG makes them all attempt a real
+        # connection otherwise, same as TestBuildConnectorsGoogleFamily's own
+        # test_only_this_connector_is_skipped_when_others_succeed above.
+        monkeypatch.setattr(daemon_main, "GmailClient", fake_client_class(
+            connection_error=daemon_main.GmailClientError("boom")
+        ))
+        for attr in ("DriveClient", "CalendarClient", "ContactsClient", "TasksClient", "AppsScriptClient"):
+            monkeypatch.setattr(daemon_main, attr, fake_client_class(result="user@example.com"))
+
+        _connectors, failures = daemon_main.build_connectors({}, GOOGLE_ORG_CONFIG)
+
+        # Slack/Salesforce/Atlassian/Telegram also have no org config of
+        # their own in GOOGLE_ORG_CONFIG, so they fail too (each with its
+        # own "no_org_config") -- this test only cares that Gmail's sibling
+        # Google-family connectors, which all *do* have org config here,
+        # stay unaffected by Gmail's own failure.
+        google_family = {"gmail", "drive", "calendar", "contacts", "tasks", "apps_script"}
+        assert {name for name in failures if name in google_family} == {"gmail"}
 
 
 # ---------------------------------------------------------------------------- #
@@ -1222,6 +1337,18 @@ class TestMaybeStartWebServer:
         link = result.mcp_dispatcher.get_sign_in_link("approvals")
         assert link["url"].startswith(f"{result.base_url}/approvals?bootstrap=")
 
+    def test_mcp_dispatcher_defaults_to_local_mode(self, monkeypatch, tmp_path):
+        # privacyfence_status's own mode field (issue #396 Phase 2) --
+        # every call site in this class passes no org_config, so this must
+        # be "local", the byte-identical-to-before-P7 default.
+        self._no_bind(monkeypatch, tmp_path)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
+        )
+
+        assert result.mcp_dispatcher.status("checking")["mode"] == "local"
+
     def test_no_mcp_dispatcher_means_nothing_to_wire(self, monkeypatch, tmp_path):
         # web.mcp.enabled defaults False -- must not raise reaching for
         # mcp_dispatcher.set_bootstrap_link_provider on a None dispatcher.
@@ -1285,6 +1412,51 @@ class TestMaybeStartWebServer:
 
         assert result is not None
         assert result.controller is controller
+
+    def test_mcp_dispatcher_gets_the_controllers_connector_status_provider(self, monkeypatch, tmp_path):
+        # privacyfence_status's own connector view (issue #396 Phase 2) --
+        # wired to SettingsController.status_connectors alongside the
+        # unattended-session listener above, so the tool reports the same
+        # enabled/authenticated/blocked_by state the settings page does
+        # rather than re-deriving it from the built connectors alone.
+        self._no_bind(monkeypatch, tmp_path)
+        controller = self._controller(tmp_path, monkeypatch)
+        controller._connectors = ["gmail"]
+        controller._connector_failures = {"slack": "not_authenticated"}
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, controller=controller,
+        )
+
+        status = result.mcp_dispatcher.status("checking")
+        assert status["setup_complete"] is True
+        assert status["connectors"] == controller.status_connectors()
+        rows = {row["name"]: row for row in status["connectors"]}
+        assert rows["slack"]["blocked_by"] == "not_authenticated"
+
+    def test_mcp_dispatcher_gets_wired_to_notify_the_controller_of_connector_changes(self, monkeypatch, tmp_path):
+        # issue #396 Part C: SettingsController.refresh_connectors() needs a
+        # way to reach McpDispatcher.notify_tools_changed once both objects
+        # exist -- wired here alongside status_connectors above.
+        self._no_bind(monkeypatch, tmp_path)
+        controller = self._controller(tmp_path, monkeypatch)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, controller=controller,
+        )
+
+        assert controller._connectors_changed_listener == result.mcp_dispatcher.notify_tools_changed
+
+    def test_no_controller_means_status_falls_back_to_built_connectors_only(self, monkeypatch, tmp_path):
+        self._no_bind(monkeypatch, tmp_path)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
+        )
+
+        assert result.mcp_dispatcher.status("checking")["connectors"] == []
 
     def test_allow_quit_defaults_true_and_is_configurable(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
@@ -1441,6 +1613,16 @@ class TestMaybeStartWebServerOrgMode:
                 unattended_sessions_enabled=False,
                 org_config={"mode": "org", "idp": {"issuer": "https://idp.example.com", "client_id": "c"}},
             )
+
+    def test_org_mode_reports_org_in_the_status_tool(self, monkeypatch, tmp_path):
+        # privacyfence_status's own mode field (issue #396 Phase 2) --
+        # this is the one branch that must not default to "local".
+        self._no_bind(monkeypatch, tmp_path)
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False, org_config=self._org_config(),
+        )
+        assert result.mcp_dispatcher.status("checking")["mode"] == "org"
 
     def test_no_org_config_defaults_to_local_mode(self, monkeypatch, tmp_path):
         # The critical byte-identical-to-before-this-phase guarantee:
@@ -1968,7 +2150,7 @@ class TestRunApp:
         fake_audit_logger = MagicMock()
         monkeypatch.setattr(daemon_main, "init_audit_logger", lambda path, **kwargs: fake_audit_logger)
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
-        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: connectors)
+        monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: (connectors, {}))
         monkeypatch.setattr(daemon_main, "_wait_for_shutdown", lambda: None)
         monkeypatch.setattr(daemon_main, "_run_update_check_timer", lambda controller: None)
 

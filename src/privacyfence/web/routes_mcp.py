@@ -25,6 +25,7 @@ built, so it can't be the decorator-per-tool ``FastMCP`` surface) plus
 """
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 import uuid
@@ -37,7 +38,10 @@ from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAut
 from mcp.server.auth.provider import TokenVerifier
 from mcp.server.auth.routes import build_resource_metadata_url, create_auth_routes, create_protected_resource_routes
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.lowlevel.server import Server as MCPServer
+from mcp.server.models import InitializationOptions
+from mcp.server.session import ServerSession
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from pydantic import AnyHttpUrl
 from starlette.middleware.authentication import AuthenticationMiddleware
@@ -59,6 +63,30 @@ logger = logging.getLogger(__name__)
 
 MCP_PATH = "/mcp"
 
+# Part A of issue #396: server instructions returned in the `initialize`
+# result (Server.instructions -> InitializationOptions.instructions,
+# confirmed against a real mcp==1.30.0 install -- no Server subclass needed
+# for this part, unlike the NotificationOptions(tools_changed=True) override
+# Part C's tools/list_changed support needs at this same construction site).
+# Deliberately short and factual, not "call privacyfence_status at the start
+# of every conversation": most conversations have nothing to do with
+# PrivacyFence, and every meta-tool call is a round trip a client pays for.
+SERVER_INSTRUCTIONS = (
+    "PrivacyFence is a privacy/approval gateway between this client and the user's real "
+    "business systems (Gmail, Drive, Slack, and similar) -- it does not provide those services "
+    "itself, it governs access to connectors that do, applying policy and approval gates before "
+    "data moves.\n\n"
+    "An empty tool list, or one with only privacyfence_-prefixed meta-tools and no connector "
+    "tools (gmail_*, drive_*, slack_*, ...), means this install's connectors aren't set up or "
+    "authenticated yet -- it does NOT mean PrivacyFence has nothing to do with the current "
+    "request. Call privacyfence_status before the first PrivacyFence-governed action in a "
+    "conversation, or whenever the user asks why a connector isn't available: it reports the "
+    "real setup state and, if nothing is authenticated yet, a link the user can open to finish "
+    "setup. It is the one tool guaranteed to exist even when every other tool is missing.\n\n"
+    "Most conversations have nothing to do with PrivacyFence and should not call any "
+    "privacyfence_* tool at all."
+)
+
 
 def _session_key(server: MCPServer) -> str:
     """The current request's session key -- a fresh ``uuid4`` handed out
@@ -72,6 +100,33 @@ def _session_key(server: MCPServer) -> str:
     return server.request_context.lifespan_context["session_key"]
 
 
+class _PrivacyFenceServer(MCPServer):
+    """Overrides ``create_initialization_options()`` to always advertise
+    ``tools.listChanged = True`` (issue #396 Part C).
+
+    Confirmed against a real ``mcp==1.30.0`` install (Phase 0 spike):
+    ``StreamableHTTPSessionManager`` (``mcp/server/streamable_http_
+    manager.py``, what this module's ``mount_mcp`` actually uses) always
+    calls ``self.app.create_initialization_options()`` with zero arguments,
+    so the base implementation's own ``notification_options or
+    NotificationOptions()`` falls through to ``NotificationOptions()``'s
+    default ``tools_changed=False`` on every real request -- there is no
+    argument for a caller to pass here that this class would need to
+    respect instead. Overriding the method itself is the only lever
+    available without patching the manager.
+    """
+
+    def create_initialization_options(
+        self,
+        notification_options: NotificationOptions | None = None,
+        experimental_capabilities: dict[str, dict[str, Any]] | None = None,
+    ) -> InitializationOptions:
+        return super().create_initialization_options(
+            notification_options=NotificationOptions(tools_changed=True),
+            experimental_capabilities=experimental_capabilities,
+        )
+
+
 def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
     """Builds the low-level MCP ``Server``, wired to ``dispatcher`` for both
     tool listing and tool calls. A fresh ``Server`` per daemon process
@@ -79,6 +134,52 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
     see ``McpDispatcher.connectors``), not a decorator per connector tool:
     the tool set is only known at request time.
     """
+
+    # issue #396 Part C: every currently-open Streamable HTTP session's own
+    # live ``ServerSession`` -- the SDK object ``send_tool_list_changed()``
+    # actually lives on (confirmed reachable as
+    # ``server.request_context.session`` from inside a request handler,
+    # Phase 0 spike) -- keyed by the same session_key
+    # dispatcher.end_session() already uses. This dict, not McpDispatcher,
+    # is the right owner: it's routes_mcp.py-specific transport state with
+    # no meaning outside one running MCPServer, whereas McpDispatcher's own
+    # session-scoped state (unattended flags, dedupe) is protocol-level and
+    # already has its own home. Populated from inside handle_list_tools/
+    # handle_call_tool below (RequestContext.session is only reachable
+    # inside a request, not from _session_lifespan's own `yield`), evicted
+    # in _session_lifespan's existing `finally`.
+    live_sessions: dict[str, ServerSession] = {}
+
+    def _capture_session(session_key: str, session: ServerSession) -> None:
+        live_sessions[session_key] = session
+
+    async def _send_tool_list_changed(session: ServerSession) -> None:
+        try:
+            await session.send_tool_list_changed()
+        except Exception as exc:  # noqa: BLE001 -- one dead/closing session must not
+            # stop the others in the same broadcast from being notified.
+            logger.info("tools/list_changed notification failed for one session: %s", exc)
+
+    def _broadcast_tools_changed() -> None:
+        # Called via McpDispatcher.notify_tools_changed(), itself called
+        # from SettingsController.refresh_connectors()'s on-main-thread
+        # `done()` callback (daemon_main.py wires
+        # controller.set_connectors_changed_listener(mcp_dispatcher.
+        # notify_tools_changed)) -- that callback already runs on this
+        # server's own asyncio loop (settings_controller.call_on_main ->
+        # web/state_stream.call_soon_threadsafe), so a running loop is
+        # always available here in production; a test that calls this
+        # directly with no loop running (e.g. exercising the dispatcher in
+        # isolation) simply notifies nobody, since live_sessions is empty
+        # in that case anyway.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        for session in list(live_sessions.values()):
+            loop.create_task(_send_tool_list_changed(session))
+
+    dispatcher.set_tools_changed_broadcaster(_broadcast_tools_changed)
 
     @contextlib.asynccontextmanager
     async def _session_lifespan(_: MCPServer) -> AsyncIterator[dict[str, Any]]:
@@ -93,9 +194,11 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
             yield {"session_key": session_key}
         finally:
             dispatcher.end_session(session_key)
+            live_sessions.pop(session_key, None)
 
-    server: MCPServer = MCPServer(
+    server: MCPServer = _PrivacyFenceServer(
         "privacyfence", version=PRIVACYFENCE_VERSION, lifespan=_session_lifespan,
+        instructions=SERVER_INSTRUCTIONS,
     )
 
     @server.list_tools()
@@ -113,6 +216,7 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
         # handle_call_tool (correctly scoped) could resolve those same
         # connectors perfectly well -- a client simply had no way to learn
         # the tools existed to call them.
+        _capture_session(_session_key(server), server.request_context.session)
         principal = principal_from_access_token(get_access_token())
         with principal_scope(principal):
             tools = [
@@ -126,6 +230,7 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
     @server.call_tool()
     async def handle_call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
         session_key = _session_key(server)
+        _capture_session(session_key, server.request_context.session)
         # Entered once per tool call, in the one place this surface
         # dispatches one (P6) --
         # every per-principal registry downstream (auto_accept.py,
@@ -204,6 +309,8 @@ async def _dispatch_meta_tool(
         )
     if name == mcp_tools.GET_SIGN_IN_LINK_TOOL.name:
         return dispatcher.get_sign_in_link(arguments.get("page", "approvals"), reason)
+    if name == mcp_tools.PRIVACYFENCE_STATUS_TOOL.name:
+        return dispatcher.status(reason)
     raise ValueError(f"Unknown tool: {name!r}")  # pragma: no cover -- unreachable, META_TOOL_NAMES gates this
 
 
@@ -394,6 +501,7 @@ def protected_resource_metadata_url(issuer_url: str) -> AnyHttpUrl:
 
 __all__ = [
     "MCP_PATH",
+    "SERVER_INSTRUCTIONS",
     "build_mcp_server",
     "build_mcp_asgi_app",
     "mount_mcp",

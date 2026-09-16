@@ -631,6 +631,7 @@ class SettingsController:
         connectors: list[str],
         connector_host: Any,
         connector_objs: list[Any] | None = None,
+        connector_failures: dict[str, str] | None = None,
     ) -> None:
         self._config_path = config_path
         self._connectors = connectors
@@ -640,6 +641,13 @@ class SettingsController:
         # startup from daemon_main.py's already-built connectors, refreshed
         # whenever refresh_connectors() re-authenticates/toggles one.
         self._connector_objs: dict[str, Any] = {c.name: c for c in (connector_objs or [])}
+        # name -> "no_org_config" | "not_authenticated" | a redacted
+        # message, for every *enabled* connector build_connectors() didn't
+        # end up producing (issue #396 Phase 1) -- read by _connectors_state
+        # below as each row's blocked_by, so "never set up" and "auth
+        # expired" stop looking identical to a client asking why a
+        # connector is missing. Same refresh cadence as _connector_objs.
+        self._connector_failures: dict[str, str] = dict(connector_failures or {})
         self._resolver = get_resolver()
         # Latest known update-check outcome -- None until the first check
         # completes (or forever, if update checking is disabled). The
@@ -672,6 +680,13 @@ class SettingsController:
         # other background outcome reaches an open browser tab exactly the
         # way it already reaches an open native window.
         self._change_listeners: list[Callable[[dict[str, Any]], None]] = []
+        # issue #396 Part C: fired by refresh_connectors()'s own done()
+        # callback whenever the live connector set actually gets swapped --
+        # wired to McpDispatcher.notify_tools_changed by daemon_main.py once
+        # an MCP dispatcher exists (see set_connectors_changed_listener's
+        # own docstring), so an open MCP client learns about newly (or no
+        # longer) authenticated connectors without needing to reconnect.
+        self._connectors_changed_listener: Callable[[], None] | None = None
 
         set_rules_changed_listener(self._on_rules_changed)
 
@@ -683,6 +698,20 @@ class SettingsController:
         used to do itself, unconditionally, with ipc_server.py's IPCServer
         before P5 retired it."""
         dispatcher.set_unattended_changed_listener(self._on_unattended_changed)
+
+    def set_connectors_changed_listener(self, callback: Callable[[], None] | None) -> None:
+        """``callback`` is ``McpDispatcher.notify_tools_changed`` in
+        production (issue #396 Part C) -- called, on the main thread, right
+        after refresh_connectors() swaps in a freshly-built connector set,
+        so an already-connected MCP client is told its tool list changed
+        instead of needing a restart to see it. Wired by daemon_main.py
+        once an MCP dispatcher exists, the same "wired a step after both
+        objects exist" shape wire_unattended_listener above and
+        McpDispatcher.set_bootstrap_link_provider both already use. ``None``
+        (org mode's per-principal path today, or a test that never wires
+        one) makes refresh_connectors() simply skip the notification --
+        the connector set still changes, nothing is told about it."""
+        self._connectors_changed_listener = callback
 
     # ------------------------------------------------------------------ #
     # Cross-thread change notifications
@@ -996,7 +1025,7 @@ class SettingsController:
         ConnectorHost, so authenticating or toggling a connector takes
         effect immediately instead of requiring a restart."""
 
-        def work() -> list:
+        def work() -> tuple[list, dict[str, str]]:
             from .daemon_main import build_connectors, load_org_config
             cfg = self._load_config()
             try:
@@ -1010,10 +1039,19 @@ class SettingsController:
 
         def done(ok: bool, result: Any) -> None:
             if ok:
+                result, failures = result
                 self._connectors = [c.name for c in result]
                 self._connector_objs = {c.name: c for c in result}
+                self._connector_failures = failures
                 if self.connector_host is not None:
                     self.connector_host.set_connectors(result)
+                # issue #396 Part C: after the live set is actually swapped,
+                # not before -- a listener that asks for fresh connector
+                # state (McpDispatcher.notify_tools_changed's own broadcast
+                # is fire-and-forget, but the principle holds) must see the
+                # new set, not the one refresh_connectors() is replacing.
+                if self._connectors_changed_listener is not None:
+                    self._connectors_changed_listener()
             self._push_snapshot()
 
         _run_async(work, done)
@@ -1629,9 +1667,37 @@ class SettingsController:
                 "enabled": enabled,
                 "busy": busy,
                 "has_org": has_org,
+                # None for a connected connector, a deliberately disabled
+                # one (never attempted, so build_connectors() never raised
+                # for it -- "enabled" above already says that), or one this
+                # row simply hasn't been through a build for yet; otherwise
+                # "no_org_config" | "not_authenticated" | a redacted
+                # message, from build_connectors()'s own per-connector
+                # failure map (issue #396 Phase 1).
+                "blocked_by": (
+                    None if connected or not enabled else self._connector_failures.get(cname)
+                ),
                 "auth_label": "Reconnect…" if connected else "Authenticate…",
             })
         return rows
+
+    def status_connectors(self) -> list[dict[str, Any]]:
+        """privacyfence_status's own connector view (issue #396 Phase 2,
+        web/mcp_dispatch.py's ``McpDispatcher.set_connectors_state_provider``
+        seam) -- the same underlying state ``_connectors_state`` above
+        derives for the settings page, reshaped into the
+        ``{name, enabled, authenticated, blocked_by}`` rows the MCP status
+        payload documents rather than the page's own
+        ``{key, label, icon, authed, busy, has_org, auth_label}`` shape."""
+        cfg = self._load_config()
+        org_config = self._org_config_or_empty()
+        return [
+            {
+                "name": row["key"], "enabled": row["enabled"],
+                "authenticated": row["authed"], "blocked_by": row["blocked_by"],
+            }
+            for row in self._connectors_state(cfg, org_config)
+        ]
 
     def _rules_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
         rules_cfg: dict[str, list[dict]] = cfg.get("auto_accept_rules", {}) or {}

@@ -216,11 +216,23 @@ class TestMetaToolManifest:
         assert schema["required"] == ["approval_ids"]
         assert schema["properties"]["approval_ids"]["type"] == "array"
 
-    def test_get_sign_in_link_page_is_an_approvals_or_settings_enum(self):
+    def test_get_sign_in_link_page_is_an_approvals_settings_or_connectors_enum(self):
         schema = mcp_tools.GET_SIGN_IN_LINK_TOOL.inputSchema
-        assert schema["properties"]["page"]["enum"] == ["approvals", "settings"]
+        assert schema["properties"]["page"]["enum"] == ["approvals", "settings", "connectors"]
         assert schema["properties"]["page"]["default"] == "approvals"
         assert schema["required"] == ["reason"]  # page itself stays optional, defaulting server-side
+
+    def test_status_tool_requires_only_reason(self):
+        # issue #396 Phase 2: the one meta-tool guaranteed to exist even
+        # with zero connectors -- no params of its own beyond the shared
+        # audited "reason", same posture as list_rules/get_sign_in_link.
+        schema = mcp_tools.PRIVACYFENCE_STATUS_TOOL.inputSchema
+        assert schema["required"] == ["reason"]
+        assert set(schema["properties"]) == {"reason"}
+
+    def test_status_tool_is_in_the_meta_tool_manifest(self):
+        assert mcp_tools.PRIVACYFENCE_STATUS_TOOL in mcp_tools.META_TOOLS
+        assert mcp_tools.PRIVACYFENCE_STATUS_TOOL.name in mcp_tools.META_TOOL_NAMES
 
 
 # --------------------------------------------------------------------------- #

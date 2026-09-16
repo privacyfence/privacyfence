@@ -141,6 +141,8 @@ input[type=text]:focus { outline: 2px solid var(--pf-accent); outline-offset: 0;
 }
 .pf-error-dismiss { cursor: pointer; color: var(--pf-danger); font-weight: 600; flex-shrink: 0; }
 .pf-update-banner { border-color: var(--pf-accent); }
+.pf-welcome-banner { border-color: var(--pf-accent); }
+.pf-welcome-dismiss { cursor: pointer; color: var(--pf-text-muted); font-weight: 600; flex-shrink: 0; }
 
 /* ---- Cards / rows shared across pages ---- */
 .pf-card {
@@ -342,7 +344,17 @@ select.pf-input { cursor: pointer; }
 _JS = r"""
 (function () {
   var ui = {
-    section: 'general', rulesConnector: null, privacyGroup: null, rulesSearch: '',
+    // issue #396 Part C: window.__pfInitialSection lets one specific route
+    // (GET /settings/connectors, see web/routes_settings.py) land here with
+    // Connectors already selected -- a real, server-decided initial value
+    // for what's otherwise purely client-side UI state (see this module's
+    // own docstring on `ui`). Every other route omits the script that sets
+    // it, so this falls back to 'general' exactly as before.
+    section: (window.__pfInitialSection || 'general'),
+    rulesConnector: null, privacyGroup: null, rulesSearch: '',
+    // Dismissible client-side only (never sent to Python, same reasoning
+    // as every other `ui.*` field) -- see renderWelcomeBanner below.
+    welcomeBannerDismissed: false,
     telegramModalOpen: false,
     // Tracks whether we've actually observed a non-null telegram_auth.step
     // from Python yet -- a fresh, never-submitted modal also has step ===
@@ -618,11 +630,36 @@ _JS = r"""
     return { text: 'Not connected', cls: 'pf-pill-neutral' };
   }
 
+  // issue #396 Part C: shown on first run (nothing authenticated yet) so
+  // landing here from privacyfence_status's own sign-in link isn't a blank
+  // connector list with no explanation of what any of it means or what
+  // order to do things in. Dismissible, client-side only -- see ui.
+  // welcomeBannerDismissed's own comment above; a page reload brings it
+  // back until a connector is actually authenticated, at which point
+  // `anyAuthed` below stops it from rendering at all.
+  function renderWelcomeBanner(state) {
+    if (ui.welcomeBannerDismissed) return '';
+    var anyAuthed = state.connectors.some(function (c) { return c.authed; });
+    if (anyAuthed) return '';
+    var html = '<div class="pf-card pf-welcome-banner"><div class="pf-card-row">';
+    html += '<div><div class="pf-card-title">Welcome to PrivacyFence</div>';
+    html += '<div class="pf-card-desc">PrivacyFence is a privacy and approval gateway between Claude and your ' +
+      'real accounts (Gmail, Drive, Slack, and similar) -- it governs access to them, it does not provide them ' +
+      'itself. Nothing is governed until at least one connector below is authenticated. If your IT team gave ' +
+      'you an organization config bundle, install it first from the General page; otherwise authenticate a ' +
+      'connector directly below, then go back to Claude.</div></div>';
+    html += '<div class="pf-welcome-dismiss" role="button" tabindex="0" aria-label="Dismiss welcome message" ' +
+      'data-dismiss-welcome="1">✕</div>';
+    html += '</div></div>';
+    return html;
+  }
+
   function renderConnectors(state) {
     var html = '<div class="pf-page">';
     html += '<div class="pf-page-title">Connectors</div>';
     html += '<div class="pf-page-subtitle">Authenticate a connector to let Claude access it, subject to approval and policy. ' +
       'Signing in opens a browser window on the machine running PrivacyFence -- not necessarily this device.</div>';
+    html += renderWelcomeBanner(state);
     state.connectors.forEach(function (c) {
       var status = connectorStatus(c);
       html += '<div class="pf-connector-row">';
@@ -1038,6 +1075,9 @@ _JS = r"""
     var dismissEl = e.target.closest('[data-dismiss-error]');
     if (dismissEl) { pyState.error = ''; render(pyState); return; }
 
+    var welcomeDismissEl = e.target.closest('[data-dismiss-welcome]');
+    if (welcomeDismissEl) { ui.welcomeBannerDismissed = true; render(pyState); return; }
+
     var telegramAuthEl = e.target.closest('[data-telegram-auth]');
     if (telegramAuthEl) { ui.telegramModalOpen = true; ui.telegramAuthWasActive = false; render(pyState); return; }
 
@@ -1191,7 +1231,7 @@ _JS = r"""
 """
 
 
-def build_html(state: dict, *, nonce: str | None = None) -> str:
+def build_html(state: dict, *, nonce: str | None = None, initial_section: str | None = None) -> str:
     """Full self-contained HTML document for the settings window's WKWebView.
 
     ``state`` is embedded directly as ``window.__pfInitialState`` so the
@@ -1206,13 +1246,25 @@ def build_html(state: dict, *, nonce: str | None = None) -> str:
     that exact same nonce -- one document, one Content-Security-Policy
     header. Defaults to a fresh one when omitted (every real caller passes
     the actual per-request value explicitly).
+
+    ``initial_section`` (issue #396 Part C): a deliberate, narrow exception
+    to ``ui.section`` otherwise being purely client-side state (see this
+    module's own docstring) -- ``GET /settings/connectors`` passes
+    ``"connectors"`` so a sign-in link minted while un-onboarded lands
+    directly on the screen that unblocks the user, instead of ``/settings``'s
+    default General page. ``None`` (every other route) emits no script at
+    all, leaving the JS's own ``'general'`` fallback exactly as before.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     state_json = json.dumps(state)
+    section_script = ""
+    if initial_section is not None:
+        section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json.dumps(initial_section)};</script>'
     return (
         "<title>PrivacyFence Settings</title>"
         f'<style nonce="{nonce}">{_TOKENS_CSS}{_CSS}</style>'
         '<div id="app"></div>'
         f'<script nonce="{nonce}">window.__pfInitialState = {state_json};</script>'
+        f"{section_script}"
         f'<script nonce="{nonce}">{_JS}</script>'
     )
