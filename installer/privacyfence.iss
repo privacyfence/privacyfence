@@ -47,6 +47,15 @@
 ; plan.md Phase 7 / B6) -- keep these in sync if this changes.
 #define InstallDirName "PrivacyFence"
 #define TaskName "PrivacyFence"
+; #428 Phase 4 (B5c). Both of these are created only by
+; scripts/windows_privilege_separation.ps1's `enable`, never by this
+; installer -- they are named here because *uninstall* has to clean them up
+; whether or not the user ever opted in. Kept in sync with
+; privilege_separation.WINDOWS_COMPANION_TASK_NAME / WINDOWS_SERVICE_NAME
+; (tests/unit/test_privilege_separation.py asserts it).
+#define CompanionTaskName "PrivacyFenceCompanion"
+#define ServiceName "PrivacyFence"
+#define CompanionExeName "PrivacyFenceCompanion.exe"
 
 [Setup]
 AppId={{B6E3B6C4-6C2E-4A8B-9C4C-3B6C6E7C6C1B}
@@ -86,6 +95,23 @@ Source: "{#McpbPath}"; DestDir: "{app}"; Flags: ignoreversion
 ; below) -- dontcopy means Setup extracts it to {tmp} for [Code] to read at
 ; install time, but it's never actually installed into {app}.
 Source: "privacyfence-task.xml.tmpl"; Flags: dontcopy
+; #428 Phase 4 (B5c): the opt-in privilege-separation tool and the companion
+; autostart task it registers. Both are *installed* rather than extracted to
+; {tmp}: unlike the daemon task above, nothing here runs at install time.
+; Installing them changes nothing at all -- the service, the ACLs and the
+; startup inversion are written only when a human runs this script with
+; `enable` from an elevated PowerShell, exactly as the .deb ships
+; /usr/sbin/privacyfence-privilege-separation without running it.
+;
+; Renamed to privilege-separation.ps1 on the way in, and the template lands
+; beside it: the script resolves its template directory as "the checkout's
+; installer\windows, or my own directory", so a real install finds it next
+; to itself with no path threaded through. That name is also what
+; privilege_separation.PLATFORM_LAYOUTS' Windows status_command quotes at
+; anyone reading a daemon log.
+Source: "..\scripts\windows_privilege_separation.ps1"; DestDir: "{app}"; \
+    DestName: "privilege-separation.ps1"; Flags: ignoreversion
+Source: "windows\privacyfence-companion-task.xml.tmpl"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 ; Points at the web settings UI in the default browser, not at the daemon
@@ -93,6 +119,16 @@ Source: "privacyfence-task.xml.tmpl"; Flags: dontcopy
 ; a headless background daemon (same reasoning as the Linux .deb plan's
 ; P3.2 for its own .desktop entry).
 Name: "{group}\{#AppName}"; Filename: "{#SettingsUrl}"; IconFilename: "{app}\{#AppExeName}"
+; #428 Phase 4 (B5c): the companion app (ADR 0002), as a thing a human can
+; start by hand. On a privilege-separated install it is started at sign-in by
+; its own Scheduled Task and this shortcut is the recovery path when that tray
+; icon has been quit or has crashed -- the daemon is a service by then, so
+; there is nothing else in the user's session that can mint a sign-in link or
+; open a browser for a connector's OAuth flow. On an ordinary install it is
+; simply the opt-in way to run it, which is what ADR 0002 Phase 3 always
+; intended; the Start Menu entry above still opens the settings page directly.
+Name: "{group}\{#AppName} Companion"; Filename: "{app}\{#CompanionExeName}"; \
+    IconFilename: "{app}\{#CompanionExeName}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
 [Run]
@@ -141,6 +177,24 @@ Filename: "{app}\{#AppName}-{#AppVersion}.mcpb"; \
 ; per uninstall even if Inno retries the uninstall step.
 Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#TaskName}"" /f"; \
     Flags: runhidden; RunOnceId: "RemovePrivacyFenceTask"
+; #428 Phase 4 (B5c): the two things a privilege-separated install adds, torn
+; down here rather than left behind. Both are no-ops on an install that never
+; opted in -- schtasks and sc.exe each exit non-zero for something that does
+; not exist, which Inno ignores for an [UninstallRun] entry, and that is the
+; right behavior: this must not fail an uninstall over the ordinary case.
+;
+; Deleting the service is also what retires the NT SERVICE\PrivacyFence
+; virtual account -- it exists only for as long as its service does, which is
+; the whole appeal of a virtual account over a real one nobody would ever
+; remember to delete.
+;
+; The data directory is deliberately not touched; see [UninstallDelete] below.
+Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#CompanionTaskName}"" /f"; \
+    Flags: runhidden; RunOnceId: "RemovePrivacyFenceCompanionTask"
+Filename: "{sys}\sc.exe"; Parameters: "stop ""{#ServiceName}"""; \
+    Flags: runhidden; RunOnceId: "StopPrivacyFenceService"
+Filename: "{sys}\sc.exe"; Parameters: "delete ""{#ServiceName}"""; \
+    Flags: runhidden; RunOnceId: "RemovePrivacyFenceService"
 
 [UninstallDelete]
 ; Explicitly scope what uninstall does NOT touch (Phase 4.3): per-user data
@@ -154,6 +208,17 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#TaskName}"" /f"; \
 ; task (UninstallRun, above) only -- there is deliberately no
 ; [UninstallDelete] entry naming %LOCALAPPDATA%\PrivacyFence, unlike the
 ; entries a "clean uninstall" for a typical app might add.
+;
+; #428 Phase 4 (B5c) adds a second such directory and the same rule applies
+; to it: a privilege-separated install keeps its state under
+; %ProgramData%\PrivacyFence instead, holding the same credentials, settings
+; and audit log plus the policy and passkeys the service account owns. It is
+; not removed here either. Uninstalling while separated therefore leaves a
+; directory no account can read except the service account that no longer
+; exists and the Administrators group -- which is why
+; scripts/windows_privilege_separation.ps1 disable, run *before* uninstalling,
+; is the documented order (docs/platform-support.md). An administrator can
+; still recover the directory afterwards by taking ownership of it.
 
 [Code]
 (* Copies whatever schtasks.exe wrote on stdout/stderr into Setup's own log

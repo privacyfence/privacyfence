@@ -552,7 +552,7 @@ class TestCheckStoragePermissions:
         assert caplog.text.count("SEC-09") == 1
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="POSIX permission bits only -- #428 Phase 4 is macOS/Linux; B5c is where Windows gets NTFS ACLs of its own",
+        sys.platform == "win32", reason="POSIX permission bits only -- Windows' half of #428 Phase 4 is NTFS ACLs, audited by windows_acl.py instead",
     )
     def test_separated_layout_is_not_audited_against_the_flat_0700_rule(self, tmp_path, monkeypatch, caplog):
         # #428 Phase 4 makes two of these directories deliberately looser than

@@ -10,6 +10,7 @@ import {
   readMcpToken,
   readMcpUrl,
   SYSTEM_ROOTS,
+  defaultSystemRoot,
   windowsDataDir,
 } from "../src/protocol.js";
 
@@ -156,20 +157,37 @@ describe("privilegeSeparationRoot / handoffDir (#428 Phase 4)", () => {
   });
 
   it("ignores a relative PRIVACYFENCE_SYSTEM_ROOT on a platform with no default", () => {
-    withPlatform("win32", () => {
+    // freebsd, not win32: B5c gave Windows a default root of its own, so the
+    // only platforms left with none are the ones #428 P4 has no installer
+    // for at all.
+    withPlatform("freebsd", () => {
       assert.equal(privilegeSeparationRoot({ PRIVACYFENCE_SYSTEM_ROOT: "relative/path" }), null);
     });
   });
 
   it("looks for no marker at all on a platform #428 P4 has not shipped for", () => {
-    // B5c adds Windows; until then there is no installer that could have
-    // written one there.
-    withPlatform("win32", () => {
+    // All three desktop platforms have an installer as of B5c, so this is
+    // now about the ones that never will: there is nothing that could have
+    // written a marker on freebsd, and going looking for one would mean
+    // reading a path this shim invented.
+    withPlatform("freebsd", () => {
       assert.equal(privilegeSeparationRoot({}), null);
     });
   });
 
-  it("knows each shipped platform's own default root (#428 P4 B5a/B5b)", () => {
+  it("prefers %ProgramData% to the hardcoded C: default on Windows", () => {
+    // Mirrors privilege_separation.system_root()'s own Windows branch: that
+    // folder can be redirected to another volume, the installer's icacls
+    // runs against wherever it really is, and resolving the literal would
+    // send this shim somewhere nothing was provisioned. The literal stays as
+    // the fallback for a process started without the variable at all.
+    withPlatform("win32", () => {
+      assert.equal(defaultSystemRoot({ ProgramData: "D:\\ProgramData" }), path.join("D:\\ProgramData", "PrivacyFence"));
+      assert.equal(defaultSystemRoot({}), SYSTEM_ROOTS.win32);
+    });
+  });
+
+  it("knows each shipped platform's own default root (#428 P4 B5a/B5b/B5c)", () => {
     // The roots themselves, not just the marker logic: this is the shim's
     // half of the contract with privilege_separation.PLATFORM_LAYOUTS, whose
     // own test reads this same table back from source and asserts the two
@@ -179,11 +197,12 @@ describe("privilegeSeparationRoot / handoffDir (#428 Phase 4)", () => {
     assert.deepEqual(SYSTEM_ROOTS, {
       darwin: "/Library/Application Support/PrivacyFence",
       linux: "/var/lib/privacyfence",
+      win32: "C:/ProgramData/PrivacyFence",
     });
   });
 
   it("resolves the handoff directory on every platform that has a root", () => {
-    for (const platform of ["darwin", "linux"] as const) {
+    for (const platform of ["darwin", "linux", "win32"] as const) {
       withPlatform(platform, () => {
         withMarker(validMarker(platform), (root, env) => {
           assert.equal(privilegeSeparationRoot(env), root);
