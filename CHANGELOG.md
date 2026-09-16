@@ -78,6 +78,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   need to exist first. The not-authorized page's on-demand recovery command changed to match (`nc -U`
   on macOS/Linux, PowerShell's `NamedPipeClientStream` on Windows — neither needs Python, matching
   the previous `curl`-based command's own no-extra-install posture). See issue #428.
+- Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
+  `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
+  that want hardware-bound passkeys as a hard requirement before releasing a write approval.
+  Previously, step-up accepted either a passkey assertion or a fresh IdP re-authentication
+  unconditionally, even for an org that had enabled step-up specifically to defend against a
+  compromised or phished IdP session — a principal with no enrolled passkey silently fell back to
+  the weaker path. With `require_passkey` set, that fallback is gone entirely (the IdP step-up
+  endpoint itself refuses, not just its link), and a principal with no enrolled passkey gets a
+  hard failure pointing at `/security` to enroll one instead. Off by default. See issue #406.
+- `web/server.py`'s module docstring no longer claims `/settings` stays unmounted in org mode
+  because its CSRF model can't generalize to org mode's per-session cookie — `org_session.py`'s
+  `check_csrf` already does that double-submit check, the same shape `session_auth.check_csrf`
+  uses in local mode. The real, still-open gap is deciding which of `routes_settings.py`'s ~30
+  actions are per-principal versus install-wide/admin-only and wiring `Principal.is_admin` into
+  authorizing the latter, which the docstring now says instead. `docs/org-mode-setup-guide.md`
+  gains a new §9 explaining where PII/privacy policy (install-wide, from the server's own
+  `config/settings.yaml`, needs a daemon restart to change, and defaults to `block` for any group
+  absent from that file — unlike local mode's `allow`) and auto-accept rules/grants (per-principal,
+  under that user's own `users/<principal>/config/settings.yaml`) actually live today, since
+  neither has a browser page of its own yet. See issue #400.
 
 ### Added
 

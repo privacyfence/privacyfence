@@ -299,6 +299,17 @@ def build_parser() -> argparse.ArgumentParser:
              "this well\") -- repeat for more than one. Omit to fall back to plain re-"
              "authentication (prompt=login) with no acr_values hint.",
     )
+    step_up_require_passkey_toggle = step_up.add_mutually_exclusive_group()
+    step_up_require_passkey_toggle.add_argument(
+        "--step-up-require-passkey", action="store_true",
+        help="Close the IdP-reauth fallback (#406): a principal with no enrolled passkey gets a "
+             "hard failure pointing at /security instead of a silent downgrade to plain IdP "
+             "re-authentication. Off by default -- only meaningful with --step-up-enabled.",
+    )
+    step_up_require_passkey_toggle.add_argument(
+        "--step-up-no-require-passkey", action="store_true",
+        help="Explicitly turn --step-up-require-passkey back off (useful with --merge).",
+    )
 
     unattended = parser.add_argument_group("Unattended / scheduled Cowork tasks")
     unattended_toggle = unattended.add_mutually_exclusive_group()
@@ -504,7 +515,10 @@ def main(argv: list[str] | None = None) -> int:
     ]):
         raise SystemExit("--server-*/--idp-*/--idp-step-up-acr-value flags require --mode org.")
 
-    if args.step_up_enabled or args.step_up_disabled or args.step_up_scope or args.step_up_rp_id or args.step_up_rp_name:
+    if (
+        args.step_up_enabled or args.step_up_disabled or args.step_up_scope or args.step_up_rp_id
+        or args.step_up_rp_name or args.step_up_require_passkey or args.step_up_no_require_passkey
+    ):
         # bundle["mode"] already reflects either this invocation's --mode
         # or (with --merge and no --mode given) whatever mode the existing
         # bundle on disk already had -- either way, "org" is what actually
@@ -522,6 +536,10 @@ def main(argv: list[str] | None = None) -> int:
             step_up_section["rp_id"] = args.step_up_rp_id
         if args.step_up_rp_name:
             step_up_section["rp_name"] = args.step_up_rp_name
+        if args.step_up_require_passkey:
+            step_up_section["require_passkey"] = True
+        elif args.step_up_no_require_passkey:
+            step_up_section["require_passkey"] = False
         bundle["step_up"] = step_up_section
 
     if (
@@ -632,6 +650,8 @@ def main(argv: list[str] | None = None) -> int:
         summary += f", mode={bundle['mode']}"
     if "step_up" in bundle:
         summary += f", step_up.enabled={bundle['step_up'].get('enabled', False)}"
+        if bundle["step_up"].get("require_passkey", False):
+            summary += ", step_up.require_passkey=True"
     if "download_delivery" in bundle:
         summary += f", download_delivery.allow_disk_staging={bundle['download_delivery'].get('allow_disk_staging', True)}"
     if "authz" in bundle:

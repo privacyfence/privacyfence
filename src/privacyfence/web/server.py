@@ -54,13 +54,17 @@ decision additionally demands a fresh WebAuthn step-up when
 web/routes_org_approvals.py's own module docstring covers both.
 
 **Still deliberately not mounted in org mode**: ``/settings``
-(``routes_settings.py``'s ~30-action surface) -- generalizing its CSRF
-model (today "the one shared token doubles as the session cookie value and
-the per-page CSRF token") to org mode's per-session cookie is real, scoped
-follow-up work no phase through P9 has needed yet (``/connect``, P8, and
-now ``/approvals``/``/security``, P9, are each a small, purpose-built page
-rather than a port of that surface -- see routes_connect.py's own module
-docstring for why that shape was chosen over porting it).
+(``routes_settings.py``'s ~30-action surface). The CSRF model itself is no
+longer the blocker -- ``org_session.check_csrf`` already does the
+per-session double-submit this surface would need, the same shape
+``session_auth.check_csrf`` uses in local mode. What's still missing is
+deciding which of that surface's ~30 actions are per-principal, which are
+install-wide and admin-only, and wiring ``Principal.is_admin`` into
+authorizing the latter -- real, scoped follow-up work no phase through P9
+has done yet (``/connect``, P8, and now ``/approvals``/``/security``, P9,
+are each a small, purpose-built page rather than a port of that surface --
+see routes_connect.py's own module docstring for why that shape was chosen
+over porting it).
 """
 from __future__ import annotations
 
