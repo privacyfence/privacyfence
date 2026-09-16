@@ -628,8 +628,11 @@ jobs:
     # Needs `contents: write` now (unlike before privacyfence/privacyfence#373, when this job only
     # read the repo and talked to R2): it's the one place that calls action-gh-release, to attach
     # the complete artifact set (or, on a pre-release tag, to create the asset-less release entry).
+    # `actions: read` is new for privacyfence/privacyfence#374's coverage-report step below -- it
+    # only reads two other workflows' run history, never writes anything via the Actions API.
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -653,6 +656,24 @@ jobs:
           CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Finalizing version=$VERSION channel=$CHANNEL"
+
+      # privacyfence/privacyfence#374, option 1 ("Report, don't gate"): linux-graphical-session.yml
+      # and windows-graphical-session.yml -- the only automated coverage for the daemon starting
+      # itself at login -- run on packaging-related `main` pushes, weekly, and on demand, never on
+      # a tag push and never as a `needs:` of this job, since a flaky run in that tier must never
+      # block a release (docs/testing-policy.md's Layer 6 row). That leaves a gap where a tag can
+      # ship with autostart broken as long as the last packaging-touching push to `main` was green
+      # and nothing since then re-ran either workflow. This step closes the "nobody looked" half of
+      # that gap without touching the "must never block" half -- see scripts/
+      # check_graphical_session_coverage.py's own module docstring for exactly what it checks.
+      # Always exits 0: a missing or stale-or-red run only ever prints a `::warning::` annotation on
+      # this job, it never fails it or blocks the release below.
+      - name: Check graphical-session/autostart coverage (report only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/check_graphical_session_coverage.py \
+            --repo "${{ github.repository }}" --commit "${{ github.sha }}"
 
       # Pulls together the four workflow artifacts `build`/`build-windows`/`build-deb`/`sbom`
       # uploaded above (`PrivacyFence-dmg`, `PrivacyFence-windows-installer`, `PrivacyFence-deb`,
