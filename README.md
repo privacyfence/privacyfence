@@ -269,13 +269,16 @@ warnings, no manual quarantine step. Pre-release (alpha/beta/rc) builds might no
 signing/notarization credential availability at build time. Full installation details are in
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
 
-**Optional:** by default PrivacyFence's daemon runs as you — and so does the AI client
-it governs, which is why that client can read and rewrite the policy deciding what it's allowed to
-do. `sudo ./scripts/macos_privilege_separation.sh enable` moves the daemon to an account of its
-own, which takes the policy, the audit key and the connector credentials out of its reach, and
-starts a menu-bar companion so you still have a way in. Opt-in, reversible, and worth reading
-[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-and-linux-opt-in)
-before you run it — the migration moves live connector tokens.
+**Privilege separation is on by default:** without it, PrivacyFence's daemon runs as you — and so
+does the AI client it governs, which is why that client could otherwise read and rewrite the policy
+deciding what it's allowed to do. The first time the daemon finds itself unseparated it asks once,
+via the standard admin-password dialog, to move itself to an account of its own — which takes the
+policy, the audit key and the connector credentials out of its reach — and start a menu-bar
+companion so you still have a way in. Decline once and it won't ask again; run
+`sudo ./scripts/macos_privilege_separation.sh enable` any time afterward if you change your mind
+(`... disable` reverses it). Reversible either way, and worth reading
+[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-and-linux-default-on)
+before you run it by hand — the migration moves live connector tokens.
 
 ### Install on Windows
 
@@ -338,14 +341,17 @@ Prefer a bare `pip`/`pipx install privacyfence` plus the repo-root `privacyfence
 (`--user` systemd unit) instead? That path works too — see the same
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging) section.
 
-**Optional:** by default PrivacyFence's daemon runs as you — and so does the AI client it governs,
-which is why that client can read and rewrite the policy deciding what it's allowed to do.
-`sudo privacyfence-privilege-separation enable` (installed by the `.deb`; from a source checkout
-it's `sudo ./scripts/linux_privilege_separation.sh enable`) moves the daemon to a `privacyfence`
-system account of its own — a system systemd unit in place of the autostart entry — which takes the policy,
-the audit key and the connector credentials out of its reach. Opt-in, reversible, and worth reading
-[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-and-linux-opt-in)
-before you run it — the migration moves live connector tokens.
+**Privilege separation is on by default for the `.deb`:** `debian/postinst` runs
+`privacyfence-privilege-separation enable --auto` itself, on every install and upgrade, moving the
+daemon to a `privacyfence` system account of its own — a system systemd unit in place of the
+autostart entry — which takes the policy, the audit key and the connector credentials out of the AI
+client's reach. It only skips itself when it can't safely tell who owns the install (an unattended
+upgrade with no `sudo` session behind it); a source checkout, or a `.deb` install it skipped, stays
+opt-in via `sudo privacyfence-privilege-separation enable` (installed by the `.deb`; from a source
+checkout it's `sudo ./scripts/linux_privilege_separation.sh enable`). `... disable` reverses it
+either way. Reversible, and worth reading
+[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-and-linux-default-on)
+before you run it by hand — the migration moves live connector tokens.
 
 ### Run from source
 

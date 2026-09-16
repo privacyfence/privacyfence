@@ -119,6 +119,27 @@ if command -v fileicon &>/dev/null; then
   fileicon set "$BUNDLE" "$ICNS_PATH" 2>/dev/null || true
 fi
 
+# ── 4b. Bundle the privilege-separation script + its launchd templates ───────
+# #428 D1 (4.1): the daemon's own auto-enable trigger (privilege_separation.py
+# maybe_auto_enable_macos()) shells out to this script, elevated. Until now
+# nothing shipped it into the DMG at all -- opting in required a source
+# checkout, which is also why the auto trigger couldn't exist before this.
+# scripts/macos_privilege_separation.sh resolves its own REPO_ROOT as
+# "$(dirname "${BASH_SOURCE[0]}")/.." and reads templates from
+# "${REPO_ROOT}/installer/macos" -- copying both directories into
+# Contents/Resources/ with that same scripts/ + installer/macos/ sibling
+# layout means the script needs no packaged-vs-checkout branch (unlike the
+# .deb's linux_privilege_separation.sh, which has one because the .deb
+# installs the script somewhere else entirely, as
+# /usr/sbin/privacyfence-privilege-separation).
+echo "→ Bundling the privilege-separation script…"
+RESOURCES="${BUNDLE}/Contents/Resources"
+mkdir -p "${RESOURCES}/scripts" "${RESOURCES}/installer/macos"
+cp -p scripts/macos_privilege_separation.sh "${RESOURCES}/scripts/macos_privilege_separation.sh"
+chmod +x "${RESOURCES}/scripts/macos_privilege_separation.sh"
+cp -p installer/macos/com.privacyfence.daemon.plist.tmpl "${RESOURCES}/installer/macos/"
+cp -p installer/macos/com.privacyfence.companion.plist.tmpl "${RESOURCES}/installer/macos/"
+
 # ── 5. Optional code signing ──────────────────────────────────────────────────
 if [ -n "$SIGN_IDENTITY" ]; then
   echo "→ Code-signing with: ${SIGN_IDENTITY}"

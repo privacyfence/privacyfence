@@ -90,8 +90,11 @@ import errno
 import json
 import logging
 import os
+import shlex
 import stat
+import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -576,3 +579,126 @@ def _authority_owner_problem(state: Separation) -> str | None:
         f"{state.service_account!r} account -- the privilege separation this install "
         "advertises is not actually in effect."
     )
+
+
+# ── #428 D1 (4.1): auto-enable trigger ────────────────────────────────────────
+#
+# D1 was the original plan's "flip the default on, once a platform's opt-in
+# has soaked through a full release cycle" step, deferred to 4.2. That soak
+# period is explicitly overridden for 4.1: macOS and Linux both auto-enable
+# now, macOS from here and Linux from debian/postinst (root already, at
+# package-configure time, no prompt needed). Windows has no B5c yet, so
+# nothing here touches it -- SUPPORTED_PLATFORMS still gates everything else
+# in this module the same way it always has.
+#
+# macOS has no package-manager postinst to lean on the way the .deb does: a
+# DMG install is a drag to /Applications, nothing runs as root at install
+# time, and nothing short of a human answering an admin password prompt can
+# create a system account or a LaunchDaemon. This is that prompt, asked once.
+AUTO_ENABLE_ATTEMPTED_MARKER_NAME = ".separation_auto_enable_attempted"
+
+
+def _macos_installer_script_path() -> Path | None:
+    """Where ``scripts/macos_privilege_separation.sh`` actually is for *this*
+    running process: bundled into the .app's ``Resources/`` for a packaged
+    install (``scripts/build_dmg.sh`` copies both it and its launchd
+    templates there, preserving the repo's own ``scripts/`` +
+    ``installer/macos/`` sibling layout so the script's own ``REPO_ROOT``
+    resolution needs no packaged-vs-checkout branch), or the repo-relative
+    checkout path for a source install. ``None`` if neither exists -- the
+    normal case in a test process, and treated the same as "nothing to
+    auto-enable with"."""
+    from . import paths
+
+    bundle = paths.app_bundle_path()
+    if bundle is not None:
+        candidate = bundle / "Contents" / "Resources" / "scripts" / "macos_privilege_separation.sh"
+    else:
+        candidate = Path(__file__).resolve().parents[2] / "scripts" / "macos_privilege_separation.sh"
+    return candidate if candidate.is_file() else None
+
+
+def _applescript_quoted(text: str) -> str:
+    """Escape ``text`` for a double-quoted AppleScript string literal
+    (``\\`` and ``"`` are the only two characters that mean anything there).
+    ``text`` here is already a full shell command built with
+    ``shlex.quote()`` per argument -- that is the shell layer's own quoting,
+    this is the AppleScript layer's on top of it, and neither substitutes
+    for the other."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def maybe_auto_enable_macos() -> None:
+    """#428 D1 (4.1): on an unseparated macOS install, ask once -- via the
+    standard macOS admin-password dialog -- to run
+    ``scripts/macos_privilege_separation.sh enable`` on this human's behalf.
+
+    Called from ``daemon_main.main()``, after ``check_runtime_identity()``
+    and only on the path that starts the persistent daemon. A no-op on every
+    other platform, on an already-separated install, and when the script
+    this needs isn't packaged into the running app (a test process, or a
+    source checkout run without ``scripts/`` next to it).
+
+    Fires at most once per install: a marker file next to the (still
+    unseparated) data directory records the attempt regardless of whether
+    the human approves the prompt or cancels it, so a decline is respected
+    rather than repeated at the next daemon start. There is no UI to ask
+    again short of running the script by hand or deleting that marker --
+    same as every other platform, where opting in has only ever been that
+    one manual command.
+
+    Runs the elevation prompt on a background thread so daemon startup never
+    blocks on a human answering (or ignoring) a password dialog, and treats
+    every failure as non-fatal: this is a convenience layered on top of the
+    opt-in path, never a replacement for it, and it must never take the
+    daemon down with it.
+    """
+    if current_platform() != "darwin":
+        return
+    if is_enabled():
+        return
+    script = _macos_installer_script_path()
+    if script is None:
+        return
+
+    from . import paths
+
+    marker = paths.data_dir() / AUTO_ENABLE_ATTEMPTED_MARKER_NAME
+    if marker.exists():
+        return
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("attempted\n", encoding="utf-8")
+    except OSError:
+        logger.warning("could not write %s -- skipping the auto-enable prompt this run", marker, exc_info=True)
+        return
+
+    threading.Thread(
+        target=_run_auto_enable_macos,
+        args=(script,),
+        name="privilege-separation-auto-enable",
+        daemon=True,
+    ).start()
+
+
+def _run_auto_enable_macos(script: Path) -> None:
+    command = f"{shlex.quote(str(script))} enable --auto"
+    applescript = f"do shell script {_applescript_quoted(command)} with administrator privileges"
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", applescript],
+            capture_output=True, text=True, timeout=300, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        logger.warning("automatic privilege-separation enable did not run", exc_info=True)
+        return
+    if result.returncode != 0:
+        # osascript's own exit code for a declined password prompt -- an
+        # expected outcome, not a bug. `enable --auto` exits 0 even when it
+        # skips itself (see that script's own --auto handling), so a nonzero
+        # code here means osascript couldn't run it at all, which is worth a
+        # log line either way.
+        logger.info("automatic privilege-separation enable did not complete: %s", result.stderr.strip())
+        return
+    reset_cache()
+    logger.info("privilege separation enabled automatically (#428 D1) -- restart the daemon to pick it up")

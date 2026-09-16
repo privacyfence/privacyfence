@@ -36,8 +36,15 @@
 # is still the step to take a backup before: it is the one part of this that
 # touches data you cannot re-mint from a config file.
 #
-# Ships opt-in deliberately. #428 P4 does not default on for a platform until
-# that platform's opt-in has soaked through a full release cycle.
+# Ships opt-in by hand via the three subcommands above. #428 D1 (4.1, moved up
+# from the original 4.2 plan) additionally auto-runs `enable --auto` from the
+# .deb's postinst on every install and upgrade -- see debian/postinst. `--auto`
+# is the same `enable`, made safe to run unattended: anywhere it would
+# otherwise die() on something a human would resolve interactively (no
+# resolvable owner, no installed executables, an unsupported init system), it
+# instead logs why and exits 0, leaving the install opt-in rather than failing
+# the package configure step it's called from. A human running this by hand
+# never wants that silent behavior, which is why --auto isn't the default.
 set -euo pipefail
 
 # ── Constants. Every one of these is also declared in
@@ -108,9 +115,15 @@ usage: sudo $0 {enable|disable|status} [options]
                       (both together let a source/venv install be separated:
                        --daemon-exec .venv/bin/privacyfence-app
                        --companion-exec .venv/bin/privacyfence-companion)
+  --auto              enable only: never die(), never prompt -- log and exit 0
+                      instead of failing when this can't safely tell who owns
+                      the install or find the daemon. For unattended callers
+                      (the .deb's postinst); a human should not pass this.
 USAGE
   exit 2
 }
+
+AUTO=0
 
 require_linux() {
   [ "$(uname -s)" = "Linux" ] || die "this script is Linux-only (macOS is scripts/macos_privilege_separation.sh; #428 P4's Windows phase is B5c)"
@@ -569,13 +582,30 @@ while [ $# -gt 0 ]; do
     --user) OWNER_USER="${2:-}"; shift 2 ;;
     --daemon-exec) DAEMON_EXECUTABLE="${2:-}"; shift 2 ;;
     --companion-exec) COMPANION_EXECUTABLE="${2:-}"; shift 2 ;;
+    --auto) AUTO=1; shift ;;
     -h|--help) usage ;;
     *) die "unknown option: $1" ;;
   esac
 done
 
 case "$COMMAND" in
-  enable) cmd_enable ;;
+  enable)
+    if [ "$AUTO" = "1" ]; then
+      note "auto-enabling privilege separation (#428 D1, 4.1) -- see debian/postinst"
+      # Run in a subshell: die() calls exit, and under set -euo pipefail an
+      # exit from a *direct* call would take this whole process down with it
+      # -- including the postinst that's calling us. A subshell's exit only
+      # ends the subshell, and testing it in `if` is exempt from errexit, so
+      # a resolve_owner()/resolve_executables()/cmd_enable failure lands here
+      # instead of failing the package configure step.
+      if ! ( cmd_enable ); then
+        warn "auto-enable did not run to completion -- this install stays opt-in."
+        warn "rerun without --auto to see why, or once it's clear: sudo $0 enable"
+      fi
+    else
+      cmd_enable
+    fi
+    ;;
   disable) cmd_disable ;;
   status) cmd_status ;;
   *) usage ;;

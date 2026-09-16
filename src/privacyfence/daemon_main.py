@@ -1847,6 +1847,13 @@ def main(argv: list[str] | None = None) -> int:
                 return run_atlassian_oauth(org_config)
             if args.telegram_setup:
                 return run_telegram_setup()
+        # #428 D1 (4.1): only on the path that actually starts the persistent
+        # daemon, not any of the one-shot CLI invocations above -- an admin
+        # password dialog popping up during `--gmail-oauth` would be a
+        # surprising thing for a scripted/headless call to trigger. A no-op
+        # everywhere but an unseparated macOS install; see that function's
+        # own docstring for what it does and why it only ever asks once.
+        privilege_separation.maybe_auto_enable_macos()
         return run_app(config, args.config)
     except Exception as exc:
         logger.error("Fatal error: %s", exc, exc_info=True)

@@ -28,4 +28,20 @@ esac
 # installing user's desktop session nor safely start a per-user daemon on their behalf --
 # see the now-removed docs/linux-local-deb-packaging-plan.md P3.3.
 
+# #428 D1 (4.1, moved up from the original 4.2 plan): auto-enable privilege separation here,
+# on every install and upgrade (dpkg calls this same `configure` case for both -- $2 is the old
+# version on an upgrade, empty on a fresh install, and neither changes what to do). postinst
+# already runs as root, which is exactly what enable needs and what the "postinst can't safely
+# act on a user's behalf" reasoning above was about the *daemon*, not this: `enable --auto`
+# only proceeds when $SUDO_USER names a resolvable, non-root account (i.e. this .deb was
+# installed via `sudo apt install`/`sudo dpkg -i`, not by root directly or by an unattended
+# upgrade with no session behind it) and the packaged executables it needs exist -- see
+# scripts/linux_privilege_separation.sh's --auto handling. Anywhere that's not true, it logs why
+# and exits 0 rather than guessing, leaving the install opt-in exactly as before this. Idempotent
+# either way (enable already refreshes rather than fails on an already-separated install), and
+# best-effort: `|| true` means a failure here is never allowed to fail the package install.
+if [ "$1" = "configure" ] && [ -x /usr/sbin/privacyfence-privilege-separation ]; then
+    /usr/sbin/privacyfence-privilege-separation enable --auto || true
+fi
+
 exit 0
