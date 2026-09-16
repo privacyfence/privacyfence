@@ -697,6 +697,21 @@ class TestSaveAttachmentBytes:
 
         assert (nested / "f.txt").read_bytes() == b"data"
 
+    def test_unwritable_destination_becomes_confluence_client_error(self, tmp_path, monkeypatch):
+        # A disk-level failure (permission denied, a read-only/synthetic
+        # mount point that rejects mkdir, etc.) must surface as
+        # ConfluenceClientError like every other failure in this method --
+        # not a bare OSError, which coding-and-testing-guidelines.md §1.4
+        # requires every *_client.py public method to never leak.
+        client = make_client()
+        monkeypatch.setattr(
+            confluence_client_module.os, "makedirs",
+            MagicMock(side_effect=OSError(45, "Operation not supported")),
+        )
+
+        with pytest.raises(ConfluenceClientError, match="could not write"):
+            client.save_attachment_bytes(b"data", "f.txt", str(tmp_path))
+
 
 class TestDownloadAttachment:
     def test_downloads_and_saves_content(self, tmp_path):
