@@ -1,0 +1,95 @@
+# #428 Phase 4 (B5b): the PrivacyFence daemon as a *system* systemd unit,
+# running under its own dedicated account.
+#
+# This replaces the two things that start the daemon in the logged-in user's
+# session today -- the `--user` unit in the repo root (privacyfence.service,
+# the pip/pipx path) and the XDG autostart entry the .deb installs
+# (/etc/xdg/autostart/privacyfence.desktop) -- for installs that have opted
+# into privilege separation. The difference that matters is User= below: a
+# `--user` unit and an autostart entry both run as whoever is logged in,
+# which is also who the AI client PrivacyFence exists to govern runs as, and
+# a system unit runs as the account it names, in no login session at all.
+# That one line is what takes settings.yaml, the enrolled WebAuthn
+# credentials and the audit log's HMAC key out of the agent's reach.
+#
+# Installed to /etc/systemd/system/privacyfence-daemon.service by
+# scripts/linux_privilege_separation.sh -- which fills in every placeholder
+# below. Do not install this file by hand: systemd will start the daemon
+# happily enough, but nothing will have created the service account, moved
+# the data directory, or written the marker file every PrivacyFence process
+# reads to agree on where that directory now is
+# (src/privacyfence/privilege_separation.py).
+#
+# The companion -- which is what a human actually interacts with once the
+# daemon has no desktop session of its own -- is the separate XDG autostart
+# entry in privacyfence-companion.desktop.tmpl. ADR 0002's "startup wiring
+# inverts on all three platforms" is these two files, on this one.
+
+[Unit]
+Description=PrivacyFence daemon (privilege-separated)
+Documentation=https://github.com/privacyfence/privacyfence/issues/428
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=__DAEMON_EXECUTABLE__
+
+# The whole point of this file. Both are the dedicated system account
+# scripts/linux_privilege_separation.sh creates; Group= is also the group the
+# installing human is added to, which is what lets the companion and the
+# daemon still reach each other's sockets under handoff/ while everything
+# else stays 0700.
+User=__SERVICE_ACCOUNT__
+Group=__SERVICE_GROUP__
+
+WorkingDirectory=__SYSTEM_ROOT__
+
+# The daemon resolves its own paths from the marker file inside this root
+# (privilege_separation.system_root()), so nothing here needs to pass it a
+# data directory. What it does need is a HOME that exists: the service
+# account has no home of its own, and several libraries in the dependency
+# tree probe $HOME on import.
+Environment=HOME=__SYSTEM_ROOT__
+
+# Mirrors the LaunchDaemon's KeepAlive/SuccessfulExit=false and the Windows
+# task's RestartOnFailure (tests/windows_task_contract.py): restart on a
+# crash, not on a clean exit -- so `systemctl stop`, and the companion's own
+# Quit action over the control channel, both actually stop it.
+Restart=on-failure
+RestartSec=5
+
+# Cheap, uncontroversial hardening on top of the uid split this unit exists
+# for -- none of it is what #428 Phase 4 claims, and none of it is load-
+# bearing for that claim. Deliberately stopping short of ProtectHome= and
+# ProtectSystem=strict: the daemon reads a human's files through connectors
+# by design, and a StateDirectory= would fight the installer for ownership
+# of a root it has already provisioned.
+#
+# PrivateTmp= is deliberately NOT here, and must not be added. The control
+# channel falls back to a short socket name in the system temp directory when
+# the preferred path would overflow AF_UNIX's sun_path (web/
+# control_channel.py's socket_path_under()/companion_socket_path_under()).
+# /var/lib/privacyfence/handoff/control.sock is nowhere near that limit, so
+# the fallback should never fire here -- but if it ever did, a private /tmp
+# namespace would put the daemon's socket somewhere the companion, running in
+# the user's session, cannot see it, and the failure would look like "the
+# companion can't reach the daemon" rather than like a unit-file setting.
+# That is the one /tmp use in this codebase, and it is a cross-account
+# rendezvous, which is exactly what PrivateTmp= exists to prevent.
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+# umask 0007, not systemd's 0022 default: every file the daemon creates
+# under handoff/ has to stay group-readable for the human's own session (see
+# privilege_separation.HANDOFF_FILE_MODE_SEPARATED), and nothing it creates
+# anywhere should be world-readable. The explicit modes in paths.py and
+# secure_files.py are what actually decide each file; this only makes the
+# default agree with them rather than quietly widening one that slips
+# through.
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

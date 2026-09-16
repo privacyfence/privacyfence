@@ -10,8 +10,9 @@ that's a different convention rather than the same dotfile name reused
 under ``%USERPROFILE%``.
 
 #428 Phase 4 adds a third answer on top of those two: an install that has
-opted into privilege separation (macOS only so far) keeps everything under a
-system root owned by a dedicated service account instead, with a small
+opted into privilege separation (macOS and Linux; Windows is still to come)
+keeps everything under a system root owned by a dedicated service account
+instead, with a small
 ``handoff_dir()`` the logged-in user's own session can still reach. See
 privilege_separation.py for the layout and for what that boundary does and
 does not claim.
@@ -134,8 +135,9 @@ def data_dir() -> Path:
     see that function's own docstring.)
 
     #428 Phase 4: on an install that has opted into privilege separation
-    (macOS only today -- ``scripts/macos_privilege_separation.sh``), every
-    branch below is bypassed for the service-owned system root instead. A
+    (``scripts/{macos,linux}_privilege_separation.sh``; Windows is still to
+    come), every branch below is bypassed for the service-owned system root
+    instead. A
     service account cannot sensibly own a directory inside a human's home,
     so the whole data directory moves rather than just the authority subtree
     -- which is also what makes the migration carry live connector OAuth

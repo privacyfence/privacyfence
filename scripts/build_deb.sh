@@ -196,6 +196,19 @@ install -m 0644 resources/linux/privacyfence.desktop "${STAGE}/etc/xdg/autostart
 install -m 0755 resources/linux/privacyfence-companion-wrapper "${STAGE}/usr/bin/privacyfence-companion"
 install -m 0644 resources/linux/privacyfence-companion.desktop \
   "${STAGE}/usr/share/applications/privacyfence-companion.desktop"
+# #428 Phase 4 (B5b): the opt-in privilege-separation tool and the two templates it renders.
+# /usr/sbin, not /usr/bin -- it refuses to run without root, and /usr/sbin is on root's PATH
+# rather than an ordinary user's. Named without the .sh suffix for the same reason every other
+# command here is: what a person types is a command, not a file. The templates travel with it
+# because the script needs them at `enable` time and there is no source checkout on a packaged
+# install (the script tries the checkout layout first, then this one -- see its own comment).
+mkdir -p "${STAGE}/usr/sbin" "${STAGE}/usr/share/privacyfence/installer/linux"
+install -m 0755 scripts/linux_privilege_separation.sh \
+  "${STAGE}/usr/sbin/privacyfence-privilege-separation"
+install -m 0644 installer/linux/privacyfence-daemon.service.tmpl \
+  "${STAGE}/usr/share/privacyfence/installer/linux/privacyfence-daemon.service.tmpl"
+install -m 0644 installer/linux/privacyfence-companion.desktop.tmpl \
+  "${STAGE}/usr/share/privacyfence/installer/linux/privacyfence-companion.desktop.tmpl"
 install -m 0644 src/privacyfence/resources/icon_512.png "${STAGE}/usr/share/icons/hicolor/512x512/apps/privacyfence.png"
 install -m 0644 src/privacyfence/resources/icon_64.png "${STAGE}/usr/share/icons/hicolor/64x64/apps/privacyfence.png"
 install -m 0644 src/privacyfence/resources/icon_32.png "${STAGE}/usr/share/icons/hicolor/32x32/apps/privacyfence.png"

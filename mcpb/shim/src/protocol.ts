@@ -22,10 +22,10 @@
  * per-user data dir, matching paths.py's bundled/installed branch.
  *
  * #428 Phase 4 adds one more branch, and it is the reason these two paths go
- * through ``handoffDir()`` rather than ``dataDir()`` directly: on a macOS
- * install that has opted into privilege separation, the daemon runs as its
- * own account and its data directory moves to a system location that account
- * owns. The two files this shim reads are exactly the two that stay
+ * through ``handoffDir()`` rather than ``dataDir()`` directly: on a macOS or
+ * Linux install that has opted into privilege separation, the daemon runs as
+ * its own account and its data directory moves to a system location that
+ * account owns. The two files this shim reads are exactly the two that stay
  * reachable from the user's session, in ``<system root>/handoff``. See
  * src/privacyfence/privilege_separation.py -- this is a port of its marker
  * discovery, deliberately a small and permissive one: anything unreadable,
@@ -58,19 +58,31 @@ export function dataDir(): string {
   return process.platform === "win32" ? windowsDataDir() : path.join(os.homedir(), ".privacyfence");
 }
 
-/** The marker file scripts/macos_privilege_separation.sh writes, or null on
- * an install (or a platform) that has no privilege separation. Mirrors
- * privilege_separation.separation(): same default root, same
+/** Each platform's default separated root, keyed exactly like
+ * privilege_separation.PLATFORM_LAYOUTS -- a platform absent from here has
+ * no #428 Phase 4 installer yet (Windows, B5c), so nothing can have written
+ * a marker for it and this must not go looking for one.
+ *
+ * Exported for tests on both sides of that contract: this file's own, and
+ * tests/unit/test_privilege_separation.py, which reads this literal back and
+ * asserts it against the Python constants. A drift here does not fail
+ * loudly -- it makes the shim look for mcp_url in a directory no installer
+ * provisioned, which presents as "daemon not running" against a daemon that
+ * is running perfectly well. */
+export const SYSTEM_ROOTS: Record<string, string> = {
+  darwin: "/Library/Application Support/PrivacyFence",
+  linux: "/var/lib/privacyfence",
+};
+
+/** The marker file scripts/{macos,linux}_privilege_separation.sh writes, or
+ * null on an install (or a platform) that has no privilege separation.
+ * Mirrors privilege_separation.separation(): same default roots, same
  * PRIVACYFENCE_SYSTEM_ROOT override, same version and platform checks.
  * Exported only for tests, which need to point it at a temp directory. */
 export function privilegeSeparationRoot(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = env.PRIVACYFENCE_SYSTEM_ROOT;
   const root =
-    override && path.isAbsolute(override)
-      ? override
-      : process.platform === "darwin"
-        ? "/Library/Application Support/PrivacyFence"
-        : null;
+    override && path.isAbsolute(override) ? override : (SYSTEM_ROOTS[process.platform] ?? null);
   if (!root) return null;
   let marker: { version?: unknown; platform?: unknown };
   try {

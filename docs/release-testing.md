@@ -26,6 +26,18 @@ Run only checks that automation cannot judge reliably:
   run `… disable` and confirm the previous layout is back with connector tokens intact. No CI job can
   cover any of this — it needs root, a real system account and a real login session — so this check
   is its only coverage; see `platform-support.md`'s "Known open items";
+- on Linux specifically, the same check against the same set of changes, in that platform's own
+  terms: on a real desktop Ubuntu, run `sudo privacyfence-privilege-separation enable`, confirm
+  `… status` reports a clean layout after a logout/login, confirm the daemon is running under
+  `privacyfence` (`systemctl show -p User privacyfence-daemon.service`, `ps -o user= -p …`) and that
+  your own account genuinely cannot read `/var/lib/privacyfence/authority`, confirm the Applications
+  menu entry opens `/approvals` and a real MCP client still reaches `/mcp`, then run `… disable` and
+  confirm the previous layout is back with connector tokens intact. **Plus the one thing macOS's
+  check doesn't have to cover: complete a real connector OAuth flow (Slack, Salesforce or
+  Atlassian) while separated.** A daemon with no desktop session cannot open a browser itself, so
+  that flow goes through the `--serve` companion the XDG autostart entry starts — and if that entry
+  didn't take, the daemon comes up looking perfectly healthy while connector authentication
+  silently has no way to reach you;
 - perform focused exploratory connector QA using [`connector-qa-testing.md`](connector-qa-testing.md) for a new connector, a major connector rewrite, or an unexplained provider regression.
 
 A signed Windows release specifically must not ship without the Windows-specific bullet above having actually been run against that release build — this is the human QA pass [privacyfence/privacyfence#121](https://github.com/privacyfence/privacyfence/issues/121) is gated on closing until.

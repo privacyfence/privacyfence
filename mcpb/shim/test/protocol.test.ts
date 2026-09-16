@@ -9,6 +9,7 @@ import {
   privilegeSeparationRoot,
   readMcpToken,
   readMcpUrl,
+  SYSTEM_ROOTS,
   windowsDataDir,
 } from "../src/protocol.js";
 
@@ -155,16 +156,40 @@ describe("privilegeSeparationRoot / handoffDir (#428 Phase 4)", () => {
   });
 
   it("ignores a relative PRIVACYFENCE_SYSTEM_ROOT on a platform with no default", () => {
-    withPlatform("linux", () => {
+    withPlatform("win32", () => {
       assert.equal(privilegeSeparationRoot({ PRIVACYFENCE_SYSTEM_ROOT: "relative/path" }), null);
     });
   });
 
   it("looks for no marker at all on a platform #428 P4 has not shipped for", () => {
-    // B5b/B5c add Linux and Windows; until then there is no installer that
-    // could have written one there.
-    withPlatform("linux", () => {
+    // B5c adds Windows; until then there is no installer that could have
+    // written one there.
+    withPlatform("win32", () => {
       assert.equal(privilegeSeparationRoot({}), null);
     });
+  });
+
+  it("knows each shipped platform's own default root (#428 P4 B5a/B5b)", () => {
+    // The roots themselves, not just the marker logic: this is the shim's
+    // half of the contract with privilege_separation.PLATFORM_LAYOUTS, whose
+    // own test reads this same table back from source and asserts the two
+    // agree. Getting one wrong means the shim looks for mcp_url in a
+    // directory no installer provisioned, which presents as "daemon not
+    // running" against a daemon that is running fine.
+    assert.deepEqual(SYSTEM_ROOTS, {
+      darwin: "/Library/Application Support/PrivacyFence",
+      linux: "/var/lib/privacyfence",
+    });
+  });
+
+  it("resolves the handoff directory on every platform that has a root", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      withPlatform(platform, () => {
+        withMarker(validMarker(platform), (root, env) => {
+          assert.equal(privilegeSeparationRoot(env), root);
+          assert.equal(handoffDir(env), path.join(root, "handoff"));
+        });
+      });
+    }
   });
 });

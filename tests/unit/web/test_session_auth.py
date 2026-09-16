@@ -336,3 +336,23 @@ class TestUnauthorizedHtml:
         assert "NamedPipeClientStream" in body
         assert "PrivacyFence-Control-" in body
         assert "nc -U" not in body
+
+    def test_companion_sentence_follows_the_platform_not_just_the_marker(self, monkeypatch):
+        # #428 Phase 4 changed this sentence, and B5b made it platform-
+        # dependent. On a separated macOS/Windows install a tray item really
+        # is started for the reader at login. On Linux what a separated
+        # install autostarts is the invisible `--serve` channel -- so
+        # "it should already be there" would send a locked-out reader
+        # hunting for a tray icon ADR 0002 decision 4 says this platform
+        # deliberately does not have.
+        monkeypatch.setattr(sa.privilege_separation, "is_enabled", lambda: False)
+        assert "Nothing installs or starts it automatically yet" in sa._companion_availability_sentence()
+
+        monkeypatch.setattr(sa.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(sa.privilege_separation, "current_platform", lambda: "darwin")
+        assert "runs it at login for you" in sa._companion_availability_sentence()
+
+        monkeypatch.setattr(sa.privilege_separation, "current_platform", lambda: "linux")
+        linux = sa._companion_availability_sentence()
+        assert "Applications-menu entry" in linux
+        assert "at login" not in linux

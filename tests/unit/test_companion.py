@@ -109,6 +109,39 @@ class TestMainArgvDispatch:
         monkeypatch.setattr(companion, "_run_tray", lambda: 0)
         assert companion.main([]) == 0
 
+    def test_serve_flag_runs_the_channel_on_a_non_tray_platform(self, monkeypatch):
+        # #428 Phase 4 (B5b): what the XDG autostart entry a separated Linux
+        # install writes actually runs. Without it there is no persistent
+        # process in the user's session for a service-hosted daemon to hand a
+        # connector OAuth URL to.
+        monkeypatch.setattr(companion.sys, "platform", "linux")
+        monkeypatch.setattr(companion, "_run_serve", lambda: 0)
+        assert companion.main(["--serve"]) == 0
+
+    def test_serve_reports_a_channel_that_could_not_bind(self, monkeypatch):
+        # A non-zero exit rather than a process that sits there looking
+        # started: systemd/the desktop session is the only thing watching an
+        # autostarted --serve, and "up but deaf" would present as connector
+        # OAuth silently never opening a browser.
+        class _DeafChannel:
+            address = None
+
+            def start(self) -> None:
+                pass
+
+            def stop(self) -> None:
+                pass
+
+        monkeypatch.setattr(companion, "CompanionChannelServer", _DeafChannel)
+        assert companion._run_serve(wait=lambda: None) == 1
+
+    def test_serve_and_action_together_are_refused(self, monkeypatch):
+        # One runs and exits, the other stays up forever. Silently picking
+        # either would make a mis-written .desktop Exec= look like it worked.
+        with pytest.raises(SystemExit) as exc_info:
+            companion.main(["--serve", "--action", "quit"])
+        assert exc_info.value.code == 2
+
 
 @pytest.mark.skipif(
     sys.platform == "win32",
@@ -156,6 +189,32 @@ class TestCompanionEndToEnd:
             assert called == [True]
         finally:
             server.stop()
+
+    def test_serve_is_that_same_channel_and_nothing_else(self, tmp_path, monkeypatch):
+        """#428 Phase 4 (B5b): `privacyfence-companion --serve` run against a
+        real daemon-side caller. This is the whole of what a separated Linux
+        install autostarts -- no tray, no menu -- and the thing it has to
+        deliver is precisely the relay the previous test exercises, so assert
+        it through the same path rather than by inspecting the server object.
+
+        ``wait`` is the injectable seam ``_run_serve`` grows for exactly this:
+        a real run blocks on an Event nothing ever sets, so the test supplies
+        the body that runs while the channel is up."""
+        from privacyfence import oauth_loopback, paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        opened = []
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: opened.append(url) or True)
+
+        def while_serving() -> None:
+            assert oauth_loopback._default_open_browser("https://example.com/callback") is True
+
+        assert companion._run_serve(wait=while_serving) == 0
+        assert opened == ["https://example.com/callback"]
+        # And tore the socket back down on the way out, rather than leaving a
+        # stale node for the next login's autostart to trip over.
+        assert not cc.companion_socket_path().exists()
 
     def test_oauth_loopback_relays_through_a_real_companion_channel(self, tmp_path, monkeypatch):
         """The other direction: oauth_loopback.py's default opener asking a

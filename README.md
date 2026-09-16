@@ -269,12 +269,12 @@ warnings, no manual quarantine step. Pre-release (alpha/beta/rc) builds might no
 signing/notarization credential availability at build time. Full installation details are in
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
 
-**Optional, macOS only:** by default PrivacyFence's daemon runs as you — and so does the AI client
+**Optional:** by default PrivacyFence's daemon runs as you — and so does the AI client
 it governs, which is why that client can read and rewrite the policy deciding what it's allowed to
 do. `sudo ./scripts/macos_privilege_separation.sh enable` moves the daemon to an account of its
 own, which takes the policy, the audit key and the connector credentials out of its reach, and
 starts a menu-bar companion so you still have a way in. Opt-in, reversible, and worth reading
-[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-opt-in)
+[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-and-linux-opt-in)
 before you run it — the migration moves live connector tokens.
 
 ### Install on Windows
@@ -337,6 +337,15 @@ package is built.
 Prefer a bare `pip`/`pipx install privacyfence` plus the repo-root `privacyfence.service`
 (`--user` systemd unit) instead? That path works too — see the same
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging) section.
+
+**Optional:** by default PrivacyFence's daemon runs as you — and so does the AI client it governs,
+which is why that client can read and rewrite the policy deciding what it's allowed to do.
+`sudo privacyfence-privilege-separation enable` (installed by the `.deb`; from a source checkout
+it's `sudo ./scripts/linux_privilege_separation.sh enable`) moves the daemon to a `privacyfence`
+system account of its own — a system systemd unit in place of the autostart entry — which takes the policy,
+the audit key and the connector credentials out of its reach. Opt-in, reversible, and worth reading
+[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-and-linux-opt-in)
+before you run it — the migration moves live connector tokens.
 
 ### Run from source
 
