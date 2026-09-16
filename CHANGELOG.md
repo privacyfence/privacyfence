@@ -8,8 +8,11 @@ HOW TO USE THIS FILE
    two branches in flight would both claim the same next version, which is the exact failure
    CLAUDE.md records at commit d929510 ("Revert version bump -- will release together with other
    pending CRs") from the era when versions were hand-bumped in two files. Only the PR that cuts
-   a release renames `## [Unreleased]` to `## [X.Y.Z] -- YYYY-MM-DD`, adds a fresh empty
-   `## [Unreleased]` above it, and updates the two link definitions at the bottom.
+   a release turns `## [Unreleased]` into `## [X.Y.Z] -- YYYY-MM-DD`, adds a fresh empty
+   `## [Unreleased]` above it, and updates the two link definitions at the bottom. If a section for
+   that version already exists (4.0.0's was opened early), MERGE `[Unreleased]`'s entries into it
+   and fix its date -- renaming the heading would create a second one, and
+   scripts/changelog_section.py refuses to render a version that has two.
 
 2. This file is NEVER a version source. setuptools_scm derives the version from the git tag and
    remains the only one -- see CLAUDE.md's "Releasing" section. Nothing may parse this file to
@@ -31,6 +34,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Security
+
+- `docs/security-and-compliance.md` now states the local-mode trust boundary explicitly: it is the
+  operating-system user account, so a process running as the signed-in user — including an AI client
+  with shell access, which is the normal local-mode install — can mint a session and release a
+  pending approval without a browser. The CSRF, same-origin, TTL and expiry controls on that path are
+  defenses against a hostile web page and against leaked credentials, not against local code
+  execution, and the document previously left that easy to read more broadly than it holds. Nothing
+  about the implementation changed; this corrects what is claimed for it, and names the work that
+  closes the gap (issues #426, #427, #428). Org mode is unaffected — its daemon runs on a server the
+  client has no loopback access to.
 
 ### Added
 
