@@ -260,6 +260,11 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
                 # third-party exception carrying a token or auth code.
                 logger.info("Tool call %s failed: %s", name, exc)
                 return mcp_tools.error_result(public_message(exc))
+        if name == mcp_tools.GET_SIGN_IN_LINK_TOOL.name:
+            # This tool's whole point is handing a human a link to click --
+            # the generic JSON-dump text every other meta tool gets isn't
+            # clickable in most clients, so it gets its own result shape.
+            return mcp_tools.sign_in_link_result(result)
         return mcp_tools.to_call_tool_result(result)
 
     return server

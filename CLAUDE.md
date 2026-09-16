@@ -74,12 +74,22 @@ every build's artifacts to the release, see "Packaged-artifact release gating" b
 `softprops/action-gh-release` as `body_path:` in that same single call that attaches the files.
 
 That makes the notes a pull-request deliverable rather than a tag-day one, and it puts one
-requirement on the PR that cuts a release: **rename `CHANGELOG.md`'s `## [Unreleased]` heading to
-`## [X.Y.Z] — YYYY-MM-DD`, add a fresh empty `## [Unreleased]` above it, and update the two link
-definitions at the bottom of the file — before tagging.** A stable tag with no matching section
-fails the release build at the render step, which is deliberate: `action-gh-release` silently keeps
-the release's existing body when `body_path` can't be read, so failing loudly is the only way not
-to ship the auto-generated pull-request wall by accident.
+requirement on the PR that cuts a release: **`CHANGELOG.md` must end up with exactly one
+`## [X.Y.Z] — YYYY-MM-DD` heading for the version being tagged, a fresh empty `## [Unreleased]`
+above it, and the two link definitions at the bottom updated — before tagging.**
+
+Usually that means renaming `## [Unreleased]`. **Check first whether a section for that version
+already exists**, because renaming on top of one produces a *second* `## [X.Y.Z]` rather than the
+first: 4.0.0's section was opened early, while the changelog was being written, so its release PR
+must merge `[Unreleased]`'s entries into the existing `## [4.0.0]` section and correct its date
+instead of renaming anything.
+
+A stable tag with no matching section fails the release build at the render step, which is
+deliberate: `action-gh-release` silently keeps the release's existing body when `body_path` can't be
+read, so failing loudly is the only way not to ship the auto-generated pull-request wall by
+accident. A *duplicated* section fails the same way and for the same reason — before that guard
+existed, `changelog_section.py` matched the first heading and stopped at the next `##`, emitting
+whichever half came first, dropping the other, and exiting 0.
 
 Feature branches add under `## [Unreleased]` and never open a concrete version heading — that is
 the same `d929510` failure mode described above, in a different file.

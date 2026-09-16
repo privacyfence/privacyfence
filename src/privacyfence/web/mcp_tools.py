@@ -28,6 +28,7 @@ from typing import Any
 from mcp import types
 
 from ..connector import ToolSpec
+from .session_auth import BOOTSTRAP_TTL_SECONDS
 
 # Same rationale as bridge/src/tools.ts's UNIFORM_READ_ONLY_ANNOTATIONS: MCP
 # tool annotations are UI hints, not a security boundary (the spec says so
@@ -99,6 +100,29 @@ def to_call_tool_result(value: Any) -> types.CallToolResult:
     if isinstance(value, dict):
         return types.CallToolResult(content=content, structuredContent=value)
     return types.CallToolResult(content=content)
+
+
+def sign_in_link_result(value: dict[str, str]) -> types.CallToolResult:
+    """privacyfence_get_sign_in_link's own result shape -- everything else
+    goes through the generic ``to_call_tool_result`` above, whose text
+    content is a raw ``json.dumps({"url": ...})`` blob a human has to pick
+    the link out of by hand. This tool exists specifically to hand a human a
+    link to click, so its text content is a single markdown link instead:
+    any client that renders tool text as markdown (most chat clients do)
+    shows it as something clickable rather than JSON to copy-paste from. The
+    link text itself names the expiry (``BootstrapStore``'s TTL, session_auth.py)
+    rather than a second, separate sentence -- one string a human can still
+    act on correctly if only the link text survives into a screenshot or a
+    shared transcript, instead of a bare URL with no context once separated
+    from an explanation next to it. ``structuredContent`` is unchanged --
+    still the plain ``{"url": ...}`` dict, for a client that reads that
+    instead of the text."""
+    url = value["url"]
+    minutes = BOOTSTRAP_TTL_SECONDS // 60
+    text = f"[Sign in to PrivacyFence]({url}) — one-time link, expires in {minutes} minutes"
+    return types.CallToolResult(
+        content=[types.TextContent(type="text", text=text)], structuredContent=value,
+    )
 
 
 def error_result(message: str) -> types.CallToolResult:

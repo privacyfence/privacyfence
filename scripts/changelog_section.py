@@ -2,11 +2,13 @@
 """Print one version's section out of CHANGELOG.md.
 
 This is what makes the GitHub Release body and the changelog the same text. `.github/workflows/
-build.yml`'s four "Attach release assets (stable only)" steps each run this script and hand the
-result to `softprops/action-gh-release` as `body_path:`, so the notes are written once, reviewed
-in the pull request that writes them, and tag day involves no writing at all. Before this, the
-release body was whatever GitHub's "generate release notes" button produced -- a list of every
-merged pull request, which for 4.0.0 would have been about 127 lines nobody reads.
+build.yml`'s `finalize-release` job runs this script once -- after `needs:` has proven every build
+job succeeded -- and hands the result to `softprops/action-gh-release` as `body_path:` in the same
+call that attaches the files, so the notes are written once, reviewed in the pull request that
+writes them, and tag day involves no writing at all. (Through privacyfence/privacyfence#373 this
+ran four times, once per attaching job, each rendering identical text.) Before this, the release
+body was whatever GitHub's "generate release notes" button produced -- a list of every merged pull
+request, which for 4.0.0 would have been about 127 lines nobody reads.
 
 Direction of the dependency matters: this reads a version *out of* the changelog, it never
 determines one. setuptools_scm remains the only version source (see this repo's CLAUDE.md
@@ -23,6 +25,14 @@ nobody wrote should fail the release build loudly. The alternative is worse than
 action-gh-release silently falls back to the release's existing body when `body_path` cannot be
 read, so a missing section would otherwise ship the auto-generated pull-request wall this script
 exists to replace.
+
+It exits non-zero on a *duplicated* section for the same reason, and that case is the sneakier of
+the two. CLAUDE.md's release step says to rename `## [Unreleased]` to `## [X.Y.Z] -- YYYY-MM-DD`,
+which is right whenever no such heading exists yet -- but 4.0.0's section was opened early, while
+the changelog was being written, so following that step literally would have produced a second
+`## [4.0.0]`. Matching the first heading and stopping at the next `##` then emits whichever half
+came first and silently drops the other, with exit code 0: a green build shipping half the notes.
+The loud failure the missing-section case already gets is what this deserves too.
 
 Pre-release tags (4.0.0a17 and friends) intentionally have no section of their own -- per Keep a
 Changelog they are folded into the version they lead to -- which is why the workflow only runs
@@ -101,20 +111,29 @@ def known_versions(text: str) -> list[str]:
 def section(text: str, version: str) -> str:
     """The body of ``version``'s section, without its own heading.
 
-    Raises ``LookupError`` if there is no such section. Surrounding blank lines are stripped so the
-    result is the release body exactly as it should render, with no leading gap under the title.
+    Raises ``LookupError`` if there is no such section, if there is more than one (see this
+    module's docstring for why that is a real and non-obvious failure), or if the section is empty.
+    Surrounding blank lines are stripped so the result is the release body exactly as it should
+    render, with no leading gap under the title.
     """
     wanted = _normalize(version)
     lines = _content_lines(text)
 
-    start: int | None = None
-    for index, (line, is_heading_line) in enumerate(lines):
-        match = _VERSION_HEADING.match(line) if is_heading_line else None
-        if match and _normalize(match.group(1)) == wanted:
-            start = index + 1  # the heading itself is the release title on GitHub; don't repeat it
-            break
-    if start is None:
+    headings = [
+        index
+        for index, (line, is_heading_line) in enumerate(lines)
+        if is_heading_line
+        and (match := _VERSION_HEADING.match(line))
+        and _normalize(match.group(1)) == wanted
+    ]
+    if not headings:
         raise LookupError(f"CHANGELOG.md has no section for {version}")
+    if len(headings) > 1:
+        raise LookupError(
+            f"CHANGELOG.md has {len(headings)} headings for {version}; only the first would be "
+            f"rendered and the rest silently dropped. Merge them into one section."
+        )
+    start = headings[0] + 1  # the heading itself is the release title on GitHub; don't repeat it
 
     end = len(lines)
     for index in range(start, len(lines)):
