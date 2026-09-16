@@ -2346,7 +2346,7 @@ class TestDownloadFile:
             "id": "f1", "name": "f.bin", "mimeType": "application/octet-stream",
         }
         client = make_client(service)
-        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
+        monkeypatch.setattr(client, "_load_credentials", MagicMock)
 
         fake_session = MagicMock()
         fake_session.get.return_value = _FakeStreamResponse([b"data"])
