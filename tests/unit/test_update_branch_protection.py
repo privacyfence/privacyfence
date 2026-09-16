@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "update_branch_protection.py"
 _spec = importlib.util.spec_from_file_location("update_branch_protection", _SCRIPT_PATH)
@@ -353,9 +354,25 @@ class TestRequiredChecksList:
     def test_matches_the_per_pr_gating_jobs_in_tests_yml(self):
         """A rename in tests.yml that doesn't reach this list silently stops gating that job --
         the exact drift this script exists to prevent, so it is asserted rather than trusted."""
-        workflow = (_SCRIPT_PATH.parents[1] / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
+        workflow_path = _SCRIPT_PATH.parents[1] / ".github" / "workflows" / "tests.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
         for job in ("test", "platform-windows", "platform-macos", "static-analysis", "org-mode-smoke"):
             assert f"\n  {job}:" in workflow, f"{job} is required but no longer a job in tests.yml"
-        assert "python-version: ['3.11', '3.12']" in workflow, (
-            "the test-python-compat matrix changed -- update the two 'Test (Python X, core suite)' entries"
+
+        # test-python-compat is a matrix, so it reports one check per Python version rather than
+        # one per job -- each leg needs its own entry in the list above. Derived from the parsed
+        # matrix rather than asserted against a hardcoded version list: a literal here would have
+        # to be hand-edited on every matrix change too, which is one more place to forget, and it
+        # never actually proved the two sides *correspond* -- only that each looked as expected
+        # on the day it was written.
+        matrix_versions = yaml.safe_load(workflow)["jobs"]["test-python-compat"]["strategy"]["matrix"][
+            "python-version"
+        ]
+        assert matrix_versions, "test-python-compat has no python-version matrix any more"
+        expected = {f"Test (Python {version}, core suite)" for version in matrix_versions}
+        actual = {check for check in ubp.REQUIRED_STATUS_CHECKS if check.startswith("Test (Python ")}
+        assert actual == expected, (
+            "the test-python-compat matrix and REQUIRED_STATUS_CHECKS disagree -- every matrix leg "
+            "reports as its own GitHub check and must be listed, and a listed check that no longer "
+            "runs never reports at all, which blocks every merge"
         )
