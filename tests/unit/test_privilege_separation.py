@@ -497,7 +497,11 @@ class TestInstallerContract:
         assert self._assign("SERVICE_GROUP") == privilege_separation.SERVICE_GROUP_NAME
 
     def test_system_root_matches(self):
-        assert self._assign("SYSTEM_ROOT") == str(privilege_separation.MACOS_SYSTEM_ROOT)
+        # as_posix(), not str(): this file is collected on Windows too, where
+        # Path is a WindowsPath and stringifies the very same constant with
+        # backslashes. The script's value is a macOS path by nature, so the
+        # POSIX spelling is the one both sides actually mean.
+        assert self._assign("SYSTEM_ROOT") == privilege_separation.MACOS_SYSTEM_ROOT.as_posix()
 
     def test_marker_matches(self):
         assert self._assign("MARKER_NAME") == privilege_separation.MARKER_FILE_NAME
