@@ -104,8 +104,8 @@ what is being built.
 
 ### Packaged-artifact release gating
 
-The now-removed `automated-test-strategy-plan.md` Phase 6.4: every published DMG/installer/`.deb` is started
-and exercised, automatically, before it (or anything else from the same tag) actually ships.
+Every published DMG/installer/`.deb` is started and exercised, automatically, before it (or anything
+else from the same tag) actually ships.
 
 Within `build.yml`, this needs no cross-workflow trickery — each of the `build` (macOS),
 `build-windows`, and `build-deb` jobs runs its own packaged-artifact test

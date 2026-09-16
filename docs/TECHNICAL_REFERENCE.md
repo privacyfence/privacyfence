@@ -1064,9 +1064,8 @@ than ERROR/`1`, so Task Scheduler logs a clean success on every ordinary tick. `
 `<StopIfGoingOnBatteries>` are both set to `false`, inverting Task Scheduler's own defaults: left at
 the defaults, a laptop on battery power would not start PrivacyFence at sign-in and would stop it
 when unplugged — a privacy gate that quietly isn't running, with the MCP client simply finding no
-daemon. This closes
-The now-removed `automated-test-strategy-plan.md` Phase 13, including its
-crash-restart half — measured, not assumed, on a real `windows-latest` runner: killing the
+daemon. This closes the crash-restart gap in Windows autostart — measured, not assumed, on a real
+`windows-latest` runner: killing the
 Scheduler-started daemon produces a new pid, under the same signed-in account, before the
 `<TimeTrigger>`'s own next tick would otherwise be due. See
 [`platform-support.md`](platform-support.md)'s "Known open items" for this mechanism's current

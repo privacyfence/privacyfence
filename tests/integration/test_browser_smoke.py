@@ -170,12 +170,6 @@ def page(context):
     pg.close()
 
 
-# Phase 4 item 4.5 (the now-removed automated-test-strategy-plan.md): "systematic
-# failure-artifact capture (screenshot/console/DOM/daemon log)" -- checked
-# against what this module and .github/workflows/tests.yml's own Playwright
-# step already had before this landed (neither did anything beyond pytest's
-# own default traceback/stdout capture), so this is new, not a duplicate of
-# an existing mechanism.
 _ARTIFACTS_DIR = Path(__file__).resolve().parents[2] / "test-results" / "browser-smoke"
 
 
@@ -572,13 +566,11 @@ class TestApprovalDecisionFlow:
 
 
 # --------------------------------------------------------------------- #
-# Approval-list behaviors beyond one Allow/Deny round trip (Phase 4 item
-# 4.1, the now-removed automated-test-strategy-plan.md) -- everything that section's
-# own "Already in this repo" bullet lists as still missing from
-# TestApprovalDecisionFlow above: the empty state on its own, "Always
-# allow"'s (result, choice) round trip, the post-decision toast surviving
-# more than one decision, live SSE refresh with several cards pending at
-# once, and double-submit idempotency.
+# Approval-list behaviors beyond one Allow/Deny round trip -- everything
+# TestApprovalDecisionFlow above doesn't already cover: the empty state on
+# its own, "Always allow"'s (result, choice) round trip, the post-decision
+# toast surviving more than one decision, live SSE refresh with several
+# cards pending at once, and double-submit idempotency.
 # --------------------------------------------------------------------- #
 
 
@@ -748,7 +740,7 @@ class TestApprovalListBehavior:
 
 
 # --------------------------------------------------------------------- #
-# PII behavior (Phase 4 item 4.2, the now-removed automated-test-strategy-plan.md):
+# PII behavior:
 # deterministic synthetic PII triggers the banner/tint on a review-gate
 # card, an unrelated operation never gets it, and the separate PII/rule
 # confirmation dialog (show_pii_confirmation_popup, dialog_window_html.py's
@@ -839,7 +831,7 @@ class TestPiiApprovalUi:
 
 
 # --------------------------------------------------------------------- #
-# Responsive layout (Phase 4 item 4.3, the now-removed automated-test-strategy-plan.md):
+# Responsive layout:
 # named viewports (phone/tablet/desktop) -- no horizontal page scroll, the
 # WIDE layout's two-column split actually stacks below approval_window_
 # html.py's own 700px breakpoint, primary actions stay reachable, and the
@@ -946,7 +938,7 @@ class TestResponsiveLayout:
 
 
 # --------------------------------------------------------------------- #
-# Light/dark mode (Phase 4 item 4.4, the now-removed automated-test-strategy-plan.md):
+# Light/dark mode:
 # structural assertions only (element presence, and that the dark-mode
 # design tokens actually took effect on a real computed style) -- not pixel
 # comparison, per that item's own text; subjective visual quality

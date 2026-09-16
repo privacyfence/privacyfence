@@ -123,7 +123,6 @@ jobs:
           .venv/bin/python scripts/qa_fixture_recorder.py --record \
             --report-file /tmp/qa-record-report.md
 
-      # 1.8 (the now-removed automated-test-strategy-plan.md Phase 1 residual work):
       # create/read/update/delete a fresh, uniquely-tagged QA object per
       # write-capable connector, on the same weekly schedule as --check
       # above. Unlike --check's drift, never continue-on-error -- a failed

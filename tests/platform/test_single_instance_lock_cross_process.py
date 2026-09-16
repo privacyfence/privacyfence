@@ -1,6 +1,5 @@
 """daemon_main's single-instance lock, proven against a genuinely separate
-OS process (the now-removed automated-test-strategy-plan.md Phase 2.3 -- "single-
-instance locking").
+OS process.
 
 tests/unit/test_daemon_main.py's own TestInstanceLock already proves the
 lock is OS-level, not just in-process bookkeeping

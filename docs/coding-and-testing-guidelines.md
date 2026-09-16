@@ -342,7 +342,7 @@ Do not use a source checkout as proof that a packaged artifact works.
 
 ## System/packaged-artifact test diagnostics
 
-New `pytest.mark.system`/`pytest.mark.packaged` tests get CI-diagnostics capture (`tests/diagnostics.py`, the now-removed `automated-test-strategy-plan.md` Phase 10) for free, without any per-test code, as long as the test's own daemon home/install directory lives under its `tmp_path` (directly or via a fixture it depends on — see `test_windows_packaged_smoke.py`'s `home = tmp_path / "home"`) and any subprocess log is named `daemon.log`, `install*.log`, or `uninstall*.log`, or is a `*.jsonl` audit log. A test that instead drives a real system-wide install (`dpkg -i`, not a `tmp_path`-scoped one) needs its own small capture call into `tests.diagnostics.failure_dir()`/`suite_name_for()` — see `test_deb_packaged_lifecycle.py`'s `_capture_installed_file_manifest` for the pattern.
+New `pytest.mark.system`/`pytest.mark.packaged` tests get CI-diagnostics capture (`tests/diagnostics.py`) for free, without any per-test code, as long as the test's own daemon home/install directory lives under its `tmp_path` (directly or via a fixture it depends on — see `test_windows_packaged_smoke.py`'s `home = tmp_path / "home"`) and any subprocess log is named `daemon.log`, `install*.log`, or `uninstall*.log`, or is a `*.jsonl` audit log. A test that instead drives a real system-wide install (`dpkg -i`, not a `tmp_path`-scoped one) needs its own small capture call into `tests.diagnostics.failure_dir()`/`suite_name_for()` — see `test_deb_packaged_lifecycle.py`'s `_capture_installed_file_manifest` for the pattern.
 
 ## Documentation
 

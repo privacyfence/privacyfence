@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Build privacyfence_<version>_<arch>.deb — a `dpkg -i`-able Linux package wrapping a
 # self-contained PyInstaller build of the daemon, the Linux equivalent of scripts/build_dmg.sh's
-# macOS DMG. See the now-removed docs/linux-local-deb-packaging-plan.md for the full design (why PyInstaller
-# instead of a "proper" python3-* dependency package, why /opt + a /usr/bin wrapper, why XDG
-# autostart instead of the repo-root --user systemd unit).
+# macOS DMG. Key design decisions (not otherwise written up in a standing doc): PyInstaller instead
+# of a "proper" python3-* dependency package, because several runtime dependencies aren't reliably
+# available as compatible Debian archive packages and this project doesn't want to maintain a
+# private APT repo just to have one; /opt/privacyfence + a thin /usr/bin/privacyfence-app wrapper,
+# per Debian policy §9.1.2 for packages that don't integrate with the system package management
+# for their internals; and an XDG autostart .desktop entry rather than the repo-root --user systemd
+# unit (that unit stays the documented path for a bare pip/pipx install), because it works the same
+# way across desktop environments and needs no per-user enablement step from a root-run postinst.
 #
 # Prerequisites (needed only on your build machine, not end-user machines):
 #   pip install -e .        # PrivacyFence itself, so VERSION below can read its installed
@@ -225,8 +230,8 @@ CHANGELOG_DATE="$(date -Ru)"
 # from its Package: stanza here: drop comment lines (not valid in a binary control file, only in
 # the source-package one dpkg-source parses) and dh substvar placeholders (nothing computes
 # ${misc:Depends} outside a real dh build -- an empty/absent Depends is exactly the "no python3-*
-# dependency requirements" property the key decision in the now-removed docs/linux-local-deb-packaging-plan.md is
-# built around), then fill in this build's Architecture/Version/Installed-Size.
+# dependency requirements" property the key design decision above (PyInstaller over a
+# python3-*-dependent package) is built around), then fill in this build's Architecture/Version/Installed-Size.
 INSTALLED_SIZE_KB=$(find "$STAGE" -mindepth 1 -maxdepth 1 ! -name DEBIAN -exec du -sk {} + | awk '{sum+=$1} END {print sum+0}')
 
 "$PYTHON" - "$ARCH" "$DEB_VERSION" "$INSTALLED_SIZE_KB" "${STAGE}/DEBIAN/control" <<'PYEOF'

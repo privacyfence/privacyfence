@@ -46,9 +46,8 @@ from privacyfence.html_to_text import html_to_markdown, html_to_text
 from privacyfence.markdown_to_html import markdown_to_html
 from privacyfence.text_extraction import extract_text
 
-# The now-removed automated-test-strategy-plan.md Phase 0: hypothesis-generated inputs
-# through pure parsing functions, no I/O -- unit per testing-policy.md's
-# seven-layer taxonomy.
+# Hypothesis-generated inputs through pure parsing functions, no I/O -- unit
+# per testing-policy.md's seven-layer taxonomy.
 pytestmark = pytest.mark.unit
 
 # A generous but bounded text strategy: arbitrary Unicode text (not just
