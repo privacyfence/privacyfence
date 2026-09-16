@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import json
 import os
-import pwd
 import re
 import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -33,6 +33,31 @@ from privacyfence.web import control_channel, mcp_auth
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = REPO_ROOT / "scripts" / "macos_privilege_separation.sh"
 TEMPLATE_DIR = REPO_ROOT / "installer" / "macos"
+
+# Applied per class, not to the whole module: the marker parsing, the path
+# resolution that follows from it and the installer/template contract are all
+# pure logic worth running on every platform -- proving, among other things,
+# #428 Phase 4's own claim that Windows behaves exactly as it did before this
+# existed. What can't run there is anything that reads a POSIX mode or a file
+# owner back off disk: Windows has neither (chmod there is the documented
+# no-op secure_files.py's own docstring describes), the same known, accepted
+# gap test_secure_files.py already skips for. It is also why B5c is a phase of
+# its own rather than a platform leg of this one -- real NTFS ACLs are net-new
+# work with no equivalent here.
+posix_permissions_only = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="reads POSIX ownership/permission bits back off disk -- Windows has none, and #428 P4's Windows phase (B5c) is NTFS ACLs rather than this",
+)
+
+
+def this_account() -> str:
+    """This process's own account name. The ``pwd`` module is imported here
+    rather than at module scope because it does not exist on Windows, where
+    this file is still collected -- every caller below sits behind
+    ``posix_permissions_only``."""
+    import pwd
+
+    return pwd.getpwuid(os.geteuid()).pw_name
 
 
 @pytest.fixture
@@ -227,6 +252,7 @@ class TestSystemRootOverride:
 
 
 class TestSeparatedPathResolution:
+    pytestmark = posix_permissions_only
     def test_data_dir_is_the_system_root(self, separated):
         assert paths.data_dir() == separated
 
@@ -313,6 +339,7 @@ class TestRuntimeIdentity:
 
 
 class TestAuditLayout:
+    pytestmark = posix_permissions_only
     def test_clean_layout_reports_nothing(self, separated, monkeypatch):
         monkeypatch.setattr(privilege_separation, "_authority_owner_problem", lambda _state: None)
 
@@ -337,11 +364,12 @@ class TestAuditLayout:
 
 
 class TestProcessIdentityHelpers:
+    pytestmark = posix_permissions_only
     def test_current_user_name_answers_this_process(self):
         # Thin, but it is what check_runtime_identity()'s whole decision rests
         # on, and the import of ``pwd`` inside it is the part that would break
         # silently on a build where it isn't available.
-        assert privilege_separation.current_user_name() == pwd.getpwuid(os.geteuid()).pw_name
+        assert privilege_separation.current_user_name() == this_account()
 
     def test_running_as_service_account_is_false_when_unseparated(self):
         privilege_separation.reset_cache()
@@ -362,6 +390,8 @@ class TestAuditLayoutBestEffort:
     of the layout), and a permission error there must not be reported as a
     layout defect or crash a startup check."""
 
+    pytestmark = posix_permissions_only
+
     def test_a_missing_directory_is_skipped_rather_than_reported(self, separated, monkeypatch):
         monkeypatch.setattr(privilege_separation, "_authority_owner_problem", lambda _state: None)
         (separated / "handoff").rmdir()
@@ -378,12 +408,8 @@ class TestAuditLayoutBestEffort:
         # The passing case for the ownership probe: pretend this process's own
         # account *is* the service account, which is what a real separated
         # install looks like from the daemon's side.
-        monkeypatch.setattr(
-            privilege_separation,
-            "SERVICE_ACCOUNT_NAME",
-            pwd.getpwuid(os.geteuid()).pw_name,
-        )
-        _write_marker(separated, service_account=pwd.getpwuid(os.geteuid()).pw_name)
+        monkeypatch.setattr(privilege_separation, "SERVICE_ACCOUNT_NAME", this_account())
+        _write_marker(separated, service_account=this_account())
 
         assert privilege_separation.audit_layout() == []
 
@@ -400,6 +426,8 @@ class TestAuditLayoutBestEffort:
 
 
 class TestHandoffWrites:
+    pytestmark = posix_permissions_only
+
     def test_write_handoff_file_is_ordinary_when_unseparated(self, monkeypatch, tmp_path):
         privilege_separation.reset_cache()
         target = tmp_path / "state" / "mcp_url"
