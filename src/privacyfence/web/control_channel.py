@@ -145,6 +145,7 @@ class ControlChannelServer:
         # None until start() has run.
         self.address: str | None = None
         self._posix_socket: socket.socket | None = None
+        self._windows_security_attributes = None
 
     def start(self) -> None:
         if paths.is_windows():
@@ -219,32 +220,48 @@ class ControlChannelServer:
 
     def _start_windows(self) -> None:
         self.address = windows_pipe_name()
-        self._thread = threading.Thread(target=self._accept_loop_windows, name="control-channel", daemon=True)
+        self._windows_security_attributes = _current_user_security_attributes()
+        # Created synchronously, on this (the caller's) thread, before the
+        # accept-loop thread even starts -- the same "start() doesn't
+        # return until the channel is actually reachable" guarantee
+        # _start_posix()'s own synchronous bind()+listen() gives for free.
+        # Without this, a client (a real one, or this class's own tests)
+        # calling CreateFile/WaitNamedPipe on ``self.address`` right after
+        # start() returns could race the background thread's first
+        # CreateNamedPipe call and find no instance there yet.
+        first_handle = self._create_windows_pipe_instance()
+        self._thread = threading.Thread(
+            target=self._accept_loop_windows, args=(first_handle,), name="control-channel", daemon=True,
+        )
         self._thread.start()
 
-    def _accept_loop_windows(self) -> None:
+    def _create_windows_pipe_instance(self):  # noqa: ANN201 -- a pywin32 PyHANDLE, no type stub
+        import win32pipe
+
+        return win32pipe.CreateNamedPipe(
+            self.address,
+            win32pipe.PIPE_ACCESS_DUPLEX,
+            win32pipe.PIPE_TYPE_MESSAGE | win32pipe.PIPE_READMODE_MESSAGE | win32pipe.PIPE_WAIT,
+            win32pipe.PIPE_UNLIMITED_INSTANCES,
+            _MAX_MESSAGE_BYTES, _MAX_MESSAGE_BYTES,
+            0,
+            self._windows_security_attributes,
+        )
+
+    def _accept_loop_windows(self, first_handle) -> None:  # noqa: ANN001 -- a pywin32 PyHANDLE, no type stub
         import pywintypes
         import win32file
         import win32pipe
         import winerror
 
-        pipe_name = self.address
-        assert pipe_name is not None  # nosec B101  # invariant narrowing, not input validation
-        security_attributes = _current_user_security_attributes()
+        handle = first_handle
         while not self._stop_event.is_set():
-            try:
-                handle = win32pipe.CreateNamedPipe(
-                    pipe_name,
-                    win32pipe.PIPE_ACCESS_DUPLEX,
-                    win32pipe.PIPE_TYPE_MESSAGE | win32pipe.PIPE_READMODE_MESSAGE | win32pipe.PIPE_WAIT,
-                    win32pipe.PIPE_UNLIMITED_INSTANCES,
-                    _MAX_MESSAGE_BYTES, _MAX_MESSAGE_BYTES,
-                    0,
-                    security_attributes,
-                )
-            except pywintypes.error:
-                logger.exception("Could not create control channel pipe instance")
-                break
+            if handle is None:
+                try:
+                    handle = self._create_windows_pipe_instance()
+                except pywintypes.error:
+                    logger.exception("Could not create control channel pipe instance")
+                    break
             try:
                 win32pipe.ConnectNamedPipe(handle, None)
             except pywintypes.error as exc:
@@ -253,6 +270,7 @@ class ControlChannelServer:
                 # rather than as a failure -- the handle is already usable.
                 if exc.winerror != winerror.ERROR_PIPE_CONNECTED:
                     win32file.CloseHandle(handle)
+                    handle = None
                     continue
             if self._stop_event.is_set():
                 # Only ever reached via _unblock_windows_accept()'s own
@@ -266,6 +284,7 @@ class ControlChannelServer:
                 with contextlib.suppress(pywintypes.error):
                     win32pipe.DisconnectNamedPipe(handle)
                 win32file.CloseHandle(handle)
+                handle = None
 
     def _serve_one_windows(self, handle) -> None:  # noqa: ANN001 -- a pywin32 PyHANDLE, no type stub
         import pywintypes

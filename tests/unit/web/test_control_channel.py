@@ -35,12 +35,22 @@ def _mint(sock_path: str, message: str = "MINT\n", *, timeout: float = 2.0) -> s
 
 
 class TestPosixSocketPath:
-    def test_lives_under_the_authority_root_by_default(self, tmp_path, monkeypatch):
+    def test_lives_under_the_authority_root_by_default(self, monkeypatch):
+        # A pure PurePosixPath, and paths.authority_dir() itself mocked
+        # rather than paths.data_dir() -- pytest's own tmp_path is already
+        # long enough on some CI runners (macOS's /private/var/folders/...
+        # prefix) to trip the sun_path-length fallback this class's other
+        # tests exercise on purpose, which would make this "short path"
+        # case flaky by host rather than by design. authority_dir() being
+        # real (secure_mkdir side effects) is also worth avoiding here,
+        # since this test only cares about the pure join.
+        from pathlib import PurePosixPath
+
         from privacyfence import paths
 
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "authority_dir", lambda: PurePosixPath("/home/alice/.privacyfence/authority"))
         path = cc.posix_socket_path()
-        assert path == tmp_path / "authority" / "control.sock"
+        assert path == PurePosixPath("/home/alice/.privacyfence/authority/control.sock")
 
     def test_falls_back_to_a_short_temp_path_when_too_long_for_af_unix(self, tmp_path, monkeypatch):
         from privacyfence import paths

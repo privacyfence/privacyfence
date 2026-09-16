@@ -425,9 +425,24 @@ class TestWebServerControlChannel:
 
         assert server.control_channel is None
 
-    def test_start_binds_the_channel_and_stop_tears_it_down(self, tmp_path, monkeypatch):
+    def _channel_exists(self, address: str) -> bool:
+        # Named pipes aren't filesystem objects the way a POSIX socket path
+        # is -- Path.exists() on Windows ends up doing a GetFileAttributes-
+        # style probe against the pipe that can itself raise WinError 231
+        # ("all pipe instances are busy") rather than cleanly returning
+        # False, since it's effectively a connection attempt racing the
+        # accept loop's own. tests.control_channel_client's
+        # windows_pipe_exists() (open-then-close, OSError caught) is the
+        # liveness check that's actually safe to make on that platform.
+        if sys.platform == "win32":
+            from tests.control_channel_client import windows_pipe_exists
+
+            return windows_pipe_exists(address)
         from pathlib import Path
 
+        return Path(address).exists()
+
+    def test_start_binds_the_channel_and_stop_tears_it_down(self, tmp_path, monkeypatch):
         from privacyfence import paths
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
@@ -435,10 +450,10 @@ class TestWebServerControlChannel:
         try:
             server.start()
             assert server.control_channel.address is not None
-            assert Path(server.control_channel.address).exists()
+            assert self._channel_exists(server.control_channel.address)
         finally:
             server.stop()
-        assert not Path(server.control_channel.address).exists()
+        assert not self._channel_exists(server.control_channel.address)
 
     def test_a_code_minted_through_the_channel_authenticates_the_real_server(self, tmp_path, monkeypatch):
         import socket
@@ -446,6 +461,7 @@ class TestWebServerControlChannel:
         import httpx
 
         from privacyfence import paths
+        from tests.control_channel_client import mint_bootstrap_code
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         # uvicorn.Config binds a fixed port at WebServer construction time,
@@ -459,14 +475,7 @@ class TestWebServerControlChannel:
         server = WebServer(WebApprovalUI(), host="127.0.0.1", port=free_port)
         server.start()
         try:
-            client_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client_sock.settimeout(2.0)
-            client_sock.connect(server.control_channel.address)
-            client_sock.sendall(b"MINT\n")
-            reply = client_sock.recv(4096).decode("utf-8")
-            client_sock.close()
-            assert reply.startswith("OK ")
-            code = reply[len("OK "):].strip()
+            code = mint_bootstrap_code(tmp_path)
 
             resp = httpx.get(
                 f"http://127.0.0.1:{free_port}/approvals", params={"bootstrap": code}, follow_redirects=False,
@@ -474,6 +483,7 @@ class TestWebServerControlChannel:
             assert "pf_session" in resp.headers.get("set-cookie", "")
         finally:
             server.stop()
+
 
 class TestBootstrapFlow:
     def _app(self):
