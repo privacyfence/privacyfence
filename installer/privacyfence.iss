@@ -116,6 +116,24 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 ; PrivacyFence is running at all.
 Filename: "{app}\{#AliasExeName}"; Description: "Launch {#AppName} now"; \
     Flags: nowait postinstall skipifsilent
+; Offer to open the bundled .mcpb right after install (privacyfence/
+; privacyfence#407) -- without this, a user has to already know the .mcpb
+; ships alongside the daemon rather than being downloaded separately, *and*
+; which of two different install directories it landed in ({autopf} vs.
+; {userpf}, depending on PrivilegesRequired=lowest's elevation outcome
+; above), before they can even start looking for it in File Explorer. Its
+; installed name matches the [Files] entry above, which copies {#McpbPath}
+; into {app} keeping the source filename -- scripts/build_installer.ps1
+; builds it as "{#AppName}-{#AppVersion}.mcpb" (ProductName-Version.mcpb),
+; so that's reconstructed here rather than threaded through as its own /D
+; value.
+; "shellexec" (not a bare Filename/CreateProcess launch) is required: a
+; .mcpb isn't something Windows can exec directly, so this needs
+; ShellExecute to dispatch it to whatever's registered to open it --
+; Claude Desktop, once it's installed and has claimed the extension.
+Filename: "{app}\{#AppName}-{#AppVersion}.mcpb"; \
+    Description: "Install {#AppName} into Claude Desktop"; \
+    Flags: postinstall shellexec skipifsilent
 
 [UninstallRun]
 ; Must remove the scheduled task -- wired into the uninstaller here, not
