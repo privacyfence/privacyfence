@@ -105,6 +105,12 @@ MODULE_FLOORS: dict[str, float] = {
     # CSRF/Origin/step-up auth for write approvals.
     "src/privacyfence/web/routes_security.py": 96.0,
     "src/privacyfence/webauthn_stepup.py": 98.0,
+    # #400: org mode's settings surface. It authorizes on Principal.is_admin
+    # and, since C3e, rewrites the install-wide privacy/PII policy for every
+    # principal -- the same class of thing as the fail-closed load path
+    # privacy_filter.py above is pinned at 100 for, just on the write side.
+    "src/privacyfence/web/org_install_policy.py": 100.0,
+    "src/privacyfence/web/routes_org_settings.py": 98.0,
 }
 
 

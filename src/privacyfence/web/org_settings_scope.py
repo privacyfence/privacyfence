@@ -21,11 +21,15 @@ checker banner, Telegram's interactive phone/2FA login, and the per-viewer
 notification-detail preference. Those never get an org-mode route, under
 either allowlist, ever.
 
-These three frozensets are that split -- a read+remove settings surface for
-`PER_PRINCIPAL_ACTIONS` is #400's own follow-on work that builds on it, not
-the routes themselves; no org-mode route module exists yet. This module's
-own test checks the split against `routes_settings._ALLOWED_ACTIONS` so a
-newly added local-mode action can't silently go unclassified.
+These three frozensets are that split. `web/routes_org_settings.py` is what
+consumes it: a read+remove surface for the per-principal half, and, since
+#400 C3e, a real editor for the privacy/PII members of the admin-only half
+(`web/org_install_policy.py`'s `SUPPORTED_ACTIONS`, a strict subset of
+`ADMIN_ONLY_ACTIONS` -- `set_log_level` and `toggle_calendar_free_busy` are
+install-wide too but aren't privacy policy, and each needs a reload path of
+its own). This module's own test checks the split against
+`routes_settings._ALLOWED_ACTIONS` so a newly added local-mode action can't
+silently go unclassified.
 
 `is_action_permitted` is the other half: `Principal.is_admin` is already
 resolved from the IdP and carried end to end (`org_identity.
