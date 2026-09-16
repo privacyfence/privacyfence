@@ -202,7 +202,7 @@ def make_http_sender(url: str, bearer_token_env: str) -> Sender:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(request, timeout=_SEND_TIMEOUT_SECONDS) as response:  # nosec B310 -- url scheme checked above
+        with urllib.request.urlopen(request, timeout=_SEND_TIMEOUT_SECONDS) as response:  # nosec B310  # url scheme checked above
             if response.status >= 300:
                 raise RuntimeError(f"audit forwarding endpoint returned HTTP {response.status}")
 
