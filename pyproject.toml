@@ -319,7 +319,7 @@ strict_equality = true
 # strings" (`web_token`, `mcp_token`, `TOKEN_URL`, ...), the OAuth `token_type="Bearer"` literal
 # read as B106, `assert`s used for internal invariant-narrowing rather than input validation
 # (B101), and defensive `except Exception: pass`/`continue` around per-line audit-log parsing
-# (B110/B112) -- each now triaged and annotated `# nosec BXXX -- <reason>` at its call site
+# (B110/B112) -- each now triaged and annotated `# nosec BXXX  # <reason>` at its call site
 # rather than suppressed here, so a *new* instance of any of these still gets flagged. With that
 # triage done, this runs blocking in CI alongside ruff (see [tool.ruff.lint] above); a real
 # finding fails the `static-analysis` job the same way a ruff violation does.
