@@ -22,7 +22,9 @@ name: Windows graphical-session autostart
 # maintainer trigger.
 on:
   push:
-    branches: [main]
+    # releases/** is protected the same as main (see CLAUDE.md) and gets the same
+    # packaging-related push trigger.
+    branches: [main, "releases/**"]
     paths:
       - 'installer/**'
       - 'scripts/build_installer.ps1'
