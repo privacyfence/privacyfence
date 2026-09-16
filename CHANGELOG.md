@@ -83,6 +83,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Every daemon log line now carries the running `privacyfence` version (e.g. `v4.0.1`, or the
+  `setuptools_scm` dev form like `v4.0.1.dev3+gabc1234` between tags) right before the log level,
+  so a log excerpt is self-describing without having to correlate it against when a build was
+  installed. `setup_logging()` in `daemon_main.py` is the one place the format string lives, so
+  every logger in the process picks this up.
 - The README's Quick start steps for all three local-mode installers (DMG, Windows, `.deb`) now
   say "ask Claude to set up PrivacyFence" instead of "ask Claude for a sign-in link" — the latter
   named a specific tool (`privacyfence_get_sign_in_link`) a user had no way to know about unless
