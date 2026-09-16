@@ -370,7 +370,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the first whenever the same client also served org-mode sign-in. The request no longer asks
   for it, and a granted scope wider than the requested one is accepted rather than refused; a
   grant *missing* a requested scope is still an error.
-
 - Org mode now rejects an `org_config.json` whose `server.issuer_url` is not an absolute `http(s)`
   URL with a hostname, naming that key, instead of starting and then answering every request with
   `Invalid Host header`. Surrounding whitespace in the value is stripped rather than silently
