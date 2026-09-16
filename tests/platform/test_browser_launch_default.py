@@ -1,6 +1,4 @@
-"""The real default browser-launch path of run_browser_oauth() (docs/
-The now-removed automated-test-strategy-plan.md Phase 2.3 -- "the browser-launch
-abstraction").
+"""The real default browser-launch path of run_browser_oauth().
 
 ``open_browser`` is deliberately injectable (oauth_loopback.py's own
 docstring, §16.2.7) so tests can simulate the provider round trip without a

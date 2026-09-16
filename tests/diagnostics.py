@@ -1,10 +1,9 @@
-"""Shared CI-diagnostics capture for system/packaged-artifact test failures
-(the now-removed automated-test-strategy-plan.md Phase 10).
+"""Shared CI-diagnostics capture for system/packaged-artifact test failures.
 
-Phase 10's objective is "make test failures diagnosable entirely from cloud
+The objective is "make test failures diagnosable entirely from cloud
 CI" -- this project is developed cloud-first, with no dedicated physical
 test machines to re-run a failing macOS/Windows/Linux packaged-artifact test
-on by hand. Every test this phase covers (``pytest.mark.packaged``,
+on by hand. Every test this covers (``pytest.mark.packaged``,
 ``pytest.mark.system``) already isolates its own state -- daemon home
 directory, install directory, audit log -- under pytest's own per-test
 ``tmp_path``, so the content worth capturing already exists on disk, at a

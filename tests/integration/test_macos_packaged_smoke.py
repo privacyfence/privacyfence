@@ -63,8 +63,7 @@ the packaged app:
    manual, per this plan's own governing rule. Runs against its own private
    copy of the bundle (``signed_app_copy``), not the one step 6 deletes --
    see that fixture's own docstring for why.
-8. **Upgrade in place** (the now-removed automated-test-strategy-plan.md Phase 6 item
-   20 -- deliberately not built in the same PR as steps 1-7): install
+8. **Upgrade in place** (deliberately not built in the same PR as steps 1-7): install
    version N, apply real state through the daemon's own MCP surface,
    replace the bundle with a synthetically-relabeled version N+1 at the
    same ``$HOME`` (step 6 already established that "installing" a new
@@ -252,8 +251,7 @@ def _wait_for_file(path: Path, proc: subprocess.Popen, log_path: Path, timeout: 
     MCP token files, ``load_or_create_token()``/``web/mcp_auth.py``) --
     these are written before the server starts accepting connections, but
     poll rather than assume either is already flushed to disk the instant
-    the socket answers. ``log_path`` (the now-removed automated-test-strategy-plan.md
-    Phase 10) is the daemon's own redirected stdout/stderr, embedded in
+    the socket answers. ``log_path`` is the daemon's own redirected stdout/stderr, embedded in
     either failure message below -- same shape
     test_windows_packaged_smoke.py's identically-named helper already
     uses, and (unlike the in-memory buffer this replaced) still readable
@@ -328,10 +326,9 @@ def _running_daemon_at(exe: Path, home: Path):
     base_url = f"http://localhost:{port}"  # WebServer.base_url's own construction, host defaults to "localhost"
 
     env = {**os.environ, "HOME": str(home)}
-    # Redirected straight to a file under `home` (docs/automated-test-
-    # strategy-plan.md Phase 10), not `subprocess.PIPE` read on a background
-    # thread -- the same daemon.log convention every other packaged/system
-    # module in this repo already uses, which is what lets Phase 10's own
+    # Redirected straight to a file under `home`, not `subprocess.PIPE` read
+    # on a background thread -- the same daemon.log convention every other
+    # packaged/system module in this repo already uses, which is what lets
     # tests/diagnostics.py find and capture it on a failing test without
     # this module needing any capture code of its own.
     log_path = home / "daemon.log"
@@ -370,9 +367,8 @@ def running_packaged_daemon(installed_app, tmp_path):
     """The primary round-trip test's own daemon: ``installed_app``'s exe, a
     fresh scratch ``$HOME`` per test. Thin wrapper around
     ``_running_daemon_at`` -- see that function's own docstring for the
-    actual mechanism. ``home`` lives under this test's own ``tmp_path``
-    (the now-removed automated-test-strategy-plan.md Phase 10), not a bare
-    ``tempfile.mkdtemp()`` this fixture used to manually ``shutil.rmtree()``
+    actual mechanism. ``home`` lives under this test's own ``tmp_path``,
+    not a bare ``tempfile.mkdtemp()`` this fixture used to manually ``shutil.rmtree()``
     on the way out -- pytest already owns ``tmp_path``'s own lifecycle
     (rotated, not deleted immediately), which is what lets a failing test's
     ``daemon.log`` still be there afterward for tests/diagnostics.py to
