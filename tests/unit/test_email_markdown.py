@@ -108,6 +108,47 @@ class TestLists:
         assert markdown_to_plain("1. one\n2. two") == "1. one\n2. two"
 
 
+class TestHeadings:
+    def test_heading_1_renders_as_large(self):
+        html = markdown_to_html("# Big Title")
+        assert html == '<p><b style="font-size:large">Big Title</b></p>'
+
+    def test_heading_2_renders_as_huge(self):
+        html = markdown_to_html("## Bigger Title")
+        assert html == '<p><b style="font-size:xx-large">Bigger Title</b></p>'
+
+    def test_heading_supports_inline_styles(self):
+        html = markdown_to_html("# **bold** heading")
+        assert html == '<p><b style="font-size:large"><b>bold</b> heading</b></p>'
+
+    def test_heading_surrounded_by_paragraphs(self):
+        html = markdown_to_html("intro\n\n# Title\n\noutro")
+        assert html == (
+            "<p>intro</p>"
+            '<p><b style="font-size:large">Title</b></p>'
+            "<p>outro</p>"
+        )
+
+    def test_consecutive_headings_stay_separate_blocks(self):
+        html = markdown_to_html("# One\n## Two")
+        assert html == (
+            '<p><b style="font-size:large">One</b></p>'
+            '<p><b style="font-size:xx-large">Two</b></p>'
+        )
+
+    def test_triple_hash_is_not_a_heading(self):
+        assert markdown_to_html("### Not a heading") == "<p>### Not a heading</p>"
+
+    def test_hash_without_space_is_not_a_heading(self):
+        assert markdown_to_html("#nope") == "<p>#nope</p>"
+
+    def test_plain_heading_renders_as_plain_line(self):
+        assert markdown_to_plain("# Title") == "Title"
+
+    def test_plain_heading_surrounded_by_paragraphs(self):
+        assert markdown_to_plain("intro\n\n# Title\n\noutro") == "intro\n\nTitle\n\noutro"
+
+
 class TestSecurityEscaping:
     def test_literal_html_tags_are_escaped(self):
         html = markdown_to_html("<script>alert(1)</script>")

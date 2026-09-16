@@ -343,6 +343,7 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
             "write": GrantCapability("Create/modify auto-accept", (
                 ("calendar.create_modify_event", "personal_calendar"),
                 ("calendar.set_visibility", "personal_calendar"),
+                ("calendar.set_color", "personal_calendar"),
             )),
         },
         resolver=_resolve_calendar,

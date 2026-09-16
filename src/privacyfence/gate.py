@@ -279,6 +279,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "drive_docs_format_content": NARROW,
     "calendar_update_event": NARROW, "calendar_create_out_of_office": NARROW,
     "calendar_set_working_location": NARROW, "calendar_set_event_visibility": NARROW,
+    "calendar_set_event_color": NARROW,
     "contacts_update": NARROW, "contacts_create": NARROW,
     "contacts_add_label": NARROW, "contacts_remove_label": NARROW,
     "jira_update_issue": NARROW, "jira_transition_issue": NARROW,

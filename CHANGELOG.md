@@ -76,6 +76,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   default, alongside "Launch PrivacyFence now"), so Claude Desktop's install prompt appears
   automatically for most users instead of requiring them to locate the file in File Explorer
   first. See issue #407.
+- Gmail draft bodies (`body_markdown` on all 6 draft tools) now support `# Heading 1`/`## Heading 2`
+  syntax, rendered as Gmail's own "Large"/"Huge" font-size compose presets (not raw `<h1>`/`<h2>`
+  tags, which render inconsistently across mail clients). See issue #414.
+- Calendar events can now be given a color. `calendar_create_event`/`calendar_update_event` accept
+  a `color` parameter, and a new `calendar_set_event_color` tool changes just that field on an
+  existing event, mirroring `calendar_set_event_visibility`. A new `calendar_list_colors` tool
+  lists Calendar's fixed color palette (id, name e.g. "Tomato", hex background/foreground) so a
+  color can be picked by name instead of a numeric id. See issue #414.
 
 ### Changed
 

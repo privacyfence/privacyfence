@@ -107,6 +107,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "calendar_create_out_of_office":  "calendar.out_of_office",
     "calendar_set_working_location":  "calendar.working_location",
     "calendar_set_event_visibility":  "calendar.set_visibility",
+    "calendar_set_event_color":       "calendar.set_color",
     "salesforce_get_record":          "salesforce.read_record",
     "salesforce_run_report":          "salesforce.run_report",
     "salesforce_search":              "salesforce.search",
@@ -220,12 +221,14 @@ TOOL_TO_GATE: dict[str, str] = {
     "calendar_get_free_busy":          "auto",
     "calendar_list_rooms":             "auto",
     "calendar_get_event_visibility":   "auto",
+    "calendar_list_colors":            "auto",
     "calendar_get_event_details":      "review",
     "calendar_create_event":           "popup",
     "calendar_update_event":           "popup",
     "calendar_create_out_of_office":   "popup",
     "calendar_set_working_location":   "popup",
     "calendar_set_event_visibility":   "popup",
+    "calendar_set_event_color":        "popup",
     # Google Contacts
     "contacts_list":                   "auto",
     "contacts_search":                 "auto",
@@ -1289,6 +1292,9 @@ WRITE_RULE_SUGGESTIONS: dict[str, WriteRuleSuggestion] = {
         "personal_calendar", lambda ctx: [ctx.args["calendar_id"]] if ctx.args.get("calendar_id") else _NO_SUGGESTION
     ),
     "calendar.set_visibility": WriteRuleSuggestion(
+        "personal_calendar", lambda ctx: [ctx.args["calendar_id"]] if ctx.args.get("calendar_id") else _NO_SUGGESTION
+    ),
+    "calendar.set_color": WriteRuleSuggestion(
         "personal_calendar", lambda ctx: [ctx.args["calendar_id"]] if ctx.args.get("calendar_id") else _NO_SUGGESTION
     ),
     # Drive/Sheets/Docs writes -- see _DRIVE_SANDBOX_WRITE_SUGGESTIONS above.

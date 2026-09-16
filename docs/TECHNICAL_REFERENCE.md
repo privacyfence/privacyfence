@@ -263,9 +263,11 @@ bound, since it isn't racing anyone's timeout.
 | `calendar_list_rooms` | read | auto | — | — (lists meeting rooms — name, email, building, floor, capacity — from a static directory IT syncs into `org_config.json` via `scripts/sync_room_directory.py`; not a live lookup, so it may be empty until IT has synced one; the Calendar connector's own OAuth client never holds Workspace admin directory access) |
 | `calendar_get_event_details` | read | review | title, time, organizer, attendee count | Description, full attendee list, conferencing link, file attachments (e.g. Gemini meeting notes/transcript) |
 | `calendar_get_event_visibility` | read | auto | — | — |
-| `calendar_create_event` | write | popup | — | Title, time, attendees, description, location, Google Meet flag, room bookings |
-| `calendar_update_event` | write | popup | — | Title, time, fields changing (old → new), Google Meet flag, room bookings |
+| `calendar_list_colors` | read | auto | — | — (lists Calendar's fixed event color palette — id, name e.g. "Tomato", hex background/foreground — via the Calendar API's own `colors().get()`) |
+| `calendar_create_event` | write | popup | — | Title, time, attendees, description, location, Google Meet flag, room bookings, color |
+| `calendar_update_event` | write | popup | — | Title, time, fields changing (old → new), Google Meet flag, room bookings, color |
 | `calendar_set_event_visibility` | write | popup | — | Event title, calendar, visibility change (old → new) |
+| `calendar_set_event_color` | write | popup | — | Event title, calendar, color change (old → new) |
 | `calendar_create_out_of_office` | write | popup | — | Title, time, fixed "auto-decline new conflicts only" note, decline message |
 | `calendar_set_working_location` | write | popup | — | Date, location (office/home), building/label if given |
 
@@ -283,6 +285,13 @@ that isn't exposed here. Working-location presence only offers "office" or "home
 property of the event is left untouched. There's no separate `calendar_create_event`/
 `calendar_update_event` visibility parameter — set it via `calendar_set_event_visibility` after
 creating or alongside updating the event.
+
+`calendar_create_event`/`calendar_update_event`'s `color` parameter and the standalone
+`calendar_set_event_color` tool (which, like `calendar_set_event_visibility`, changes only that one
+field) all accept either a numeric Calendar event color id (`"1"`-`"11"`) or a case-insensitive name
+(`"Tomato"`, `"Sage"`, ...) — see `calendar_list_colors` for the full id → name → hex mapping. Names
+are this connector's own static table (the Calendar API's `colors().get()` returns hex values per id
+but never a name), matching what Calendar's own web UI shows for each id.
 
 ### Google Contacts
 
@@ -434,7 +443,7 @@ auto-accept rule yet — Allow-once-only, like most new write tools at first cut
 
 ### The `auto` tier, across all connectors
 
-The tables above gate 41 tools `auto` — allowed to proceed with no human in the loop, but still
+The tables above gate 42 tools `auto` — allowed to proceed with no human in the loop, but still
 recorded in the audit log as `auto_accepted` (see
 [Audit integrity and forwarding](security-and-compliance.md#audit-integrity-and-forwarding): the
 `auto` gate is a logged, IT-and-user-configured exception, never a default absence of control).
@@ -456,7 +465,7 @@ tool discloses once a human does approve it.
 | Gmail | `gmail_list_messages`, `gmail_list_threads`, `gmail_list_message_attachments`, `gmail_list_filters`, `gmail_list_labels` | 5 |
 | Google Drive (incl. Sheets) | `drive_list_files`, `drive_get_file_metadata`, `drive_list_folder`, `drive_list_shared_drives`, `drive_create_blank_file`, `drive_sheets_create`, `drive_sheets_get_metadata` | 7 |
 | Slack | `slack_list_channels`, `slack_list_dms`, `slack_list_group_chats`, `slack_resolve_permalink`, `slack_refresh_user_cache`, `slack_refresh_channel_cache` | 6 |
-| Google Calendar | `calendar_list_calendars`, `calendar_list_events`, `calendar_get_free_busy`, `calendar_list_rooms`, `calendar_get_event_visibility` | 5 |
+| Google Calendar | `calendar_list_calendars`, `calendar_list_events`, `calendar_get_free_busy`, `calendar_list_rooms`, `calendar_get_event_visibility`, `calendar_list_colors` | 6 |
 | Google Contacts | `contacts_list`, `contacts_search`, `contacts_get` | 3 |
 | Telegram | `telegram_list_chats`, `telegram_refresh_chat_cache` | 2 |
 | Salesforce | `salesforce_list_reports` | 1 |
@@ -464,7 +473,7 @@ tool discloses once a human does approve it.
 | Confluence | `confluence_list_spaces`, `confluence_search`, `confluence_cql_search`, `confluence_list_pages`, `confluence_list_attachments` | 5 |
 | Google Tasks | `tasks_list_task_lists`, `tasks_list_tasks`, `tasks_get_task` | 3 |
 | Apps Script | `apps_script_list_projects` | 1 |
-| **Total** | | **41** |
+| **Total** | | **42** |
 
 A few things worth calling out explicitly about this tier as a whole, rather than tool by tool:
 
@@ -844,7 +853,8 @@ channel(s) alike.
 
 > **`personal_calendar` is grant-managed** — see [Auto-accept grants](#auto-accept-grants) →
 > `calendar.calendars`. One calendar grant's `read`/`write` capabilities cover
-> `calendar.read_event_details`, `calendar.create_modify_event`, and `calendar.set_visibility`.
+> `calendar.read_event_details`, `calendar.create_modify_event`, `calendar.set_visibility`, and
+> `calendar.set_color`.
 
 `calendar_create_out_of_office` (`calendar.out_of_office`) and `calendar_set_working_location`
 (`calendar.working_location`) each have their own operation key, but none of the rules above apply
@@ -854,12 +864,13 @@ auto-accept is the unconditional `always_allow` — there's no narrower resource
 rule to, so it's a plain yes/no rather than the organizer/calendar-scoped rules
 `calendar_create_event`/`calendar_update_event` support.
 
-`calendar_set_event_visibility` (`calendar.set_visibility`) is a write like
-`calendar_create_event`/`calendar_update_event`, so it shares `calendar.create_modify_event`'s
-rule set (`i_am_organizer`, `no_external_attendees`, `personal_calendar`) rather than getting a
-rule of its own — `non_private_event` only applies to `calendar.read_event_details`. Clicking
-**Always allow** on a "Read Calendar Event" prompt proposes `non_private_event` when the event
-isn't private and neither `i_am_organizer` nor `no_external_attendees` apply.
+`calendar_set_event_visibility` (`calendar.set_visibility`) and `calendar_set_event_color`
+(`calendar.set_color`) are writes like `calendar_create_event`/`calendar_update_event`, so both
+share `calendar.create_modify_event`'s rule set (`i_am_organizer`, `no_external_attendees`,
+`personal_calendar`) rather than getting a rule of their own — `non_private_event` only applies to
+`calendar.read_event_details`. Clicking **Always allow** on a "Read Calendar Event" prompt proposes
+`non_private_event` when the event isn't private and neither `i_am_organizer` nor
+`no_external_attendees` apply.
 
 **Salesforce**
 
