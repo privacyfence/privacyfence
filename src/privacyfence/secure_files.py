@@ -59,7 +59,7 @@ _REPLACE_RETRY_ATTEMPTS = 5
 _REPLACE_RETRY_BASE_DELAY_SECONDS = 0.02
 
 
-def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE) -> Path:
+def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE, *, foreign_owner_ok: bool = False) -> Path:
     """Create ``path`` (and any missing parents) if needed, then force its
     own permissions to ``mode``.
 
@@ -74,9 +74,23 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE) -> Path:
     A ``chmod`` failure (e.g. a filesystem that doesn't support POSIX
     permissions) is logged at ``warning`` and otherwise non-fatal -- the
     directory is still created and usable, just not provably restricted.
+
+    ``foreign_owner_ok`` is for the directories #428 Phase 4's privilege
+    separation deliberately shares between two accounts (``paths.py``'s
+    ``data_dir()`` and ``handoff_dir()`` on a separated install): there, a
+    process running as the logged-in user resolves a directory *owned by the
+    daemon's service account*, and ``chmod`` on it is guaranteed to fail with
+    ``EPERM`` every single time. Skipping the attempt when this process isn't
+    the owner keeps that from becoming a warning on every path resolution --
+    which would train a reader to ignore exactly the warnings SEC-09 added
+    this logging for. The owner's own process still re-asserts the mode, so
+    the self-healing property is unchanged; and the separated layout gets a
+    check of its own regardless, in ``privilege_separation.audit_layout()``.
     """
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
+    if foreign_owner_ok and not _is_owned_by_this_process(path):
+        return path
     try:
         path.chmod(mode)
     except OSError as exc:  # pragma: no cover -- best effort on non-POSIX
@@ -84,16 +98,40 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE) -> Path:
     return path
 
 
-def atomic_write_bytes(path: Path | str, data: bytes, *, mode: int = DEFAULT_FILE_MODE) -> None:
+def _is_owned_by_this_process(path: Path) -> bool:
+    """True when ``path``'s owning uid is this process's effective uid, and
+    on any platform where that question has no POSIX answer (Windows), where
+    treating everything as owned preserves the pre-existing behavior of
+    always attempting the ``chmod``."""
+    if os.name == "nt":  # pragma: no cover -- no POSIX ownership to compare
+        return True
+    try:
+        return path.stat().st_uid == os.geteuid()
+    except OSError:  # pragma: no cover -- best effort, same posture as the chmod below
+        return True
+
+
+def atomic_write_bytes(
+    path: Path | str, data: bytes, *, mode: int = DEFAULT_FILE_MODE, dir_mode: int = DEFAULT_DIR_MODE,
+) -> None:
     """Write ``data`` to ``path`` atomically and with ``mode`` permissions
     from the moment the file exists -- see module docstring.
 
     The containing directory is created via ``secure_mkdir`` if it doesn't
     exist yet, so callers no longer need their own
     ``os.makedirs(..., exist_ok=True)`` before calling this.
+
+    ``dir_mode`` exists because ``secure_mkdir`` re-asserts that mode on an
+    *existing* directory too, which is the right default everywhere except
+    the one directory #428 Phase 4 deliberately shares between two accounts:
+    writing ``mcp_token`` into ``paths.handoff_dir()`` with the ``0700``
+    default would silently re-tighten the ``2770`` the installer set, and
+    lock the agent out of its own credential on the next read. Callers that
+    write into such a directory pass its real mode -- see
+    ``privilege_separation.write_handoff_file()``, the only one that does.
     """
     path = Path(path)
-    secure_mkdir(path.parent)
+    secure_mkdir(path.parent, dir_mode)
     tmp_path = path.parent / f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
     try:
@@ -146,9 +184,14 @@ def _replace_with_retries(tmp_path: Path, path: Path) -> None:
 
 
 def atomic_write_text(
-    path: Path | str, text: str, *, mode: int = DEFAULT_FILE_MODE, encoding: str = "utf-8",
+    path: Path | str,
+    text: str,
+    *,
+    mode: int = DEFAULT_FILE_MODE,
+    dir_mode: int = DEFAULT_DIR_MODE,
+    encoding: str = "utf-8",
 ) -> None:
-    atomic_write_bytes(path, text.encode(encoding), mode=mode)
+    atomic_write_bytes(path, text.encode(encoding), mode=mode, dir_mode=dir_mode)
 
 
 def atomic_write_json(path: Path | str, data: Any, *, mode: int = DEFAULT_FILE_MODE, **json_kwargs: Any) -> None:

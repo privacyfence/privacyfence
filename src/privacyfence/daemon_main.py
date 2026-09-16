@@ -85,8 +85,8 @@ from typing import Any
 import portalocker
 import yaml
 
-from . import audit_forwarding, org_bundle_signing, org_mode
-from .paths import authority_dir, authority_root, data_dir, org_dir, user_dir
+from . import audit_forwarding, org_bundle_signing, org_mode, privilege_separation
+from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL_ID, current_principal
 from .app_credentials import telegram_app_credentials
@@ -506,7 +506,19 @@ def check_storage_permissions(org_mode_active: bool) -> None:
     # docstring), so at daemon startup this list often names the same
     # directory twice; no need to warn about it twice too.
     dirs = list(dict.fromkeys([data_dir(), org_dir(), user_dir()]))
-    problems = audit_directory_permissions(dirs)
+    if privilege_separation.is_enabled():
+        # #428 Phase 4 deliberately makes two of those directories looser
+        # than 0700 -- the system root is 0711 so the logged-in user can
+        # traverse to handoff_dir(), and handoff_dir() itself is 2770 so the
+        # companion and the daemon (two accounts now) can still hand each
+        # other a socket and a token. Auditing them against the flat 0700
+        # rule would report the design as a defect on every startup, and in
+        # org mode would refuse to start over it. privilege_separation's own
+        # audit_layout() checks the modes that layout actually calls for,
+        # plus the one that matters most: that authority/ is owned by the
+        # service account rather than still by the human.
+        dirs = [d for d in dirs if d not in (data_dir(), handoff_dir())]
+    problems = audit_directory_permissions(dirs) + privilege_separation.audit_layout()
     for problem in problems:
         logger.warning("SEC-09: %s", problem)
     if problems and org_mode_active:
@@ -1780,6 +1792,20 @@ def main(argv: list[str] | None = None) -> int:
     # main() is reached (the `privacyfence-app` console script, a dev run).
     ensure_std_streams()
     args = parse_args(argv)
+
+    # #428 Phase 4, before load_config() below -- which is the first thing
+    # that would read settings.yaml out of the (now service-account-owned)
+    # authority directory, and whose own first-run behavior is to seed a
+    # fresh default from the packaged example when it can't. On a separated
+    # install started as the wrong account that would look like a silent
+    # policy reset rather than a failure, so this refuses to start instead.
+    # See privilege_separation.check_runtime_identity() for the full
+    # reasoning, including why this is the one place local mode fails closed.
+    try:
+        privilege_separation.check_runtime_identity()
+    except privilege_separation.PrivilegeSeparationError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 1
 
     oauth_flag = (
         args.gmail_oauth or args.drive_oauth or args.contacts_oauth

@@ -8,6 +8,13 @@ _is_installed_package(). On POSIX that's ``~/.privacyfence``; on Windows
 it's ``%LOCALAPPDATA%\\PrivacyFence`` -- see windows_data_dir() for why
 that's a different convention rather than the same dotfile name reused
 under ``%USERPROFILE%``.
+
+#428 Phase 4 adds a third answer on top of those two: an install that has
+opted into privilege separation (macOS only so far) keeps everything under a
+system root owned by a dedicated service account instead, with a small
+``handoff_dir()`` the logged-in user's own session can still reach. See
+privilege_separation.py for the layout and for what that boundary does and
+does not claim.
 """
 from __future__ import annotations
 
@@ -19,6 +26,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import privilege_separation
 from .secure_files import secure_mkdir
 
 if TYPE_CHECKING:
@@ -124,12 +132,74 @@ def data_dir() -> Path:
     section for what this closes. (``secure_mkdir``'s ``chmod`` is a no-op
     best-effort on Windows, which has no POSIX permission bits to set --
     see that function's own docstring.)
+
+    #428 Phase 4: on an install that has opted into privilege separation
+    (macOS only today -- ``scripts/macos_privilege_separation.sh``), every
+    branch below is bypassed for the service-owned system root instead. A
+    service account cannot sensibly own a directory inside a human's home,
+    so the whole data directory moves rather than just the authority subtree
+    -- which is also what makes the migration carry live connector OAuth
+    tokens, and why it ships opt-in for a release before defaulting on. The
+    root is ``0711`` there, not ``0700``: the logged-in user has to be able
+    to traverse it to reach ``handoff_dir()``, and must not be able to list
+    anything else. See privilege_separation.py's own module docstring for
+    the full layout, and ``handoff_dir()`` below for the files that stay
+    reachable from the user's own session.
     """
+    override = privilege_separation.data_dir_override()
+    if override is not None:
+        return secure_mkdir(override, mode=privilege_separation.SYSTEM_ROOT_MODE, foreign_owner_ok=True)
     if is_bundled() or _is_installed_package():
         d = windows_data_dir() if is_windows() else Path.home() / ".privacyfence"
     else:
         d = Path(__file__).parent.parent.parent
     return secure_mkdir(d)
+
+
+def handoff_dir() -> Path:
+    """Where the files the *user's own desktop session* has to reach live:
+    the agent's ``mcp_token`` and the ``mcp_url`` the MCPB shim discovers it
+    by, the ``web_base_url``/``*_url`` discovery files a human reads, and
+    both ends of the Phase 2/3 control channels (``control.sock``,
+    ``companion.sock``).
+
+    ``data_dir()`` itself on an ordinary install -- so nothing moves, and no
+    caller behaves differently, until privilege separation is opted into.
+    On a separated install it's ``data_dir()/handoff``, group-owned by the
+    service account with the setgid bit (``2770``) and the installing human
+    added to that group, which is what lets the daemon (one account) and the
+    companion and agent (another) still hand each other a token and a socket
+    while everything else under ``data_dir()`` stays ``0700`` and unreadable
+    to them.
+
+    This directory is deliberately *not* a security boundary: ADR 0002
+    decision 6 chose to make a minted session insufficient (via #426's
+    passkey) rather than to make minting uncallable, precisely because the
+    companion and the agent share a uid and no permission bit can separate
+    them. What Phase 4 takes away from the agent is ``authority_dir()`` --
+    policy, enrolled passkeys, the audit log and its HMAC key -- and that is
+    the whole of what it claims.
+    """
+    if not privilege_separation.is_enabled():
+        return data_dir()
+    return secure_mkdir(
+        data_dir() / privilege_separation.HANDOFF_DIR_NAME,
+        mode=privilege_separation.HANDOFF_DIR_MODE,
+        foreign_owner_ok=True,
+    )
+
+
+def control_socket_dir() -> Path:
+    """Which directory ``web/control_channel.py`` binds ``control.sock`` in.
+
+    ``authority_dir()`` on an ordinary install, unchanged from Phase 2, where
+    it sits alongside the ``web_token`` file it replaced. ``handoff_dir()``
+    on a separated one, because Phase 4 makes ``authority_dir()`` ``0700``
+    under the service account and the companion -- running as the human --
+    has to be able to connect. That is not a downgrade of anything Phase 4
+    claims: see ``handoff_dir()`` above and ADR 0002 decision 6.
+    """
+    return handoff_dir() if privilege_separation.is_enabled() else authority_dir()
 
 
 def org_dir() -> Path:

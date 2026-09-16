@@ -36,6 +36,54 @@ class TestSecureMkdir:
     @pytest.mark.skipif(
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
+    def test_foreign_owner_ok_leaves_a_directory_this_process_does_not_own(self, tmp_path, monkeypatch):
+        # #428 Phase 4: a process running as the logged-in user resolves
+        # directories owned by the daemon's service account. chmod there is
+        # guaranteed to fail with EPERM on every single path resolution, and
+        # a warning per resolution would train a reader to ignore exactly the
+        # warnings SEC-09 added this logging for. (Monkeypatched rather than
+        # chown'd: creating a genuinely foreign-owned directory needs root,
+        # which no test in this suite has.)
+        target = tmp_path / "service-owned"
+        target.mkdir()
+        target.chmod(0o770)
+        monkeypatch.setattr(secure_files, "_is_owned_by_this_process", lambda _path: False)
+
+        result = secure_files.secure_mkdir(target, foreign_owner_ok=True)
+
+        assert result == target
+        assert stat.S_IMODE(target.stat().st_mode) == 0o770
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
+    )
+    def test_foreign_owner_ok_still_tightens_a_directory_this_process_owns(self, tmp_path):
+        target = tmp_path / "ours"
+        target.mkdir()
+        target.chmod(0o755)
+
+        secure_files.secure_mkdir(target, foreign_owner_ok=True)
+
+        assert stat.S_IMODE(target.stat().st_mode) == 0o700
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
+    )
+    def test_atomic_write_respects_an_explicit_dir_mode(self, tmp_path):
+        # The handoff directory (#428 Phase 4) is deliberately 2770, and the
+        # 0700 default would re-tighten it on every discovery-file write --
+        # locking out the accounts the installer just let in, one write at a
+        # time.
+        target = tmp_path / "handoff" / "mcp_token"
+
+        secure_files.atomic_write_text(target, "token", mode=0o640, dir_mode=0o2770)
+
+        assert stat.S_IMODE(target.parent.stat().st_mode) == 0o2770
+        assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
+    )
     def test_re_tightens_an_existing_directory(self, tmp_path):
         target = tmp_path / "existing"
         target.mkdir()

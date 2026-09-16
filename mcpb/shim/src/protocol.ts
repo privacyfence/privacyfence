@@ -21,6 +21,18 @@
  * Desktop never spawns it out of a source tree -- so it always resolves the
  * per-user data dir, matching paths.py's bundled/installed branch.
  *
+ * #428 Phase 4 adds one more branch, and it is the reason these two paths go
+ * through ``handoffDir()`` rather than ``dataDir()`` directly: on a macOS
+ * install that has opted into privilege separation, the daemon runs as its
+ * own account and its data directory moves to a system location that account
+ * owns. The two files this shim reads are exactly the two that stay
+ * reachable from the user's session, in ``<system root>/handoff``. See
+ * src/privacyfence/privilege_separation.py -- this is a port of its marker
+ * discovery, deliberately a small and permissive one: anything unreadable,
+ * unparseable or not version 1 falls back to the ordinary layout, because a
+ * shim that guesses wrong here is a shim that reports "daemon not running"
+ * for a daemon that is running fine.
+ *
  * Both are read fresh on every launch (this process is spawned once per
  * Claude Desktop session and exits when it ends -- see index.ts), not
  * cached beyond that, since a relaunched daemon can bind a different port
@@ -46,8 +58,43 @@ export function dataDir(): string {
   return process.platform === "win32" ? windowsDataDir() : path.join(os.homedir(), ".privacyfence");
 }
 
-export const MCP_URL_FILE = path.join(dataDir(), "mcp_url");
-export const MCP_TOKEN_FILE = path.join(dataDir(), "mcp_token");
+/** The marker file scripts/macos_privilege_separation.sh writes, or null on
+ * an install (or a platform) that has no privilege separation. Mirrors
+ * privilege_separation.separation(): same default root, same
+ * PRIVACYFENCE_SYSTEM_ROOT override, same version and platform checks.
+ * Exported only for tests, which need to point it at a temp directory. */
+export function privilegeSeparationRoot(env: NodeJS.ProcessEnv = process.env): string | null {
+  const override = env.PRIVACYFENCE_SYSTEM_ROOT;
+  const root =
+    override && path.isAbsolute(override)
+      ? override
+      : process.platform === "darwin"
+        ? "/Library/Application Support/PrivacyFence"
+        : null;
+  if (!root) return null;
+  let marker: { version?: unknown; platform?: unknown };
+  try {
+    marker = JSON.parse(fs.readFileSync(path.join(root, "privilege-separation.json"), "utf8"));
+  } catch {
+    // Absent on every unseparated install, which is the common case -- not
+    // an error, and deliberately not logged.
+    return null;
+  }
+  if (marker?.version !== 1) return null;
+  if (marker?.platform !== process.platform) return null;
+  return root;
+}
+
+/** Where mcp_url/mcp_token live: ``dataDir()`` normally, and the
+ * user-reachable handoff subdirectory of the service-owned root on a
+ * privilege-separated install. Exported only for tests. */
+export function handoffDir(env: NodeJS.ProcessEnv = process.env): string {
+  const root = privilegeSeparationRoot(env);
+  return root === null ? dataDir() : path.join(root, "handoff");
+}
+
+export const MCP_URL_FILE = path.join(handoffDir(), "mcp_url");
+export const MCP_TOKEN_FILE = path.join(handoffDir(), "mcp_token");
 
 /** Reads and validates the daemon's current /mcp URL. Throws if the file is
  * missing, empty, or doesn't parse as an absolute URL -- callers only reach
