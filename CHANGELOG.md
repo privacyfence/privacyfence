@@ -213,6 +213,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Slack and the rest were invisible to Claude in org mode — calls to them resolved correctly, but
   no client could discover the tools existed to make one. Local mode was never affected, and a
   principal is never shown tools backed by another principal's credentials.
+- The PyPI project page is no longer bare. `pyproject.toml` now declares `[project.urls]`
+  (Homepage, Download, Documentation, Source, Changelog, Issues, Security) and `classifiers`, so
+  the sidebar on `pypi.org/project/privacyfence/` links back to the site and repo and the project
+  is classified (Development Status, License, Operating System, Intended Audience, Topic) rather
+  than surfacing in no browse facet at all. README.md — which is the PyPI long description — had
+  30 relative doc links and 4 relative screenshot `<img>`s that only resolve on GitHub; those are
+  now absolute (`github.com/.../blob/main/...` for docs, `raw.githubusercontent.com/.../main/...`
+  for images), and the three `../../releases` download pointers now point at
+  `privacyfence.eu/download/`, the canonical download surface. See issue #370.
 
 ## [4.0.0] — 2026-09-14
 

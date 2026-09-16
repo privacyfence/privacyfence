@@ -754,8 +754,7 @@ def _load_principal_settings() -> dict[str, Any]:
       Fail-safe, never fail-open, but it made unattended sessions and
       auto-accept as a whole unusable for every org principal.
 
-    The sibling ``init_config_path`` omission was found and fixed on its own
-    (the now-removed automated-test-strategy-plan.md Phase 8); this one
+    The sibling ``init_config_path`` omission was found and fixed on its own; this one
     survived it because no in-process org test had a principal whose
     settings.yaml carried a rule *and* went through the real factory.
     """
@@ -1477,7 +1476,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     if not _acquire_instance_lock():
         # Windows' autostart task (installer/privacyfence-task.xml.tmpl)
         # carries a repeating <TimeTrigger> as its real crash-restart
-        # mechanism (the now-removed automated-test-strategy-plan.md Phase 13): every tick
+        # mechanism (see docs/platform-support.md's "Known open items" for the full
+        # crash-restart story): every tick
         # launches this daemon, and finding one already running is the
         # expected outcome on every tick but the one that actually needed a
         # relaunch, not a failure. Logging it at ERROR and exiting 1, as

@@ -81,8 +81,8 @@ def assert_task_xml_matches_autostart_contract(xml_text: str, *, exec_path: str)
         f"<LogonTrigger> is scoped to one account; it must fire for any interactive logon\n{context}"
     )
 
-    # Real crash-restart (the now-removed automated-test-strategy-plan.md Phase 13): the
-    # LogonTrigger above only ever fires once per sign-in, so it cannot
+    # Real crash-restart (see docs/platform-support.md's "Known open items" for the full
+    # crash-restart story): the LogonTrigger above only ever fires once per sign-in, so it cannot
     # bring a daemon back after it dies mid-session -- and RestartOnFailure
     # (asserted below) was measured on a real windows-latest runner not to
     # cover that case at all (Task Scheduler logs a killed action as a
@@ -90,7 +90,7 @@ def assert_task_xml_matches_autostart_contract(xml_text: str, *, exec_path: str)
     # Repetition is what actually relaunches a dead daemon: no default
     # fallback on Repetition/Interval or StartBoundary below, since a
     # missing or misconfigured element there silently means "no
-    # crash-restart," exactly the failure mode this phase exists to close.
+    # crash-restart," exactly the failure mode this contract exists to close.
     time_triggers = triggers.findall(f"{TASK_NS}TimeTrigger")
     assert len(time_triggers) == 1, f"expected exactly one <TimeTrigger>\n{context}"
     time_trigger = time_triggers[0]
@@ -170,7 +170,7 @@ def assert_task_xml_matches_autostart_contract(xml_text: str, *, exec_path: str)
     )
     # Crash-restart -- the Windows analogue of the macOS LaunchAgent's
     # KeepAlive/SuccessfulExit=false and the .deb's systemd
-    # Restart=on-failure (the now-removed automated-test-strategy-plan.md Phase 13).
+    # Restart=on-failure.
     restart = settings.find(f"{TASK_NS}RestartOnFailure")
     assert restart is not None, (
         f"no <RestartOnFailure>: the crash-restart behavior this task is supposed to carry is not "

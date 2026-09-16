@@ -23,8 +23,13 @@ This bucket is where alpha/beta/rc artifacts live *instead of* going anywhere pu
 stable, which also reaches PyPI and a public GitHub Release, pre-release tags stop at R2 --
 see .github/workflows/publish-pypi.yml and build.yml for exactly which channels reach which public
 index. The bucket itself is left at Cloudflare R2's default (private, no public bucket policy or
-custom domain) -- distributing an alpha/beta download link to testers is a separate, not-yet-
-decided step, deliberately not automated by this script.
+custom domain) -- but that privacy doesn't gate who can download a pre-release. Decided
+2026-09-13 (see this repo's CLAUDE.md "Who can download a pre-release" section): anyone can,
+unauthenticated, through cloudflare/downloads/src/index.ts's `/download/<channel>/<artifact>`
+route, and website/download/download.js advertises whichever pre-release channel has a build to
+every visitor. What the bucket's privacy actually buys is making that Worker route the only public
+path to any artifact -- nothing can enumerate the bucket or fetch a release without passing
+through the route that counts it -- not access control over pre-releases.
 
 Stdlib + boto3 only (`pip install boto3`) -- no PrivacyFence install required, matching the other
 release-time scripts in this directory (scripts/build_org_bundle.py, scripts/sync_room_directory.py).
