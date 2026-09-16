@@ -168,59 +168,97 @@ def user_dir(principal: "Principal | None" = None) -> Path:
 # Relative to a principal's user_dir() -- the pre-#428 location of each of
 # these, for both the local principal (whose user_dir() is data_dir() itself)
 # and any other one (users/<id>/), which is what makes a single migration
-# table below correct for either branch.
+# table below correct for either branch. The audit log is deliberately NOT
+# here: unlike the other three, org mode's audit logger never reads it back
+# from authority_dir() (audit_log.py's _fallback_log_dir() keeps every
+# non-local principal's audit trail at user_dir(principal)/logs/audit,
+# unchanged by #428 -- see that function's own docstring). Migrating it
+# unconditionally here once broke exactly that: any call to authority_dir()
+# for an unrelated reason (e.g. resolving an org principal's settings.yaml)
+# silently relocated a directory a *different*, non-redirected code path was
+# still actively writing to, losing whatever audit history hadn't been read
+# back yet. See _migrate_legacy_audit_log_dir() below for the one caller
+# that both migrates and reads audit logs from the new location: the local
+# principal's own, in daemon_main.py.
 _LEGACY_AUTHORITY_PATHS: tuple[Path, ...] = (
     Path("config") / "settings.yaml",
     Path("webauthn_credentials.json"),
     Path("web_token"),
     Path("web_token_version"),
-    Path("logs") / "audit",
 )
+
+_LEGACY_AUDIT_LOG_RELATIVE = Path("logs") / "audit"
 
 # Per-process memo of which authority_dir() roots have already had their
 # migration attempted, so a hot path that calls authority_dir() often (e.g.
-# a webauthn check on every step-up) doesn't re-stat five legacy paths on
+# a webauthn check on every step-up) doesn't re-stat these legacy paths on
 # every call -- migrating is a one-time, first-startup-after-upgrade thing,
 # not a steady-state one. Keyed on the *target* directory rather than a
 # bool, since tests exercise more than one principal/data_dir() within a
-# single process.
+# single process. Audit-log migration is tracked separately since it's
+# opt-in per authority_root() call rather than automatic.
 _authority_migration_attempted: set[Path] = set()
+_audit_log_migration_attempted: set[Path] = set()
+
+
+def _migrate_path(legacy: Path, destination: Path) -> None:
+    """Move ``legacy`` to ``destination`` if the former exists and the
+    latter doesn't -- shared by both the authority-files migration and the
+    audit-log one, so the same idempotent, log-and-continue-on-failure
+    behavior applies to each: a path that doesn't exist, or a destination
+    that already does (including from a previous call), is left alone
+    rather than overwritten.
+
+    This is a pure file/directory move, not yet a permissions or ownership
+    change -- #428 Phase 4 is what makes ``destination``'s parent
+    service-owned. Until then it sits at the same uid as everything else
+    under ``legacy``'s own parent.
+    """
+    if destination.exists() or not legacy.exists():
+        return
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(destination)
+    except OSError as exc:
+        logger.warning("Could not migrate %s to %s: %s", legacy, destination, exc)
 
 
 def _migrate_legacy_authority_files(root: Path, target: Path) -> None:
     """#428 Phase 1: move a pre-4.1 install's human-authority files -- the
-    privacy policy, enrolled WebAuthn credentials, the web-session bootstrap
-    secret and the audit log -- out of ``root`` and into ``target`` the
-    first time ``target`` is asked for, so upgrading doesn't silently reset
-    a configured policy, drop enrolled passkeys, or orphan existing audit
-    history. Idempotent and safe to re-run: a legacy path that doesn't
-    exist, or a destination that already does (including from a previous
-    call, in this process or an earlier one), is left alone rather than
-    overwritten.
-
-    This is a pure file move, not yet a permissions or ownership change --
-    #428 Phase 4 is what makes ``target`` service-owned. Until then it sits
-    at the same uid as everything else under ``root``.
+    privacy policy, enrolled WebAuthn credentials, and the web-session
+    bootstrap secret -- out of ``root`` and into ``target`` the first time
+    ``target`` is asked for, so upgrading doesn't silently reset a
+    configured policy or drop enrolled passkeys.
     """
     for relative in _LEGACY_AUTHORITY_PATHS:
-        legacy = root / relative
-        destination = target / relative
-        if destination.exists() or not legacy.exists():
-            continue
-        try:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            legacy.rename(destination)
-        except OSError as exc:
-            logger.warning("Could not migrate %s to the new authority directory: %s", legacy, exc)
+        _migrate_path(root / relative, target / relative)
+
+
+def _migrate_legacy_audit_log_dir(root: Path, target: Path) -> None:
+    """Companion to ``_migrate_legacy_authority_files()`` for the one path
+    that isn't safe to migrate unconditionally: the audit log. Only ever
+    called from ``authority_root(..., migrate_audit_log=True)``, which only
+    the local principal's own audit-directory resolution
+    (``daemon_main.py``) passes -- the one place that also reads the audit
+    log back from ``target`` afterwards. See ``_LEGACY_AUTHORITY_PATHS``'s
+    own comment for what goes wrong if this runs for a principal whose
+    audit logger doesn't also move.
+    """
+    _migrate_path(root / _LEGACY_AUDIT_LOG_RELATIVE, target / _LEGACY_AUDIT_LOG_RELATIVE)
 
 
 def authority_dir(principal: "Principal | None" = None) -> Path:
     """Directory root for the files that back the *human's* authority in
     local mode -- the web-approval bootstrap secret (``web_token``), the
-    privacy policy (``config/settings.yaml``), enrolled WebAuthn credentials
-    (P426), and the audit log plus its HMAC key -- as distinct from
-    ``user_dir()``, which stays reachable by the agent for its own
-    ``mcp_token`` and connector caches/credentials.
+    privacy policy (``config/settings.yaml``), and enrolled WebAuthn
+    credentials (P426) -- as distinct from ``user_dir()``, which stays
+    reachable by the agent for its own ``mcp_token`` and connector
+    caches/credentials.
+
+    Local mode's audit log (plus its HMAC key) is also human-authority state
+    and also ends up under this same directory, but it isn't migrated by
+    this function -- see ``authority_root()``'s ``migrate_audit_log``
+    parameter and ``_LEGACY_AUTHORITY_PATHS``'s own comment for why.
 
     #428 Phase 1: a pure refactor. This directory lives at the same uid as
     everything else under ``user_dir()`` until #428 Phase 4 moves the
@@ -239,7 +277,7 @@ def authority_dir(principal: "Principal | None" = None) -> Path:
     return authority_root(user_dir(principal))
 
 
-def authority_root(root: Path) -> Path:
+def authority_root(root: Path, *, migrate_audit_log: bool = False) -> Path:
     """The ``authority`` subdirectory of an arbitrary ``root``, created and
     migrated into exactly like ``authority_dir()`` -- which is
     ``authority_root(user_dir(principal))``, and the function most callers
@@ -253,11 +291,19 @@ def authority_root(root: Path) -> Path:
     monkeypatch those two names to sandbox a run keep doing so correctly.
     Both need the identical mkdir-plus-migrate behavior for whatever root
     they resolve to; only which root they start from differs.
+
+    ``migrate_audit_log`` defaults to False: the audit log only migrates
+    where it's also read back from the new location afterwards, which today
+    is exactly one call site (daemon_main.py's local-principal
+    ``init_audit_logger()`` wiring) -- pass True only from there.
     """
     target = root / "authority"
     if target not in _authority_migration_attempted:
         _migrate_legacy_authority_files(root, target)
         _authority_migration_attempted.add(target)
+    if migrate_audit_log and target not in _audit_log_migration_attempted:
+        _migrate_legacy_audit_log_dir(root, target)
+        _audit_log_migration_attempted.add(target)
     return secure_mkdir(target)
 
 

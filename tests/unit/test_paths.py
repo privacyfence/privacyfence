@@ -311,7 +311,15 @@ class TestAuthorityDir:
         assert not legacy_path.exists()
         assert (result / legacy_relative).read_text(encoding="utf-8") == "pre-4.1 content"
 
-    def test_migrates_a_legacy_audit_directory_with_its_contents(self, monkeypatch, tmp_path):
+    def test_does_not_migrate_the_audit_log(self, monkeypatch, tmp_path):
+        # Regression test: authority_dir()/authority_root() with no
+        # migrate_audit_log=True must never touch logs/audit. It once did
+        # unconditionally, which broke org mode's audit trail -- any call
+        # resolving an org principal's settings.yaml (which does go through
+        # authority_dir()) silently relocated a directory that principal's
+        # own audit logger (audit_log.py's _fallback_log_dir(), never
+        # redirected by #428) was still actively writing to at its old,
+        # unmigrated path -- see privacyfence/privacyfence#440's CI failure.
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         legacy_audit = tmp_path / "logs" / "audit"
         legacy_audit.mkdir(parents=True)
@@ -319,9 +327,8 @@ class TestAuthorityDir:
 
         result = paths.authority_dir()
 
-        assert not legacy_audit.exists()
-        migrated = result / "logs" / "audit" / "2026-W01.jsonl"
-        assert migrated.read_text(encoding="utf-8") == '{"decision": "approved"}\n'
+        assert legacy_audit.exists()
+        assert not (result / "logs").exists()
 
     def test_a_missing_legacy_file_is_not_fabricated(self, monkeypatch, tmp_path):
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
@@ -386,6 +393,42 @@ class TestAuthorityRoot:
 
         assert not (tmp_path / "web_token").exists()
         assert (result / "web_token").read_text(encoding="utf-8") == "secret"
+
+    def test_does_not_migrate_the_audit_log_by_default(self, tmp_path):
+        legacy_audit = tmp_path / "logs" / "audit"
+        legacy_audit.mkdir(parents=True)
+        (legacy_audit / "2026-W01.jsonl").write_text('{"decision": "approved"}\n', encoding="utf-8")
+
+        result = paths.authority_root(tmp_path)
+
+        assert legacy_audit.exists()
+        assert not (result / "logs").exists()
+
+    def test_migrates_the_audit_log_when_asked(self, tmp_path):
+        legacy_audit = tmp_path / "logs" / "audit"
+        legacy_audit.mkdir(parents=True)
+        (legacy_audit / "2026-W01.jsonl").write_text('{"decision": "approved"}\n', encoding="utf-8")
+
+        result = paths.authority_root(tmp_path, migrate_audit_log=True)
+
+        assert not legacy_audit.exists()
+        migrated = result / "logs" / "audit" / "2026-W01.jsonl"
+        assert migrated.read_text(encoding="utf-8") == '{"decision": "approved"}\n'
+
+    def test_a_second_call_without_migrate_audit_log_does_not_undo_it(self, tmp_path):
+        # Once daemon_main.py's own call has migrated the audit log, a later
+        # read-only accessor (settings_controller.py's export/snapshot
+        # helpers) calling authority_root() with the default False must see
+        # the already-migrated directory, not have it treated as absent.
+        legacy_audit = tmp_path / "logs" / "audit"
+        legacy_audit.mkdir(parents=True)
+        (legacy_audit / "2026-W01.jsonl").write_text('{"decision": "approved"}\n', encoding="utf-8")
+        migrated_path = paths.authority_root(tmp_path, migrate_audit_log=True) / "logs" / "audit" / "2026-W01.jsonl"
+
+        result = paths.authority_root(tmp_path)
+
+        assert result / "logs" / "audit" / "2026-W01.jsonl" == migrated_path
+        assert migrated_path.read_text(encoding="utf-8") == '{"decision": "approved"}\n'
 
     def test_authority_dir_and_authority_root_agree_for_the_local_principal(self, monkeypatch, tmp_path):
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)

@@ -1592,7 +1592,12 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     audit_logger = init_audit_logger(
         # #428 Phase 1: the audit log (plus its HMAC key) is one of the
         # human-authority files -- authority_root(), not data_dir() itself.
-        str(authority_root(Path(data_dir())) / "logs" / "audit"),
+        # migrate_audit_log=True only here: this is the one call site that
+        # also reads the local principal's audit log back from the new
+        # location afterwards -- see authority_root()'s own docstring for
+        # why every other authority_root()/authority_dir() call defaults to
+        # leaving the audit directory alone.
+        str(authority_root(Path(data_dir()), migrate_audit_log=True) / "logs" / "audit"),
         deployment_id=get_or_create_deployment_id(),
         security_config_hash=compute_security_config_hash(config),
         forwarder=audit_forwarder,
