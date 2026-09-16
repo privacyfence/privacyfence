@@ -154,7 +154,7 @@ Run a single active daemon per state directory: PrivacyFence takes a `portalocke
 
 ## 9. Approvals
 
-Org-mode approval routes are principal-aware: a signed-in user can act only on approvals authorized for that principal. Sensitive write approvals can require WebAuthn step-up when configured (`--step-up-enabled` in §5).
+Org-mode approval routes are principal-aware: a signed-in user can act only on approvals authorized for that principal. Sensitive write approvals can require WebAuthn step-up when configured (`--step-up-enabled` in §5), and that step-up ordinarily accepts either an enrolled passkey or a fresh IdP re-authentication. `--step-up-require-passkey` closes the IdP-reauth path entirely for organizations that want hardware-bound WebAuthn as a hard requirement (e.g. to defend against a compromised or phished IdP session satisfying step-up on its own): a principal with no enrolled passkey gets a hard failure directing them to `/security` to enroll one instead of a silent fallback to re-authentication.
 
 The UI behavior itself is the same embedded browser approval surface documented in [`approval-list-ui-ux.md`](approval-list-ui-ux.md).
 

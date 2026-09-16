@@ -113,6 +113,7 @@ class TestStepUpConfigFromOrgConfig:
         assert config.scope == "writes"
         assert config.rp_id == ""
         assert config.rp_name == org_mode.DEFAULT_RP_NAME
+        assert config.require_passkey is False
 
     def test_default_rp_id_falls_back_to_the_caller_supplied_default(self):
         config = org_mode.StepUpConfig.from_org_config({}, default_rp_id="pf.example.com")
@@ -135,6 +136,14 @@ class TestStepUpConfigFromOrgConfig:
     def test_invalid_scope_raises(self):
         with pytest.raises(org_mode.ConfigurationError):
             org_mode.StepUpConfig.from_org_config({"step_up": {"scope": "everything"}})
+
+    def test_require_passkey_defaults_false_and_reads_true(self):
+        assert org_mode.StepUpConfig.from_org_config(
+            {"step_up": {"enabled": True}},
+        ).require_passkey is False
+        assert org_mode.StepUpConfig.from_org_config(
+            {"step_up": {"enabled": True, "require_passkey": True}},
+        ).require_passkey is True
 
 
 class TestDownloadDeliveryConfigFromOrgConfig:
