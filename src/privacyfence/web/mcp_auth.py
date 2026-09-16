@@ -5,9 +5,8 @@ into.
 ``StaticTokenVerifier`` below is a ``TokenVerifier`` (the official SDK's
 protocol, ``mcp.server.auth.provider.TokenVerifier``) checking a single
 shared secret -- the same "possession of this file is the authority"
-posture ``web_token`` has for the approval surface (see server.py's module
-docstring), and the same one ``~/.privacyfence/ipc_token`` had for the
-bridge before P5 retired both. Not real OAuth 2.1 -- that's org mode
+posture ``~/.privacyfence/ipc_token`` had for the bridge, before P5 retired
+it. Not real OAuth 2.1 -- that's org mode
 (landed at P7 as ``OrgOAuthProvider``, which satisfies the exact same ``TokenVerifier``
 protocol via its own ``verify_token``). Using the SDK's own
 ``TokenVerifier``/``BearerAuthBackend``/``RequireAuthMiddleware`` here
@@ -16,8 +15,8 @@ routes_mcp.py's own wiring didn't change (see that module's
 ``build_mcp_asgi_app``, which takes a ``verifier: TokenVerifier`` --
 either this module's or ``OrgOAuthProvider``'s).
 
-This token is deliberately a **separate secret from web_token**
-(server.py's approval-surface token): §10.3's audience separation --
+This token is deliberately a **separate secret from the approval surface's
+own session/CSRF cookie**: §10.3's audience separation --
 "the MCP access token must never be accepted on approval-decision
 endpoints, and the browser session cookie must never be accepted on
 /mcp" -- has to hold even if someone reuses one file's contents by hand, so
@@ -40,8 +39,8 @@ MCP_TOKEN_FILE_NAME = "mcp_token"  # nosec B105  # a filename, not a credential 
 
 
 def load_or_create_mcp_token() -> str:
-    """Reused across daemon restarts (same file), same posture as
-    web/server.py's ``load_or_create_token``."""
+    """Reused across daemon restarts (same file) -- the agent's own
+    long-lived credential, unlike the approval surface's session cookie."""
     path = paths.data_dir() / MCP_TOKEN_FILE_NAME
     if path.exists():
         token = path.read_text(encoding="utf-8").strip()

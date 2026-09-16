@@ -256,42 +256,6 @@ class TestSessionCookieHelpers:
         assert sa.SESSION_COOKIE in set_cookie
 
 
-class TestVerifyBearerSecret:
-    def test_correct_bearer_header_passes(self):
-        scope = {"type": "http", "headers": [(b"authorization", b"Bearer s3cr3t")], "method": "POST", "path": "/"}
-        assert sa.verify_bearer_secret(Request(scope), "s3cr3t") is True
-
-    def test_wrong_secret_fails(self):
-        scope = {"type": "http", "headers": [(b"authorization", b"Bearer wrong")], "method": "POST", "path": "/"}
-        assert sa.verify_bearer_secret(Request(scope), "s3cr3t") is False
-
-    def test_missing_header_fails(self):
-        scope = {"type": "http", "headers": [], "method": "POST", "path": "/"}
-        assert sa.verify_bearer_secret(Request(scope), "s3cr3t") is False
-
-    def test_non_bearer_scheme_fails(self):
-        scope = {"type": "http", "headers": [(b"authorization", b"Basic s3cr3t")], "method": "POST", "path": "/"}
-        assert sa.verify_bearer_secret(Request(scope), "s3cr3t") is False
-
-    def test_compares_via_hmac_compare_digest(self, monkeypatch):
-        # Same reasoning as TestCsrfAndOrigin's equivalent spy: this is the
-        # one remaining check against the persistent local install secret
-        # (module docstring), so it's exactly where a timing side-channel
-        # would matter most if a future edit swapped the constant-time
-        # compare for a plain ``==``.
-        calls = []
-        real_compare_digest = sa.hmac.compare_digest
-        monkeypatch.setattr(
-            sa.hmac, "compare_digest",
-            lambda a, b: calls.append((a, b)) or real_compare_digest(a, b),
-        )
-        scope = {"type": "http", "headers": [(b"authorization", b"Bearer s3cr3t")], "method": "POST", "path": "/"}
-
-        assert sa.verify_bearer_secret(Request(scope), "s3cr3t") is True
-
-        assert calls == [("s3cr3t", "s3cr3t")]
-
-
 class TestUnauthorizedHtml:
     def _scope(self):
         return {
@@ -300,9 +264,10 @@ class TestUnauthorizedHtml:
         }
 
     def test_is_no_store(self):
-        # SEC-18: this page names a live bearer-secret command (the exact
-        # ~/.privacyfence/web_token curl invocation) -- it must never be
-        # cached, and previously carried no Cache-Control header at all.
+        # SEC-18: this page names a live control-channel path/pipe name
+        # (the exact recovery command a reader is meant to copy-paste) -- it
+        # must never be cached, and previously carried no Cache-Control
+        # header at all.
         response = sa.unauthorized_html(Request(self._scope()))
         assert response.status_code == 401
         assert response.headers["cache-control"] == "no-store"
@@ -321,10 +286,11 @@ class TestUnauthorizedHtml:
         assert "PrivacyFence logged" not in body
 
     def test_still_offers_the_on_demand_bootstrap_command(self):
+        # #428 Phase 2: the on-demand mint goes through the control channel
+        # now, not a bearer-authenticated HTTP route.
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
-        assert "POST" in body
-        assert "/api/bootstrap" in body
-        assert "web_token" in body
+        assert "MINT" in body
+        assert "/api/bootstrap" not in body
 
     def test_mentions_asking_a_connected_mcp_client(self):
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
@@ -350,8 +316,9 @@ class TestUnauthorizedHtml:
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
 
         assert "/home/alice/.privacyfence/approvals_url" in body
-        assert "$(cat /home/alice/.privacyfence/authority/web_token)" in body
+        assert "nc -U '/home/alice/.privacyfence/authority/control.sock'" in body
         assert "Get-Content" not in body
+        assert "NamedPipeClientStream" not in body
 
     def test_shows_the_windows_path_and_a_powershell_command(self, monkeypatch):
         # paths.is_windows() (not os.name itself -- see that function's own
@@ -366,6 +333,6 @@ class TestUnauthorizedHtml:
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
 
         assert r"C:\Users\alice\AppData\Local\PrivacyFence\approvals_url" in body
-        assert "Get-Content" in body
-        assert r"C:\Users\alice\AppData\Local\PrivacyFence\authority\web_token" in body
-        assert "$(cat " not in body
+        assert "NamedPipeClientStream" in body
+        assert "PrivacyFence-Control-" in body
+        assert "nc -U" not in body

@@ -85,6 +85,7 @@ import pytest
 import yaml
 
 import privacyfence
+from tests.control_channel_client import mint_bootstrap_code, resolve_posix_socket_path
 
 mcp_client = pytest.importorskip(
     "mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'"
@@ -191,8 +192,9 @@ def _prepare_sandbox(tmp_path: Path, *, port: int) -> Path:
     config["web"]["port"] = port
     config["web"]["approvals"] = {"hold_window_seconds": 0.3}
     config["update_check"]["enabled"] = False
-    # #428 Phase 1: settings.yaml (like web_token and the audit log) lives
-    # under an `authority` subdirectory of data_dir(), not data_dir() itself.
+    # #428 Phase 1: settings.yaml (like the control channel's socket and the
+    # audit log) lives under an `authority` subdirectory of data_dir(), not
+    # data_dir() itself.
     config_dir = sandbox / "authority" / "config"
     config_dir.mkdir(parents=True)
     (config_dir / "settings.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -257,21 +259,21 @@ def _wait_until_connectable(host: str, port: int, timeout: float = 10.0) -> None
     raise AssertionError(f"nothing accepted a connection on {host}:{port} within {timeout}s of mcp_url appearing")
 
 
-async def _bootstrap_session(web_client: httpx.AsyncClient, web_token: str, *, path: str) -> str:
+async def _bootstrap_session(web_client: httpx.AsyncClient, sandbox: Path, *, path: str) -> str:
     """Exactly the "still have filesystem access, no valid link handy" path
-    ``unauthorized_html``'s own 401 page recommends -- ``POST
-    /api/bootstrap`` (SEC-06) mints a fresh one-time code on demand,
-    presented as a raw JSON field rather than a full URL specifically so it
-    never needs to be logged (and, unlike the startup log lines, is never
-    redacted by ``safe_errors.SecretRedactingFormatter`` -- that formatter's
-    own key=value pattern matches the literal word ``bootstrap`` and would
-    turn a URL logged with the code in it into ``bootstrap=[REDACTED]``,
-    which is exactly why this test mints its own rather than trying to
-    scrape one out of the daemon's log). Returns the ``pf_session`` cookie
-    value now set on ``web_client``."""
-    mint_resp = await web_client.post("/api/bootstrap", headers={"Authorization": f"Bearer {web_token}"})
-    assert mint_resp.status_code == 200, mint_resp.text
-    code = mint_resp.json()["bootstrap"]
+    ``unauthorized_html``'s own 401 page recommends -- #428 Phase 2's
+    control channel (a real Unix domain socket/named pipe against this
+    daemon's own sandboxed data directory, via ``tests.control_channel_
+    client``) mints a fresh one-time code on demand, never carried over
+    HTTP at all, let alone logged (and, unlike the startup log lines, the
+    code returned here is never redacted by ``safe_errors.
+    SecretRedactingFormatter`` -- that formatter's own key=value pattern
+    matches the literal word ``bootstrap`` and would turn a URL logged with
+    the code in it into ``bootstrap=[REDACTED]``, which is exactly why this
+    test mints its own rather than trying to scrape one out of the
+    daemon's log). Returns the ``pf_session`` cookie value now set on
+    ``web_client``."""
+    code = mint_bootstrap_code(sandbox)
     exchange_resp = await web_client.get(path, params={"bootstrap": code})
     assert exchange_resp.status_code == 200, exchange_resp.text
     session_id = web_client.cookies.get("pf_session")
@@ -358,8 +360,13 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
         assert (sandbox / "authority" / "config" / "settings.yaml").exists()
         mcp_token = (sandbox / "mcp_token").read_text(encoding="utf-8").strip()
         assert mcp_token
-        web_token = (sandbox / "authority" / "web_token").read_text(encoding="utf-8").strip()
-        assert web_token
+        if sys.platform != "win32":
+            # #428 Phase 2: the control channel replaces web_token -- no
+            # file to read a secret out of any more, but the socket itself
+            # (unlike a Windows named pipe, which isn't a filesystem
+            # object) is still directly observable as a basic liveness
+            # check ahead of the real mint call below.
+            assert resolve_posix_socket_path(sandbox).exists()
 
         base_url = f"http://{parsed.hostname}:{parsed.port}"
 
@@ -372,7 +379,7 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
             # A real session, minted the same way an operator with disk
             # access (never a link out of the log -- see
             # ``_bootstrap_session``'s own docstring) gets one.
-            session_id = await _bootstrap_session(web_client, web_token, path="/settings")
+            session_id = await _bootstrap_session(web_client, sandbox, path="/settings")
             assert (await web_client.get("/settings")).status_code == 200
             # Sessions aren't scoped to the path that minted them -- the
             # same cookie authenticates /approvals too, exactly as a

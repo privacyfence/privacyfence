@@ -9,8 +9,9 @@
  *   client that talks to /mcp instead of the old IPC socket.
  * - <data dir>/mcp_token -- the bearer secret for /mcp
  *   (web/mcp_auth.py's load_or_create_mcp_token()), deliberately a
- *   *different* file/secret than ipc_token or web_token (§10.3's audience
- *   separation) -- see that module's own docstring.
+ *   *different* secret than the approval surface's own session cookie or
+ *   the retired ipc_token (§10.3's audience separation) -- see that
+ *   module's own docstring.
  *
  * ``<data dir>`` mirrors paths.py's ``data_dir()``: ``~/.privacyfence`` on
  * POSIX, ``%LOCALAPPDATA%\PrivacyFence`` on Windows (not the same dotfile

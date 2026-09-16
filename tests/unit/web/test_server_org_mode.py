@@ -35,11 +35,6 @@ def _org_auth(tmp_path, monkeypatch) -> OrgAuth:
 
 
 class TestBuildAppOrgMode:
-    def test_requires_a_token_in_local_mode(self):
-        import pytest
-        with pytest.raises(ValueError):
-            build_app(WebApprovalUI())  # no token, no org -- neither mode satisfied
-
     def test_mcp_route_is_mounted(self, tmp_path, monkeypatch):
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(
@@ -303,7 +298,7 @@ class TestDownloadsSurfaceOrgMode:
         assert r.headers["location"] == "/login"
 
     def test_downloads_route_is_absent_in_local_mode(self, tmp_path):
-        app = build_app(WebApprovalUI(), token="t", allowed_hosts=frozenset({"testserver"}))
+        app = build_app(WebApprovalUI(), allowed_hosts=frozenset({"testserver"}))
         client = TestClient(app, base_url="http://testserver")
         assert client.get("/downloads/abc").status_code == 404
 
@@ -314,11 +309,11 @@ class TestWebServerOrgMode:
         server = WebServer(WebApprovalUI(), host="0.0.0.0", port=443, org=org)
         assert server.base_url == ISSUER
 
-    def test_token_and_mcp_token_are_none_in_org_mode(self, tmp_path, monkeypatch):
+    def test_mcp_token_and_control_channel_are_none_in_org_mode(self, tmp_path, monkeypatch):
         org = _org_auth(tmp_path, monkeypatch)
         server = WebServer(WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {}))
-        assert server.token is None
         assert server.mcp_token is None
+        assert server.control_channel is None
 
     def test_mcp_url_still_reflects_base_url_in_org_mode(self, tmp_path, monkeypatch):
         org = _org_auth(tmp_path, monkeypatch)

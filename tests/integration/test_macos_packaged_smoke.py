@@ -25,8 +25,9 @@ the packaged app:
    built and immediately run on this same machine was never quarantined
    for in the first place) with an isolated ``$HOME``, then mint a
    bootstrap link the same way a human with filesystem access to this
-   machine but no daemon-log line handy would (``POST /api/bootstrap``
-   with the persistent ``web_token`` read straight off disk -- see
+   machine but no daemon-log line handy would (through the #428 Phase 2
+   control channel -- a real Unix domain socket against this daemon's own
+   data directory, via ``tests.control_channel_client`` -- see
    ``running_packaged_daemon`` below for why this, and not scraping the
    daemon's own stdout, is the only reliable way to get one: SEC-10's
    ``SecretRedactingFormatter`` redacts a ``bootstrap=<value>`` substring
@@ -117,12 +118,13 @@ pytest.importorskip(
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+from tests.control_channel_client import mint_bootstrap_code_posix, resolve_posix_socket_path  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIM_DIR = REPO_ROOT / "mcpb" / "shim"
 SHIM_ENTRY = SHIM_DIR / "dist" / "shim.js"
 DIST_DIR = REPO_ROOT / "dist"
 SETTINGS_EXAMPLE = REPO_ROOT / "src" / "privacyfence" / "resources" / "settings.yaml.example"
-WEB_TOKEN_FILE_NAME = "web_token"  # web/server.py's TOKEN_FILE_NAME
 MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
 
 
@@ -238,7 +240,6 @@ class RunningDaemon:
     home: Path
     base_url: str
     bootstrap_url: str
-    web_token: str
     mcp_token: str
 
     @property
@@ -272,6 +273,23 @@ def _wait_for_file(path: Path, proc: subprocess.Popen, log_path: Path, timeout: 
     raise AssertionError(f"{path} never appeared within {timeout}s -- log:\n{log_path.read_text(errors='replace')}")
 
 
+def _wait_for_path(path: Path, proc: subprocess.Popen, log_path: Path, timeout: float = 30.0) -> None:
+    """Like ``_wait_for_file()`` but for a path with no meaningful text
+    content of its own -- the control channel's Unix domain socket, in
+    particular, whose ``read_text()`` wouldn't return anything sensible."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise AssertionError(
+                f"daemon exited early (code {proc.poll()}) instead of starting -- log:\n"
+                f"{log_path.read_text(errors='replace')}"
+            )
+        if path.exists():
+            return
+        time.sleep(0.1)
+    raise AssertionError(f"{path} never appeared within {timeout}s -- log:\n{log_path.read_text(errors='replace')}")
+
+
 @contextlib.contextmanager
 def _running_daemon_at(exe: Path, home: Path):
     """Launches the real frozen daemon binary directly at ``exe`` -- not via
@@ -291,27 +309,28 @@ def _running_daemon_at(exe: Path, home: Path):
     ``$HOME`` twice, against two different bundle copies, and still find the
     first boot's state on the second.
 
-    Mints its bootstrap URL via ``POST /api/bootstrap`` (SEC-06,
-    web/server.py's ``_bootstrap_mint_route``) authorized by the persistent
-    ``web_token`` read straight off disk, rather than scraping the daemon's
-    own startup log line for one: SEC-10's ``SecretRedactingFormatter``
+    Mints its bootstrap URL through the #428 Phase 2 control channel (a real
+    Unix domain socket against this daemon's own data directory, via
+    ``tests.control_channel_client``) rather than scraping the daemon's own
+    startup log line for one: SEC-10's ``SecretRedactingFormatter``
     (safe_errors.py) redacts any ``bootstrap=<value>`` substring out of
     every log line -- ``bootstrap`` is literally in its key-name allowlist
     -- so the one line that would otherwise carry it never actually does.
-    Reading the raw persistent secret off disk and minting a fresh code
-    through the same endpoint a human with only filesystem access (no live
-    log line) would use is both correct in the same way and the only thing
-    that actually works here. ``mcp_token`` is read the same way (no
-    minting endpoint needed for it -- it's the daemon's own persistent MCP
-    bearer token, web/mcp_auth.py), for callers that talk to ``/mcp``
-    directly instead of through the real Node shim (the shim resolves its
-    own copy from the same file, from inside the spawned process, so the
-    primary round-trip test below never needs this field itself)."""
+    Minting a fresh code through the same channel a human with only
+    filesystem access (no live log line) would use is both correct in the
+    same way and the only thing that actually works here. ``mcp_token`` is
+    read straight off disk (no minting channel needed for it -- it's the
+    daemon's own persistent MCP bearer token, web/mcp_auth.py), for callers
+    that talk to ``/mcp`` directly instead of through the real Node shim
+    (the shim resolves its own copy from the same file, from inside the
+    spawned process, so the primary round-trip test below never needs this
+    field itself)."""
     assert exe.is_file(), f"{exe} missing -- PyInstaller output layout changed?"
 
     home.mkdir(parents=True, exist_ok=True)
     # #428 Phase 1: settings.yaml lives under an authority/ subdirectory of
-    # data_dir(), same as web_token below -- not data_dir() itself.
+    # data_dir(), same as the control channel's socket below -- not
+    # data_dir() itself.
     config_dir = home / ".privacyfence" / "authority" / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     settings_path = config_dir / "settings.yaml"
@@ -341,18 +360,15 @@ def _running_daemon_at(exe: Path, home: Path):
         _wait_until_connectable("localhost", port, proc, log_path)
 
         data_dir = home / ".privacyfence"
-        web_token = _wait_for_file(data_dir / "authority" / WEB_TOKEN_FILE_NAME, proc, log_path)
+        _wait_for_path(resolve_posix_socket_path(data_dir), proc, log_path)
         mcp_token = _wait_for_file(data_dir / MCP_TOKEN_FILE_NAME, proc, log_path)
 
-        resp = httpx.post(
-            f"{base_url}/api/bootstrap", headers={"Authorization": f"Bearer {web_token}"}, timeout=10,
-        )
-        resp.raise_for_status()
-        bootstrap_url = f"{base_url}/approvals?bootstrap={resp.json()['bootstrap']}"
+        code = mint_bootstrap_code_posix(resolve_posix_socket_path(data_dir))
+        bootstrap_url = f"{base_url}/approvals?bootstrap={code}"
 
         yield RunningDaemon(
             process=proc, home=home, base_url=base_url, bootstrap_url=bootstrap_url,
-            web_token=web_token, mcp_token=mcp_token,
+            mcp_token=mcp_token,
         )
     finally:
         proc.terminate()
