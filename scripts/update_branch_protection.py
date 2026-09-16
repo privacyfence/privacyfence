@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""Keep `main`'s required-status-checks list in sync with the `.github/workflows/tests.yml` jobs
-that actually run on every PR and are meant to gate correctness (`docs/automated-test-strategy-
-plan.md` Phase 11).
+"""Keep a protected branch's required-status-checks list in sync with the `.github/workflows/
+tests.yml` jobs that actually run on every PR and are meant to gate correctness
+(`docs/automated-test-strategy-plan.md` Phase 11).
+
+Targets `main` by default, but `--branch` also accepts a glob pattern such as `releases/**` --
+CLAUDE.md's "Branching & PRs" section documents `releases/*` as a long-lived, cross-cycle
+integration branch pattern (e.g. `releases/4.1-dev`) protected by its own ruleset the same way
+`main` is. `REQUIRED_STATUS_CHECKS` is the same target list either way, since `tests.yml`'s push
+trigger runs the identical jobs on both. Pass the pattern exactly as it appears in that ruleset's
+`conditions.ref_name.include` (e.g. `--branch "releases/**"`) -- this script matches it verbatim
+as `refs/heads/<branch>`, it does not itself expand or interpret the glob.
 
 Branch protection is GitHub repo configuration this repo doesn't otherwise track as a file --
 there's no commit history or diff to review for it, which is exactly why it silently falls behind
@@ -28,6 +36,8 @@ list for exactly what's included and why.
 Usage:
     python scripts/update_branch_protection.py show
     python scripts/update_branch_protection.py apply [--dry-run]
+    python scripts/update_branch_protection.py --branch "releases/**" show
+    python scripts/update_branch_protection.py --branch "releases/**" apply [--dry-run]
 
 Requires GITHUB_TOKEN in the environment: a token with admin rights on this repo's rulesets
 (fine-grained "Administration: write", or classic `repo` scope on an org/repo admin's account).
@@ -113,14 +123,20 @@ def _rulesets_url(owner: str, repo: str) -> str:
 
 
 def _targets_branch(ruleset: dict[str, Any], branch: str) -> bool:
-    """True if this ruleset's ref conditions include `branch`.
+    """True if this ruleset's ref conditions include `branch` -- a literal branch name
+    (`main`) or a glob pattern (`releases/**`), matched verbatim as `refs/heads/<branch>`.
 
-    Matches both the literal ref (`refs/heads/main`) and GitHub's `~DEFAULT_BRANCH` placeholder,
-    which is how the UI's "Include default branch" option is stored -- a ruleset created that way
-    never names the branch literally.
+    Matches the literal/pattern ref and GitHub's `~ALL` placeholder unconditionally, and
+    `~DEFAULT_BRANCH` only when `branch` actually is `"main"` -- that placeholder is how the UI's
+    "Include default branch" option is stored (a ruleset created that way never names the branch
+    literally), but it means *the* default branch specifically. Treating it as a match for any
+    other branch/pattern (e.g. `releases/**`) would make a query for that pattern hit main's own
+    ruleset by accident whenever main's ruleset happens to use the placeholder.
     """
     include = ruleset.get("conditions", {}).get("ref_name", {}).get("include", [])
-    return f"refs/heads/{branch}" in include or "~DEFAULT_BRANCH" in include or "~ALL" in include
+    if f"refs/heads/{branch}" in include or "~ALL" in include:
+        return True
+    return branch == "main" and "~DEFAULT_BRANCH" in include
 
 
 def find_branch_ruleset(owner: str, repo: str, branch: str) -> dict[str, Any] | None:
