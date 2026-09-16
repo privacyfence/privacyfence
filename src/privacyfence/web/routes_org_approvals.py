@@ -236,7 +236,7 @@ def _render_list_page(rows: list, *, csrf: str, nonce: str) -> str:
 <style nonce="{nonce}">{_tokens_css()}body{{background:var(--color-bg);color:var(--color-text);margin:0;
 font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}</style></head>
 <body>{body}
-<p style="text-align:center"><a href="/connect">Connections</a> &middot; <a href="/security">Passkeys</a></p>
+<p style="text-align:center"><a href="/connect">Connections</a> &middot; <a href="/security">Passkeys</a> &middot; <a href="/settings">Settings</a></p>
 </body></html>"""
 
 

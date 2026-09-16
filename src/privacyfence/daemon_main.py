@@ -629,6 +629,7 @@ def _maybe_start_web_server(
             return None
         return _start_org_web_server(
             web_config, org_config, connector_host, unattended_sessions_enabled=unattended_sessions_enabled,
+            install_wide_config=config,
         )
 
     use_web_settings = bool(settings_config.get("enabled", False)) and controller is not None
@@ -742,10 +743,11 @@ def _maybe_start_web_server(
     return server
 
 
-def _load_principal_settings() -> dict[str, Any]:
+def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Load ``settings.yaml`` for whichever principal is currently scoped,
-    and make it *live* for that principal -- both halves of what run_app()
-    does once for the local principal.
+    and make it *live* for that principal -- three halves of what run_app()
+    does once for the local principal (auto-accept rules, and, since #400's
+    Phase 0 fix, the privacy/PII filter too).
 
     Called from org mode's per-principal ``ConnectorRegistry`` factory,
     under the ``principal_scope`` that factory is already run inside. The
@@ -756,8 +758,8 @@ def _load_principal_settings() -> dict[str, Any]:
     principal's, per §9.2's storage layout and #428 Phase 1's authority
     split.
 
-    Both side effects below exist because ``ConnectorRegistry.get()`` never
-    goes through ``run_app()`` for any principal other than local, so
+    All three side effects below exist because ``ConnectorRegistry.get()``
+    never goes through ``run_app()`` for any principal other than local, so
     nothing else ever performs them for an org principal:
 
     - ``init_config_path()`` -- without it, every non-local principal's
@@ -782,6 +784,28 @@ def _load_principal_settings() -> dict[str, Any]:
       disagreement between the two meta-tools is the symptom this fixes).
       Fail-safe, never fail-open, but it made unattended sessions and
       auto-accept as a whole unusable for every org principal.
+    - ``init_privacy_filter()`` (#400 Phase 0) -- without it, ``privacy_
+      filter._REGISTRY`` (also a ``PrincipalRegistry``, see that module's
+      docstring) kept its default empty-dict entry for every principal but
+      whichever one happened to be scoped when a local-mode ``run_app()``
+      called ``init_privacy_filter`` directly. ``category_policy()``'s own
+      "group absent from the registry" fallback is a hardcoded "allow" --
+      the *opposite* of org mode's intended fail-closed ``block`` default
+      (``privacy_filter.init_privacy_filter``'s own ``fail_safe_default``)
+      -- so every org principal but that one silently got the permissive
+      default nobody configured. ``org_managed=True`` unconditionally: this
+      function only ever runs from org mode's own ``ConnectorRegistry``
+      factory (see this function's own docstring above), never local
+      mode's. Install-wide, per the design docs/org-mode-setup-guide.md §9
+      states ("there is no per-user override") -- so this uses
+      ``install_wide_config`` (the server's own settings.yaml, threaded
+      down from ``_start_org_web_server``), not this principal's own
+      per-user ``cfg``, for exactly the same reason ``cfg`` is right for
+      auto-accept rules and wrong here: a per-user file nobody expects an
+      admin to edit for PII policy must not silently override the one file
+      they actually do edit. Falls back to ``cfg`` only when no install-wide
+      config is given at all (a bare ``principal_scope()`` call in a test
+      that doesn't care about privacy-filter behavior specifically).
 
     The sibling ``init_config_path`` omission was found and fixed on its own; this one
     survived it because no in-process org test had a principal whose
@@ -790,21 +814,23 @@ def _load_principal_settings() -> dict[str, Any]:
     cfg = load_config(_resolve_authority_path("config/settings.yaml"))
     init_config_path(_resolve_authority_path("config/settings.yaml"))
     reload_rules(build_effective_rules(cfg))
+    init_privacy_filter(install_wide_config if install_wide_config is not None else cfg, org_managed=True)
     return cfg
 
 
 def _start_org_web_server(
     web_config: dict[str, Any], org_config: dict[str, Any], connector_host: ConnectorHost,
-    *, unattended_sessions_enabled: bool,
+    *, unattended_sessions_enabled: bool, install_wide_config: dict[str, Any],
 ) -> Any:
     """org mode's own boot path (P7) -- a real OAuth 2.1 authorization server on ``/mcp``
-    instead of the local shared-secret ``StaticTokenVerifier``, no local-
-    token approval/settings surface mounted at all (see web/server.py's
-    own module docstring for why). Raises ``org_mode.ConfigurationError``
-    (SEC-04; surfaced as a startup failure, the same posture a missing/
-    invalid settings.yaml already has) if org_config.json is missing the
-    ``idp``/``server`` sections org mode requires -- there is no silent
-    partial-org-mode fallback.
+    instead of the local shared-secret ``StaticTokenVerifier``. The
+    read-only settings surface (#400, web/routes_org_settings.py) is
+    mounted here too now -- see web/server.py's own module docstring for
+    exactly what it does and does not cover. Raises ``org_mode.
+    ConfigurationError`` (SEC-04; surfaced as a startup failure, the same
+    posture a missing/invalid settings.yaml already has) if org_config.json
+    is missing the ``idp``/``server`` sections org mode requires -- there is
+    no silent partial-org-mode fallback.
 
     ``connector_host`` (the local principal's own connector set, built once
     at startup by run_app()) is accepted for signature parity with local
@@ -813,6 +839,17 @@ def _start_org_web_server(
     built lazily per principal instead of shared off the local principal's
     set (see connector_registry.py's own docstring for why this was left
     unwired until now).
+
+    ``install_wide_config`` (#400 Phase 0) is run_app()'s own ``config`` --
+    the *server's own* settings.yaml, already loaded once at startup for
+    the local/launcher principal's own ``init_privacy_filter()`` call.
+    Threaded down into ``_connectors_for_principal``'s
+    ``_load_principal_settings()`` call below (so every org principal's
+    privacy-filter registry entry reflects the real install-wide policy,
+    not their own unconfigured per-user file -- see that function's own
+    docstring) and carried on ``OrgAuth.install_wide_settings`` for
+    web/routes_org_settings.py's admin-only policy view to read directly,
+    with no daemon_main import of its own needed there.
     """
     from .approvals import PendingApprovalRegistry
     from .connector_registry import ConnectorRegistry
@@ -861,7 +898,9 @@ def _start_org_web_server(
         # per-principal settings page for them to surface on (see
         # SettingsController's own docstring) -- so they're discarded here;
         # a later phase that needs them for org mode plugs in at this seam.
-        connectors, _failures = build_connectors(_load_principal_settings(), org_config)
+        connectors, _failures = build_connectors(
+            _load_principal_settings(install_wide_config=install_wide_config), org_config,
+        )
         return connectors
 
     connector_registry = ConnectorRegistry(factory=_connectors_for_principal)
@@ -890,6 +929,7 @@ def _start_org_web_server(
         org=OrgAuth(
             provider=provider, sessions=sessions, idp=idp, issuer_url=server_config.issuer_url,
             connector_registry=connector_registry, org_config=org_config,
+            install_wide_settings=install_wide_config,
         ),
         ssl_certfile=server_config.cert_file or None,
         ssl_keyfile=server_config.key_file or None,

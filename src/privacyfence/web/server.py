@@ -53,18 +53,20 @@ decision additionally demands a fresh WebAuthn step-up when
 ``org_config.json``'s ``step_up.enabled`` is set (§10.6, D7) --
 web/routes_org_approvals.py's own module docstring covers both.
 
-**Still deliberately not mounted in org mode**: ``/settings``
-(``routes_settings.py``'s ~30-action surface). The CSRF model itself is no
-longer the blocker -- ``org_session.check_csrf`` already does the
-per-session double-submit this surface would need, the same shape
-``session_auth.check_csrf`` uses in local mode. What's still missing is
-deciding which of that surface's ~30 actions are per-principal, which are
-install-wide and admin-only, and wiring ``Principal.is_admin`` into
-authorizing the latter -- real, scoped follow-up work no phase through P9
-has done yet (``/connect``, P8, and now ``/approvals``/``/security``, P9,
-are each a small, purpose-built page rather than a port of that surface --
-see routes_connect.py's own module docstring for why that shape was chosen
-over porting it).
+**`/settings` in org mode** (#400) is, likewise, *not*
+``routes_settings.py``'s ~30-action local-mode surface -- porting that
+dispatcher wholesale was never the plan (see routes_connect.py's own
+module docstring for why a small, purpose-built page is the shape every
+other org-mode surface here already takes). What is mounted instead
+(web/routes_org_settings.py) is read-only except for removing a row:
+``GET /settings`` is every signed-in principal's own auto-accept rules and
+resource grants, and ``GET /settings/privacy`` is an admin-only
+(``Principal.is_admin`` -- #400 C3c finally gave that field a real
+consumer) view of the install-wide PII/privacy policy. Editing either from
+the browser, and the rest of routes_settings.py's ~30 actions (connector
+management, the update banner, Telegram's interactive auth -- see
+web/org_settings_scope.py's own ``NOT_APPLICABLE_ACTIONS`` for the ones
+that only ever meant something on a desktop install), remain unmounted.
 """
 from __future__ import annotations
 
@@ -335,6 +337,14 @@ class OrgAuth:
     # always supplies both.
     connector_registry: ConnectorRegistry | None = None
     org_config: dict = field(default_factory=dict)
+    # #400: the server's own install-wide settings.yaml (run_app()'s
+    # ``config``) -- routes_org_settings.py's admin-only privacy-policy view
+    # reads this directly, and daemon_main._start_org_web_server threads the
+    # same dict into every org principal's own privacy-filter registration
+    # (see _load_principal_settings()'s docstring). Defaults to {} for the
+    # same "every existing OrgAuth() caller keeps working" reason
+    # connector_registry/org_config already do.
+    install_wide_settings: dict = field(default_factory=dict)
 
 
 def _default_principal(_request: Request) -> Principal:
@@ -677,7 +687,9 @@ def _build_org_app(
 ) -> ASGIApp:
     """org mode's own route set -- see build_app()'s and this module's own
     docstrings for what's deliberately absent (the local-token settings
-    surface, still). ``/approvals`` and ``/security`` (P9,
+    surface's ~30-action dispatcher, still -- only its own read-only,
+    purpose-built replacement is mounted, see routes_org_settings below).
+    ``/approvals`` and ``/security`` (P9,
     web/routes_org_approvals.py/web/routes_security.py) are mounted
     unconditionally here -- unlike ``/connect`` (below), they need nothing
     from ``org.connector_registry``, only ``web_ui`` (already a required
@@ -686,7 +698,7 @@ def _build_org_app(
     from urllib.parse import urlparse
 
     from ..org_mode import AuthzPolicyConfig, StepUpConfig
-    from . import routes_org_approvals, routes_security
+    from . import routes_org_approvals, routes_org_settings, routes_security
 
     extra_routes: list[Route] = []
     lifespans = []
@@ -735,6 +747,12 @@ def _build_org_app(
         extra_routes.extend(routes_security.build_routes(
             sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
         ))
+    # #400: mounted unconditionally, same reasoning as /approvals above --
+    # needs only org.sessions and the install-wide settings dict, both
+    # already required parameters of this function either way.
+    extra_routes.extend(routes_org_settings.build_routes(
+        sessions=org.sessions, install_wide_settings=org.install_wide_settings,
+    ))
 
     lifespan = None
     if lifespans:
