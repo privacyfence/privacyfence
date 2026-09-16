@@ -519,9 +519,15 @@ class ConfluenceClient:
         Returns a dict with ``path``, ``name``, and ``size_bytes``.
         """
         dest_path = resolve_attachment_destination(filename, destination_dir)
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        with open(dest_path, "wb") as fh:
-            fh.write(data)
+        try:
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            with open(dest_path, "wb") as fh:
+                fh.write(data)
+        except OSError as exc:
+            raise ConfluenceClientError(
+                f"save_attachment_bytes: could not write to {dest_path!r}: {exc}. "
+                "Choose a different destination_dir."
+            ) from exc
         name = os.path.basename(dest_path)
         logger.info("save_attachment_bytes: name=%s size=%d", name, len(data))
         return {"path": dest_path, "name": name, "size_bytes": len(data)}
