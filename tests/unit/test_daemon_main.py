@@ -143,6 +143,34 @@ class TestResolvePath:
         assert result == str(tmp_path / "users" / "alice" / "credentials" / "x.json")
 
 
+# ---------------------------------------------------------------------------- #
+# _resolve_authority_path (#428 Phase 1)
+# ---------------------------------------------------------------------------- #
+
+class TestResolveAuthorityPath:
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
+    )
+    def test_absolute_path_is_returned_unchanged(self):
+        assert daemon_main._resolve_authority_path("/etc/hosts") == "/etc/hosts"
+
+    def test_relative_path_is_joined_with_project_roots_authority_subdirectory(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))
+
+        result = daemon_main._resolve_authority_path("config/settings.yaml")
+
+        assert result == str(tmp_path / "authority" / "config" / "settings.yaml")
+
+    def test_relative_path_for_a_non_local_principal_uses_its_own_authority_subdirectory(self, monkeypatch, tmp_path):
+        from privacyfence import paths
+        from privacyfence.principal import Principal, principal_scope
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        with principal_scope(Principal(id="alice")):
+            result = daemon_main._resolve_authority_path("config/settings.yaml")
+        assert result == str(tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml")
+
+
 class TestGoogleClientConfig:
     def test_empty_when_no_google_section(self):
         assert daemon_main._google_client_config({}) == {}
@@ -1698,7 +1726,8 @@ class TestOrgModeConnectorRegistry:
         host = result.org.connector_registry.get(alice)
 
         assert "slack" in host.connectors
-        assert (alice_dir / "config" / "settings.yaml").exists()  # bootstrapped on first use, per-principal
+        # bootstrapped on first use, per-principal -- under authority/ (#428 Phase 1)
+        assert (alice_dir / "authority" / "config" / "settings.yaml").exists()
 
     def test_two_principals_get_independent_connector_sets(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)

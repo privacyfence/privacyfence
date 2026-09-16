@@ -257,6 +257,185 @@ class TestUserDir:
             paths.user_dir(Principal(id=bad_id))
 
 
+class TestAuthorityDir:
+    """#428 Phase 1: the human-authority root -- web_token, settings.yaml,
+    webauthn credentials, and the audit log -- split out of user_dir(),
+    which stays reachable by the agent for mcp_token and connector state."""
+
+    def test_local_principal_is_a_subdirectory_of_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+        result = paths.authority_dir(Principal(id="local"))
+
+        assert result == tmp_path / "authority"
+        assert result.is_dir()
+
+    def test_other_principal_is_a_subdirectory_of_their_own_user_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+        result = paths.authority_dir(Principal(id="alice"))
+
+        assert result == tmp_path / "users" / "alice" / "authority"
+        assert result.is_dir()
+
+    def test_defaults_to_current_principal(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+        with principal_scope(Principal(id="local")):
+            assert paths.authority_dir() == tmp_path / "authority"
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, the now-removed windows-linux-support-plan.md's Track B3)",
+    )
+    def test_created_at_0700(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+        result = paths.authority_dir()
+
+        assert stat.S_IMODE(result.stat().st_mode) == 0o700
+
+    @pytest.mark.parametrize("legacy_relative", [
+        Path("config") / "settings.yaml",
+        "webauthn_credentials.json",
+        "web_token",
+        "web_token_version",
+    ])
+    def test_migrates_a_legacy_file_on_first_use(self, monkeypatch, tmp_path, legacy_relative):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        legacy_path = tmp_path / legacy_relative
+        legacy_path.parent.mkdir(parents=True, exist_ok=True)
+        legacy_path.write_text("pre-4.1 content", encoding="utf-8")
+
+        result = paths.authority_dir()
+
+        assert not legacy_path.exists()
+        assert (result / legacy_relative).read_text(encoding="utf-8") == "pre-4.1 content"
+
+    def test_does_not_migrate_the_audit_log(self, monkeypatch, tmp_path):
+        # Regression test: authority_dir()/authority_root() with no
+        # migrate_audit_log=True must never touch logs/audit. It once did
+        # unconditionally, which broke org mode's audit trail -- any call
+        # resolving an org principal's settings.yaml (which does go through
+        # authority_dir()) silently relocated a directory that principal's
+        # own audit logger (audit_log.py's _fallback_log_dir(), never
+        # redirected by #428) was still actively writing to at its old,
+        # unmigrated path -- see privacyfence/privacyfence#440's CI failure.
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        legacy_audit = tmp_path / "logs" / "audit"
+        legacy_audit.mkdir(parents=True)
+        (legacy_audit / "2026-W01.jsonl").write_text('{"decision": "approved"}\n', encoding="utf-8")
+
+        result = paths.authority_dir()
+
+        assert legacy_audit.exists()
+        assert not (result / "logs").exists()
+
+    def test_a_missing_legacy_file_is_not_fabricated(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+        result = paths.authority_dir()
+
+        assert not (result / "web_token").exists()
+
+    def test_does_not_overwrite_an_already_migrated_file(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        (tmp_path / "web_token").write_text("legacy", encoding="utf-8")
+        first = paths.authority_dir()
+        (first / "web_token").write_text("current", encoding="utf-8")
+        # A legacy file re-appearing (e.g. something else wrote to the old
+        # path after migration already ran) must never clobber real current
+        # state on a second lookup.
+        (tmp_path / "web_token").write_text("stale-legacy", encoding="utf-8")
+
+        second = paths.authority_dir()
+
+        assert (second / "web_token").read_text(encoding="utf-8") == "current"
+
+    def test_a_failed_migration_is_logged_not_raised(self, monkeypatch, tmp_path, caplog):
+        # e.g. a permissions error mid-upgrade -- the directory must still
+        # come back usable rather than taking the whole startup down over
+        # one file that couldn't be moved.
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        (tmp_path / "web_token").write_text("legacy", encoding="utf-8")
+
+        def _raise_rename(self, target):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(Path, "rename", _raise_rename)
+
+        with caplog.at_level("WARNING"):
+            result = paths.authority_dir()
+
+        assert result.is_dir()
+        assert not (result / "web_token").exists()
+        assert "web_token" in caplog.text
+
+
+class TestAuthorityRoot:
+    """authority_root() is authority_dir()'s own underlying primitive, taking
+    an explicit root rather than a principal -- daemon_main.py's local-
+    principal path resolution uses it directly, anchored on its own
+    PROJECT_ROOT/data_dir() module-level references rather than calling
+    user_dir()/authority_dir() itself, so that tests which monkeypatch those
+    two names to sandbox a run keep doing so correctly (see that module's
+    _resolve_authority_path())."""
+
+    def test_is_an_authority_subdirectory_of_the_given_root(self, tmp_path):
+        result = paths.authority_root(tmp_path)
+
+        assert result == tmp_path / "authority"
+        assert result.is_dir()
+
+    def test_migrates_legacy_files_relative_to_the_given_root(self, tmp_path):
+        (tmp_path / "web_token").write_text("secret", encoding="utf-8")
+
+        result = paths.authority_root(tmp_path)
+
+        assert not (tmp_path / "web_token").exists()
+        assert (result / "web_token").read_text(encoding="utf-8") == "secret"
+
+    def test_does_not_migrate_the_audit_log_by_default(self, tmp_path):
+        legacy_audit = tmp_path / "logs" / "audit"
+        legacy_audit.mkdir(parents=True)
+        (legacy_audit / "2026-W01.jsonl").write_text('{"decision": "approved"}\n', encoding="utf-8")
+
+        result = paths.authority_root(tmp_path)
+
+        assert legacy_audit.exists()
+        assert not (result / "logs").exists()
+
+    def test_migrates_the_audit_log_when_asked(self, tmp_path):
+        legacy_audit = tmp_path / "logs" / "audit"
+        legacy_audit.mkdir(parents=True)
+        (legacy_audit / "2026-W01.jsonl").write_text('{"decision": "approved"}\n', encoding="utf-8")
+
+        result = paths.authority_root(tmp_path, migrate_audit_log=True)
+
+        assert not legacy_audit.exists()
+        migrated = result / "logs" / "audit" / "2026-W01.jsonl"
+        assert migrated.read_text(encoding="utf-8") == '{"decision": "approved"}\n'
+
+    def test_a_second_call_without_migrate_audit_log_does_not_undo_it(self, tmp_path):
+        # Once daemon_main.py's own call has migrated the audit log, a later
+        # read-only accessor (settings_controller.py's export/snapshot
+        # helpers) calling authority_root() with the default False must see
+        # the already-migrated directory, not have it treated as absent.
+        legacy_audit = tmp_path / "logs" / "audit"
+        legacy_audit.mkdir(parents=True)
+        (legacy_audit / "2026-W01.jsonl").write_text('{"decision": "approved"}\n', encoding="utf-8")
+        migrated_path = paths.authority_root(tmp_path, migrate_audit_log=True) / "logs" / "audit" / "2026-W01.jsonl"
+
+        result = paths.authority_root(tmp_path)
+
+        assert result / "logs" / "audit" / "2026-W01.jsonl" == migrated_path
+        assert migrated_path.read_text(encoding="utf-8") == '{"decision": "approved"}\n'
+
+    def test_authority_dir_and_authority_root_agree_for_the_local_principal(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+        assert paths.authority_dir(Principal(id="local")) == paths.authority_root(tmp_path)
+
+
 class TestDownloadsDir:
     """The per-principal downloads directory used for staged delivery."""
 

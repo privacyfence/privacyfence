@@ -17,7 +17,9 @@ authority" the way it was through v4.0.0a12 (the same posture
 ``~/.privacyfence/ipc_token`` had for the bridge, before P5 retired both --
 this surface, reachable from a browser rather than only a local process,
 needed more). ``load_or_create_token()``'s random
-secret is generated once, written 0600 under paths.data_dir(), rotated
+secret is generated once, written 0600 under paths.authority_dir() (#428
+Phase 1 -- the human-authority root, not the agent-reachable
+paths.data_dir() this used to sit in directly), rotated
 whenever the installed version changes, and now used only to authorize
 minting a bootstrap code on demand (``POST /api/bootstrap``, see
 ``_bootstrap_mint_route`` below) -- never sent to a browser or written to a
@@ -170,9 +172,13 @@ def load_or_create_token() -> str:
     dead-ending any ``?token=`` link, log line, or shell-history entry that
     named it. A missing/unreadable version marker counts as "changed" too,
     so every pre-SEC-06 install (which never wrote one) rotates exactly
-    once on first startup under this version."""
-    path = paths.data_dir() / TOKEN_FILE_NAME
-    version_path = paths.data_dir() / TOKEN_VERSION_FILE_NAME
+    once on first startup under this version.
+
+    #428 Phase 1: lives under ``paths.authority_dir()``, not
+    ``paths.data_dir()`` -- this is the human's credential, not the
+    agent's (that's ``mcp_token``, which stays in ``data_dir()``)."""
+    path = paths.authority_dir() / TOKEN_FILE_NAME
+    version_path = paths.authority_dir() / TOKEN_VERSION_FILE_NAME
     current_version = __version__
     if path.exists() and version_path.exists():
         try:

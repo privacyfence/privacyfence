@@ -371,7 +371,9 @@ class TestToken:
         first = load_or_create_token()
         second = load_or_create_token()
         assert first == second
-        token_file = tmp_path / "web_token"
+        # #428 Phase 1: web_token lives under authority_dir(), not data_dir()
+        # itself -- see paths.py's own docstring for why.
+        token_file = tmp_path / "authority" / "web_token"
         assert token_file.exists()
         assert oct(token_file.stat().st_mode)[-3:] == "600"
 
@@ -394,7 +396,7 @@ class TestToken:
         first = load_or_create_token()
         second = load_or_create_token()
         assert first == second
-        version_file = tmp_path / "web_token_version"
+        version_file = tmp_path / "authority" / "web_token_version"
         assert version_file.exists()
         assert oct(version_file.stat().st_mode)[-3:] == "600"
 

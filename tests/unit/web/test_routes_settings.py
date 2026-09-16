@@ -395,7 +395,7 @@ class TestAuditLogDownload:
     def test_current_week_activity_downloads_with_content_disposition(self, client, controller, sessions):
         from privacyfence.audit_log import AuditEntry, AuditLogger, current_week
 
-        log_dir = sc.data_dir() / "logs" / "audit"
+        log_dir = sc.authority_root(sc.data_dir()) / "logs" / "audit"
         log_dir.mkdir(parents=True)
         week = current_week()
         AuditLogger(str(log_dir)).record(AuditEntry(

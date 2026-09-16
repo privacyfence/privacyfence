@@ -1651,7 +1651,7 @@ class TestAuditLog:
         assert controller.error
 
     def test_export_audit_log_path_no_activity_this_week_sets_error(self, controller):
-        (sc.data_dir() / "logs" / "audit").mkdir(parents=True)
+        (sc.authority_root(sc.data_dir()) / "logs" / "audit").mkdir(parents=True)
 
         path = controller.export_audit_log_path()
 
@@ -1661,7 +1661,7 @@ class TestAuditLog:
     def test_export_audit_log_path_exports_and_returns_the_current_weeks_path(self, controller):
         from privacyfence.audit_log import AuditEntry, AuditLogger, current_week
 
-        log_dir = sc.data_dir() / "logs" / "audit"
+        log_dir = sc.authority_root(sc.data_dir()) / "logs" / "audit"
         log_dir.mkdir(parents=True)
         week = current_week()
         entry = AuditEntry(
@@ -1681,7 +1681,7 @@ class TestAuditLog:
     def test_snapshot_recent_entries_reflect_the_audit_log(self, controller):
         from privacyfence.audit_log import AuditEntry, AuditLogger, current_week
 
-        log_dir = sc.data_dir() / "logs" / "audit"
+        log_dir = sc.authority_root(sc.data_dir()) / "logs" / "audit"
         log_dir.mkdir(parents=True)
         entry = AuditEntry(
             timestamp="2026-07-06T12:00:00+00:00", week=current_week(), request_id="",

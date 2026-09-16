@@ -48,7 +48,7 @@ from .calendar_client import CalendarClient
 from .contacts_client import ContactsClient
 from .drive_client import DriveClient
 from .gmail_client import GmailClient
-from .paths import data_dir, org_dir
+from .paths import authority_root, data_dir, org_dir
 from .pii_detector import set_pii_category_enabled, set_pii_detection_enabled
 from .privacy_filter import _parse_group as _parse_privacy_group
 from .privacy_filter import _VALID_POLICIES as PRIVACY_POLICIES
@@ -1554,7 +1554,7 @@ class SettingsController:
         here rather than a silent open-the-folder fallback. Sets self.error
         (and returns None) on either miss; clears it on success.
         """
-        log_dir = Path(data_dir()) / "logs" / "audit"
+        log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
         week = current_week()
         if not log_dir.exists() or not (log_dir / f"{week}.jsonl").exists():
             self.error = "No audit log for this week yet."
@@ -1867,7 +1867,7 @@ class SettingsController:
         level = str(log_cfg.get("level", "INFO")).upper()
         log_file = log_cfg.get("file", "logs/privacyfence.log")
         week = current_week()
-        log_dir = Path(data_dir()) / "logs" / "audit"
+        log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
 
         recent: list[dict[str, Any]] = []
         if log_dir.exists():

@@ -60,9 +60,13 @@ Configuration is split into two files (see paths.py):
   - ``config/settings.yaml``   — per-user settings: privacy policy,
     connectors{enabled}, auto_accept_rules,
     pii_detection{enabled, detect_ip_addresses, detect_financial_figures,
-    audit_match_details}. No secrets live here.
+    audit_match_details}. No secrets live here. Lives under
+    ``paths.authority_dir()`` (#428 Phase 1), not the user-dir root
+    directly -- see that function's own docstring.
 Per-user credentials (OAuth tokens, Telegram session) live under
-``credentials/``, one file per connector.
+``credentials/``, one file per connector -- ``paths.user_dir()`` itself,
+reachable by the agent, since these are its own operational data rather
+than the human's authority.
 """
 from __future__ import annotations
 
@@ -82,7 +86,7 @@ import portalocker
 import yaml
 
 from . import audit_forwarding, org_bundle_signing, org_mode
-from .paths import data_dir, org_dir, user_dir
+from .paths import authority_dir, authority_root, data_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL_ID, current_principal
 from .app_credentials import telegram_app_credentials
@@ -268,6 +272,11 @@ def _resolve_path(path: str) -> str:
     or to that *other* principal's own storage root (P6) when this runs
     inside a ``principal_scope()`` block for someone else (only
     connector_registry.py's ``ConnectorRegistry.get()`` does that today).
+
+    For connector OAuth tokens/caches and the daemon's own runtime log --
+    the agent's operational data, still reachable under ``user_dir()``.
+    ``config/settings.yaml`` does *not* go through this any more -- see
+    ``_resolve_authority_path()``.
     """
     if os.path.isabs(path):
         return path
@@ -275,6 +284,24 @@ def _resolve_path(path: str) -> str:
     if principal.id == LOCAL_PRINCIPAL_ID:
         return os.path.join(PROJECT_ROOT, path)
     return str(user_dir(principal) / path)
+
+
+def _resolve_authority_path(path: str) -> str:
+    """Like ``_resolve_path()``, but rooted at the ``authority`` subtree
+    rather than ``user_dir()``/``PROJECT_ROOT`` directly -- #428 Phase 1's
+    split for the files that back the *human's* authority (today, just
+    ``config/settings.yaml``) rather than the agent's own operational data.
+    Mirrors ``_resolve_path()``'s own local-vs-other-principal branching,
+    including anchoring the local principal on ``PROJECT_ROOT`` rather than
+    calling ``user_dir()``/``data_dir()`` itself, for the same test-
+    sandboxing reason given in that function's docstring.
+    """
+    if os.path.isabs(path):
+        return path
+    principal = current_principal()
+    if principal.id == LOCAL_PRINCIPAL_ID:
+        return str(authority_root(Path(PROJECT_ROOT)) / path)
+    return str(authority_dir(principal) / path)
 
 
 def _bootstrap_config(resolved: str) -> None:
@@ -722,10 +749,12 @@ def _load_principal_settings() -> dict[str, Any]:
 
     Called from org mode's per-principal ``ConnectorRegistry`` factory,
     under the ``principal_scope`` that factory is already run inside. The
-    *relative* path is what makes ``_resolve_path()`` (and ``load_config``'s
-    own bootstrap-a-default-on-first-use behavior) resolve against that
-    principal's own ``users/<id>/config/settings.yaml`` rather than the
-    local principal's, per §9.2's storage layout.
+    *relative* path is what makes ``_resolve_authority_path()`` (and
+    ``load_config``'s own bootstrap-a-default-on-first-use behavior)
+    resolve against that principal's own
+    ``users/<id>/authority/config/settings.yaml`` rather than the local
+    principal's, per §9.2's storage layout and #428 Phase 1's authority
+    split.
 
     Both side effects below exist because ``ConnectorRegistry.get()`` never
     goes through ``run_app()`` for any principal other than local, so
@@ -758,8 +787,8 @@ def _load_principal_settings() -> dict[str, Any]:
     survived it because no in-process org test had a principal whose
     settings.yaml carried a rule *and* went through the real factory.
     """
-    cfg = load_config("config/settings.yaml")
-    init_config_path(_resolve_path("config/settings.yaml"))
+    cfg = load_config(_resolve_authority_path("config/settings.yaml"))
+    init_config_path(_resolve_authority_path("config/settings.yaml"))
     reload_rules(build_effective_rules(cfg))
     return cfg
 
@@ -1561,7 +1590,14 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
             logger.warning("Could not start audit-log forwarding -- continuing without it: %s", exc)
 
     audit_logger = init_audit_logger(
-        str(Path(data_dir()) / "logs" / "audit"),
+        # #428 Phase 1: the audit log (plus its HMAC key) is one of the
+        # human-authority files -- authority_root(), not data_dir() itself.
+        # migrate_audit_log=True only here: this is the one call site that
+        # also reads the local principal's audit log back from the new
+        # location afterwards -- see authority_root()'s own docstring for
+        # why every other authority_root()/authority_dir() call defaults to
+        # leaving the audit directory alone.
+        str(authority_root(Path(data_dir()), migrate_audit_log=True) / "logs" / "audit"),
         deployment_id=get_or_create_deployment_id(),
         security_config_hash=compute_security_config_hash(config),
         forwarder=audit_forwarder,
@@ -1644,7 +1680,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="privacyfence-app",
         description="PrivacyFence daemon — governance UI and connector host.",
     )
-    default_config = os.path.join(PROJECT_ROOT, "config", "settings.yaml")
+    # #428 Phase 1: authority_root(), not PROJECT_ROOT directly -- settings.yaml
+    # is the human's privacy policy, not the agent's own operational data.
+    default_config = str(authority_root(Path(PROJECT_ROOT)) / "config" / "settings.yaml")
     parser.add_argument("--config", default=default_config)
     parser.add_argument("--gmail-oauth", action="store_true")
     parser.add_argument("--drive-oauth", action="store_true")

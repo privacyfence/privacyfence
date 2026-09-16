@@ -138,11 +138,15 @@ class WebAuthnCredential:
 # --------------------------------------------------------------------- #
 # Credential storage -- one 0600 JSON file per principal, same posture as
 # every OAuth token file in this codebase (see slack_client.
-# save_token_record's own comment).
+# save_token_record's own comment). Lives under paths.authority_dir(), not
+# paths.user_dir() directly (#428 Phase 1): #428's whole point is that the
+# agent must not be able to write the credential store a passkey (#426)
+# would be checked against, and authority_dir() is the root that becomes
+# service-owned in Phase 4.
 # --------------------------------------------------------------------- #
 
 def _credentials_path(principal: Principal) -> Path:
-    return paths.user_dir(principal) / CREDENTIALS_FILE_NAME
+    return paths.authority_dir(principal) / CREDENTIALS_FILE_NAME
 
 
 def list_credentials(principal: Principal) -> list[WebAuthnCredential]:

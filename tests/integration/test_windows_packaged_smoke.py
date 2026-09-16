@@ -243,7 +243,9 @@ def _prepare_home(home: Path, *, port: int) -> None:
     ``test_windows_upgrade_in_place_preserves_user_state`` exists to make
     (same reasoning, same fix, as ``test_deb_packaged_lifecycle.py``'s
     identically-named helper)."""
-    config_dir = _data_dir(home) / "config"
+    # #428 Phase 1: settings.yaml lives under an authority/ subdirectory of
+    # data_dir(), same as web_token below -- not data_dir() itself.
+    config_dir = _data_dir(home) / "authority" / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     settings_path = config_dir / "settings.yaml"
     if settings_path.exists():
@@ -285,7 +287,7 @@ def _running_daemon(exe: Path, home: Path):
             try:
                 _wait_until_connectable("localhost", port)
                 data_dir = _data_dir(home)
-                web_token = _wait_for_file(data_dir / WEB_TOKEN_FILE_NAME, proc, log_path)
+                web_token = _wait_for_file(data_dir / "authority" / WEB_TOKEN_FILE_NAME, proc, log_path)
                 mcp_token = _wait_for_file(data_dir / MCP_TOKEN_FILE_NAME, proc, log_path)
                 yield RunningDaemon(proc, home, port, web_token, mcp_token)
             finally:
@@ -399,7 +401,7 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         assert deny_result.isError is True
 
         # -- Audit log confirms both real decisions ------------------------------
-        audit_dir = _data_dir(daemon.home) / "logs" / "audit"
+        audit_dir = _data_dir(daemon.home) / "authority" / "logs" / "audit"
         decisions = []
         for jsonl_path in sorted(audit_dir.glob("*.jsonl")):
             for line in jsonl_path.read_text(encoding="utf-8").splitlines():
@@ -465,7 +467,7 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     with _running_daemon(alias_exe, home) as daemon:
         await _run_daemon_mcp_approval_audit_scenario(daemon)
 
-    settings_path = _data_dir(home) / "config" / "settings.yaml"
+    settings_path = _data_dir(home) / "authority" / "config" / "settings.yaml"
     assert "allowed.example.com" in settings_path.read_text(encoding="utf-8")
 
     # ── Uninstall (silent) ─────────────────────────────────────────────────
@@ -595,7 +597,7 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
             await _quit(web_client, session_id)
         assert daemon.process.wait(timeout=15) == 0
 
-    settings_path = _data_dir(home) / "config" / "settings.yaml"
+    settings_path = _data_dir(home) / "authority" / "config" / "settings.yaml"
     assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
 
     # ── Build and silently install a synthetically-bumped version N+1 over
