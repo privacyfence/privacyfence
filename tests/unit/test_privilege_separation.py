@@ -269,10 +269,35 @@ class TestSeparatedPathResolution:
         # authority/ is 0700 under the service account, so a companion
         # running as the human could not connect to a socket inside it.
         assert paths.control_socket_dir() == separated / "handoff"
-        assert control_channel.posix_socket_path() == separated / "handoff" / "control.sock"
+        # Compared against socket_path_under()'s own answer for that directory
+        # rather than a literal ``.../handoff/control.sock``: that function
+        # falls back to a short name in the system temp directory when the
+        # preferred path would overflow AF_UNIX's sun_path, which a macOS
+        # runner's own tmp_path reliably does (/private/var/folders/...) and a
+        # Linux one reliably doesn't. What Phase 4 changes is *which directory*
+        # is consulted, and that holds in either regime.
+        assert control_channel.posix_socket_path() == control_channel.socket_path_under(separated / "handoff")
+        assert control_channel.posix_socket_path() != control_channel.socket_path_under(separated / "authority")
 
     def test_companion_socket_is_in_the_handoff_dir(self, separated):
-        assert control_channel.companion_socket_path() == separated / "handoff" / "companion.sock"
+        assert control_channel.companion_socket_path() == control_channel.companion_socket_path_under(
+            separated / "handoff"
+        )
+        # Pre-Phase-4 this was rooted at data_dir() itself. It had to move: the
+        # companion runs as the human, who cannot create anything under the
+        # service-account-owned root.
+        assert control_channel.companion_socket_path() != control_channel.companion_socket_path_under(separated)
+
+    def test_a_real_installs_sockets_fit_in_sun_path(self):
+        # The two comparisons above are deliberately fallback-agnostic, which
+        # means they would also pass if the shipped layout were too long for
+        # AF_UNIX and every socket silently landed in /tmp instead. It isn't,
+        # and that is a property of the directory names this phase chose rather
+        # than an accident -- so assert it against the real root.
+        handoff = privilege_separation.MACOS_SYSTEM_ROOT / privilege_separation.HANDOFF_DIR_NAME
+
+        assert control_channel.socket_path_under(handoff) == handoff / "control.sock"
+        assert control_channel.companion_socket_path_under(handoff) == handoff / "companion.sock"
 
     def test_mcp_token_stays_reachable_by_the_agent(self, separated):
         # #428: "mcp_token stays reachable by the agent. It is the agent's own
