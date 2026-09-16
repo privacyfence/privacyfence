@@ -330,6 +330,14 @@ class TestUnauthorizedHtml:
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
         assert "privacyfence_get_sign_in_link" in body
 
+    def test_asking_claude_leads_rather_than_sitting_a_paragraph_down(self):
+        # Issue #423 part 3: P10 removed the menu bar, so "ask Claude to
+        # reopen this" is the intended recovery path, not a fallback --
+        # this regression-tests that it's the first thing the page says,
+        # ahead of the "why you're here" explanation.
+        body = sa.unauthorized_html(Request(self._scope())).body.decode()
+        assert body.index("privacyfence_get_sign_in_link") < body.index("expired, was already used")
+
     def test_shows_the_posix_path_and_a_bash_command_by_default(self, monkeypatch):
         # PurePosixPath, not Path -- a real Path constructed from a POSIX-
         # looking string still renders with backslashes on a host that's

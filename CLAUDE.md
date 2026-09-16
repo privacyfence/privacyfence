@@ -67,25 +67,36 @@ build_mcpb.sh` reads the real version only to stamp the `.mcpb` manifest itself
 ### Release notes come from CHANGELOG.md
 
 A stable tag's GitHub Release body is `CHANGELOG.md`'s section for that version, not GitHub's
-"generate release notes" button. Each of `build.yml`'s four stable-only release steps (in `build`,
-`build-windows`, `build-deb`, and `sbom`) runs `scripts/changelog_section.py <version>` and hands
-the result to `softprops/action-gh-release` as `body_path:`. They run in parallel against the same
-release and all write identical text, so the order they finish in doesn't matter.
+"generate release notes" button. `build.yml`'s `finalize-release` job — the same job that attaches
+every build's artifacts to the release, see "Packaged-artifact release gating" below — runs
+`scripts/changelog_section.py <version>` once, after `needs:` has already proven `build`,
+`build-windows`, `build-deb`, and `sbom` all succeeded, and hands the result to
+`softprops/action-gh-release` as `body_path:` in that same single call that attaches the files.
 
 That makes the notes a pull-request deliverable rather than a tag-day one, and it puts one
-requirement on the PR that cuts a release: **rename `CHANGELOG.md`'s `## [Unreleased]` heading to
-`## [X.Y.Z] — YYYY-MM-DD`, add a fresh empty `## [Unreleased]` above it, and update the two link
-definitions at the bottom of the file — before tagging.** A stable tag with no matching section
-fails the release build at the render step, which is deliberate: `action-gh-release` silently keeps
-the release's existing body when `body_path` can't be read, so failing loudly is the only way not
-to ship the auto-generated pull-request wall by accident.
+requirement on the PR that cuts a release: **`CHANGELOG.md` must end up with exactly one
+`## [X.Y.Z] — YYYY-MM-DD` heading for the version being tagged, a fresh empty `## [Unreleased]`
+above it, and the two link definitions at the bottom updated — before tagging.**
+
+Usually that means renaming `## [Unreleased]`. **Check first whether a section for that version
+already exists**, because renaming on top of one produces a *second* `## [X.Y.Z]` rather than the
+first: 4.0.0's section was opened early, while the changelog was being written, so its release PR
+must merge `[Unreleased]`'s entries into the existing `## [4.0.0]` section and correct its date
+instead of renaming anything.
+
+A stable tag with no matching section fails the release build at the render step, which is
+deliberate: `action-gh-release` silently keeps the release's existing body when `body_path` can't be
+read, so failing loudly is the only way not to ship the auto-generated pull-request wall by
+accident. A *duplicated* section fails the same way and for the same reason — before that guard
+existed, `changelog_section.py` matched the first heading and stopped at the next `##`, emitting
+whichever half came first, dropping the other, and exiting 0.
 
 Feature branches add under `## [Unreleased]` and never open a concrete version heading — that is
 the same `d929510` failure mode described above, in a different file.
 
 Pre-release tags (`aN`/`bN`/`rcN`) get no section of their own: per Keep a Changelog they fold into
-the version they lead to, which is why only the stable-channel steps render a body. Their release
-entries keep whatever body GitHub generated.
+the version they lead to, which is why `finalize-release` only renders a body on the stable
+channel. Their release entries keep whatever body GitHub generated.
 
 `changelog_section.py` reads a version *out of* the changelog and never determines one —
 `setuptools_scm` remains the only version source, and nothing may parse `CHANGELOG.md` to find out
@@ -100,9 +111,20 @@ Within `build.yml`, this needs no cross-workflow trickery — each of the `build
 `build-windows`, and `build-deb` jobs runs its own packaged-artifact test
 (`tests/integration/test_macos_packaged_smoke.py`, `test_windows_packaged_smoke.py`,
 `test_deb_packaged_lifecycle.py` — all `pytest.mark.packaged`) as an ordinary step, right after
-that job builds its own artifact and before that same job's own R2-upload/GitHub-Release-attach
-steps. An ordinary failed step stops the job there, so a broken DMG/installer/`.deb` never reaches
-its own upload steps — no `needs:` needed for this part, since it's all sequencing within one job.
+that job builds its own artifact and before that same job's own R2-upload and
+workflow-artifact-upload (`actions/upload-artifact`) steps. An ordinary failed step stops the job
+there, so a broken DMG/installer/`.deb` never reaches its own upload steps — no `needs:` needed for
+this part, since it's all sequencing within one job.
+
+The GitHub Release attachment is a separate guarantee, and it *does* need `needs:` (privacyfence/
+privacyfence#373): `build`/`build-windows`/`build-deb`/`sbom` each only upload their own artifact
+as a workflow artifact now, never straight to the release, so a job failing after a sibling has
+already succeeded can no longer leave the public GitHub Release with only some of a stable
+release's files. `finalize-release` — gated by `needs: [build, build-windows, build-deb, sbom]`,
+the same job that promotes R2's `latest.json` — downloads every workflow artifact and makes the
+one `softprops/action-gh-release` call itself, after all four jobs have already succeeded. The
+GitHub Release ends up exactly as atomic as the R2 promotion: either it gets the complete file set,
+or it doesn't get touched at all.
 
 Getting the same guarantee into `publish-pypi.yml` is the part that actually needs wiring: that
 workflow's sdist/wheel has no packaged-artifact test of its own to gate on, but a broken macOS/

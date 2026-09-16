@@ -113,6 +113,51 @@ class TestSubscribe:
         assert any(len(d) == 1 and d[0]["id"] == "a1" for d in ids_seen)
 
 
+class TestSubscribeTouch:
+    """Issue #423: a long-lived connection is itself proof of activity, so
+    ``subscribe()`` refreshes the session on the same cadence it already
+    polls at, instead of leaving it untouched for the whole life of the
+    connection."""
+
+    async def test_touch_is_called_once_per_tick(self):
+        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
+        calls = []
+
+        def touch():
+            calls.append(1)
+            return True
+
+        async for _ in stream.subscribe(_Disconnector(after=3), touch=touch):
+            pass
+
+        assert len(calls) == 3
+
+    async def test_stream_ends_once_touch_reports_the_session_gone(self):
+        # A False from `touch` (session idle-/absolute-expired) closes the
+        # connection the same way a client disconnect does -- never
+        # streaming to a tab whose session the store has already evicted.
+        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
+        calls = []
+
+        def touch():
+            calls.append(1)
+            return len(calls) < 2
+
+        chunks = [c async for c in stream.subscribe(_Disconnector(after=100), touch=touch)]
+
+        assert len(calls) == 2
+        events = [_parse_sse(c)[0] for c in chunks]
+        assert events == ["approvals"]  # only the initial full-state flush, nothing after
+
+    async def test_no_touch_given_behaves_as_before(self):
+        # `touch` is optional -- server.py only ever omits it for callers
+        # with no session store of their own (there are none left in local
+        # mode, but nothing here should require passing it).
+        stream = StateStream(settings_snapshot=lambda: None, list_pending=lambda: [])
+        chunks = [c async for c in stream.subscribe(_Disconnector(after=2))]
+        assert len(chunks) == 1
+
+
 class _FakeApproval:
     def __init__(self, approval_id: str) -> None:
         self.id = approval_id
