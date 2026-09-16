@@ -105,10 +105,8 @@ export interface FindDaemonCmdOptions {
  * bridge/src/daemon.ts's findDaemonCmd: the shim ships inside the .mcpb,
  * never as a sibling of privacyfence-app on disk, so this normally only
  * matters as a fallback -- the daemon should already be running via its
- * LaunchAgent (macOS), Task Scheduler task (Windows, the now-removed docs/windows-support-
- * plan.md Phase 3), or systemd --user unit / XDG autostart entry (Linux,
- * per the now-removed docs/linux-local-deb-packaging-plan.md's Phase 3) by the time Claude
- * Desktop spawns the shim.
+ * LaunchAgent (macOS), Task Scheduler task (Windows), or systemd --user unit / XDG autostart
+ * entry (Linux) by the time Claude Desktop spawns the shim.
  */
 export function findDaemonCmd(opts: FindDaemonCmdOptions = {}): string[] {
   const scriptPath = opts.scriptPath ?? process.argv[1] ?? process.execPath;
@@ -140,8 +138,7 @@ export function findDaemonCmd(opts: FindDaemonCmdOptions = {}): string[] {
 
   // Linux fallback: a `.deb` install puts a wrapper at /usr/bin/privacyfence-app
   // (normally already on PATH, so the which() lookup above would have found
-  // it), but a `pipx install privacyfence` (the now-removed windows-linux-support-plan.md's
-  // Track A2 "verify the pip/pipx path" item) drops the console script at
+  // it), but a `pipx install privacyfence` drops the console script at
   // ~/.local/bin/privacyfence-app instead -- a location that's on a user's
   // interactive shell PATH but not necessarily on the trimmed-down PATH a
   // graphical session (and therefore Claude Desktop, and this spawned shim)

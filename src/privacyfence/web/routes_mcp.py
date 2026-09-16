@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import uuid
 from collections.abc import AsyncIterator
@@ -396,6 +397,155 @@ class _SessionIdOnlyOnSuccess:
         await self._app(scope, receive, send_without_dead_session_id)
 
 
+# One JSON-RPC ``initialize`` frame is a few hundred bytes; this leaves room
+# for a client that sends generous capability metadata while bounding what a
+# stale-session POST can make this middleware hold in memory before it
+# decides. Over the cap, the request is passed through untouched -- it cannot
+# be an ``initialize`` worth re-homing at that size, and guessing is worse
+# than leaving today's behavior alone.
+_MAX_BUFFERED_OPENING_BODY_BYTES = 256 * 1024
+
+
+def _header_value(scope: dict[str, Any], name: bytes) -> str | None:
+    for key, value in scope.get("headers", []):
+        if key.lower() == name:
+            return value.decode("latin-1")
+    return None
+
+
+def _names_initialize(frame: object) -> bool:
+    return isinstance(frame, dict) and frame.get("method") == "initialize"
+
+
+def _is_initialize(body: bytes | None) -> bool:
+    """Whether ``body`` is (or, for a batch, contains) an ``initialize``
+    request. Deliberately the *only* thing this module reads out of a /mcp
+    request body: which method is being called is JSON-RPC envelope framing,
+    not knowledge of what the method does -- the same line ``mcpb/shim/src/
+    proxy.ts`` draws for the same reason."""
+    if not body:
+        return False
+    try:
+        frame = json.loads(body)
+    except ValueError:
+        return False
+    if isinstance(frame, list):
+        return any(_names_initialize(item) for item in frame)
+    return _names_initialize(frame)
+
+
+async def _buffer_request_body(receive: Any) -> tuple[bytes | None, Any]:
+    """Reads the request body so it can be inspected, and returns it
+    alongside a ``receive`` that replays every consumed ASGI message before
+    falling back to the real one -- so whatever runs next sees an untouched
+    request either way.
+
+    ``None`` as the body means "don't inspect this": either it exceeded
+    ``_MAX_BUFFERED_OPENING_BODY_BYTES`` or the client disconnected
+    mid-stream. The replay is still correct in both cases.
+    """
+    consumed: list[dict[str, Any]] = []
+    body = bytearray()
+    unusable = False
+    while True:
+        message = await receive()
+        consumed.append(message)
+        if message["type"] != "http.request":
+            unusable = True  # http.disconnect: a partial body is not worth parsing
+            break
+        body += message.get("body", b"")
+        if len(body) > _MAX_BUFFERED_OPENING_BODY_BYTES:
+            unusable = True
+            break
+        if not message.get("more_body", False):
+            break
+
+    pending = list(consumed)
+
+    async def replay() -> dict[str, Any]:
+        if pending:
+            return pending.pop(0)
+        return await receive()
+
+    return (None if unusable else bytes(body)), replay
+
+
+class _RehomeStaleInitialize:
+    """Lets an ``initialize`` that arrives carrying a dead ``Mcp-Session-Id``
+    open a fresh session, instead of being refused forever.
+
+    The SDK's session manager answers any request naming a session it doesn't
+    hold with 404 "Session not found" (``streamable_http_manager.py``'s final
+    ``else``), which is right by the spec and fatal in practice, because
+    **neither** official client transport recovers from it:
+
+    - the Python client (``client/streamable_http.py``) turns a 404 into a
+      "Session terminated" JSON-RPC error and returns -- it never clears its
+      own ``session_id``;
+    - the TypeScript client (``client/streamableHttp.js``) throws
+      ``StreamableHTTPError``. It special-cases 401 and 403; 404 is not one of
+      them, and ``_sessionId`` is only ever cleared by an explicit
+      ``terminateSession()`` -- which itself throws on the 404 that a dead
+      session's DELETE earns, before reaching the line that would clear it.
+
+    So a client holding a stale id keeps stamping it on everything it sends,
+    ``initialize`` very much included, and every one of those is refused on
+    account of the id rather than judged on its own merits. The connection
+    cannot recover for the life of the client process. That happens after any
+    daemon restart, and after any session this daemon evicts or lets lapse.
+
+    ``_SessionIdOnlyOnSuccess`` above stops a client *adopting* an id it was
+    never given; this handles the case where the id was legitimately issued
+    and has since died. Together they make the failure recoverable from both
+    ends.
+
+    Only a POST whose body actually is an ``initialize`` is re-homed. A
+    request naming a *live* session is untouched, so the session manager's own
+    "a session can only be used with the credential that created it" check
+    still decides those. Everything else -- a GET reopening an SSE stream, a
+    DELETE terminating a session, any non-``initialize`` POST -- keeps today's
+    404: those genuinely need the session they name, and a fresh one would not
+    serve them (a server session that never saw ``initialize`` refuses the
+    frame anyway, so silently re-homing them would trade a clear 404 for a
+    confusing one).
+    """
+
+    def __init__(self, app: ASGIApp, session_manager: StreamableHTTPSessionManager) -> None:
+        self._app = app
+        self._session_manager = session_manager
+
+    def _is_live(self, session_id: str) -> bool | None:
+        """``None`` when this SDK build doesn't expose its session map where
+        we expect it -- the pin is a range (``mcp>=1.28,<2.0``), so an
+        internal rename must degrade to "do nothing" rather than break /mcp.
+        """
+        instances = getattr(self._session_manager, "_server_instances", None)
+        if not isinstance(instances, dict):
+            return None
+        return session_id in instances
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope.get("method") != "POST":
+            await self._app(scope, receive, send)
+            return
+        session_id = _header_value(scope, _MCP_SESSION_ID_HEADER)
+        if session_id is None or self._is_live(session_id) is not False:
+            await self._app(scope, receive, send)
+            return
+        body, replay = await _buffer_request_body(receive)
+        if not _is_initialize(body):
+            await self._app(scope, replay, send)
+            return
+        logger.info(
+            "Re-homing an initialize request that named a session this daemon no longer holds",
+        )
+        rehomed = {**scope, "headers": [
+            (name, value) for name, value in scope.get("headers", [])
+            if name.lower() != _MCP_SESSION_ID_HEADER
+        ]}
+        await self._app(rehomed, replay, send)
+
+
 def build_mcp_asgi_app(
     dispatcher: McpDispatcher, *, token: str | None = None, verifier: TokenVerifier | None = None,
     resource_metadata_url: AnyHttpUrl | None = None,
@@ -423,7 +573,9 @@ def build_mcp_asgi_app(
             raise ValueError("build_mcp_asgi_app needs either token or verifier")
         verifier = StaticTokenVerifier(token)
     protected = RequireAuthMiddleware(
-        _SessionIdOnlyOnSuccess(_StreamableHTTPASGIApp(session_manager)),
+        _SessionIdOnlyOnSuccess(
+            _RehomeStaleInitialize(_StreamableHTTPASGIApp(session_manager), session_manager),
+        ),
         required_scopes=[], resource_metadata_url=resource_metadata_url,
     )
     authenticated = AuthContextMiddleware(protected)

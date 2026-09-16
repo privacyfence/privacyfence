@@ -1,14 +1,12 @@
-"""Real graphical-session autostart verification for the Linux ``.deb``
-(the now-removed automated-test-strategy-plan.md Phase 7 item 1; the now-removed linux-local-deb-
-packaging-plan.md P7.2).
+"""Real graphical-session autostart verification for the Linux ``.deb``.
 
 ``test_deb_packaged_lifecycle.py`` (Phase 6.3) already proves the install/
 validate/remove/purge/upgrade lifecycle, including that ``desktop-file-
 validate`` accepts the installed ``/etc/xdg/autostart/privacyfence.desktop``.
 What it deliberately does *not* prove -- see that module's own docstring,
-which only starts the daemon directly -- is P7.2's actual open question:
-does a real graphical login *itself* start the daemon via that autostart
-entry, with nothing else telling it to?
+which only starts the daemon directly -- is this module's own open
+question: does a real graphical login *itself* start the daemon via that
+autostart entry, with nothing else telling it to?
 
 There is no real display manager (gdm/lightdm/sddm) available on a CI
 runner to log into, so this module makes one deliberate substitution
@@ -24,7 +22,7 @@ in this module parses or interprets ``privacyfence.desktop`` itself; it
 only brings up a real ``systemd --user`` manager for the account (the same
 ``user@<uid>.service`` unit ``pam_systemd`` starts at a real login) and
 starts that one real target -- standing in for the missing physical
-login, exactly as P7.2's own text anticipates ("real or VM ... desktop").
+login, standing in for a real or VM desktop session.
 Everything downstream -- the generated unit's shape, whether it actually
 gets pulled in, whether starting it actually launches the packaged binary,
 whether the daemon then serves a real MCP/approval/audit round trip, and
@@ -39,9 +37,9 @@ PrivacyFence state under ``$HOME``, and always removes whatever it creates
 there afterwards -- see ``_real_home_state``. Only ever run this against a
 disposable CI account.
 
-A second, independent test in this module closes the other half of P7.2's
-"where practical" ask -- the OAuth loopback browser-opening flow -- in the
-one way a real graphical session uniquely enables:
+A second, independent test in this module covers the OAuth loopback
+browser-opening flow, where practical, in the one way a real graphical
+session uniquely enables:
 ``tests/platform/test_browser_launch_default.py`` (Phase 2.3) already
 proves ``oauth_loopback.run_browser_oauth()``'s default path reaches the
 real ``webbrowser.open`` function object, but it does so by *monkeypatching
@@ -61,9 +59,8 @@ systemd as PID 1 (``/run/systemd/system`` -- a container typically fails
 this, a GitHub-hosted ``ubuntu-latest`` runner, a real VM, passes it), with
 whatever else each specific test additionally needs (a just-built ``.deb``
 and passwordless root for the autostart test; ``Xvfb`` for the browser
-test). This is the flakiest, most expensive tier in
-`the now-removed `automated-test-strategy-plan.md``'s whole taxonomy by design (see
-Phase 7's own objective) -- scheduled on packaging-related ``main`` changes,
+test). This is the flakiest, most expensive tier in docs/testing-policy.md's
+test taxonomy (layer 6, packaged-artifact) by design -- scheduled on packaging-related ``main`` changes,
 nightly/periodic runs, and release-candidate tags via its own
 ``.github/workflows/linux-graphical-session.yml``, deliberately kept out of
 both the per-PR ``tests.yml`` jobs and ``build.yml``'s tag-triggered release
@@ -143,7 +140,7 @@ pytestmark = [
     pytest.mark.packaged,
     pytest.mark.skipif(
         platform.system() != "Linux",
-        reason="only meaningful on real Linux -- see the now-removed linux-local-deb-packaging-plan.md P7.2",
+        reason="only meaningful on real Linux",
     ),
     # Same heavy-setup timeout reasoning as test_deb_packaged_lifecycle.py:
     # a real dpkg install, a real systemd --user manager brought up from
@@ -204,8 +201,7 @@ def _current_user() -> str:
 # --------------------------------------------------------------------------- #
 
 def _capture_real_home_diagnostics(request, real_home: Path, state_dir: Path) -> None:
-    """The now-removed automated-test-strategy-plan.md Phase 10: this module's own
-    tests/diagnostics.py capture call, since ``_real_home_state`` (unlike
+    """This module's own tests/diagnostics.py capture call, since ``_real_home_state`` (unlike
     every other packaged/system fixture in this repo) deliberately isolates
     nothing under ``tmp_path`` -- see this fixture's own docstring for why.
     Its own daemon never even logs to a file (`systemd --user` captures its
@@ -249,7 +245,7 @@ def _real_home_state(request):
 
 
 # --------------------------------------------------------------------------- #
-# Test 1 -- P7.2: real login-equivalent XDG autostart actually starts the
+# Test 1 -- real login-equivalent XDG autostart actually starts the
 # packaged daemon, which then serves a real daemon/MCP/approval/audit round
 # trip (Phase 3's own contract shape), and "Quit PrivacyFence" stops the
 # real systemd unit, not just the process.
@@ -421,7 +417,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
 
 
 # --------------------------------------------------------------------------- #
-# Test 2 -- P7.2 "where practical": the real (unmocked) OAuth loopback
+# Test 2 -- where practical, the real (unmocked) OAuth loopback
 # browser-opening flow, under a real Xvfb $DISPLAY.
 # --------------------------------------------------------------------------- #
 

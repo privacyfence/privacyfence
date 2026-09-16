@@ -1,7 +1,6 @@
 """The real daemon, started and stopped as a genuinely separate OS process
-(the now-removed automated-test-strategy-plan.md Phase 2.3 -- "process spawning,"
-"daemon startup," "shim daemon discovery (mcp_url file)," and "process
-cleanup on shutdown").
+(process spawning, daemon startup, shim daemon discovery (mcp_url file), and
+process cleanup on shutdown).
 
 Every other daemon-startup test in this repo drives ``daemon_main.run_app()``
 or ``main()`` as a plain Python call inside the *test's own process* (see
@@ -14,8 +13,7 @@ writes the ``mcp_url`` file the shim discovers it through (protocol.ts),
 and goes away cleanly when killed -- freeing both the port and the
 single-instance lock for whatever starts next. This is deliberately a small
 slice of that, not the full daemon/MCP/approval/audit contract --
-The now-removed automated-test-strategy-plan.md's own Phase 3 (``tests/system/
-test_local_mode_system.py``, not yet built) owns that larger scenario, on
+``tests/system/test_local_mode_system.py`` owns that larger scenario, on
 all three OSes, reusing patterns from this module and from
 tests/integration/test_mcp_daemon_contract.py rather than duplicating them
 here.

@@ -63,6 +63,7 @@ def _idp() -> oi.IdpConfig:
 
 def _build_app(tmp_path, monkeypatch):
     monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
+    monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
     provider = OrgOAuthProvider(_idp(), idp_callback_url=f"{ISSUER}/oauth/idp/callback")
     dispatcher = McpDispatcher(lambda: {"whoami": WhoAmIConnector()})
     mcp_route, session_manager = mount_mcp(dispatcher, verifier=provider)
@@ -228,6 +229,7 @@ async def test_dcr_registration_is_visible_to_a_fresh_provider_instance(tmp_path
     earlier one registered, so Claude never has to re-run DCR after a
     restart."""
     monkeypatch.setattr("privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"))
+    monkeypatch.setattr("privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"))
     first = OrgOAuthProvider(_idp(), idp_callback_url=f"{ISSUER}/oauth/idp/callback")
     from mcp.shared.auth import OAuthClientInformationFull
     from pydantic import AnyUrl

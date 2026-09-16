@@ -380,8 +380,7 @@ class TestListRules:
         return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
 
     def test_returns_the_persisted_rules(self):
-        # No longer a @staticmethod (the now-removed automated-test-strategy-plan.md
-        # Phase 8): it now forces this principal's ConnectorRegistry entry
+        # No longer a @staticmethod: it now forces this principal's ConnectorRegistry entry
         # to exist first, the same way check_policy already did, so a
         # principal whose first-ever MCP call is this one still gets their
         # auto_accept config path initialized instead of raising -- an

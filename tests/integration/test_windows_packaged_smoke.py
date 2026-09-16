@@ -1,6 +1,4 @@
-"""Packaged-artifact lifecycle test for the Windows installer
-(the now-removed automated-test-strategy-plan.md Phase 6 item 6.2; docs/windows-support-
-plan.md Phase 4/6).
+"""Packaged-artifact lifecycle test for the Windows installer.
 
 The same role ``tests/integration/test_macos_packaged_smoke.py`` (TST-15)
 plays for the DMG and ``tests/integration/test_deb_packaged_lifecycle.py``
@@ -18,9 +16,8 @@ as possible to how a real user would.
    location needs no admin elevation at all -- this test relies on exactly
    that, so it runs the same way an unprivileged CI runner does.
 2. **Validate the autostart entry**: ``installer/privacyfence.iss``'s
-   ``[Run]`` section registers the Task Scheduler task
-   (the now-removed windows-support-plan.md Phase 3) as part of the (silent) install
-   itself, not a separate opt-in step -- ``schtasks /query`` against it is
+   ``[Run]`` section registers the Task Scheduler task as part of the
+   (silent) install itself, not a separate opt-in step -- ``schtasks /query`` against it is
    the one thing that would silently no-op at next logon if the install step
    ever stopped wiring it up.
 3. **Start the real installed daemon** (``privacyfence-app.exe``, not
@@ -128,7 +125,7 @@ pytestmark = [
     pytest.mark.packaged,
     pytest.mark.skipif(
         platform.system() != "Windows",
-        reason="only meaningful against a real installer -- see the now-removed windows-support-plan.md Phase 4",
+        reason="only meaningful against a real installer",
     ),
     pytest.mark.skipif(
         not _built_installers(),

@@ -135,6 +135,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Org mode: restarting the daemon no longer forces every connected MCP client through a full
+  browser sign-in. The OAuth refresh tokens `/mcp` clients hold are now persisted across a
+  restart, so the ordinary silent-refresh path survives one and a client re-authenticates with
+  nobody present. Previously every token store was in-process only: a restart emptied them, the
+  refresh path was unavailable along with everything else, and the client had to redo the whole
+  `authorize → IdP redirect → sign-in → code exchange` round trip. For a human at a browser that
+  was an annoyance; for a scheduled or background tool call it was a dead end, because there is
+  nobody there to complete a redirect. Each record is sealed under a key derived from the refresh
+  token itself rather than one the daemon keeps, so the file is inert without a token that was
+  already valid — encrypting under a daemon-held key would have moved the secret rather than
+  protected it. Access tokens (one hour, re-minted by the refresh) and browser sessions (a human
+  is present by definition) are still deliberately in-memory only, and every revocation path —
+  logout, `/revoke`, rotation, the 30-day chain cap — clears the persisted record too. See issue
+  #402.
+- A client holding the session id of a Streamable HTTP session that no longer exists — after a
+  daemon restart, or an eviction — can now recover instead of being refused for the life of its
+  own process. `/mcp` answered any request naming an unknown session with `404 Session not
+  found`, which is correct by the spec and fatal in practice: neither official MCP client
+  transport clears its stored session id on a 404, so it kept stamping the dead id on everything
+  it sent, `initialize` included, and every one of those was refused on account of the id rather
+  than judged on its own merits. An `initialize` that arrives carrying an unknown session id now
+  opens a fresh session. Requests that genuinely need the session they name (a GET reopening an
+  SSE stream, a DELETE, any non-`initialize` POST) still get today's 404. The bundled `.mcpb`
+  shim retries the same frame once without the stale id, so a shim newer than the daemon it talks
+  to recovers as well. See issue #402.
 - The `/approvals` and `/settings` pages no longer get logged out from under a tab that's been
   open and actively watching (live SSE indicator, incoming approvals rendering) for longer than
   the 30-minute idle timeout. The session was only ever touched once, when the stream connected —
@@ -198,6 +223,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Slack and the rest were invisible to Claude in org mode — calls to them resolved correctly, but
   no client could discover the tools existed to make one. Local mode was never affected, and a
   principal is never shown tools backed by another principal's credentials.
+- The PyPI project page is no longer bare. `pyproject.toml` now declares `[project.urls]`
+  (Homepage, Download, Documentation, Source, Changelog, Issues, Security) and `classifiers`, so
+  the sidebar on `pypi.org/project/privacyfence/` links back to the site and repo and the project
+  is classified (Development Status, License, Operating System, Intended Audience, Topic) rather
+  than surfacing in no browse facet at all. README.md — which is the PyPI long description — had
+  30 relative doc links and 4 relative screenshot `<img>`s that only resolve on GitHub; those are
+  now absolute (`github.com/.../blob/main/...` for docs, `raw.githubusercontent.com/.../main/...`
+  for images), and the three `../../releases` download pointers now point at
+  `privacyfence.eu/download/`, the canonical download surface. See issue #370.
 
 ## [4.0.0] — 2026-09-14
 

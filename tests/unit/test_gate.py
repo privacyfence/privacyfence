@@ -10,11 +10,11 @@ The one invariant that matters more than
 any individual branch: gated_call must never return raw_data when
 filtered_data differs from it -- that's the actual privacy boundary.
 
-The now-removed `automated-test-strategy-plan.md` Phase 5 cross-checked this module against the
+This module is cross-checked against the
 full gate/policy matrix (auto->allowed, review->Allow/Deny, review+PII->Proceed/
 Cancel, popup/write->Allow/Deny, "Always allow"->proposed rule, matching/non-
-matching rule/grant, unattended allowed/forbidden) and found it already covered
-nearly all of it -- see that phase's own status note for what the audit added.
+matching rule/grant, unattended allowed/forbidden) and covers
+nearly all of it.
 One matrix item is deliberately *not* asserted anywhere in this file: "policy
 denial happens before connector execution." gated_call() itself never holds a
 reference to a connector's provider client -- for a popup-gated write, the

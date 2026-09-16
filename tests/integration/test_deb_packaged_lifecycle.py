@@ -1,11 +1,8 @@
-"""Packaged-artifact lifecycle test for the Linux ``.deb``
-(the now-removed automated-test-strategy-plan.md Phase 6 item 6.3; the now-removed linux-local-deb-
-packaging-plan.md P7.1/P7.3).
+"""Packaged-artifact lifecycle test for the Linux ``.deb``.
 
-The now-removed ``linux-local-deb-packaging-plan.md`` Phase 7 already proved this
-lifecycle by hand once (P7.1: install/validate/remove/purge; P7.3, partially:
-reinstalling the same build over itself leaves ``$HOME`` alone). This module
-turns that into a repeatable CI job, the same role
+This lifecycle -- install/validate/remove/purge, and, partially, that
+reinstalling the same build over itself leaves ``$HOME`` alone -- used to be
+proven only by hand. This module turns that into a repeatable CI job, the same role
 ``tests/integration/test_macos_packaged_smoke.py`` (TST-15) already plays for
 the DMG: install the actual built artifact, not a source checkout or an
 editable dev install, and exercise it as closely as possible to how a real
@@ -140,7 +137,7 @@ pytestmark = [
     pytest.mark.packaged,
     pytest.mark.skipif(
         platform.system() != "Linux",
-        reason="only meaningful against a real .deb -- see the now-removed linux-local-deb-packaging-plan.md P7.1",
+        reason="only meaningful against a real .deb",
     ),
     pytest.mark.skipif(
         not _built_debs(),
@@ -192,8 +189,7 @@ def _purge_if_present() -> None:
 
 
 def _capture_installed_file_manifest(request) -> None:
-    """The now-removed automated-test-strategy-plan.md Phase 10 item 1's "an
-    installed-file manifest (packaged tests)" -- unlike
+    """An installed-file manifest -- unlike
     test_windows_packaged_smoke.py's own install directory (already under
     that test's own ``tmp_path``, so tests/diagnostics.py's generic
     per-``tmp_path`` manifest already covers it for free), a real

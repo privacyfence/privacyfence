@@ -87,6 +87,11 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/web/oauth_provider.py": 99.0,
     "src/privacyfence/web/org_session.py": 100.0,
     "src/privacyfence/web/session_auth.py": 100.0,
+    # #402: the only place org-mode bearer material is written to disk. Every
+    # branch here is either a credential going out or a damaged-file path that
+    # has to fail closed, so this one earns a full floor rather than a high
+    # one.
+    "src/privacyfence/web/sealed_refresh_store.py": 100.0,
     # SEC-07: privacy-filter fail-closed load path.
     "src/privacyfence/privacy_filter.py": 100.0,
     # SEC-09: atomic, permission-safe credential/config writes.

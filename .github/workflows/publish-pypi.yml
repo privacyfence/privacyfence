@@ -4,9 +4,9 @@ name: Publish to PyPI
 # push does everything: builds and signs the DMG (build.yml) *and* builds
 # and publishes the sdist/wheel (this workflow), with no separate step.
 # Independently triggered, but no longer independently *gated*: the
-# `wait_for_build` job below (the now-removed automated-test-strategy-plan.md Phase 6.4)
-# blocks every publish step here on build.yml's own run for this exact commit
-# actually succeeding -- packaged-artifact test failures (macOS/Windows/Linux)
+# `wait_for_build` job below blocks every publish step here on build.yml's own
+# run for this exact commit actually succeeding -- packaged-artifact test
+# failures (macOS/Windows/Linux)
 # block PyPI/TestPyPI/R2 publication too, not just their own platform's DMG/
 # installer/.deb.
 #
@@ -34,9 +34,10 @@ permissions:
   contents: read
 
 jobs:
-  # Phase 6.4 (the now-removed automated-test-strategy-plan.md): "Wire all three [macOS/Windows/Linux
-  # packaged-artifact tests] into the release build workflows (build.yml, publish-pypi.yml) ahead
-  # of the publish step... A failed packaged-artifact test blocks publication."
+  # Every published DMG/installer/.deb is started and exercised, automatically, before it (or
+  # anything else from the same tag) actually ships -- see CLAUDE.md's "Packaged-artifact release
+  # gating" section. This job wires that guarantee into this workflow's own publish steps too: a
+  # failed packaged-artifact test on any platform blocks publication here as well.
   #
   # GitHub Actions has no native `needs:` across separate workflow files -- build.yml and this
   # workflow are two independent listeners on the same `push: tags: ['v*']` event, so there's no

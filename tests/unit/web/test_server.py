@@ -362,7 +362,7 @@ class TestBuildCsp:
 
 class TestToken:
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, the now-removed windows-linux-support-plan.md's Track B3)",
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_generates_and_persists_a_token(self, tmp_path, monkeypatch):
         from privacyfence import paths
@@ -387,7 +387,7 @@ class TestToken:
     # -- SEC-06: rotated whenever the installed version changes -------------- #
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, the now-removed windows-linux-support-plan.md's Track B3)",
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_survives_a_restart_with_no_version_change(self, tmp_path, monkeypatch):
         from privacyfence import paths
@@ -610,7 +610,7 @@ class TestBootstrapUrlFile:
         return WebServer(WebApprovalUI(), host="localhost", port=0, token=TOKEN)
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, the now-removed windows-linux-support-plan.md's Track B3)",
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_mint_writes_the_unredacted_link_to_its_own_file(self, tmp_path, monkeypatch):
         server = self._server(tmp_path, monkeypatch)
@@ -661,6 +661,9 @@ class TestBootstrapUrlFile:
         monkeypatch.setattr(
             "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"),
         )
+        monkeypatch.setattr(
+            "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"),
+        )
         idp = oi.IdpConfig(
             issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
             authorization_endpoint="https://idp.example.com/authorize",
@@ -696,7 +699,7 @@ class TestMcpUrlFile:
         return WebServer(WebApprovalUI(), host="localhost", port=0, token=TOKEN, **kwargs)
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, the now-removed windows-linux-support-plan.md's Track B3)",
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_start_writes_the_file_when_mcp_is_enabled(self, tmp_path, monkeypatch):
         server = self._server(tmp_path, monkeypatch, with_mcp=True)

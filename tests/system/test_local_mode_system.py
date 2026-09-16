@@ -1,5 +1,5 @@
-"""Canonical cross-platform system test (the now-removed automated-test-strategy-plan.md
-Phase 3): one real daemon -> MCP -> approval -> audit scenario, proven
+"""Canonical cross-platform system test (docs/testing-policy.md's layer-3
+canonical scenario): one real daemon -> MCP -> approval -> audit scenario, proven
 identical on ``ubuntu-latest``, ``windows-latest``, and ``macos-latest`` --
 no new CI wiring needed for that (``pyproject.toml``'s ``testpaths =
 ["tests"]`` already collects this module wherever the full suite already

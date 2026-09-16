@@ -5,9 +5,17 @@ PrivacyFence ships as a single DMG (app + `.mcpb` shim, one version number) via 
 ``stage`` is one of ``a``/``b``/``rc`` (PEP 440's short pre-release spellings; this is also the
 exact scheme `__version__` itself now uses, derived from these same tags by setuptools_scm — see
 this repo's CLAUDE.md "Releasing" section and src/privacyfence/__init__.py); a bare
-``v<major>.<minor>.<patch>`` tag is a stable release. No pre-release tag has ever actually been cut
-yet — this module defines the scheme so a future beta-testing program can start without any further
-changes here.
+``v<major>.<minor>.<patch>`` tag is a stable release. The beta channel isn't hypothetical: it's the
+channel `website/download/download.js` reads to populate the "Want to test the next version?"
+section, and by now well over a dozen pre-release tags have been cut against it (``v4.0.0a11``,
+``v4.0.0a12``, ``v4.0.0a14``, the earlier ``v3.2.0-beta``, ``v3.3.0-beta1``/``2`` and
+``v3.4.0-beta1``/``2``/``3``, plus a run of now-inert ``v4.0.0-alphaN`` tags — see the next
+paragraph). ``_STAGE_RANK`` below is the contract those tags rank against.
+
+Note the two spellings are not equivalent: the early ``v4.0.0-alpha1`` through ``-alpha10``
+(and the ``-apha2`` typo) tags deliberately don't match `_VERSION_RE`'s short PEP 440 form, so
+`parse_version()` returns ``None`` for them and they're inert for ranking purposes — only the
+``a11``/``a12``/``a14``-style short-form tags participate.
 
 Between release tags, `__version__` is one setuptools_scm synthesizes itself rather than one anyone
 typed as a tag: ``<next-version>.dev<n>+g<sha>`` (e.g. ``4.0.1.dev3+gabc1234``), where
