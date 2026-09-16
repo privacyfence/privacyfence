@@ -889,6 +889,29 @@ class TestAutoEnableMacos:
         privilege_separation.maybe_auto_enable_macos()
         assert len(started) == 1
 
+    def test_marker_write_failure_is_swallowed_not_raised(self, monkeypatch, tmp_path):
+        # Best-effort like every other permission-adjacent write in this
+        # module: a daemon startup path must never crash because it could
+        # not write a one-byte marker file.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
+        privilege_separation.reset_cache()
+        script = tmp_path / "macos_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
+        # A file where the marker's parent directory should be: mkdir(parents=True,
+        # exist_ok=True) on it raises FileExistsError (an OSError), since exist_ok
+        # only tolerates an existing *directory*.
+        data_dir = tmp_path / "data"
+        data_dir.write_text("not a directory", encoding="utf-8")
+        monkeypatch.setattr(paths, "data_dir", lambda: data_dir)
+        started = []
+        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+
+        privilege_separation.maybe_auto_enable_macos()
+
+        assert started == []
+
     def test_applescript_quoting_escapes_quotes_and_backslashes(self):
         quoted = privilege_separation._applescript_quoted('a "quoted" \\path\\')
         # AppleScript's own escapes for a double-quoted string literal: a
@@ -916,7 +939,7 @@ class TestAutoEnableMacos:
 
         assert len(calls) == 1
         cmd = calls[0]
-        assert cmd[0] == "osascript"
+        assert cmd[0] == privilege_separation._OSASCRIPT
         assert cmd[1] == "-e"
         applescript = cmd[2]
         assert applescript.startswith("do shell script ")

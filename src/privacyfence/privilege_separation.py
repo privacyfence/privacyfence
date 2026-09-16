@@ -111,7 +111,7 @@ import logging
 import os
 import shlex
 import stat
-import subprocess
+import subprocess  # nosec B404  # osascript elevation prompt below -- fixed argv, no shell, see that call site
 import sys
 import threading
 from dataclasses import dataclass
@@ -935,12 +935,19 @@ def maybe_auto_enable_macos() -> None:
     ).start()
 
 
+
+# Absolute path, not "osascript" on PATH: bandit B607 flags a partial
+# executable path as attacker-PATH-controllable, and macOS ships this at a
+# fixed location -- no reason to resolve it any other way.
+_OSASCRIPT = "/usr/bin/osascript"
+
+
 def _run_auto_enable_macos(script: Path) -> None:
     command = f"{shlex.quote(str(script))} enable --auto"
     applescript = f"do shell script {_applescript_quoted(command)} with administrator privileges"
     try:
-        result = subprocess.run(
-            ["osascript", "-e", applescript],
+        result = subprocess.run(  # nosec B603  # fixed argv list below, no shell, nothing here is attacker-controlled
+            [_OSASCRIPT, "-e", applescript],
             capture_output=True, text=True, timeout=300, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
