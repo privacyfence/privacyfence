@@ -348,6 +348,77 @@ class TestStepUpWebAuthnFlow:
         assert not stored.event.is_set()  # decision was never released
 
 
+class TestStepUpRequirePasskey:
+    """#406: an org can close the IdP-reauth fallback entirely."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def test_no_credential_hard_fails_with_no_idp_fallback(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 403
+        body = r.json()
+        assert body["error"] == "passkey_enrollment_required"
+        assert body["enroll_url"] == "/security"
+        stored = web_ui.deferred_registry.get(approval.id)
+        assert stored is not None
+        assert not stored.event.is_set()
+
+    def test_with_a_credential_offers_webauthn_options_but_no_idp_url(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+        body = r.json()
+        assert "webauthn_options" in body
+        assert "idp_stepup_url" not in body
+
+    def test_a_valid_assertion_still_completes_the_decision(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        first = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert first.status_code == 428
+
+        fake_verified = type("V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False})()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post(f"/api/approvals/{approval.id}/decide", json={
+                "result": "accept", "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert second.status_code == 200
+
+    def test_idp_stepup_start_is_refused_even_hit_directly(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
+        assert r.status_code == 403
+
+
 class TestIdpStepUp:
     def test_start_requires_a_signed_in_session(self):
         app, _sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))

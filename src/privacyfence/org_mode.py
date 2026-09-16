@@ -132,6 +132,18 @@ class StepUpConfig:
     endpoint skips the whole step-up check when this is False, so turning
     P9 on is an explicit opt-in per deployment, exactly like every other
     org-mode surface this codebase has shipped so far.
+
+    ``require_passkey=False`` (the default) keeps D7's original two-path
+    design -- a WebAuthn assertion *or* a fresh IdP re-authentication.
+    ``require_passkey=True`` closes the second path (#406): an org that
+    hard-requires hardware-bound WebAuthn (e.g. because a compromised or
+    phished IdP session could otherwise satisfy step-up on its own) sets
+    this, and web/routes_org_approvals.py stops offering
+    ``idp_stepup_url`` at all -- a principal with no enrolled passkey gets
+    a hard failure pointing at ``/security`` to enroll one, not a silent
+    downgrade to a weaker step-up than what was configured. Mirrors
+    ``AuthzPolicyConfig``'s no-fallback precedent below: a real gate, not
+    an "or fall back to X" escape hatch.
     """
 
     enabled: bool = False
@@ -147,6 +159,7 @@ class StepUpConfig:
     # (from_org_config, below) rather than requiring a redundant setting.
     rp_id: str = ""
     rp_name: str = DEFAULT_RP_NAME
+    require_passkey: bool = False
 
     @staticmethod
     def from_org_config(org_config: dict[str, Any], *, default_rp_id: str = "") -> "StepUpConfig":
@@ -163,6 +176,7 @@ class StepUpConfig:
             scope=scope,
             rp_id=raw.get("rp_id", "") or default_rp_id,
             rp_name=raw.get("rp_name", DEFAULT_RP_NAME) or DEFAULT_RP_NAME,
+            require_passkey=bool(raw.get("require_passkey", False)),
         )
 
 

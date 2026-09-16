@@ -111,7 +111,7 @@ The local `/mcp` endpoint uses the generated bearer token stored in the user's P
 
 Org mode authenticates human users through the configured OIDC provider and applies PrivacyFence's org authorization/session model to MCP and web traffic. Principal identity is carried explicitly through request handling and user-scoped storage/connector resolution.
 
-Where configured, WebAuthn step-up is used for sensitive org-mode approval actions. Credential enrollment and lookup are scoped to the authenticated principal.
+Where configured, WebAuthn step-up is used for sensitive org-mode approval actions. Credential enrollment and lookup are scoped to the authenticated principal. By default, step-up accepts either a passkey assertion or a fresh IdP re-authentication; `step_up.require_passkey` ([#406](https://github.com/privacyfence/privacyfence/issues/406)) closes the IdP-reauth path for organizations that want hardware-bound WebAuthn as a hard requirement — a compromised or phished IdP session can no longer satisfy step-up on its own, and a principal with no enrolled passkey is hard-failed toward enrollment rather than silently allowed through the weaker path.
 
 ## Authorization and principal isolation
 

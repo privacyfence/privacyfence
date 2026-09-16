@@ -239,6 +239,53 @@ class TestMainSigningIntegration:
 
         assert "authz" not in json.loads(out_path.read_text())
 
+    def test_step_up_require_passkey_flag_writes_the_section(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+
+        rc = build_org_bundle.main([
+            "-o", str(out_path), "--mode", "org",
+            "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com",
+            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--step-up-enabled", "--step-up-require-passkey",
+            "--sign-key", str(key_path),
+        ])
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text())
+        assert bundle["step_up"]["enabled"] is True
+        assert bundle["step_up"]["require_passkey"] is True
+
+    def test_step_up_no_require_passkey_turns_it_back_off_on_merge(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+        build_org_bundle.main([
+            "-o", str(out_path), "--mode", "org",
+            "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com",
+            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--step-up-enabled", "--step-up-require-passkey",
+            "--sign-key", str(key_path),
+        ])
+
+        build_org_bundle.main([
+            "-o", str(out_path), "--merge", "--step-up-no-require-passkey", "--sign-key", str(key_path),
+        ])
+
+        bundle = json.loads(out_path.read_text())
+        assert bundle["step_up"]["require_passkey"] is False
+        assert bundle["step_up"]["enabled"] is True  # untouched by this merge
+
+    def test_step_up_require_passkey_requires_mode_org(self, tmp_path):
+        out_path = tmp_path / "org_config.json"
+        with pytest.raises(SystemExit, match="--mode org"):
+            build_org_bundle.main([
+                "-o", str(out_path), "--step-up-require-passkey",
+            ])
+
     def test_sign_key_needs_cryptography_gives_a_clear_error(self, tmp_path, monkeypatch):
         # A plain sys.modules["cryptography"] = None wouldn't reliably
         # force ImportError here -- once a submodule has been imported

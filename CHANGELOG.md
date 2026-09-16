@@ -67,6 +67,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pre-4.1 install's existing `settings.yaml`, WebAuthn credentials, `web_token`, and audit history
   are moved into the new location automatically on first startup under this version, so nothing is
   silently reset. See issue #428.
+- Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
+  `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
+  that want hardware-bound passkeys as a hard requirement before releasing a write approval.
+  Previously, step-up accepted either a passkey assertion or a fresh IdP re-authentication
+  unconditionally, even for an org that had enabled step-up specifically to defend against a
+  compromised or phished IdP session — a principal with no enrolled passkey silently fell back to
+  the weaker path. With `require_passkey` set, that fallback is gone entirely (the IdP step-up
+  endpoint itself refuses, not just its link), and a principal with no enrolled passkey gets a
+  hard failure pointing at `/security` to enroll one instead. Off by default. See issue #406.
 
 ### Added
 

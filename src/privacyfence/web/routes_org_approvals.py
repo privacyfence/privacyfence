@@ -28,12 +28,20 @@ webauthn_stepup.py's own module docstring covers the ceremony and the
 decision-fingerprint binding; this module is only the HTTP protocol
 wrapping it: a first decide attempt with no ``webauthn_assertion`` gets a
 ``428`` carrying fresh assertion options (when a passkey is enrolled) and
-an IdP re-auth link (always, as D7's own fallback), and a second attempt
+an IdP re-auth link (as D7's own fallback), and a second attempt
 carrying the completed assertion is verified and, on success, treated as
 the original decision. **Deny needs no step-up** -- denying leaks nothing
 (the same reasoning approval_list_html.py's own module docstring gives for
 letting Deny live on the list row with no card at all), so step-up is
 scoped to the two approving results (``accept``/``accept_all``) only.
+
+**``step_up.require_passkey`` (#406)** closes the IdP-reauth fallback for
+orgs that want hardware-bound WebAuthn as a hard requirement. With it set,
+the ``428`` never carries ``idp_stepup_url``, ``/api/approvals/{id}/
+stepup/idp`` refuses outright (not just "unadvertised" -- a client hitting
+it directly gets a ``403`` too, see ``stepup_idp_start`` below), and a
+principal with no enrolled passkey gets a ``403`` naming ``/security`` as
+where to enroll one instead of the usual ``428``. See ``_step_up_response``.
 
 The IdP re-auth path (``GET /api/approvals/{id}/stepup/idp`` ->
 ``GET /oauth/stepup/callback``) mirrors web/routes_org_identity.py's own
@@ -178,6 +186,17 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
         "      return null;"
         "    });"
         "  }"
+        "  if (r.status === 403) {"
+        "    return r.json().then(function(data){"
+        "      if (data.enroll_url) {"
+        "        document.body.innerHTML = 'This organization requires a passkey for this approval. "
+        "<a href=\"' + data.enroll_url + '\">Set up a passkey</a>';"
+        "      } else {"
+        f"        document.body.innerHTML = {_FAILED_MESSAGE!r};"
+        "      }"
+        "      return null;"
+        "    });"
+        "  }"
         "  return r;"
         "}).then(function(r){"
         "  if (r === null) { return; }"
@@ -296,19 +315,26 @@ def build_routes(
 
     def _step_up_response(principal: Principal, approval_id: str, *, result: str, choice: int | None) -> JSONResponse:
         body: dict = {"error": "step_up_required"}
-        if step_up.rp_id:
-            begun = webauthn_stepup.begin_assertion(principal, rp_id=step_up.rp_id)
-            if begun is not None:
-                options_json, challenge = begun
-                fingerprint = webauthn_stepup.decision_fingerprint(
-                    approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
-                )
-                challenges.put(principal.id, approval_id, challenge=challenge, fingerprint=fingerprint)
-                body["webauthn_options"] = json.loads(options_json)
-        choice_q = "" if choice is None else str(int(choice))
-        body["idp_stepup_url"] = (
-            f"/api/approvals/{quote(approval_id)}/stepup/idp?result={quote(result)}&choice={quote(choice_q)}"
-        )
+        begun = webauthn_stepup.begin_assertion(principal, rp_id=step_up.rp_id) if step_up.rp_id else None
+        if begun is not None:
+            options_json, challenge = begun
+            fingerprint = webauthn_stepup.decision_fingerprint(
+                approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
+            )
+            challenges.put(principal.id, approval_id, challenge=challenge, fingerprint=fingerprint)
+            body["webauthn_options"] = json.loads(options_json)
+        elif step_up.require_passkey:
+            # No enrolled passkey, and this org has closed the IdP-reauth
+            # fallback (#406) -- hard-fail rather than silently downgrading
+            # to a weaker step-up than what was configured.
+            return JSONResponse(
+                {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
+            )
+        if not step_up.require_passkey:
+            choice_q = "" if choice is None else str(int(choice))
+            body["idp_stepup_url"] = (
+                f"/api/approvals/{quote(approval_id)}/stepup/idp?result={quote(result)}&choice={quote(choice_q)}"
+            )
         return JSONResponse(body, status_code=428)
 
     async def decide(request: Request) -> Response:
@@ -369,6 +395,15 @@ def build_routes(
             return RedirectResponse(
                 f"/login?next=/approvals/{quote(request.path_params['id'])}", status_code=302,
                 headers={"Cache-Control": "no-store"},
+            )
+        if step_up.require_passkey:
+            # Not merely unadvertised (_step_up_response omits
+            # idp_stepup_url) -- the endpoint itself refuses, so a client
+            # hitting it directly can't use it as a bypass. See module
+            # docstring's #406 note.
+            return PlainTextResponse(
+                "This organization requires a passkey for step-up verification; "
+                "IdP re-authentication cannot be used instead.", status_code=403,
             )
         approval_id = request.path_params["id"]
         result = request.query_params.get("result", "")
