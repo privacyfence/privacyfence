@@ -1517,10 +1517,16 @@ class DriveClient:
 
         metadata = self.get_file_metadata(file_id)
         dest_path = resolve_download_destination(metadata, destination_dir)
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
         data, _export_mime = self._stream_full_content(file_id, metadata)
-        with open(dest_path, "wb") as fh:
-            fh.write(data)
+        try:
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            with open(dest_path, "wb") as fh:
+                fh.write(data)
+        except OSError as exc:
+            raise DriveClientError(
+                f"download_file: could not write to {dest_path!r}: {exc}. "
+                "Choose a different destination_dir."
+            ) from exc
 
         size = os.path.getsize(dest_path)
         logger.info("download_file %s → %s (%d bytes)", file_id, dest_path, size)

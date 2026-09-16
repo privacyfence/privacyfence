@@ -2335,6 +2335,30 @@ class TestDownloadFile:
         assert result["name"] == "evil.bin"
         assert os.path.exists(tmp_path / "evil.bin")
 
+    def test_unwritable_destination_becomes_drive_client_error(self, tmp_path, monkeypatch):
+        # A disk-level failure writing to destination_dir (permission denied,
+        # a read-only/synthetic mount point that rejects mkdir, etc.) must
+        # surface as DriveClientError like every other failure in this
+        # method -- not a bare OSError, which coding-and-testing-guidelines.md
+        # §1.4 requires every *_client.py public method to never leak.
+        service = MagicMock()
+        service.files.return_value.get.return_value.execute.return_value = {
+            "id": "f1", "name": "f.bin", "mimeType": "application/octet-stream",
+        }
+        client = make_client(service)
+        monkeypatch.setattr(client, "_load_credentials", lambda: MagicMock())
+
+        fake_session = MagicMock()
+        fake_session.get.return_value = _FakeStreamResponse([b"data"])
+        monkeypatch.setattr(drive_client_module, "AuthorizedSession", lambda creds: fake_session)
+        monkeypatch.setattr(
+            drive_client_module.os, "makedirs",
+            MagicMock(side_effect=OSError(45, "Operation not supported")),
+        )
+
+        with pytest.raises(DriveClientError, match="could not write"):
+            client.download_file("f1", destination_dir=str(tmp_path))
+
 
 class TestDownloadFileBytes:
     """org-mode inline/staged delivery's own entry point -- same fetch as
