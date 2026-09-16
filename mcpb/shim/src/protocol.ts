@@ -22,11 +22,13 @@
  * per-user data dir, matching paths.py's bundled/installed branch.
  *
  * #428 Phase 4 adds one more branch, and it is the reason these two paths go
- * through ``handoffDir()`` rather than ``dataDir()`` directly: on a macOS or
- * Linux install that has opted into privilege separation, the daemon runs as
- * its own account and its data directory moves to a system location that
- * account owns. The two files this shim reads are exactly the two that stay
- * reachable from the user's session, in ``<system root>/handoff``. See
+ * through ``handoffDir()`` rather than ``dataDir()`` directly: on an install
+ * that has opted into privilege separation -- any of the three platforms,
+ * since B5c -- the daemon runs as its own account and its data directory
+ * moves to a system location that account owns (``%ProgramData%\PrivacyFence``
+ * on Windows, which is also why the ``%LOCALAPPDATA%`` branch above is not
+ * the whole answer there). The two files this shim reads are exactly the two
+ * that stay reachable from the user's session, in ``<system root>/handoff``. See
  * src/privacyfence/privilege_separation.py -- this is a port of its marker
  * discovery, deliberately a small and permissive one: anything unreadable,
  * unparseable or not version 1 falls back to the ordinary layout, because a
@@ -59,9 +61,17 @@ export function dataDir(): string {
 }
 
 /** Each platform's default separated root, keyed exactly like
- * privilege_separation.PLATFORM_LAYOUTS -- a platform absent from here has
- * no #428 Phase 4 installer yet (Windows, B5c), so nothing can have written
- * a marker for it and this must not go looking for one.
+ * privilege_separation.PLATFORM_LAYOUTS. A platform absent from here has no
+ * #428 Phase 4 installer, so nothing can have written a marker for it and
+ * this must not go looking for one; as of B5c all three are present.
+ *
+ * Windows' entry is spelled with forward slashes on purpose. It is only ever
+ * consumed by path.join(), which normalizes separators, and writing it this
+ * way keeps it comparable to the Python side's own Path("C:/ProgramData/...")
+ * -- a backslash literal here would also have to be escaped in both this file
+ * and the test that reads it back, for no gain. The real default is
+ * %ProgramData%, which privilegeSeparationRoot() prefers when it is set; this
+ * literal is the fallback for a process started without it.
  *
  * Exported for tests on both sides of that contract: this file's own, and
  * tests/unit/test_privilege_separation.py, which reads this literal back and
@@ -72,17 +82,38 @@ export function dataDir(): string {
 export const SYSTEM_ROOTS: Record<string, string> = {
   darwin: "/Library/Application Support/PrivacyFence",
   linux: "/var/lib/privacyfence",
+  win32: "C:/ProgramData/PrivacyFence",
 };
 
-/** The marker file scripts/{macos,linux}_privilege_separation.sh writes, or
+/** This platform's default separated root before any marker is read --
+ * SYSTEM_ROOTS, except on Windows, where %ProgramData% is consulted first
+ * for exactly the reason privilege_separation.system_root() consults it:
+ * that folder can be redirected to another volume, the installer's icacls
+ * runs against wherever it really is, and a hardcoded C: would then send
+ * this shim looking somewhere nothing was ever provisioned.
+ *
+ * Exported only for tests, which need to drive the win32 branch from a
+ * non-Windows CI host. */
+export function defaultSystemRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (platform === "win32" && env.ProgramData) {
+    return path.join(env.ProgramData, "PrivacyFence");
+  }
+  return SYSTEM_ROOTS[platform] ?? null;
+}
+
+/** The marker file each platform's privilege-separation installer writes
+ * (scripts/{macos,linux}_privilege_separation.sh,
+ * scripts/windows_privilege_separation.ps1), or
  * null on an install (or a platform) that has no privilege separation.
  * Mirrors privilege_separation.separation(): same default roots, same
  * PRIVACYFENCE_SYSTEM_ROOT override, same version and platform checks.
  * Exported only for tests, which need to point it at a temp directory. */
 export function privilegeSeparationRoot(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = env.PRIVACYFENCE_SYSTEM_ROOT;
-  const root =
-    override && path.isAbsolute(override) ? override : (SYSTEM_ROOTS[process.platform] ?? null);
+  const root = override && path.isAbsolute(override) ? override : defaultSystemRoot(env);
   if (!root) return null;
   let marker: { version?: unknown; platform?: unknown };
   try {

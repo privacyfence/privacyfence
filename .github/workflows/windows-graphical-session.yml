@@ -28,6 +28,11 @@ on:
     paths:
       - 'installer/**'
       - 'scripts/build_installer.ps1'
+      # #428 Phase 4 (B5c): privacyfence.iss installs this next to the
+      # application as privilege-separation.ps1, so a change to it is a
+      # change to what the installer ships -- and the packaged smoke test
+      # below is the only thing in this repo that builds that installer.
+      - 'scripts/windows_privilege_separation.ps1'
       - 'scripts/pyinstaller_common.py'
       - 'PrivacyFenceApp.win.spec'
       - 'tests/integration/test_windows_packaged_smoke.py'

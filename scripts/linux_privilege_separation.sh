@@ -126,7 +126,7 @@ USAGE
 AUTO=0
 
 require_linux() {
-  [ "$(uname -s)" = "Linux" ] || die "this script is Linux-only (macOS is scripts/macos_privilege_separation.sh; #428 P4's Windows phase is B5c)"
+  [ "$(uname -s)" = "Linux" ] || die "this script is Linux-only (macOS is scripts/macos_privilege_separation.sh; Windows is scripts/windows_privilege_separation.ps1)"
 }
 
 require_systemd() {

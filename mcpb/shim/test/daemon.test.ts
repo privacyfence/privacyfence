@@ -460,6 +460,43 @@ describe("ensureDaemonRunning on a privilege-separated install (#428 Phase 4)", 
     }
   });
 
+  it("names each platform's own service manager in the wait message (#428 P4 B5c)", async () => {
+    // Diagnostics, but load-bearing diagnostics: this message is the only
+    // thing a user sees when a separated daemon has not come up, and it is
+    // what sends them to `sc.exe query` rather than to launchctl on a
+    // machine that has no launchd. B5c is what made the previous
+    // two-way branch (linux, else macOS) wrong rather than merely
+    // incomplete -- before it, win32 could never reach this code at all.
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const originalError = console.error;
+    const lines: string[] = [];
+    console.error = (...args: unknown[]) => {
+      lines.push(args.join(" "));
+    };
+    const { mcpUrlFile, cleanup } = makeTempMcpFiles();
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      await assert.rejects(
+        ensureDaemonRunning({
+          mcpUrlFile,
+          separationRoot: () => "C:\\ProgramData\\PrivacyFence",
+          findCmd: () => ["should-not-run"],
+          connectTimeoutMs: 120,
+          connectIntervalMs: 20,
+        }),
+        ShimExitError,
+      );
+    } finally {
+      Object.defineProperty(process, "platform", original);
+      console.error = originalError;
+      cleanup();
+    }
+    const waiting = lines.find((line) => line.includes("#428 Phase 4"));
+    assert.ok(waiting, `no wait message was logged; got ${JSON.stringify(lines)}`);
+    assert.match(waiting, /a Windows service/);
+    assert.match(waiting, /sc\.exe query PrivacyFence/);
+  });
+
   it("still gives up after the connect window, so waitForDaemonPatiently keeps retrying", async () => {
     const { mcpUrlFile, cleanup } = makeTempMcpFiles();
     try {

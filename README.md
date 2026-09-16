@@ -277,7 +277,7 @@ policy, the audit key and the connector credentials out of its reach — and sta
 companion so you still have a way in. Decline once and it won't ask again; run
 `sudo ./scripts/macos_privilege_separation.sh enable` any time afterward if you change your mind
 (`... disable` reverses it). Reversible either way, and worth reading
-[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-and-linux-default-on)
+[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
 before you run it by hand — the migration moves live connector tokens.
 
 ### Install on Windows
@@ -307,6 +307,21 @@ Stable releases are Authenticode-signed; pre-release (alpha/beta/rc) builds migh
 on signing certificate availability at build time. Full installation details, including what
 uninstalling does and doesn't remove, are in
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
+
+**Optional:** by default PrivacyFence's daemon runs as you — and so does the AI client it governs,
+which is why that client can read and rewrite the policy deciding what it's allowed to do. From an
+elevated PowerShell,
+`powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" enable`
+moves the daemon to a Windows service running under a virtual account of its own, which takes the
+policy, the audit key and the connector credentials out of that client's reach, and starts a tray
+companion so you still have a way in. Two things differ from macOS and Linux: it needs the
+per-machine install from step 2 (a service runs whatever its path names, so PrivacyFence installed
+inside your own profile could be rewritten by the very client this contains — `enable` refuses
+rather than pretending otherwise), and your data directory moves to `%ProgramData%\PrivacyFence\`,
+so run `… disable` *before* uninstalling if you ever want it back under your own account. Opt-in,
+reversible, and worth reading
+[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
+before you run it — the migration moves live connector tokens.
 
 ### Install from the `.deb` (Debian/Ubuntu desktop)
 
@@ -350,7 +365,7 @@ upgrade with no `sudo` session behind it); a source checkout, or a `.deb` instal
 opt-in via `sudo privacyfence-privilege-separation enable` (installed by the `.deb`; from a source
 checkout it's `sudo ./scripts/linux_privilege_separation.sh enable`). `... disable` reverses it
 either way. Reversible, and worth reading
-[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-and-linux-default-on)
+[Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
 before you run it by hand — the migration moves live connector tokens.
 
 ### Run from source

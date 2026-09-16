@@ -178,3 +178,107 @@ def assert_task_xml_matches_autostart_contract(xml_text: str, *, exec_path: str)
     )
     assert (restart.findtext(f"{TASK_NS}Interval") or "").strip() == "PT1M", context
     assert (restart.findtext(f"{TASK_NS}Count") or "").strip() == "3", context
+
+
+def assert_task_xml_matches_companion_contract(xml_text: str, *, exec_path: str) -> None:
+    """The same contract for #428 Phase 4 (B5c)'s *companion* task
+    (``installer/windows/privacyfence-companion-task.xml.tmpl``), which is
+    registered by ``scripts/windows_privilege_separation.ps1`` rather than by
+    the installer.
+
+    Deliberately its own function rather than a flag on the one above: the
+    two tasks differ in exactly the places where the daemon's own history
+    made a choice the companion must *not* copy, and expressing that as
+    branches inside a shared assertion would make each difference look like
+    an exception rather than a decision.
+
+    * **No ``TimeTrigger``.** The daemon's repeating trigger is its
+      crash-restart mechanism and is harmless there because the
+      single-instance lock makes every redundant tick exit at once. The
+      companion has no such lock, so the same trigger would stack up one
+      tray icon per five minutes, forever. The daemon's crash-restart on a
+      separated install is the service's own ``sc failure`` configuration
+      instead.
+    * **``IgnoreNew``, not ``Parallel``.** Same reason. Task Scheduler
+      scopes that policy per task instance and each user's logon produces
+      its own, so this stays correct for several signed-in users at once --
+      which is the one thing ``Parallel`` was needed for on the daemon's
+      task.
+
+    Everything else -- schema 1.2, the unscoped ``LogonTrigger``, the
+    ``Principal``/``Actions`` id pair, ``LeastPrivilege``, both inverted
+    battery defaults, ``RestartOnFailure`` -- is asserted identically,
+    because every one of those was a real shipped bug on the daemon's task
+    and none of them is any less of one here.
+    """
+    root = ET.fromstring(xml_text)
+    context = f"---- companion task XML ----\n{xml_text}"
+
+    assert root.get("version") == "1.2", f"<Task> does not declare schema version 1.2\n{context}"
+
+    triggers = root.find(f"{TASK_NS}Triggers")
+    assert triggers is not None, f"no <Triggers>\n{context}"
+    logon_triggers = triggers.findall(f"{TASK_NS}LogonTrigger")
+    assert len(logon_triggers) == 1, f"expected exactly one <LogonTrigger>\n{context}"
+    logon_trigger = logon_triggers[0]
+    enabled = logon_trigger.findtext(f"{TASK_NS}Enabled")
+    assert enabled is None or enabled.strip().lower() == "true", f"<LogonTrigger> is disabled\n{context}"
+    assert logon_trigger.find(f"{TASK_NS}UserId") is None, (
+        f"<LogonTrigger> is scoped to one account; it must fire for any interactive logon\n{context}"
+    )
+    assert triggers.find(f"{TASK_NS}TimeTrigger") is None, (
+        f"the companion task carries a <TimeTrigger>: with no single-instance lock in the "
+        f"companion, a repeating trigger spawns one tray icon per tick\n{context}"
+    )
+
+    principals = root.find(f"{TASK_NS}Principals")
+    assert principals is not None, f"no <Principals>\n{context}"
+    principal = principals.find(f"{TASK_NS}Principal")
+    assert principal is not None, f"no <Principal>\n{context}"
+    group_id = (principal.findtext(f"{TASK_NS}GroupId") or "").strip()
+    assert group_id.lower().endswith("users") or group_id.upper() == BUILTIN_USERS_SID, (
+        f"principal is {group_id!r}, not the built-in Users group -- the companion would only ever "
+        f"run for one account\n{context}"
+    )
+    run_level = (principal.findtext(f"{TASK_NS}RunLevel") or "LeastPrivilege").strip()
+    # Not merely the default: the companion is deliberately on the *agent's*
+    # side of the #428 trust boundary, and an elevated one would be able to
+    # reach the authority directory the whole phase exists to take away.
+    assert run_level == "LeastPrivilege", f"unexpected RunLevel {run_level!r}\n{context}"
+
+    actions = root.find(f"{TASK_NS}Actions")
+    assert actions is not None, f"no <Actions>\n{context}"
+    principal_id = principal.get("id")
+    assert principal_id, f"<Principal> carries no id for <Actions> to name\n{context}"
+    assert actions.get("Context") == principal_id, (
+        f"<Actions Context={actions.get('Context')!r}> does not name the principal id "
+        f"{principal_id!r}\n{context}"
+    )
+    command = (actions.findtext(f"{TASK_NS}Exec/{TASK_NS}Command") or "").strip().strip('"')
+    assert command.lower() == exec_path.lower(), (
+        f"task action runs {command!r}, not {exec_path!r}\n{context}"
+    )
+
+    settings = root.find(f"{TASK_NS}Settings")
+    assert settings is not None, f"no <Settings>\n{context}"
+    assert (settings.findtext(f"{TASK_NS}Enabled") or "true").strip().lower() == "true", (
+        f"the task itself is registered disabled\n{context}"
+    )
+    assert (settings.findtext(f"{TASK_NS}MultipleInstancesPolicy") or "").strip() == "IgnoreNew", (
+        f"the companion task is not IgnoreNew: a second trigger in one session would start a "
+        f"second tray icon\n{context}"
+    )
+    assert (settings.findtext(f"{TASK_NS}DisallowStartIfOnBatteries") or "").strip() == "false", (
+        f"DisallowStartIfOnBatteries is not false: the companion would not start on battery power\n{context}"
+    )
+    assert (settings.findtext(f"{TASK_NS}StopIfGoingOnBatteries") or "").strip() == "false", (
+        f"StopIfGoingOnBatteries is not false: the companion would be stopped when the machine "
+        f"unplugs\n{context}"
+    )
+    restart = settings.find(f"{TASK_NS}RestartOnFailure")
+    assert restart is not None, (
+        f"no <RestartOnFailure>: a launch failure at sign-in would leave the user with no way into "
+        f"the web UI until their next one\n{context}"
+    )
+    assert (restart.findtext(f"{TASK_NS}Interval") or "").strip() == "PT1M", context
+    assert (restart.findtext(f"{TASK_NS}Count") or "").strip() == "3", context

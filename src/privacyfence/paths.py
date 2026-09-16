@@ -10,9 +10,10 @@ that's a different convention rather than the same dotfile name reused
 under ``%USERPROFILE%``.
 
 #428 Phase 4 adds a third answer on top of those two: an install that has
-opted into privilege separation (macOS and Linux; Windows is still to come)
-keeps everything under a system root owned by a dedicated service account
-instead, with a small
+opted into privilege separation (all three desktop platforms) keeps
+everything under a system root owned by a dedicated service account instead
+-- ``%ProgramData%\\PrivacyFence`` on Windows, where a service account cannot
+sensibly own something inside a user profile -- with a small
 ``handoff_dir()`` the logged-in user's own session can still reach. See
 privilege_separation.py for the layout and for what that boundary does and
 does not claim.
@@ -135,16 +136,20 @@ def data_dir() -> Path:
     see that function's own docstring.)
 
     #428 Phase 4: on an install that has opted into privilege separation
-    (``scripts/{macos,linux}_privilege_separation.sh``; Windows is still to
-    come), every branch below is bypassed for the service-owned system root
-    instead. A
+    (``scripts/{macos,linux}_privilege_separation.sh``,
+    ``scripts/windows_privilege_separation.ps1``), every branch below is
+    bypassed for the service-owned system root instead. A
     service account cannot sensibly own a directory inside a human's home,
     so the whole data directory moves rather than just the authority subtree
     -- which is also what makes the migration carry live connector OAuth
     tokens, and why it ships opt-in for a release before defaulting on. The
     root is ``0711`` there, not ``0700``: the logged-in user has to be able
     to traverse it to reach ``handoff_dir()``, and must not be able to list
-    anything else. See privilege_separation.py's own module docstring for
+    anything else. (Windows has no mode to set -- ``secure_mkdir``'s ``chmod``
+    is the documented no-op there -- so the same intent is an NTFS ACL the
+    installer writes and ``windows_acl.py`` audits; the mode passed here is
+    simply inert on that platform, exactly as it was before this phase.) See
+    privilege_separation.py's own module docstring for
     the full layout, and ``handoff_dir()`` below for the files that stay
     reachable from the user's own session.
     """
@@ -323,7 +328,9 @@ def authority_dir(principal: "Principal | None" = None) -> Path:
     """Directory root for the files that back the *human's* authority in
     local mode -- the #428 Phase 2 control channel's socket (macOS/Linux;
     Windows' named pipe lives outside the filesystem, see web/
-    control_channel.py), the privacy policy (``config/settings.yaml``), and
+    control_channel.py -- which is also why Phase 4's Windows layout can keep
+    ``handoff_dir()`` read-only to the shared group where POSIX has to make
+    it writable), the privacy policy (``config/settings.yaml``), and
     enrolled WebAuthn credentials (P426) -- as distinct from ``user_dir()``,
     which stays reachable by the agent for its own ``mcp_token`` and
     connector caches/credentials.

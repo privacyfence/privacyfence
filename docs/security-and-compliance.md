@@ -43,14 +43,15 @@ on the same machine, so a process running as that user can reach everything the 
 on. This section states plainly what that does and does not mean, because the goals listed above
 are otherwise easy to read more broadly than they hold.
 
-**On macOS and Linux that boundary now moves by default** — see [Privilege separation (macOS and
-Linux, default-on)](#privilege-separation-macos-and-linux-default-on) below, which is what
-[#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4 builds and D1 (4.1) turns
-on automatically. Everything in the rest of this section describes the un-separated install —
-still what a Windows install is, still reachable on any platform via `... disable`, and still what
-a macOS install is until its one admin-password prompt is answered or a Linux install is until
-`enable --auto` can resolve who owns it (see that subsection for when it can't); that subsection
-says exactly which of these statements a separated install changes and which it leaves standing.
+**On macOS, Linux and Windows you can move that boundary** — see [Privilege separation (macOS,
+Linux and Windows)](#privilege-separation-macos-linux-and-windows) below, which is what
+[#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4 builds. macOS and Linux move
+it **by default** as of D1 (4.1); Windows remains opt-in, per that subsection. Everything in the
+rest of this section describes the un-separated install — still what a Windows install is unless
+`enable` is run by hand, still reachable on any platform via `... disable`, and still what a macOS
+install is until its one admin-password prompt is answered or a Linux install is until `enable
+--auto` can resolve who owns it (see that subsection for when it can't); that subsection says
+exactly which of these statements a separated install changes and which it leaves standing.
 
 A local process running as the signed-in user can:
 
@@ -94,42 +95,71 @@ configured, WebAuthn step-up binds a write approval to a fresh user-verified ass
 account so its state is neither readable nor writable by processes running as the user
 ([#428](https://github.com/privacyfence/privacyfence/issues/428) — Phases 1 and 2, a state-layout
 refactor and the control-channel interface itself, have landed; Phase 4's actual privilege
-separation is what closes this, and now ships default-on on macOS and Linux (D1, 4.1) — see below),
-and giving the
-human a way
+separation is what closes this, and has now shipped on all three desktop platforms — default-on for
+macOS and Linux (D1, 4.1), opt-in for Windows — see below), and giving the human a way
 into the web UI that does not route a credential through the AI client
 ([#427](https://github.com/privacyfence/privacyfence/issues/427) — the companion app, Phase 3).
 Local-mode WebAuthn step-up ([#426](https://github.com/privacyfence/privacyfence/issues/426))
 depends on both: a passkey enrolled in a credential store the agent can rewrite is not a control.
 
-### Privilege separation (macOS and Linux, default-on)
+### Privilege separation (macOS, Linux and Windows)
 
-On macOS and Linux, one script runs the daemon under a dedicated account instead of yours. It
-creates that account, moves `~/.privacyfence` to a system location owned by it, and inverts the
-startup wiring so the daemon leaves your session and the companion app enters it:
+One script per platform runs the daemon under a dedicated account instead of yours. It creates that
+account, moves the data directory to a system location owned by it, and inverts the startup wiring
+so the daemon leaves your session and the companion app enters it:
 
-| | macOS | Linux |
-|---|---|---|
-| Script | `scripts/macos_privilege_separation.sh` | `privacyfence-privilege-separation` (`.deb`), or `scripts/linux_privilege_separation.sh` |
-| Account | `_privacyfence` | `privacyfence` |
-| Data directory | `/Library/Application Support/PrivacyFence` | `/var/lib/privacyfence` |
-| Daemon starts as | a LaunchDaemon | a system systemd unit (`privacyfence-daemon.service`) |
-| Companion starts as | a LaunchAgent (the menu-bar app) | an XDG autostart entry running `privacyfence-companion --serve` |
-| Replaces | the login-session LaunchAgent | the `.deb`'s XDG autostart entry and the `--user` unit |
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| Script | `scripts/macos_privilege_separation.sh` | `privacyfence-privilege-separation` (`.deb`), or `scripts/linux_privilege_separation.sh` | `privilege-separation.ps1`, installed next to the app (elevated PowerShell) |
+| Account | `_privacyfence` | `privacyfence` | `NT SERVICE\PrivacyFence` (a virtual service account) |
+| Data directory | `/Library/Application Support/PrivacyFence` | `/var/lib/privacyfence` | `%ProgramData%\PrivacyFence` |
+| Daemon starts as | a LaunchDaemon | a system systemd unit (`privacyfence-daemon.service`) | a Windows service (`PrivacyFence`) |
+| Companion starts as | a LaunchAgent (the menu-bar app) | an XDG autostart entry running `privacyfence-companion --serve` | a Scheduled Task (`PrivacyFenceCompanion`, the tray app) |
+| Replaces | the login-session LaunchAgent | the `.deb`'s XDG autostart entry and the `--user` unit | the installer's own `PrivacyFence` Scheduled Task, disabled rather than deleted |
 
-Both still ship the manual `enable`/`disable`/`status` subcommands above, but #428 D1 (4.1) turns
-this on **by default** rather than waiting for the originally-planned soak period: the `.deb`'s
-`postinst` runs `enable --auto` itself, root already, on every install and every upgrade
-([`debian/postinst`](../debian/postinst)); macOS has no equivalent package-manager hook, so the
-daemon's own startup asks once, via the standard admin-password dialog, the first time it finds
-itself unseparated (`privilege_separation.maybe_auto_enable_macos()`). Either way the migration
-moves live connector OAuth tokens — `... disable` reverses it, and remains the way to opt back out.
-`--auto` (used by both triggers, never by a human directly) is the same `enable`, made safe to run
-unattended: anywhere it can't safely tell who owns the install or find the daemon's executables, it
-logs why and leaves the install opt-in rather than guessing or failing a package install. Windows is
-[#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4's remaining work and is
-unchanged for now — real NTFS ACLs are net-new work with no equivalent on either platform above,
-where POSIX permission bits already do the job.
+All three still ship the manual `enable`/`disable`/`status` subcommands above; the migration moves
+live connector OAuth tokens, so take a backup first if running one by hand. `... disable` reverses
+it on any platform. **macOS and Linux now turn this on by default as of #428 D1 (4.1)**, rather than
+waiting out the originally-planned soak period: the `.deb`'s `postinst` runs `enable --auto` itself,
+root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)); macOS
+has no equivalent package-manager hook, so the daemon's own startup asks once, via the standard
+admin-password dialog, the first time it finds itself unseparated
+(`privilege_separation.maybe_auto_enable_macos()`). `--auto` (used by both triggers, never by a
+human directly) is the same `enable`, made safe to run unattended: anywhere it can't safely tell who
+owns the install or find the daemon's executables, it logs why and leaves the install opt-in rather
+than guessing or failing a package install. **Windows stays opt-in** — D1 does not extend to it, on
+top of the install-tier and mandatory-companion requirements below, which raise the bar for an
+unattended default beyond what the two POSIX platforms needed.
+
+**Windows expresses the same layout in a different primitive, and adds one requirement the others
+do not have.** There are no permission bits there, so the modes below are NTFS ACLs
+(`icacls`), applied at enable time and re-checked on every daemon start. Two consequences are worth
+stating rather than leaving to be discovered:
+
+- **A service runs whatever its `binPath` names**, so the install location is part of the boundary.
+  PrivacyFence installed under your own profile — the non-elevated, per-user path the installer
+  offers ([#407](https://github.com/privacyfence/privacyfence/issues/407)) — would let a process
+  running as you rewrite the daemon's own executable and have the service run it *as the service
+  account*, which is worse than not separating at all. So `enable` refuses against a user-writable
+  install and says why; privilege separation on Windows requires the per-machine install under
+  `%ProgramFiles%`. That is the resolution of the open question [ADR
+  0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) carried: two install tiers, with
+  separation available only on the elevated one.
+- **The companion is mandatory, not a convenience.** A Windows service runs in session 0 and cannot
+  reach your desktop, so without the tray app there is no way for connector OAuth
+  (Slack/Salesforce/Atlassian) to open a sign-in page at all — the case ADR 0002 decision 5 was
+  written for, arriving where it was predicted. `enable` refuses to install the daemon half alone.
+
+One thing has no POSIX counterpart at all: **ownership is part of the boundary**. An object's owner
+on Windows can rewrite its ACL regardless of what that ACL says, so `enable` takes ownership of the
+data directory (to `Administrators`) rather than letting the move out of `%LOCALAPPDATA%` leave it
+with you — otherwise every permission above would be advisory against the one account it is meant
+to exclude. `… disable` hands ownership back.
+
+One thing is *tighter* on Windows than on POSIX: the shared handoff directory is readable by the
+group, not writable. POSIX has to grant `rwx` there because the companion creates its own socket
+file in it and `connect(2)` needs write permission on the node; both Windows control channels are
+named pipes rather than files, so nothing in your session ever creates anything there.
 
 The Linux companion is where the two differ in more than naming. It has no tray (ADR 0002 decision
 4's dependency budget), so what autostarts is `--serve`: the companion's control channel alone, no
@@ -149,7 +179,11 @@ Approvals, Open Settings, Quit) is unchanged and still one-shot.
   forwarding](#audit-integrity-and-forwarding) carries;
 - it can no longer read the connector credentials the daemon holds.
 
-Those four files live under `<system root>/authority`, mode `0700`, owned by the service account.
+Those four files live under `<system root>/authority`: mode `0700` owned by the service account on
+macOS and Linux, and on Windows an ACL granting that account (plus `SYSTEM` and `Administrators`)
+and nothing else. The root above it is `0711` — traversable so your session can reach the handoff
+directory, never listable — which on Windows is an `icacls` grant of traverse-only to `Users`, with
+the inheritance `%ProgramData%` hands out severed first.
 
 **What it deliberately does not close.** Minting a session stays reachable from your own account.
 The companion app and the AI client both run as you, and no permission bit can tell them apart —
@@ -166,8 +200,9 @@ a group-shared `<system root>/handoff` directory, not under `authority`, along w
 reasoning.
 
 **And it does not survive root.** `sudo` re-owns any file and reconfigures any LaunchDaemon or
-systemd unit. What this defends against is an agent running with your *normal* privileges — the
-ordinary case — and it makes escalation require an authentication prompt you see.
+systemd unit; a local Administrator on Windows takes ownership of any file and reconfigures any
+service. What this defends against is an agent running with your *normal* privileges — the ordinary
+case — and it makes escalation require an authentication prompt you see.
 
 `sudo scripts/<platform>_privilege_separation.sh status` checks the layout on disk: the three
 directory modes, that `authority` really is owned by the service account rather than still by you,
@@ -266,7 +301,7 @@ See [`org-mode-download-delivery.md`](org-mode-download-delivery.md).
 
 PrivacyFence records gate/approval activity in its audit log, including principal information in org mode. Every entry is unconditionally chained to the one before it with a keyed hash (HMAC-SHA256) — this isn't an opt-in feature; `AuditLogger` computes it for every install, and `verify_chain()` (or `scripts/verify_audit_log.py`) detects a line inserted, edited, or removed after the fact.
 
-The chain's signing key lives next to the `.jsonl` files it protects, at the same file permissions. That defends against accidental corruption and against a party who gains write access to the log files specifically (e.g. a bug in some other export/backup path) without also reading the key — it does **not** defend against a party who already has full read/write access to the audit directory, since that party can read the key alongside the log and recompute a consistent chain over a tampered file. The real defense against that threat is a copy that leaves this trust boundary entirely — see the forwarding paragraph below. In local mode that party includes any process running as the signed-in user (see [Local-mode trust boundary](#local-mode-trust-boundary)), so forwarding carries more of the weight there than the file permissions do — unless the install has separated privileges (default-on for a fresh macOS/Linux install as of #428 D1; [privilege separation](#privilege-separation-macos-and-linux-default-on)), which moves the audit directory and its key onto an account that user does not hold, and is exactly the change that lets the file permissions carry their own weight again.
+The chain's signing key lives next to the `.jsonl` files it protects, at the same file permissions. That defends against accidental corruption and against a party who gains write access to the log files specifically (e.g. a bug in some other export/backup path) without also reading the key — it does **not** defend against a party who already has full read/write access to the audit directory, since that party can read the key alongside the log and recompute a consistent chain over a tampered file. The real defense against that threat is a copy that leaves this trust boundary entirely — see the forwarding paragraph below. In local mode that party includes any process running as the signed-in user (see [Local-mode trust boundary](#local-mode-trust-boundary)), so forwarding carries more of the weight there than the file permissions do — unless the install has separated privileges (default-on for a fresh macOS/Linux install as of #428 D1, opt-in on Windows; [privilege separation](#privilege-separation-macos-linux-and-windows)), which moves the audit directory and its key onto an account that user does not hold, and is exactly the change that lets the file permissions carry their own weight again.
 
 Org deployments can use the implemented forwarding/export path for external retention/monitoring. Forwarding does not replace local operational decisions about retention, backup, and access control.
 

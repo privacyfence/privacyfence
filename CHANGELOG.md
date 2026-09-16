@@ -128,8 +128,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Salesforce and Atlassian would have no way to show you a sign-in page. **Opt-in, and staying
   opt-in for a full release**, same as macOS: the migration moves live connector OAuth tokens, and
   `… disable` (which restores both startup paths it moved aside) is the only way back. Root still
-  defeats all of it. Windows remains unchanged — its phase needs net-new NTFS ACL work that neither
-  POSIX platform did. See issue #428.
+  defeats all of it. See issue #428.
+- Issue #428 Phase 4, Windows: `privilege-separation.ps1 enable`, run from an elevated PowerShell
+  (the installer now puts it next to the application; a source checkout runs
+  `scripts/windows_privilege_separation.ps1`), completes Phase 4 on the last platform — and it is
+  the one where the mechanism genuinely differs rather than being differently spelled. The daemon
+  becomes a **Windows service** running as the virtual account `NT SERVICE\PrivacyFence`
+  (materialized by the Service Control Manager with the service, its own SID, no password for
+  anyone to store), the data directory moves from `%LOCALAPPDATA%\PrivacyFence` to
+  `%ProgramData%\PrivacyFence`, and the Scheduled Task that used to start the daemon in your
+  session is disabled in favour of a new one that starts the companion tray app there instead. It
+  closes the same four things — the agent can no longer edit the always-allow rules and PII policy,
+  forge a WebAuthn credential, read the audit log's HMAC key, or read the daemon's connector
+  credentials — and the marker file, the three directories and the `handoff` contents are identical
+  to the other two platforms'.
+  What is new is the permission model: Windows has no mode bits, so the layout is NTFS ACLs written
+  with `icacls` and re-checked on every daemon start, with `/inheritance:r` first because
+  `%ProgramData%` otherwise grants every account on the machine read access by inheritance, and
+  `/setowner` because an owner can rewrite an ACL whatever it says — and moving the data directory
+  out of `%LOCALAPPDATA%` would otherwise leave it owned by the account being excluded. The
+  shared `handoff` directory ends up *tighter* than on POSIX — readable by the new
+  `PrivacyFenceUsers` group, not writable, since both control channels are named pipes rather than
+  socket files and nothing in your session needs to create anything there.
+  Two Windows-only requirements are enforced rather than documented. **A per-machine install is
+  required**: a service runs whatever its path names, so separating an install under your own
+  profile would let the very client this contains rewrite the daemon's executable and have it run
+  as the service account — `enable` reads the install directory's ACL and refuses, which settles
+  issue #407's open question as two install tiers rather than dropping the non-elevated path. **And
+  the companion is mandatory**, because a service runs in session 0 and cannot open a browser, so
+  connector OAuth for Slack, Salesforce and Atlassian goes through it or not at all. **Opt-in, and
+  staying opt-in for a full release**, same as the other two; the migration moves live connector
+  OAuth tokens and `… disable` is the only way back — run it *before* uninstalling, since uninstall
+  leaves `%ProgramData%\PrivacyFence` in place exactly as it leaves `%LOCALAPPDATA%\PrivacyFence`
+  today. Administrator still defeats all of it. See issue #428.
 - Issue #428 D1: privilege separation on macOS and Linux is now **default-on**, moved up from the
   original plan's 4.2 target rather than waiting the full release cycle the two entries above
   described. `enable`/`disable`/`status` are unchanged and `disable` remains how to opt back out;
