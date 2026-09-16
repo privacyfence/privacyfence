@@ -363,6 +363,53 @@ warn_return_any = true
 no_implicit_reexport = true
 strict_equality = true
 
+# Next four promotions (privacyfence/privacyfence#377): each was already clean under the
+# flags above with no code changes needed, matching url_safety.py's own bar -- small,
+# security-critical, and picked from the issue's own candidate list (org-config trust,
+# 100%-covered fail-closed/session-boundary modules). privacyfence.privacy_filter, also on
+# that list, is deliberately *not* here yet: it has one real `no-any-return` finding
+# (category_policy() returning an internal `dict[str, Any]` lookup) that needs an actual
+# typed-shape fix, not just a flag flip, so it's left for a PR that touches that file.
+[[tool.mypy.overrides]]
+module = "privacyfence.org_bundle_signing"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "privacyfence.safe_errors"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "privacyfence.web.session_auth"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "privacyfence.web.org_session"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
 [tool.bandit]
 # TST-07: "bandit or semgrep for security-focused rules". Scans src/ only
 # for now (tests/ trips B101 `assert_used` constantly, which is how pytest
