@@ -26,6 +26,7 @@ from typing import Any
 from mcp import types
 
 from ..connector import ToolSpec
+from .session_auth import BOOTSTRAP_TTL_SECONDS
 
 # Same rationale as bridge/src/tools.ts's UNIFORM_READ_ONLY_ANNOTATIONS: MCP
 # tool annotations are UI hints, not a security boundary (the spec says so
@@ -104,13 +105,19 @@ def sign_in_link_result(value: dict[str, str]) -> types.CallToolResult:
     goes through the generic ``to_call_tool_result`` above, whose text
     content is a raw ``json.dumps({"url": ...})`` blob a human has to pick
     the link out of by hand. This tool exists specifically to hand a human a
-    link to click, so its text content is a markdown link instead: any
-    client that renders tool text as markdown (most chat clients do) shows
-    it as something clickable rather than JSON to copy-paste from.
-    ``structuredContent`` is unchanged -- still the plain ``{"url": ...}``
-    dict, for a client that reads that instead of the text."""
+    link to click, so its text content is a single markdown link instead:
+    any client that renders tool text as markdown (most chat clients do)
+    shows it as something clickable rather than JSON to copy-paste from. The
+    link text itself names the expiry (``BootstrapStore``'s TTL, session_auth.py)
+    rather than a second, separate sentence -- one string a human can still
+    act on correctly if only the link text survives into a screenshot or a
+    shared transcript, instead of a bare URL with no context once separated
+    from an explanation next to it. ``structuredContent`` is unchanged --
+    still the plain ``{"url": ...}`` dict, for a client that reads that
+    instead of the text."""
     url = value["url"]
-    text = f"[Click here to sign in to PrivacyFence]({url})\n\n{url}"
+    minutes = BOOTSTRAP_TTL_SECONDS // 60
+    text = f"[Sign in to PrivacyFence]({url}) — one-time link, expires in {minutes} minutes"
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)], structuredContent=value,
     )

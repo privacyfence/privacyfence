@@ -68,9 +68,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   current-user-only install) and how to get there in File Explorer, instead of just saying to
   install it with no path given, for the case where the new automatic prompt above was declined.
   See issue #407.
-- `privacyfence_get_sign_in_link`'s result text is now a markdown link instead of a raw
-  `{"url": ...}` JSON blob, so a client that renders tool text as markdown shows something
-  clickable instead of a link a human has to copy out by hand. `structuredContent` is unchanged.
+- `privacyfence_get_sign_in_link`'s result text is now a single markdown link (naming the
+  10-minute expiry in the link text itself, e.g. "Sign in to PrivacyFence — one-time link, expires
+  in 10 minutes") instead of a raw `{"url": ...}` JSON blob, so a client that renders tool text as
+  markdown shows something clickable instead of a link a human has to copy out by hand, and the
+  expiry stays legible even if only the link text survives into a screenshot or shared transcript.
+  `structuredContent` is unchanged.
 
 ### Fixed
 

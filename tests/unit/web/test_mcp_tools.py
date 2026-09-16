@@ -37,6 +37,7 @@ from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.web import mcp_tools
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
+from privacyfence.web.session_auth import BOOTSTRAP_TTL_SECONDS
 
 
 # --------------------------------------------------------------------------- #
@@ -355,13 +356,17 @@ class TestGetSignInLinkOverRealTransport:
         # to_call_tool_result) -- fine for a client that just reads
         # structuredContent, but this tool exists specifically to hand a
         # human a link to click, so it gets a markdown link instead of JSON
-        # a human would otherwise have to copy the url out of by hand.
+        # a human would otherwise have to copy the url out of by hand. The
+        # expiry lives in the same string as the link (not a separate
+        # sentence) so it still reads correctly if only the link text
+        # survives into a screenshot or a shared transcript.
         dispatcher = _dispatcher({})
         dispatcher.set_bootstrap_link_provider(lambda path: f"http://localhost:8765{path}?bootstrap=abc123")
         async with _connected_session(dispatcher) as session:
             result = await session.call_tool("privacyfence_get_sign_in_link", {"reason": "locked out"})
         url = "http://localhost:8765/approvals?bootstrap=abc123"
-        assert result.content[0].text == f"[Click here to sign in to PrivacyFence]({url})\n\n{url}"
+        minutes = BOOTSTRAP_TTL_SECONDS // 60
+        assert result.content[0].text == f"[Sign in to PrivacyFence]({url}) — one-time link, expires in {minutes} minutes"
 
 
 class TestListAutoAcceptRulesDisclosureIsAudited:
