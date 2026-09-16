@@ -21,15 +21,24 @@ checker banner, Telegram's interactive phone/2FA login, and the per-viewer
 notification-detail preference. Those never get an org-mode route, under
 either allowlist, ever.
 
-These three frozensets are that split -- the design decision #400's own
-follow-on work (admin-gating `ADMIN_ONLY_ACTIONS` behind `Principal.
-is_admin`, and a read+remove settings surface for `PER_PRINCIPAL_ACTIONS`)
-builds on, not the routes themselves; neither org-mode route module exists
-yet. This module's own test checks the split against
-`routes_settings._ALLOWED_ACTIONS` so a newly added local-mode action can't
-silently go unclassified.
+These three frozensets are that split -- a read+remove settings surface for
+`PER_PRINCIPAL_ACTIONS` is #400's own follow-on work that builds on it, not
+the routes themselves; no org-mode route module exists yet. This module's
+own test checks the split against `routes_settings._ALLOWED_ACTIONS` so a
+newly added local-mode action can't silently go unclassified.
+
+`is_action_permitted` is the other half: `Principal.is_admin` is already
+resolved from the IdP and carried end to end (`org_identity.
+principal_from_claims` -> `OrgSessionStore` / `OrgOAuthProvider.
+_mint_tokens` -> `mcp_auth.principal_from_access_token`), but until now
+nothing consumed it for an authorization decision anywhere in this
+codebase. This is that decision, in one place, so the eventual org-mode
+settings route calls it instead of re-deriving "is this action gated"
+from the three sets itself.
 """
 from __future__ import annotations
+
+from ..principal import Principal
 
 PER_PRINCIPAL_ACTIONS: frozenset[str] = frozenset({
     "toggle_connector", "refresh_connectors", "authenticate_connector",
@@ -51,3 +60,18 @@ NOT_APPLICABLE_ACTIONS: frozenset[str] = frozenset({
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
     "set_notifications_detail",
 })
+
+
+def is_action_permitted(action: str, principal: Principal) -> bool:
+    """Whether `principal` may invoke `action` on an org-mode settings
+    surface. A `PER_PRINCIPAL_ACTIONS` member is permitted for any signed-in
+    principal -- every one of them already resolves against
+    `current_principal()` inside the controller/registry it touches, so
+    there is nothing further to check here. An `ADMIN_ONLY_ACTIONS` member
+    needs `principal.is_admin`. Anything else -- a `NOT_APPLICABLE_ACTIONS`
+    member, or a name in neither set at all -- is never permitted; the
+    caller is expected to 404 those the same way `routes_settings.py`'s own
+    allowlist check does, not reach this function with them."""
+    if action in ADMIN_ONLY_ACTIONS:
+        return principal.is_admin
+    return action in PER_PRINCIPAL_ACTIONS
