@@ -300,7 +300,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     # graphical login's XDG autostart should ─────────────────────────────
     _dpkg("-i", str(deb_path))
     time.sleep(1.0)
-    assert not (home / ".privacyfence" / WEB_TOKEN_FILE_NAME).exists(), (
+    assert not (home / ".privacyfence" / "authority" / WEB_TOKEN_FILE_NAME).exists(), (
         "installing the .deb must never itself start the daemon -- only the next login should"
     )
 
@@ -386,7 +386,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     expected_exe = str(OPT_DIR / "PrivacyFenceApp")
     assert exe_link == expected_exe, f"systemd started {exe_link!r}, not the packaged binary at {expected_exe!r}"
 
-    web_token = _wait_for_path_content(home / ".privacyfence" / WEB_TOKEN_FILE_NAME, timeout=20)
+    web_token = _wait_for_path_content(home / ".privacyfence" / "authority" / WEB_TOKEN_FILE_NAME, timeout=20)
     mcp_token = _wait_for_path_content(home / ".privacyfence" / MCP_TOKEN_FILE_NAME, timeout=20)
     _wait_until_connectable("localhost", port)
 
@@ -416,7 +416,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     _wait_for_unit_property(systemctl_user, unit, "ActiveState", "inactive", timeout=20)
     assert not Path(f"/proc/{main_pid}").exists(), f"pid {main_pid} still alive after Quit PrivacyFence"
 
-    settings_path = home / ".privacyfence" / "config" / "settings.yaml"
+    settings_path = home / ".privacyfence" / "authority" / "config" / "settings.yaml"
     assert "autostart.example.com" in settings_path.read_text(encoding="utf-8")
 
 

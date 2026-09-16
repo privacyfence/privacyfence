@@ -350,7 +350,7 @@ class TestUnauthorizedHtml:
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
 
         assert "/home/alice/.privacyfence/approvals_url" in body
-        assert "$(cat /home/alice/.privacyfence/web_token)" in body
+        assert "$(cat /home/alice/.privacyfence/authority/web_token)" in body
         assert "Get-Content" not in body
 
     def test_shows_the_windows_path_and_a_powershell_command(self, monkeypatch):
@@ -367,5 +367,5 @@ class TestUnauthorizedHtml:
 
         assert r"C:\Users\alice\AppData\Local\PrivacyFence\approvals_url" in body
         assert "Get-Content" in body
-        assert r"C:\Users\alice\AppData\Local\PrivacyFence\web_token" in body
+        assert r"C:\Users\alice\AppData\Local\PrivacyFence\authority\web_token" in body
         assert "$(cat " not in body

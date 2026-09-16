@@ -191,7 +191,9 @@ def _prepare_sandbox(tmp_path: Path, *, port: int) -> Path:
     config["web"]["port"] = port
     config["web"]["approvals"] = {"hold_window_seconds": 0.3}
     config["update_check"]["enabled"] = False
-    config_dir = sandbox / "config"
+    # #428 Phase 1: settings.yaml (like web_token and the audit log) lives
+    # under an `authority` subdirectory of data_dir(), not data_dir() itself.
+    config_dir = sandbox / "authority" / "config"
     config_dir.mkdir(parents=True)
     (config_dir / "settings.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
     return sandbox
@@ -353,10 +355,10 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
 
         assert proc.poll() is None
         assert (sandbox / "privacyfence.lock").exists()
-        assert (sandbox / "config" / "settings.yaml").exists()
+        assert (sandbox / "authority" / "config" / "settings.yaml").exists()
         mcp_token = (sandbox / "mcp_token").read_text(encoding="utf-8").strip()
         assert mcp_token
-        web_token = (sandbox / "web_token").read_text(encoding="utf-8").strip()
+        web_token = (sandbox / "authority" / "web_token").read_text(encoding="utf-8").strip()
         assert web_token
 
         base_url = f"http://{parsed.hostname}:{parsed.port}"
@@ -428,7 +430,7 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
             assert fourth.isError is True
 
             # ── 8: audit log confirms both real decisions ────────────────
-            audit_dir = sandbox / "logs" / "audit"
+            audit_dir = sandbox / "authority" / "logs" / "audit"
             decisions = []
             for jsonl_path in sorted(audit_dir.glob("*.jsonl")):
                 for line in jsonl_path.read_text(encoding="utf-8").splitlines():
@@ -473,8 +475,8 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
     # cleared by a clean quit; see WebServer.stop()'s own comment, not
     # called from run_app()'s shutdown path at all) -- still on disk after
     # the process is gone, exactly as a real install's state should be.
-    assert (sandbox / "config" / "settings.yaml").exists()
-    assert (sandbox / "logs" / "audit").exists()
+    assert (sandbox / "authority" / "config" / "settings.yaml").exists()
+    assert (sandbox / "authority" / "logs" / "audit").exists()
 
 
 async def test_local_mode_status_bootstrap_lands_on_connectors_page(tmp_path):

@@ -57,6 +57,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   two processes running as the same user cannot be told apart. Supersedes ADR 0001 in part. No
   behavior changes with this entry; it is the decision the implementation in issues #428 and #426
   will follow. See issue #427.
+- Issue #428 Phase 1: local mode's human-authority state — the web-approval bootstrap secret
+  (`web_token`), the privacy policy (`config/settings.yaml`), enrolled WebAuthn credentials, and the
+  audit log plus its HMAC key — now lives under its own `authority` subdirectory, split out of
+  `mcp_token` and the agent's own connector caches/credentials, which stay where they were. A pure
+  refactor with no security gain yet — everything still runs as the same OS user until Phase 4 moves
+  the daemon to its own account and re-owns this subtree to it — but it isolates that later,
+  security-bearing state migration from everything that depends on the storage layout today. A
+  pre-4.1 install's existing `settings.yaml`, WebAuthn credentials, `web_token`, and audit history
+  are moved into the new location automatically on first startup under this version, so nothing is
+  silently reset. See issue #428.
 
 ### Added
 

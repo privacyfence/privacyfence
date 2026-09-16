@@ -919,7 +919,12 @@ class TestCleanShutdownAndRestart:
         port = _free_port()
         _write_org_config(home, _signed_org_config(idp_issuer=mock_idp.base_url, port=port))
         carol_dir = home / ".privacyfence" / "users" / safe_principal_id("carol")
-        settings_file = carol_dir / "config" / "settings.yaml"
+        # #428 Phase 1: settings.yaml lives under an authority/ subdirectory
+        # now; the audit log doesn't move for a non-local principal (it's
+        # never routed through daemon_main.py's authority_root() -- see
+        # audit_log.py's _fallback_log_dir(), the only path org-mode
+        # principals' audit loggers ever take).
+        settings_file = carol_dir / "authority" / "config" / "settings.yaml"
         audit_file = carol_dir / "logs" / "audit" / f"{current_week()}.jsonl"
 
         async def _propose_and_decide_rule(client: LoopbackClient, access_token: str, carol_cookie: str) -> None:

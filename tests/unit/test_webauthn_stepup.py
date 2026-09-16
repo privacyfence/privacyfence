@@ -91,12 +91,12 @@ class TestCredentialStorage:
     )
     def test_credentials_file_is_0600(self):
         wa.add_credential(ALICE, _credential())
-        path = paths.user_dir(ALICE) / wa.CREDENTIALS_FILE_NAME
+        path = paths.authority_dir(ALICE) / wa.CREDENTIALS_FILE_NAME
         assert path.exists()
         assert (path.stat().st_mode & 0o777) == 0o600
 
     def test_corrupt_credentials_file_reads_as_empty_not_a_crash(self):
-        path = paths.user_dir(ALICE) / wa.CREDENTIALS_FILE_NAME
+        path = paths.authority_dir(ALICE) / wa.CREDENTIALS_FILE_NAME
         path.write_text("not json", encoding="utf-8")
         assert wa.list_credentials(ALICE) == []
 

@@ -312,7 +312,9 @@ def _running_daemon_at(exe: Path, home: Path):
     assert exe.is_file(), f"{exe} missing -- PyInstaller output layout changed?"
 
     home.mkdir(parents=True, exist_ok=True)
-    config_dir = home / ".privacyfence" / "config"
+    # #428 Phase 1: settings.yaml lives under an authority/ subdirectory of
+    # data_dir(), same as web_token below -- not data_dir() itself.
+    config_dir = home / ".privacyfence" / "authority" / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     settings_path = config_dir / "settings.yaml"
     if settings_path.exists():
@@ -342,7 +344,7 @@ def _running_daemon_at(exe: Path, home: Path):
         _wait_until_connectable("localhost", port, proc, log_path)
 
         data_dir = home / ".privacyfence"
-        web_token = _wait_for_file(data_dir / WEB_TOKEN_FILE_NAME, proc, log_path)
+        web_token = _wait_for_file(data_dir / "authority" / WEB_TOKEN_FILE_NAME, proc, log_path)
         mcp_token = _wait_for_file(data_dir / MCP_TOKEN_FILE_NAME, proc, log_path)
 
         resp = httpx.post(
@@ -496,7 +498,7 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
 
     # Confirms the round trip actually reached persisted state, not just a
     # confirmed-but-inert in-memory result.
-    settings_path = running_packaged_daemon.home / ".privacyfence" / "config" / "settings.yaml"
+    settings_path = running_packaged_daemon.home / ".privacyfence" / "authority" / "config" / "settings.yaml"
     assert "trusted_sender_domain" in settings_path.read_text(encoding="utf-8")
 
     # ── State lives outside the package (module docstring, §6) ───────────
@@ -742,7 +744,7 @@ async def test_macos_upgrade_preserves_user_state(tmp_path):
             assert result.isError is not True, getattr(result, "content", result)
             assert result.structuredContent["changed"] is True
 
-        settings_path = home / ".privacyfence" / "config" / "settings.yaml"
+        settings_path = home / ".privacyfence" / "authority" / "config" / "settings.yaml"
         assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
 
         # ── "Install" a synthetically-relabeled version N+1 -- delete the

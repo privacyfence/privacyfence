@@ -227,23 +227,29 @@ def unauthorized_html(request: Request) -> Response:
 
     The discovery-file path and the shell command are both platform-
     dependent -- ``paths.data_dir()`` resolves to the real, live directory
-    this install actually writes ``approvals_url``/``web_token`` into
-    (``~/.privacyfence`` on POSIX, ``%LOCALAPPDATA%\\PrivacyFence`` on
-    Windows, see that function's own docstring), and the paste-able command
-    is PowerShell's ``Get-Content`` on Windows rather than bash's
-    ``$(cat ...)``, which isn't valid there."""
+    this install actually writes ``approvals_url`` into (``~/.privacyfence``
+    on POSIX, ``%LOCALAPPDATA%\\PrivacyFence`` on Windows, see that
+    function's own docstring); ``web_token`` itself lives one level down, in
+    its ``authority`` subdirectory (#428 Phase 1's human-authority root --
+    the same one ``paths.authority_dir()`` returns, computed here as a plain
+    join rather than calling that function directly, since this is a pure
+    display string for an unauthenticated page and has no reason to also
+    create the directory or run its migration-on-first-use side effect on
+    every hit), and the paste-able command is PowerShell's ``Get-Content``
+    on Windows rather than bash's ``$(cat ...)``, which isn't valid there."""
     origin = f"{request.url.scheme}://{request.url.netloc}"
     data_dir = paths.data_dir()
+    authority_dir = data_dir / "authority"
     if paths.is_windows():
         approvals_url_path = f"{data_dir}\\approvals_url"
-        web_token_path = f"{data_dir}\\web_token"
+        web_token_path = f"{authority_dir}\\web_token"
         command = (
             f'curl.exe -s -X POST -H "Authorization: Bearer $(Get-Content \'{web_token_path}\')" '
             f"{origin}/api/bootstrap"
         )
     else:
         approvals_url_path = f"{data_dir}/approvals_url"
-        web_token_path = f"{data_dir}/web_token"
+        web_token_path = f"{authority_dir}/web_token"
         command = f'curl -s -X POST -H "Authorization: Bearer $(cat {web_token_path})" {origin}/api/bootstrap'
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"

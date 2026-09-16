@@ -622,7 +622,7 @@ def _installed(_real_home_state, tmp_path):
     # must never fire under /VERYSILENT (test_windows_packaged_smoke.py's
     # own lifecycle test relies on the same fact); only Task Scheduler
     # should ever start the daemon in this module.
-    assert not (_data_dir(home) / WEB_TOKEN_FILE_NAME).exists(), (
+    assert not (_data_dir(home) / "authority" / WEB_TOKEN_FILE_NAME).exists(), (
         "a silent install must never itself start the daemon -- only the autostart task should"
     )
 
@@ -694,7 +694,7 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
 
     pid, _owner = _start_task_and_wait_for_daemon(_installed)
 
-    web_token = _wait_for_path_content(_data_dir(_installed.home) / WEB_TOKEN_FILE_NAME, timeout=20)
+    web_token = _wait_for_path_content(_data_dir(_installed.home) / "authority" / WEB_TOKEN_FILE_NAME, timeout=20)
     mcp_token = _wait_for_path_content(_data_dir(_installed.home) / MCP_TOKEN_FILE_NAME, timeout=20)
     _wait_until_connectable("localhost", _installed.port)
 
@@ -723,7 +723,7 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
         f"{ALIAS_EXE_NAME} (pid {pid}) still running after Quit PrivacyFence"
     )
 
-    settings_path = _data_dir(_installed.home) / "config" / "settings.yaml"
+    settings_path = _data_dir(_installed.home) / "authority" / "config" / "settings.yaml"
     assert "autologon.example.com" in settings_path.read_text(encoding="utf-8")
 
 

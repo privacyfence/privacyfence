@@ -45,7 +45,10 @@ they hold.
 
 A local process running as the signed-in user can:
 
-- read `web_token` from the data directory and `POST /api/bootstrap` to mint a fresh bootstrap code —
+- read `web_token` from the data directory's `authority` subdirectory ([#428](https://github.com/privacyfence/privacyfence/issues/428)
+  Phase 1 split this, and `config/settings.yaml`, enrolled WebAuthn credentials, and the audit log,
+  out of the rest of the data directory -- a pure file-layout change so far, since it still sits at
+  the same uid as everything else there) and `POST /api/bootstrap` to mint a fresh bootstrap code —
   the not-authorized page prints that exact command, deliberately, for a locked-out human;
 - exchange the code for a `pf_session` cookie by visiting `/approvals?bootstrap=<code>`;
 - `POST /api/approvals/<id>/decide` and release a pending approval.

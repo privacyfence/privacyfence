@@ -12,6 +12,7 @@ under ``%USERPROFILE%``.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import sys
@@ -22,6 +23,8 @@ from .secure_files import secure_mkdir
 
 if TYPE_CHECKING:
     from .principal import Principal
+
+logger = logging.getLogger(__name__)
 
 # Deliberately strict -- principal ids reach here from an OAuth 2.1/OIDC
 # `sub` claim once P7 lands (today it's always "local"), and this is the one
@@ -160,6 +163,102 @@ def user_dir(principal: "Principal | None" = None) -> Path:
     if not _is_safe_principal_id(principal.id):
         raise ValueError(f"Unsafe principal id for filesystem storage: {principal.id!r}")
     return secure_mkdir(data_dir() / "users" / principal.id)
+
+
+# Relative to a principal's user_dir() -- the pre-#428 location of each of
+# these, for both the local principal (whose user_dir() is data_dir() itself)
+# and any other one (users/<id>/), which is what makes a single migration
+# table below correct for either branch.
+_LEGACY_AUTHORITY_PATHS: tuple[Path, ...] = (
+    Path("config") / "settings.yaml",
+    Path("webauthn_credentials.json"),
+    Path("web_token"),
+    Path("web_token_version"),
+    Path("logs") / "audit",
+)
+
+# Per-process memo of which authority_dir() roots have already had their
+# migration attempted, so a hot path that calls authority_dir() often (e.g.
+# a webauthn check on every step-up) doesn't re-stat five legacy paths on
+# every call -- migrating is a one-time, first-startup-after-upgrade thing,
+# not a steady-state one. Keyed on the *target* directory rather than a
+# bool, since tests exercise more than one principal/data_dir() within a
+# single process.
+_authority_migration_attempted: set[Path] = set()
+
+
+def _migrate_legacy_authority_files(root: Path, target: Path) -> None:
+    """#428 Phase 1: move a pre-4.1 install's human-authority files -- the
+    privacy policy, enrolled WebAuthn credentials, the web-session bootstrap
+    secret and the audit log -- out of ``root`` and into ``target`` the
+    first time ``target`` is asked for, so upgrading doesn't silently reset
+    a configured policy, drop enrolled passkeys, or orphan existing audit
+    history. Idempotent and safe to re-run: a legacy path that doesn't
+    exist, or a destination that already does (including from a previous
+    call, in this process or an earlier one), is left alone rather than
+    overwritten.
+
+    This is a pure file move, not yet a permissions or ownership change --
+    #428 Phase 4 is what makes ``target`` service-owned. Until then it sits
+    at the same uid as everything else under ``root``.
+    """
+    for relative in _LEGACY_AUTHORITY_PATHS:
+        legacy = root / relative
+        destination = target / relative
+        if destination.exists() or not legacy.exists():
+            continue
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            legacy.rename(destination)
+        except OSError as exc:
+            logger.warning("Could not migrate %s to the new authority directory: %s", legacy, exc)
+
+
+def authority_dir(principal: "Principal | None" = None) -> Path:
+    """Directory root for the files that back the *human's* authority in
+    local mode -- the web-approval bootstrap secret (``web_token``), the
+    privacy policy (``config/settings.yaml``), enrolled WebAuthn credentials
+    (P426), and the audit log plus its HMAC key -- as distinct from
+    ``user_dir()``, which stays reachable by the agent for its own
+    ``mcp_token`` and connector caches/credentials.
+
+    #428 Phase 1: a pure refactor. This directory lives at the same uid as
+    everything else under ``user_dir()`` until #428 Phase 4 moves the
+    daemon to its own account and re-owns this subtree to it -- splitting
+    the path out now means that later change is a permissions/ownership
+    change at one root, not a hunt through every call site that used to
+    build one of these paths against ``data_dir()``/``user_dir()`` directly.
+
+    A subdirectory of ``user_dir(principal)``, not a sibling of it: the
+    local principal's authority root is ``data_dir()/authority`` (since
+    ``user_dir(LOCAL_PRINCIPAL_ID)`` *is* ``data_dir()``), and any other
+    principal's is ``user_dir(principal)/authority``. Org mode is out of
+    scope for #428 (its daemon already runs where the agent has no access),
+    but the non-local branch costs nothing extra to keep correct.
+    """
+    return authority_root(user_dir(principal))
+
+
+def authority_root(root: Path) -> Path:
+    """The ``authority`` subdirectory of an arbitrary ``root``, created and
+    migrated into exactly like ``authority_dir()`` -- which is
+    ``authority_root(user_dir(principal))``, and the function most callers
+    actually want.
+
+    Exists as its own function for daemon_main.py's local-principal path
+    resolution (``_resolve_authority_path()``, the audit-log directory),
+    which anchors on its own ``PROJECT_ROOT``/``data_dir()`` module-level
+    references rather than calling ``user_dir()`` -- exactly like the
+    pre-#428 ``_resolve_path()`` already did -- so that the tests that
+    monkeypatch those two names to sandbox a run keep doing so correctly.
+    Both need the identical mkdir-plus-migrate behavior for whatever root
+    they resolve to; only which root they start from differs.
+    """
+    target = root / "authority"
+    if target not in _authority_migration_attempted:
+        _migrate_legacy_authority_files(root, target)
+        _authority_migration_attempted.add(target)
+    return secure_mkdir(target)
 
 
 def downloads_dir(principal: "Principal | None" = None) -> Path:
