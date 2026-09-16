@@ -19,7 +19,9 @@ replaces it with a channel a browser cannot reach at all:
   fixed-size ``sun_path`` buffer -- see ``posix_socket_path()``).
 - **Windows**: a named pipe in the machine-global ``\\\\.\\pipe\\`` namespace,
   created with a security descriptor whose DACL grants access to the current
-  user's SID alone -- see ``_current_user_security_attributes()``.
+  user's SID alone -- plus, once #428 Phase 4 has split the daemon and the
+  companion into two accounts, to each of those. See
+  ``_current_user_security_attributes()``.
 
 Both are still reachable by anything running as the same OS user, agent
 included -- Phase 2 is explicitly "still same uid, so still no security gain
@@ -559,18 +561,36 @@ class CompanionChannelServer:
 
 def _current_user_security_attributes():  # noqa: ANN201 -- a pywin32 SECURITY_ATTRIBUTES, no type stub
     """A ``SECURITY_ATTRIBUTES`` whose DACL grants full access to the
-    current process token's own user SID and nothing else -- the "real
-    security descriptor" half of #428 Phase 2's named-pipe requirement.
-    Windows has no filesystem permission bits (``paths.py``'s own
-    ``secure_mkdir`` docstring), so a named pipe's ACL is the actual
-    access-control primitive here, not a chmod equivalent applied
-    afterwards. Shared by both ``ControlChannelServer`` and
-    ``CompanionChannelServer``'s pipes -- both are ACL'd to "whoever this
-    process is running as", the same uid both channels' own docstrings are
-    explicit is the actual (pre-#428-Phase-4) trust boundary."""
+    current process token's own user SID -- plus, on a #428 Phase 4
+    separated install, to the two accounts that now sit on the other end of
+    these channels. The "real security descriptor" half of #428 Phase 2's
+    named-pipe requirement. Windows has no filesystem permission bits
+    (``paths.py``'s own ``secure_mkdir`` docstring), so a named pipe's ACL
+    is the actual access-control primitive here, not a chmod equivalent
+    applied afterwards.
+
+    Shared by both ``ControlChannelServer`` and ``CompanionChannelServer``'s
+    pipes, and deliberately the same descriptor for both. Before Phase 4
+    that was one SID, because daemon, companion and agent were one account.
+    After it they are two -- the daemon is ``NT SERVICE\\PrivacyFence``, the
+    companion is the logged-in human -- and each end has to be reachable by
+    the other, which is exactly what ``privilege_separation.socket_mode()``'s
+    ``0660`` expresses on POSIX. This is that, in the primitive Windows has.
+
+    Not narrower than that, for the reason both channels' own docstrings
+    already give: ADR 0002 decision 6 draws the boundary at ``authority/``,
+    not here, because the companion and the agent share a session and no ACL
+    can tell them apart. An account named by
+    ``windows_channel_trustees()`` that does not exist on this machine
+    (a marker left behind by a half-removed install) is skipped rather than
+    raised on -- the pipe still comes up, ACL'd to this process alone, and
+    ``audit_layout()`` is what reports the layout as broken.
+    """
     import ntsecuritycon
     import win32api
     import win32security
+
+    from .. import windows_acl
 
     process_token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
     user_sid, _attributes = win32security.GetTokenInformation(process_token, win32security.TokenUser)
@@ -578,6 +598,17 @@ def _current_user_security_attributes():  # noqa: ANN201 -- a pywin32 SECURITY_A
     security_descriptor = win32security.SECURITY_DESCRIPTOR()
     dacl = win32security.ACL()
     dacl.AddAccessAllowedAce(win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, user_sid)
+    for trustee in privilege_separation.windows_channel_trustees():
+        sid = windows_acl.lookup_account_sid(trustee)
+        if sid is None:
+            logger.warning(
+                "Control channel: no account named %r on this machine -- its end of the "
+                "channel will not be able to connect.", trustee,
+            )
+            continue
+        if sid == user_sid:
+            continue
+        dacl.AddAccessAllowedAce(win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, sid)
     security_descriptor.SetSecurityDescriptorDacl(1, dacl, 0)
 
     security_attributes = win32security.SECURITY_ATTRIBUTES()

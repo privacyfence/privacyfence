@@ -1081,7 +1081,17 @@ dotfile POSIX uses reused verbatim under `%USERPROFILE%`, since a dot-prefixed n
 convention Explorer honors the way it is on POSIX; `%LOCALAPPDATA%` rather than the Roaming
 `%APPDATA%` because this directory holds credentials and audit logs that shouldn't follow a roaming
 profile across machines), created by the app on first run — the installer never touches it, and
-uninstalling removes only the program files and the scheduled task.
+uninstalling removes only the program files, the scheduled task(s) and, if one exists, the
+privilege-separation service.
+
+**Unless the install has opted into privilege separation** (#428 Phase 4 — see
+`platform-support.md`'s Windows section), in which case that state lives at
+`%ProgramData%\PrivacyFence\` under the `NT SERVICE\PrivacyFence` virtual account instead, the
+daemon is a Windows service rather than the Scheduled Task above (which is left registered but
+disabled), and a second task starts the companion tray app in each user session. Uninstall leaves
+`%ProgramData%\PrivacyFence\` in place exactly as it leaves `%LOCALAPPDATA%\PrivacyFence\`, which
+on a separated install means a directory no ordinary account can read afterwards — so
+`privilege-separation.ps1 disable` before uninstalling is the documented order.
 
 **File-permissions caveat, accepted for v1**: elsewhere on this codebase, credential/token files are
 written with `chmod(0o600/0o700)` to lock them down to the owning user. On Windows, `chmod` is a
@@ -1089,8 +1099,19 @@ silent no-op — there is no POSIX permission bit to set — so those files rely
 a per-user Windows profile already has (restricted to that user and Administrators) rather than an
 explicit lock-down step. This is a deliberate, accepted gap, not an oversight: a single-user Windows
 profile's own default ACLs already provide the same practical protection the `chmod` calls give on
-POSIX, and tightening it further (e.g. via `icacls`/`pywin32`) is out of scope unless a security
-review finds the default insufficient.
+POSIX.
+
+**#428 Phase 4 is the security review that found the default insufficient — for one specific
+reason, and it does not generalize.** The profile's own ACLs protect that data from *other accounts
+on the machine*, which was always the threat this caveat was written against, and they still do.
+What they cannot do is protect it from a process running *as that same user*, which is exactly what
+the AI client is. Privilege separation moves the data out of the profile to `%ProgramData%`
+precisely because a service account cannot own something inside a human's profile, and at that
+point the profile's default ACLs protect nothing at all — so that layout is explicit `icacls`
+grants, written by `scripts/windows_privilege_separation.ps1` and audited on every daemon start by
+`src/privacyfence/windows_acl.py` (which uses `pywin32`, already a Windows dependency for the
+control channel's named pipes). On an install that has *not* opted in, everything in the paragraph
+above is unchanged: no `icacls`, no ACL code in the write path, the profile's defaults as before.
 
 ### Linux
 

@@ -38,6 +38,26 @@ Run only checks that automation cannot judge reliably:
   that flow goes through the `--serve` companion the XDG autostart entry starts — and if that entry
   didn't take, the daemon comes up looking perfectly healthy while connector authentication
   silently has no way to reach you;
+- on Windows specifically, the same check against the same set of changes, in that platform's own
+  terms — and this is the one with the most that only a human can see. On a real Windows machine
+  with the **per-machine** install (the elevated one; the per-user path cannot be separated, and
+  `enable` will say so), from an elevated PowerShell run
+  `powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" enable`.
+  Then, after a sign-out/sign-in: confirm `… status` reports a clean layout, confirm the daemon is
+  running as the virtual account (`sc.exe qc PrivacyFence` shows `SERVICE_START_NAME:
+  NT SERVICE\PrivacyFence`, and Task Manager's Details tab shows `PrivacyFenceApp.exe` under that
+  user name) rather than having died at start with **error 1053** — the service host
+  (`windows_service.py`) is the single genuinely new moving part on this platform and the SCM is the
+  only thing that exercises it; confirm your own account genuinely cannot read
+  `%ProgramData%\PrivacyFence\authority` (`type` a file in it and expect access denied, rather than
+  trusting `icacls` output alone); confirm the tray companion opens `/approvals`, that a real MCP
+  client still reaches `/mcp`, and — as on Linux, and for the same reason with a sharper edge, since
+  a service in session 0 can reach no desktop at all — **complete a real connector OAuth flow
+  (Slack, Salesforce or Atlassian) while separated**. Then run `… disable` and confirm the previous
+  layout is back at `%LOCALAPPDATA%\PrivacyFence` with connector tokens intact and the original
+  Scheduled Task re-enabled. Worth doing once in the other direction too: try `enable` against a
+  per-user install and confirm it refuses rather than producing a service running an executable you
+  can rewrite;
 - perform focused exploratory connector QA using [`connector-qa-testing.md`](connector-qa-testing.md) for a new connector, a major connector rewrite, or an unexplained provider regression.
 
 A signed Windows release specifically must not ship without the Windows-specific bullet above having actually been run against that release build — this is the human QA pass [privacyfence/privacyfence#121](https://github.com/privacyfence/privacyfence/issues/121) is gated on closing until.

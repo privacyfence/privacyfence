@@ -1,4 +1,4 @@
-"""#428 Phase 4 (B5a/B5b): the macOS and Linux privilege-separation layouts.
+"""#428 Phase 4 (B5a/B5b/B5c): all three privilege-separation layouts.
 
 The thing under test is a *contract between four artifacts*: the Python
 module that resolves paths from a marker file, the shell script that writes
@@ -12,11 +12,23 @@ decision follows from the marker exactly as intended, and that the scripts,
 the templates and the shim still agree with the module about what that
 marker means.
 
-Everything that isn't a name is shared between the two platforms, which is
-why almost every test here runs against both: what B5b added to B5a is three
-strings (a root, an account, a group) and a second installer, and a test
-that only ever exercised one platform's strings would not have noticed the
-other's going wrong.
+Everything that isn't a name is shared between the platforms, which is why
+almost every test here runs against all of them: what B5b added to B5a is
+three strings (a root, an account, a group) and a second installer, and a
+test that only ever exercised one platform's strings would not have noticed
+the other's going wrong.
+
+B5c is the exception that proves how far that goes. Windows shares the
+marker, the directory layout, the migration list and every path decision --
+so it joins ``PLATFORMS`` and runs all of that unchanged -- but it expresses
+the *permissions* as NTFS ACLs rather than as mode bits, and it provisions
+them from PowerShell rather than from bash. So the installer contract and
+the layout audit split in two: ``POSIX_PLATFORMS`` keeps the shell-script
+and mode-bit assertions, and ``TestWindows*`` below covers the half that has
+no POSIX counterpart at all -- the ACL audit, the ``.ps1``, the companion
+Scheduled Task, the service, and the one check no other platform needs (that
+the daemon's own image is not writable by the account it is being separated
+from).
 
 ``current_platform`` is monkeypatched rather than ``sys.platform`` itself,
 and ``PRIVACYFENCE_SYSTEM_ROOT`` relocates the whole layout under
@@ -33,7 +45,14 @@ from pathlib import Path
 
 import pytest
 
-from privacyfence import paths, privilege_separation, secure_files
+from privacyfence import (
+    daemon_main,
+    paths,
+    privilege_separation,
+    secure_files,
+    windows_acl,
+    windows_service,
+)
 from privacyfence.web import control_channel, mcp_auth
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,28 +61,35 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # it. Kept as its own table rather than derived from PLATFORM_LAYOUTS so a
 # platform added to the module without an installer fails here loudly --
 # which is exactly the mistake PLATFORM_LAYOUTS' own comment warns about.
-PLATFORMS = ("darwin", "linux")
+PLATFORMS = ("darwin", "linux", "win32")
+# The two whose layout is POSIX permission bits, provisioned by a shell
+# script. Windows' installer is PowerShell and its layout is ACLs, so every
+# assertion that reads a mode or a `NAME="value"` line belongs here rather
+# than in PLATFORMS -- see this module's own docstring.
+POSIX_PLATFORMS = ("darwin", "linux")
 INSTALLERS = {
     "darwin": REPO_ROOT / "scripts" / "macos_privilege_separation.sh",
     "linux": REPO_ROOT / "scripts" / "linux_privilege_separation.sh",
+    "win32": REPO_ROOT / "scripts" / "windows_privilege_separation.ps1",
 }
 MACOS_TEMPLATE_DIR = REPO_ROOT / "installer" / "macos"
 LINUX_TEMPLATE_DIR = REPO_ROOT / "installer" / "linux"
+WINDOWS_TEMPLATE_DIR = REPO_ROOT / "installer" / "windows"
+WINDOWS_INNO_SETUP = REPO_ROOT / "installer" / "privacyfence.iss"
 SHIM_PROTOCOL = REPO_ROOT / "mcpb" / "shim" / "src" / "protocol.ts"
 
 # Applied per class, not to the whole module: the marker parsing, the path
 # resolution that follows from it and the installer/template contract are all
-# pure logic worth running on every platform -- proving, among other things,
-# #428 Phase 4's own claim that Windows behaves exactly as it did before this
-# existed. What can't run there is anything that reads a POSIX mode or a file
-# owner back off disk: Windows has neither (chmod there is the documented
-# no-op secure_files.py's own docstring describes), the same known, accepted
-# gap test_secure_files.py already skips for. It is also why B5c is a phase of
-# its own rather than a platform leg of these two -- real NTFS ACLs are
-# net-new work with no equivalent here.
+# pure logic worth running on every platform. What can't run *on* Windows is
+# anything that reads a POSIX mode or a file owner back off disk: Windows has
+# neither (chmod there is the documented no-op secure_files.py's own docstring
+# describes), the same known, accepted gap test_secure_files.py already skips
+# for. What that platform has instead is NTFS ACLs, covered by TestWindowsAcl*
+# below and -- against a real filesystem -- by
+# tests/platform/test_windows_acls.py.
 posix_permissions_only = pytest.mark.skipif(
     sys.platform == "win32",
-    reason="reads POSIX ownership/permission bits back off disk -- Windows has none, and #428 P4's Windows phase (B5c) is NTFS ACLs rather than this",
+    reason="reads POSIX ownership/permission bits back off disk -- Windows has none, and its own layout is asserted through windows_acl instead",
 )
 
 
@@ -146,10 +172,11 @@ class TestNotSeparated:
         assert privilege_separation.data_dir_override() is None
 
     def test_disabled_on_an_unsupported_platform(self, monkeypatch):
-        # B5c adds "win32" to PLATFORM_LAYOUTS along with the installer that
-        # can provision it. Until then, no marker can exist there and this
-        # must not go looking for one.
-        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        # All three desktop platforms have an installer as of B5c, so this is
+        # now about the ones that never will: nothing could have written a
+        # marker on FreeBSD, and looking for one would mean reading a path
+        # this module invented.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "freebsd")
         monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
         privilege_separation.reset_cache()
 
@@ -282,14 +309,44 @@ class TestSystemRootOverride:
             # /opt: this is variable state the daemon rewrites, while /opt
             # holds the (read-only, dpkg-owned) application bundle itself.
             ("linux", "/var/lib/privacyfence"),
+            # Per-machine application state, outside every user profile --
+            # which is exactly what %LOCALAPPDATA% is not, and the whole
+            # reason the Windows data directory has to move at all.
+            ("win32", "C:/ProgramData/PrivacyFence"),
         ],
     )
     def test_default_root_per_platform(self, platform, expected, monkeypatch):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: platform)
         monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
+        monkeypatch.delenv(privilege_separation.WINDOWS_PROGRAM_DATA_ENV_VAR, raising=False)
         privilege_separation.reset_cache()
 
         assert privilege_separation.system_root() == Path(expected)
+
+    def test_windows_prefers_the_real_program_data(self, monkeypatch):
+        # %ProgramData% can be redirected to another volume, and the
+        # installer's icacls runs against wherever it really is -- resolving
+        # the hardcoded C: there would leave every process looking somewhere
+        # nothing was provisioned. The shim makes the same choice
+        # (protocol.ts's defaultSystemRoot).
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
+        monkeypatch.setenv(privilege_separation.WINDOWS_PROGRAM_DATA_ENV_VAR, "D:/ProgramData")
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.system_root() == Path("D:/ProgramData/PrivacyFence")
+
+    def test_only_windows_consults_program_data(self, monkeypatch):
+        # The variable exists on a Windows machine only, but nothing stops a
+        # POSIX process from having it set -- and a macOS install reading it
+        # would relocate its whole layout on the strength of a stray
+        # environment variable.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
+        monkeypatch.setenv(privilege_separation.WINDOWS_PROGRAM_DATA_ENV_VAR, "D:/ProgramData")
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.system_root() == privilege_separation.MACOS_SYSTEM_ROOT
 
     @pytest.mark.parametrize(
         "platform,expected",
@@ -307,6 +364,28 @@ class TestSystemRootOverride:
 
         assert layout.service_account == expected
         assert layout.service_group == expected
+
+    def test_windows_account_and_group_are_two_different_principals(self):
+        # The one place the three layouts genuinely differ in shape rather
+        # than in spelling. On POSIX the daemon is a member of its own group,
+        # so one name does both jobs. A Windows virtual service account has
+        # no group memberships at all, so the group is a separate local group
+        # the human is added to -- and every ACL and pipe DACL has to name
+        # both principals rather than relying on membership to cover one.
+        layout = privilege_separation.PLATFORM_LAYOUTS["win32"]
+
+        assert layout.service_account == "NT SERVICE\\PrivacyFence"
+        assert layout.service_group == "PrivacyFenceUsers"
+        assert layout.service_account != layout.service_group
+
+    def test_the_windows_account_name_follows_the_service_name(self):
+        # Not a naming choice: Windows derives a virtual account's name from
+        # its service's, so `sc create PrivacyFence obj= NT SERVICE\Something
+        # Else` simply is not a virtual account. These two constants are one
+        # fact written twice.
+        assert privilege_separation.WINDOWS_SERVICE_ACCOUNT_NAME == (
+            f"NT SERVICE\\{privilege_separation.WINDOWS_SERVICE_NAME}"
+        )
 
 
 class TestSeparatedPathResolution:
@@ -347,7 +426,7 @@ class TestSeparatedPathResolution:
         # service-account-owned root.
         assert control_channel.companion_socket_path() != control_channel.companion_socket_path_under(separated)
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_a_real_installs_sockets_fit_in_sun_path(self, platform):
         # The two comparisons above are deliberately fallback-agnostic, which
         # means they would also pass if the shipped layout were too long for
@@ -435,6 +514,15 @@ class TestRuntimeIdentity:
 class TestAuditLayout:
     pytestmark = posix_permissions_only
 
+    @pytest.fixture(autouse=True)
+    def _modes_are_the_primitive_here(self, platform_name):
+        # audit_layout() reads POSIX modes on macOS/Linux and NTFS ACLs on
+        # Windows -- two different primitives, not one with a branch -- so
+        # the mode assertions below have nothing to say about the win32 leg
+        # of ``platform_name``. Its equivalents are TestWindowsLayoutAudit.
+        if platform_name == "win32":
+            pytest.skip("Windows' layout audit is ACLs -- see TestWindowsLayoutAudit")
+
     def test_clean_layout_reports_nothing(self, separated, monkeypatch):
         monkeypatch.setattr(privilege_separation, "_authority_owner_problem", lambda _state: None)
 
@@ -489,6 +577,11 @@ class TestAuditLayoutBestEffort:
     layout defect or crash a startup check."""
 
     pytestmark = posix_permissions_only
+
+    @pytest.fixture(autouse=True)
+    def _modes_are_the_primitive_here(self, platform_name):
+        if platform_name == "win32":
+            pytest.skip("Windows' layout audit is ACLs -- see TestWindowsLayoutAudit")
 
     def test_a_missing_directory_is_skipped_rather_than_reported(self, separated, monkeypatch):
         monkeypatch.setattr(privilege_separation, "_authority_owner_problem", lambda _state: None)
@@ -548,34 +641,39 @@ class TestHandoffWrites:
 
 
 class TestInstallerContract:
-    """Each platform's shell script and this module are two halves of one
-    contract: the script provisions a layout, the module resolves paths from
-    it, and neither can see the other at runtime. A silent drift between them
-    leaves a daemon looking for its data where the installer never put it.
+    """Each POSIX platform's shell script and this module are two halves of
+    one contract: the script provisions a layout, the module resolves paths
+    from it, and neither can see the other at runtime. A silent drift between
+    them leaves a daemon looking for its data where the installer never put
+    it.
 
-    Everything here runs against every shipped platform's installer, because
-    the two scripts share every constant except the three names -- and a
-    check that only ever read one of them would not have caught the other
-    drifting."""
+    Everything here runs against both shell installers, because the two
+    scripts share every constant except the three names -- and a check that
+    only ever read one of them would not have caught the other drifting.
 
-    SCRIPTS = {platform: path.read_text(encoding="utf-8") for platform, path in INSTALLERS.items()}
+    Windows' installer has its own class below. It is PowerShell rather than
+    bash, so not one of the ``NAME="value"`` reads here parses it, and it
+    provisions ACLs rather than modes, so half of what is asserted here has
+    nothing to compare against there."""
+
+    SCRIPTS = {platform: INSTALLERS[platform].read_text(encoding="utf-8") for platform in POSIX_PLATFORMS}
 
     def _assign(self, platform: str, name: str) -> str:
         match = re.search(rf'^{name}="?([^"\n]*)"?$', self.SCRIPTS[platform], re.MULTILINE)
         assert match is not None, f"{name} is not assigned in {INSTALLERS[platform].name}"
         return match.group(1)
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_is_executable(self, platform):
         assert os.access(INSTALLERS[platform], os.X_OK)
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_account_names_match(self, platform):
         layout = privilege_separation.PLATFORM_LAYOUTS[platform]
         assert self._assign(platform, "SERVICE_ACCOUNT") == layout.service_account
         assert self._assign(platform, "SERVICE_GROUP") == layout.service_group
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_system_root_matches(self, platform):
         # as_posix(), not str(): this file is collected on Windows too, where
         # Path is a WindowsPath and stringifies the very same constant with
@@ -584,7 +682,7 @@ class TestInstallerContract:
         expected = privilege_separation.PLATFORM_LAYOUTS[platform].system_root
         assert self._assign(platform, "SYSTEM_ROOT") == expected.as_posix()
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_the_module_names_this_installer(self, platform):
         # check_runtime_identity() tells a locked-out human which script to
         # run; a path that doesn't exist is worse than no path at all.
@@ -619,12 +717,12 @@ class TestInstallerContract:
         assert f'{packaged_dir.group(1)}/privacyfence-daemon.service.tmpl"' in build_deb
         assert f'{packaged_dir.group(1)}/privacyfence-companion.desktop.tmpl"' in build_deb
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_marker_matches(self, platform):
         assert self._assign(platform, "MARKER_NAME") == privilege_separation.MARKER_FILE_NAME
         assert int(self._assign(platform, "MARKER_VERSION")) == privilege_separation.MARKER_VERSION
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_writes_its_own_platform_into_the_marker(self, platform):
         # separation() rejects a marker whose platform isn't this one, so a
         # script writing the wrong string would produce an install that every
@@ -632,11 +730,11 @@ class TestInstallerContract:
         # -- check_runtime_identity()'s worst case.
         assert f'"platform": "{platform}"' in self.SCRIPTS[platform]
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_handoff_dir_name_matches(self, platform):
         assert self._assign(platform, "HANDOFF_DIR_NAME") == privilege_separation.HANDOFF_DIR_NAME
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     @pytest.mark.parametrize(
         "script_name,module_constant",
         [
@@ -651,7 +749,7 @@ class TestInstallerContract:
         # Python octal literals (0o711) -- same numbers, two notations.
         assert int(self._assign(platform, script_name), 8) == module_constant
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_migrates_every_file_that_moved_into_the_handoff_dir(self, platform):
         # Each of these sits at the root of a pre-Phase-4 data directory and
         # has to end up inside handoff/, or something in the user's session
@@ -671,19 +769,19 @@ class TestInstallerContract:
         # learns to mint a link for.
         assert server._bootstrap_url_file_name("/approvals").endswith("_url")
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     @pytest.mark.parametrize("subcommand", ["enable", "disable", "status"])
     def test_documents_each_subcommand(self, platform, subcommand):
         assert f"cmd_{subcommand}()" in self.SCRIPTS[platform]
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_refuses_to_run_without_the_companion(self, platform):
         # ADR 0002 decision 2: after Phase 4 nobody in the user's desktop
         # session can mint a sign-in link except the companion, so installing
         # the daemon half alone is a locked door.
         assert "a separated install needs the companion app" in self.SCRIPTS[platform]
 
-    @pytest.mark.parametrize("platform", PLATFORMS)
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_refuses_to_run_on_the_other_platform(self, platform):
         # Both scripts do the same chown/chmod/account work on paths that
         # exist under both OSes; running the wrong one would half-provision a
@@ -869,3 +967,491 @@ class TestShimContract:
 
     def test_the_shim_honors_the_same_override(self):
         assert privilege_separation.SYSTEM_ROOT_ENV_VAR in self.SOURCE
+
+
+class TestWindowsInstallerContract:
+    """B5c's half of the same contract, against a PowerShell script instead
+    of a shell one.
+
+    Windows shares the marker, the directory names and the migration list
+    with macOS and Linux, so those are asserted here exactly as
+    ``TestInstallerContract`` asserts them for bash -- only the syntax of the
+    assignment differs. What it does *not* share is a single mode: the layout
+    is NTFS ACLs, and the checks for those are further down.
+    """
+
+    SCRIPT = INSTALLERS["win32"].read_text(encoding="utf-8")
+    LAYOUT = privilege_separation.PLATFORM_LAYOUTS["win32"]
+
+    def _assign(self, name: str) -> str:
+        match = re.search(rf"^\${name} = '([^']*)'$", self.SCRIPT, re.MULTILINE)
+        assert match is not None, f"${name} is not assigned in {INSTALLERS['win32'].name}"
+        return match.group(1)
+
+    def test_account_and_group_names_match(self):
+        # The account is built from the service name in the script, the same
+        # way the module builds it -- so this asserts the composed result
+        # rather than a literal, which is the thing both halves have to agree
+        # on for `sc create obj=` to name a real virtual account.
+        assert self._assign("ServiceName") == privilege_separation.WINDOWS_SERVICE_NAME
+        assert '$ServiceAccount = "NT SERVICE\\$ServiceName"' in self.SCRIPT
+        assert self._assign("ServiceGroup") == self.LAYOUT.service_group
+
+    def test_system_root_is_program_data(self):
+        # The script never hardcodes C:, for the same reason system_root()
+        # prefers the variable: a redirected %ProgramData% has to take both
+        # halves with it, or the installer provisions one directory and every
+        # process reads another.
+        assert "$SystemRoot = Join-Path $env:ProgramData 'PrivacyFence'" in self.SCRIPT
+        assert self.LAYOUT.system_root == Path("C:/ProgramData/PrivacyFence")
+
+    def test_the_module_names_this_installer(self):
+        assert (REPO_ROOT / self.LAYOUT.installer).is_file()
+        assert INSTALLERS["win32"] == REPO_ROOT / self.LAYOUT.installer
+
+    def test_the_status_command_names_what_the_installer_actually_puts_on_disk(self):
+        # Deliberately not the repo-relative path, for the same reason
+        # Linux's is not: almost every Windows install is the Inno one, which
+        # copies this script next to the application under a different name,
+        # and quoting a path someone does not have is worse than quoting
+        # none. So the name in the error and the name the installer writes
+        # have to stay the same string.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        assert 'DestName: "privilege-separation.ps1"' in inno
+        assert r'..\scripts\windows_privilege_separation.ps1' in inno
+        assert "privilege-separation.ps1" in self.LAYOUT.status_command
+        assert "status" in self.LAYOUT.status_command
+
+    def test_the_installer_ships_the_template_the_script_renders(self):
+        # The script resolves a checkout layout first and its own directory
+        # second; a real install has only the latter, so a template missing
+        # from [Files] makes `enable` die at Install-CompanionTask on exactly
+        # the machines most likely to run it.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        assert r'Source: "windows\privacyfence-companion-task.xml.tmpl"; DestDir: "{app}"' in inno
+        assert (WINDOWS_TEMPLATE_DIR / "privacyfence-companion-task.xml.tmpl").is_file()
+        assert "privacyfence-companion-task.xml.tmpl" in self.SCRIPT
+
+    def test_marker_matches(self):
+        assert self._assign("MarkerName") == privilege_separation.MARKER_FILE_NAME
+        assert f"$MarkerVersion = {privilege_separation.MARKER_VERSION}" in self.SCRIPT
+
+    def test_writes_its_own_platform_into_the_marker(self):
+        # separation() rejects a marker whose platform isn't this one, so a
+        # script writing the wrong string would produce an install every
+        # process reads as un-separated while a separated layout sits on disk
+        # -- check_runtime_identity()'s worst case.
+        assert "platform        = 'win32'" in self.SCRIPT
+
+    def test_handoff_dir_name_matches(self):
+        assert self._assign("HandoffDirName") == privilege_separation.HANDOFF_DIR_NAME
+
+    def test_task_names_match_the_module_and_the_uninstaller(self):
+        # Three places name these: the script that creates them, the module
+        # that documents them, and the .iss whose [UninstallRun] has to
+        # remove them from a machine that opted in and then uninstalled.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        assert self._assign("DaemonTaskName") == privilege_separation.WINDOWS_DAEMON_TASK_NAME
+        assert self._assign("CompanionTaskName") == privilege_separation.WINDOWS_COMPANION_TASK_NAME
+        assert f'#define CompanionTaskName "{privilege_separation.WINDOWS_COMPANION_TASK_NAME}"' in inno
+        assert f'#define ServiceName "{privilege_separation.WINDOWS_SERVICE_NAME}"' in inno
+
+    def test_the_uninstaller_removes_the_service_and_the_companion_task(self):
+        # Both exist only on an install that opted in, and both outlive the
+        # program files if nothing removes them -- a service whose binPath no
+        # longer exists, and a task that fails at every sign-in.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        assert 'Parameters: "/delete /tn ""{#CompanionTaskName}"" /f"' in inno
+        assert 'Parameters: "delete ""{#ServiceName}"""' in inno
+
+    def test_migrates_every_file_that_moved_into_the_handoff_dir(self):
+        names = re.search(r"^\$HandoffFileNames = @\(([^)]*)\)$", self.SCRIPT, re.MULTILINE)
+        assert names is not None
+        moved = {part.strip().strip("'") for part in names.group(1).split(",")}
+
+        assert mcp_auth.MCP_TOKEN_FILE_NAME in moved
+        assert control_channel.WEB_BASE_URL_FILE_NAME in moved
+        from privacyfence.web import server
+
+        assert server.MCP_URL_FILE_NAME in moved
+
+    @pytest.mark.parametrize("subcommand", ["enable", "disable", "status"])
+    def test_documents_each_subcommand(self, subcommand):
+        assert f"function Invoke-{subcommand.capitalize()}" in self.SCRIPT
+        assert f"'{subcommand}'" in self.SCRIPT
+
+    def test_refuses_to_run_without_the_companion(self):
+        # ADR 0002 decision 2, and on Windows it is stronger than on the
+        # other two: a session-0 service cannot open a browser at all, so
+        # without a companion even connector OAuth stops working.
+        assert "a separated install needs the companion app" in self.SCRIPT
+
+    def test_refuses_to_run_on_another_platform(self):
+        assert "$env:OS -ne 'Windows_NT'" in self.SCRIPT
+
+    def test_requires_administrator(self):
+        # Creating a service and rewriting ACLs under %ProgramData% both need
+        # it, and failing halfway through would leave a data directory nobody
+        # owns.
+        assert "WindowsBuiltInRole]::Administrator" in self.SCRIPT
+
+    def test_refuses_a_user_writable_install(self):
+        # #407, settled: a service runs whatever binPath names, so a
+        # PrivacyFence the logged-in user can rewrite would hand the agent a
+        # way to run its own code as the service account.
+        assert "function Assert-ImageProtected" in self.SCRIPT
+        assert "Assert-ImageProtected" in self.SCRIPT.split("function Invoke-Enable", 1)[1]
+
+    def test_severs_inheritance_before_granting_anything(self):
+        # The single most load-bearing line in the script: %ProgramData%
+        # grants Users read-and-execute by inheritance, so a directory
+        # created under it is readable by every account on the machine until
+        # that inheritance is cut.
+        assert self.SCRIPT.count("'/inheritance:r'") >= 4
+
+    def test_grants_the_root_traverse_but_not_listing(self):
+        # POSIX 0711, in the primitive Windows has. (X) is execute/traverse
+        # with no FILE_READ_DATA, and it carries no (OI)(CI), so it does not
+        # reach authority\ or handoff\ either.
+        assert '"${SidUsers}:(X)"' in self.SCRIPT
+
+    def test_the_marker_stays_readable_from_the_users_own_session(self):
+        # The root grants Users traverse only, so without an ACE of its own
+        # the one file that tells a user-session process the layout moved
+        # would be the one file it cannot read -- and paths.py would resolve
+        # the unseparated directory for the companion and the agent.
+        assert '"${SidUsers}:(R)"' in self.SCRIPT
+
+    def test_uses_well_known_sids_for_built_in_principals(self):
+        # "BUILTIN\\Users" is "BUILTIN\\Utilisateurs" on a French Windows and
+        # icacls would reject it; the SID is the same string everywhere.
+        assert "$SidSystem = '*S-1-5-18'" in self.SCRIPT
+        assert "$SidAdministrators = '*S-1-5-32-544'" in self.SCRIPT
+        assert "$SidUsers = '*S-1-5-32-545'" in self.SCRIPT
+
+
+class TestWindowsCompanionTaskTemplate:
+    """ADR 0002's "startup wiring inverts", on Windows: what autostarts in
+    the user's session stops being the daemon and becomes the companion."""
+
+    TEMPLATE = (WINDOWS_TEMPLATE_DIR / "privacyfence-companion-task.xml.tmpl").read_text(encoding="utf-8")
+
+    def test_matches_the_shared_task_contract(self):
+        from tests.windows_task_contract import (
+            EXEC_PATH_PLACEHOLDER,
+            assert_task_xml_matches_companion_contract,
+        )
+
+        assert_task_xml_matches_companion_contract(self.TEMPLATE, exec_path=EXEC_PATH_PLACEHOLDER)
+
+    def test_runs_the_companion_not_the_daemon(self):
+        script = INSTALLERS["win32"].read_text(encoding="utf-8")
+
+        assert "$DefaultCompanionExecName = 'PrivacyFenceCompanion.exe'" in script
+        # And that the placeholder the script substitutes is the one the
+        # template actually carries.
+        assert "__EXEC_PATH__" in self.TEMPLATE
+        assert "'__EXEC_PATH__'" in script
+
+    def test_the_installer_disables_the_daemons_own_task(self):
+        # Left enabled it would start a second daemon in the logged-in user's
+        # session at every sign-in, which on a separated install refuses to
+        # start (check_runtime_identity) rather than quietly seeding a
+        # default policy -- loud, but still a daemon that is not running for
+        # the reason the log says.
+        script = INSTALLERS["win32"].read_text(encoding="utf-8")
+
+        assert "Disable-ScheduledTask -TaskName $DaemonTaskName" in script
+        assert "Enable-ScheduledTask -TaskName $DaemonTaskName" in script
+
+    def test_the_companion_is_reachable_by_hand_as_well(self):
+        # The companion has no crash-restart of its own (see the template's
+        # own comment on why a repeating trigger is wrong here), so the Start
+        # Menu shortcut is the recovery path when the tray icon is gone.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        assert '#define CompanionExeName "PrivacyFenceCompanion.exe"' in inno
+        assert r'Name: "{group}\{#AppName} Companion"' in inno
+
+
+class TestWindowsLayoutAudit:
+    """``audit_layout()``'s Windows branch, driven through a synthetic DACL.
+
+    Nothing here needs Windows: ``windows_acl.read_dacl()`` is the only part
+    that does, and it is exactly one call this replaces. What that buys is
+    that the *decisions* -- which ACE is a defect and which is the design --
+    are asserted on every PR by the ordinary Ubuntu suite, rather than only
+    by the Windows job and only for whatever ACL that runner happens to have.
+    ``tests/platform/test_windows_acls.py`` covers the other half: that a
+    directory icacls really has provisioned reads back the way this expects.
+    """
+
+    ACCOUNT = privilege_separation.WINDOWS_SERVICE_ACCOUNT_NAME
+    GROUP = privilege_separation.WINDOWS_SERVICE_GROUP_NAME
+
+    @pytest.fixture
+    def separated_windows(self, monkeypatch, tmp_path):
+        root = tmp_path / "PrivacyFence"
+        (root / "authority").mkdir(parents=True)
+        (root / privilege_separation.HANDOFF_DIR_NAME).mkdir()
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
+        _write_marker(root, "win32")
+        yield root
+        privilege_separation.reset_cache()
+
+    def _install_dacls(self, monkeypatch, root: Path, overrides: dict[Path, list] | None = None):
+        """What the installer provisions, per directory, with any one of them
+        replaced by ``overrides``. Modelling all three at once matters: most
+        of the failure modes here are a *missing* severance of inheritance on
+        one directory while the other two are fine."""
+        full = windows_acl.FILE_ALL_ACCESS
+        provisioned = {
+            root: [
+                windows_acl.Ace(self.ACCOUNT, full),
+                windows_acl.Ace("NT AUTHORITY\\SYSTEM", full),
+                windows_acl.Ace("BUILTIN\\Administrators", full),
+                windows_acl.Ace("BUILTIN\\Users", windows_acl.FILE_TRAVERSE_ONLY),
+            ],
+            root / "authority": [
+                windows_acl.Ace(self.ACCOUNT, full),
+                windows_acl.Ace("NT AUTHORITY\\SYSTEM", full),
+            ],
+            root / privilege_separation.HANDOFF_DIR_NAME: [
+                windows_acl.Ace(self.ACCOUNT, full),
+                windows_acl.Ace(f"MACHINE\\{self.GROUP}", windows_acl.FILE_GENERIC_READ_EXECUTE),
+            ],
+        }
+        provisioned.update(overrides or {})
+        monkeypatch.setattr(windows_acl, "read_dacl", lambda path: provisioned.get(Path(path)))
+        monkeypatch.setattr(windows_acl, "has_null_dacl", lambda _path: False)
+
+    def test_a_provisioned_layout_reports_nothing(self, separated_windows, monkeypatch):
+        self._install_dacls(monkeypatch, separated_windows)
+
+        assert privilege_separation.audit_layout() == []
+
+    def test_reports_a_root_that_can_be_enumerated(self, separated_windows, monkeypatch):
+        # The inheritance %ProgramData% hands out for free, left in place:
+        # every account on the machine can list the data directory.
+        self._install_dacls(monkeypatch, separated_windows, {
+            separated_windows: [
+                windows_acl.Ace(self.ACCOUNT, windows_acl.FILE_ALL_ACCESS),
+                windows_acl.Ace("BUILTIN\\Users", windows_acl.FILE_GENERIC_READ_EXECUTE, inherited=True),
+            ],
+        })
+
+        problems = privilege_separation.audit_layout()
+
+        assert any("list its contents" in problem for problem in problems)
+
+    def test_reports_an_authority_dir_the_user_can_still_reach(self, separated_windows, monkeypatch):
+        # The Windows counterpart of "0700, but under the human's own uid":
+        # the mode looks right and the boundary is not there.
+        self._install_dacls(monkeypatch, separated_windows, {
+            separated_windows / "authority": [
+                windows_acl.Ace(self.ACCOUNT, windows_acl.FILE_ALL_ACCESS),
+                windows_acl.Ace("MACHINE\\alice", windows_acl.FILE_GENERIC_READ_EXECUTE),
+            ],
+        })
+
+        problems = privilege_separation.audit_layout()
+
+        assert any("not actually in effect" in problem for problem in problems)
+
+    def test_a_deny_ace_is_not_a_grant(self, separated_windows, monkeypatch):
+        self._install_dacls(monkeypatch, separated_windows, {
+            separated_windows / "authority": [
+                windows_acl.Ace(self.ACCOUNT, windows_acl.FILE_ALL_ACCESS),
+                windows_acl.Ace("MACHINE\\alice", windows_acl.FILE_ALL_ACCESS, allowed=False),
+            ],
+        })
+
+        assert privilege_separation.audit_layout() == []
+
+    def test_reports_a_handoff_dir_the_group_cannot_read(self, separated_windows, monkeypatch):
+        # The failure that presents as "the daemon is not running": the shim
+        # cannot read mcp_token, so it reports no daemon against one that is
+        # running perfectly well.
+        self._install_dacls(monkeypatch, separated_windows, {
+            separated_windows / privilege_separation.HANDOFF_DIR_NAME: [
+                windows_acl.Ace(self.ACCOUNT, windows_acl.FILE_ALL_ACCESS),
+            ],
+        })
+
+        problems = privilege_separation.audit_layout()
+
+        assert any("cannot reach mcp_token" in problem for problem in problems)
+
+    def test_reports_a_handoff_dir_the_group_can_write(self, separated_windows, monkeypatch):
+        # Nothing in the user's session creates anything there on Windows --
+        # both channels are named pipes -- so a writable handoff would only
+        # let the agent replace the discovery files the companion reads.
+        self._install_dacls(monkeypatch, separated_windows, {
+            separated_windows / privilege_separation.HANDOFF_DIR_NAME: [
+                windows_acl.Ace(self.ACCOUNT, windows_acl.FILE_ALL_ACCESS),
+                windows_acl.Ace(f"MACHINE\\{self.GROUP}", windows_acl.FILE_ALL_ACCESS),
+            ],
+        })
+
+        problems = privilege_separation.audit_layout()
+
+        assert any("never to rewrite it" in problem for problem in problems)
+
+    def test_a_directory_it_cannot_read_is_skipped_rather_than_reported(
+        self, separated_windows, monkeypatch,
+    ):
+        # Same best-effort posture as the POSIX branch: the process running
+        # the audit may legitimately not be able to see a path -- that is
+        # half the point of the layout.
+        self._install_dacls(monkeypatch, separated_windows, {separated_windows / "authority": None})
+        monkeypatch.setattr(windows_acl, "read_dacl", lambda path: None)
+
+        assert privilege_separation.audit_layout() == []
+
+    def test_a_null_dacl_is_reported_rather_than_read_as_unknown(
+        self, separated_windows, monkeypatch,
+    ):
+        # The one case read_dacl() cannot express: no DACL at all grants
+        # every account full control, which is the opposite of the empty list
+        # it would otherwise look like.
+        monkeypatch.setattr(windows_acl, "read_dacl", lambda _path: None)
+        monkeypatch.setattr(windows_acl, "has_null_dacl", lambda _path: True)
+
+        problems = privilege_separation.audit_layout()
+
+        assert len(problems) == 3
+        assert all("no access-control list at all" in problem for problem in problems)
+
+    def test_checks_the_daemons_own_image_when_frozen(self, separated_windows, monkeypatch, tmp_path):
+        # The check with no POSIX counterpart. Both the executable and the
+        # directory holding it: one is "replace the binary", the other is
+        # "drop a DLL next to it".
+        image = tmp_path / "Program Files" / "PrivacyFence" / "privacyfence-app.exe"
+        image.parent.mkdir(parents=True)
+        image.write_text("", encoding="utf-8")
+        monkeypatch.setattr(privilege_separation, "daemon_image_paths", lambda: (image, image.parent))
+        user_writable = [windows_acl.Ace("MACHINE\\alice", windows_acl.FILE_ALL_ACCESS)]
+        self._install_dacls(monkeypatch, separated_windows, {
+            image: user_writable,
+            image.parent: user_writable,
+        })
+
+        problems = privilege_separation.audit_layout()
+
+        assert len(problems) == 2
+        assert all("can run code as that account" in problem for problem in problems)
+
+    def test_a_frozen_install_checks_the_exe_and_the_directory_holding_it(self, monkeypatch):
+        # Two paths rather than one: rewriting the executable and dropping a
+        # DLL beside it are both "the service runs code the user chose", and
+        # only the second is stopped by the exe's own ACL.
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "_MEIPASS", "/tmp/_MEI", raising=False)
+        monkeypatch.setattr(sys, "executable", "/opt/pf/privacyfence-app.exe")
+
+        assert privilege_separation.daemon_image_paths() == (
+            Path("/opt/pf/privacyfence-app.exe"),
+            Path("/opt/pf"),
+        )
+
+    def test_an_unfrozen_install_has_no_image_to_check(self, monkeypatch):
+        # sys.executable is the Python interpreter for a source or pip
+        # install -- shared with every other Python program on the machine,
+        # and not something this install provisioned or can speak about.
+        monkeypatch.delattr(sys, "frozen", raising=False)
+
+        assert privilege_separation.daemon_image_paths() == ()
+
+
+class TestWindowsServiceHost:
+    """The service is B5c's one genuinely new moving part: macOS and Linux
+    pointed a different service manager at the same unchanged executable,
+    and Windows cannot, because its SCM waits to be called back."""
+
+    def test_the_daemon_entry_point_routes_the_service_flag(self, monkeypatch):
+        called = []
+        monkeypatch.setattr(
+            "privacyfence.windows_service.run_service", lambda: called.append(True) or 0
+        )
+
+        assert daemon_main.main(["--windows-service"]) == 0
+        assert called == [True]
+
+    def test_the_service_flag_short_circuits_before_any_config_is_read(self, monkeypatch):
+        # It has to: this process is the dispatcher, not the daemon. The SCM
+        # calls back into main() with no arguments, and every startup check
+        # -- check_runtime_identity() included -- runs there, exactly once.
+        monkeypatch.setattr("privacyfence.windows_service.run_service", lambda: 0)
+        monkeypatch.setattr(
+            daemon_main, "load_config", lambda *_args, **_kwargs: pytest.fail("config was read")
+        )
+        monkeypatch.setattr(
+            privilege_separation, "check_runtime_identity",
+            lambda: pytest.fail("the dispatcher ran the daemon's own startup checks"),
+        )
+
+        assert daemon_main.main(["--windows-service"]) == 0
+
+    def test_the_service_name_and_the_account_are_one_fact(self):
+        # Windows derives a virtual account's name from its service's, so a
+        # service host naming a different service would produce an account no
+        # ACL on disk mentions.
+        assert windows_service.WINDOWS_SERVICE_NAME == privilege_separation.WINDOWS_SERVICE_NAME
+        assert privilege_separation.WINDOWS_SERVICE_ACCOUNT_NAME.endswith(
+            windows_service.WINDOWS_SERVICE_NAME
+        )
+
+    def test_the_installer_registers_exactly_that_flag(self):
+        # The one string that connects the two: the SCM starts what binPath
+        # says, and anything else would be killed after 30 seconds with error
+        # 1053 for never calling StartServiceCtrlDispatcher.
+        script = INSTALLERS["win32"].read_text(encoding="utf-8")
+
+        assert "--windows-service" in script
+        assert "'obj=', $ServiceAccount" in script
+
+    def test_the_module_imports_without_pywin32(self):
+        # Deliberate: the ServiceFramework subclass is built inside a
+        # function, so importing this module (from a test, or from
+        # daemon_main's own argument routing) never requires Windows.
+        assert windows_service.SERVICE_DISPLAY_NAME
+        assert "#428" in windows_service.SERVICE_DESCRIPTION
+
+
+class TestWindowsChannelTrustees:
+    """``socket_mode()``'s ``0660``, in the primitive Windows has: a named
+    pipe's DACL names the account on the other end rather than a group bit
+    opening up a socket node."""
+
+    def test_empty_on_an_unseparated_install(self, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.windows_channel_trustees() == ()
+
+    def test_names_both_principals_on_a_separated_one(self, monkeypatch, tmp_path):
+        # Both, not just the group: a virtual service account holds no group
+        # memberships, so granting the group alone would leave the daemon's
+        # own end of the companion's pipe unreachable.
+        root = tmp_path / "PrivacyFence"
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
+        _write_marker(root, "win32")
+
+        assert privilege_separation.windows_channel_trustees() == (
+            privilege_separation.WINDOWS_SERVICE_ACCOUNT_NAME,
+            privilege_separation.WINDOWS_SERVICE_GROUP_NAME,
+        )
+
+    def test_empty_on_a_separated_posix_install(self, separated, platform_name):
+        # POSIX draws this with socket_mode()'s 0660 and the shared group;
+        # there is no pipe DACL to add anyone to.
+        if platform_name == "win32":
+            pytest.skip("this is the POSIX branch")
+
+        assert privilege_separation.windows_channel_trustees() == ()

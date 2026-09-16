@@ -94,7 +94,7 @@ USAGE
 }
 
 require_macos() {
-  [ "$(uname -s)" = "Darwin" ] || die "this script is macOS-only (#428 P4's Linux and Windows phases are B5b/B5c)"
+  [ "$(uname -s)" = "Darwin" ] || die "this script is macOS-only (Linux is scripts/linux_privilege_separation.sh; Windows is scripts/windows_privilege_separation.ps1)"
 }
 
 require_root() {

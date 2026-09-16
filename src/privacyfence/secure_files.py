@@ -86,6 +86,9 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE, *, foreign_owne
     this logging for. The owner's own process still re-asserts the mode, so
     the self-healing property is unchanged; and the separated layout gets a
     check of its own regardless, in ``privilege_separation.audit_layout()``.
+    On Windows it skips the attempt outright, for the related-but-distinct
+    reason ``_is_owned_by_this_process()`` gives: there is no mode there for
+    the ``chmod`` to assert in the first place.
     """
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
@@ -99,12 +102,27 @@ def secure_mkdir(path: Path | str, mode: int = DEFAULT_DIR_MODE, *, foreign_owne
 
 
 def _is_owned_by_this_process(path: Path) -> bool:
-    """True when ``path``'s owning uid is this process's effective uid, and
-    on any platform where that question has no POSIX answer (Windows), where
-    treating everything as owned preserves the pre-existing behavior of
-    always attempting the ``chmod``."""
-    if os.name == "nt":  # pragma: no cover -- no POSIX ownership to compare
-        return True
+    """True when ``path``'s owning uid is this process's effective uid.
+
+    Only ever consulted for a ``foreign_owner_ok`` call -- i.e. for the two
+    directories #428 Phase 4 deliberately shares between two accounts -- so
+    "I cannot tell" has to answer for that case specifically rather than in
+    general.
+
+    **False on Windows**, which is the answer that case wants and the
+    opposite of what an "unknown, so assume yes" default would give. There is
+    no POSIX ownership to compare there, but there is also nothing for the
+    ``chmod`` to do: it is the documented no-op this module's own docstring
+    describes, and #428 Phase 4's Windows layout is NTFS ACLs the installer
+    writes and ``windows_acl.py`` audits instead. Attempting it anyway is not
+    merely useless -- the companion and the MCP client resolve
+    ``paths.handoff_dir()`` constantly and hold *read* access to it, so
+    ``os.chmod`` there raises ``PermissionError`` every single time, and the
+    warning below would fire on every path resolution in exactly the two
+    processes that are behaving correctly.
+    """
+    if os.name == "nt":  # pragma: no cover -- exercised by the platform-windows job
+        return False
     try:
         return path.stat().st_uid == os.geteuid()
     except OSError:  # pragma: no cover -- best effort, same posture as the chmod below

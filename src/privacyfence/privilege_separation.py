@@ -12,26 +12,22 @@ finally splits, and all four of issue #428's weaknesses close at once: the
 agent runs as the logged-in user, the daemon runs as a dedicated service
 account, and the human-authority files are ``0700`` under the latter.
 
-**macOS and Linux, opt-in on both.** ``SUPPORTED_PLATFORMS`` is the single
-gate: on Windows every function here reports "not separated" and every path
-in ``paths.py`` resolves exactly as it did before this module existed, byte
-for byte. #428 P4's Windows phase (B5c) adds that platform to the tuple
-along with the installer that can actually provision it -- it needs net-new
-NTFS ACL work that has no equivalent here, which is why the two POSIX
-platforms went first: real permission bits already work, so they validate
-the shape at the lowest cost.
+**All three platforms, opt-in on every one.** ``SUPPORTED_PLATFORMS`` is
+the single gate, and B5c completes it: an install that has not run its
+platform's installer resolves every path in ``paths.py`` exactly as it did
+before this module existed, byte for byte, everywhere.
 
 ## The layout
 
-The two platforms differ only in the three names ``PLATFORM_LAYOUTS`` below
-holds -- where the root is, and what the account and group are called.
-Everything else (the three directories, their modes, the marker, what goes
-in ``handoff/``) is identical, which is the point: one layout, provisioned
-by whichever installer a platform has.
+The three platforms differ in the names ``PLATFORM_LAYOUTS`` below holds --
+where the root is, and what the account and group are called. Everything
+else (the three directories, the marker, what goes in ``handoff/``) is
+identical, which is the point: one layout, provisioned by whichever
+installer a platform has.
 
-===========  ==================================  ===============
+===========  ==================================  =============================
 Platform     System root                         Service account
-===========  ==================================  ===============
+===========  ==================================  =============================
 macOS        /Library/Application Support/       ``_privacyfence``
              PrivacyFence                        (Apple's hidden
                                                  system-account
@@ -40,10 +36,33 @@ Linux        /var/lib/privacyfence               ``privacyfence``
              (FHS 3.0 §5.8)                      (no underscore --
                                                  that prefix means
                                                  nothing here)
-===========  ==================================  ===============
+Windows      %ProgramData%\\PrivacyFence          ``NT SERVICE\\PrivacyFence``
+                                                 (a *virtual* account:
+                                                 created with the service,
+                                                 its own SID, no password
+                                                 anyone has to manage)
+===========  ==================================  =============================
 
-``scripts/macos_privilege_separation.sh enable`` and
-``scripts/linux_privilege_separation.sh enable`` are what provision this;
+**What differs on Windows is the primitive, not the layout.** There are no
+permission bits there -- ``secure_mkdir``'s ``chmod`` is the documented
+no-op ``secure_files.py`` describes -- so the modes below are NTFS ACLs
+instead, and ``windows_acl.py`` is both the translation table and the audit.
+Two consequences are worth stating rather than leaving to be discovered:
+
+* ``handoff/`` is group-*readable* on Windows, not group-writable. Nothing
+  in the user's session has to create anything there, because both control
+  channels are named pipes rather than socket files, so the POSIX group's
+  ``rwx`` (which ``connect(2)`` on a socket node requires) buys nothing.
+* A Windows service runs whatever image its ``binPath`` names, so the
+  daemon's own executable becomes part of the boundary: an install the
+  logged-in user can rewrite would let the agent run its own code *as the
+  service account*. That is why the non-elevated per-user install path
+  (#407) cannot be separated, and why ``audit_layout()`` re-checks the image
+  on every start -- see ``windows_acl.image_problems()``.
+
+``scripts/macos_privilege_separation.sh enable``,
+``scripts/linux_privilege_separation.sh enable`` and
+``scripts/windows_privilege_separation.ps1 enable`` are what provision this;
 they are the only supported way to turn it on, and they write the marker
 file this module reads. Afterwards, taking Linux's root as the example::
 
@@ -94,6 +113,7 @@ import stat
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from . import secure_files
 
@@ -109,6 +129,33 @@ logger = logging.getLogger(__name__)
 # packaging guide would use.
 MACOS_SERVICE_ACCOUNT_NAME = "_privacyfence"
 LINUX_SERVICE_ACCOUNT_NAME = "privacyfence"
+# Windows has no ``useradd`` equivalent to run, and deliberately needs none:
+# a *virtual service account* is created by the Service Control Manager along
+# with the service itself, gets its own SID, and has no password for anyone
+# (or anything) to store, rotate or leak. Its name is not a choice -- Windows
+# derives it from the service's, as ``NT SERVICE\<service name>`` -- which is
+# why the two constants below are one fact written twice and
+# ``tests/unit/test_privilege_separation.py`` asserts they agree. Preferred
+# over ``LocalService`` (#428's own wording) because that account is shared
+# with every other service that picked it, so ACLs naming it would grant
+# those services access to PrivacyFence's authority files too.
+WINDOWS_SERVICE_NAME = "PrivacyFence"
+WINDOWS_SERVICE_ACCOUNT_NAME = f"NT SERVICE\\{WINDOWS_SERVICE_NAME}"
+# The Windows stand-in for the POSIX service *group*: a local group the
+# installing human is added to, named in ``handoff/``'s ACL. A virtual
+# service account cannot be given secondary group memberships, so unlike
+# macOS/Linux -- where account and group are the same name and the daemon is
+# a member of its own group -- the two principals are always listed
+# separately in every ACL and pipe DACL this phase writes.
+WINDOWS_SERVICE_GROUP_NAME = "PrivacyFenceUsers"
+# Windows' own "startup wiring inverts" (ADR 0002): the Scheduled Task the
+# installer registers keeps its name and starts the *companion* on a
+# separated install, while the daemon becomes the service above. The
+# installer script disables the daemon task rather than deleting it, so
+# ``disable`` can put it back and the uninstaller's own
+# ``schtasks /delete`` still finds it.
+WINDOWS_DAEMON_TASK_NAME = "PrivacyFence"
+WINDOWS_COMPANION_TASK_NAME = "PrivacyFenceCompanion"
 
 # Where a separated install keeps everything ``paths.data_dir()`` used to put
 # under ``~/.privacyfence``. A service account cannot sensibly own something
@@ -120,6 +167,17 @@ LINUX_SERVICE_ACCOUNT_NAME = "privacyfence"
 # exactly what this directory is.
 MACOS_SYSTEM_ROOT = Path("/Library/Application Support/PrivacyFence")
 LINUX_SYSTEM_ROOT = Path("/var/lib/privacyfence")
+# Windows' is ``%ProgramData%``: per-machine application state, outside every
+# user profile, which is precisely what ``%LOCALAPPDATA%`` is not. The
+# literal below is the default every supported Windows install actually has;
+# ``system_root()`` prefers the environment variable when it is set, because
+# a machine can be built with ``%ProgramData%`` redirected to another volume
+# and a hardcoded ``C:`` would then name a directory nothing else uses. Kept
+# as a forward-slash ``Path`` so it compares equal to the same path built
+# anywhere else -- ``PureWindowsPath`` normalizes separators, and the MCPB
+# shim's own copy of this table is a POSIX-style string for the same reason.
+WINDOWS_PROGRAM_DATA_ENV_VAR = "ProgramData"
+WINDOWS_SYSTEM_ROOT = Path("C:/ProgramData/PrivacyFence")
 
 # Written by the installer, read by every PrivacyFence process (daemon,
 # companion, and anything the human runs from a shell) so all of them agree
@@ -167,8 +225,10 @@ class PlatformLayout:
 
     Everything *else* about a separated install -- the directory structure,
     the modes above, the marker's own format -- is identical everywhere, so
-    this is deliberately the whole of the per-platform surface. Adding B5c
-    means one more entry here plus the installer that can provision it.
+    this is deliberately the whole of the per-platform surface. Adding a
+    platform means one more entry here plus the installer that can provision
+    it -- which is exactly what B5c turned out to be, plus the ACL work
+    ``windows_acl.py`` holds, because Windows' permissions are not a mode.
     """
 
     system_root: Path
@@ -210,6 +270,30 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
         installer="scripts/linux_privilege_separation.sh",
         status_command="sudo privacyfence-privilege-separation status",
         start_command="sudo systemctl restart privacyfence-daemon.service",
+    ),
+    "win32": PlatformLayout(
+        system_root=WINDOWS_SYSTEM_ROOT,
+        service_account=WINDOWS_SERVICE_ACCOUNT_NAME,
+        service_group=WINDOWS_SERVICE_GROUP_NAME,
+        installer="scripts/windows_privilege_separation.ps1",
+        # What a human types, which on Windows is never the repo-relative
+        # path: the installer copies this script next to the application as
+        # ``privilege-separation.ps1``, and PowerShell will not run an
+        # unsigned script from disk without being told to. Quoting the
+        # elevated, real-install form is the only version that works when
+        # pasted out of a daemon log by someone who has no checkout.
+        #
+        # ``$env:ProgramFiles``, not ``%ProgramFiles%``: this is a PowerShell
+        # command and PowerShell does not expand the ``%VAR%`` form, so the
+        # cmd.exe spelling would resolve to a literal directory name that
+        # does not exist -- in the one shell the reader has just been told to
+        # open elevated. The same spelling is what README.md and
+        # docs/platform-support.md quote.
+        status_command=(
+            'powershell -ExecutionPolicy Bypass -File '
+            '"$env:ProgramFiles\\PrivacyFence\\privilege-separation.ps1" status'
+        ),
+        start_command=f"sc.exe start {WINDOWS_SERVICE_NAME}",
     ),
 }
 
@@ -282,7 +366,22 @@ def system_root() -> Path | None:
         else:
             return candidate
     layout = platform_layout()
-    return None if layout is None else layout.system_root
+    if layout is None:
+        return None
+    if current_platform() == "win32":
+        # ``%ProgramData%`` is ``C:\ProgramData`` on every ordinary install
+        # and is what ``WINDOWS_SYSTEM_ROOT`` already spells, so this branch
+        # normally changes nothing. It exists for the machine where that
+        # folder has been redirected: the installer's own ``icacls`` runs
+        # against the redirected path, so resolving the hardcoded one here
+        # would have every process looking somewhere the installer never
+        # provisioned. Missing entirely (a stripped-down service
+        # environment) falls back to the literal, the same way
+        # ``paths.windows_data_dir()`` falls back for ``%LOCALAPPDATA%``.
+        program_data = os.environ.get(WINDOWS_PROGRAM_DATA_ENV_VAR)
+        if program_data:
+            return Path(program_data) / "PrivacyFence"
+    return layout.system_root
 
 
 def marker_path() -> Path | None:
@@ -428,7 +527,18 @@ def ensure_handoff_file_mode(path: Path) -> None:
     ``mcp_token`` is reused across restarts, so a token migrated in from a
     pre-Phase-4 install would keep its old ``0600`` forever and the agent
     would never be able to read its own credential again. Best-effort and
-    silent on failure, like every other permission fix-up here."""
+    silent on failure, like every other permission fix-up here.
+
+    A no-op on Windows, where there is no mode to re-assert and the
+    equivalent problem is solved a different way: a file *created* in
+    ``handoff/`` inherits that directory's ACL, and a file *moved* there by
+    the migration keeps whatever ACL it had in ``%LOCALAPPDATA%``, so
+    ``scripts/windows_privilege_separation.ps1`` runs ``icacls /reset /t``
+    over the directory once, at enable time, rather than leaving every
+    process to re-derive an inherited ACL it has no way to compute.
+    """
+    if os.name == "nt":  # pragma: no cover -- exercised by the platform-windows job
+        return
     try:
         if path.stat().st_mode & 0o7777 != handoff_file_mode():
             path.chmod(handoff_file_mode())
@@ -439,9 +549,25 @@ def ensure_handoff_file_mode(path: Path) -> None:
 def current_user_name() -> str:
     """This process's account name, or its numeric uid as a string where
     ``pwd`` can't answer (a uid with no passwd entry -- possible inside a
-    container, and Windows has no ``pwd`` module at all)."""
-    if os.name == "nt":  # pragma: no cover -- Windows has no pwd module
-        return os.environ.get("USERNAME", "")
+    container).
+
+    Windows answers from the process token rather than from ``%USERNAME%``,
+    which #428 P4's Windows phase made necessary rather than merely tidier:
+    a service running under the virtual ``NT SERVICE\\PrivacyFence`` account
+    is handed an environment block whose ``USERNAME`` is the *machine*
+    account, so the env var would report a mismatch for the one process that
+    is running as exactly the right account. See
+    ``windows_acl.current_account_name()``; the env var stays as the
+    fallback for a build with no pywin32 at all, where it is still right for
+    an ordinary interactive process.
+    """
+    if os.name == "nt":  # pragma: no cover -- exercised by the platform-windows job
+        from . import windows_acl
+
+        try:
+            return windows_acl.current_account_name()
+        except Exception:
+            return os.environ.get("USERNAME", "")
     import pwd
 
     try:
@@ -450,9 +576,27 @@ def current_user_name() -> str:
         return str(os.geteuid())
 
 
+def accounts_equal(left: str, right: str) -> bool:
+    """Whether two account names name the same account.
+
+    Case-sensitive on POSIX, where they are, and case-*insensitive* on
+    Windows, where they are not: ``NT SERVICE\\PrivacyFence`` and
+    ``NT Service\\privacyfence`` are one account, and ``LookupAccountSid``
+    is free to return either spelling depending on how the SID was
+    registered. Comparing those with ``==`` would make
+    ``check_runtime_identity()`` refuse to start a correctly separated
+    daemon.
+    """
+    if current_platform() == "win32":
+        from . import windows_acl
+
+        return windows_acl.normalize_trustee(left) == windows_acl.normalize_trustee(right)
+    return left == right
+
+
 def running_as_service_account() -> bool:
     state = separation()
-    return state is not None and current_user_name() == state.service_account
+    return state is not None and accounts_equal(current_user_name(), state.service_account)
 
 
 def check_runtime_identity() -> None:
@@ -497,16 +641,21 @@ def check_runtime_identity() -> None:
             )
         return
     actual = current_user_name()
-    if actual != state.service_account:
+    if not accounts_equal(actual, state.service_account):
         how_to_start = (
             f" Start the daemon via its service ('{layout.start_command}') rather than directly."
             if layout is not None
             else ""
         )
+        # Explicitly quoted rather than ``!r``: every account name here is a
+        # Windows one on B5c's platform (``NT SERVICE\PrivacyFence``), and
+        # repr would double each backslash -- so the message would name an
+        # account that does not exist for the one reader most likely to paste
+        # it into a command.
         raise PrivilegeSeparationError(
-            f"This install runs the daemon under the dedicated {state.service_account!r} account "
-            f"(#428 Phase 4), but this process is running as {actual!r}. Refusing to start: the "
-            f"human-authority files under {state.authority_dir} are not readable as {actual!r}, so "
+            f"This install runs the daemon under the dedicated '{state.service_account}' account "
+            f"(#428 Phase 4), but this process is running as '{actual}'. Refusing to start: the "
+            f"human-authority files under {state.authority_dir} are not readable as '{actual}', so "
             f"starting would seed a fresh default policy and ignore the real one.{how_to_start}"
         )
 
@@ -538,6 +687,8 @@ def audit_layout() -> list[str]:
     state = separation()
     if state is None:
         return []
+    if current_platform() == "win32":
+        return windows_layout_problems(state)
     problems = []
     for path, expected in (
         (state.data_dir, SYSTEM_ROOT_MODE),
@@ -553,11 +704,103 @@ def audit_layout() -> list[str]:
     return problems
 
 
+def daemon_image_paths() -> tuple[Path, ...]:
+    """The files a Windows service's ``binPath`` actually executes, for the
+    one check with no POSIX counterpart (``windows_acl.image_problems()``).
+
+    Two paths, not one, because there are two ways to replace what a service
+    runs: rewriting the executable itself, and dropping a DLL next to it for
+    the loader to find first. Both are "write access to the install
+    directory", so both are checked.
+
+    Empty on anything but a frozen build. A source or ``pip`` install's
+    ``sys.executable`` is the Python interpreter, which is shared with every
+    other Python program on the machine and is not something this install
+    provisioned or can speak about -- reporting a user-writable
+    ``python.exe`` as a PrivacyFence layout defect would be noise on every
+    developer's own machine, which is where unfrozen installs actually live.
+    """
+    if not (getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")):
+        return ()
+    image = Path(sys.executable)
+    return (image, image.parent)
+
+
+def windows_layout_problems(state: Separation) -> list[str]:
+    """``audit_layout()``'s Windows half: the same three directories, read
+    as NTFS ACLs rather than as mode bits, plus the daemon's own image.
+
+    Structured exactly like the POSIX half -- one human-readable string per
+    way the install has drifted from what the installer provisioned, and a
+    path that cannot be read is skipped rather than reported, since the
+    process doing the checking may legitimately not be able to see it. The
+    one addition is ``has_null_dacl()``: a directory with no DACL at all
+    grants every account full control, which reads as "could not check"
+    everywhere else and has to be called out explicitly here.
+    """
+    from . import windows_acl
+
+    checks: tuple[tuple[Path, Any, dict[str, str]], ...] = (
+        (state.data_dir, windows_acl.root_problems, {}),
+        (state.authority_dir, windows_acl.authority_problems, {}),
+        (
+            state.handoff_dir,
+            windows_acl.handoff_problems,
+            {"service_group": state.service_group},
+        ),
+    )
+    problems: list[str] = []
+    for path, check, extra in checks:
+        aces = windows_acl.read_dacl(path)
+        if aces is None:
+            if windows_acl.has_null_dacl(path):
+                problems.append(
+                    f"{path} has no access-control list at all, which grants every account on "
+                    "this machine full control over it."
+                )
+            continue
+        problems.extend(check(path, aces, service_account=state.service_account, **extra))
+    for image in daemon_image_paths():
+        aces = windows_acl.read_dacl(image)
+        if aces is not None:
+            problems.extend(
+                windows_acl.image_problems(image, aces, service_account=state.service_account)
+            )
+    return problems
+
+
+def windows_channel_trustees() -> tuple[str, ...]:
+    """The accounts a control-channel named pipe's DACL has to grant, on top
+    of the process's own (``web/control_channel.py``).
+
+    Empty on an unseparated install, where both ends of both channels are
+    the same account and the existing "this user's SID and nothing else"
+    descriptor already says everything there is to say. On a separated one
+    the daemon and the companion are two accounts, so each end names both
+    -- the Windows counterpart of ``socket_mode()``'s ``0660``, and
+    deliberately not narrower for the same reason: ADR 0002 decision 6 draws
+    the boundary at ``authority/``, not here.
+
+    Both principals are listed explicitly rather than relying on the group
+    alone, because a virtual service account cannot be made a member of a
+    local group -- see ``WINDOWS_SERVICE_GROUP_NAME``.
+    """
+    state = separation()
+    if state is None or current_platform() != "win32":
+        return ()
+    return (state.service_account, state.service_group)
+
+
 def _authority_owner_problem(state: Separation) -> str | None:
     """The check that actually matters: ``authority/`` being ``0700`` buys
     nothing if it is ``0700`` *under the logged-in user's own uid*, which is
     precisely the pre-#428 state this phase exists to leave behind."""
-    if os.name == "nt":  # pragma: no cover -- B5c's problem, and not a POSIX one
+    if os.name == "nt":  # pragma: no cover -- exercised by the platform-windows job
+        # Windows has no file owner to compare, and its equivalent of this
+        # check -- "is authority/ reachable by anything but the service
+        # account" -- is an ACL question rather than an ownership one. See
+        # windows_layout_problems(), which audit_layout() branches to before
+        # ever reaching here.
         return None
     import pwd
 

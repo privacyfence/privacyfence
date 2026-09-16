@@ -262,10 +262,21 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
   // reason (the service manager hasn't started it, or it crashed) under a
   // second failure. Wait for it instead, and say what to look at.
   if (separationRoot() !== null) {
-    const [manager, inspect] =
-      process.platform === "linux"
-        ? ["a systemd unit", "systemctl status privacyfence-daemon.service"]
-        : ["a LaunchDaemon", "sudo launchctl print system/com.privacyfence.daemon"];
+    // One entry per platform #428 Phase 4 has shipped for, since the thing a
+    // reader has to go look at is different in each: the daemon is a
+    // LaunchDaemon, a system systemd unit, or (B5c) a Windows service running
+    // as NT SERVICE\PrivacyFence. Keyed with a default rather than exhaustively,
+    // because this message is diagnostics -- naming the wrong inspection
+    // command would be unhelpful, but throwing here would turn a running
+    // daemon into a failed shim launch.
+    const managers: Partial<Record<NodeJS.Platform, [string, string]>> = {
+      linux: ["a systemd unit", "systemctl status privacyfence-daemon.service"],
+      win32: ["a Windows service", "sc.exe query PrivacyFence"],
+    };
+    const [manager, inspect] = managers[process.platform] ?? [
+      "a LaunchDaemon",
+      "sudo launchctl print system/com.privacyfence.daemon",
+    ];
     console.error(
       `Daemon not running (${describeTarget(mcpUrlFile)}) — this install runs it as ` +
         `${manager} under its own account (#428 Phase 4), so waiting for the service ` +

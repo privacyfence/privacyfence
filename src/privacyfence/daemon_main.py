@@ -1782,6 +1782,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--salesforce-oauth", action="store_true")
     parser.add_argument("--atlassian-oauth", action="store_true")
     parser.add_argument("--telegram-setup", action="store_true")
+    # #428 Phase 4 (B5c): how the Windows Service Control Manager starts the
+    # daemon on a privilege-separated install -- see windows_service.py for
+    # why Windows needs an argv flag where macOS and Linux needed only a
+    # different service manager pointed at the same unchanged executable.
+    # Hidden from --help: nobody runs this by hand, and the one person who
+    # tries after reading it out of `sc qc` gets a message saying so
+    # (windows_service.run_service()).
+    parser.add_argument("--windows-service", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
@@ -1792,6 +1800,17 @@ def main(argv: list[str] | None = None) -> int:
     # main() is reached (the `privacyfence-app` console script, a dev run).
     ensure_std_streams()
     args = parse_args(argv)
+
+    # #428 Phase 4 (B5c), before anything else: this process is not the
+    # daemon, it is the shell the Service Control Manager expects to talk
+    # to. It hands itself to the SCM, which calls back into this same
+    # function with no arguments at all -- so every check below, the
+    # runtime-identity one included, runs exactly once, in the service's own
+    # run rather than in the dispatcher that precedes it.
+    if args.windows_service:
+        from . import windows_service
+
+        return windows_service.run_service()
 
     # #428 Phase 4, before load_config() below -- which is the first thing
     # that would read settings.yaml out of the (now service-account-owned)

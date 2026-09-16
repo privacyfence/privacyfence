@@ -104,6 +104,19 @@ MODULE_FLOORS: dict[str, float] = {
     # 100 only because of the platform branches this repo's Linux CI cannot
     # execute (the pwd lookups a Windows build skips entirely).
     "src/privacyfence/privilege_separation.py": 99.0,
+    # #428 Phase 4 (B5c): the Windows half of the same decision. NTFS ACLs
+    # are the only thing standing between the agent and the policy/passkey/
+    # audit-key files there -- POSIX modes do not exist on that platform --
+    # so a gap in the mask arithmetic below means the audit stops reporting a
+    # data directory every account on the machine can enumerate.
+    #
+    # 81.0 rather than a number in the nineties, and deliberately not raised
+    # by adding pragmas: this module is half pure logic (every audit
+    # function, all of it covered) and half three pywin32 calls that cannot
+    # execute on this repo's Linux CI at all. The floor protects the half
+    # that can; tests/platform/test_windows_acls.py covers the other half on
+    # the platform-windows job, against real ACLs icacls wrote.
+    "src/privacyfence/windows_acl.py": 81.0,
     # SEC-11: OIDC discovery trust validation.
     "src/privacyfence/org_identity.py": 100.0,
     "src/privacyfence/web/routes_org_identity.py": 99.0,

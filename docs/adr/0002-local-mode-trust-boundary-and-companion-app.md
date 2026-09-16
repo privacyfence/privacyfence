@@ -2,10 +2,11 @@
 
 ## Status
 
-Accepted; implemented on macOS and Linux. [#428](https://github.com/privacyfence/privacyfence/issues/428)
+Accepted; implemented on all three desktop platforms. [#428](https://github.com/privacyfence/privacyfence/issues/428)
 Phase 3 built the companion app this decides, and Phase 4 built the privilege separation behind it
-— shipped opt-in on macOS (`scripts/macos_privilege_separation.sh`) and Linux
-(`scripts/linux_privilege_separation.sh`), still to come on Windows.
+— shipped opt-in on macOS (`scripts/macos_privilege_separation.sh`), Linux
+(`scripts/linux_privilege_separation.sh`) and Windows
+(`scripts/windows_privilege_separation.ps1`).
 [#426](https://github.com/privacyfence/privacyfence/issues/426) builds the half that makes
 it mean something, and is unblocked per platform only once that platform's Phase 4 has landed and
 soaked. Supersedes [ADR 0001](0001-remove-macos-native-extra.md) in part — see "Relationship to
@@ -124,6 +125,13 @@ machine-wide, not per-session, so a service-hosted daemon still receives the pro
 from a browser running in the user's session, on the fixed port those three providers' allow-lists
 require.
 
+**Amended by #428 Phase 4 (B5c), 2026-09-16: on Windows this is what it always said it would be.**
+B5c made the daemon a service, the service runs in session 0, and `webbrowser.open()` from it
+reaches nothing — so `scripts/windows_privilege_separation.ps1` refuses to enable without the
+companion executable present, and registers its Scheduled Task as part of `enable` rather than
+leaving it opt-in. The prediction held; what B5b (below) found is that its *scope* was too narrow,
+not that its reasoning was wrong.
+
 **Amended by #428 Phase 4 (B5b), 2026-09-16: this is not a Windows-only requirement, and Linux hit
 it first.** The reasoning above is right and its scope was wrong — Session 0 isolation is one way
 for a daemon to lose the user's desktop session, but a system systemd unit loses it just as
@@ -133,6 +141,44 @@ Linux budget is smaller than it sounds: what a separated Linux install autostart
 and still no new dependency. "No tray on Linux" is what that budget rules out; a socket is not a
 tray. The clickable Applications-menu entry stays exactly as decision 4 describes it, and remains
 one-shot.
+
+### 5a. The install location is part of the boundary on Windows, so separation needs the elevated install tier
+
+**Added by #428 Phase 4 (B5c), 2026-09-16**, resolving the open question #428's own Phase 4 section
+raised and left open: *"Installing a service requires admin, so the non-elevated per-user install
+path documented in the README (see [#407](https://github.com/privacyfence/privacyfence/issues/407))
+cannot have this. Either two install tiers, or that path is dropped."*
+
+**Decided: two install tiers. The per-user path stays, exactly as it is, and cannot be separated.**
+
+The deciding argument is not that a service install needs administrator rights — that is merely
+inconvenient, and a one-time elevation prompt is a price this feature is plainly worth. It is that
+**a Windows service runs whatever its `binPath` names**. PrivacyFence installed under
+`%LOCALAPPDATA%\Programs` is writable by the logged-in user, which is the same account the agent
+runs as; separating such an install would hand that agent a way to replace the daemon's own
+executable and have the Service Control Manager run it *as the service account*. That is not a
+weaker version of the guarantee — it is a privilege-escalation path that did not exist before,
+which makes it strictly worse than the unseparated install it replaced.
+
+macOS and Linux do not face this: `/Applications` and `/opt/privacyfence` are root-owned as a side
+effect of how those platforms install software at all, so the question never arose there and no
+equivalent check exists in their installers.
+
+Consequences:
+
+- `scripts/windows_privilege_separation.ps1`'s `enable` reads the install directory's ACL and
+  refuses when anything outside `SYSTEM`/`Administrators` can write it, naming the per-user install
+  as the likely cause. It is a refusal, not a warning: a half-honest separation is the one outcome
+  worth preventing outright.
+- `privilege_separation.audit_layout()` re-checks the daemon's own image on every start
+  (`windows_acl.image_problems()`), because an install can be replaced in place after `enable` ran.
+- `installer/privacyfence.iss` keeps `PrivilegesRequired=lowest`. Nothing about the *installer*
+  changes; what is tiered is which installs this opt-in is available to.
+- Dropping the per-user path instead was rejected for the reason it was added
+  ([#407](https://github.com/privacyfence/privacyfence/issues/407)): it is what makes PrivacyFence
+  installable by someone who cannot elevate at all, and privilege separation is opt-in — taking the
+  product away from that user to make an optional hardening step universally available is the wrong
+  trade in the wrong direction.
 
 ### 6. Session minting is made insufficient, not uncallable
 
@@ -210,8 +256,13 @@ tray dependency itself.
 - **Startup wiring inverts on all three platforms** in Phase 4: what autostarts in the user's
   session becomes the companion, while the daemon moves to a LaunchDaemon / system systemd unit /
   Windows service. macOS's `LSUIElement` bundle keeps its "no dock icon" behavior and gains a
-  status item; the Windows installer's Scheduled Task starts the companion instead of the daemon;
-  the `.deb`'s XDG autostart entry does the same and loses `NoDisplay=true`.
+  status item; the Windows installer's Scheduled Task is disabled and a second one starts the
+  companion instead (disabled rather than replaced, so `disable` can restore it and the uninstaller
+  still finds it); the `.deb`'s XDG autostart entry does the same and loses `NoDisplay=true`.
+  Windows needed one thing the other two did not: its Service Control Manager launches a process
+  and then waits to be called back, so `src/privacyfence/windows_service.py` is a service host
+  around the same `daemon_main.main()` the console entry point calls — the one place where
+  "the same unchanged executable, started by a different manager" was not enough.
 - **Local mode gains a UI affordance that is not the browser and not the model**, which is the
   first time since P10 that a human can reach approvals without either.
 - **ADR 0001's ban is now scoped rather than absolute** — see below.
