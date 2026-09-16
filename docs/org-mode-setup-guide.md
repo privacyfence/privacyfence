@@ -152,21 +152,29 @@ Run a single active daemon per state directory: PrivacyFence takes a `portalocke
 2. On the `/connect` page, click **Connect** next to each connector you've registered (§4.2 and each connector's own setup guide). Each redirects to that service's own consent screen and lands you back on `/connect` showing it connected — nothing to install or restart, since `ConnectorRegistry` builds and caches that principal's connector set lazily and rebuilds it as soon as credentials change.
 3. Point Claude (Desktop, Cowork, or any Streamable HTTP MCP client) at `https://pf.acme.example.com/mcp`. The client's own OAuth 2.1 dynamic client registration and sign-in against this daemon triggers the same IdP redirect as step 1 — there's no bearer token to copy anywhere, unlike local mode's `~/.privacyfence/mcp_token`.
 
-## 9. Approvals
+## 9. Where PII policy and auto-accept rules live
+
+`/settings` (local mode's combined settings page) is still not mounted in org mode — see [§5](#5-build-the-organization-config-bundle)'s note on `Install/Update Organization Config…` — so there is no single browser page for either of the two things below yet. Each is configured, and takes effect, differently.
+
+**PII/privacy policy is install-wide.** The `privacy`/`drive_privacy`/`slack_privacy`/`contacts_privacy`/`tasks_privacy`/`confluence_privacy` sections of the *server's own* `~/.privacyfence/config/settings.yaml` (`privacy_filter.py`, see `resources/settings.yaml.example`) apply to every principal on this install — there is no per-user override. They're read once, at daemon startup; editing that file on the server requires restarting the daemon (`systemctl restart privacyfence-org`, [§7](#7-start-the-daemon)) before a change takes effect. A category genuinely absent from that file falls back to a group's `default_policy`, and a group section absent altogether falls back to a **default of `block`** in org mode specifically (`allow` in local mode) — an organization's centrally deployed `settings.yaml` is expected to state its own privacy policy explicitly, not silently inherit the permissive default a single-user desktop install gets. Check the deployed file for any group you expect to be restrictive; leaving it out entirely still fails closed, but naming it explicitly is what documents the intended policy to the next administrator who reads it.
+
+**Auto-accept rules and resource grants are per-principal.** Each signed-in user's "Always allow" decisions (`gate.py`'s `propose_rule_change`, offered from the approval popup — [§10](#10-approvals) below) persist to that principal's own `~/.privacyfence/users/<principal>/config/settings.yaml`, under `auto_accept_rules`/`auto_accept_grants` — the same file layout local mode uses for its one local principal, just rooted under that user's own directory instead of the top-level one. One principal's rules are invisible to and cannot be edited by another; there is currently no admin-facing way to review or revoke another principal's rules from the browser (`/settings`'s rule editor being the local-mode-only path that does this today) — an administrator with server filesystem access can read or hand-edit that file directly, the same way they would the install-wide one above.
+
+## 10. Approvals
 
 Org-mode approval routes are principal-aware: a signed-in user can act only on approvals authorized for that principal. Sensitive write approvals can require WebAuthn step-up when configured (`--step-up-enabled` in §5), and that step-up ordinarily accepts either an enrolled passkey or a fresh IdP re-authentication. `--step-up-require-passkey` closes the IdP-reauth path entirely for organizations that want hardware-bound WebAuthn as a hard requirement (e.g. to defend against a compromised or phished IdP session satisfying step-up on its own): a principal with no enrolled passkey gets a hard failure directing them to `/security` to enroll one instead of a silent fallback to re-authentication.
 
 The UI behavior itself is the same embedded browser approval surface documented in [`approval-list-ui-ux.md`](approval-list-ui-ux.md).
 
-## 10. Downloads
+## 11. Downloads
 
 Centralized deployments cannot write directly to a user's local filesystem. Org-mode file delivery therefore uses inline content (up to `download_delivery.inline_max_bytes`, default 8MB, `--downloads-inline-max-bytes` in §5) or encrypted short-lived staged links (`download_delivery.link_ttl_seconds`, default 300s, `--downloads-link-ttl-seconds`) as documented in [`org-mode-download-delivery.md`](org-mode-download-delivery.md).
 
-## 11. Operations
+## 12. Operations
 
 Before production use, define backup/restore, upgrades/rollback, monitoring, audit retention/forwarding (`--audit-forwarding-*` in §5), and service restart procedures. See [`org-mode-operational-readiness.md`](org-mode-operational-readiness.md).
 
-## 12. Validation
+## 13. Validation
 
 Validate the deployment through the public HTTPS origin:
 

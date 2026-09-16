@@ -76,6 +76,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the weaker path. With `require_passkey` set, that fallback is gone entirely (the IdP step-up
   endpoint itself refuses, not just its link), and a principal with no enrolled passkey gets a
   hard failure pointing at `/security` to enroll one instead. Off by default. See issue #406.
+- `web/server.py`'s module docstring no longer claims `/settings` stays unmounted in org mode
+  because its CSRF model can't generalize to org mode's per-session cookie — `org_session.py`'s
+  `check_csrf` already does that double-submit check, the same shape `session_auth.check_csrf`
+  uses in local mode. The real, still-open gap is deciding which of `routes_settings.py`'s ~30
+  actions are per-principal versus install-wide/admin-only and wiring `Principal.is_admin` into
+  authorizing the latter, which the docstring now says instead. `docs/org-mode-setup-guide.md`
+  gains a new §9 explaining where PII/privacy policy (install-wide, from the server's own
+  `config/settings.yaml`, needs a daemon restart to change, and defaults to `block` for any group
+  absent from that file — unlike local mode's `allow`) and auto-accept rules/grants (per-principal,
+  under that user's own `users/<principal>/config/settings.yaml`) actually live today, since
+  neither has a browser page of its own yet. See issue #400.
 
 ### Added
 
