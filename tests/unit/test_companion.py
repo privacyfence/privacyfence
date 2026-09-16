@@ -10,6 +10,8 @@ ControlChannelServer/CompanionChannelServer instances.
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from privacyfence import companion
@@ -108,6 +110,12 @@ class TestMainArgvDispatch:
         assert companion.main([]) == 0
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="forces paths.is_windows() to False to exercise the POSIX socket path "
+    "deterministically -- see test_control_channel.py's own module-level skip for why that "
+    "needs a real AF_UNIX, which this CI OS's Python doesn't expose at all",
+)
 class TestCompanionEndToEnd:
     """A real ControlChannelServer (the daemon's) and a real
     CompanionChannelServer (the companion's), wired together exactly the

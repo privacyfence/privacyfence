@@ -598,22 +598,35 @@ def send_line_posix(socket_path: Path | str, message: str, *, timeout: float) ->
 def send_line_windows(pipe_name: str, message: str, *, timeout: float) -> str:
     """The named-pipe equivalent of ``send_line_posix()`` -- pywin32 is a
     transitive runtime dependency already (via ``mcp.os.win32.utilities``),
-    so it's always importable here."""
+    so it's always importable here.
+
+    ``pywintypes.error`` isn't an ``OSError`` subclass, unlike everything
+    ``socket.connect()`` raises on the POSIX side for the same "nothing is
+    listening" case -- caught here and re-raised as ``OSError`` (connection
+    phase) / ``ControlChannelError`` (post-connection phase), so every
+    caller up the stack (``mint_bootstrap_code``/``request_quit``/
+    ``request_open_url``, ``companion.py``, ``oauth_loopback.py``'s default
+    opener) needs to know about exactly one exception shape for each case,
+    regardless of platform, instead of also needing a pywintypes-specific
+    except clause of its own."""
     import pywintypes
     import win32file
     import win32pipe
 
-    win32pipe.WaitNamedPipe(pipe_name, int(timeout * 1000))
-    handle = win32file.CreateFile(
-        pipe_name, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-        0, None, win32file.OPEN_EXISTING, 0, None,
-    )
     try:
-        win32file.WriteFile(handle, message.encode(_ENCODING))
+        win32pipe.WaitNamedPipe(pipe_name, int(timeout * 1000))
+        handle = win32file.CreateFile(
+            pipe_name, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+            0, None, win32file.OPEN_EXISTING, 0, None,
+        )
+    except pywintypes.error as exc:
+        raise OSError(f"could not reach the control channel at {pipe_name}: {exc}") from exc
+    try:
         try:
+            win32file.WriteFile(handle, message.encode(_ENCODING))
             _rc, data = win32file.ReadFile(handle, _MAX_MESSAGE_BYTES)
         except pywintypes.error as exc:
-            raise ControlChannelError(f"control channel request failed to read a reply: {exc}") from exc
+            raise ControlChannelError(f"control channel request failed: {exc}") from exc
     finally:
         win32file.CloseHandle(handle)
     return data.decode(_ENCODING)
