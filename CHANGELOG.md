@@ -57,6 +57,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Authenticating, disabling, or refreshing a connector now pushes a real MCP `tools/list_changed`
   notification to every open Streamable HTTP session, so a client that already connected picks up
   the new tool list without needing to reconnect. See issue #396.
+- The Windows installer now offers to open the bundled `.mcpb` at the end of setup (checked by
+  default, alongside "Launch PrivacyFence now"), so Claude Desktop's install prompt appears
+  automatically for most users instead of requiring them to locate the file in File Explorer
+  first. See issue #407.
 
 ### Changed
 
@@ -66,10 +70,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   they'd already read this far; the former matches what a fresh install's own `initialize`
   instructions already tell Claude to do on its own via `privacyfence_status`. The step also now
   says the link lands on Settings' Connectors page rather than Settings in general. See issue #396.
+- A pending approval's `message` field, and `privacyfence_await_approval`'s own tool description,
+  now explicitly tell the calling agent to relay the approval `url` to the user right away and
+  either await or schedule a follow-up check, instead of leaving the agent to sit on a
+  `approval_pending` result quietly. PrivacyFence itself was already returning the `url` and a
+  poll tool (`privacyfence_await_approval`) alongside every pending approval — this only
+  strengthens the in-band instructions an MCP client sees, since a daemon has no way to push a
+  notification into a chat turn on its own.
 - The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands
   (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
   current-user-only install) and how to get there in File Explorer, instead of just saying to
-  install it with no path given. See issue #407.
+  install it with no path given, for the case where the new automatic prompt above was declined.
+  See issue #407.
 
 ### Fixed
 

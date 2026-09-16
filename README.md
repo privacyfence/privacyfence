@@ -277,10 +277,12 @@ signing/notarization credential availability at build time. Full installation de
    your own user profile — registers a Task Scheduler task so the daemon starts at login, and
    starts the daemon immediately — no separate "install the mcpb first" step is needed to get it
    running (unlike macOS, above), though you still need it installed to talk to Claude Desktop.
-3. Install **PrivacyFence.mcpb** into Claude Desktop: open File Explorer, paste the install path
-   from step 2 into the address bar (`%ProgramFiles%\PrivacyFence\` or
-   `%LOCALAPPDATA%\Programs\PrivacyFence\`, whichever applies to you) and press Enter, then
-   double-click `PrivacyFence.mcpb` there — Claude Desktop opens and offers to install it.
+3. Install **PrivacyFence.mcpb** into Claude Desktop: on the installer's last page, leave
+   "Install PrivacyFence into Claude Desktop" checked (it's on by default) and click Finish —
+   Claude Desktop opens on its own and offers to install it. If you unchecked that box, or need to
+   do it again later, open File Explorer, paste the install path from step 2 into the address bar
+   (`%ProgramFiles%\PrivacyFence\` or `%LOCALAPPDATA%\Programs\PrivacyFence\`, whichever applies to
+   you) and press Enter, then double-click the `.mcpb` file there.
 4. Ask Claude to set up PrivacyFence. PrivacyFence's `initialize` response already tells Claude to
    check `privacyfence_status` before its first governed action, so you often don't even need to
    ask explicitly — either way, Claude calls it and hands you a sign-in link. Open it, or open
