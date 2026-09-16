@@ -25,8 +25,9 @@
 #                                # default Git for Windows install already
 #                                # does this)
 #   node + npm on PATH           # for scripts/build_mcpb.sh
-#   signtool.exe on PATH         # only if $env:SIGN_CERT_PATH is set (Phase 5)
-#                                # -- ships with the Windows SDK
+#   signtool.exe                # only if $env:SIGN_CERT_PATH is set (Phase 5) -- ships with the
+#                                # Windows SDK; used straight off PATH if present there, otherwise
+#                                # auto-located under Windows Kits' own install layout
 #
 # Usage:
 #   pwsh ./scripts/build_installer.ps1
@@ -135,10 +136,23 @@ $McpbPath = "dist/${ProductName}-${Version}.mcpb"
 # installer and not these would still show an unrecognized-publisher warning
 # if a user runs either directly rather than through the installer.
 $TimestampUrl = if ($env:SIGN_TIMESTAMP_URL) { $env:SIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
+$script:SignToolPath = $null
+function Get-SignToolPath {
+    # windows-latest GitHub-hosted runners carry the Windows SDK but don't put signtool.exe on
+    # PATH -- only Visual Studio's dev shells (VsDevCmd/vcvarsall) do that, and this script runs in
+    # plain pwsh. Fall back to searching the SDK's own install layout before giving up.
+    $cmd = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $found = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending | Select-Object -First 1
+    if ($found) { return $found.FullName }
+    throw "signtool.exe not found on PATH or under C:\Program Files (x86)\Windows Kits\10\bin -- install the Windows SDK"
+}
 function Invoke-Signing([string]$Path) {
     if (-not $env:SIGN_CERT_PATH) { return }
+    if (-not $script:SignToolPath) { $script:SignToolPath = Get-SignToolPath }
     Write-Host "-> Signing $Path..."
-    & signtool.exe sign /fd sha256 /f "$env:SIGN_CERT_PATH" /p "$env:SIGN_CERT_PASSWORD" `
+    & $script:SignToolPath sign /fd sha256 /f "$env:SIGN_CERT_PATH" /p "$env:SIGN_CERT_PASSWORD" `
         /tr $TimestampUrl /td sha256 "$Path"
     if ($LASTEXITCODE -ne 0) { throw "signtool failed on $Path" }
 }
