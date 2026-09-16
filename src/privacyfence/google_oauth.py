@@ -86,7 +86,7 @@ def authorize_url(client_config: dict[str, Any], scopes: list[str], redirect_uri
     # (its openid/userinfo.* scopes are in the union too).
     url, _ = flow.authorization_url(access_type="offline", prompt="consent", state=state)
     # Flow.authorization_url() always sets it (autogenerate_code_verifier=True).
-    assert flow.code_verifier is not None  # nosec B101 -- invariant narrowing, not input validation
+    assert flow.code_verifier is not None  # nosec B101  # invariant narrowing, not input validation
     return url, flow.code_verifier
 
 

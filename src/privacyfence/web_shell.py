@@ -281,7 +281,20 @@ _STREAM_JS = """
   }
   var es = new EventSource('/api/state/stream');
   es.onopen = function () { setState('live', 'live'); };
-  es.onerror = function () { setState('reconnecting', 'reconnecting…'); };
+  es.onerror = function () {
+    // Issue #423: readyState CLOSED means the browser gave up for good --
+    // a non-2xx response (this route's own 401 once the session has
+    // idle-/absolute-expired) never gets an automatic retry per the
+    // EventSource spec, unlike a transient network error, which leaves
+    // readyState CONNECTING while it retries on its own. Telling those
+    // two apart is what stops "reconnecting…" from lying forever on an
+    // expired tab that in fact needs a fresh bootstrap link, not a wait.
+    if (es.readyState === EventSource.CLOSED) {
+      setState('down', 'session expired — reopen this page');
+    } else {
+      setState('reconnecting', 'reconnecting…');
+    }
+  };
   es.addEventListener('settings', function (e) {
     if (window.__pfRender) { window.__pfRender(JSON.parse(e.data)); }
   });

@@ -8,8 +8,11 @@ HOW TO USE THIS FILE
    two branches in flight would both claim the same next version, which is the exact failure
    CLAUDE.md records at commit d929510 ("Revert version bump -- will release together with other
    pending CRs") from the era when versions were hand-bumped in two files. Only the PR that cuts
-   a release renames `## [Unreleased]` to `## [X.Y.Z] -- YYYY-MM-DD`, adds a fresh empty
-   `## [Unreleased]` above it, and updates the two link definitions at the bottom.
+   a release turns `## [Unreleased]` into `## [X.Y.Z] -- YYYY-MM-DD`, adds a fresh empty
+   `## [Unreleased]` above it, and updates the two link definitions at the bottom. If a section for
+   that version already exists (4.0.0's was opened early), MERGE `[Unreleased]`'s entries into it
+   and fix its date -- renaming the heading would create a second one, and
+   scripts/changelog_section.py refuses to render a version that has two.
 
 2. This file is NEVER a version source. setuptools_scm derives the version from the git tag and
    remains the only one -- see CLAUDE.md's "Releasing" section. Nothing may parse this file to
@@ -32,8 +35,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- `docs/security-and-compliance.md` now states the local-mode trust boundary explicitly: it is the
+  operating-system user account, so a process running as the signed-in user — including an AI client
+  with shell access, which is the normal local-mode install — can mint a session and release a
+  pending approval without a browser. The CSRF, same-origin, TTL and expiry controls on that path are
+  defenses against a hostile web page and against leaked credentials, not against local code
+  execution, and the document previously left that easy to read more broadly than it holds. Nothing
+  about the implementation changed; this corrects what is claimed for it, and names the work that
+  closes the gap (issues #426, #427, #428). Org mode is unaffected — its daemon runs on a server the
+  client has no loopback access to.
+
 ### Added
 
+- The Windows installer now offers to open the bundled `.mcpb` at the end of setup (checked by
+  default, alongside "Launch PrivacyFence now"), so Claude Desktop's install prompt appears
+  automatically for most users instead of requiring them to locate the file in File Explorer
+  first. See issue #407.
 - Gmail draft bodies (`body_markdown` on all 6 draft tools) now support `# Heading 1`/`## Heading 2`
   syntax, rendered as Gmail's own "Large"/"Huge" font-size compose presets (not raw `<h1>`/`<h2>`
   tags, which render inconsistently across mail clients). See issue #414.
@@ -45,13 +64,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- A pending approval's `message` field, and `privacyfence_await_approval`'s own tool description,
+  now explicitly tell the calling agent to relay the approval `url` to the user right away and
+  either await or schedule a follow-up check, instead of leaving the agent to sit on a
+  `approval_pending` result quietly. PrivacyFence itself was already returning the `url` and a
+  poll tool (`privacyfence_await_approval`) alongside every pending approval — this only
+  strengthens the in-band instructions an MCP client sees, since a daemon has no way to push a
+  notification into a chat turn on its own.
 - The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands
   (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
   current-user-only install) and how to get there in File Explorer, instead of just saying to
-  install it with no path given. See issue #407.
+  install it with no path given, for the case where the new automatic prompt above was declined.
+  See issue #407.
 
 ### Fixed
 
+- The `/approvals` and `/settings` pages no longer get logged out from under a tab that's been
+  open and actively watching (live SSE indicator, incoming approvals rendering) for longer than
+  the 30-minute idle timeout. The session was only ever touched once, when the stream connected —
+  watching it registered as zero activity — so the next click or refresh after 30 minutes returned
+  401 even though the page still reported itself as live. The stream now refreshes its own session
+  on every poll tick; an open connection is itself proof the tab is open, so the 24-hour absolute
+  cap is the only cap left for a tab that's never closed. The live indicator also now reports
+  "session expired" instead of a permanent, misleading "reconnecting…" once the browser gives up
+  for good, and the expired-session page leads with "ask Claude for a new sign-in link" rather
+  than burying it a paragraph down. See issue #423.
 - Windows installs now store per-user state (config, credentials, the audit log) under
   `%LOCALAPPDATA%\PrivacyFence` instead of a literal `.privacyfence` folder dropped into
   `%USERPROFILE%`. A dot-prefixed name isn't a hiding convention Windows Explorer honors the way

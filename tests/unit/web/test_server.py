@@ -850,6 +850,78 @@ class TestSettingsFoldedIntoTheCombinedApp:
         assert server.state_stream is not None
 
 
+class TestStateStreamTouchesItsOwnSession:
+    """Issue #423: ``_state_stream_route`` used to authenticate once, at
+    connect time, and never touch the session again for the life of the
+    connection -- a tab watching it past the idle timeout got evicted
+    anyway. Driving the route's generator directly (same reasoning
+    TestSettingsFoldedIntoTheCombinedApp gives above for not going through
+    a real GET) proves the ``touch`` callback threaded into
+    ``stream.subscribe`` is bound to *this* request's own cookie, not a
+    shared or wrong session id."""
+
+    @staticmethod
+    async def _receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    def _request(self, session_id: str):
+        from starlette.requests import Request
+
+        headers = [(b"cookie", f"{SESSION_COOKIE}={session_id}".encode())]
+        scope = {
+            "type": "http", "headers": headers, "method": "GET", "path": "/api/state/stream",
+            "scheme": "http", "server": ("localhost", 8765),
+        }
+        return Request(scope, receive=self._receive)
+
+    async def test_destroying_the_sessions_store_entry_ends_this_stream(self):
+        from privacyfence.web.server import _state_stream_route
+        from privacyfence.web.state_stream import StateStream
+
+        sessions = LocalSessionStore()
+        session_id = sessions.create()
+        web_ui = WebApprovalUI()
+        stream = StateStream(settings_snapshot=lambda: None, list_pending=web_ui.deferred_registry.list_pending)
+        route = _state_stream_route(stream, sessions=sessions)
+
+        response = await route.endpoint(self._request(session_id))
+        assert response.status_code == 200
+
+        agen = response.body_iterator
+        await agen.__anext__()  # the initial full-state flush
+
+        sessions.destroy(session_id)
+        with pytest.raises(StopAsyncIteration):
+            # The loop's own touch() call, on the very next tick, finds the
+            # session gone and breaks -- exactly as a client disconnect
+            # would, rather than streaming on to an evicted session.
+            await agen.__anext__()
+
+    async def test_a_different_sessions_eviction_leaves_this_stream_running(self):
+        from privacyfence.web.server import _state_stream_route
+        from privacyfence.web.state_stream import StateStream
+
+        sessions = LocalSessionStore()
+        session_id = sessions.create()
+        other_id = sessions.create()
+        web_ui = WebApprovalUI()
+        stream = StateStream(settings_snapshot=lambda: None, list_pending=web_ui.deferred_registry.list_pending)
+        route = _state_stream_route(stream, sessions=sessions)
+
+        response = await route.endpoint(self._request(session_id))
+        agen = response.body_iterator
+        await agen.__anext__()
+
+        sessions.destroy(other_id)
+        stream.push_settings({"a": 1})
+        # This connection's own session is still live, so its next tick's
+        # touch() succeeds and the push comes through rather than the
+        # generator breaking.
+        chunk = await agen.__anext__()
+        assert "settings" in chunk
+        assert '{"a": 1}' in chunk
+
+
 class TestWebServerWiresTheStateStream:
     def test_controller_is_registered_as_a_change_listener(self, tmp_path, monkeypatch):
         controller = _controller(tmp_path, monkeypatch)

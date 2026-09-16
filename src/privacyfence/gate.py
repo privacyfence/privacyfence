@@ -453,7 +453,13 @@ def _pending_result(registry: PendingApprovalRegistry, approval: PendingApproval
         "approval_id": approval.id,
         "url": registry.approval_url(approval.id),
         "expires_at": datetime.fromtimestamp(approval.expires_at, tz=timezone.utc).isoformat(),
-        "message": "This step needs your approval. Open the link above to review and decide.",
+        "message": (
+            "This step needs a human's approval before it can proceed. Do not wait "
+            "silently: reply to the user right now with this result's url so they can "
+            "open it and decide, then call privacyfence_await_approval with this "
+            "approval_id to wait for their decision (or, if you can schedule a "
+            "follow-up check for later, do that instead of blocking here)."
+        ),
     }
 
 
