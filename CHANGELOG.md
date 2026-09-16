@@ -46,6 +46,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   about the implementation changed; this corrects what is claimed for it, and names the work that
   closes the gap (issues #426, #427, #428). Org mode is unaffected — its daemon runs on a server the
   client has no loopback access to.
+- ADR 0002 (`docs/adr/0002-local-mode-trust-boundary-and-companion-app.md`) records the architecture
+  decision that follows from the statement above: local mode's trust boundary is the OS user
+  account, and a minimal companion app (tray/menu-bar item — Open Approvals, Open Settings, Quit)
+  returns as the channel that gets a human into the web UI without a sign-in credential traveling
+  through the AI client. It fixes the companion app's dependency budget (a second entry point of the
+  existing packaged binary; one platform-conditional tray dependency on macOS/Windows, none on
+  Linux), keeps the web app as the only implementation of approvals and settings, and records why
+  session minting is made *insufficient* (via the passkey in issue #426) rather than uncallable —
+  two processes running as the same user cannot be told apart. Supersedes ADR 0001 in part. No
+  behavior changes with this entry; it is the decision the implementation in issues #428 and #426
+  will follow. See issue #427.
 
 ### Added
 
