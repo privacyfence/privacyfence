@@ -10,6 +10,7 @@ isn't running on.
 """
 from __future__ import annotations
 
+import os
 import socket
 import sys
 
@@ -284,6 +285,104 @@ class TestCompanionChannelServer:
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         assert cc.posix_socket_path() != cc.companion_socket_path()
+
+
+class TestCompanionChannelPeerVerification:
+    """#428 B10: unlike ``ControlChannelServer``'s MINT/QUIT (ADR 0002
+    decision 6 -- no peer check, deliberately, because companion and agent
+    share a uid), this channel's whole reason to exist is the daemon asking
+    the companion to open a URL, and separation is the one case where the
+    two ends really do have different uids. The test client below connects
+    from this very process, so ``SO_PEERCRED`` genuinely reports this
+    process's own real uid -- what's faked is only which account
+    ``service_account_uid()`` resolves to, not the kernel-reported peer.
+    """
+
+    def _server(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        server = cc.CompanionChannelServer()
+        server.start()
+        return server
+
+    def test_unseparated_install_checks_nothing(self, tmp_path, monkeypatch):
+        opened = []
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: opened.append(url) or True)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="OPEN https://example.com/callback\n")
+            assert reply.startswith("OK")
+            assert opened == ["https://example.com/callback"]
+        finally:
+            server.stop()
+
+    def test_accepts_a_connection_from_the_service_account_uid(self, tmp_path, monkeypatch):
+        from privacyfence import privilege_separation
+
+        opened = []
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: opened.append(url) or True)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "service_account_uid", lambda: os.getuid())
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="OPEN https://example.com/callback\n")
+            assert reply.startswith("OK")
+            assert opened == ["https://example.com/callback"]
+        finally:
+            server.stop()
+
+    def test_refuses_a_connection_from_any_other_uid(self, tmp_path, monkeypatch):
+        from privacyfence import privilege_separation
+
+        opened = []
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: opened.append(url) or True)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "service_account_uid", lambda: os.getuid() + 1)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="OPEN https://example.com/callback\n")
+            assert reply.startswith("ERROR")
+            assert opened == []
+        finally:
+            server.stop()
+
+    def test_refuses_when_the_service_account_uid_cannot_be_resolved(self, tmp_path, monkeypatch):
+        """A half-removed install (the marker names an account that no
+        longer exists) fails closed rather than falling back to accepting
+        anyone -- ``service_account_uid()`` returns None for exactly this
+        case."""
+        from privacyfence import privilege_separation
+
+        opened = []
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: opened.append(url) or True)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "service_account_uid", lambda: None)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="OPEN https://example.com/callback\n")
+            assert reply.startswith("ERROR")
+            assert opened == []
+        finally:
+            server.stop()
+
+    def test_control_channel_server_never_checks_peer_identity(self, tmp_path, monkeypatch):
+        """ADR 0002 decision 6: the daemon's own MINT/QUIT channel is
+        deliberately not gated this way, separated or not -- companion and
+        agent share a uid there regardless."""
+        from privacyfence import paths, privilege_separation
+        from privacyfence.web.session_auth import BootstrapStore
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "service_account_uid", lambda: os.getuid() + 1)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore())
+        server.start()
+        try:
+            reply = _mint(server.address)
+            assert reply.startswith("OK ")
+        finally:
+            server.stop()
 
 
 class TestControlChannelClientFunctions:

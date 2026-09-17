@@ -341,6 +341,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   path and remains a `config/settings.yaml` edit plus a restart, which is what keeps the existing
   "treat this install as compromised" banner meaningful — a disable it observes still can never have
   come from a browser control. See `step_up_config.py`'s `LiveStepUpConfig`.
+- B10 of the 4.1.0 action plan: on a privilege-separated install, the companion app's own control
+  channel (`OPEN <url>`, `web/control_channel.py`'s `CompanionChannelServer`) now refuses a
+  connection unless it comes from the daemon's service-account uid. The socket is `0660`
+  group-shared with the agent (same as the daemon's own MINT/QUIT channel), and before separation
+  that sharing is exactly ADR 0002 decision 6's deliberate trade-off — companion, agent and daemon
+  are all one uid, so no peer check could tell them apart. Separation changes that for this one
+  channel: the daemon moves to a different account while the companion and the agent stay on the
+  logged-in user's, so `SO_PEERCRED`/`LOCAL_PEERCRED`'s uid becomes meaningful here for the first
+  time, and an agent sharing the group could previously send `OPEN` itself to drive the human's
+  browser to an attacker-chosen http(s) URL. The daemon's own MINT/QUIT channel is unchanged — ADR
+  0002 decision 6 still applies there. See `privilege_separation.service_account_uid()`.
 
 ### Added
 
