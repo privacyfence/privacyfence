@@ -138,14 +138,19 @@ on its own. They matter for the same reason the rest of the audit log does: a re
 automated check) can reconstruct what changed and when, rather than trusting the current state of
 `config/settings.yaml` and `webauthn_credentials.json` to be the whole story.
 
-**Requirement changes are only observable at daemon startup.** There is no UI path to flip
-`step_up.require_passkey` — it is a `config/settings.yaml` edit plus a restart, deliberately, so its
-name and semantics can never drift from a settings-page control nobody asked for (`step_up_config.py`'s
-own docstring). That means a *change* can only be caught by comparing the value a fresh startup loads
-against what the previous startup last saw, which is exactly what `webauthn_stepup.
-observe_step_up_requirement` does: an install predating this feature, or one where the requirement
-has never changed, produces nothing extra to audit. Restarting with the same value twice in a row is
-silent, by design — only an actual transition is recorded.
+**Requirement changes were, through #426 Phase 4, only observable at daemon startup** — there was no
+UI path to flip `step_up.require_passkey` at all, so a *change* could only be caught by comparing the
+value a fresh startup loads against what the previous startup last saw, via `webauthn_stepup.
+observe_step_up_requirement`. B9 of the 4.1.0 action plan added a one-directional Settings-page
+control (the General page's Security card, `SettingsController.enable_step_up`) that turns this
+requirement *on* — never off — the moment a passkey is already enrolled, and calls
+`observe_step_up_requirement` itself right away rather than waiting for the next startup, so that
+transition is audited immediately. Turning the requirement back *off* still has no UI path and remains
+a `config/settings.yaml` edit plus a restart, deliberately: that asymmetry is what keeps the "treat this
+install as compromised" banner below trustworthy — a disable it observes never came from a control in
+the human's own browser. An install predating B9, or one where the requirement has never changed
+either way, produces nothing extra to audit at startup. Restarting with the same value twice in a row
+is silent, by design — only an actual transition is recorded.
 
 **Turning the requirement off latches a persistent banner**, not just a one-time audit line — the
 same `pf-shell-banner` the Phase 3 "nothing enrolled yet" notice uses, on both `/approvals` and
@@ -305,7 +310,7 @@ What bounds it instead: local mode only (it raises in org mode, which authentica
 
 Net effect: an MCP client can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. The justification this paragraph used to give — that such a client already holds equivalent-or-greater access via every other tool this daemon exposes — holds for connector reads and writes, which are themselves gated. It understates one case: a session also reaches the approval UI, so it can *release* a gated call rather than merely request one, and that is the product's central control rather than one more tool. This is not a weakness introduced by this tool — see [Local-mode trust boundary](#local-mode-trust-boundary), where a process running as the user mints the same session through the control channel without it — but it should not be described as a neutral consequence of existing trust either. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
 
-**Revised, #426 Phase 4:** the paragraph above is still true of a session by itself, and stays true regardless of configuration — this tool has no `step_up` awareness of its own, and doesn't need any: minting a session was never the part step-up narrows. What changes is what that session is *sufficient for*, and only under two conditions together, neither of which is this deployment's default. With [privilege separation](#privilege-separation-macos-linux-and-windows) active (default-on for macOS/Linux as of #428 D1, opt-in for Windows) **and** `step_up.require_passkey` turned on in `config/settings.yaml` (opt-in everywhere, no UI toggle by design — see `step_up_config.py`'s own docstring), the credential store a step-up assertion is checked against is no longer writable by the same process minting the session, so that session alone can no longer release an approving decision on a gated write, nor change what a future write can reach through `_SENSITIVE_ACTIONS` (an always-allow rule, a grant, a relaxed default policy). It can still mint the session, still view what's pending, and still hold read access to the review screen — the confidentiality half [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 names as the weaker guarantee, left open on purpose. With either condition missing — no privilege separation, or `step_up.require_passkey` left off — the original paragraph's net effect stands unqualified: the session is enough on its own.
+**Revised, #426 Phase 4:** the paragraph above is still true of a session by itself, and stays true regardless of configuration — this tool has no `step_up` awareness of its own, and doesn't need any: minting a session was never the part step-up narrows. What changes is what that session is *sufficient for*, and only under two conditions together, neither of which is this deployment's default. With [privilege separation](#privilege-separation-macos-linux-and-windows) active (default-on for macOS/Linux as of #428 D1, opt-in for Windows) **and** `step_up.require_passkey` turned on in `config/settings.yaml` (opt-in everywhere — reachable from the Settings page once a passkey is enrolled, B9, or still by hand; see `step_up_config.py`'s own `LiveStepUpConfig` docstring), the credential store a step-up assertion is checked against is no longer writable by the same process minting the session, so that session alone can no longer release an approving decision on a gated write, nor change what a future write can reach through `_SENSITIVE_ACTIONS` (an always-allow rule, a grant, a relaxed default policy). It can still mint the session, still view what's pending, and still hold read access to the review screen — the confidentiality half [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 names as the weaker guarantee, left open on purpose. With either condition missing — no privilege separation, or `step_up.require_passkey` left off — the original paragraph's net effect stands unqualified: the session is enough on its own.
 
 ### Local MCP
 

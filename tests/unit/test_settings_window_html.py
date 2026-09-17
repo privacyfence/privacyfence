@@ -40,6 +40,7 @@ def _make_state(**overrides):
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
             "org_button_label": "Install/Update Organization Config…", "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "standard",
+            "step_up_available": True, "step_up_on": False, "step_up_has_passkey": False,
         },
         "connectors": [
             {"key": "gmail", "label": "Gmail", "icon": "gmail", "icon_data_uri": "data:image/png;base64,AAA",
@@ -422,7 +423,44 @@ class TestNotificationsCard:
             "org_installed": True, "org_installed_date": "Jun 14, 2026",
             "org_button_label": "x", "version": "3.1.1",
             "notifications_enabled": True, "notifications_detail": "detailed",
+            "step_up_available": True, "step_up_on": False, "step_up_has_passkey": False,
         })
         html = build_html(state)
         embedded = _extract_initial_state(html)
         assert embedded["general"]["notifications_detail"] == "detailed"
+
+
+class TestStepUpCard:
+    """B9: the General page's Security card grows a one-directional "turn
+    step-up on" control -- string-level checks only, same reasoning as this
+    module's own docstring (no JS engine here to actually branch on
+    g.step_up_on/g.step_up_has_passkey and see which of the three states
+    renders)."""
+
+    def _general_fn(self, html: str) -> str:
+        start = html.index("function renderGeneral")
+        end = html.index("function connectorStatus")
+        return html[start:end]
+
+    def test_turn_on_control_is_wired_to_enable_step_up(self):
+        fn = self._general_fn(build_html(_make_state()))
+        assert "'enable_step_up'" in fn
+
+    def test_reads_all_three_step_up_fields_off_state(self):
+        fn = self._general_fn(build_html(_make_state()))
+        assert "g.step_up_available" in fn
+        assert "g.step_up_on" in fn
+        assert "g.step_up_has_passkey" in fn
+
+    def test_state_embeds_step_up_fields_for_client_render_to_read(self):
+        state = _make_state(general={
+            "pii_enabled": True, "pii_ip": True, "pii_financial": False,
+            "update_check_enabled": True, "update_check_beta": False,
+            "org_installed": True, "org_installed_date": "Jun 14, 2026",
+            "org_button_label": "x", "version": "3.1.1",
+            "notifications_enabled": True, "notifications_detail": "standard",
+            "step_up_available": True, "step_up_on": True, "step_up_has_passkey": True,
+        })
+        embedded = _extract_initial_state(build_html(state))
+        assert embedded["general"]["step_up_on"] is True
+        assert embedded["general"]["step_up_has_passkey"] is True

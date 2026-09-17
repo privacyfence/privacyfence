@@ -72,11 +72,21 @@ this module only tracks the state an entry needs to be written from:
   that generates it -- it is never recoverable again), stored only as a
   salted hash.
 - **Requirement enable/disable tracking**
-  (``observe_step_up_requirement``/``step_up_disabled_notice``) -- there
-  is no UI to flip ``step_up.require_passkey`` (it's a config file edit
-  plus a restart, deliberately -- see step_up_config.py's own docstring),
-  so the only place a *change* can be observed at all is daemon startup,
-  by comparing the freshly loaded value against what was last seen.
+  (``observe_step_up_requirement``/``step_up_disabled_notice``) -- through
+  #426 Phase 4 there was no UI to flip ``step_up.require_passkey`` at all
+  (a config file edit plus a restart), so the only place a *change* could
+  be observed was daemon startup, comparing the freshly loaded value
+  against what was last seen. B9 of the 4.1.0 action plan added a one-
+  directional UI path (settings_controller.py's ``enable_step_up``, see
+  step_up_config.py's own ``LiveStepUpConfig`` docstring) that turns this
+  *on*, and that path calls this same function itself right away rather
+  than waiting for the next startup, so an enable is observed -- and
+  audited -- the moment it happens. Turning it back *off* is still a
+  config-file-plus-restart operation with no UI of its own, deliberately:
+  that asymmetry is what keeps ``step_up_disabled_notice``'s "treat this
+  install as compromised" banner trustworthy -- a disable this module ever
+  observes did not come from a human clicking a button in their own
+  browser.
 """
 from __future__ import annotations
 

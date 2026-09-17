@@ -759,14 +759,26 @@ def _maybe_start_web_server(
     # WebServer(...) call below, so the require_passkey startup check right
     # after server.start() reads the exact same config this daemon actually
     # booted with.
-    local_step_up = step_up_config.StepUpConfig.from_local_config(config)
-    # #426 Phase 4: the only place a require_passkey/step_up.enabled
-    # *change* can be observed at all -- there's no UI path to flip it (see
-    # step_up_config.py's own docstring), so a startup-time comparison
-    # against what the previous startup last saw is the only option.
-    # webauthn_stepup.observe_step_up_requirement does the comparison and
-    # persists the new state; this daemon records the actual audit entry
-    # so that module stays free of any audit_log.py dependency.
+    #
+    # B9: wrapped in LiveStepUpConfig, not passed as a bare StepUpConfig,
+    # so SettingsController.enable_step_up (wired in just below) can flip
+    # require_passkey on for every consumer of this same object -- web/
+    # server.py's WebServer, and everything it mounts -- without a daemon
+    # restart. See step_up_config.py's own LiveStepUpConfig docstring.
+    local_step_up = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig.from_local_config(config))
+    if controller is not None:
+        controller.wire_step_up(local_step_up)
+    # #426 Phase 4: through B9, the only place a require_passkey/step_up.
+    # enabled *change* could be observed at all was a startup-time
+    # comparison against what the previous startup last saw, since there
+    # was no UI path to flip it. B9 added one (SettingsController.
+    # enable_step_up, wired above) that observes its own change itself,
+    # right when it happens -- this call remains for every other case: an
+    # existing install's config already had it on at boot, or a human hand-
+    # edited the file between runs. webauthn_stepup.observe_step_up_
+    # requirement does the comparison and persists the new state; this
+    # daemon records the actual audit entry so that module stays free of
+    # any audit_log.py dependency.
     step_up_change = observe_step_up_requirement(
         LOCAL_PRINCIPAL, enabled=local_step_up.enabled, require_passkey=local_step_up.require_passkey,
     )

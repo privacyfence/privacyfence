@@ -63,6 +63,14 @@ NOT_APPLICABLE_ACTIONS: frozenset[str] = frozenset({
     "skip_update", "remind_later_update",
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
     "set_notifications_detail",
+    # B9: hardcodes LOCAL_PRINCIPAL throughout (the credential check, the
+    # config/settings.yaml section it writes, the LiveStepUpConfig it
+    # updates) -- local mode's own single-principal, file-based step_up
+    # model, not org mode's per-principal-credential, org_config.json-
+    # bundle-driven one. Wiring this into an org-mode route would be
+    # actively wrong (it would gate on, and mutate state for, the wrong
+    # principal), not merely unavailable.
+    "enable_step_up",
 })
 
 

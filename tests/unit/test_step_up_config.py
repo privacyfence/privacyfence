@@ -115,3 +115,39 @@ class TestLocalEnrollmentBanner:
         banner = config.local_enrollment_banner(has_credentials=False)
         assert banner is not None
         assert "/security" in banner
+
+
+class TestLiveStepUpConfig:
+    """B9: ``LiveStepUpConfig`` mirrors every read a plain ``StepUpConfig``
+    offers, off whatever value it currently holds, so every consumer that
+    was written against a bare ``StepUpConfig`` (web/routes_approvals.py,
+    web/routes_settings.py, web/routes_security.py) keeps working unchanged
+    when local mode hands it one of these instead -- see the class's own
+    docstring."""
+
+    def test_reads_mirror_the_initial_config(self):
+        initial = step_up_config.StepUpConfig(
+            enabled=False, scope="writes", rp_id="localhost", rp_name="PrivacyFence", require_passkey=False,
+        )
+        live = step_up_config.LiveStepUpConfig(initial)
+        assert live.enabled is False
+        assert live.scope == "writes"
+        assert live.rp_id == "localhost"
+        assert live.rp_name == "PrivacyFence"
+        assert live.require_passkey is False
+
+    def test_update_is_visible_to_every_subsequent_read(self):
+        live = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig())
+        assert live.enabled is False
+        assert live.require_passkey is False
+        live.update(step_up_config.StepUpConfig(enabled=True, require_passkey=True))
+        assert live.enabled is True
+        assert live.require_passkey is True
+
+    def test_local_enrollment_banner_reflects_the_current_value(self):
+        live = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig(enabled=False, require_passkey=False))
+        assert live.local_enrollment_banner(has_credentials=False) is None
+        live.update(step_up_config.StepUpConfig(enabled=True, require_passkey=True))
+        banner = live.local_enrollment_banner(has_credentials=False)
+        assert banner is not None
+        assert "/security" in banner
