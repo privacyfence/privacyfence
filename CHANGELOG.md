@@ -465,6 +465,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   markdown shows something clickable instead of a link a human has to copy out by hand, and the
   expiry stays legible even if only the link text survives into a screenshot or shared transcript.
   `structuredContent` is unchanged.
+- Windows installer/executable signing now goes through SSL.com's eSigner CodeSignTool instead of
+  a locally imported Authenticode `.pfx`. CA/B Forum's June 2023 key-storage rules mean code-signing
+  private keys can no longer be issued as an exportable `.pfx` at all — SSL.com holds this one in
+  its eSigner cloud HSM — so `build.yml`'s `build-windows` job and `scripts/build_installer.ps1`'s
+  `Invoke-Signing` helper now authenticate to eSigner per signing call (`ESIGNER_USERNAME`/
+  `ESIGNER_PASSWORD`/`ESIGNER_CREDENTIAL_ID`/`ESIGNER_TOTP_SECRET`) rather than reading
+  `WINDOWS_CERTIFICATE`/`WINDOWS_CERTIFICATE_PWD`. See `docs/platform-support.md`.
 
 ### Fixed
 
@@ -581,13 +588,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now absolute (`github.com/.../blob/main/...` for docs, `raw.githubusercontent.com/.../main/...`
   for images), and the three `../../releases` download pointers now point at
   `privacyfence.eu/download/`, the canonical download surface. See issue #370.
-- `scripts/build_installer.ps1` no longer assumes `signtool.exe` is on `PATH` when
-  `WINDOWS_CERTIFICATE`/`WINDOWS_CERTIFICATE_PWD` are set. GitHub's `windows-latest` runner ships
-  the Windows SDK but does not add it to `PATH` outside a Visual Studio dev shell, so the first
-  signed Windows build would have failed at the signing step with "signtool.exe is not recognized"
-  the moment those secrets were configured — this path had never actually run in CI, since no
-  certificate has been available until now. The script now falls back to locating `signtool.exe`
-  under the SDK's own install layout when it isn't already on `PATH`.
 - `drive_download_file`, `gmail_download_attachment`, and `confluence_download_attachment` no
   longer fail with a bare, unhelpful "Tool call failed" when `destination_dir` can't actually be
   written to (a permissions error, or — as observed on macOS — the synthetic `/home` mount point,
