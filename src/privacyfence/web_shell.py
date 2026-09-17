@@ -82,6 +82,11 @@ body {
 .pf-shell-live-dot.live { background: #2fa84f; }
 .pf-shell-live-dot.reconnecting { background: #d9a520; }
 .pf-shell-live-dot.down { background: var(--color-danger); }
+.pf-shell-banner {
+  padding: 8px 20px; font-size: 13px; font-weight: 600; text-align: center;
+  background: var(--color-danger); color: #fff; flex-shrink: 0;
+}
+.pf-shell-banner a { color: #fff; text-decoration: underline; }
 .pf-shell-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .pf-shell-toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
@@ -321,6 +326,7 @@ def _nav_html(active: str) -> str:
 def wrap(
     body_html: str, *, title: str, active: str, nonce: str | None = None,
     notifications_enabled: bool = True, notifications_detail: str = "minimal",
+    banner_html: str | None = None,
 ) -> str:
     """Full ``<!DOCTYPE html>`` document: tokens.css + the shell's own CSS,
     the header (brand, nav between Approvals/Settings, live indicator), and
@@ -348,12 +354,30 @@ def wrap(
     ``nonce`` parameter) -- one document, one Content-Security-Policy
     header, one nonce. Defaults to a fresh one when omitted (every real
     caller passes the actual per-request value explicitly).
+
+    ``banner_html`` (#426 Phase 3): an already-escaped fragment shown as a
+    full-width, non-dismissable strip between the header and ``<main>`` --
+    ``None`` (the default) renders nothing. The one real caller today is
+    web/routes_approvals.py's/web/routes_settings.py's own
+    ``step_up.require_passkey`` check: with that flag on and no passkey
+    enrolled, the daemon starts and keeps serving (step_up_config.py's own
+    "closed for releases, open for repair" -- refusing to boot would remove
+    the only path to ``/security``, the one page that can fix this), but
+    every approving decision and every sensitive settings action hard-fails
+    (webauthn_stepup.has_credentials() is False, so decide()/settings_
+    action() both 403 rather than release anything) -- this banner is what
+    makes that state visible on every page rather than only discoverable by
+    triggering the 403 itself. Rendered on every request fresh, so it
+    reflects the current enrollment state, not a dismissed-once flag: it
+    disappears the moment a passkey is enrolled, with no separate
+    acknowledgement step.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     stream_js = _STREAM_JS % {
         "notifications_enabled": "true" if notifications_enabled else "false",
         "notifications_detail": json.dumps(notifications_detail),
     }
+    banner = f'<div class="pf-shell-banner" role="alert">{banner_html}</div>' if banner_html else ""
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -373,6 +397,7 @@ def wrap(
 <span id="pf-shell-live-label">connecting…</span>
 </div>
 </header>
+{banner}
 <main class="pf-shell-main">{body_html}</main>
 <div class="pf-shell-toast" id="pf-shell-toast" role="status"></div>
 <div class="pf-sr-only" id="pf-shell-announcer" aria-live="polite"></div>

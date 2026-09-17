@@ -32,10 +32,35 @@ client-side link/window.open, never a shell-out reachable from this
 process's HTTP listener. TestNoSubprocessFromHttp in this module's test
 file is what a security review gets to point at instead of re-reading this
 comment.
+
+**Sensitive-action step-up (#426 Phase 3):** gating the local decide
+endpoint on ``step_up.require_passkey`` (web/routes_approvals.py) means
+nothing releasing a *write approval* can happen without a passkey -- but an
+agent that cannot forge an approval doesn't need to if it can just add an
+always-allow rule instead, and this dispatcher's ``POST /api/settings/
+{action}`` was that open door: none of its ~30 actions ever asked for
+step-up. ``_SENSITIVE_ACTIONS`` below is the subset that can change *what
+gets gated* (rule/grant/policy/PII actions) rather than merely how the app
+looks or behaves -- update checks, log level, notification detail, and
+connector auth all stay ungated, since gating all of them would make
+routine settings use miserable for the one real cost (an agent that already
+has connector access gaining nothing new by flipping those). With
+``step_up.require_passkey`` on, a sensitive action is verified the same
+two-round-trip way web/routes_approvals.py's own decide() is: a first POST
+with no ``webauthn_assertion`` gets a ``428`` carrying fresh options (or a
+``403`` naming ``/security`` if nothing is enrolled -- the same hard fail,
+never a silent skip), and a second POST carrying the completed assertion is
+verified and, on success, actually runs the action.
+``_NON_SENSITIVE_ACTIONS`` is the deliberately explicit complement, not
+``_ALLOWED_ACTIONS - _SENSITIVE_ACTIONS`` -- see TestSensitiveActionsCoverAllAllowedActions
+in this module's test file for why a derived set would silently swallow a
+future action nobody classified either way.
 """
 from __future__ import annotations
 
+import hashlib
 import inspect
+import json
 import logging
 import typing
 from pathlib import Path
@@ -46,9 +71,13 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import BaseRoute, Route
 
-from .. import approval_icons, settings_window_html, web_shell
+from .. import approval_icons, settings_window_html, webauthn_stepup, web_shell
+from ..principal import LOCAL_PRINCIPAL
 from ..settings_controller import REPO_URL, SettingsController
+from ..step_up_config import StepUpConfig
+from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
 from .csp import nonce_for as _csp_nonce_for
+from .routes_security import PF_WEBAUTHN_JS
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
 from .session_auth import LocalSessionStore
 from .session_auth import authenticated as _session_authenticated
@@ -87,6 +116,34 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "update_rule_row", "add_rule_row", "remove_rule_row",
     "toggle_grant_capability", "add_grant_row", "update_grant_row", "remove_grant_row",
     "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
+    "set_log_level", "set_notifications_detail",
+})
+
+# ---------------------------------------------------------------------------- #
+# #426 Phase 3's own allowlist-within-the-allowlist -- see module docstring.
+# Every rule-row/grant/policy/PII action can change *what a future write
+# reaches decide() at all* (an always-allow rule, a granted capability, a
+# relaxed default policy), which is exactly the bypass a passkey requirement
+# on decide() alone leaves open; the remainder is either read-only, informs
+# no policy decision (update checks, log level, notification detail), or is
+# connector auth an agent with connector access already has no need to
+# forge. Both sets are explicit, not derived from each other, so
+# TestSensitiveActionsCoverAllAllowedActions below fails the moment a new
+# action lands in _ALLOWED_ACTIONS without a matching entry in either.
+# ---------------------------------------------------------------------------- #
+
+_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
+    "update_rule_row", "add_rule_row", "remove_rule_row",
+    "toggle_grant_capability", "add_grant_row", "update_grant_row", "remove_grant_row",
+    "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
+    "toggle_pii_detection", "toggle_pii_category",
+})
+
+_NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
+    "toggle_update_check", "toggle_update_check_beta", "check_for_updates_now",
+    "skip_update", "remind_later_update",
+    "toggle_connector", "refresh_connectors", "authenticate_connector",
+    "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
     "set_log_level", "set_notifications_detail",
 })
 
@@ -177,6 +234,15 @@ def _snapshot(controller: SettingsController) -> dict[str, Any]:
 # ---------------------------------------------------------------------------- #
 
 def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
+    """``pfSettingsPost``'s own ``428``/``403`` branches (#426 Phase 3) are
+    the settings-page counterpart of web/routes_approvals.py's own
+    ``_bridge_shim`` step-up handling -- see that function's docstring for
+    the shared shape (``428`` carries fresh ``webauthn_options`` to complete
+    with ``window.pfWebauthnGet``, defined by ``PF_WEBAUTHN_JS``, and retry;
+    a ``403`` names ``/security`` because nothing is enrolled at all). The
+    one real difference: this page stays open across the ceremony (it is
+    not a one-shot card), so failures surface via ``window.alert`` rather
+    than replacing the whole document's markup."""
     return (
         "<input type=\"file\" id=\"pf-org-config-input\" accept=\".json,application/json\" style=\"display:none\">"
         f'<script nonce="{nonce}">(function(){{'
@@ -192,6 +258,10 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "    .then(function(state){ if (window.__pfRender) { window.__pfRender(state); } })"
         "    .finally(function(){ fileInput.value = ''; });"
         "});"
+        "function pfSettingsPost(url, body) {"
+        "  return fetch(url, {method:'POST', credentials:'same-origin',"
+        "headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});"
+        "}"
         "window.webkit = window.webkit || {};"
         "window.webkit.messageHandlers = window.webkit.messageHandlers || {};"
         "window.webkit.messageHandlers.pf = {postMessage: function(payload) {"
@@ -205,13 +275,56 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "    rest.confirmed = true;"
         "  }"
         "  var body = Object.assign({}, rest, {csrf: CSRF});"
-        "  fetch(url, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})"
-        "    .then(function(r){ return r.json().then(function(state){ return {ok: r.ok, state: state}; }); })"
-        "    .then(function(res){ if (res.ok && window.__pfRender) { window.__pfRender(res.state); } "
+        "  pfSettingsPost(url, body).then(function(r){"
+        "    if (r.status === 428) {"
+        "      return r.json().then(function(data){"
+        "        if (data.webauthn_options && window.PublicKeyCredential) {"
+        "          return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function(assertion){"
+        "            var retryBody = Object.assign({}, body, {webauthn_assertion: assertion});"
+        "            return pfSettingsPost(url, retryBody);"
+        "          }).catch(function(err){"
+        "            window.alert('This change needs your passkey, and the prompt failed: ' + err.message);"
+        "            return null;"
+        "          });"
+        "        }"
+        "        window.alert('This change needs a passkey, and none is available in this browser.');"
+        "        return null;"
+        "      });"
+        "    }"
+        "    if (r.status === 403) {"
+        "      return r.json().then(function(data){"
+        "        if (data.enroll_url) {"
+        "          window.alert('This change requires a passkey. Set one up at ' + data.enroll_url + '.');"
+        "        }"
+        "        return null;"
+        "      });"
+        "    }"
+        "    return r;"
+        "  }).then(function(r){"
+        "    if (r === null) { return; }"
+        "    return r.json().then(function(state){ return {ok: r.ok, state: state}; });"
+        "  }).then(function(res){"
+        "    if (!res) { return; }"
+        "    if (res.ok && window.__pfRender) { window.__pfRender(res.state); } "
         "else if (!res.ok) { console.error('PrivacyFence action failed:', action, res.state); } });"
         "}};"
         "})();</script>"
     )
+
+
+def _action_fingerprint(action: str, body: dict[str, Any]) -> str:
+    """The settings-action counterpart of webauthn_stepup.decision_
+    fingerprint -- binds a step-up ceremony to *this exact action and
+    payload* rather than merely "some sensitive action", so a WebAuthn
+    assertion obtained for e.g. ``remove_grant_row`` can't be replayed to
+    authorize a differently-shaped ``add_rule_row`` (or the same action with
+    different arguments). ``body`` must already have ``csrf``/
+    ``webauthn_assertion`` stripped -- neither is part of what a human
+    approved by completing the ceremony, and including the assertion itself
+    would make the first (options-only) and second (assertion-carrying)
+    request's own fingerprints diverge."""
+    payload = f"{action}|{json.dumps(body, sort_keys=True, default=str)}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def build_routes(
@@ -221,6 +334,8 @@ def build_routes(
     allow_quit: bool = True,
     notifications_enabled: bool = True,
     notifications_detail: str = "minimal",
+    step_up: StepUpConfig | None = None,
+    step_up_origin: str = "",
 ) -> list[BaseRoute]:
     """The Route objects themselves, for server.py to fold into the one
     combined app (extra_routes, same pattern web/routes_mcp.py's
@@ -238,10 +353,24 @@ def build_routes(
     class's own docstring. Nothing here needs to know about the stream at
     all; SettingsController's existing on_change/_push_snapshot mechanism
     already fires for every mutating call, this request's own included.
+
+    ``step_up``/``step_up_origin`` (#426 Phase 3) gate ``_SENSITIVE_ACTIONS``
+    on a fresh WebAuthn assertion whenever ``step_up.require_passkey`` is on
+    -- see module docstring. Both default to "off" so every existing caller
+    of this function is unaffected; web/server.py's ``build_app`` passes the
+    same ``StepUpConfig``/origin it already resolves for web/
+    routes_approvals.py's own decide-time check and web/routes_security.py's
+    ``/security`` mount.
     """
+    challenges = StepUpChallengeStore()
 
     def _authenticated(request: Request) -> bool:
         return _session_authenticated(request, sessions)
+
+    def _banner_html() -> str | None:
+        if step_up is None:
+            return None
+        return step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(LOCAL_PRINCIPAL))
 
     async def _render_settings_page(request: Request, *, initial_section: str | None) -> Response:
         if not _authenticated(request):
@@ -257,6 +386,13 @@ def build_routes(
         state = _snapshot(controller)
         body = settings_window_html.build_html(state, nonce=nonce, initial_section=initial_section)
         csrf = request.cookies.get(_SESSION_COOKIE, "")
+        # PF_WEBAUTHN_JS (#426 Phase 3): the same ceremony helpers web/
+        # routes_approvals.py's card page carries, needed here whenever a
+        # sensitive action's own 428/403 branch below (_settings_bridge_shim)
+        # has to run one -- always injected, same reasoning that module's
+        # own docstring gives for TestStepUpBridgeShim: whether it's ever
+        # exercised depends on config, not on whether the helpers exist.
+        body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
         body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
         # Read off this request's own fresh snapshot, not the notifications_
         # enabled/detail closure args above -- those are only the daemon-
@@ -269,6 +405,7 @@ def build_routes(
             body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
             notifications_enabled=general.get("notifications_enabled", notifications_enabled),
             notifications_detail=general.get("notifications_detail", notifications_detail),
+            banner_html=_banner_html(),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -292,6 +429,29 @@ def build_routes(
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
         return None
 
+    def _settings_step_up_response(action: str, fingerprint_body: dict[str, Any]) -> JSONResponse:
+        """The settings-action counterpart of web/routes_approvals.py's own
+        ``_step_up_response`` -- with no enrolled passkey this hard-fails
+        (``403``) rather than falling through unguarded, since this gate
+        only ever runs when ``step_up.require_passkey`` is already on (see
+        ``_needs_step_up`` below); there is no Phase-2-style "let it through"
+        configuration to fall back to here."""
+        assert step_up is not None  # nosec B101  # _needs_step_up() already proved this before calling us
+        begun = webauthn_stepup.begin_assertion(LOCAL_PRINCIPAL, rp_id=step_up.rp_id) if step_up.rp_id else None
+        if begun is None:
+            return JSONResponse(
+                {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
+            )
+        options_json, challenge = begun
+        fingerprint = _action_fingerprint(action, fingerprint_body)
+        challenges.put(LOCAL_PRINCIPAL.id, action, challenge=challenge, fingerprint=fingerprint)
+        return JSONResponse(
+            {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
+        )
+
+    def _needs_step_up(action: str) -> bool:
+        return step_up is not None and step_up.enabled and step_up.require_passkey and action in _SENSITIVE_ACTIONS
+
     async def settings_action(request: Request) -> Response:
         if not _authenticated(request):
             return _unauthorized_response(request)
@@ -310,6 +470,22 @@ def build_routes(
         if rejected is not None:
             return rejected
         body = {k: v for k, v in payload.items() if k != "csrf"}
+        if _needs_step_up(action):
+            fingerprint_body = {k: v for k, v in body.items() if k != "webauthn_assertion"}
+            assertion = payload.get("webauthn_assertion")
+            if not isinstance(assertion, dict):
+                return _settings_step_up_response(action, fingerprint_body)
+            pending = challenges.pop(LOCAL_PRINCIPAL.id, action)
+            expected_fp = _action_fingerprint(action, fingerprint_body)
+            if pending is None or pending.fingerprint != expected_fp:
+                return JSONResponse({"error": "step_up_expired"}, status_code=400)
+            try:
+                webauthn_stepup.verify_assertion(
+                    LOCAL_PRINCIPAL, assertion, expected_challenge=pending.challenge,
+                    rp_id=step_up.rp_id, origin=step_up_origin.rstrip("/"),
+                )
+            except WebAuthnError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=401)
         try:
             result = _call_action(controller, action, body)
         except _BadAction as exc:
@@ -381,6 +557,7 @@ def build_routes(
 def create_app(
     controller: SettingsController, *, sessions: LocalSessionStore, allow_quit: bool = True,
     notifications_enabled: bool = True, notifications_detail: str = "minimal",
+    step_up: StepUpConfig | None = None, step_up_origin: str = "",
 ) -> Starlette:
     """Standalone Starlette app wrapping build_routes() -- what this
     module's own tests construct against, the same "no filesystem/global-
@@ -388,5 +565,5 @@ def create_app(
     already established."""
     return Starlette(routes=build_routes(
         controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
-        notifications_detail=notifications_detail,
+        notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_origin,
     ))

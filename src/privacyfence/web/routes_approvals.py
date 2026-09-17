@@ -23,16 +23,19 @@ mode has no IdP to re-authenticate against, so the ``428`` this module's
 ``decide()`` returns while step-up is outstanding never carries an
 ``idp_stepup_url``, only ``webauthn_options`` (org mode's own
 ``require_passkey=True`` shape is the only one available here, see
-step_up_config.py's own docstring). When no passkey is enrolled at all,
-``_step_up_response`` below returns ``None`` and the decision is let
-through unguarded rather than left permanently stuck behind a ceremony
-nobody could ever complete -- **this is the one place step-up stays
-evadable at this phase**: simply never enrolling a passkey dodges the
-gate entirely. Closing that gap by making ``step_up.require_passkey`` fail
-closed (refusing to release the write, rather than skipping the check) is
-#426 Phase 3, not this one -- see step_up_config.py's own ``StepUpConfig.
-require_passkey`` docstring for why that field is already parsed here but
-not yet read.
+step_up_config.py's own docstring). When no passkey is enrolled at all and
+``step_up.require_passkey`` is off, ``_step_up_response`` below returns
+``None`` and the decision is let through unguarded rather than left
+permanently stuck behind a ceremony nobody could ever complete -- simply
+never enrolling a passkey dodges the gate entirely in that configuration.
+
+**``step_up.require_passkey`` (#426 Phase 3)** closes that gap: with it on,
+a decision that needs step-up and finds no enrolled credential gets a
+``403`` naming ``/security`` instead of ``None`` -- the write is never
+released, mirroring web/routes_org_approvals.py's own ``require_passkey``
+handling exactly (local mode already has no IdP fallback to disable, unlike
+org mode's own extra ``stepup_idp_start``/``stepup_callback`` refusal, so
+this is the only behavior change needed here).
 """
 from __future__ import annotations
 
@@ -274,6 +277,11 @@ def create_app(
     def _list_rows() -> list:
         return web_ui.deferred_registry.list_pending()
 
+    def _banner_html() -> str | None:
+        if step_up is None:
+            return None
+        return step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(LOCAL_PRINCIPAL))
+
     async def list_approvals(request: Request) -> Response:
         if not _authenticated(request):
             return _unauthorized(request)
@@ -290,6 +298,7 @@ def create_app(
         html = web_shell.wrap(
             body, title="PrivacyFence — Approvals", active="approvals", nonce=nonce,
             notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
+            banner_html=_banner_html(),
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -367,20 +376,28 @@ def create_app(
 
     def _step_up_response(approval_id: str, *, result: str, choice: int | None) -> JSONResponse | None:
         """The local-mode counterpart of web/routes_org_approvals.py's own
-        ``_step_up_response`` -- ``None`` when there is no enrolled passkey
-        to challenge, which the caller takes as "let the decision through
-        unguarded" rather than a dead end with no fallback (see module
-        docstring: this is the phase's one deliberate evasion, closed by
-        #426 Phase 3's ``require_passkey`` enforcement, not this one)."""
+        ``_step_up_response``. ``None`` when there is no enrolled passkey to
+        challenge *and* ``step_up.require_passkey`` is off, which the caller
+        takes as "let the decision through unguarded" (module docstring:
+        Phase 2's own evadable-by-not-enrolling behavior, kept only for that
+        configuration). With ``require_passkey`` on and nothing enrolled,
+        this hard-fails with a ``403`` instead -- #426 Phase 3, mirroring
+        org mode's own ``require_passkey`` branch exactly."""
         begun = webauthn_stepup.begin_assertion(LOCAL_PRINCIPAL, rp_id=step_up.rp_id) if step_up.rp_id else None
-        if begun is None:
-            return None
-        options_json, challenge = begun
-        fingerprint = webauthn_stepup.decision_fingerprint(
-            approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
-        )
-        challenges.put(LOCAL_PRINCIPAL.id, approval_id, challenge=challenge, fingerprint=fingerprint)
-        return JSONResponse({"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428)
+        if begun is not None:
+            options_json, challenge = begun
+            fingerprint = webauthn_stepup.decision_fingerprint(
+                approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
+            )
+            challenges.put(LOCAL_PRINCIPAL.id, approval_id, challenge=challenge, fingerprint=fingerprint)
+            return JSONResponse(
+                {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
+            )
+        if step_up.require_passkey:
+            return JSONResponse(
+                {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
+            )
+        return None
 
     async def decide(request: Request) -> Response:
         approval_id = request.path_params["id"]

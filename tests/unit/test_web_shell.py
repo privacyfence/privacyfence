@@ -65,6 +65,28 @@ class TestWrap:
         assert '<link rel="icon" href="data:image/png;base64,' in html
 
 
+class TestBanner:
+    """#426 Phase 3: the "loud persistent banner" step_up_config.py's
+    StepUpConfig.local_enrollment_banner() drives -- see that function's
+    own docstring for when it fires."""
+
+    def test_no_banner_by_default(self):
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert '<div class="pf-shell-banner"' not in html
+
+    def test_banner_renders_between_header_and_main_when_given(self):
+        html = web_shell.wrap("<p>body</p>", title="t", active="approvals", banner_html="Passkey required")
+        assert '<div class="pf-shell-banner" role="alert">Passkey required</div>' in html
+        assert html.index("pf-shell-banner") < html.index("<p>body</p>")
+
+    def test_banner_html_is_not_escaped(self):
+        # Same convention as body_html itself (test_body_html_is_not_escaped
+        # above) -- callers own their own escaping; step_up_config.py's own
+        # banner text carries a real <a href> link.
+        html = web_shell.wrap("", title="t", active="approvals", banner_html='<a href="/security">add one</a>')
+        assert '<a href="/security">add one</a>' in html
+
+
 class TestNotifications:
     """W8, docs/approval-list-ui-ux.md §4: tiers 0-1 only."""
 

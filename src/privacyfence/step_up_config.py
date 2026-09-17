@@ -111,6 +111,25 @@ class StepUpConfig:
             require_passkey=bool(raw.get("require_passkey", False)),
         )
 
+    def local_enrollment_banner(self, *, has_credentials: bool) -> str | None:
+        """#426 Phase 3's "loud persistent banner": ``None`` unless
+        ``require_passkey`` is actually in force (``enabled`` too -- see
+        this module's own docstring on ``require_passkey``'s dependence on
+        it) and nothing is enrolled yet, in which case web_shell.wrap()'s
+        own ``banner_html`` renders this on every local-mode page. The
+        daemon still starts and serves in this state -- refusing to boot
+        would remove the only path to ``/security`` that fixes it -- but
+        web/routes_approvals.py's decide() and web/routes_settings.py's
+        sensitive actions both hard-fail (403) rather than release
+        anything, so this string says exactly that rather than merely
+        "step-up is on"."""
+        if self.enabled and self.require_passkey and not has_credentials:
+            return (
+                "Passkey required: no passkey is enrolled, so approving decisions and sensitive "
+                'settings changes are blocked until you <a href="/security">add one</a>.'
+            )
+        return None
+
     @staticmethod
     def from_local_config(config: dict[str, Any]) -> "StepUpConfig":
         """local mode's own entry point (#426 Phase 1) -- ``config`` is the

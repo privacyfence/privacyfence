@@ -314,9 +314,20 @@ step_up:
   rp_id: localhost
   # Shown to your platform authenticator's own passkey picker/prompt.
   rp_name: PrivacyFence
-  # Once enforcement lands (Phase 3), whether a passkey assertion is the
-  # *only* way to satisfy step-up. Local mode has no alternative path (no
-  # IdP to re-authenticate against), so this has no effect yet -- today,
-  # not enrolling a passkey at all skips step-up entirely regardless of
-  # this setting.
+  # Whether a passkey assertion is *mandatory*, not merely offered when one
+  # happens to be enrolled (#426 Phase 3). With this on: an approving
+  # decision with nothing enrolled is refused outright (a 403 naming
+  # /security), not silently released; the same is true for a sensitive
+  # subset of the settings actions (rule/grant/policy/PII changes -- see
+  # web/routes_settings.py's own _SENSITIVE_ACTIONS); and removing your
+  # last enrolled credential always needs a fresh assertion first,
+  # regardless of this flag. If nothing is enrolled when the daemon starts
+  # with this on, it still starts -- refusing to boot would remove the one
+  # path (/security) that fixes it -- but every page carries a persistent
+  # banner until a passkey is added, and no approving decision is released
+  # in the meantime. Before #428 (privilege separation) lands for your
+  # platform, this flag and the enrolled-credential store are both files an
+  # agent with shell access on this machine can edit -- see issue #426's
+  # own "What this guarantees, and what it depends on" for what that means
+  # in practice.
   require_passkey: false
