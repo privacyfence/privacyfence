@@ -338,6 +338,17 @@ step_up:
   # own "What this guarantees, and what it depends on" for what that means
   # in practice.
   require_passkey: false
+  # The approval binder's own batch decide endpoint (/approvals, Phase 3):
+  # "single_assertion" -- the default -- lets one passkey prompt release a
+  # whole selected batch of approvals at once, bound to the exact set you
+  # selected (adding, dropping, or flipping any one item invalidates it).
+  # "per_item" is the stricter alternative for an install that never wants
+  # one prompt to cover more than one decision: with it set, the batch
+  # endpoint refuses outright to release anything in the batch that needs
+  # step-up (nothing in the batch is applied), so those have to be decided
+  # one at a time from their own card instead. A deny-only batch is
+  # unaffected either way -- denying never needs step-up.
+  batch: single_assertion
 
 # P3 of the auto-accept policy redesign: which evaluator decides an auto-accept call. Both the
 # existing evaluator and the new policy/engine.py one run on every call regardless of this

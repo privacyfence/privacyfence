@@ -207,6 +207,59 @@ class TestDecisionFingerprint:
         )
 
 
+class TestBatchDecisionFingerprint:
+    """The approval binder's own binding (Phase 3): the role
+    decision_fingerprint plays for one decision, over a whole submitted
+    set."""
+
+    def test_stable_for_the_same_inputs(self):
+        items = [("a1", "accept"), ("a2", "deny")]
+        a = wa.batch_decision_fingerprint(principal_id="alice", items=items)
+        b = wa.batch_decision_fingerprint(principal_id="alice", items=list(items))
+        assert a == b
+
+    def test_order_independent(self):
+        # A batch has no meaningful order -- resubmitting the identical set
+        # in a different order must fingerprint identically.
+        forward = wa.batch_decision_fingerprint(principal_id="alice", items=[("a1", "accept"), ("a2", "deny")])
+        backward = wa.batch_decision_fingerprint(principal_id="alice", items=[("a2", "deny"), ("a1", "accept")])
+        assert forward == backward
+
+    def test_changes_when_principal_changes(self):
+        items = [("a1", "accept")]
+        assert (
+            wa.batch_decision_fingerprint(principal_id="alice", items=items)
+            != wa.batch_decision_fingerprint(principal_id="bob", items=items)
+        )
+
+    def test_changes_when_an_item_is_added(self):
+        smaller = [("a1", "accept")]
+        larger = [("a1", "accept"), ("a2", "accept")]
+        assert (
+            wa.batch_decision_fingerprint(principal_id="alice", items=smaller)
+            != wa.batch_decision_fingerprint(principal_id="alice", items=larger)
+        )
+
+    def test_changes_when_an_items_result_flips(self):
+        accept = [("a1", "accept"), ("a2", "deny")]
+        flipped = [("a1", "deny"), ("a2", "deny")]
+        assert (
+            wa.batch_decision_fingerprint(principal_id="alice", items=accept)
+            != wa.batch_decision_fingerprint(principal_id="alice", items=flipped)
+        )
+
+    def test_binds_deny_items_too_not_just_the_accepting_ones(self):
+        # §10.6's own binding covers the whole set a human saw, not merely
+        # the subset that happened to need step-up -- an assertion for
+        # {accept A, deny B} must not cover {accept A, deny C} either.
+        with_b = [("a1", "accept"), ("b", "deny")]
+        with_c = [("a1", "accept"), ("c", "deny")]
+        assert (
+            wa.batch_decision_fingerprint(principal_id="alice", items=with_b)
+            != wa.batch_decision_fingerprint(principal_id="alice", items=with_c)
+        )
+
+
 class TestStepUpChallengeStore:
     def test_put_then_pop_returns_the_entry(self):
         store = wa.StepUpChallengeStore()

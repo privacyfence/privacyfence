@@ -215,6 +215,14 @@ class TestBinderMarkup:
         html = approval_list_html.build_list_html(rows, csrf="t")
         assert 'id="pf-approvals-toolbar"' in html
         assert 'id="pf-deny-selected"' in html
+        assert 'id="pf-approve-selected"' in html
+
+    def test_approve_selected_starts_disabled(self):
+        # Phase 3 of the binder plan: like Deny selected, nothing is
+        # selected on first paint, so there is nothing to approve yet.
+        rows = [approval_list_html.row_from_approval(_real_card())]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert 'id="pf-approve-selected" disabled' in html
 
     def test_toolbar_absent_on_the_empty_state(self):
         html = approval_list_html.build_list_html([], csrf="t")

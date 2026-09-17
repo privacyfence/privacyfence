@@ -42,10 +42,24 @@ docstring for exactly which approvals that covers. This phase ships:
   ``frame-ancestors 'none'`` and this page's own ``frame-src`` admits
   ``data:`` only).
 
-Approving still opens the card -- there is still no Allow action on this
-page (docs/approval-list-ui-ux.md's own claim stays literally true through
-this phase; a batch **Approve** arrives in Phase 3, bound to one passkey
-assertion over the exact selected set).
+Approving still opens the card through Phase 2 -- docs/approval-list-ui-ux.md's
+own claim ("no Allow on the list") stays literally true up to there.
+
+**Phase 3 of the binder plan** is what finally breaks that claim: an
+**Approve selected** button posts the same set to the batch decide
+endpoint (Phase 2) with ``result: "accept"`` on every item, gated
+server-side on one WebAuthn assertion bound to the exact submitted set
+(webauthn_stepup.batch_decision_fingerprint) whenever step-up applies.
+``runBatch`` mirrors web/routes_settings.py's own ``pfSettingsPost``
+428/403 handling almost exactly: a ``428`` carries fresh
+``webauthn_options`` (and this page's own ``batch_id`` to echo back) to
+complete with ``window.pfWebauthnGet`` (injected by web/routes_approvals.py's/
+web/routes_org_approvals.py's list route, same as the settings page) and
+resubmit; a ``403``/``400`` surfaces via ``window.alert`` since this page
+stays open across the ceremony, unlike a one-shot card. The submit
+button's own label names the selected set's composition -- "Approve 12 ·
+9 reads, 3 writes" (Q1 of the binder plan's own open questions) -- so an
+unintended write can't hide inside a read-shaped batch.
 
 Selection lives in a JS ``Set`` keyed by approval id (``pfSelected``,
 module-scoped closure state) and survives ``window.__pfRenderApprovals``'s
@@ -93,6 +107,11 @@ _CSS = """
   border: 1px solid var(--color-divider); background: transparent; color: var(--color-danger); cursor: pointer;
 }
 .pf-btn-deny-selected:disabled { opacity: 0.5; cursor: default; }
+.pf-btn-approve-selected {
+  font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-md);
+  border: 1px solid var(--color-accent); background: var(--color-accent); color: #fff; cursor: pointer;
+}
+.pf-btn-approve-selected:disabled { opacity: 0.5; cursor: default; }
 .pf-approval-group { margin-bottom: 14px; }
 .pf-approval-group-header {
   display: flex; align-items: center; gap: 8px; padding: 6px 4px; font-size: 12.5px;
@@ -246,14 +265,43 @@ _JS = """
     return rows.filter(function (r) { return r.batchable; }).map(function (r) { return r.id; });
   }
 
+  // Q1 of the binder plan's own "Open questions": name the selected set's
+  // composition on the submit button itself -- "Approve 12 · 9 reads, 3
+  // writes" -- so an unintended write can't hide inside a read-shaped
+  // batch. gate_kind is "popup" (write) | "review" (read) | "" (a bare
+  // confirm/choice dialog, never batchable, so never counted here).
+  function selectedComposition(rows) {
+    var reads = 0, writes = 0;
+    rows.forEach(function (r) {
+      if (!pfSelected.has(r.id)) return;
+      if (r.gate_kind === 'popup') { writes++; } else if (r.gate_kind === 'review') { reads++; }
+    });
+    return {reads: reads, writes: writes};
+  }
+
+  function compositionLabel(composition) {
+    var parts = [];
+    if (composition.reads) { parts.push(composition.reads + (composition.reads === 1 ? ' read' : ' reads')); }
+    if (composition.writes) { parts.push(composition.writes + (composition.writes === 1 ? ' write' : ' writes')); }
+    return parts.join(', ');
+  }
+
   function updateToolbar(rows) {
     var toolbar = document.getElementById('pf-approvals-toolbar');
     if (!toolbar) return;
     var ids = selectableIds(rows);
     var selectedCount = ids.filter(function (id) { return pfSelected.has(id); }).length;
+    var composition = selectedComposition(rows);
     var countEl = document.getElementById('pf-selected-count');
     if (countEl) {
       countEl.textContent = selectedCount === 0 ? '' : selectedCount + ' selected';
+    }
+    var approveBtn = document.getElementById('pf-approve-selected');
+    if (approveBtn) {
+      approveBtn.disabled = selectedCount === 0;
+      approveBtn.textContent = selectedCount === 0
+        ? 'Approve selected'
+        : 'Approve ' + selectedCount + (compositionLabel(composition) ? ' \\u00b7 ' + compositionLabel(composition) : '');
     }
     var denyBtn = document.getElementById('pf-deny-selected');
     if (denyBtn) { denyBtn.disabled = selectedCount === 0; }
@@ -346,6 +394,91 @@ _JS = """
     });
   }
 
+  // The approval binder's own batch-approve path (Phase 3 of the binder
+  // plan): a single POST to the batch decide endpoint (Phase 2), gated on
+  // one WebAuthn assertion bound to the exact submitted set when step-up
+  // applies. Mirrors web/routes_settings.py's own pfSettingsPost 428/403
+  // handling almost exactly -- this page stays open across the ceremony
+  // (it is not a one-shot card), so a failure surfaces via window.alert
+  // rather than replacing the whole document.
+  function submitBatch(items, batchId, assertion) {
+    var body = {items: items, csrf: %(csrf)s};
+    if (batchId) { body.batch_id = batchId; }
+    if (assertion) { body.webauthn_assertion = assertion; }
+    return fetch('/api/approvals/batch/decide', {
+      method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
+  }
+
+  function runBatch(items, batchId, assertion) {
+    return submitBatch(items, batchId, assertion).then(function (r) {
+      if (r.status === 428) {
+        return r.json().then(function (data) {
+          if (data.webauthn_options && window.PublicKeyCredential) {
+            return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function (newAssertion) {
+              return runBatch(items, data.batch_id, newAssertion);
+            }).catch(function (err) {
+              window.alert('Approving needs your passkey, and the prompt failed: ' + err.message);
+              return null;
+            });
+          }
+          window.alert('Approving needs a passkey, and none is available in this browser.');
+          return null;
+        });
+      }
+      if (r.status === 401) {
+        window.alert('That passkey check could not be verified — please try Approve again.');
+        return null;
+      }
+      if (r.status === 403 || r.status === 400) {
+        return r.json().then(function (data) {
+          if (data.enroll_url) {
+            window.alert('This install requires a passkey to approve. Set one up at ' + data.enroll_url + '.');
+          } else if (data.message) {
+            window.alert(data.message);
+          } else {
+            // A stale/expired challenge (e.g. the passkey prompt took too
+            // long) or another genuine 400 -- no silent no-op either way.
+            window.alert('Could not approve this batch — please reload and try again.');
+          }
+          return null;
+        });
+      }
+      return r.ok ? r.json() : null;
+    });
+  }
+
+  function applyBatchResults(data) {
+    var results = (data && data.results) || [];
+    var appliedAny = false;
+    results.forEach(function (result) {
+      if (result.outcome === 'applied' || result.outcome === 'already_decided') {
+        if (result.outcome === 'applied') { appliedAny = true; }
+        var row = document.querySelector('[data-approval-id="' + result.id + '"]');
+        if (row) { row.remove(); }
+        pfSelected.delete(result.id);
+      }
+    });
+    updateToolbar(pfLastRows);
+    if (appliedAny && window.__pfNotifPrompt) { window.__pfNotifPrompt(); }
+  }
+
+  function approveSelected() {
+    var ids = Array.from(pfSelected);
+    if (!ids.length) return;
+    var items = ids.map(function (id) { return {id: id, result: 'accept'}; });
+    var approveBtn = document.getElementById('pf-approve-selected');
+    if (approveBtn) { approveBtn.disabled = true; }
+    runBatch(items, null, null).then(function (data) {
+      if (data) { applyBatchResults(data); }
+    }).catch(function () {
+      window.alert('Could not submit the batch — please reload and try again.');
+    }).then(function () {
+      updateToolbar(pfLastRows);
+    });
+  }
+
   function toggleSelect(id, checked) {
     if (checked) { pfSelected.add(id); } else { pfSelected.delete(id); }
     updateToolbar(pfLastRows);
@@ -423,6 +556,7 @@ _JS = """
     var detailsBtn = e.target.closest('[data-details]');
     if (detailsBtn) { toggleDetails(detailsBtn.getAttribute('data-details')); return; }
     if (e.target.id === 'pf-deny-selected') { denySelected(); return; }
+    if (e.target.id === 'pf-approve-selected') { approveSelected(); return; }
   });
 
   document.addEventListener('change', function (e) {
@@ -647,6 +781,8 @@ def _toolbar_html(*, any_batchable: bool) -> str:
         f"{select_all_disabled}>"
         "<span>Select all</span></label>"
         '<span class="pf-selected-count" id="pf-selected-count"></span>'
+        '<button type="button" class="pf-btn-approve-selected" id="pf-approve-selected" disabled>'
+        "Approve selected</button>"
         '<button type="button" class="pf-btn-deny-selected" id="pf-deny-selected" disabled>Deny selected</button>'
         "</div>"
     )

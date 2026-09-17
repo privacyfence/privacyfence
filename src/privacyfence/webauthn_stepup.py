@@ -396,6 +396,22 @@ def decision_fingerprint(*, approval_id: str, principal_id: str, result: str, ch
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def batch_decision_fingerprint(*, principal_id: str, items: list[tuple[str, str]]) -> str:
+    """The approval binder's own binding (Phase 3 of the binder plan): the
+    role ``decision_fingerprint`` plays for one decision, over a whole
+    submitted *set*. ``items`` is ``(approval_id, result)`` pairs -- sorted
+    here before hashing, so resubmitting the identical set in a different
+    order (a batch has no meaningful order) fingerprints identically, while
+    adding, dropping, or flipping the result of any single item does not.
+    Binds the whole submitted set, deny items included, not just the ones
+    that actually needed step-up -- so an assertion obtained for {A, B}
+    cannot be replayed to authorize {A, B, C}, nor to flip B's own result,
+    even though only A needed a passkey at all."""
+    canonical = "|".join(f"{approval_id}:{result}" for approval_id, result in sorted(items))
+    payload = f"{principal_id}|{canonical}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 @dataclass
 class _PendingStepUp:
     challenge: bytes
@@ -619,6 +635,7 @@ __all__ = [
     "WebAuthnCredential",
     "WebAuthnError",
     "add_credential",
+    "batch_decision_fingerprint",
     "begin_assertion",
     "begin_registration",
     "consume_recovery_code",

@@ -839,10 +839,11 @@ class TestStepUpBridgeShim:
 
 class TestBatchDecide:
     """Phase 2 of the approval binder plan: ``POST /api/approvals/batch/
-    decide`` -- approve or deny a selected set in one request. No step-up
-    here yet (that's Phase 3, layered onto this same endpoint once a
-    single bound assertion can cover the whole set); this covers only the
-    plain batch mechanics and their own auth posture."""
+    decide`` -- approve or deny a selected set in one request. This
+    covers only the plain batch mechanics and their own auth posture,
+    against an app with step-up off (the ``client``/``sessions``/``web_ui``
+    fixtures' default ``create_app`` call, no ``step_up``) -- see
+    TestBatchStepUp below for the passkey gate itself."""
 
     def test_a_mixed_batch_applies_each_item_and_reports_its_own_outcome(self, client, sessions, web_ui):
         session_id = _signed_in(client, sessions)
@@ -951,3 +952,233 @@ class TestBatchDecide:
         })
         assert r.status_code == 401
         assert not approval.event.is_set()
+
+
+class TestBatchStepUp:
+    """Phase 3 of the approval binder plan: the batch decide endpoint's own
+    passkey gate -- one WebAuthn assertion bound to the whole submitted
+    set (webauthn_stepup.batch_decision_fingerprint), not one per item."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _enroll(self):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def _verified_assertion(self):
+        return type("V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False})()
+
+    def test_deny_only_batch_never_steps_up(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "deny"}],
+        })
+        assert r.status_code == 200
+
+    def test_no_assertion_offers_a_428_with_a_batch_id(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "accept"}],
+        })
+        assert r.status_code == 428
+        body = r.json()
+        assert "webauthn_options" in body
+        assert body["batch_id"]
+        assert not approval.event.is_set()
+
+    def test_valid_assertion_applies_the_whole_batch(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        accept_me = _register(web_ui, gate_kind="popup", dedupe_key="k1")
+        deny_me = _register(web_ui, dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        items = [{"id": accept_me.id, "result": "accept"}, {"id": deny_me.id, "result": "deny"}]
+        first = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": items})
+        assert first.status_code == 428
+        batch_id = first.json()["batch_id"]
+
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=self._verified_assertion()):
+            second = client.post("/api/approvals/batch/decide", json={
+                "csrf": session_id, "items": items, "batch_id": batch_id,
+                "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert second.status_code == 200
+        assert second.json()["results"] == [
+            {"id": accept_me.id, "outcome": "applied"}, {"id": deny_me.id, "outcome": "applied"},
+        ]
+        assert accept_me.result == "accept"
+        assert deny_me.result == "deny"
+
+    def test_an_assertion_for_a_smaller_set_is_rejected(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        accept_me = _register(web_ui, gate_kind="popup", dedupe_key="k1")
+        extra = _register(web_ui, dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        first = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": accept_me.id, "result": "accept"}],
+        })
+        batch_id = first.json()["batch_id"]
+
+        # Resubmits with an extra item beyond what the challenge was bound to.
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "batch_id": batch_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            "items": [{"id": accept_me.id, "result": "accept"}, {"id": extra.id, "result": "deny"}],
+        })
+        assert r.status_code == 400
+        assert not accept_me.event.is_set()
+        assert not extra.event.is_set()
+
+    def test_a_failed_assertion_does_not_release_the_batch(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        items = [{"id": approval.id, "result": "accept"}]
+        first = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": items})
+        batch_id = first.json()["batch_id"]
+
+        with patch.object(wa.webauthn, "verify_authentication_response", side_effect=ValueError("bad sig")):
+            r = client.post("/api/approvals/batch/decide", json={
+                "csrf": session_id, "batch_id": batch_id, "webauthn_assertion": {"id": "Y3JlZC0x"}, "items": items,
+            })
+        assert r.status_code == 401
+        assert not approval.event.is_set()
+
+    def test_an_assertion_with_a_flipped_result_is_rejected(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        accept_me = _register(web_ui, gate_kind="popup", dedupe_key="k1")
+        other = _register(web_ui, dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        items = [{"id": accept_me.id, "result": "accept"}, {"id": other.id, "result": "deny"}]
+        first = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": items})
+        batch_id = first.json()["batch_id"]
+
+        flipped = [{"id": accept_me.id, "result": "accept"}, {"id": other.id, "result": "accept"}]
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "batch_id": batch_id, "webauthn_assertion": {"id": "Y3JlZC0x"}, "items": flipped,
+        })
+        assert r.status_code == 400
+        assert not accept_me.event.is_set()
+        assert not other.event.is_set()
+
+    def test_replay_after_the_challenge_was_consumed_is_rejected(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        items = [{"id": approval.id, "result": "accept"}]
+        first = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": items})
+        batch_id = first.json()["batch_id"]
+
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=self._verified_assertion()):
+            second = client.post("/api/approvals/batch/decide", json={
+                "csrf": session_id, "batch_id": batch_id, "webauthn_assertion": {"id": "Y3JlZC0x"}, "items": items,
+            })
+        assert second.status_code == 200
+
+        # A second decide for a fresh approval, replaying the same
+        # already-consumed batch id/assertion, must not be accepted.
+        another = _register(web_ui, gate_kind="popup", dedupe_key="k2")
+        third = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "batch_id": batch_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            "items": [{"id": another.id, "result": "accept"}],
+        })
+        assert third.status_code == 400
+        assert not another.event.is_set()
+
+    def test_an_assertion_with_no_matching_pending_challenge_is_rejected(self):
+        # No prior 428 round-trip -- nothing pending in the challenge
+        # store for this (made-up) batch_id. StepUpChallengeStore's own
+        # TTL expiry (test_webauthn_stepup.py's TestStepUpChallengeStore)
+        # raises through this exact same path once a real challenge ages
+        # out, since ``pop()`` treats "never existed" and "expired" alike.
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "batch_id": "made-up-batch-id",
+            "webauthn_assertion": {"id": "Y3JlZC0x"}, "items": [{"id": approval.id, "result": "accept"}],
+        })
+        assert r.status_code == 400
+        assert not approval.event.is_set()
+
+    def test_require_passkey_with_nothing_enrolled_hard_fails_the_whole_batch(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        accept_me = _register(web_ui, gate_kind="popup", dedupe_key="k1")
+        deny_me = _register(web_ui, dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id,
+            "items": [{"id": accept_me.id, "result": "accept"}, {"id": deny_me.id, "result": "deny"}],
+        })
+        assert r.status_code == 403
+        body = r.json()
+        assert body["error"] == "passkey_enrollment_required"
+        assert body["enroll_url"] == "/security"
+        assert not accept_me.event.is_set()
+        assert not deny_me.event.is_set()  # nothing applied -- not even the deny
+
+    def test_require_passkey_off_with_nothing_enrolled_lets_it_through(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "accept"}],
+        })
+        assert r.status_code == 200
+        assert r.json()["results"] == [{"id": approval.id, "outcome": "applied"}]
+
+    def test_per_item_mode_refuses_the_batch_with_nothing_applied(self):
+        self._enroll()
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", batch="per_item"),
+        )
+        accept_me = _register(web_ui, gate_kind="popup", dedupe_key="k1")
+        deny_me = _register(web_ui, dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id,
+            "items": [{"id": accept_me.id, "result": "accept"}, {"id": deny_me.id, "result": "deny"}],
+        })
+        assert r.status_code == 400
+        assert not accept_me.event.is_set()
+        assert not deny_me.event.is_set()
+
+    def test_per_item_mode_does_not_affect_a_deny_only_batch(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", batch="per_item"),
+        )
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "deny"}],
+        })
+        assert r.status_code == 200

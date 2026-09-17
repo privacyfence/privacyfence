@@ -474,6 +474,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   routes_org_approvals.py` and `web/routes_settings.py` is now one shared helper (`web/
   step_up_decide.py`) all three call, behavior-preserving — the batch endpoint would otherwise have
   been a fourth copy.
+- Approval binder, Phase 3: an **Approve selected** button on `/approvals` submits a batch
+  approval, gated on one WebAuthn passkey assertion bound to the exact selected set
+  (`webauthn_stepup.batch_decision_fingerprint`) rather than one prompt per item. Submitting with
+  no assertion gets a `428` carrying a fresh challenge and a server-minted `batch_id`; resubmitting
+  the identical items plus that `batch_id` and the completed assertion releases the whole batch in
+  one request. The fingerprint binds the *entire* submitted set, deny items included — an assertion
+  obtained for one selection can't be replayed to authorize a larger, smaller, or differently-decided
+  one, and it's single-use, so replaying it after release also fails. Only an approving item that
+  actually needs step-up (a write, or, in the wider scope, a PII-flagged read) triggers the
+  ceremony at all — a deny-only batch never prompts. `step_up.require_passkey` fails the *whole*
+  batch closed (a `403` naming `/security`, nothing applied) exactly as it already does for a
+  single decision; with it off and nothing enrolled, the batch is let through unguarded, the same
+  evadable behavior the single-decide endpoint already has. A new `step_up.batch` setting
+  (`single_assertion`, the default, or `per_item`) lets an install refuse single-assertion batching
+  entirely instead — with it set, a batch containing anything that needs step-up is rejected
+  outright, nothing applied, and those items have to be decided one at a time from their own card.
+  The submit button itself names the selected set's composition ("Approve 12 · 9 reads, 3 writes")
+  so an unintended write can't hide inside a read-shaped batch. No IdP re-authentication fallback
+  for the batch endpoint even in org mode, unlike its single-decision endpoint — this is a
+  page-level ceremony, the same shape `web/routes_settings.py`'s sensitive actions already use, and
+  that one has never offered an IdP link either.
 
 ### Changed
 
