@@ -247,17 +247,100 @@ def _handle_daemon_request(bootstrap: BootstrapStore, *, allow_quit: bool, line:
     return "ERROR unknown command\n"
 
 
+def _peer_uid_posix(conn: socket.socket) -> int | None:
+    """The uid of the process on the other end of a connected ``AF_UNIX``
+    socket -- Linux and macOS each expose this through a different
+    ``getsockopt``, so this picks whichever one this platform actually has
+    rather than assuming Linux's. None if neither is available (any other
+    POSIX platform, or the lookup itself failed), which ``_verify_companion_
+    peer()`` treats as "cannot vouch for this peer" rather than as a real
+    uid."""
+    if hasattr(socket, "SO_PEERCRED"):
+        # Linux: struct ucred { pid_t pid; uid_t uid; gid_t gid; } -- three
+        # native ints, in that order.
+        import struct
+
+        try:
+            raw = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+        except OSError:
+            return None
+        _pid, uid, _gid = struct.unpack("3i", raw)
+        return uid
+    if privilege_separation.current_platform() == "darwin":
+        return _peer_uid_macos(conn)
+    return None
+
+
+def _peer_uid_macos(conn: socket.socket) -> int | None:
+    """macOS's equivalent of Linux's ``SO_PEERCRED``:
+    ``getsockopt(SOL_LOCAL, LOCAL_PEERCRED)`` fills a ``struct xucred``
+    (``<sys/un.h>``), not Linux's ``struct ucred`` -- there is no Python-
+    level API for either on this platform, so this goes through ``libc`` via
+    ``ctypes``, the same way ``windows_acl.py`` goes through ``pywin32`` for
+    the Windows primitive this module has no stdlib equivalent for either."""
+    import ctypes
+
+    sol_local = 0
+    local_peercred = 0x001
+
+    class _Xucred(ctypes.Structure):
+        _fields_ = [
+            ("cr_version", ctypes.c_uint),
+            ("cr_uid", ctypes.c_uint),
+            ("cr_ngroups", ctypes.c_short),
+            ("cr_groups", ctypes.c_uint * 16),
+        ]
+
+    libc = ctypes.CDLL(None, use_errno=True)  # dlopen(NULL): this process's own libc
+    xucred = _Xucred()
+    size = ctypes.c_uint(ctypes.sizeof(xucred))
+    rc = libc.getsockopt(conn.fileno(), sol_local, local_peercred, ctypes.byref(xucred), ctypes.byref(size))
+    if rc != 0:
+        return None
+    return xucred.cr_uid
+
+
+def _verify_companion_peer(conn: socket.socket) -> str | None:
+    """The companion channel's own gate (#428 B10) -- called before the
+    handler on every connection, POSIX only (Windows named pipes are ACL'd
+    instead, see ``_current_user_security_attributes()``). Before separation
+    this channel is in the same boat ADR 0002 decision 6 describes for the
+    daemon's own MINT/QUIT channel: companion, agent and daemon are all one
+    uid, so no peer check could tell them apart, and none is attempted here
+    either. After separation the daemon moves to its own service account
+    while the companion -- and the agent, sharing the logged-in user's uid
+    and this socket's group -- stay put: the one case in this codebase where
+    a peer's real uid actually distinguishes the caller this channel exists
+    for (the daemon, relaying its own ``oauth_loopback.py`` request) from
+    the one it does not (the agent, reachable through the same ``0660``
+    group). Returns an ``ERROR`` line to send back and refuse the
+    connection without invoking the handler, or None to let it proceed."""
+    if not privilege_separation.is_enabled():
+        return None
+    expected_uid = privilege_separation.service_account_uid()
+    peer_uid = _peer_uid_posix(conn)
+    if expected_uid is None or peer_uid != expected_uid:
+        logger.warning(
+            "Companion channel: refused a connection from uid %r (expected the daemon's "
+            "service account, uid %r).", peer_uid, expected_uid,
+        )
+        return "ERROR peer not authorized\n"
+    return None
+
+
 def _handle_companion_request(line: str) -> str:
     """The companion channel's own dispatch -- one command, ``OPEN <url>``,
     sent by the daemon (``request_open_url()`` below) and acted on here, in
     the companion process, which is the one thing in this architecture that
     still runs in the user's desktop session once #428 Phase 4 moves the
-    daemon to a service account. Scheme-restricted to http(s): this channel
-    is reachable by anything running as the same OS user (companion and
-    daemon are still the same uid pre-Phase-4, agent included -- ADR 0002
-    decision 1), so it's worth not handing that caller a way to open an
-    arbitrary ``file://``/custom-scheme URL for the one capability this
-    process trades away nothing else to gain."""
+    daemon to a service account. Scheme-restricted to http(s): pre-Phase-4,
+    or on a Phase-4 install this dispatch is even reached from at all (see
+    ``_verify_companion_peer()`` -- #428 B10 -- for who that is once
+    separated), the caller is at minimum "anything running as the same OS
+    user" (companion and daemon are still the same uid pre-Phase-4, agent
+    included -- ADR 0002 decision 1), so it's worth not handing that caller
+    a way to open an arbitrary ``file://``/custom-scheme URL for the one
+    capability this process trades away nothing else to gain."""
     parts = line.strip().split(maxsplit=1)
     command = parts[0].upper() if parts else ""
     if command != "OPEN" or len(parts) != 2:
@@ -292,11 +375,15 @@ class _LineProtocolServer:
         socket_path: Callable[[], Path],
         pipe_name: Callable[[], str],
         thread_name: str,
+        verify_peer: Callable[[socket.socket], str | None] | None = None,
     ) -> None:
         self._handler = handler
         self._socket_path_fn = socket_path
         self._pipe_name_fn = pipe_name
         self._thread_name = thread_name
+        # POSIX only (see _serve_one_posix) -- CompanionChannelServer's own
+        # #428 B10 gate; None everywhere else (ADR 0002 decision 6).
+        self._verify_peer = verify_peer
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         # What a client needs to connect: the socket path (POSIX) or pipe
@@ -370,6 +457,12 @@ class _LineProtocolServer:
 
     def _serve_one_posix(self, conn: socket.socket) -> None:
         conn.settimeout(5.0)
+        if self._verify_peer is not None:
+            refusal = self._verify_peer(conn)
+            if refusal is not None:
+                with contextlib.suppress(OSError):
+                    conn.sendall(refusal.encode(_ENCODING))
+                return
         try:
             data = conn.recv(_MAX_MESSAGE_BYTES)
         except OSError:
@@ -555,6 +648,13 @@ class CompanionChannelServer:
     ``ControlChannelServer``'s own). The daemon is this channel's client,
     via ``request_open_url()`` below -- see this module's own docstring for
     why the two channels run in opposite directions.
+
+    On a #428 Phase 4 separated install (POSIX only -- see
+    ``_verify_companion_peer()``), a connection is refused unless it comes
+    from the daemon's own service-account uid: this socket is ``0660``
+    group-shared with the agent, same as ``ControlChannelServer``'s, but
+    unlike that one, separation *does* put a different uid on the other end
+    of the connection this channel exists to accept (#428 B10).
     """
 
     def __init__(self) -> None:
@@ -563,6 +663,7 @@ class CompanionChannelServer:
             socket_path=companion_socket_path,
             pipe_name=companion_pipe_name,
             thread_name="companion-channel",
+            verify_peer=_verify_companion_peer,
         )
 
     @property

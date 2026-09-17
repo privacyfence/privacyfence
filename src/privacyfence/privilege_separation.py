@@ -644,6 +644,34 @@ def running_as_service_account() -> bool:
     return state is not None and accounts_equal(current_user_name(), state.service_account)
 
 
+def service_account_uid() -> int | None:
+    """The daemon's service-account uid on a separated POSIX install --
+    None if this install isn't separated, if this platform has no uid
+    concept at all (Windows: the boundary is an ACL, not a uid, see
+    ``_current_user_security_attributes()`` in ``web/control_channel.py``),
+    or if the account named in the marker doesn't exist locally (a
+    half-removed install; the caller fails closed the same way
+    ``_current_user_security_attributes()`` skips a missing Windows trustee
+    rather than crashing).
+
+    #428 B10's own reason to exist: ``web/control_channel.py``'s companion
+    channel is the one place ``SO_PEERCRED``/``LOCAL_PEERCRED``'s uid is
+    actually meaningful (ADR 0002 decision 6 is explicit that it is *not*,
+    everywhere else, while the companion and the agent share a uid) --
+    once separated, the daemon is the one end of that channel that has
+    moved to a different account, so this is what a connecting peer's real
+    uid gets checked against."""
+    state = separation()
+    if state is None or current_platform() == "win32":
+        return None
+    import pwd
+
+    try:
+        return pwd.getpwnam(state.service_account).pw_uid
+    except KeyError:
+        return None
+
+
 def check_runtime_identity() -> None:
     """Daemon startup's gate: refuse to run as the wrong account on an
     install that has been separated.

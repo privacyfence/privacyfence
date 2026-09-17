@@ -628,6 +628,52 @@ class TestProcessIdentityHelpers:
         assert privilege_separation.running_as_service_account() is False
 
 
+class TestServiceAccountUid:
+    """#428 B10: ``web/control_channel.py``'s companion channel checks a
+    connecting peer's real uid against this."""
+
+    # Two of the tests below call the real `pwd.getpwnam` (POSIX-only, like
+    # TestProcessIdentityHelpers above) -- applied to the whole class rather
+    # than just those two so a `platform_name`-parametrized method skips the
+    # same way on a real Windows runner regardless of which platform it's
+    # simulating, matching that class's own convention.
+    pytestmark = posix_permissions_only
+
+    def test_none_when_unseparated(self):
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.service_account_uid() is None
+
+    def test_none_on_windows_even_when_separated(self, separated):
+        # win32 is one of the three platforms `separated` parametrizes over
+        # (see platform_name); a uid has no meaning there at all -- the
+        # boundary is an ACL, checked a different way entirely.
+        if privilege_separation.current_platform() != "win32":
+            pytest.skip("only the win32 parametrization of `separated` exercises this")
+
+        assert privilege_separation.service_account_uid() is None
+
+    def test_resolves_a_real_account_on_posix(self, separated, platform_name):
+        if platform_name == "win32":
+            pytest.skip("POSIX only -- see test_none_on_windows_even_when_separated")
+        import pwd
+
+        # Overwrite the marker `separated` already wrote so it names this
+        # test process's own (real, existing) account instead of the
+        # platform's ordinary service-account name.
+        _write_marker(separated, platform_name, service_account=this_account())
+
+        assert privilege_separation.service_account_uid() == pwd.getpwnam(this_account()).pw_uid
+
+    def test_none_for_an_account_that_does_not_exist(self, separated, platform_name):
+        if platform_name == "win32":
+            pytest.skip("POSIX only -- see test_none_on_windows_even_when_separated")
+
+        _write_marker(separated, platform_name, service_account="privacyfence-b10-test-no-such-account")
+
+        assert privilege_separation.service_account_uid() is None
+
+
 class TestAuditLayoutBestEffort:
     """Every probe here is best-effort on purpose: the process running the
     audit may legitimately not be able to see a path (that is half the point
