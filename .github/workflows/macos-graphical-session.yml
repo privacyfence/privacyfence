@@ -12,10 +12,10 @@ name: macOS graphical-session autostart
 #
 # Deliberately its own workflow, not a step added to build.yml's build job or
 # tests.yml's per-PR jobs -- same reasoning as the Linux/Windows workflows: this is
-# the flakiest, most expensive tier in this repo's whole test taxonomy by design, so
-# a flaky run here must never block an actual release the way a failure in
-# build.yml's own packaged DMG smoke test (TST-15) correctly does, and it's too heavy
-# to run on every PR. Scheduled instead on packaging-related `main` changes, a weekly
+# the most expensive tier in this repo's whole test taxonomy by design, so it's too
+# heavy to run on every PR or sit on an actual release's critical path the way a
+# failure in build.yml's own packaged DMG smoke test (TST-15) correctly does.
+# Scheduled instead on packaging-related `main` changes, a weekly
 # cadence (an hour after windows-graphical-session.yml's own Monday slot, same
 # reasoning -- spread the heavier scheduled jobs across the runner pool), and by
 # explicit maintainer trigger.
