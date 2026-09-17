@@ -632,6 +632,13 @@ class TestServiceAccountUid:
     """#428 B10: ``web/control_channel.py``'s companion channel checks a
     connecting peer's real uid against this."""
 
+    # Two of the tests below call the real `pwd.getpwnam` (POSIX-only, like
+    # TestProcessIdentityHelpers above) -- applied to the whole class rather
+    # than just those two so a `platform_name`-parametrized method skips the
+    # same way on a real Windows runner regardless of which platform it's
+    # simulating, matching that class's own convention.
+    pytestmark = posix_permissions_only
+
     def test_none_when_unseparated(self):
         privilege_separation.reset_cache()
 
