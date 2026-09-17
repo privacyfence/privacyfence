@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import stat
 import sys
 from pathlib import Path
@@ -787,6 +788,220 @@ class TestInstallerContract:
         # exist under both OSes; running the wrong one would half-provision a
         # layout at a root nothing reads.
         assert "uname -s" in self.SCRIPTS[platform]
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_has_a_non_interactive_auto_mode(self, platform):
+        # #428 D1 (4.1): both POSIX platforms' unattended auto-enable
+        # trigger -- the .deb's postinst on Linux, the daemon's own
+        # admin-prompt on macOS -- passes --auto, and it has to make enable
+        # safe to run unattended (never die() a caller that can't recover
+        # interactively) without silently skipping require_root. Windows
+        # stays opt-in only -- D1 does not extend to it.
+        assert "--auto" in self.SCRIPTS[platform]
+        assert "AUTO=1" in self.SCRIPTS[platform]
+
+    def test_the_debian_postinst_auto_enables_on_configure(self):
+        # The one place Linux's auto-enable actually gets invoked from --
+        # see debian/postinst's own comment for why postinst (already root,
+        # at package-configure time) can safely do this where the daemon
+        # itself couldn't.
+        postinst = (REPO_ROOT / "debian" / "postinst").read_text(encoding="utf-8")
+        assert "privacyfence-privilege-separation enable --auto" in postinst
+        assert '[ "$1" = "configure" ]' in postinst
+
+
+class TestAutoEnableMacos:
+    """#428 D1 (4.1): the daemon's own trigger for auto-enabling privilege
+    separation on macOS, since there's no package-manager postinst there to
+    lean on the way Linux's .deb has. Nothing here can exercise the real
+    ``osascript`` admin prompt (no macOS, no human to answer it) -- these
+    cover the two things CI can prove: that the trigger fires (or correctly
+    doesn't) under every precondition, and that the elevated command it
+    builds is what it should be."""
+
+    pytestmark = posix_permissions_only
+
+    @staticmethod
+    def _fake_thread_class(started: list):
+        class _FakeThread:
+            def __init__(self, **kw):
+                self.kw = kw
+
+            def start(self) -> None:
+                started.append(self.kw)
+
+        return _FakeThread
+
+    def test_noop_on_linux(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        privilege_separation.reset_cache()
+        started = []
+        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+
+        privilege_separation.maybe_auto_enable_macos()
+
+        assert started == []
+
+    def test_noop_when_already_separated(self, separated, monkeypatch):
+        # separated is platform-parametrized (darwin and linux); running on
+        # both proves the linux side is *also* a noop here, for the same
+        # "already enabled" reason rather than the platform check above.
+        started = []
+        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+
+        privilege_separation.maybe_auto_enable_macos()
+
+        assert started == []
+
+    def test_noop_without_a_packaged_or_checkout_script(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
+        privilege_separation.reset_cache()
+        monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: None)
+        started = []
+        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+
+        privilege_separation.maybe_auto_enable_macos()
+
+        assert started == []
+
+    def test_writes_a_marker_and_starts_the_prompt_exactly_once(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
+        privilege_separation.reset_cache()
+        script = tmp_path / "macos_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
+        data_dir = tmp_path / "data"
+        monkeypatch.setattr(paths, "data_dir", lambda: data_dir)
+        started = []
+        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+
+        privilege_separation.maybe_auto_enable_macos()
+
+        marker = data_dir / privilege_separation.AUTO_ENABLE_ATTEMPTED_MARKER_NAME
+        assert marker.is_file()
+        assert len(started) == 1
+        assert started[0]["args"] == (script,)
+
+        # A second call -- the next daemon start -- must not ask again,
+        # whether the human approved the first prompt or cancelled it.
+        privilege_separation.maybe_auto_enable_macos()
+        assert len(started) == 1
+
+    def test_marker_write_failure_is_swallowed_not_raised(self, monkeypatch, tmp_path):
+        # Best-effort like every other permission-adjacent write in this
+        # module: a daemon startup path must never crash because it could
+        # not write a one-byte marker file.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
+        privilege_separation.reset_cache()
+        script = tmp_path / "macos_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
+        # A file where the marker's parent directory should be: mkdir(parents=True,
+        # exist_ok=True) on it raises FileExistsError (an OSError), since exist_ok
+        # only tolerates an existing *directory*.
+        data_dir = tmp_path / "data"
+        data_dir.write_text("not a directory", encoding="utf-8")
+        monkeypatch.setattr(paths, "data_dir", lambda: data_dir)
+        started = []
+        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+
+        privilege_separation.maybe_auto_enable_macos()
+
+        assert started == []
+
+    def test_applescript_quoting_escapes_quotes_and_backslashes(self):
+        quoted = privilege_separation._applescript_quoted('a "quoted" \\path\\')
+        # AppleScript's own escapes for a double-quoted string literal: a
+        # literal backslash doubled, a literal quote backslash-escaped.
+        assert quoted == '"a \\"quoted\\" \\\\path\\\\"'
+
+    def test_run_auto_enable_builds_the_expected_elevated_command(self, monkeypatch, tmp_path):
+        script = tmp_path / "a script with spaces.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        calls = []
+
+        class _Result:
+            returncode = 0
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return _Result()
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", fake_run)
+        reset_calls = []
+        monkeypatch.setattr(privilege_separation, "reset_cache", lambda: reset_calls.append(True))
+
+        privilege_separation._run_auto_enable_macos(script)
+
+        assert len(calls) == 1
+        cmd = calls[0]
+        assert cmd[0] == privilege_separation._OSASCRIPT
+        assert cmd[1] == "-e"
+        applescript = cmd[2]
+        assert applescript.startswith("do shell script ")
+        assert applescript.endswith("with administrator privileges")
+        assert str(script) in applescript
+        assert "enable --auto" in applescript
+        # The path has a space in it -- shlex.quote() must have wrapped that
+        # argument in its own quoting before the AppleScript layer's quoting
+        # went on top, or `sh -c` would see two words instead of one path.
+        assert shlex.quote(str(script)) in applescript
+        assert reset_calls == [True]
+
+    def test_run_auto_enable_does_not_reset_cache_on_decline_or_failure(self, monkeypatch, tmp_path):
+        script = tmp_path / "macos_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+
+        class _Result:
+            returncode = 1
+            stderr = "User canceled."
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", lambda *a, **kw: _Result())
+        reset_calls = []
+        monkeypatch.setattr(privilege_separation, "reset_cache", lambda: reset_calls.append(True))
+
+        privilege_separation._run_auto_enable_macos(script)
+
+        assert reset_calls == []
+
+    def test_run_auto_enable_swallows_a_subprocess_failure(self, monkeypatch, tmp_path):
+        script = tmp_path / "macos_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+
+        def raising_run(*a, **kw):
+            raise OSError("osascript not found")
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", raising_run)
+
+        # Must not raise -- this runs on a background thread with nothing to
+        # catch an exception escaping it.
+        privilege_separation._run_auto_enable_macos(script)
+
+    def test_installer_script_path_prefers_the_app_bundle(self, monkeypatch, tmp_path):
+        bundle = tmp_path / "PrivacyFenceApp.app"
+        script_dir = bundle / "Contents" / "Resources" / "scripts"
+        script_dir.mkdir(parents=True)
+        script = script_dir / "macos_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(paths, "app_bundle_path", lambda: bundle)
+
+        assert privilege_separation._macos_installer_script_path() == script
+
+    def test_installer_script_path_falls_back_to_the_checkout(self, monkeypatch):
+        monkeypatch.setattr(paths, "app_bundle_path", lambda: None)
+
+        # This test itself runs from a checkout, so the real script is there.
+        found = privilege_separation._macos_installer_script_path()
+        assert found == REPO_ROOT / "scripts" / "macos_privilege_separation.sh"
+
+    def test_installer_script_path_none_when_nothing_is_there(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "app_bundle_path", lambda: tmp_path / "Nothing.app")
+
+        assert privilege_separation._macos_installer_script_path() is None
 
 
 class TestLaunchdTemplates:

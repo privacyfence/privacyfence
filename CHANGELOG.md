@@ -161,6 +161,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   OAuth tokens and `… disable` is the only way back — run it *before* uninstalling, since uninstall
   leaves `%ProgramData%\PrivacyFence` in place exactly as it leaves `%LOCALAPPDATA%\PrivacyFence`
   today. Administrator still defeats all of it. See issue #428.
+- Issue #428 D1: privilege separation on macOS and Linux is now **default-on**, moved up from the
+  original plan's 4.2 target rather than waiting the full release cycle the two entries above
+  described. `enable`/`disable`/`status` are unchanged and `disable` remains how to opt back out;
+  what's new is who runs `enable` and when. On Linux, `debian/postinst` runs
+  `privacyfence-privilege-separation enable --auto` on every install and upgrade — it's already
+  root at that point, which is exactly what provisioning the account and the system unit needs.
+  On macOS, which has no equivalent package-manager hook (a DMG install runs nothing as root), the
+  daemon's own startup asks once instead, via the standard admin-password dialog, the first time it
+  finds itself unseparated (`privilege_separation.maybe_auto_enable_macos()`); `scripts/
+  build_dmg.sh` now bundles `scripts/macos_privilege_separation.sh` and its launchd templates into
+  the `.app` so that prompt has something to run — until now, opting in on a DMG install required a
+  source checkout. `--auto`, new on both scripts, is what makes this safe to run unattended: it's
+  the same `enable`, except anywhere that would otherwise fail on something only a human could
+  resolve interactively (no resolvable account owner, no installed executables) it instead logs why
+  and leaves the install opt-in, rather than failing a package install or nagging at every daemon
+  start. A decline of the macOS prompt is respected and not asked again. This still ships ahead of
+  the real-machine verification `docs/platform-support.md`'s "Known open items" describes — the
+  automated contract coverage is unchanged, the manual pass against a release build is not done, and
+  turning the default on makes running it sooner more important, not less. See issue #428.
 - Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
   `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
   that want hardware-bound passkeys as a hard requirement before releasing a write approval.
@@ -351,7 +370,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the first whenever the same client also served org-mode sign-in. The request no longer asks
   for it, and a granted scope wider than the requested one is accepted rather than refused; a
   grant *missing* a requested scope is still an error.
-
 - Org mode now rejects an `org_config.json` whose `server.issuer_url` is not an absolute `http(s)`
   URL with a hostname, naming that key, instead of starting and then answering every request with
   `Invalid Host header`. Surrounding whitespace in the value is stripped rather than silently

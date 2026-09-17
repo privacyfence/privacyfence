@@ -6,11 +6,18 @@ Accepted; implemented on all three desktop platforms. [#428](https://github.com/
 Phase 3 built the companion app this decides, and Phase 4 built the privilege separation behind it
 — shipped opt-in on macOS (`scripts/macos_privilege_separation.sh`), Linux
 (`scripts/linux_privilege_separation.sh`) and Windows
-(`scripts/windows_privilege_separation.ps1`).
+(`scripts/windows_privilege_separation.ps1`). #428 D1 (4.1) turns it on by default on macOS and
+Linux, ahead of the original plan's 4.2 target and its "soak through a full release cycle first"
+criterion — the `.deb`'s `postinst` on Linux, an admin-password prompt from the daemon's own first
+startup on macOS (`privilege_separation.maybe_auto_enable_macos()`). Windows stays opt-in; the
+manual command (`enable`/`disable`/`status`) is unchanged on every platform and remains how to opt
+back out.
 [#426](https://github.com/privacyfence/privacyfence/issues/426) builds the half that makes
-it mean something, and is unblocked per platform only once that platform's Phase 4 has landed and
-soaked. Supersedes [ADR 0001](0001-remove-macos-native-extra.md) in part — see "Relationship to
-ADR 0001" below.
+it mean something, and stays gated on that platform's Phase 4 having landed *and soaked* — D1
+turning the default on does not by itself satisfy that; see
+[`platform-support.md`](../platform-support.md)'s "Known open items" for what a soak still needs
+to show on a real machine. Supersedes [ADR 0001](0001-remove-macos-native-extra.md) in part — see
+"Relationship to ADR 0001" below.
 
 ## Context
 

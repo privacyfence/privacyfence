@@ -6,9 +6,9 @@ PrivacyFence local mode is packaged for macOS, Windows, and Debian/Ubuntu Linux.
 
 | Platform | Distribution | Startup model | Release automation |
 |---|---|---|---|
-| macOS | signed/notarized DMG containing the PyInstaller app bundle and MCPB | packaged app/LaunchAgent path, or an opt-in LaunchDaemon under a dedicated account (see below) | `.github/workflows/build.yml` on `macos-latest` |
+| macOS | signed/notarized DMG containing the PyInstaller app bundle and MCPB | packaged app/LaunchAgent path, or (default-on, see below) a LaunchDaemon under a dedicated account | `.github/workflows/build.yml` on `macos-latest` |
 | Windows | Inno Setup installer containing the PyInstaller executable and MCPB | Task Scheduler entry created by the installer, or an opt-in Windows service under a virtual service account (see below) | `.github/workflows/build.yml` on `windows-latest` |
-| Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | XDG autostart desktop entry, or an opt-in system systemd unit under a dedicated account (see below) | `.github/workflows/build.yml` on `ubuntu-latest` |
+| Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | XDG autostart desktop entry, or (default-on, see below) a system systemd unit under a dedicated account | `.github/workflows/build.yml` on `ubuntu-latest` |
 | Linux Python install | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
 | Linux org mode | Python/system service behind the configured reverse proxy and identity provider | operator-managed service | release smoke coverage in the build/test suite |
 
@@ -24,16 +24,23 @@ The macOS app is defined by `PrivacyFenceApp.spec`. Release builds are produced 
 
 The packaged application keeps user state outside the application bundle. The release workflow signs and notarizes the app/DMG when the required signing credentials are configured.
 
-### Privilege separation (opt-in)
+### Privilege separation (default-on)
 
-By default the daemon starts in the logged-in user's session — the LaunchAgent path above — which is
-also the session the AI client it governs runs in. `scripts/macos_privilege_separation.sh enable`
-changes that: it creates a dedicated `_privacyfence` system account, moves the data directory from
-`~/.privacyfence` to `/Library/Application Support/PrivacyFence` owned by that account, and inverts
-the startup wiring — a **LaunchDaemon** (`installer/macos/com.privacyfence.daemon.plist.tmpl`) runs
-the daemon with no login session at all, while a **LaunchAgent**
-(`installer/macos/com.privacyfence.companion.plist.tmpl`) runs the companion app in each user
-session so a human still has a way in.
+Without this, the daemon starts in the logged-in user's session — the LaunchAgent path above —
+which is also the session the AI client it governs runs in. `scripts/macos_privilege_separation.sh
+enable` changes that: it creates a dedicated `_privacyfence` system account, moves the data
+directory from `~/.privacyfence` to `/Library/Application Support/PrivacyFence` owned by that
+account, and inverts the startup wiring — a **LaunchDaemon**
+(`installer/macos/com.privacyfence.daemon.plist.tmpl`) runs the daemon with no login session at
+all, while a **LaunchAgent** (`installer/macos/com.privacyfence.companion.plist.tmpl`) runs the
+companion app in each user session so a human still has a way in.
+
+#428 D1 (4.1) turns this on automatically rather than requiring that command by hand: since a DMG
+install has no package-manager postinstall hook to run it as root, the daemon's own startup asks
+once, via the standard macOS admin-password dialog, the first time it finds itself unseparated
+(`privilege_separation.maybe_auto_enable_macos()`, called from `daemon_main.main()`). Declining that
+prompt is respected — it is not asked again — and running `enable` by hand always remains available,
+as does `disable` to opt back out.
 
 Three parts of the layout matter to anything that has to find PrivacyFence's files:
 
@@ -49,10 +56,11 @@ effect. `src/privacyfence/privilege_separation.py` resolves all of it from a mar
 installer writes, and the MCPB shim (`mcpb/shim/src/protocol.ts`) reads the same marker so Claude
 Desktop keeps finding the daemon. `… status` audits the result; `… disable` reverses it.
 
-Ships opt-in and stays that way for a full release
-([#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4) — the migration moves live
-connector OAuth tokens. Linux and Windows have the same thing (below).
-See [`security-and-compliance.md`](security-and-compliance.md#privilege-separation-macos-linux-and-windows-opt-in) for
+Ships default-on as of #428 D1 (4.1) — the manual `enable`/`disable`/`status` subcommands above still
+exist, and `disable` remains the way to opt back out; the migration moves live connector OAuth
+tokens. Linux has the same thing (below); Windows also has privilege separation now (below) but
+stays opt-in — D1 does not extend to it.
+See [`security-and-compliance.md`](security-and-compliance.md#privilege-separation-macos-linux-and-windows) for
 what the separation does and does not buy.
 
 ## Windows
@@ -166,18 +174,18 @@ The `platform-windows` job in `.github/workflows/tests.yml` runs the full core P
 
 The local desktop package is defined by `PrivacyFenceApp.linux.spec`, `scripts/build_deb.sh`, `debian/`, and `resources/linux/privacyfence.desktop`.
 
-The `.deb` installs the self-contained application under `/opt/privacyfence`, exposes `/usr/bin/privacyfence-app` and `/usr/bin/privacyfence-companion`, installs application icons, installs an XDG autostart desktop entry under `/etc/xdg/autostart/`, and installs the opt-in privilege-separation tool as `/usr/sbin/privacyfence-privilege-separation` with its templates under `/usr/share/privacyfence/` (see below — installing it changes nothing until it is run).
+The `.deb` installs the self-contained application under `/opt/privacyfence`, exposes `/usr/bin/privacyfence-app` and `/usr/bin/privacyfence-companion`, installs application icons, installs an XDG autostart desktop entry under `/etc/xdg/autostart/`, and installs the privilege-separation tool as `/usr/sbin/privacyfence-privilege-separation` with its templates under `/usr/share/privacyfence/` (see below — as of #428 D1, `debian/postinst` runs it automatically, `configure)` case, on every install and upgrade).
 
 The XDG desktop autostart path is separate from the repository's `privacyfence.service`, which is the Python/system-service template rather than the desktop `.deb` startup mechanism.
 
 Package removal does not delete per-user PrivacyFence state from the user's home directory.
 
-### Privilege separation (opt-in)
+### Privilege separation (default-on)
 
-The same change as macOS's, above, in Linux's own idioms. By default the daemon starts in the
+The same change as macOS's, above, in Linux's own idioms. Without it, the daemon starts in the
 logged-in user's session — either of the two startup paths above — which is also the session the AI
-client it governs runs in. `sudo privacyfence-privilege-separation enable` changes that — the `.deb` installs it under that
-name in `/usr/sbin`, and a source checkout runs the same file as
+client it governs runs in. `sudo privacyfence-privilege-separation enable` turns that off — the
+`.deb` installs it under that name in `/usr/sbin`, and a source checkout runs the same file as
 `sudo ./scripts/linux_privilege_separation.sh enable`. It
 creates a dedicated `privacyfence` system account (`useradd --system`), moves the data directory
 from `~/.privacyfence` to `/var/lib/privacyfence` owned by that account, and inverts the startup
@@ -186,6 +194,15 @@ wiring — a **system systemd unit**
 runs the daemon with no desktop session at all, while an **XDG autostart entry**
 (`installer/linux/privacyfence-companion.desktop.tmpl` → `/etc/xdg/autostart/`) runs
 `privacyfence-companion --serve` in each user session.
+
+#428 D1 (4.1): `debian/postinst` now runs `enable --auto` itself on every install and upgrade — it
+already runs as root at that point, which is exactly what this needs. `--auto` only proceeds when
+`$SUDO_USER` names a resolvable, non-root account (i.e. the `.deb` was installed via `sudo apt
+install`/`sudo dpkg -i`, not by root directly or by an unattended upgrade with no session behind
+it); anywhere that's not true it logs why and leaves the install opt-in, exactly as before this,
+rather than guessing wrong about whose install this is. A pip/pipx source install has no such
+postinst hook and stays opt-in via the manual command above. `... disable` remains how to turn it
+back off either way.
 
 Both pre-Phase-4 startup paths are moved aside rather than left in place: `/etc/xdg/autostart/
 privacyfence.desktop` and the `--user` unit each become `.disabled`, because either would start a
@@ -410,8 +427,14 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   service account, confirm the companion and the MCPB shim still reach it after a logout/login,
   confirm `disable` restores the previous layout with connector tokens intact — is a manual check,
   and belongs with the other per-platform human checks in
-  [`release-testing.md`](release-testing.md). Until that has been run on a release build, treat the
-  feature as what it ships as: opt-in.
+  [`release-testing.md`](release-testing.md). **This manual real-machine verification still has not
+  run against a release build.** #428 D1 (4.1) turns privilege separation on by default on macOS and
+  Linux anyway (Windows stays opt-in), ahead of it and ahead of the soak-through-a-release-cycle
+  criterion this section originally argued for — an explicit override of that plan, not a claim that
+  the gap above has closed. The automated coverage this bullet describes is unchanged either way;
+  running the manual checks against the first 4.1 release this ships in is now more urgent, not
+  less, precisely because the default now turns it on for people who never asked for it by name on
+  those two platforms.
   **Linux carries one thing macOS does not**: the companion is a `--serve` process autostarted by
   an XDG entry rather than a tray app, and XDG autostart is a desktop-environment behavior, not a
   systemd one — `linux-graphical-session.yml` covers the daemon's own autostart entry on a real

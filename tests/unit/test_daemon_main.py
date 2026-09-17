@@ -2766,6 +2766,40 @@ class TestMain:
         assert result == 0
         assert len(calls) == 1
 
+    def test_no_oauth_flag_triggers_the_macos_auto_enable_check(self, monkeypatch):
+        # #428 D1 (4.1): fired only on the path that actually starts the
+        # persistent daemon -- see the next test for why the one-shot CLI
+        # flags below must not trigger it.
+        self._patch_config(monkeypatch)
+        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
+        calls = []
+        monkeypatch.setattr(
+            daemon_main.privilege_separation, "maybe_auto_enable_macos", lambda: calls.append(1)
+        )
+
+        result = daemon_main.main([])
+
+        assert result == 0
+        assert calls == [1]
+
+    @pytest.mark.parametrize("flag", ["--gmail-oauth", "--telegram-setup"])
+    def test_oauth_and_telegram_flags_do_not_trigger_the_macos_auto_enable_check(self, monkeypatch, flag):
+        # A password-prompting admin dialog popping up during a scripted,
+        # headless `--gmail-oauth` invocation would be a surprising side
+        # effect of an unrelated flag.
+        self._patch_config(monkeypatch)
+        monkeypatch.setattr(daemon_main, "run_gmail_oauth", lambda org_config: 0)
+        monkeypatch.setattr(daemon_main, "run_telegram_setup", lambda: 0)
+        calls = []
+        monkeypatch.setattr(
+            daemon_main.privilege_separation, "maybe_auto_enable_macos", lambda: calls.append(1)
+        )
+
+        result = daemon_main.main([flag])
+
+        assert result == 0
+        assert calls == []
+
     def test_fatal_exception_is_caught_prints_error_and_returns_1(self, monkeypatch, capsys):
         self._patch_config(monkeypatch)
         def raiser(config, path):
