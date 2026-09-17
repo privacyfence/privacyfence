@@ -28,6 +28,13 @@ on:
       - 'debian/**'
       - 'resources/linux/**'
       - 'scripts/build_deb.sh'
+      # #428 Phase 4 (B5b): build_deb.sh installs this next to the daemon as
+      # /usr/sbin/privacyfence-privilege-separation, along with the two unit
+      # templates it renders -- so a change to either is a change to what
+      # the .deb ships, and the packaged smoke test below is the only thing
+      # in this repo that builds that .deb.
+      - 'scripts/linux_privilege_separation.sh'
+      - 'installer/linux/**'
       - 'scripts/pyinstaller_common.py'
       - 'PrivacyFenceApp.linux.spec'
       - 'tests/integration/test_linux_graphical_session_autostart.py'
