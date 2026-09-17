@@ -290,6 +290,15 @@ def create_app(
         parts = [p for p in parts if p]
         return " ".join(parts) if parts else None
 
+    def _off_notice_html() -> str | None:
+        # B23 of the 4.1.0 action plan: unlike _banner_html above (a live
+        # problem, re-derived every request), this is an invitation --
+        # step-up existing and being off is this install's ordinary
+        # default, not a defect -- so it's rendered as a dismissible
+        # notice (web_shell.wrap's own dismissible_notice_html) instead of
+        # stacked into the non-dismissable banner.
+        return None if step_up is None else step_up.off_notice()
+
     async def list_approvals(request: Request) -> Response:
         if not _authenticated(request):
             return _unauthorized(request)
@@ -307,6 +316,7 @@ def create_app(
             body, title="PrivacyFence — Approvals", active="approvals", nonce=nonce,
             notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
             banner_html=_banner_html(),
+            dismissible_notice_html=_off_notice_html(), dismissible_notice_key="pf_step_up_off_dismissed",
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 

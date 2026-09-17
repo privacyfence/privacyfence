@@ -117,6 +117,34 @@ class TestLocalEnrollmentBanner:
         assert "/security" in banner
 
 
+class TestOffNotice:
+    """B23 of the 4.1.0 action plan: the fallback for the state neither of
+    the other two banners cover -- an install that has simply never turned
+    step-up on. Fires exactly when step-up is *not* actually "required"
+    (the same ``enabled and require_passkey`` pairing ``observe_step_up_
+    requirement`` uses), regardless of ``has_credentials`` -- unlike
+    ``local_enrollment_banner`` this doesn't care whether a passkey is
+    enrolled, only whether the requirement is in force at all."""
+
+    def test_none_when_step_up_is_genuinely_required(self):
+        config = step_up_config.StepUpConfig(enabled=True, require_passkey=True)
+        assert config.off_notice() is None
+
+    def test_notice_on_the_ordinary_default(self):
+        config = step_up_config.StepUpConfig()
+        notice = config.off_notice()
+        assert notice is not None
+        assert "/settings" in notice
+
+    def test_notice_when_enabled_but_require_passkey_is_off(self):
+        config = step_up_config.StepUpConfig(enabled=True, require_passkey=False)
+        assert config.off_notice() is not None
+
+    def test_notice_when_require_passkey_but_not_enabled(self):
+        config = step_up_config.StepUpConfig(enabled=False, require_passkey=True)
+        assert config.off_notice() is not None
+
+
 class TestLiveStepUpConfig:
     """B9: ``LiveStepUpConfig`` mirrors every read a plain ``StepUpConfig``
     offers, off whatever value it currently holds, so every consumer that
@@ -151,3 +179,9 @@ class TestLiveStepUpConfig:
         banner = live.local_enrollment_banner(has_credentials=False)
         assert banner is not None
         assert "/security" in banner
+
+    def test_off_notice_reflects_the_current_value(self):
+        live = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig())
+        assert live.off_notice() is not None
+        live.update(step_up_config.StepUpConfig(enabled=True, require_passkey=True))
+        assert live.off_notice() is None

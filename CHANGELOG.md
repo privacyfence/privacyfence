@@ -372,6 +372,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   actively listening on regardless of that socket's own options — leaving it undefined which of the
   two processes actually received the provider's callback. With reuse off, that bind() now always
   fails, which the existing actionable `OAuthLoopbackError` already reports.
+- B20 of the 4.1.0 action plan: `web/org_settings_scope.py`'s `PER_PRINCIPAL_ACTIONS` allow-list
+  named `add_rule_row`/`update_rule_row`, the grant equivalents, and the connector actions as
+  permitted for any signed-in principal, but `web/routes_org_settings.py` only ever wired routes
+  for removing a rule row and removing a grant row — the allow-list had run ahead of the routes.
+  No route currently calls `is_action_permitted` with any of the unwired action names, so nothing
+  was actually reachable, but a route added later in good faith could have trusted the allow-list's
+  "yes" without noticing no implementation backed it. `PER_PRINCIPAL_ACTIONS` now holds exactly the
+  two actions with a real route; the rest moved to a new `PER_PRINCIPAL_ACTIONS_UNROUTED` set that
+  `is_action_permitted` denies until each one gets its own route and moves over.
+- B23 of the 4.1.0 action plan: local mode's `/approvals` page now says, once, when step-up isn't
+  actually protecting anything — B9 gave the requirement a browser-reachable on switch, but the
+  default is still off and nothing said so. The two banners that already existed both fired on
+  transitions or misconfigurations (`step_up_config.py`'s `local_enrollment_banner` once
+  `require_passkey` is already in force and nothing is enrolled; `webauthn_stepup.py`'s
+  `step_up_disabled_notice` once a disable transition has been latched), so a fresh install — or any
+  install that has simply never turned this on — showed an approvals page that looked complete while
+  an agent session could still approve its own writes, with no hint beyond the Security card in
+  Settings. A new `StepUpConfig.off_notice()` fires exactly when step-up isn't genuinely required
+  (`enabled and require_passkey` together), and `/approvals` renders it as a dismissible strip
+  (`web_shell.wrap`'s new `dismissible_notice_html`) with a link to turn it on — advisory, not an
+  alarm, so it stays dismissed in that browser once seen rather than nagging on every visit for as
+  long as the install stays in its default state.
 
 ### Added
 
@@ -456,6 +478,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   markdown shows something clickable instead of a link a human has to copy out by hand, and the
   expiry stays legible even if only the link text survives into a screenshot or shared transcript.
   `structuredContent` is unchanged.
+- Windows installer/executable signing now goes through SSL.com's eSigner CodeSignTool instead of
+  a locally imported Authenticode `.pfx`. CA/B Forum's June 2023 key-storage rules mean code-signing
+  private keys can no longer be issued as an exportable `.pfx` at all — SSL.com holds this one in
+  its eSigner cloud HSM — so `build.yml`'s `build-windows` job and `scripts/build_installer.ps1`'s
+  `Invoke-Signing` helper now authenticate to eSigner per signing call (`ESIGNER_USERNAME`/
+  `ESIGNER_PASSWORD`/`ESIGNER_CREDENTIAL_ID`/`ESIGNER_TOTP_SECRET`) rather than reading
+  `WINDOWS_CERTIFICATE`/`WINDOWS_CERTIFICATE_PWD`. See `docs/platform-support.md`.
 
 ### Fixed
 
@@ -572,13 +601,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now absolute (`github.com/.../blob/main/...` for docs, `raw.githubusercontent.com/.../main/...`
   for images), and the three `../../releases` download pointers now point at
   `privacyfence.eu/download/`, the canonical download surface. See issue #370.
-- `scripts/build_installer.ps1` no longer assumes `signtool.exe` is on `PATH` when
-  `WINDOWS_CERTIFICATE`/`WINDOWS_CERTIFICATE_PWD` are set. GitHub's `windows-latest` runner ships
-  the Windows SDK but does not add it to `PATH` outside a Visual Studio dev shell, so the first
-  signed Windows build would have failed at the signing step with "signtool.exe is not recognized"
-  the moment those secrets were configured — this path had never actually run in CI, since no
-  certificate has been available until now. The script now falls back to locating `signtool.exe`
-  under the SDK's own install layout when it isn't already on `PATH`.
 - `drive_download_file`, `gmail_download_attachment`, and `confluence_download_attachment` no
   longer fail with a bare, unhelpful "Tool call failed" when `destination_dir` can't actually be
   written to (a permissions error, or — as observed on macOS — the synthetic `/home` mount point,
@@ -631,6 +653,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Linux autostart, and it now re-runs the only test that exercises it instead of waiting for the
   next `main` push that happens to touch something else on the existing path list, or the weekly
   schedule.
+- B24 of the 4.1.0 action plan: `sudo scripts/linux_privilege_separation.sh enable` (and D1's
+  auto-enable) actually stops the daemon's own XDG autostart entry from autostarting now.
+  `stop_legacy_autostart()` only ever renamed `/etc/xdg/autostart/privacyfence.desktop` to
+  `....desktop.disabled`, on the assumption that XDG autostart only reads `*.desktop` files —
+  `systemd-xdg-autostart-generator` does not filter the autostart directories by filename, and
+  turned the renamed file into a unit under `xdg-desktop-autostart.target` just the same, starting
+  a second daemon in the logged-in user's own session at every login. It failed closed rather than
+  doing damage (`check_runtime_identity` already refuses to run as the wrong account on a
+  separated install), but the disable mechanism did not do what its own comment claimed, and
+  `status`'s `STILL AUTOSTARTS` check — which only ever looked at the original, un-renamed path —
+  reported no problem. The entry is now also marked `Hidden=true`, the key
+  `systemd-xdg-autostart-generator` (and every other XDG-autostart reader) actually honors to skip
+  a file without removing it; `disable` strips it back out when restoring the entry, and `status`
+  now checks the renamed file for it too. An already-separated install upgrading past this fix
+  self-heals the next time `enable --auto` runs (`debian/postinst`, on every install and upgrade),
+  with no separate migration needed.
 
 ## [4.0.0] — 2026-09-14
 

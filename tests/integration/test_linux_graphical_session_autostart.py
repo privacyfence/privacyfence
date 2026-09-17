@@ -85,13 +85,14 @@ with systemd as PID 1
 GitHub-hosted ``ubuntu-latest`` runner, a real VM, passes it), with whatever
 else each specific test additionally needs (a just-built ``.deb`` and
 passwordless root for the autostart tests; ``Xvfb`` for the browser test).
-This is the flakiest, most expensive tier in docs/testing-policy.md's
-test taxonomy (layer 6, packaged-artifact) by design -- scheduled on packaging-related ``main`` changes,
-nightly/periodic runs, and release-candidate tags via its own
+This is the most expensive tier in docs/testing-policy.md's
+test taxonomy (layer 6, packaged-artifact) by design -- scheduled on
+packaging-related ``main`` changes, nightly/periodic runs, and
+release-candidate tags via its own
 ``.github/workflows/linux-graphical-session.yml``, deliberately kept out of
 both the per-PR ``tests.yml`` jobs and ``build.yml``'s tag-triggered release
-pipeline (a flaky run here must never block an actual release the way a
-failure in ``test_deb_packaged_lifecycle.py`` correctly does).
+pipeline: unlike ``test_deb_packaged_lifecycle.py``, whose failure correctly
+does block a release, this tier is too heavy to gate every PR or release on.
 """
 from __future__ import annotations
 
@@ -100,6 +101,7 @@ import contextlib
 import getpass
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import time
@@ -170,6 +172,28 @@ def _systemd_escape_unit_name_component(text: str) -> str:
     bare "-" as the unit-name hierarchy separator -- becomes a C-style
     \\xAB hex escape."""
     return "".join(c if c in _UNIT_NAME_SAFE_CHARS else f"\\x{ord(c):02x}" for c in text)
+
+
+def _systemd_unit_list(value: str) -> list[str]:
+    """Splits a ``systemctl show -p <property> --value`` unit list into the
+    unit names it actually names.
+
+    Not a plain space-separated list: systemd prints each element as a
+    *quoted word*, so any unit name holding a character it considers
+    special -- the ``\\xAB`` escapes
+    ``_systemd_escape_unit_name_component`` above produces among them --
+    comes back wrapped in double quotes with every backslash doubled::
+
+        "app-privacyfence\\\\x2dcompanion@autostart.service" app-foo@autostart.service
+
+    A bare ``.split()`` therefore never matches the real unit name for any
+    entry whose desktop-file stem contains a dash -- which is exactly the
+    companion's -- even when the unit is plainly listed.
+    ``shlex.split`` applies the same two unquoting rules systemd's own
+    quoting used here (drop the surrounding quotes, collapse ``\\\\`` back
+    to ``\\``) and leaves the ``\\xAB`` escapes themselves alone, which is
+    what the generated unit is genuinely called."""
+    return shlex.split(value)
 
 
 # Empirically confirmed against the real systemd-xdg-autostart-generator
@@ -408,6 +432,22 @@ def _start_real_login_session(user: str, uid: int) -> tuple[dict, Callable[..., 
     subprocess.run(
         ["sudo", "-n", "loginctl", "enable-linger", user], check=True, capture_output=True, text=True, timeout=15,
     )
+    # `systemctl start` is a no-op against a manager that is already running,
+    # and on a CI runner this account's manager generally is -- which would
+    # make this a *continued* session, not a new one. That distinction is not
+    # cosmetic here: `enable --auto` adds the installing human to the
+    # `privacyfence` group during this very test's `dpkg -i`, and a process's
+    # supplementary groups are fixed when its session is created. A manager
+    # that predates the install hands every unit it starts -- the companion
+    # among them -- a group set without `privacyfence`, so the companion
+    # cannot create its socket in the 2770 group-owned handoff dir and fails
+    # exactly the way linux_privilege_separation.sh's own "log out and back
+    # in" note describes. Stopping first is what makes the start below a real
+    # login rather than a reused one.
+    subprocess.run(
+        ["sudo", "-n", "systemctl", "stop", f"user@{uid}.service"],
+        check=False, capture_output=True, text=True, timeout=30,
+    )
     subprocess.run(
         ["sudo", "-n", "systemctl", "start", f"user@{uid}.service"],
         check=True, capture_output=True, text=True, timeout=15,
@@ -427,10 +467,9 @@ def _start_real_login_session(user: str, uid: int) -> tuple[dict, Callable[..., 
         )
 
     # A real login's user manager always (re-)runs its generators
-    # (systemd-xdg-autostart-generator among them) on its own startup;
-    # daemon-reload makes that moment explicit and repeatable here, since
-    # the .deb's postinst just dropped a new autostart entry after this
-    # manager may already have been running for other CI reasons.
+    # (systemd-xdg-autostart-generator among them) on its own startup, which
+    # the restart above already guarantees; daemon-reload keeps that moment
+    # explicit and repeatable even if the stop above was refused.
     systemctl_user("daemon-reload")
     return user_env, systemctl_user
 
@@ -548,9 +587,25 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
     assert "PartOf=graphical-session.target" in unit_def.stdout
 
     wants = systemctl_user("show", "xdg-desktop-autostart.target", "-p", "Wants", "--value")
-    assert unit in wants.stdout.split(), (
+    assert unit in _systemd_unit_list(wants.stdout), (
         f"{unit} is not pulled in by xdg-desktop-autostart.target -- a real desktop session "
         f"would never start it at login:\n{wants.stdout}"
+    )
+
+    # B24: the earlier `assert not AUTOSTART_DESKTOP_FILE.exists()` above only
+    # proves stop_legacy_autostart() renamed the file -- it does not prove
+    # systemd actually stopped autostarting it. systemd-xdg-autostart-
+    # generator does not filter the autostart directories by filename, so
+    # the *renamed* file was still turned into AUTOSTART_UNIT_NAME and pulled
+    # into this same target -- a second daemon, started as this logged-in
+    # user, that check_runtime_identity then refused to run as the wrong
+    # account. This is the one assertion in this module that would actually
+    # have caught that: not the file move, but whether the generator honours
+    # it.
+    assert AUTOSTART_UNIT_NAME not in wants.stdout.split(), (
+        f"{AUTOSTART_UNIT_NAME} is still pulled in by xdg-desktop-autostart.target -- "
+        f"stop_legacy_autostart()'s rename of {AUTOSTART_DESKTOP_FILE} did not stop systemd's "
+        f"generator from autostarting the daemon's old entry under its renamed name:\n{wants.stdout}"
     )
 
     _trigger_graphical_session_target(user_env)
@@ -571,9 +626,28 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
     # companion's own CompanionChannelServer actually bound its socket --
     # the same rigor the unseparated test applies to the daemon's own
     # control.sock.
-    _wait_for_path_as_root(
-        companion_socket_path_under(HANDOFF_DIR), timeout=20, what="the companion's own control channel socket",
-    )
+    try:
+        _wait_for_path_as_root(
+            companion_socket_path_under(HANDOFF_DIR), timeout=20, what="the companion's own control channel socket",
+        )
+    except AssertionError as exc:
+        # The one failure mode worth naming rather than re-deriving from a
+        # bare "never appeared": handoff/ is 2770 and group-owned, so a
+        # companion whose session predates `enable --auto`'s `usermod -aG`
+        # simply cannot create a socket in it. Print what the process
+        # actually got, so this never costs a second workflow round.
+        try:
+            status = Path(f"/proc/{companion_pid}/status").read_text()
+        except OSError:  # the companion exited between the check above and here
+            credentials = f"<pid {companion_pid} is gone>"
+        else:
+            credentials = "\n".join(
+                ln for ln in status.splitlines() if ln.startswith(("Uid:", "Gid:", "Groups:"))
+            )
+        journal = systemctl_user("status", unit, "--no-pager", check=False).stdout
+        raise AssertionError(
+            f"{exc}\n\ncompanion process credentials:\n{credentials}\n\n{unit}:\n{journal}"
+        ) from exc
 
     # ── Cleanup: unlike the daemon, the companion's --serve mode has no
     # in-product "quit" of its own (companion.py only ever asks the *daemon*
@@ -645,7 +719,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     assert "PartOf=graphical-session.target" in unit_def.stdout
 
     wants = systemctl_user("show", "xdg-desktop-autostart.target", "-p", "Wants", "--value")
-    assert unit in wants.stdout.split(), (
+    assert unit in _systemd_unit_list(wants.stdout), (
         f"{unit} is not pulled in by xdg-desktop-autostart.target -- a real desktop session "
         f"would never start it at login:\n{wants.stdout}"
     )
