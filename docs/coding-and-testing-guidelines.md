@@ -138,12 +138,17 @@ Run Ruff on changed Python code:
 
 ```bash
 ruff check .
+python3 scripts/mypy_strict_modules.py
 ```
 
 `pyproject.toml` is authoritative for Ruff, mypy, Bandit, pytest, and coverage configuration. Ruff
-and Bandit are blocking CI checks; mypy is still a visible informational check in the current
-test workflow, promoted per module as modules get cleaned up (see `[tool.mypy]`'s
-`[[tool.mypy.overrides]]` entries).
+and Bandit are blocking CI checks. mypy runs twice in the same job: `mypy src/privacyfence` over
+the whole tree is a visible informational check (`continue-on-error`), and
+`scripts/mypy_strict_modules.py` re-runs it, blocking, over just the modules the ratchet has
+promoted (`[tool.mypy]`'s `[[tool.mypy.overrides]]` entries — the script reads that list out of
+`pyproject.toml`, so promoting a module needs no workflow change). Promoting the next module means
+adding an overrides block once the module is clean; from then on a regression in it fails the
+merge.
 
 For Node/TypeScript changes under `mcpb/shim/`, run:
 
@@ -260,12 +265,13 @@ A new connector's test module should include, at minimum:
 - [ ] `pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing
       --cov-report=json:coverage.json` passes at 100%, and `python scripts/check_coverage_floor.py
       coverage.json` passes (the coverage ratchet — see `testing-policy.md`).
-- [ ] `ruff check .` and `bandit -c pyproject.toml -r src` both pass (CI's `static-analysis` job
-      blocks on both; `mypy` runs in the same job but is informational only for now, except for
-      the modules with a `[[tool.mypy.overrides]]` entry — see `[tool.ruff.lint]`/`[tool.mypy]`/
-      `[tool.bandit]` in `pyproject.toml`). A new Bandit finding that's a genuine false positive
-      gets a `# nosec BXXX  # <reason>` comment at its call site, not a suppression in
-      `pyproject.toml`.
+- [ ] `ruff check .`, `bandit -c pyproject.toml -r src` and `python3 scripts/mypy_strict_modules.py`
+      all pass (CI's `static-analysis` job blocks on all three; the whole-tree `mypy` run in that
+      same job is informational only for now, while the modules with a `[[tool.mypy.overrides]]`
+      entry are what the third command checks and CI blocks on — see `[tool.ruff.lint]`/
+      `[tool.mypy]`/`[tool.bandit]` in `pyproject.toml`). A new Bandit finding that's a genuine
+      false positive gets a `# nosec BXXX  # <reason>` comment at its call site, not a suppression
+      in `pyproject.toml`.
 - [ ] A user-visible change has a line under `CHANGELOG.md`'s `## [Unreleased]` heading (not under
       a concrete version heading — see this repo's CLAUDE.md, "Release notes come from
       CHANGELOG.md"). Internal-only changes don't need one.
