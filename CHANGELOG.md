@@ -180,6 +180,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the real-machine verification `docs/platform-support.md`'s "Known open items" describes — the
   automated contract coverage is unchanged, the manual pass against a release build is not done, and
   turning the default on makes running it sooner more important, not less. See issue #428.
+- Issue #428 Phase 4, macOS: `scripts/macos_privilege_separation.sh enable` (and D1's auto-enable
+  through it) now refuses to elevate a daemon or companion image that anyone but root or `wheel`
+  could have rewritten, and `privilege_separation.audit_layout()` re-checks the same thing on every
+  daemon start. ADR 0002 §5a asserted that `/Applications` was root-owned the way `/opt` is; it
+  isn't — it's `root:admin drwxrwxr-x`, and a drag-installed `.app` is normally owned by the
+  installing user, the same account the agent runs as — so nothing previously stopped that account
+  from replacing the bundle's executable and getting code execution as the service account once
+  privilege separation elevated to it, the identical escalation Windows already refused to permit.
+  Corrected in ADR 0002 §5a itself.
 - Issue #428 D1 follow-up: the macOS auto-enable prompt above ran whatever
   `scripts/macos_privilege_separation.sh` resolved to through an admin-password dialog without first
   checking what that was — on a packaged install the `.app`'s `Resources/` is as writable as anything
@@ -191,6 +200,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   install opt-in, the same fallback `--auto` already takes for every other unresolvable case. A
   source checkout can never satisfy the ownership check, which is deliberate: this prompt now only
   ever runs a script the installer itself shipped.
+- Issue #428 B4: the control channel's `QUIT` command is now refused unconditionally on a
+  privilege-separated install, regardless of `allow_quit`. The control socket is `0660`
+  group-shared after separation so the companion can still reach it, which puts the agent in the
+  same group too; since a clean exit is exit 0, neither systemd's `Restart=on-failure` nor
+  launchd's `SuccessfulExit: false` restarts a daemon stopped this way, so one `QUIT\n` on that
+  socket was a standing, agent-reachable way to turn the privacy gate off entirely — exactly the
+  capability privilege separation exists to take away from the agent. The error now names this
+  platform's own service-manager command (`PlatformLayout.stop_command`, new alongside
+  `start_command`/`status_command`) instead: a system service is the service manager's to stop,
+  not this channel's. See issue #428.
 - Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
   `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
   that want hardware-bound passkeys as a hard requirement before releasing a write approval.

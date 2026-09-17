@@ -53,8 +53,12 @@ Environment=HOME=__SYSTEM_ROOT__
 
 # Mirrors the LaunchDaemon's KeepAlive/SuccessfulExit=false and the Windows
 # task's RestartOnFailure (tests/windows_task_contract.py): restart on a
-# crash, not on a clean exit -- so `systemctl stop`, and the companion's own
-# Quit action over the control channel, both actually stop it.
+# crash, not on a clean exit -- so `systemctl stop` actually stops it. The
+# companion's own Quit action over the control channel does not: #428 B4
+# made that socket's QUIT refuse unconditionally on a separated install
+# (web/control_channel.py's _handle_daemon_request()), because it is
+# 0660 group-shared with the agent -- a system service is `systemctl`'s
+# to stop, not a line on that socket.
 Restart=on-failure
 RestartSec=5
 
