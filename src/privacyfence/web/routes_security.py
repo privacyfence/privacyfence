@@ -1,14 +1,22 @@
-"""Passkey enrollment for org mode (P9): ``GET /security`` lets a signed-in principal see and manage
-their own enrolled WebAuthn credentials, and the ``/api/security/webauthn/*``
-routes drive the two ceremonies webauthn_stepup.py implements. web/routes_
-org_approvals.py's decide endpoint is the other, later consumer of an
-enrolled credential (the actual step-up check on a write approval) -- this
-module only ever registers or removes one.
+"""Passkey enrollment, for org mode and (#426 Phase 1) local mode alike:
+``GET /security`` lets a signed-in principal see and manage their own
+enrolled WebAuthn credentials, and the ``/api/security/webauthn/*`` routes
+drive the two ceremonies webauthn_stepup.py implements. web/routes_
+org_approvals.py's decide endpoint (org mode) is the other, later consumer
+of an enrolled credential (the actual step-up check on a write approval);
+local mode's own decide-time check is #426 Phase 2 -- this module only ever
+registers or removes a credential, in either mode.
 
 Same posture as web/routes_connect.py (not a port of routes_settings.py's
-whole surface, org mode's own session-cookie CSRF model via org_session.
-check_csrf/check_origin, not web_shell.wrap()'d) -- see that module's own
-docstring for the reasoning, which applies here unchanged.
+whole surface, a session-cookie CSRF model, not web_shell.wrap()'d) -- see
+that module's own docstring for the reasoning, which applies here
+unchanged. Mode-agnostic since #426 Phase 1: ``build_routes`` takes a
+principal/session resolver rather than an ``OrgSessionStore`` directly, so
+org mode passes ``org_session``'s functions and local mode passes web/
+session_auth.py's -- the two modules already have matching shapes
+(``authenticated``/``check_csrf``/``check_origin``) for exactly this reason
+(session_auth.py's own module docstring: "mirroring web/org_session.py's
+own real-session model").
 
 ``PF_WEBAUTHN_JS`` (the base64url <-> ArrayBuffer conversions and the two
 ``navigator.credentials`` wrapper calls) is defined here and imported by
@@ -22,19 +30,17 @@ from __future__ import annotations
 import json
 import logging
 from html import escape as _esc
-from typing import Any
+from typing import Any, Callable
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from .. import webauthn_stepup
-from ..org_mode import StepUpConfig
 from ..principal import Principal
+from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import RegistrationChallengeStore, WebAuthnError
-from . import org_session
 from .csp import nonce_for as _csp_nonce_for
-from .org_session import OrgSessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -115,25 +121,47 @@ function pfWebauthnGet(optionsJson) {
 """
 
 
-def build_routes(*, sessions: OrgSessionStore, step_up: StepUpConfig, issuer_url: str) -> list[Route]:
+def build_routes(
+    *,
+    resolve_principal: Callable[[Request], "Principal | None"],
+    check_csrf: Callable[[Request, Any], bool],
+    check_origin: Callable[[Request], bool],
+    unauthenticated_response: Callable[[Request], Response],
+    session_cookie_name: str,
+    step_up: StepUpConfig,
+    issuer_url: str,
+) -> list[Route]:
+    """``resolve_principal``/``check_csrf``/``check_origin`` are the
+    mode-specific half of this module (#426 Phase 1) -- org mode's caller
+    (web/server.py's ``_build_org_app``) passes ``org_session``'s three
+    functions bound to its own ``OrgSessionStore``; local mode's caller
+    passes web/session_auth.py's, bound to its own ``LocalSessionStore``.
+    ``unauthenticated_response`` covers the one place the two modes
+    genuinely differ in *behavior*, not just which store backs the check:
+    org mode redirects an unauthenticated page view to ``/login``, which
+    local mode has no equivalent of -- it shows session_auth.py's own
+    ``unauthorized_html`` recovery page instead. ``session_cookie_name`` is
+    only for embedding the right cookie's value as this page's own CSRF
+    token (the double-submit scheme's session-id-doubles-as-token design,
+    see either session module's own ``check_csrf`` docstring) -- reading it
+    directly here rather than through another callable, since it's a bare
+    string either way.
+    """
     challenges = RegistrationChallengeStore()
     origin = issuer_url.rstrip("/")
 
-    def _current_principal(request: Request) -> Principal | None:
-        return org_session.authenticated(request, sessions)
-
     def _check_post(request: Request, csrf: Any) -> Response | None:
-        if not org_session.check_csrf(request, csrf):
+        if not check_csrf(request, csrf):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        if not org_session.check_origin(request):
+        if not check_origin(request):
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
         return None
 
     async def security_page(request: Request) -> Response:
-        principal = _current_principal(request)
+        principal = resolve_principal(request)
         if principal is None:
-            return RedirectResponse("/login?next=/security", status_code=302, headers={"Cache-Control": "no-store"})
-        session_id = request.cookies.get(org_session.SESSION_COOKIE, "")
+            return unauthenticated_response(request)
+        session_id = request.cookies.get(session_cookie_name, "")
         creds = webauthn_stepup.list_credentials(principal)
         html = _render_security_page(
             principal=principal, creds=creds, csrf=session_id, step_up=step_up,
@@ -142,7 +170,7 @@ def build_routes(*, sessions: OrgSessionStore, step_up: StepUpConfig, issuer_url
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     async def register_options(request: Request) -> Response:
-        principal = _current_principal(request)
+        principal = resolve_principal(request)
         if principal is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
@@ -161,7 +189,7 @@ def build_routes(*, sessions: OrgSessionStore, step_up: StepUpConfig, issuer_url
         return JSONResponse({"options": json.loads(options_json)})
 
     async def register_verify(request: Request) -> Response:
-        principal = _current_principal(request)
+        principal = resolve_principal(request)
         if principal is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
@@ -190,9 +218,9 @@ def build_routes(*, sessions: OrgSessionStore, step_up: StepUpConfig, issuer_url
         return JSONResponse({"status": "ok", "credential_id": saved.credential_id, "label": saved.label})
 
     async def delete_credential(request: Request) -> Response:
-        principal = _current_principal(request)
+        principal = resolve_principal(request)
         if principal is None:
-            return RedirectResponse("/login?next=/security", status_code=302, headers={"Cache-Control": "no-store"})
+            return unauthenticated_response(request)
         form = await request.form()
         rejected = _check_post(request, form.get("csrf"))
         if rejected is not None:

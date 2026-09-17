@@ -60,8 +60,10 @@ Configuration is split into two files (see paths.py):
   - ``config/settings.yaml``   — per-user settings: privacy policy,
     connectors{enabled}, auto_accept_rules,
     pii_detection{enabled, detect_ip_addresses, detect_financial_figures,
-    audit_match_details}. No secrets live here. Lives under
-    ``paths.authority_dir()`` (#428 Phase 1), not the user-dir root
+    audit_match_details}, step_up{enabled, scope, rp_id, rp_name,
+    require_passkey} (#426 Phase 1 -- local mode's own WebAuthn passkey
+    enrollment config, see step_up_config.py). No secrets live here. Lives
+    under ``paths.authority_dir()`` (#428 Phase 1), not the user-dir root
     directly -- see that function's own docstring.
 Per-user credentials (OAuth tokens, Telegram session) live under
 ``credentials/``, one file per connector -- ``paths.user_dir()`` itself,
@@ -85,7 +87,7 @@ from typing import Any
 import portalocker
 import yaml
 
-from . import __version__, audit_forwarding, org_bundle_signing, org_mode, privilege_separation
+from . import __version__, audit_forwarding, org_bundle_signing, org_mode, privilege_separation, step_up_config
 from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL_ID, current_principal
@@ -715,6 +717,11 @@ def _maybe_start_web_server(
         allow_quit=bool(settings_config.get("allow_quit", True)),
         notifications_enabled=bool(notifications_config.get("enabled", True)),
         notifications_detail=str(notifications_config.get("detail", "minimal")),
+        # #426 Phase 1: mounts /security for local-mode passkey enrollment --
+        # config's own "step_up" section, not web_config's, since this is
+        # the human's privacy/security policy (settings.yaml), not a web
+        # server transport setting.
+        step_up=step_up_config.StepUpConfig.from_local_config(config),
     )
     server.start()
     # The pending-result URL gate.py hands back to Claude (§5.2 point 4) is
@@ -981,7 +988,7 @@ def _start_org_web_server(
     )
     server.start()
     approval_registry.set_base_url(server.base_url)
-    step_up = org_mode.StepUpConfig.from_org_config(org_config)
+    step_up = step_up_config.StepUpConfig.from_org_config(org_config)
     logger.info(
         "Org mode active -- MCP-over-HTTP at %s (OAuth 2.1, DCR at %s/register), IdP %s, "
         "WebAuthn step-up %s, app-level authz policy %s, accepting Host %s",

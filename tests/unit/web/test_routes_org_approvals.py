@@ -13,8 +13,8 @@ from starlette.testclient import TestClient
 
 from privacyfence import org_identity as oi, paths, webauthn_stepup as wa
 from privacyfence.approvals import PendingApprovalRegistry
-from privacyfence.org_mode import StepUpConfig
 from privacyfence.principal import Principal, principal_scope
+from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session, routes_org_approvals as roa
 from privacyfence.web_approval_ui import WebApprovalUI
 

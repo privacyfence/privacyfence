@@ -592,6 +592,14 @@ _JS = r"""
     html += toggleHtml(g.pii_financial, 'toggle_pii_category', { category_key: 'detect_financial_figures' }, !g.pii_enabled, 'Detect financial figures');
     html += '</div></div>';
 
+    // #426 Phase 1: a plain same-origin <a>, not a data-action AJAX call --
+    // /security is its own standalone page (web/routes_security.py), not
+    // part of this SPA's own render() dispatch.
+    html += '<div class="pf-card"><div class="pf-card-row"><div><div class="pf-card-title">Security</div>';
+    html += '<div class="pf-card-desc">Manage passkeys (Face ID, Touch ID, Windows Hello) enrolled against this install.</div></div>';
+    html += '<a class="pf-btn-secondary" style="text-decoration:none;display:inline-block" href="/security">Manage passkeys</a>';
+    html += '</div></div>';
+
     html += '<div class="pf-card"><div class="pf-card-row"><div><div class="pf-card-title">Check for Updates</div>';
     html += '<div class="pf-card-desc">Once-a-day check against GitHub Releases. Never installs anything automatically.</div></div>';
     html += toggleHtml(g.update_check_enabled, 'toggle_update_check', {}, false, 'Check for Updates');
