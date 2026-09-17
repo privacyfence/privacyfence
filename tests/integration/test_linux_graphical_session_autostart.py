@@ -84,6 +84,8 @@ import pytest
 
 pytest.importorskip("mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'")
 
+from privacyfence import privilege_separation  # noqa: E402
+from privacyfence.web.control_channel import socket_path_under  # noqa: E402
 from tests.control_channel_client import resolve_posix_socket_path  # noqa: E402
 from tests.diagnostics import (  # noqa: E402
     capture_directory_manifest,
@@ -291,14 +293,33 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     # "Authenticate..." session.
     _prepare_home(home, port=port)
 
-    # ── Install; confirm the postinst's own contract (P3.3): a fresh
-    # install must never itself start the daemon -- only the *next*
-    # graphical login's XDG autostart should ─────────────────────────────
+    # ── Install; confirm the postinst's actual contract. #428 D1 auto-
+    # enables privilege separation from `configure`, and this test's own
+    # passwordless-sudo `dpkg -i` is exactly the case its own `--auto`
+    # guard requires ($SUDO_USER resolvable and non-root, the packaged
+    # executables just unpacked) -- so unlike the old P3.3-only contract,
+    # this install *does* start the daemon before dpkg returns, just under
+    # the system unit `enable --auto` installs, not the per-user autostart
+    # entry this module is otherwise about. Ask privilege_separation which
+    # of the two actually happened rather than assuming, and check whichever
+    # socket that implies -- the pre-D1 assertion below only still holds on
+    # an install `enable --auto` could not take over. ────────────────────
     _dpkg("-i", str(deb_path))
     time.sleep(1.0)
-    assert not resolve_posix_socket_path(home / ".privacyfence").exists(), (
-        "installing the .deb must never itself start the daemon -- only the next login should"
-    )
+    privilege_separation.reset_cache()
+    separated = privilege_separation.separation()
+    if separated is not None:
+        # paths.control_socket_dir() itself routes here once separated
+        # (authority_dir() is 0700 under the service account by then) --
+        # see that function's own docstring.
+        assert socket_path_under(separated.handoff_dir).exists(), (
+            "privilege separation auto-enabled on install -- enable --auto's own "
+            "'systemctl enable --now' should already have the daemon up under the system unit"
+        )
+    else:
+        assert not resolve_posix_socket_path(home / ".privacyfence").exists(), (
+            "installing the .deb must never itself start the daemon -- only the next login should"
+        )
 
     # ── "Log in": bring up a real systemd --user manager for this account,
     # exactly the unit pam_systemd starts at a real login, then trigger the
