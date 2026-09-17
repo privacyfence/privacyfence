@@ -656,6 +656,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Linux autostart, and it now re-runs the only test that exercises it instead of waiting for the
   next `main` push that happens to touch something else on the existing path list, or the weekly
   schedule.
+- B24 of the 4.1.0 action plan: `sudo scripts/linux_privilege_separation.sh enable` (and D1's
+  auto-enable) actually stops the daemon's own XDG autostart entry from autostarting now.
+  `stop_legacy_autostart()` only ever renamed `/etc/xdg/autostart/privacyfence.desktop` to
+  `....desktop.disabled`, on the assumption that XDG autostart only reads `*.desktop` files —
+  `systemd-xdg-autostart-generator` does not filter the autostart directories by filename, and
+  turned the renamed file into a unit under `xdg-desktop-autostart.target` just the same, starting
+  a second daemon in the logged-in user's own session at every login. It failed closed rather than
+  doing damage (`check_runtime_identity` already refuses to run as the wrong account on a
+  separated install), but the disable mechanism did not do what its own comment claimed, and
+  `status`'s `STILL AUTOSTARTS` check — which only ever looked at the original, un-renamed path —
+  reported no problem. The entry is now also marked `Hidden=true`, the key
+  `systemd-xdg-autostart-generator` (and every other XDG-autostart reader) actually honors to skip
+  a file without removing it; `disable` strips it back out when restoring the entry, and `status`
+  now checks the renamed file for it too. An already-separated install upgrading past this fix
+  self-heals the next time `enable --auto` runs (`debian/postinst`, on every install and upgrade),
+  with no separate migration needed.
 
 ## [4.0.0] — 2026-09-14
 

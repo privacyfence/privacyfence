@@ -51,7 +51,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Combined (line + branch) percentage, matching coverage.json's
 # totals.percent_covered / pytest-cov's own summary "Cover" column.
-OVERALL_FLOOR = 94.0
+#
+# One decimal place, not the whole-percent rounding MODULE_FLOORS uses below:
+# the "harmless float jitter" that rounding protects against is the
+# percentage computation's own floating-point noise, which is negligible at
+# this scale (17,000+ statements) -- a real regression big enough to matter
+# moves this number by far more than 0.1%. Whole-percent headroom here would
+# just let a real, module-sized regression hide inside the aggregate, which
+# is the exact failure mode MODULE_FLOORS exists to close for the modules
+# listed below; it shouldn't reopen for everything else.
+OVERALL_FLOOR = 94.9
 
 # Security-critical modules get a floor of their own, on top of the overall
 # one above -- see the module docstring for why. Paths are repository-
@@ -134,6 +143,28 @@ MODULE_FLOORS: dict[str, float] = {
     # privacy_filter.py above is pinned at 100 for, just on the write side.
     "src/privacyfence/web/org_install_policy.py": 100.0,
     "src/privacyfence/web/routes_org_settings.py": 98.0,
+    # #428 B10: the daemon's own session-minting interface (MINT/QUIT) and
+    # the companion's OPEN channel share this module's accept-loop plumbing,
+    # including the peer-uid gate B10 added. 61.0, not a number in the
+    # nineties like the rest of this file's IPC-adjacent modules, because
+    # most of what's uncovered here is the Windows named-pipe half of
+    # _LineProtocolServer -- exercised for real by the platform-windows job
+    # (tests/platform/), not by this Linux-only run, the same split
+    # windows_acl.py's own floor documents above. Without a floor at all, a
+    # regression in the POSIX half this CI run *does* exercise -- the
+    # peer-uid check included -- was invisible to the gate.
+    "src/privacyfence/web/control_channel.py": 61.0,
+    # _run_tray() (macOS/Windows only, guarded on sys.platform) is nearly
+    # all of what's uncovered -- the tray icon this Linux-only run has
+    # nothing to drive. 81.0 reflects that split honestly rather than
+    # padding it with a pragma.
+    "src/privacyfence/companion.py": 81.0,
+    # The SSE stream's own generator body (approvals_stream's event_source,
+    # a poll loop no test here consumes to exhaustion) plus a couple of
+    # decide()'s edge branches (the bare-index "choice" coercion, the plain
+    # "/" redirect) account for the gap. decide() itself -- the module's
+    # actual authorization surface -- is otherwise well covered.
+    "src/privacyfence/web/routes_approvals.py": 88.0,
 }
 
 
