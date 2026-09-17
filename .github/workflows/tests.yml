@@ -383,12 +383,23 @@ jobs:
 
       # Non-blocking for now (see [tool.mypy] in pyproject.toml) --
       # `continue-on-error` keeps the finding visible as a failed step in
-      # the Actions UI without failing the job, so it can be tightened to
-      # blocking per-module without a workflow change once modules are
-      # clean.
+      # the Actions UI without failing the job. The whole tree still carries
+      # ~87 pre-existing errors; the per-module ratchet that promotes files
+      # out of that state is enforced by the *next* step, not this one.
       - name: Type-check (mypy, informational)
         continue-on-error: true
         run: mypy src/privacyfence
+
+      # Blocking: the per-module strictness ratchet. Every module with a
+      # `[[tool.mypy.overrides]]` block in pyproject.toml is described there as
+      # "promoted to blocking" -- without this step that was only ever true of
+      # which errors mypy printed, since the step above cannot fail the job.
+      # The module list is read back out of pyproject.toml by the script (see
+      # its docstring, including why it passes `--follow-imports=silent`), so
+      # promoting the next module stays a one-block edit in pyproject.toml with
+      # nothing to change here.
+      - name: Type-check promoted modules (mypy, blocking)
+        run: python scripts/mypy_strict_modules.py
 
       # Blocking: see [tool.bandit] in pyproject.toml -- the false positives that used to
       # justify running this non-blocking are now triaged and annotated `# nosec BXXX` at
