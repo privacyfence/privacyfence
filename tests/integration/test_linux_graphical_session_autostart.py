@@ -100,6 +100,7 @@ import contextlib
 import getpass
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import time
@@ -170,6 +171,28 @@ def _systemd_escape_unit_name_component(text: str) -> str:
     bare "-" as the unit-name hierarchy separator -- becomes a C-style
     \\xAB hex escape."""
     return "".join(c if c in _UNIT_NAME_SAFE_CHARS else f"\\x{ord(c):02x}" for c in text)
+
+
+def _systemd_unit_list(value: str) -> list[str]:
+    """Splits a ``systemctl show -p <property> --value`` unit list into the
+    unit names it actually names.
+
+    Not a plain space-separated list: systemd prints each element as a
+    *quoted word*, so any unit name holding a character it considers
+    special -- the ``\\xAB`` escapes
+    ``_systemd_escape_unit_name_component`` above produces among them --
+    comes back wrapped in double quotes with every backslash doubled::
+
+        "app-privacyfence\\\\x2dcompanion@autostart.service" app-foo@autostart.service
+
+    A bare ``.split()`` therefore never matches the real unit name for any
+    entry whose desktop-file stem contains a dash -- which is exactly the
+    companion's -- even when the unit is plainly listed.
+    ``shlex.split`` applies the same two unquoting rules systemd's own
+    quoting used here (drop the surrounding quotes, collapse ``\\\\`` back
+    to ``\\``) and leaves the ``\\xAB`` escapes themselves alone, which is
+    what the generated unit is genuinely called."""
+    return shlex.split(value)
 
 
 # Empirically confirmed against the real systemd-xdg-autostart-generator
@@ -548,7 +571,7 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
     assert "PartOf=graphical-session.target" in unit_def.stdout
 
     wants = systemctl_user("show", "xdg-desktop-autostart.target", "-p", "Wants", "--value")
-    assert unit in wants.stdout.split(), (
+    assert unit in _systemd_unit_list(wants.stdout), (
         f"{unit} is not pulled in by xdg-desktop-autostart.target -- a real desktop session "
         f"would never start it at login:\n{wants.stdout}"
     )
@@ -645,7 +668,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     assert "PartOf=graphical-session.target" in unit_def.stdout
 
     wants = systemctl_user("show", "xdg-desktop-autostart.target", "-p", "Wants", "--value")
-    assert unit in wants.stdout.split(), (
+    assert unit in _systemd_unit_list(wants.stdout), (
         f"{unit} is not pulled in by xdg-desktop-autostart.target -- a real desktop session "
         f"would never start it at login:\n{wants.stdout}"
     )
