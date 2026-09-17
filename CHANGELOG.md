@@ -341,6 +341,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   path and remains a `config/settings.yaml` edit plus a restart, which is what keeps the existing
   "treat this install as compromised" banner meaningful — a disable it observes still can never have
   come from a browser control. See `step_up_config.py`'s `LiveStepUpConfig`.
+- B11 of the 4.1.0 action plan: `PRIVACYFENCE_SYSTEM_ROOT` (`privilege_separation.py`'s
+  test/development escape hatch for relocating a separated install's authority root) is now
+  refused on a genuinely separated install instead of being honoured unconditionally. The
+  daemon's own environment is controlled by launchd/systemd, but the companion app and the MCPB
+  shim read this variable too, and *their* environment is whatever the signed-in user's session
+  set — exactly the boundary privilege separation exists to hold. `system_root()` and the shim's
+  `privilegeSeparationRoot()` now check the platform's real default root for an already-provisioned
+  marker before trusting the override; once one exists there, a user-session process can no longer
+  redirect itself onto a root it controls instead of the one the installer provisioned and locked
+  down. The override still works exactly as before on the common case — a dev/CI machine, which
+  has no real marker at that literal system root to begin with.
 
 ### Added
 
@@ -564,7 +575,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   live connector OAuth tokens and the audit log, moves back under `~/.privacyfence` instead of
   being left behind in a `0700` directory the user can no longer read, owned by an account whose
   only undo tool was just uninstalled. The operation is best-effort and never runs on a plain
-  upgrade, which must leave a running separated install alone.
+  upgrade, which must leave a separated install's data and account in place — it just gets briefly
+  stopped and restarted there too, see below.
+- A separated install's daemon (`privacyfence-daemon.service`, a packaged PyInstaller onedir
+  build running straight out of `/opt/privacyfence`) no longer risks crashing partway through a
+  `.deb` upgrade. dpkg unpacks the new version's files over that same directory before `postinst`
+  gets a chance to stop and restart the unit, so a shared library the still-running old process
+  lazily loads could vanish out from under it mid-upgrade. `debian/prerm` now stops
+  `privacyfence-daemon.service` first, on `upgrade`; `postinst`'s `enable --auto`, which already
+  runs on every upgrade (issue #428 D1), starts it again once the new files are in place, so the
+  daemon never ends up left down. A no-op, as before, on an unseparated install, which has no such
+  unit.
 - Issue #428 B8: `debian/postinst`'s header comment no longer claims installing the `.deb` never
   starts the daemon. That was true before D1 but not after: `enable --auto`, right below it, now
   starts `privacyfence-daemon.service` immediately (`systemctl enable --now`) whenever it can

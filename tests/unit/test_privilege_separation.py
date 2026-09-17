@@ -351,6 +351,46 @@ class TestSystemRootOverride:
 
         assert privilege_separation.system_root() == privilege_separation.MACOS_SYSTEM_ROOT
 
+    def test_refuses_the_override_when_the_real_root_has_a_marker(self, platform_name, monkeypatch, tmp_path):
+        # B11: on a separated install, the companion and the MCPB shim honour
+        # this var too, and their environment comes from the user's login
+        # session -- exactly the boundary privilege separation exists to
+        # hold. Once a real install is provisioned at the platform's actual
+        # root, a user-session process redirecting itself elsewhere is the
+        # attack this guards against, not the test hatch the variable is for.
+        real_root = tmp_path / "real"
+        _write_marker(real_root, platform_name)
+        monkeypatch.setattr(privilege_separation, "_default_system_root", lambda: real_root)
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "attacker-controlled"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.system_root() == real_root
+
+    def test_still_honours_the_override_when_the_real_root_has_no_marker(self, platform_name, monkeypatch, tmp_path):
+        # The common case, and the one the escape hatch is actually for: a
+        # dev/CI machine has never had a real install provisioned at its
+        # platform's literal system root (that needs root to create), so the
+        # override still works exactly as before.
+        monkeypatch.setattr(privilege_separation, "_default_system_root", lambda: tmp_path / "never-provisioned")
+        test_root = tmp_path / "test"
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(test_root))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.system_root() == test_root
+
+    def test_refusal_falls_back_to_the_real_root_not_none(self, platform_name, monkeypatch, tmp_path):
+        # Refusing the override must not also refuse separation itself --
+        # the process should behave as if the variable were never set, i.e.
+        # use the real, already-provisioned root, not fail closed to None.
+        real_root = tmp_path / "real"
+        _write_marker(real_root, platform_name)
+        monkeypatch.setattr(privilege_separation, "_default_system_root", lambda: real_root)
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "attacker-controlled"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.is_enabled() is True
+        assert privilege_separation.separation().data_dir == real_root
+
     @pytest.mark.parametrize(
         "platform,expected",
         [
@@ -995,9 +1035,28 @@ class TestInstallerContract:
         assert "|| true" in remove_case.group(1)
         # Must not run on a mere upgrade -- that would tear down a running
         # separated install's unit mid-upgrade instead of leaving it alone.
-        upgrade_case = re.search(r"upgrade\|deconfigure\)(.*?);;", prerm, re.DOTALL)
-        assert upgrade_case is not None, "no `upgrade|deconfigure)` case in debian/prerm"
+        upgrade_case = re.search(r"\bupgrade\)(.*?);;", prerm, re.DOTALL)
+        assert upgrade_case is not None, "no `upgrade)` case in debian/prerm"
         assert "privacyfence-privilege-separation" not in upgrade_case.group(1)
+
+    def test_the_debian_prerm_stops_the_unit_on_upgrade(self):
+        # dpkg unpacks the new version's files over /opt/privacyfence, where
+        # a separated install's daemon runs its packaged PyInstaller onedir
+        # build from, *before* postinst's
+        # `enable --auto` gets a chance to stop and restart it -- a lazily
+        # loaded shared library can vanish out from under the still-running
+        # old process mid-upgrade. Stop the unit here first; postinst's
+        # `enable --auto`, which already runs on every upgrade, starts it
+        # again once the new files are in place.
+        prerm = (REPO_ROOT / "debian" / "prerm").read_text(encoding="utf-8")
+        upgrade_case = re.search(r"\bupgrade\)(.*?);;", prerm, re.DOTALL)
+        assert upgrade_case is not None, "no `upgrade)` case in debian/prerm"
+        assert "systemctl stop privacyfence-daemon.service" in upgrade_case.group(1)
+        assert "|| true" in upgrade_case.group(1)
+        # A bare `deconfigure` (no file swap happening) must stay a no-op.
+        deconfigure_case = re.search(r"\bdeconfigure\)(.*?);;", prerm, re.DOTALL)
+        assert deconfigure_case is not None, "no `deconfigure)` case in debian/prerm"
+        assert deconfigure_case.group(1).strip() == ""
 
 
 class TestAutoEnableMacos:
