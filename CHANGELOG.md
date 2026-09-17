@@ -319,6 +319,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   net-effect paragraph: with privilege separation active and `require_passkey` on, a session can no
   longer release a gated write or loosen policy on its own, though it can still be minted and still
   reaches the review screen. See issue #426.
+- `docs/security-and-compliance.md`'s "What it deliberately does not close" paragraph named
+  "integrity is the strong guarantee — the agent cannot approve its own request" as an unconditional
+  property. #426 Phase 4 (above) revised the neighboring sign-in-link paragraph to say this holds
+  only with privilege separation active, `step_up.enabled`, `step_up.require_passkey`, and a passkey
+  enrolled all together — but left this sentence unrevised, so it still overstated the guarantee.
+  It now names the same four preconditions and says plainly that on a default install, where none of
+  them holds, a session alone is still sufficient to approve its own request. Nothing about the
+  implementation changed; this corrects what is claimed for it.
 
 ### Added
 
