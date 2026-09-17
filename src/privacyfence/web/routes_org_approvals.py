@@ -309,6 +309,24 @@ def build_routes(
         )
         return HTMLResponse(_inject_shim(card.html, shim), headers={"Cache-Control": "no-store"})
 
+    async def approval_preview(request: Request) -> Response:
+        """The org-mode counterpart of web/routes_approvals.py's own
+        ``approval_preview`` -- same read-only inline-disclosure fragment
+        for the approval binder (Phase 1), scoped to ``current_principal()``
+        the same way every other read here is (module docstring, §10.5):
+        another principal's id reads as a plain 404, indistinguishable from
+        one that never existed."""
+        principal = _current_principal(request)
+        if principal is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        approval = registry.get(request.path_params["id"], principal_id=principal.id)
+        if approval is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(
+            {"id": approval.id, "preview": approval.preview},
+            headers={"Cache-Control": "no-store"},
+        )
+
     async def approvals_stream(request: Request) -> Response:
         principal = _current_principal(request)
         if principal is None:
@@ -515,6 +533,7 @@ def build_routes(
         Route("/approvals", list_approvals),
         Route("/approvals/{id}", show_approval),
         Route("/api/approvals/{id}/decide", decide, methods=["POST"]),
+        Route("/api/approvals/{id}/preview", approval_preview),
         Route("/api/approvals/stream", approvals_stream),
         Route("/api/approvals/{id}/stepup/idp", stepup_idp_start),
         Route("/oauth/stepup/callback", stepup_callback),

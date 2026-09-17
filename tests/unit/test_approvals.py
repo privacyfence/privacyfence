@@ -11,8 +11,11 @@ import time
 import pytest
 
 from privacyfence.approvals import (
+    ALL_APPROVAL_KINDS,
     PendingApprovalRegistry,
     TooManyPendingApprovalsError,
+    _BATCHABLE_KINDS,
+    _NON_BATCHABLE_KINDS,
     canonical_key,
 )
 from privacyfence.principal import Principal, principal_scope
@@ -724,3 +727,64 @@ class TestPerPrincipalApprovalCap:
         from privacyfence.approvals import DEFAULT_MAX_PENDING, DEFAULT_MAX_PENDING_PER_PRINCIPAL
 
         assert DEFAULT_MAX_PENDING_PER_PRINCIPAL < DEFAULT_MAX_PENDING
+
+
+class TestBatchableKindsCoverAllApprovalKinds:
+    """Mirrors web/routes_settings.py's own TestSensitiveActionsCoverAllAllowedActions:
+    _BATCHABLE_KINDS/_NON_BATCHABLE_KINDS are both explicit sets, not one
+    derived from the other, so a future PendingApproval.kind value that
+    lands in ALL_APPROVAL_KINDS with no matching entry in either fails here
+    instead of silently defaulting to either "batchable" or "not batchable"."""
+
+    def test_the_two_sets_are_disjoint_and_cover_every_known_kind(self):
+        assert _BATCHABLE_KINDS & _NON_BATCHABLE_KINDS == frozenset()
+        assert _BATCHABLE_KINDS | _NON_BATCHABLE_KINDS == ALL_APPROVAL_KINDS
+
+
+class TestIsBatchableAndBlockedReason:
+    def test_a_plain_card_is_batchable_with_no_blocked_reason(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        assert approval.is_batchable() is True
+        assert approval.blocked_reason() == ""
+
+    def test_a_pii_forced_card_is_not_batchable(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+            pii_forces_confirmation=True,
+        )
+        assert approval.is_batchable() is False
+        assert "PII confirmation" in approval.blocked_reason()
+
+    def test_a_confirm_dialog_is_not_batchable(self):
+        registry = make_registry()
+        approval = registry.register_confirm()
+        assert approval.is_batchable() is False
+        assert approval.blocked_reason() != ""
+
+    def test_a_choice_dialog_is_not_batchable(self):
+        registry = make_registry()
+        approval = registry.register_confirm()
+        approval.kind = "choice"
+        assert approval.is_batchable() is False
+        assert approval.blocked_reason() != ""
+
+    def test_to_summary_dict_carries_the_batching_fields(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+            operation_key="gmail.read_message", pii_detected=True,
+        )
+        summary = approval.to_summary_dict()
+        assert summary["operation_key"] == "gmail.read_message"
+        assert summary["pii_detected"] is True
+        assert summary["batchable"] is True
+        assert summary["blocked_reason"] == ""
+
+    def test_to_summary_dict_defaults_operation_key_to_empty_string(self):
+        registry = make_registry()
+        approval = registry.register_confirm()
+        assert approval.to_summary_dict()["operation_key"] == ""

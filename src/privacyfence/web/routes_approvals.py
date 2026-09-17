@@ -373,6 +373,29 @@ def create_app(
         shim = _bridge_shim(decide_url=f"/api/approvals/{card.id}/decide", csrf=csrf, nonce=nonce)
         return HTMLResponse(_inject_shim(card.html, shim), headers={"Cache-Control": "no-store"})
 
+    async def approval_preview(request: Request) -> Response:
+        """Read-only inline-disclosure fragment for the approval binder
+        (Phase 1): the ``preview`` dict ``gate.py`` stamped onto this
+        approval at registration -- metadata only (sender, subject, size,
+        destination path; docs/coding-and-testing-guidelines.md §1.5), never
+        ``details_text``/``html``/full body content -- so a binder row can
+        disclose what it's about without waiting on ``card.html`` (only
+        built once gate.py's ``_popup_executor`` gets around to it) and
+        without an ``<iframe>`` onto the real card document (which would
+        mean weakening web/csp.py's ``frame-ancestors 'none'`` for
+        cosmetics -- see the binder plan's own "Rejected alternatives").
+        Same auth as every other read here; no CSRF needed, same as
+        ``show_approval``'s own GET."""
+        if not _authenticated(request):
+            return _unauthorized(request)
+        approval = web_ui.deferred_registry.get(request.path_params["id"])
+        if approval is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(
+            {"id": approval.id, "preview": approval.preview},
+            headers={"Cache-Control": "no-store"},
+        )
+
     async def approvals_stream(request: Request) -> Response:
         if not _authenticated(request):
             return _unauthorized(request)
@@ -496,6 +519,7 @@ def create_app(
         Route("/approvals", list_approvals),
         Route("/approvals/{id}", show_approval),
         Route("/api/approvals/{id}/decide", decide, methods=["POST"]),
+        Route("/api/approvals/{id}/preview", approval_preview),
         Route("/api/approvals/stream", approvals_stream),
         Route("/sw.js", service_worker),
     ]

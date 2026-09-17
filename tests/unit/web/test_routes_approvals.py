@@ -274,6 +274,52 @@ class TestApprovalsStream:
         assert r.status_code == 401
 
 
+class TestApprovalPreview:
+    """GET /api/approvals/{id}/preview -- the approval binder's read-only
+    inline-disclosure fragment (Phase 1): serves the ``preview`` dict
+    stamped onto a ``PendingApproval`` at registration, metadata only."""
+
+    def test_requires_auth(self, client, web_ui):
+        thread, card, _box = _pending_card(web_ui)
+        try:
+            r = client.get(f"/api/approvals/{card.id}/preview")
+            assert r.status_code == 401
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    def test_unknown_id_is_404(self, client, sessions):
+        _signed_in(client, sessions)
+        r = client.get("/api/approvals/nope/preview")
+        assert r.status_code == 404
+
+    def test_returns_the_stamped_preview_dict(self, client, sessions, web_ui):
+        _signed_in(client, sessions)
+        approval, _ = web_ui.deferred_registry.register_or_coalesce(
+            dedupe_key="k1", connector="gmail", tool="gmail_get_message", gate_kind="review",
+            request_id="r1", preview={"From": "alice@example.com", "Subject": "hi"},
+        )
+        r = client.get(f"/api/approvals/{approval.id}/preview")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["id"] == approval.id
+        assert body["preview"] == {"From": "alice@example.com", "Subject": "hi"}
+
+    def test_never_carries_details_text_or_html(self, client, sessions, web_ui):
+        _signed_in(client, sessions)
+        thread, card, _box = _pending_card(web_ui)
+        try:
+            r = client.get(f"/api/approvals/{card.id}/preview")
+            body = r.json()
+            assert set(body.keys()) == {"id", "preview"}
+            assert "details_text" not in body
+            assert "html" not in body
+            assert "summary" not in body
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+
 class TestShowApproval:
     def test_unknown_id_says_no_longer_pending_not_404(self, client, sessions):
         _signed_in(client, sessions)
