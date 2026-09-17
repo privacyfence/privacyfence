@@ -2284,43 +2284,47 @@ class TestManyPendingApprovalsAreAllReviewable:
     fix only covered for that with a placeholder page, it didn't remove the
     underlying stall (see gate.py's own _popup_executor comment)."""
 
-    # Overrides pyproject.toml's global 30s pytest-timeout: 20 concurrent
-    # gated_call()s each running a real PII scan and a full audit-log scan
-    # -- both pure-Python, GIL-bound work handed to asyncio.to_thread's
-    # default pool -- is measurably slower under CI's coverage-instrumented
-    # run than locally, and has been observed on the Python 3.14 job
-    # specifically to need well over a minute even outside any coverage
-    # run, plausibly GIL contention across 20-way concurrency rather than
-    # true I/O latency. A large timeout here costs nothing on the success
-    # path (wait_until_async returns the moment its condition is met) and
-    # this test's own cleanup (below) needs enough headroom that
-    # pytest-timeout's SIGALRM can never fire *during* it -- an interrupted
-    # cleanup would leave exactly the leaked-thread problem this test
-    # exists to catch, just via a different trigger. This is the real
-    # backstop against a genuine (non-racy) hang, since the cleanup loop
-    # below deliberately has none of its own.
-    @pytest.mark.timeout(400)
     async def test_past_the_old_literal_eight_every_approval_still_gets_rendered(self, monkeypatch, audit_dir):
         from concurrent.futures import ThreadPoolExecutor
 
         n = 20  # past the old literal-8 worker count; approvals.DEFAULT_MAX_PENDING_PER_PRINCIPAL
         registry = PendingApprovalRegistry(
-            hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0,
+            # Deliberately NOT this file's usual hold_window=5.0/pending_ttl=5.0:
+            # those are fine for a test that registers one approval, and
+            # actively wrong for the only test that needs n of them alive at
+            # the same instant.
+            #
+            # pending_ttl bounds how long an approval may sit un-answered,
+            # and gate.gated_call() sweeps every lapsed one (_pop_registry_
+            # expirations -> pop_expired_events, which finalizes them as
+            # "expired" and sets their UI-step event, so they leave
+            # list_pending()). That sweep runs *partway through* gated_call,
+            # after its asyncio.to_thread PII/audit hops -- so on a runner
+            # slow enough that the n calls stagger over more than pending_ttl,
+            # the last ones to arrive expire the first ones' approvals before
+            # the set is ever complete, and "n pending at once" stops being
+            # reachable at all rather than merely being slow. Observed
+            # directly: 14 of 20 swept at t+14s, leaving 6 pending forever.
+            # 300s is simply longer than this test can take; production's own
+            # default is 15 minutes.
+            #
+            # hold_window is the other half. Every registered call parks a
+            # thread of asyncio.to_thread's *default* pool for the whole
+            # window inside registry.wait_async() -- and that is the same
+            # pool the calls that haven't registered yet need for their own
+            # PII/audit hops. At 5.0 with fewer default workers than n
+            # (min(32, cpu_count + 4): 7 on a 3-core macOS runner), the
+            # already-registered calls starve the rest into exactly the
+            # stagger above. Collapsing it to ~0 removes that self-inflicted
+            # serialization: every call returns its "approval_pending" result
+            # promptly and the approval stays live for _drive_interaction to
+            # render. Nothing here is testing the hold window.
+            hold_window=0.05, pending_ttl=300.0, ledger_ttl=300.0,
             max_pending=n, max_pending_per_principal=n,
         )
         approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
         monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
         monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
-        # What this test is actually proving is executor sizing, not PII
-        # detection -- the real regex scan is CPU-bound, GIL-holding work,
-        # and running 20 of them concurrently via asyncio.to_thread's
-        # default pool is exactly the kind of thing that gets dramatically
-        # slower under real contention on a loaded/weaker CI runner
-        # (observed: over 150s on Windows and macOS specifically, while
-        # every Linux job stays under a few seconds). Stubbing it out
-        # removes that variance at its source instead of chasing an ever
-        # larger timeout for a cost this test never needed to pay.
-        monkeypatch.setattr(gate, "detect_pii_categories", lambda text: [])
         # Sized to the registry's own max_pending -- exactly the
         # relationship daemon_main.py's configure_popup_executor() call
         # establishes for the real executor -- so this proves the sizing
@@ -2335,61 +2339,41 @@ class TestManyPendingApprovalsAreAllReviewable:
             for i in range(n)
         ]
         try:
-            # See the class's own timeout override above for why this
-            # budget is this large -- real, observed CI variance, not a
-            # defensive guess.
-            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=150.0)
+            # 10s each, not more: the whole test runs in ~0.2s, and the
+            # two budgets together have to leave pyproject.toml's global
+            # 30s pytest-timeout enough room to still report a *failed
+            # assertion* rather than a SIGALRM landing mid-cleanup -- an
+            # interrupted cleanup is how this test would leak the very
+            # blocked worker thread it exists to reason about.
+            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=10.0)
             # The actual regression: every one of these must have real card
             # HTML, not merely be registered and listed -- a worker-starved
             # approval sits at html == "" forever.
-            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=150.0)
+            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=10.0)
         finally:
-            # Registration races the event loop (each call does its own PII
-            # scan / audit-log scan via asyncio.to_thread before it ever
-            # reaches register_or_coalesce), so if either assert above timed
-            # out, some of the n calls may still not have registered yet --
-            # a single snapshot-and-deny here (this test's own first draft)
-            # would miss whichever ones show up a moment later, leaving
-            # their _run_in_popup_executor worker blocked on
+            # Order matters. Awaiting the gated_call tasks first is what
+            # makes the deny below exhaustive: an approval is registered
+            # from inside gated_call, so once every one of these has
+            # returned, no further approval can appear -- whereas a single
+            # deny-the-current-snapshot pass taken while they were still
+            # arriving would miss whichever registered a moment later,
+            # leaving its _run_in_popup_executor worker blocked on
             # card.event.wait() forever: a leaked non-daemon thread the
-            # whole process then hangs on at interpreter shutdown, well
-            # after pytest itself has already printed its final result.
-            #
-            # Draining in a loop until every task has actually finished
-            # closes that race -- deliberately with NO give-up deadline of
-            # its own. An earlier version gave up after a fixed window and
-            # cancelled whatever was left, which turned out to be worse
-            # than doing nothing: cancelling the *asyncio* task never stops
-            # the *OS thread* actually blocked in card.event.wait() (that
-            # block is inside a loop.run_in_executor() call, which -- like
-            # asyncio.to_thread -- doesn't propagate cancellation down to
-            # the thread), so under a slow enough CI run that deadline was
-            # observed to fire while approvals were still legitimately
-            # registering, reintroducing the exact leaked-thread hang this
-            # loop exists to prevent.
-            #
-            # The exit condition itself has to check the *registry*, not
-            # just the top-level tasks: a top-level gate.gated_call() task
-            # becomes done() the moment registry.hold_window (5s here)
-            # elapses, whether or not the underlying interaction was ever
-            # actually answered -- _resolve_decision() returns the
-            # "approval_pending" result on a plain timeout, decoupled from
-            # _drive_interaction (the real card-driving coroutine, started
-            # via a fire-and-forget asyncio.ensure_future() this test never
-            # tracks). So "all tasks done" can go true while an approval is
-            # still sitting unanswered in registry.list_pending() and its
-            # worker is still genuinely blocked -- observed directly in CI:
-            # the previous version of this loop exited, cleanup finished,
-            # pytest printed a result, and the job still hung for 35+
-            # minutes afterward. Looping until the registry itself reports
-            # nothing pending *and* every task has finished closes that gap
-            # instead of merely narrowing it further.
-            while registry.list_pending() or not all(t.done() for t in tasks):
-                for approval in registry.list_pending():
-                    registry.answer(approval.id, "deny")
-                await asyncio.sleep(0.01)
+            # whole process hangs on at interpreter shutdown, long after
+            # pytest has printed its result. They return promptly whatever
+            # the asserts above did, because hold_window is ~0.
             await asyncio.gather(*tasks, return_exceptions=True)
-            test_executor.shutdown(wait=False)
+            # Every worker still blocked is blocked on a card whose event is
+            # unset, which is exactly what list_pending() returns -- so this
+            # releases all of them, and none of the confirm-dialog follow-ups
+            # that could register something new is reachable from "deny".
+            for approval in registry.list_pending():
+                registry.answer(approval.id, "deny")
+            # wait=True rather than the usual fire-and-forget: it turns a
+            # leaked worker into an ordinary test failure (a hang the global
+            # pytest-timeout ends, here, with a traceback) instead of a
+            # clean-looking run that wedges at interpreter exit.
+            test_executor.shutdown(wait=True)
 
 
 class TestDeferredApprovalProtocol:
