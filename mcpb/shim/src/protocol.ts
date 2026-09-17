@@ -104,27 +104,42 @@ export function defaultSystemRoot(
   return SYSTEM_ROOTS[platform] ?? null;
 }
 
+/** Reads and parses the marker at `root`, or null if it's absent or doesn't
+ * parse as JSON -- the same "absent on every unseparated install, not an
+ * error" case privilegeSeparationRoot() below has always treated quietly. */
+function readMarker(root: string): { version?: unknown; platform?: unknown } | null {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(root, "privilege-separation.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function isRealMarker(marker: { version?: unknown; platform?: unknown } | null): boolean {
+  return marker?.version === 1 && marker?.platform === process.platform;
+}
+
 /** The marker file each platform's privilege-separation installer writes
  * (scripts/{macos,linux}_privilege_separation.sh,
  * scripts/windows_privilege_separation.ps1), or
  * null on an install (or a platform) that has no privilege separation.
- * Mirrors privilege_separation.separation(): same default roots, same
- * PRIVACYFENCE_SYSTEM_ROOT override, same version and platform checks.
+ * Mirrors privilege_separation.system_root()/separation(): same default
+ * roots, same version and platform checks, and -- B11 -- the same guard on
+ * PRIVACYFENCE_SYSTEM_ROOT: this shim's environment is whatever the
+ * logged-in user's session set, so once a real install is provisioned at
+ * the platform's actual root, that variable is refused rather than letting
+ * a user-session process redirect the shim onto a root it controls. It is
+ * still honoured on the common dev/CI machine, which has no real marker at
+ * that literal system root to begin with.
  * Exported only for tests, which need to point it at a temp directory. */
 export function privilegeSeparationRoot(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = env.PRIVACYFENCE_SYSTEM_ROOT;
-  const root = override && path.isAbsolute(override) ? override : defaultSystemRoot(env);
+  const defaultRoot = defaultSystemRoot(env);
+  const overrideRefused = defaultRoot !== null && isRealMarker(readMarker(defaultRoot));
+  const root = override && path.isAbsolute(override) && !overrideRefused ? override : defaultRoot;
   if (!root) return null;
-  let marker: { version?: unknown; platform?: unknown };
-  try {
-    marker = JSON.parse(fs.readFileSync(path.join(root, "privilege-separation.json"), "utf8"));
-  } catch {
-    // Absent on every unseparated install, which is the common case -- not
-    // an error, and deliberately not logged.
-    return null;
-  }
-  if (marker?.version !== 1) return null;
-  if (marker?.platform !== process.platform) return null;
+  const marker = readMarker(root);
+  if (!isRealMarker(marker)) return null;
   return root;
 }
 
