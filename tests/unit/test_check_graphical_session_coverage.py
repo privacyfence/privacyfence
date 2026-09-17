@@ -66,6 +66,7 @@ class TestCheckAll:
         runs = {
             "linux-graphical-session.yml": _run(conclusion="success", head_sha="good"),
             "windows-graphical-session.yml": _run(conclusion="failure", head_sha="bad"),
+            "macos-graphical-session.yml": _run(conclusion="success", head_sha="good"),
         }
 
         def fake_fetch(repo, workflow, token):
@@ -83,7 +84,7 @@ class TestCheckAll:
         assert len(warnings) == 1
         assert "windows-graphical-session.yml" in warnings[0]
 
-    def test_no_warnings_when_both_workflows_are_green_and_reachable(self, monkeypatch):
+    def test_no_warnings_when_all_workflows_are_green_and_reachable(self, monkeypatch):
         monkeypatch.setattr(
             check_graphical_session_coverage,
             "fetch_latest_completed_run",
@@ -109,7 +110,7 @@ class TestCheckAll:
             "privacyfence/privacyfence", "deadbeef", "test-token"
         )
 
-        assert len(warnings) == 2
+        assert len(warnings) == len(check_graphical_session_coverage.WORKFLOWS)
         assert all("could not check" in message for message in warnings)
 
     def test_never_calls_is_ancestor_when_there_is_no_run(self, monkeypatch):
@@ -126,7 +127,7 @@ class TestCheckAll:
             "privacyfence/privacyfence", "deadbeef", "test-token"
         )
 
-        assert len(warnings) == 2
+        assert len(warnings) == len(check_graphical_session_coverage.WORKFLOWS)
 
 
 class TestIsAncestor:
