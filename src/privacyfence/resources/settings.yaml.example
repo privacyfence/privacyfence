@@ -303,7 +303,14 @@ step_up:
   # on by itself: with nothing enrolled, there's no ceremony to demand and
   # the decision goes through unguarded -- so this only does something once
   # you've actually added a passkey at /security. Making enrollment
-  # mandatory is `require_passkey` below, not implemented yet (Phase 3).
+  # mandatory is `require_passkey` below.
+  #
+  # You don't have to hand-edit this file to turn it on: once a passkey is
+  # enrolled at /security, the Settings page's Security card has a "Turn
+  # on" button that sets `enabled` and `require_passkey` together (B9 of
+  # the 4.1.0 action plan) and takes effect immediately, no restart. Editing
+  # this file directly still works too, and is the only way back to
+  # `false` -- there's no UI control that turns step-up back off.
   enabled: false
   # Which approvals require step-up: "writes" (every approval popup) or
   # "writes_and_pii_reads" (also a read PrivacyFence flagged as containing

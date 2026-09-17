@@ -407,6 +407,88 @@ class TestSensitiveActionStepUp:
         assert controller.snapshot()["general"]["pii_enabled"] is True
 
 
+class TestEnableStepUpAction:
+    """B9: the dispatcher-level half of SettingsController.enable_step_up --
+    ``create_app``'s own ``step_up`` and ``controller._step_up`` (wired via
+    ``wire_step_up``) are two independently-passed things; daemon_main.py's
+    real boot path always hands the *same* LiveStepUpConfig to both (see
+    that module's own ``_maybe_start_web_server``), which is what these
+    tests set up too, so enabling step-up through this action is visible to
+    this same dispatcher's own ``_needs_step_up`` gate on the very next
+    request -- no restart."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _enroll(self):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def _live_client(self, controller, sessions):
+        from privacyfence.step_up_config import LiveStepUpConfig
+        live = LiveStepUpConfig(StepUpConfig(rp_id="localhost"))
+        controller.wire_step_up(live)
+        app = create_app(controller, sessions=sessions, step_up=live, step_up_origin=ORIGIN)
+        return TestClient(app, base_url=ORIGIN), live
+
+    def test_is_listed_in_allowed_and_sensitive_actions(self):
+        assert "enable_step_up" in _ALLOWED_ACTIONS
+        assert "enable_step_up" in _SENSITIVE_ACTIONS
+
+    def test_refused_without_an_enrolled_passkey(self, controller, sessions):
+        client, live = self._live_client(controller, sessions)
+        csrf = _authed(client, sessions)
+
+        r = client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        assert r.status_code == 200
+        assert live.enabled is False
+        assert r.json()["error"]
+
+    def test_the_first_enable_is_never_step_up_gated(self, controller, sessions):
+        # _needs_step_up only fires once step_up.enabled/require_passkey are
+        # *already* both true -- the very first call can't be gated on a
+        # ceremony that isn't active yet (module docstring's own B9 note).
+        self._enroll()
+        client, live = self._live_client(controller, sessions)
+        csrf = _authed(client, sessions)
+
+        r = client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        assert r.status_code == 200
+        assert live.enabled is True
+        assert live.require_passkey is True
+        assert r.json()["general"]["step_up_on"] is True
+
+    def test_takes_effect_immediately_for_the_next_sensitive_action(self, controller, sessions):
+        # The point of LiveStepUpConfig: this dispatcher's own step_up
+        # object is the one enable_step_up just mutated, so the very next
+        # request already sees it -- no daemon restart.
+        self._enroll()
+        client, live = self._live_client(controller, sessions)
+        csrf = _authed(client, sessions)
+        client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+
+    def test_reenabling_once_already_on_is_itself_step_up_gated(self, controller, sessions):
+        self._enroll()
+        client, live = self._live_client(controller, sessions)
+        csrf = _authed(client, sessions)
+        client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        r = client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+
+
 class TestRequirePasskeyBanner:
     """#426 Phase 3: the settings page carries the same banner the
     approvals list does -- see test_routes_approvals.py's own

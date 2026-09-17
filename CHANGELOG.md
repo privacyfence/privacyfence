@@ -305,8 +305,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   See issue #426.
 - Issue #426 Phase 4: tamper-evidence, recovery, and an honest write-up for local-mode step-up.
   Enrolling or removing a passkey, spending a recovery code, and `step_up.require_passkey` itself
-  being turned on or off (observable only at daemon startup, since there's no UI path to flip it —
-  see `step_up_config.py`) are all written to the audit log. Turning the requirement off latches a
+  being turned on or off (at this phase, observable only at daemon startup, since there was no UI
+  path to flip it at all yet — see `step_up_config.py`; B9 above adds one for turning it on) are all
+  written to the audit log. Turning the requirement off latches a
   persistent banner on `/approvals`/`/settings` and a daemon-log warning that survives further
   restarts, not just a one-time audit line, until a later startup turns it back on. `web/
   routes_security.py`'s enrollment flow now issues a one-time recovery code — shown to the browser
@@ -327,6 +328,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   It now names the same four preconditions and says plainly that on a default install, where none of
   them holds, a session alone is still sufficient to approve its own request. Nothing about the
   implementation changed; this corrects what is claimed for it.
+- B9 of the 4.1.0 action plan: local mode's step-up requirement can now be turned on from the
+  Settings page, not only by editing `config/settings.yaml` and restarting the daemon — #426 shipped
+  the whole enforcement chain and then defaulted it off with no way to flip it back on short of a
+  shell, which on a privilege-separated install means `sudo` and a text editor for the release's own
+  headline security feature. Once a passkey is enrolled at `/security`, the General page's Security
+  card gets a "Turn on" control (`enable_step_up`) that sets `step_up.enabled` and
+  `step_up.require_passkey` together and takes effect immediately, with no daemon restart — the next
+  write approval already demands the assertion. The action is refused, config untouched, unless a
+  passkey is already enrolled, and is itself an audited, step-up-gated sensitive settings action once
+  step-up is already on. One-directional by design: turning the requirement back off still has no UI
+  path and remains a `config/settings.yaml` edit plus a restart, which is what keeps the existing
+  "treat this install as compromised" banner meaningful — a disable it observes still can never have
+  come from a browser control. See `step_up_config.py`'s `LiveStepUpConfig`.
 
 ### Added
 
