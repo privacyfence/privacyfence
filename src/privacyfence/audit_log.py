@@ -105,7 +105,32 @@ class AuditEntry:
                             # "rule_changed_via_bridge_proposal" | "rule_removed_via_bridge_proposal" |
                             # "grant_changed_via_bridge_proposal" | "grant_removed_via_bridge_proposal" |
                             # "bridge_proposal_no_op" | "error" |
-                            # "approval_pending" | "expired"
+                            # "approval_pending" | "expired" |
+                            # "webauthn_credential_enrolled" | "webauthn_credential_removed" |
+                            # "webauthn_recovery_code_used" |
+                            # "step_up_requirement_enabled" | "step_up_requirement_disabled"
+                            # ("webauthn_credential_enrolled"/"webauthn_credential_removed": #426
+                            #  Phase 4 -- web/routes_security.py's register_verify/delete_credential,
+                            #  recorded for either mode's own passkey enrollment surface. Tamper-
+                            #  evidence for the credential store itself: enrolling or removing a
+                            #  passkey changes what a future step-up check can be satisfied with, so
+                            #  it's worth its own trail even though neither event is itself a gated
+                            #  decision.)
+                            # ("webauthn_recovery_code_used": #426 Phase 4 -- web/routes_security.py's
+                            #  recover_credential, local mode's sanctioned way back in when the only
+                            #  enrolled authenticator is lost with no IdP to fall back on: trading in
+                            #  the one-time recovery code from enrollment removes every credential on
+                            #  file for that principal. Always recorded on a successful trade-in --
+                            #  see webauthn_stepup.py's own module docstring for why the code itself
+                            #  is single-use.)
+                            # ("step_up_requirement_enabled"/"step_up_requirement_disabled": #426
+                            #  Phase 4 -- daemon_main.py, recorded once per daemon startup that finds
+                            #  local mode's effective ``step_up.enabled and step_up.require_passkey``
+                            #  differs from what the previous startup observed. There is no UI path to
+                            #  flip this (it's a config file edit plus a restart, deliberately -- see
+                            #  step_up_config.py's own docstring), so a startup-time comparison is the
+                            #  only place a change can be caught at all; see webauthn_stepup.py's
+                            #  observe_step_up_requirement for the persisted state this diffs against.)
                             # ("approval_pending": gate.py's deferred-approval protocol (P3)
                             #  -- a human didn't decide within the registry's hold window,
                             #  so gated_call() returned a

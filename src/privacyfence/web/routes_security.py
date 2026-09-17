@@ -36,12 +36,25 @@ below demands proof of possession of that very credential first, the same
 one of *several* enrolled credentials stays a plain, ungated request --
 there's no enforcement gap to close when at least one other credential
 would remain.
+
+**Tamper-evidence and recovery (#426 Phase 4)**: every enroll and remove
+here writes an audit entry (see ``_audit`` below), and ``register_verify``
+issues a one-time recovery code -- shown to the browser exactly once, in
+that same response -- whenever this principal doesn't currently have an
+unused one on file. ``recover_credential`` is the code's only consumer:
+trading it in removes every credential this principal has enrolled, for
+the case webauthn_stepup.py's own module docstring describes (the only
+authenticator lost to a new machine or a wiped TPM, with no IdP in local
+mode to fall back on). See that module's own docstring for the storage
+side of both.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
+import uuid
+from datetime import datetime, timezone
 from html import escape as _esc
 from typing import Any, Callable
 
@@ -50,6 +63,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from .. import webauthn_stepup
+from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..principal import Principal
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import RegistrationChallengeStore, StepUpChallengeStore, WebAuthnError
@@ -175,6 +189,31 @@ def build_routes(
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
         return None
 
+    def _audit(principal: Principal, decision: str, summary: str) -> None:
+        """#426 Phase 4: one audit entry per credential-store lifecycle
+        event -- enroll, remove, and (recover_credential, below) a spent
+        recovery code. Never allowed to block or fail the request it's
+        attached to -- same posture as every other non-critical audit call
+        in this codebase (see docs/coding-and-testing-guidelines.md
+        §1.4's "non-critical side effects" rule)."""
+        try:
+            get_audit_logger().record(AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                week=current_week(),
+                request_id=uuid.uuid4().hex[:12],
+                connector="",
+                tool="",
+                tool_name="",
+                summary=summary,
+                sender=principal.email or principal.display_name or principal.id,
+                decision=decision,
+                auto_accept_rule="",
+                latency_seconds=0.0,
+                pii_detected=False,
+            ))
+        except Exception as exc:
+            logger.warning("Audit log write failed for %s: %s", decision, exc)
+
     async def security_page(request: Request) -> Response:
         principal = resolve_principal(request)
         if principal is None:
@@ -233,7 +272,17 @@ def build_routes(
             )
         except WebAuthnError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        return JSONResponse({"status": "ok", "credential_id": saved.credential_id, "label": saved.label})
+        _audit(principal, "webauthn_credential_enrolled", f"Passkey enrolled: {saved.label!r}")
+        response: dict[str, Any] = {"status": "ok", "credential_id": saved.credential_id, "label": saved.label}
+        # #426 Phase 4: issue a recovery code the moment there stops being
+        # an unused one on file -- covers both the first-ever enrollment
+        # and an upgrade from before this feature existed. Returned exactly
+        # once, in this response only; _PAGE_JS is what actually shows it
+        # to the human -- see this module's own docstring on why it can
+        # never be recovered again after this.
+        if not webauthn_stepup.has_recovery_code(principal):
+            response["recovery_code"] = webauthn_stepup.generate_recovery_code(principal)
+        return JSONResponse(response)
 
     async def delete_credential(request: Request) -> Response:
         """A JSON/fetch endpoint (not a plain form submit) since removing
@@ -281,6 +330,44 @@ def build_routes(
             except WebAuthnError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=401)
         webauthn_stepup.remove_credential(principal, credential_id)
+        _audit(principal, "webauthn_credential_removed", f"Passkey removed: {credential_id}")
+        return JSONResponse({"status": "ok"})
+
+    async def recover_credential(request: Request) -> Response:
+        """#426 Phase 4: the sanctioned way back in when the only enrolled
+        authenticator is lost (new machine, wiped TPM) -- see module
+        docstring and webauthn_stepup.py's own on generate_recovery_code/
+        consume_recovery_code. A still-signed-in principal (this route
+        needs no WebAuthn ceremony of its own -- that's the whole point:
+        an assertion is exactly what a locked-out human can no longer
+        produce) who cannot pass a step-up challenge exchanges the
+        one-time recovery code shown at their first enrollment for a clean
+        slate: every credential on file for them is removed, so /security
+        lets them enroll a fresh passkey immediately afterward. The code
+        itself is single-use (webauthn_stepup.consume_recovery_code) and
+        this always records who spent it, success or not revealing which
+        specific check failed."""
+        principal = resolve_principal(request)
+        if principal is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        rejected = _check_post(request, payload.get("csrf") if isinstance(payload, dict) else None)
+        if rejected is not None:
+            return rejected
+        code = payload.get("code") if isinstance(payload, dict) else None
+        if not isinstance(code, str) or not code.strip():
+            return JSONResponse({"error": "missing recovery code"}, status_code=400)
+        if not webauthn_stepup.consume_recovery_code(principal, code):
+            return JSONResponse({"error": "invalid or already-used recovery code"}, status_code=401)
+        for cred in webauthn_stepup.list_credentials(principal):
+            webauthn_stepup.remove_credential(principal, cred.credential_id)
+        _audit(
+            principal, "webauthn_recovery_code_used",
+            "Recovery code used -- all enrolled passkeys removed, ready for fresh enrollment",
+        )
         return JSONResponse({"status": "ok"})
 
     return [
@@ -288,6 +375,7 @@ def build_routes(
         Route("/api/security/webauthn/register/options", register_options, methods=["POST"]),
         Route("/api/security/webauthn/register/verify", register_verify, methods=["POST"]),
         Route("/security/credentials/{credential_id}/delete", delete_credential, methods=["POST"]),
+        Route("/security/recover", recover_credential, methods=["POST"]),
     ]
 
 
@@ -343,12 +431,45 @@ document.addEventListener('DOMContentLoaded', function () {
       });
     }).then(function (r) { return r.json(); }).then(function (data) {
       if (data.error) { throw new Error(data.error); }
+      // #426 Phase 4: a recovery code is issued the moment none is
+      // currently unused -- shown exactly once, here, since the server
+      // never returns it again after this response.
+      if (data.recovery_code) {
+        window.alert(
+          'Save this recovery code somewhere safe -- it will not be shown again.\\n\\n' +
+          data.recovery_code +
+          '\\n\\nIf you ever lose every passkey enrolled here, this code is the only way back in.'
+        );
+      }
       window.location.reload();
     }).catch(function (err) {
       btn.disabled = false;
       if (status) { status.textContent = 'Could not add a passkey: ' + err.message; }
     });
   });
+
+  // #426 Phase 4: the recovery-code path for a lost/unusable authenticator
+  // -- no WebAuthn ceremony, just the one-time code from enrollment.
+  var recoverBtn = document.getElementById('pf-use-recovery-code');
+  var recoverStatus = document.getElementById('pf-recovery-status');
+  if (recoverBtn) {
+    recoverBtn.addEventListener('click', function () {
+      var code = window.prompt('Enter your recovery code:');
+      if (!code) { return; }
+      recoverBtn.disabled = true;
+      fetch('/security/recover', {
+        method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({csrf: csrf, code: code})
+      }).then(function (r) { return r.json().then(function (data) { return {ok: r.ok, data: data}; }); })
+        .then(function (result) {
+          if (!result.ok) { throw new Error(result.data.error || 'recovery code was not accepted'); }
+          window.location.reload();
+        }).catch(function (err) {
+          recoverBtn.disabled = false;
+          if (recoverStatus) { recoverStatus.textContent = 'Could not recover: ' + err.message; }
+        });
+    });
+  }
 
   // #426 Phase 3: removing your *only* enrolled passkey demands a fresh
   // assertion first (module docstring) -- the server's own 428 carries
@@ -430,6 +551,8 @@ really you before a write approval is released, even if someone else has your un
 {body}
 <p><button type="button" class="add" id="pf-add-passkey">Add a passkey</button>
 <span id="pf-passkey-status" class="meta"></span></p>
+<p>Lost every passkey enrolled here? <button type="button" class="remove" id="pf-use-recovery-code">Use your recovery code</button>
+<span id="pf-recovery-status" class="meta"></span></p>
 <p><a href="/connect">Back to connections</a></p>
 <script nonce="{nonce}">{_PAGE_JS}</script>
 </body></html>"""

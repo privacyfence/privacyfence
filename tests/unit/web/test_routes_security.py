@@ -9,6 +9,7 @@ from starlette.responses import RedirectResponse
 from starlette.testclient import TestClient
 
 from privacyfence import paths, webauthn_stepup as wa
+from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session, routes_security as rs, session_auth
@@ -22,6 +23,13 @@ BOB = Principal(id="bob", email="bob@example.com", display_name="Bob")
 @pytest.fixture(autouse=True)
 def _fake_data_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    # #426 Phase 4: register_verify/delete_credential/recover_credential
+    # now write audit entries -- an un-initialized logger falls back to
+    # the real ~/.privacyfence/audit (audit_log.py's own
+    # _fallback_log_dir), which testing-policy.md is explicit tests must
+    # never touch. init_audit_logger(str(tmp_path)) is that module's own
+    # documented isolation pattern.
+    init_audit_logger(str(tmp_path / "audit"))
     return tmp_path
 
 
@@ -79,6 +87,35 @@ def _signed_in_local(client, sessions) -> str:
     session_id = sessions.create()
     client.cookies.set(session_auth.SESSION_COOKIE, session_id)
     return session_id
+
+
+def _audit_decisions(tmp_path) -> list[str]:
+    """Reads back every ``decision`` recorded this week in the isolated
+    audit log ``_fake_data_dir`` points ``init_audit_logger`` at -- see
+    that fixture's own comment."""
+    path = tmp_path / "audit" / f"{current_week()}.jsonl"
+    if not path.exists():
+        return []
+    import json as _json
+    return [_json.loads(line)["decision"] for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def _register_first_credential(client, session_id, *, fake_verified=None) -> dict:
+    """Drives a full options->verify round trip and returns the parsed
+    JSON response -- shared by every Phase 4 test below that needs a
+    freshly enrolled credential."""
+    client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
+    fake_verified = fake_verified or type("V", (), {
+        "credential_id": b"raw-id", "credential_public_key": b"pub-key", "sign_count": 0,
+        "credential_device_type": type("D", (), {"value": "single_device"})(),
+        "credential_backed_up": False,
+    })()
+    with patch.object(wa.webauthn, "verify_registration_response", return_value=fake_verified):
+        r = client.post("/api/security/webauthn/register/verify", json={
+            "csrf": session_id, "credential": {"id": "x"}, "label": "My Laptop",
+        })
+    assert r.status_code == 200
+    return r.json()
 
 
 class TestAuthRequired:
@@ -526,3 +563,208 @@ class TestLocalModeEnrollment:
             })
         assert r.status_code == 200
         assert wa.list_credentials(LOCAL_PRINCIPAL) == []
+
+
+# In-process ASGI TestClient, no real socket -- unit per testing-policy.md's
+# seven-layer taxonomy.
+@pytest.mark.unit
+class TestEnrollAndRemoveAreAudited:
+    """#426 Phase 4: every enroll/remove writes its own audit entry."""
+
+    def test_enrollment_is_audited(self, tmp_path):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        _register_first_credential(client, session_id)
+        assert "webauthn_credential_enrolled" in _audit_decisions(tmp_path)
+
+    def test_removal_of_a_non_last_credential_is_audited(self, tmp_path):
+        app, sessions = _app()
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0y", public_key="cGs2", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        client.post("/security/credentials/Y3JlZC0x/delete", json={"csrf": session_id})
+        assert "webauthn_credential_removed" in _audit_decisions(tmp_path)
+
+    def test_removal_of_the_last_credential_is_audited_only_after_the_assertion_succeeds(self, tmp_path):
+        app, sessions = _app()
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        client.post("/security/credentials/Y3JlZC0x/delete", json={"csrf": session_id})
+        assert "webauthn_credential_removed" not in _audit_decisions(tmp_path)
+
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            client.post("/security/credentials/Y3JlZC0x/delete", json={
+                "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert "webauthn_credential_removed" in _audit_decisions(tmp_path)
+
+    def test_a_failed_delete_assertion_is_not_audited_as_a_removal(self, tmp_path):
+        app, sessions = _app()
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        client.post("/security/credentials/Y3JlZC0x/delete", json={"csrf": session_id})
+        with patch.object(wa.webauthn, "verify_authentication_response", side_effect=ValueError("bad sig")):
+            client.post("/security/credentials/Y3JlZC0x/delete", json={
+                "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert "webauthn_credential_removed" not in _audit_decisions(tmp_path)
+
+
+# In-process ASGI TestClient, no real socket -- unit per testing-policy.md's
+# seven-layer taxonomy.
+@pytest.mark.unit
+class TestRecoveryCodeIssuedOnEnrollment:
+    """#426 Phase 4: register_verify hands back a one-time recovery code
+    exactly when this principal doesn't already have an unused one."""
+
+    def test_first_ever_enrollment_returns_a_recovery_code(self):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        data = _register_first_credential(client, session_id)
+        assert "recovery_code" in data
+        assert wa.has_recovery_code(ALICE) is True
+
+    def test_a_second_enrollment_does_not_reissue_one(self):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        _register_first_credential(client, session_id)
+
+        client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
+        fake_verified = type("V", (), {
+            "credential_id": b"second-raw-id", "credential_public_key": b"pub-key-2", "sign_count": 0,
+            "credential_device_type": type("D", (), {"value": "single_device"})(),
+            "credential_backed_up": False,
+        })()
+        with patch.object(wa.webauthn, "verify_registration_response", return_value=fake_verified):
+            r = client.post("/api/security/webauthn/register/verify", json={
+                "csrf": session_id, "credential": {"id": "y"}, "label": "Second Key",
+            })
+        assert "recovery_code" not in r.json()
+
+    def test_re_enrolling_after_the_code_was_spent_issues_a_fresh_one(self):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        data = _register_first_credential(client, session_id)
+        wa.consume_recovery_code(ALICE, data["recovery_code"])
+        assert wa.has_recovery_code(ALICE) is False
+
+        client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
+        fake_verified = type("V", (), {
+            "credential_id": b"second-raw-id", "credential_public_key": b"pub-key-2", "sign_count": 0,
+            "credential_device_type": type("D", (), {"value": "single_device"})(),
+            "credential_backed_up": False,
+        })()
+        with patch.object(wa.webauthn, "verify_registration_response", return_value=fake_verified):
+            r = client.post("/api/security/webauthn/register/verify", json={
+                "csrf": session_id, "credential": {"id": "y"}, "label": "Second Key",
+            })
+        assert "recovery_code" in r.json()
+
+
+# In-process ASGI TestClient, no real socket -- unit per testing-policy.md's
+# seven-layer taxonomy.
+@pytest.mark.unit
+class TestRecoverCredential:
+    """#426 Phase 4: POST /security/recover -- the recovery-code path for
+    when the only enrolled authenticator is lost, no WebAuthn ceremony
+    involved."""
+
+    def test_unauthenticated_is_401(self):
+        app, _sessions = _app()
+        r = _client(app).post("/security/recover", json={"code": "x"})
+        assert r.status_code == 401
+
+    def test_wrong_csrf_is_rejected(self):
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.post("/security/recover", json={"csrf": "wrong", "code": "x"})
+        assert r.status_code == 401
+
+    def test_missing_code_is_a_clean_400(self):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/security/recover", json={"csrf": session_id})
+        assert r.status_code == 400
+
+    def test_malformed_json_body_is_treated_as_empty_not_a_crash(self):
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.post(
+            "/security/recover", content=b"not json", headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 401
+
+    def test_wrong_code_is_rejected_and_leaves_credentials_intact(self):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        data = _register_first_credential(client, session_id)
+        assert data["recovery_code"]
+        r = client.post("/security/recover", json={"csrf": session_id, "code": "0000-0000-0000-0000"})
+        assert r.status_code == 401
+        assert wa.list_credentials(ALICE) != []
+
+    def test_correct_code_clears_every_enrolled_credential(self, tmp_path):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        data = _register_first_credential(client, session_id)
+        r = client.post("/security/recover", json={"csrf": session_id, "code": data["recovery_code"]})
+        assert r.status_code == 200
+        assert wa.list_credentials(ALICE) == []
+        assert "webauthn_recovery_code_used" in _audit_decisions(tmp_path)
+
+    def test_code_is_single_use_even_for_recovery(self):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        data = _register_first_credential(client, session_id)
+        code = data["recovery_code"]
+        client.post("/security/recover", json={"csrf": session_id, "code": code})
+        # Re-enroll, then try to reuse the already-spent code again.
+        client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
+        fake_verified = type("V", (), {
+            "credential_id": b"second-raw-id", "credential_public_key": b"pub-key-2", "sign_count": 0,
+            "credential_device_type": type("D", (), {"value": "single_device"})(),
+            "credential_backed_up": False,
+        })()
+        with patch.object(wa.webauthn, "verify_registration_response", return_value=fake_verified):
+            client.post("/api/security/webauthn/register/verify", json={
+                "csrf": session_id, "credential": {"id": "y"}, "label": "Second Key",
+            })
+        r = client.post("/security/recover", json={"csrf": session_id, "code": code})
+        assert r.status_code == 401
+        assert wa.list_credentials(ALICE) != []
+
+    def test_a_principal_cannot_recover_using_another_principals_code(self):
+        app, sessions = _app()
+        alice_client = _client(app)
+        alice_session_id = _signed_in(alice_client, sessions, ALICE)
+        data = _register_first_credential(alice_client, alice_session_id)
+
+        bob_client = _client(app)
+        bob_session_id = _signed_in(bob_client, sessions, BOB)
+        r = bob_client.post("/security/recover", json={"csrf": bob_session_id, "code": data["recovery_code"]})
+        assert r.status_code == 401
+        assert wa.list_credentials(ALICE) != []

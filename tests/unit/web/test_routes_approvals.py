@@ -571,6 +571,21 @@ class TestRequirePasskeyBanner:
         r = client.get("/approvals")
         assert '<div class="pf-shell-banner"' not in r.text
 
+    def test_disabled_requirement_notice_is_shown(self):
+        """#426 Phase 4: webauthn_stepup.observe_step_up_requirement's own
+        persistent notice, surfaced the same way the Phase 3 enrollment
+        one is -- see test_routes_settings.py's own copy of this test."""
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=True)
+        wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=False)
+        app, sessions, _web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=False))
+        client = _client(app)
+        _signed_in(client, sessions)
+        r = client.get("/approvals")
+        assert '<div class="pf-shell-banner"' in r.text
+        assert "turned off" in r.text
+
 
 class TestRequirePasskeyHardFail:
     """#426 Phase 3: with ``require_passkey`` on, the one deliberate gap

@@ -438,6 +438,28 @@ class TestRequirePasskeyBanner:
         r = client.get("/settings")
         assert '<div class="pf-shell-banner"' not in r.text
 
+    def test_disabled_requirement_notice_is_shown(self, controller, sessions):
+        """#426 Phase 4: webauthn_stepup.observe_step_up_requirement's own
+        persistent notice, surfaced through this page's banner the same
+        way the Phase 3 enrollment one is."""
+        wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=True)
+        wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=False)
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=False),
+        )
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert '<div class="pf-shell-banner"' in r.text
+        assert "turned off" in r.text
+
+    def test_no_disabled_notice_when_never_required(self, controller, sessions):
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=False, rp_id="localhost", require_passkey=False),
+        )
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert '<div class="pf-shell-banner"' not in r.text
+
 
 class TestConnectorAuthenticationEndToEnd:
     """§16.5's W6 "Done when": a connector can be authenticated from a

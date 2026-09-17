@@ -280,7 +280,15 @@ def create_app(
     def _banner_html() -> str | None:
         if step_up is None:
             return None
-        return step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(LOCAL_PRINCIPAL))
+        # #426 Phase 4: the persistent "requirement was turned off" notice
+        # stands alongside the Phase 3 "nothing enrolled yet" one -- see
+        # web/routes_settings.py's own _banner_html for the same pairing.
+        parts = [
+            step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(LOCAL_PRINCIPAL)),
+            webauthn_stepup.step_up_disabled_notice(LOCAL_PRINCIPAL),
+        ]
+        parts = [p for p in parts if p]
+        return " ".join(parts) if parts else None
 
     async def list_approvals(request: Request) -> Response:
         if not _authenticated(request):
