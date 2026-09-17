@@ -269,9 +269,13 @@ The companion app and the AI client both run as you, and no permission bit can t
 `SO_PEERCRED`'s uid answers "which user", never "which program". Rather than build a process-identity
 check that would be sound on macOS and weak on Linux, the design makes a session *insufficient*
 instead of *uncallable*: this phase takes the human-authority files away, and #426's passkey then
-makes possession of a session not enough to release an approval. The consequence, stated rather than
-left to be discovered: **integrity is the strong guarantee — the agent cannot approve its own
-request — while confidentiality of the review screen is the weaker one**, since an agent that
+makes possession of a session not enough to release an approval — but only once [privilege
+separation](#privilege-separation-macos-linux-and-windows) is active, `step_up.enabled` and
+`step_up.require_passkey` are both set, and a passkey is enrolled. None of those four is this
+deployment's default, so on a default install the session is still sufficient on its own: the agent
+can approve its own request. The consequence, stated rather than left to be discovered for an
+install that turns all four on: **integrity is the strong guarantee — the agent cannot approve its
+own request — while confidentiality of the review screen is the weaker one**, since an agent that
 reaches the web UI can still read what is pending. The control channel's socket accordingly lives in
 a group-shared `<system root>/handoff` directory, not under `authority`, along with the agent's own
 `mcp_token` (which is the agent's credential and is meant to stay reachable). See
