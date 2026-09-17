@@ -26,9 +26,11 @@ them from PowerShell rather than from bash. So the installer contract and
 the layout audit split in two: ``POSIX_PLATFORMS`` keeps the shell-script
 and mode-bit assertions, and ``TestWindows*`` below covers the half that has
 no POSIX counterpart at all -- the ACL audit, the ``.ps1``, the companion
-Scheduled Task, the service, and the one check no other platform needs (that
-the daemon's own image is not writable by the account it is being separated
-from).
+Scheduled Task, and the service. The one check every platform needs turns
+out not to be Windows-only after all: B1 found that a packaged macOS
+install's own image can be just as writable by the account it's separated
+from as an unelevated Windows one, so ``TestPosixImageAudit`` below covers
+the ``stat``-walk counterpart to ``TestWindowsLayoutAudit``'s ACL read.
 
 ``current_platform`` is monkeypatched rather than ``sys.platform`` itself,
 and ``PRIVACYFENCE_SYSTEM_ROOT`` relocates the whole layout under
@@ -613,6 +615,161 @@ class TestAuditLayoutBestEffort:
         privilege_separation.reset_cache()
 
         assert privilege_separation.separation() is None
+
+
+class TestPosixImageAudit:
+    """B1: nothing previously verified the daemon/companion image was not
+    user-writable before privilege separation elevated to it. ADR 0002 §5a
+    used to claim ``/Applications`` was root-owned the same way ``/opt`` is
+    -- it's actually ``root:admin drwxrwxr-x``, and a drag-installed ``.app``
+    is normally owned by the installing user. This is the POSIX counterpart
+    of ``TestWindowsLayoutAudit``'s image tests and of
+    ``windows_acl.image_problems()`` itself: a ``stat`` walk rather than an
+    ACL read, since a mode bit has no inheritance to lean on the way an ACL
+    does.
+    """
+
+    pytestmark = posix_permissions_only
+
+    @pytest.fixture
+    def fake_stats(self, monkeypatch):
+        """A controlled ownership/mode table, standing in for the real
+        filesystem this test process cannot ``chown`` to root without being
+        root. Anything not explicitly set reads back as ``root:root 0755``
+        -- an ordinary, trusted directory -- so a test only has to describe
+        the one path it cares about, and the ancestor walk the function
+        under test does on its own doesn't introduce noise.
+        """
+        table: dict[Path, os.stat_result] = {}
+
+        def _entry(uid: int, gid: int, mode: int) -> os.stat_result:
+            return os.stat_result((stat.S_IFDIR | mode, 0, 0, 1, uid, gid, 0, 0, 0, 0))
+
+        def fake_stat(self_path, *args, **kwargs):
+            return table.get(self_path, _entry(0, 0, 0o755))
+
+        monkeypatch.setattr(Path, "stat", fake_stat)
+
+        def set_stat(path: Path, *, uid: int = 0, gid: int = 0, mode: int = 0o755) -> None:
+            table[path] = _entry(uid, gid, mode)
+
+        return set_stat
+
+    def test_posix_image_paths_to_check_walks_up_to_the_filesystem_root(self):
+        image = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp")
+
+        result = privilege_separation._posix_image_paths_to_check((image,))
+
+        assert image in result
+        assert Path("/Applications/PrivacyFenceApp.app") in result
+        assert Path("/Applications") in result
+        assert Path("/") in result
+
+    def test_posix_image_paths_to_check_dedupes_shared_ancestors(self):
+        # Daemon and companion live in the same bundle -- "or any directory
+        # on the path to it" should not turn into the same directory
+        # reported twice.
+        macos_dir = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS")
+        daemon = macos_dir / "PrivacyFenceApp"
+        companion = macos_dir / "PrivacyFenceCompanion"
+
+        result = privilege_separation._posix_image_paths_to_check((daemon, companion))
+
+        assert result.count(macos_dir) == 1
+
+    def test_a_root_owned_unwritable_image_is_clean(self, fake_stats):
+        image = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp")
+        fake_stats(image, uid=0, gid=0, mode=0o755)
+
+        assert privilege_separation._posix_image_problems((image,)) == []
+
+    def test_reports_an_image_not_owned_by_root(self, fake_stats):
+        # The exact defect: a drag-installed .app is normally owned by the
+        # installing user, the same account the agent runs as.
+        image = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp")
+        fake_stats(image, uid=501, gid=20, mode=0o755)
+
+        problems = privilege_separation._posix_image_problems((image,))
+
+        assert len(problems) == 1
+        assert str(image) in problems[0]
+        assert "not root" in problems[0]
+
+    def test_reports_a_world_writable_image(self, fake_stats):
+        image = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp")
+        fake_stats(image, uid=0, gid=0, mode=0o777)
+
+        problems = privilege_separation._posix_image_problems((image,))
+
+        assert len(problems) == 1
+        assert "world-writable" in problems[0]
+
+    def test_reports_a_group_writable_image_by_an_untrusted_group(self, fake_stats):
+        # /Applications itself, precisely: root:admin drwxrwxr-x.
+        applications = Path("/Applications")
+        fake_stats(applications, uid=0, gid=80, mode=0o775)
+
+        problems = privilege_separation._posix_image_problems((applications,))
+
+        assert len(problems) == 1
+        assert "group-writable" in problems[0]
+
+    def test_a_wheel_group_writable_image_is_trusted(self, monkeypatch, fake_stats):
+        import grp
+
+        class _FakeGrpEntry:
+            gr_gid = 4242
+
+        monkeypatch.setattr(grp, "getgrnam", lambda name: _FakeGrpEntry())
+        image = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp")
+        fake_stats(image, uid=0, gid=4242, mode=0o775)
+
+        assert privilege_separation._posix_image_problems((image,)) == []
+
+    def test_a_missing_path_is_skipped_rather_than_reported(self):
+        # Best-effort like every other check in this module: this function
+        # never sees a real missing path in the tests above (fake_stats
+        # answers for everything), but a real filesystem will have plenty
+        # of parents that don't exist as literal directories (e.g. a
+        # mount point's own parent).
+        image = Path("/this/path/does/not/exist/PrivacyFenceApp")
+
+        assert privilege_separation._posix_image_problems((image,)) == []
+
+    def test_checks_every_directory_on_the_way_to_the_image(self, fake_stats):
+        # The other half of B1's "or any directory on the path to it": a
+        # root-owned, unwritable executable still isn't safe if the bundle
+        # holding it can be deleted and replaced wholesale.
+        image = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp")
+        fake_stats(image, uid=0, gid=0, mode=0o755)
+        fake_stats(Path("/Applications/PrivacyFenceApp.app"), uid=501, gid=20, mode=0o755)
+
+        problems = privilege_separation._posix_image_problems((image,))
+
+        assert len(problems) == 1
+        assert "PrivacyFenceApp.app" in problems[0]
+
+    def test_wired_into_audit_layout(self, separated, platform_name, monkeypatch, fake_stats):
+        if platform_name == "win32":
+            pytest.skip("Windows' layout audit is ACLs -- see TestWindowsLayoutAudit")
+        monkeypatch.setattr(privilege_separation, "_authority_owner_problem", lambda _state: None)
+        image = Path("/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp")
+        monkeypatch.setattr(privilege_separation, "daemon_image_paths", lambda: (image,))
+        fake_stats(image, uid=501, gid=20, mode=0o755)
+
+        problems = privilege_separation.audit_layout()
+
+        assert any("not root" in problem for problem in problems)
+
+    def test_an_empty_daemon_image_paths_adds_nothing(self, separated, platform_name, monkeypatch):
+        if platform_name == "win32":
+            pytest.skip("Windows' layout audit is ACLs -- see TestWindowsLayoutAudit")
+        # The ordinary case: an unfrozen (source/pip) install, or Linux's
+        # .deb, where daemon_image_paths() is always empty.
+        monkeypatch.setattr(privilege_separation, "_authority_owner_problem", lambda _state: None)
+        monkeypatch.setattr(privilege_separation, "daemon_image_paths", lambda: ())
+
+        assert privilege_separation.audit_layout() == []
 
 
 class TestHandoffWrites:

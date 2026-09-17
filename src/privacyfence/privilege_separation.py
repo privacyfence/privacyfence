@@ -58,7 +58,12 @@ Two consequences are worth stating rather than leaving to be discovered:
   logged-in user can rewrite would let the agent run its own code *as the
   service account*. That is why the non-elevated per-user install path
   (#407) cannot be separated, and why ``audit_layout()`` re-checks the image
-  on every start -- see ``windows_acl.image_problems()``.
+  on every start -- see ``windows_acl.image_problems()``. macOS has the same
+  exposure by a different route: ``/Applications`` is ``root:admin
+  drwxrwxr-x`` and a drag-installed ``.app`` is normally owned by the
+  installing user, so nothing about a packaged macOS install makes the
+  daemon's image root-owned on its own (B1) -- ``_posix_image_problems()``
+  is that platform's counterpart, a ``stat`` walk rather than an ACL read.
 
 ``scripts/macos_privilege_separation.sh enable``,
 ``scripts/linux_privilege_separation.sh enable`` and
@@ -704,29 +709,120 @@ def audit_layout() -> list[str]:
     owner_problem = _authority_owner_problem(state)
     if owner_problem is not None:
         problems.append(owner_problem)
+    problems.extend(_posix_image_problems(daemon_image_paths()))
     return problems
 
 
 def daemon_image_paths() -> tuple[Path, ...]:
-    """The files a Windows service's ``binPath`` actually executes, for the
-    one check with no POSIX counterpart (``windows_acl.image_problems()``).
+    """The files this daemon's own frozen executable actually runs from --
+    what a Windows service's ``binPath`` names (``windows_acl.
+    image_problems()``), and, since B1, what a packaged macOS install's
+    LaunchDaemon names (``_posix_image_problems()``).
 
-    Two paths, not one, because there are two ways to replace what a service
-    runs: rewriting the executable itself, and dropping a DLL next to it for
-    the loader to find first. Both are "write access to the install
-    directory", so both are checked.
+    Two paths, not one, because there are two ways to replace what gets run:
+    rewriting the executable itself, and dropping something next to it for
+    the loader to find first (a DLL on Windows; nothing PyInstaller's
+    one-dir macOS bundle actually loads that way today, but the parent
+    directory is "write access to the install", so it's checked regardless).
 
     Empty on anything but a frozen build. A source or ``pip`` install's
     ``sys.executable`` is the Python interpreter, which is shared with every
     other Python program on the machine and is not something this install
     provisioned or can speak about -- reporting a user-writable
-    ``python.exe`` as a PrivacyFence layout defect would be noise on every
-    developer's own machine, which is where unfrozen installs actually live.
+    ``python.exe``/``python3`` as a PrivacyFence layout defect would be
+    noise on every developer's own machine, which is where unfrozen
+    installs (including every current Linux ``.deb``) actually live.
     """
     if not (getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS")):
         return ()
     image = Path(sys.executable)
     return (image, image.parent)
+
+
+# root's own group on macOS and every BSD it descends from -- the one POSIX
+# group this design extends the same trust to as it extends to root itself,
+# for the same reason ``windows_acl.TRUSTED_TRUSTEES`` includes ``BUILTIN\\
+# Administrators``. Deliberately *not* ``admin`` (the group ``/Applications``
+# is actually group-owned by, and the one ADR 0002 §5a used to assume was
+# safe the way ``/opt`` is): an ``admin`` member is any human with a local
+# account who has ever answered a password prompt, which on a single-user
+# Mac is the same account the agent runs as -- trusting it here would be
+# trusting the exact account B1 exists to stop.
+_TRUSTED_POSIX_IMAGE_GROUP = "wheel"
+
+
+def _posix_image_paths_to_check(paths: tuple[Path, ...]) -> list[Path]:
+    """``paths`` plus every directory on the way to each -- the "or any
+    directory on the path to it" half of B1's fix, and the thing an NTFS ACL
+    gets for free through inheritance that a POSIX mode bit does not: a
+    root-owned, non-writable executable still isn't safe if the directory
+    holding it can be emptied and refilled by someone else."""
+    seen: dict[Path, None] = {}
+    for path in paths:
+        for candidate in (path, *path.parents):
+            seen.setdefault(candidate)
+    return list(seen)
+
+
+def _posix_image_problems(paths: tuple[Path, ...]) -> list[str]:
+    """The POSIX counterpart of ``windows_acl.image_problems()`` (B1) -- a
+    ``stat`` walk rather than an ACL read, since POSIX has no inheritance to
+    lean on. ``daemon_image_paths()`` is empty on every unfrozen install
+    (source checkouts, the current Linux ``.deb``), so in practice this
+    only ever finds something to say about a packaged macOS build.
+
+    ADR 0002 §5a used to claim ``/Applications`` was root-owned the same way
+    ``/opt`` is, which is false: it is ``root:admin drwxrwxr-x``, and a
+    drag-installed ``.app`` is normally owned by the installing user -- the
+    same account the agent runs as. So this checks the same thing Windows
+    already refuses to run a service image on top of: is *anyone but root
+    (or ``wheel``)* able to rewrite this, whether by owning it outright or
+    through a writable group or world bit.
+
+    Best-effort like every other check in this module: a path that can't be
+    ``stat``'d is skipped rather than reported.
+    """
+    import grp
+    import pwd
+
+    try:
+        trusted_gid = grp.getgrnam(_TRUSTED_POSIX_IMAGE_GROUP).gr_gid
+    except KeyError:  # pragma: no cover -- no wheel group (non-BSD-derived POSIX)
+        trusted_gid = 0
+
+    problems: list[str] = []
+    for candidate in _posix_image_paths_to_check(paths):
+        try:
+            st = candidate.stat()
+        except OSError:
+            continue
+        if st.st_uid != 0:
+            try:
+                owner = pwd.getpwuid(st.st_uid).pw_name
+            except KeyError:  # pragma: no cover -- a uid with no passwd entry
+                owner = str(st.st_uid)
+            problems.append(
+                f"{candidate} is owned by '{owner}', not root -- the daemon runs whatever is at "
+                "this path, so an owner other than root can replace it with anything and have "
+                "that run as the service account."
+            )
+            continue
+        mode = stat.S_IMODE(st.st_mode)
+        if mode & stat.S_IWOTH:
+            problems.append(
+                f"{candidate} is world-writable (mode {mode:04o}) -- anyone on this machine can "
+                "replace what the daemon runs."
+            )
+        elif mode & stat.S_IWGRP and st.st_gid != trusted_gid:
+            try:
+                group = grp.getgrgid(st.st_gid).gr_name
+            except KeyError:  # pragma: no cover -- a gid with no group entry
+                group = str(st.st_gid)
+            problems.append(
+                f"{candidate} is group-writable by '{group}' (mode {mode:04o}) -- only root and "
+                f"'{_TRUSTED_POSIX_IMAGE_GROUP}' are trusted to replace what the daemon runs."
+            )
+    return problems
 
 
 def windows_layout_problems(state: Separation) -> list[str]:
