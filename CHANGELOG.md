@@ -247,6 +247,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the same agent the check is meant to defend against — see issue #426 for the full dependency
   reasoning, and the "Local-mode trust boundary" section of `docs/security-and-compliance.md` for
   what still doesn't hold until later phases land. See issue #426.
+- Issue #426 Phase 2: local mode's `/api/approvals/{id}/decide` endpoint (`web/routes_approvals.py`)
+  now demands a fresh WebAuthn assertion before releasing an approving decision (`accept`/
+  `accept_all`) on a write, or on a PII-flagged read when `step_up.scope` is set to
+  `writes_and_pii_reads` — ported from `web/routes_org_approvals.py`'s own decide-time gate, minus
+  the IdP re-authentication fallback local mode has no equivalent of. A first attempt with no
+  `webauthn_assertion` gets a `428` carrying fresh assertion options when a passkey is enrolled; a
+  second attempt with a valid, decision-bound assertion completes the decision. `deny` never needs
+  step-up. This is still opt-in machinery, not the guarantee issue #426 exists for: with no passkey
+  enrolled, the `428` has no options to offer and the decision is let through unguarded rather than
+  left permanently stuck — the one place step-up stays evadable at this phase, closed by Phase 3's
+  `require_passkey` enforcement, not this one. See issue #426.
 
 ### Added
 

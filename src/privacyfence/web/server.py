@@ -668,7 +668,10 @@ def build_app(
     role ``org.issuer_url`` plays for org mode's own mount below) -- passed
     separately from ``step_up`` itself since local mode's origin depends on
     ``WebServer``'s own ``host``/``port``, which this function has no other
-    way to see.
+    way to see. The same two values (#426 Phase 2) also gate
+    ``create_approvals_app``'s own decide endpoint on a fresh WebAuthn
+    assertion -- one ``StepUpConfig``, read once here, drives both the
+    enrollment surface and the decide-time check.
     """
     if org is not None:
         return _build_org_app(
@@ -728,6 +731,7 @@ def build_app(
     app = create_approvals_app(
         web_ui, sessions=sessions, extra_routes=extra_routes, lifespan=lifespan,
         notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
+        step_up=step_up, step_up_origin=step_up_issuer_url,
     )
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(bootstrapped, principal_resolver or _default_principal)
