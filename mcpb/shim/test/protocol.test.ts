@@ -211,4 +211,62 @@ describe("privilegeSeparationRoot / handoffDir (#428 Phase 4)", () => {
       });
     }
   });
+
+  describe("PRIVACYFENCE_SYSTEM_ROOT guard (B11)", () => {
+    // This shim's environment is whatever the logged-in user's session set,
+    // unlike the daemon's own (launchd/systemd-controlled) one. So once a
+    // real install is provisioned at the platform's actual default root, the
+    // override must be refused -- honouring it would let a user-session
+    // process redirect the shim onto a root it controls instead of the one
+    // the installer provisioned and locked down.
+
+    /** Stands in for the platform's real, un-overridden default root by
+     * pointing %ProgramData% at a tmp_path -- win32 is the one platform
+     * whose default root (defaultSystemRoot()) is read from the environment
+     * rather than hardcoded, so this exercises the guard without writing to
+     * an actual system directory. defaultSystemRoot() appends "PrivacyFence"
+     * to %ProgramData%, so that's where the marker has to live too. */
+    function withDefaultRoot(fn: (programData: string, defaultRoot: string) => void): void {
+      const programData = fs.mkdtempSync(path.join(os.tmpdir(), "pf-sep-programdata-"));
+      const defaultRoot = path.join(programData, "PrivacyFence");
+      fs.mkdirSync(defaultRoot);
+      try {
+        fn(programData, defaultRoot);
+      } finally {
+        fs.rmSync(programData, { recursive: true, force: true });
+      }
+    }
+
+    it("refuses the override when the real default root already has a marker", () => {
+      withPlatform("win32", () => {
+        withDefaultRoot((programData, defaultRoot) => {
+          fs.writeFileSync(path.join(defaultRoot, "privilege-separation.json"), validMarker("win32"));
+          const attackerRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pf-sep-attacker-"));
+          try {
+            const env = { ProgramData: programData, PRIVACYFENCE_SYSTEM_ROOT: attackerRoot };
+            assert.equal(privilegeSeparationRoot(env), defaultRoot);
+            assert.equal(handoffDir(env), path.join(defaultRoot, "handoff"));
+          } finally {
+            fs.rmSync(attackerRoot, { recursive: true, force: true });
+          }
+        });
+      });
+    });
+
+    it("still honours the override when the real default root has no marker", () => {
+      withPlatform("win32", () => {
+        withDefaultRoot((programData) => {
+          // defaultRoot exists but was never provisioned -- no marker in it.
+          const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pf-sep-test-"));
+          try {
+            fs.writeFileSync(path.join(testRoot, "privilege-separation.json"), validMarker("win32"));
+            const env = { ProgramData: programData, PRIVACYFENCE_SYSTEM_ROOT: testRoot };
+            assert.equal(privilegeSeparationRoot(env), testRoot);
+          } finally {
+            fs.rmSync(testRoot, { recursive: true, force: true });
+          }
+        });
+      });
+    });
+  });
 });

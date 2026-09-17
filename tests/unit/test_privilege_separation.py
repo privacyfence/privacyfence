@@ -351,6 +351,46 @@ class TestSystemRootOverride:
 
         assert privilege_separation.system_root() == privilege_separation.MACOS_SYSTEM_ROOT
 
+    def test_refuses_the_override_when_the_real_root_has_a_marker(self, platform_name, monkeypatch, tmp_path):
+        # B11: on a separated install, the companion and the MCPB shim honour
+        # this var too, and their environment comes from the user's login
+        # session -- exactly the boundary privilege separation exists to
+        # hold. Once a real install is provisioned at the platform's actual
+        # root, a user-session process redirecting itself elsewhere is the
+        # attack this guards against, not the test hatch the variable is for.
+        real_root = tmp_path / "real"
+        _write_marker(real_root, platform_name)
+        monkeypatch.setattr(privilege_separation, "_default_system_root", lambda: real_root)
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "attacker-controlled"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.system_root() == real_root
+
+    def test_still_honours_the_override_when_the_real_root_has_no_marker(self, platform_name, monkeypatch, tmp_path):
+        # The common case, and the one the escape hatch is actually for: a
+        # dev/CI machine has never had a real install provisioned at its
+        # platform's literal system root (that needs root to create), so the
+        # override still works exactly as before.
+        monkeypatch.setattr(privilege_separation, "_default_system_root", lambda: tmp_path / "never-provisioned")
+        test_root = tmp_path / "test"
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(test_root))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.system_root() == test_root
+
+    def test_refusal_falls_back_to_the_real_root_not_none(self, platform_name, monkeypatch, tmp_path):
+        # Refusing the override must not also refuse separation itself --
+        # the process should behave as if the variable were never set, i.e.
+        # use the real, already-provisioned root, not fail closed to None.
+        real_root = tmp_path / "real"
+        _write_marker(real_root, platform_name)
+        monkeypatch.setattr(privilege_separation, "_default_system_root", lambda: real_root)
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "attacker-controlled"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.is_enabled() is True
+        assert privilege_separation.separation().data_dir == real_root
+
     @pytest.mark.parametrize(
         "platform,expected",
         [

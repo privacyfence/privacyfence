@@ -352,6 +352,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   time, and an agent sharing the group could previously send `OPEN` itself to drive the human's
   browser to an attacker-chosen http(s) URL. The daemon's own MINT/QUIT channel is unchanged — ADR
   0002 decision 6 still applies there. See `privilege_separation.service_account_uid()`.
+- B11 of the 4.1.0 action plan: `PRIVACYFENCE_SYSTEM_ROOT` (`privilege_separation.py`'s
+  test/development escape hatch for relocating a separated install's authority root) is now
+  refused on a genuinely separated install instead of being honoured unconditionally. The
+  daemon's own environment is controlled by launchd/systemd, but the companion app and the MCPB
+  shim read this variable too, and *their* environment is whatever the signed-in user's session
+  set — exactly the boundary privilege separation exists to hold. `system_root()` and the shim's
+  `privilegeSeparationRoot()` now check the platform's real default root for an already-provisioned
+  marker before trusting the override; once one exists there, a user-session process can no longer
+  redirect itself onto a root it controls instead of the one the installer provisioned and locked
+  down. The override still works exactly as before on the common case — a dev/CI machine, which
+  has no real marker at that literal system root to begin with.
 
 ### Added
 
