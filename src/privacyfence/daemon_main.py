@@ -90,7 +90,8 @@ import yaml
 from . import __version__, audit_forwarding, org_bundle_signing, org_mode, privilege_separation, step_up_config
 from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
-from .principal import LOCAL_PRINCIPAL_ID, current_principal
+from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, current_principal
+from .webauthn_stepup import has_credentials as has_webauthn_credentials
 from .app_credentials import telegram_app_credentials
 from .approval_ui import init_approval_ui
 from .audit_log import (
@@ -709,6 +710,13 @@ def _maybe_start_web_server(
             # there).
             controller.set_connectors_changed_listener(mcp_dispatcher.notify_tools_changed)
 
+    # #426 Phase 1: config's own "step_up" section, not web_config's, since
+    # this is the human's privacy/security policy (settings.yaml), not a
+    # web server transport setting. Read once here, not inline in the
+    # WebServer(...) call below, so the require_passkey startup check right
+    # after server.start() reads the exact same config this daemon actually
+    # booted with.
+    local_step_up = step_up_config.StepUpConfig.from_local_config(config)
     server = WebServer(
         web_ui,
         port=int(web_config.get("port", DEFAULT_PORT)),
@@ -717,17 +725,27 @@ def _maybe_start_web_server(
         allow_quit=bool(settings_config.get("allow_quit", True)),
         notifications_enabled=bool(notifications_config.get("enabled", True)),
         notifications_detail=str(notifications_config.get("detail", "minimal")),
-        # #426 Phase 1: mounts /security for local-mode passkey enrollment --
-        # config's own "step_up" section, not web_config's, since this is
-        # the human's privacy/security policy (settings.yaml), not a web
-        # server transport setting.
-        step_up=step_up_config.StepUpConfig.from_local_config(config),
+        # #426 Phase 1: mounts /security for local-mode passkey enrollment.
+        step_up=local_step_up,
     )
     server.start()
     # The pending-result URL gate.py hands back to Claude (§5.2 point 4) is
     # only meaningful once the server is actually listening -- set here,
     # not at registry construction.
     registry.set_base_url(server.base_url)
+    # #426 Phase 3: "start, release nothing, and show a loud persistent
+    # banner -- rather than refusing to boot" (issue #426's own Phase 3
+    # text). Refusing to start here would remove the one path (/security)
+    # that fixes this misconfiguration, so this is a log line, not a raised
+    # ConfigurationError -- web_shell.wrap()'s own banner (StepUpConfig.
+    # local_enrollment_banner) is what actually makes this loud for a human
+    # who isn't reading the daemon's own log.
+    if local_step_up.local_enrollment_banner(has_credentials=has_webauthn_credentials(LOCAL_PRINCIPAL)) is not None:
+        logger.warning(
+            "step_up.require_passkey is set but no passkey is enrolled yet -- approving decisions and "
+            "sensitive settings changes will be refused until one is added at %s",
+            server.mint_bootstrap_url("/security"),
+        )
     if mcp_dispatcher is not None:
         # privacyfence_get_sign_in_link's own callback -- wired here rather
         # than at McpDispatcher construction above because it needs this

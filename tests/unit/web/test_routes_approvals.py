@@ -533,6 +533,101 @@ class TestStepUpEvadableWithNoPasskeyEnrolled:
         assert r.json() == {"status": "ok"}
 
 
+class TestRequirePasskeyBanner:
+    """#426 Phase 3: the list page carries step_up_config.py's own "loud
+    persistent banner" exactly when ``local_enrollment_banner()`` says to --
+    see that function's own tests (test_step_up_config.py) for the
+    condition itself, and web_shell.py's TestBanner for the markup."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def test_no_banner_when_step_up_is_off(self):
+        app, sessions, _web_ui = _app(step_up=StepUpConfig(enabled=False, require_passkey=True))
+        client = _client(app)
+        _signed_in(client, sessions)
+        r = client.get("/approvals")
+        assert '<div class="pf-shell-banner"' not in r.text
+
+    def test_banner_shown_when_require_passkey_unmet(self):
+        app, sessions, _web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True))
+        client = _client(app)
+        _signed_in(client, sessions)
+        r = client.get("/approvals")
+        assert '<div class="pf-shell-banner"' in r.text
+        assert "/security" in r.text
+
+    def test_no_banner_once_a_credential_is_enrolled(self):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        app, sessions, _web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True))
+        client = _client(app)
+        _signed_in(client, sessions)
+        r = client.get("/approvals")
+        assert '<div class="pf-shell-banner"' not in r.text
+
+
+class TestRequirePasskeyHardFail:
+    """#426 Phase 3: with ``require_passkey`` on, the one deliberate gap
+    TestStepUpEvadableWithNoPasskeyEnrolled documents above is closed --
+    nothing enrolled means a hard ``403``, never a silent pass-through.
+    Mirrors test_routes_org_approvals.py's own
+    test_no_credential_hard_fails_with_no_idp_fallback, minus the (local
+    mode has none) IdP angle."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def test_no_credential_hard_fails_instead_of_releasing_the_write(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 403
+        body = r.json()
+        assert body["error"] == "passkey_enrollment_required"
+        assert body["enroll_url"] == "/security"
+        stored = web_ui.deferred_registry.get(approval.id)
+        assert stored is not None
+        assert not stored.event.is_set()
+
+    def test_with_a_credential_still_offers_the_normal_webauthn_challenge(self):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+
+    def test_deny_never_hard_fails_even_with_nothing_enrolled(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "deny", "csrf": session_id})
+        assert r.status_code == 200
+
+
 class TestStepUpWebAuthnFlow:
     @pytest.fixture(autouse=True)
     def _fake_data_dir(self, monkeypatch, tmp_path):

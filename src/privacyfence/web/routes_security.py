@@ -24,22 +24,35 @@ web/routes_org_approvals.py's own step-up shim rather than duplicated --
 this module owns it only because enrollment is where the ceremony's shape
 first has to exist; there is nothing enrollment-specific about the helpers
 themselves.
+
+**Deleting your last credential (#426 Phase 3)** is gated behind a fresh
+assertion, regardless of ``step_up.require_passkey`` -- "belt-and-braces
+once #428 lands, since the flag is no longer agent-writable, but also the
+right behavior for a human at the keyboard" (issue #426's own Phase 3
+text): removing the *only* enrolled passkey is what would silently turn a
+"mandatory" install back into an unenforced one, so ``delete_credential``
+below demands proof of possession of that very credential first, the same
+428-then-retry protocol web/routes_approvals.py's decide() uses. Removing
+one of *several* enrolled credentials stays a plain, ungated request --
+there's no enforcement gap to close when at least one other credential
+would remain.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from html import escape as _esc
 from typing import Any, Callable
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from .. import webauthn_stepup
 from ..principal import Principal
 from ..step_up_config import StepUpConfig
-from ..webauthn_stepup import RegistrationChallengeStore, WebAuthnError
+from ..webauthn_stepup import RegistrationChallengeStore, StepUpChallengeStore, WebAuthnError
 from .csp import nonce_for as _csp_nonce_for
 
 logger = logging.getLogger(__name__)
@@ -148,7 +161,12 @@ def build_routes(
     string either way.
     """
     challenges = RegistrationChallengeStore()
+    delete_challenges = StepUpChallengeStore()
     origin = issuer_url.rstrip("/")
+
+    def _delete_fingerprint(principal_id: str, credential_id: str) -> str:
+        payload = f"delete-credential|{principal_id}|{credential_id}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _check_post(request: Request, csrf: Any) -> Response | None:
         if not check_csrf(request, csrf):
@@ -218,15 +236,52 @@ def build_routes(
         return JSONResponse({"status": "ok", "credential_id": saved.credential_id, "label": saved.label})
 
     async def delete_credential(request: Request) -> Response:
+        """A JSON/fetch endpoint (not a plain form submit) since removing
+        the *last* enrolled credential needs a two-round-trip WebAuthn
+        ceremony -- see module docstring. Removing one of several stays a
+        single request: ``is_last`` below is false, so the gate never
+        triggers and this behaves exactly like the old form-POST did."""
         principal = resolve_principal(request)
         if principal is None:
-            return unauthenticated_response(request)
-        form = await request.form()
-        rejected = _check_post(request, form.get("csrf"))
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        rejected = _check_post(request, payload.get("csrf") if isinstance(payload, dict) else None)
         if rejected is not None:
             return rejected
-        webauthn_stepup.remove_credential(principal, request.path_params["credential_id"])
-        return RedirectResponse("/security", status_code=303, headers={"Cache-Control": "no-store"})
+        credential_id = request.path_params["credential_id"]
+        existing = webauthn_stepup.list_credentials(principal)
+        is_last = len(existing) == 1 and existing[0].credential_id == credential_id
+        if is_last:
+            assertion = payload.get("webauthn_assertion") if isinstance(payload, dict) else None
+            if not isinstance(assertion, dict):
+                begun = webauthn_stepup.begin_assertion(principal, rp_id=step_up.rp_id) if step_up.rp_id else None
+                if begun is None:
+                    # is_last already proved a credential exists to assert
+                    # against -- only an unconfigured rp_id lands here, and
+                    # /security itself is never mounted without one (see
+                    # web/server.py's own step_up.rp_id gate).
+                    return JSONResponse({"error": "WebAuthn is not configured on this server"}, status_code=400)
+                options_json, challenge = begun
+                fingerprint = _delete_fingerprint(principal.id, credential_id)
+                delete_challenges.put(principal.id, credential_id, challenge=challenge, fingerprint=fingerprint)
+                return JSONResponse(
+                    {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
+                )
+            pending = delete_challenges.pop(principal.id, credential_id)
+            expected_fp = _delete_fingerprint(principal.id, credential_id)
+            if pending is None or pending.fingerprint != expected_fp:
+                return JSONResponse({"error": "step_up_expired"}, status_code=400)
+            try:
+                webauthn_stepup.verify_assertion(
+                    principal, assertion, expected_challenge=pending.challenge, rp_id=step_up.rp_id, origin=origin,
+                )
+            except WebAuthnError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=401)
+        webauthn_stepup.remove_credential(principal, credential_id)
+        return JSONResponse({"status": "ok"})
 
     return [
         Route("/security", security_page),
@@ -294,11 +349,48 @@ document.addEventListener('DOMContentLoaded', function () {
       if (status) { status.textContent = 'Could not add a passkey: ' + err.message; }
     });
   });
+
+  // #426 Phase 3: removing your *only* enrolled passkey demands a fresh
+  // assertion first (module docstring) -- the server's own 428 carries
+  // options only in that case, so this same handler is a plain one-shot
+  // delete whenever it isn't (a 200 with no 428 round trip at all).
+  function pfDeleteCredential(credId, assertion) {
+    var body = {csrf: csrf};
+    if (assertion) { body.webauthn_assertion = assertion; }
+    return fetch('/security/credentials/' + encodeURIComponent(credId) + '/delete', {
+      method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (r.status === 428) {
+        return r.json().then(function (data) {
+          if (!data.webauthn_options || !window.PublicKeyCredential) {
+            throw new Error('removing your only passkey needs a passkey prompt, and none is available');
+          }
+          return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function (newAssertion) {
+            return pfDeleteCredential(credId, newAssertion);
+          });
+        });
+      }
+      return r.json().then(function (data) {
+        if (!r.ok) { throw new Error(data.error || 'could not remove this passkey'); }
+        window.location.reload();
+      });
+    });
+  }
+  document.querySelectorAll('button.remove[data-credential-id]').forEach(function (removeBtn) {
+    removeBtn.addEventListener('click', function () {
+      removeBtn.disabled = true;
+      pfDeleteCredential(removeBtn.getAttribute('data-credential-id'), null).catch(function (err) {
+        removeBtn.disabled = false;
+        window.alert('Could not remove this passkey: ' + err.message);
+      });
+    });
+  });
 });
 """ + PF_WEBAUTHN_JS
 
 
-def _credential_row_html(principal: Principal, cred, csrf: str) -> str:
+def _credential_row_html(cred) -> str:
     created = ""
     try:
         import datetime as _dt
@@ -306,13 +398,15 @@ def _credential_row_html(principal: Principal, cred, csrf: str) -> str:
     except (OSError, OverflowError, ValueError):
         pass
     synced = '<span class="badge">Synced</span>' if cred.backed_up else '<span class="badge">Device-bound</span>'
+    # Plain JS-driven button, not a <form> -- removal is a fetch() POST
+    # (module docstring: the last-credential case needs a 428-then-retry
+    # WebAuthn round trip a plain form submit can't carry). data-credential-id
+    # is read by _PAGE_JS's own remove handler below.
     return (
-        '<li class="cred"><span>'
+        f'<li class="cred" data-credential-id="{_esc(cred.credential_id)}"><span>'
         f'<span class="name">{_esc(cred.label)}</span>{synced}'
         f'<div class="meta">Added {_esc(created)}</div></span>'
-        f'<form method="post" action="/security/credentials/{_esc(cred.credential_id)}/delete">'
-        f'<input type="hidden" name="csrf" value="{_esc(csrf)}">'
-        '<button type="submit" class="remove">Remove</button></form></li>'
+        f'<button type="button" class="remove" data-credential-id="{_esc(cred.credential_id)}">Remove</button></li>'
     )
 
 
@@ -320,7 +414,7 @@ def _render_security_page(
     *, principal: Principal, creds: list, csrf: str, step_up: StepUpConfig, nonce: str,
 ) -> str:
     who = _esc(principal.email or principal.display_name or principal.id)
-    rows = "".join(_credential_row_html(principal, c, csrf) for c in creds)
+    rows = "".join(_credential_row_html(c) for c in creds)
     body = f'<ul class="creds">{rows}</ul>' if creds else '<div class="empty">No passkeys added yet.</div>'
     scope_note = (
         "Required to approve a write." if step_up.scope == "writes"

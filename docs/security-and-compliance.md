@@ -104,17 +104,26 @@ depends on both: a passkey enrolled in a credential store the agent can rewrite 
 Phase 1 (config plus a `/security` enrollment page, mirroring org mode's) and Phase 2 (the
 decide-time check itself) have both landed for local mode now that Phase 4 above has, since the
 credential store the assertion is checked against is exactly the one Phase 4 makes service-owned.
-With `step_up.enabled` set, local mode's own `/api/approvals/{id}/decide` now demands a fresh
-WebAuthn assertion before releasing an approving decision on a write (or a PII-flagged read, in the
-wider scope) -- mirroring org mode's own gate, minus the IdP re-authentication fallback local mode
-has no equivalent of. **This is not yet the guarantee #426 exists for.** With no passkey enrolled,
-there is no ceremony left to demand and the decision goes through unguarded rather than deadlocking
-behind one nobody could complete -- so today, simply never enrolling a passkey dodges the check
-entirely. `require_passkey` still has no enforcement path (Phase 3): it does not yet make enrollment
-mandatory, and it does not yet gate the settings actions (adding an always-allow rule, disabling
-the requirement itself) that would otherwise let a local process route around the gate without ever
-touching the decide endpoint. Treat local-mode step-up today as real once a passkey is enrolled,
-but as opt-in, not a control every install can rely on being in effect.
+With `step_up.enabled` set, local mode's own `/api/approvals/{id}/decide` demands a fresh WebAuthn
+assertion before releasing an approving decision on a write (or a PII-flagged read, in the wider
+scope) -- mirroring org mode's own gate, minus the IdP re-authentication fallback local mode has no
+equivalent of. With `step_up.enabled` alone, and no passkey enrolled, there is no ceremony left to
+demand and the decision goes through unguarded rather than deadlocking behind one nobody could
+complete -- so with only `enabled` set, simply never enrolling a passkey dodges the check entirely.
+
+**`step_up.require_passkey` (Phase 3) is what makes it a guarantee rather than an opt-in check.**
+With it on: an approving decision with nothing enrolled is hard-failed (`403`, naming `/security`)
+rather than let through; the same is true for a sensitive subset of the local settings actions --
+the rule-row, grant, policy and PII actions in `web/routes_settings.py`'s own `_SENSITIVE_ACTIONS`
+-- so an agent that cannot forge an approval cannot route around the gate by adding an always-allow
+rule or a broader grant either, since that action itself now demands the same fresh assertion; and
+removing your last enrolled credential always needs one first, regardless of this flag, so a session
+alone cannot un-enroll its way back to the unguarded state. If nothing is enrolled when the daemon
+starts with `require_passkey` on, it still starts (refusing to boot would remove the one path,
+`/security`, that fixes the misconfiguration) but shows a persistent banner on every page until a
+passkey is added, and releases nothing in the meantime. Treat local-mode step-up as a real guarantee
+once `require_passkey` is on and a passkey is enrolled; with `enabled` alone it stays what it always
+was -- opt-in, evadable by simply not enrolling.
 
 ### Privilege separation (macOS, Linux and Windows)
 

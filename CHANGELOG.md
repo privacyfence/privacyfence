@@ -258,6 +258,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   enrolled, the `428` has no options to offer and the decision is let through unguarded rather than
   left permanently stuck — the one place step-up stays evadable at this phase, closed by Phase 3's
   `require_passkey` enforcement, not this one. See issue #426.
+- Issue #426 Phase 3: `step_up.require_passkey` is now enforced in local mode, on both surfaces an
+  agent could otherwise use to route around it. `web/routes_approvals.py`'s decide endpoint
+  hard-fails (`403`, naming `/security`) instead of letting an approving decision through unguarded
+  when nothing is enrolled — closing Phase 2's own deliberate gap. `web/routes_settings.py`'s
+  sensitive settings actions (the rule-row, grant, policy and PII actions in its new
+  `_SENSITIVE_ACTIONS`, out of the dispatcher's ~30) now demand the same fresh assertion before
+  applying, so adding an always-allow rule or a broader grant can no longer substitute for a forged
+  approval; a test asserts every allowlisted action is classified sensitive-or-not, failing when a
+  future action lands in neither set. `web/routes_security.py` gates deleting your *last* enrolled
+  credential behind a fresh assertion too, regardless of `require_passkey` — removing it is what
+  would silently turn a mandatory install back into an unenforced one. A daemon started with
+  `require_passkey` on and nothing enrolled still starts (refusing to boot would remove the only path
+  to `/security` that fixes it) but logs a warning and shows a new persistent banner
+  (`web_shell.wrap`'s `banner_html`) on every `/approvals`/`/settings` page until a passkey is added.
+  See issue #426.
 
 ### Added
 
