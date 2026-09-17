@@ -38,8 +38,14 @@ Phase 3 (ADR 0002, ``docs/adr/0002-local-mode-trust-boundary-and-companion-
 app.md``) adds a second: ``QUIT``, so the companion's tray/menu-bar "Quit"
 item and Linux's XDG launcher "Quit" action can stop the daemon without a
 browser -- gated by the same ``allow_quit`` setting the web settings page's
-own Quit action already respects. A client sends a single line, ``MINT\\n``
-or ``QUIT\\n``, and gets back either ``OK[ <value>]\\n`` or
+own Quit action already respects. Phase 4 (#428 B4) narrows that further: on
+a privilege-separated install this socket is ``0660`` group-shared so the
+companion can still reach it, which puts the agent in the same group, so
+``QUIT`` refuses unconditionally there regardless of ``allow_quit`` -- a
+system service is not this channel's to stop, only its service manager's
+(``privilege_separation.PlatformLayout.stop_command``). A client sends a
+single line, ``MINT\\n`` or ``QUIT\\n``, and gets back either
+``OK[ <value>]\\n`` or
 ``ERROR <reason>\\n``. The MINT code itself is exactly what
 ``session_auth.BootstrapStore.mint()`` always produced -- this channel is a
 new way to *reach* that call, not a new kind of credential. Redeeming the
@@ -216,6 +222,15 @@ def _handle_daemon_request(bootstrap: BootstrapStore, *, allow_quit: bool, line:
     if command == "MINT":
         return f"OK {bootstrap.mint()}\n"
     if command == "QUIT":
+        if privilege_separation.is_enabled():
+            # #428 B4: this socket is 0660 group-shared with the companion
+            # on a separated install, which puts the agent in the same
+            # group -- so unlike ``allow_quit`` below, this is not a setting
+            # an install can leave on. A system service is not this
+            # channel's to stop, whatever ``allow_quit`` says.
+            layout = privilege_separation.platform_layout()
+            how = f" Use '{layout.stop_command}' instead." if layout is not None else ""
+            return f"ERROR quit is not available on a privilege-separated install.{how}\n"
         if not allow_quit:
             return "ERROR quit is disabled\n"
         # Deferred import: daemon_main.py is the process entry point, which
@@ -503,7 +518,9 @@ class ControlChannelServer:
     ``mint_bootstrap_url()``. ``allow_quit`` mirrors the web settings page's
     own flag (``settings.yaml``'s ``allow_quit``, default true): an
     administrator who's disabled quitting from the browser has disabled it
-    here too, not just in one of the two places it's reachable from.
+    here too, not just in one of the two places it's reachable from. On a
+    privilege-separated install ``QUIT`` refuses regardless of
+    ``allow_quit`` -- see ``_handle_daemon_request()``.
     """
 
     def __init__(self, *, bootstrap: BootstrapStore, allow_quit: bool = True) -> None:
@@ -708,8 +725,10 @@ def request_quit(*, timeout: float = 5.0) -> None:
     """Asks the daemon to shut down -- what backs the companion's "Quit"
     tray item and Linux's XDG launcher "Quit" action. Raises
     ``ControlChannelError`` if the daemon declines (``allow_quit`` is
-    disabled) or replies unexpectedly; raises ``OSError`` if no daemon is
-    listening at all, same as ``mint_bootstrap_code()``."""
+    disabled, or the install is privilege-separated -- see
+    ``_handle_daemon_request()``) or replies unexpectedly; raises
+    ``OSError`` if no daemon is listening at all, same as
+    ``mint_bootstrap_code()``."""
     reply = _send_to_daemon("QUIT\n", timeout=timeout)
     if not reply.startswith("OK"):
         raise ControlChannelError(f"control channel quit failed: {reply!r}")

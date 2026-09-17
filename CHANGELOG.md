@@ -191,6 +191,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   install opt-in, the same fallback `--auto` already takes for every other unresolvable case. A
   source checkout can never satisfy the ownership check, which is deliberate: this prompt now only
   ever runs a script the installer itself shipped.
+- Issue #428 B4: the control channel's `QUIT` command is now refused unconditionally on a
+  privilege-separated install, regardless of `allow_quit`. The control socket is `0660`
+  group-shared after separation so the companion can still reach it, which puts the agent in the
+  same group too; since a clean exit is exit 0, neither systemd's `Restart=on-failure` nor
+  launchd's `SuccessfulExit: false` restarts a daemon stopped this way, so one `QUIT\n` on that
+  socket was a standing, agent-reachable way to turn the privacy gate off entirely — exactly the
+  capability privilege separation exists to take away from the agent. The error now names this
+  platform's own service-manager command (`PlatformLayout.stop_command`, new alongside
+  `start_command`/`status_command`) instead: a system service is the service manager's to stop,
+  not this channel's. See issue #428.
 - Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
   `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
   that want hardware-bound passkeys as a hard requirement before releasing a write approval.

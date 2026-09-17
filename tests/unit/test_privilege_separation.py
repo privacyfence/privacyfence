@@ -512,6 +512,21 @@ class TestRuntimeIdentity:
         assert privilege_separation.PLATFORM_LAYOUTS[platform_name].status_command in str(exc.value)
 
 
+class TestStopCommand:
+    """#428 B4: the control channel's ``QUIT`` names this instead of acting,
+    once separated -- one per platform, same as ``start_command``."""
+
+    def test_every_platform_has_one(self, platform_name):
+        layout = privilege_separation.PLATFORM_LAYOUTS[platform_name]
+        assert layout.stop_command
+        assert layout.stop_command != layout.start_command
+
+    def test_names_this_platforms_own_service_manager(self, platform_name):
+        expected_tool = {"darwin": "launchctl", "linux": "systemctl", "win32": "sc.exe"}
+        layout = privilege_separation.PLATFORM_LAYOUTS[platform_name]
+        assert expected_tool[platform_name] in layout.stop_command
+
+
 class TestAuditLayout:
     pytestmark = posix_permissions_only
 
