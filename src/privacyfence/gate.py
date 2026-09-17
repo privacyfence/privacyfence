@@ -469,7 +469,15 @@ async def _resolve_decision(
     if created:
         asyncio.ensure_future(_drive_interaction(registry, approval, interact))
 
-    decided = await registry.wait_async(approval, registry.hold_window)
+    # Approval binder, Phase 4: collapse the hold window to zero once this
+    # principal already has something else waiting, rather than blocking
+    # this call for the full window too -- see approvals.PendingApproval
+    # Registry.has_other_live()'s own docstring.
+    hold_window = registry.hold_window
+    if registry.adaptive_hold and registry.has_other_live(approval.principal_id, approval.id):
+        hold_window = 0.0
+
+    decided = await registry.wait_async(approval, hold_window)
     if not decided:
         return _PENDING, approval, None, "", ""
     return approval.final_decision, approval.final_rule_name, approval.decided_at, approval.decided_via, approval.batch_id
@@ -494,19 +502,45 @@ async def _drive_interaction(registry: PendingApprovalRegistry, approval: Pendin
 
 def _pending_result(registry: PendingApprovalRegistry, approval: PendingApproval) -> dict[str, Any]:
     """The structured result gated_call() returns to Claude instead of
-    blocking further."""
-    return {
-        "status": "approval_pending",
-        "approval_id": approval.id,
-        "url": registry.approval_url(approval.id),
-        "expires_at": datetime.fromtimestamp(approval.expires_at, tz=timezone.utc).isoformat(),
-        "message": (
+    blocking further.
+
+    Approval binder, Phase 4: ``pending_count`` (this principal's own
+    outstanding approvals, this one included) and ``binder_url`` (the
+    ``/approvals`` list, not this one card's own link) let Claude tell a
+    single stalled call apart from the case adaptive_hold above exists for --
+    several independent gated calls already waiting on the same human. Past
+    one, the message points at the binder and asks for the rest of this
+    principal's independently-ready gated work to be issued before a single
+    privacyfence_await_approval call collects every outstanding id, instead
+    of relaying N separate links and awaiting them one at a time."""
+    pending_count = len(registry.list_pending(principal_id=approval.principal_id))
+    binder_url = registry.binder_url()
+    if pending_count > 1 and binder_url:
+        message = (
+            f"This step needs a human's approval before it can proceed, and it is one of "
+            f"{pending_count} approvals now waiting on the same human. Do not wait silently, "
+            f"and do not relay these one at a time: reply to the user right now with the binder "
+            f"url ({binder_url}) so they can review and decide the whole batch at once. Then "
+            "issue whatever other gated calls are independently ready rather than deferring them, "
+            "and call privacyfence_await_approval once with every outstanding approval_id "
+            "(this one included) to wait for their decisions together."
+        )
+    else:
+        message = (
             "This step needs a human's approval before it can proceed. Do not wait "
             "silently: reply to the user right now with this result's url so they can "
             "open it and decide, then call privacyfence_await_approval with this "
             "approval_id to wait for their decision (or, if you can schedule a "
             "follow-up check for later, do that instead of blocking here)."
-        ),
+        )
+    return {
+        "status": "approval_pending",
+        "approval_id": approval.id,
+        "url": registry.approval_url(approval.id),
+        "expires_at": datetime.fromtimestamp(approval.expires_at, tz=timezone.utc).isoformat(),
+        "pending_count": pending_count,
+        "binder_url": binder_url,
+        "message": message,
     }
 
 

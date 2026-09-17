@@ -495,6 +495,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   for the batch endpoint even in org mode, unlike its single-decision endpoint — this is a
   page-level ceremony, the same shape `web/routes_settings.py`'s sensitive actions already use, and
   that one has never offered an IdP link either.
+- Approval binder, Phase 4: a gated call no longer stalls the previous three phases' batch UI empty.
+  Previously, an agent issuing tool calls one at a time blocked the full 30-second hold window on
+  the first call, relayed one link, and wasn't due to try a second call until a human had already
+  decided the first — the one-at-a-time flow, with extra steps. Once a principal already has one
+  unfinalized approval outstanding, a later gated call's own hold window now collapses to zero
+  instead (`web.approvals.adaptive_hold`, on by default): it returns `approval_pending`
+  immediately, so an agent can keep issuing independently-ready gated calls instead of stalling on
+  each in turn. The `approval_pending` result also gains `pending_count` (this principal's own
+  approvals outstanding, this one included) and `binder_url`; past one, its message points at
+  `/approvals` instead of the one card's own link and asks for every outstanding id to be
+  collected into a single `privacyfence_await_approval` call rather than relayed and awaited one
+  at a time — `privacyfence_await_approval`'s own tool description now says the same thing.
 
 ### Changed
 

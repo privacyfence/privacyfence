@@ -116,6 +116,19 @@ DEFAULT_MAX_PENDING = 50
 # at once, which is harmless since it's the only principal there is.
 DEFAULT_MAX_PENDING_PER_PRINCIPAL = 20
 
+# Approval binder, Phase 4: on by default. A sequential agent that issues
+# gated calls one at a time never fills the binder -- it stalls the full
+# hold_window on call #1, gets a pending result, and only issues call #2
+# after relaying that and waiting on a human. Once this principal already
+# has one unfinalized approval outstanding, holding a second (or third, or
+# twelfth) one for hold_window too buys nothing -- the human demonstrably
+# isn't answering within a hold window, or the first would already be
+# decided -- so gate.py's _resolve_decision() collapses that later call's
+# own wait to zero instead, returning "approval_pending" immediately so
+# Claude can move on to the next independently-ready call. See
+# PendingApprovalRegistry.has_other_live() and gate.py's own docstring.
+DEFAULT_ADAPTIVE_HOLD = True
+
 # Every UI-step decision a card/confirmation can resolve to -- the same
 # vocabulary approval_popup.py's native bridge and approval_window_html.py's
 # own JS already use. "auto_accepted" is never produced by a UI step (no
@@ -397,6 +410,7 @@ class PendingApprovalRegistry:
         max_pending: int = DEFAULT_MAX_PENDING,
         max_pending_per_principal: int = DEFAULT_MAX_PENDING_PER_PRINCIPAL,
         base_url: str | None = None,
+        adaptive_hold: bool = DEFAULT_ADAPTIVE_HOLD,
     ) -> None:
         self.hold_window = hold_window
         self.pending_ttl = pending_ttl
@@ -404,6 +418,7 @@ class PendingApprovalRegistry:
         self.max_pending = max_pending
         self.max_pending_per_principal = max_pending_per_principal
         self.base_url = base_url
+        self.adaptive_hold = adaptive_hold
         self._lock = threading.Lock()
         self._pending: dict[str, PendingApproval] = {}
         # (principal_id, dedupe_key) -> approval id -- see module docstring's
@@ -418,6 +433,15 @@ class PendingApprovalRegistry:
         if not self.base_url:
             return None
         return f"{self.base_url}/approvals/{approval_id}"
+
+    def binder_url(self) -> str | None:
+        """The list page itself (Approval binder, Phase 4) -- what gate.py's
+        _pending_result() points Claude at instead of N separate approval_
+        url()s once more than one of this principal's approvals is waiting
+        at once."""
+        if not self.base_url:
+            return None
+        return f"{self.base_url}/approvals"
 
     # ------------------------------------------------------------------ #
     # Registration
@@ -670,6 +694,21 @@ class PendingApprovalRegistry:
         import asyncio
 
         return await asyncio.to_thread(approval.finalize_event.wait, timeout)
+
+    def has_other_live(self, principal_id: str, exclude_id: str) -> bool:
+        """True if some *other* not-yet-finalized approval already exists
+        for ``principal_id`` -- gate.py's adaptive hold window (Phase 4):
+        when this is true for a call that just registered, waiting the full
+        ``hold_window`` on it buys nothing, since this principal already has
+        something else waiting on a decision. Same "not finalized" test
+        register_or_coalesce() already uses for the per-principal pending
+        cap, just without the exclusion for ``exclude_id`` itself that cap
+        check doesn't need (it runs before the new approval exists)."""
+        with self._lock:
+            return any(
+                a.id != exclude_id and not a.is_finalized() and a.principal_id == principal_id
+                for a in self._pending.values()
+            )
 
     # ------------------------------------------------------------------ #
     # Read side -- web/routes_approvals.py, privacyfence_await_approval
