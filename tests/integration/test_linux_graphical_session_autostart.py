@@ -85,13 +85,14 @@ with systemd as PID 1
 GitHub-hosted ``ubuntu-latest`` runner, a real VM, passes it), with whatever
 else each specific test additionally needs (a just-built ``.deb`` and
 passwordless root for the autostart tests; ``Xvfb`` for the browser test).
-This is the flakiest, most expensive tier in docs/testing-policy.md's
-test taxonomy (layer 6, packaged-artifact) by design -- scheduled on packaging-related ``main`` changes,
-nightly/periodic runs, and release-candidate tags via its own
+This is the most expensive tier in docs/testing-policy.md's
+test taxonomy (layer 6, packaged-artifact) by design -- scheduled on
+packaging-related ``main`` changes, nightly/periodic runs, and
+release-candidate tags via its own
 ``.github/workflows/linux-graphical-session.yml``, deliberately kept out of
 both the per-PR ``tests.yml`` jobs and ``build.yml``'s tag-triggered release
-pipeline (a flaky run here must never block an actual release the way a
-failure in ``test_deb_packaged_lifecycle.py`` correctly does).
+pipeline: unlike ``test_deb_packaged_lifecycle.py``, whose failure correctly
+does block a release, this tier is too heavy to gate every PR or release on.
 """
 from __future__ import annotations
 
