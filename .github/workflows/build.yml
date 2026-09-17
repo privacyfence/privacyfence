@@ -218,6 +218,11 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+    env:
+      # Job-level alias so the "if:" conditions below can read it -- the secrets context isn't
+      # a recognized named-value inside a step's own "if:" expression (GitHub's workflow parser
+      # rejects `secrets.X != ''` there directly), only env is.
+      ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -273,45 +278,55 @@ jobs:
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Resolved version=$VERSION channel=$CHANNEL"
 
-      # ── Import Authenticode certificate for signing ──────────────────────
+      # ── eSigner CodeSignTool (Windows Authenticode signing) ──────────────
       # Requires these GitHub secrets (Settings → Secrets and variables →
       # Actions) -- unset entirely (e.g. on a fork's workflow_dispatch run)
       # means build_installer.ps1 just produces an unsigned build (see its
       # own Invoke-Signing helper):
-      #   WINDOWS_CERTIFICATE      — base64-encoded Authenticode .pfx
-      #                              (cert + private key)
-      #                              (base64 -w0 cert.pfx | Set-Clipboard, or
-      #                              on Windows: certutil -encode)
-      #   WINDOWS_CERTIFICATE_PWD  — the .pfx export password
-      # Default decision: start with an OV cert via a portable .pfx (this
-      # step), revisit an EV/HSM-backed
-      # signing service later only if SmartScreen friction on first run
-      # turns out to matter for real users.
-      - name: Import signing certificate
-        if: env.WINDOWS_CERTIFICATE != ''
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      #   ESIGNER_USERNAME       — SSL.com account username
+      #   ESIGNER_PASSWORD       — SSL.com account password
+      #   ESIGNER_CREDENTIAL_ID  — eSigner credential ID for the enrolled cert
+      #   ESIGNER_TOTP_SECRET    — eSigner TOTP secret (base32), for headless OTP generation
+      # Supersedes the original Phase 5.1 default of a portable Authenticode .pfx
+      # (WINDOWS_CERTIFICATE/WINDOWS_CERTIFICATE_PWD): CA/B Forum's June 2023 key-storage
+      # rules mean SSL.com no longer issues code-signing certs as exportable .pfx files at
+      # all -- the private key lives only on a FIPS token or in SSL.com's eSigner cloud
+      # HSM, so this goes through SSL.com's CodeSignTool CLI (a Java tool) instead of
+      # signtool.exe against a locally imported .pfx. See this repo's CLAUDE.md
+      # "Releasing" section.
+      # CodeSignTool's Windows release zip bundles its own JDK (CodeSignTool.bat shells out to
+      # .\jdk-11.0.2\bin\java, never a system `java`), so there's no separate JDK/setup-java step
+      # needed here at all.
+      - name: Install eSigner CodeSignTool
+        if: env.ESIGNER_CREDENTIAL_ID != ''
         shell: pwsh
         run: |
-          $bytes = [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
-          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\certificate.pfx", $bytes)
-          echo "SIGN_CERT_PATH=$env:RUNNER_TEMP\certificate.pfx" >> $env:GITHUB_ENV
+          # CodeSignTool's release assets are versioned (e.g. CodeSignTool-v1.3.2-windows.zip) --
+          # there's no unversioned "CodeSignTool.zip" for a plain releases/latest/download URL to
+          # resolve -- so this looks up the actual latest-release asset name via the GitHub API
+          # instead of hardcoding a version.
+          $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/SSLcom/CodeSignTool/releases/latest" -Headers @{ "User-Agent" = "privacyfence-ci" }
+          $Asset = $Release.assets | Where-Object { $_.name -like "*-windows.zip" } | Select-Object -First 1
+          if (-not $Asset) { throw "Could not find a Windows CodeSignTool release asset in $($Release.tag_name)" }
+          Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile "$env:RUNNER_TEMP\CodeSignTool.zip"
+          # The zip extracts flat -- CodeSignTool.bat, jar/, jdk-11.0.2/ etc. all sit directly at
+          # its root, no wrapping folder -- so the destination itself is $env:CODESIGNTOOL_DIR.
+          Expand-Archive -Path "$env:RUNNER_TEMP\CodeSignTool.zip" -DestinationPath "$env:RUNNER_TEMP\CodeSignTool"
+          echo "CODESIGNTOOL_DIR=$env:RUNNER_TEMP\CodeSignTool" >> $env:GITHUB_ENV
 
       - name: Build installer
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-          SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PWD }}
+          ES_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ES_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ES_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+          ES_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
         shell: pwsh
         run: ./scripts/build_installer.ps1
 
-      - name: Remove signing certificate
-        if: always()
-        shell: pwsh
-        run: Remove-Item -Force -ErrorAction SilentlyContinue "$env:RUNNER_TEMP\certificate.pfx"
-
-      # The one place the actual packaged artifact -- not a source checkout,
-      # not a dev install -- gets exercised at all on Windows.
+      # The now-removed automated-test-strategy-plan.md Phase 6 item 6.2: the one place the actual packaged
+      # artifact -- not a source checkout, not a dev install -- gets exercised at all on Windows.
       # A real silent install (schtasks-registered autostart task included), the real installed
       # daemon started and driven through a daemon/MCP/approval/audit round trip, then a real
       # silent uninstall with both package removal and untouched-user-state checked. A failure
