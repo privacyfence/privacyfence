@@ -2287,11 +2287,14 @@ class TestManyPendingApprovalsAreAllReviewable:
     # Overrides pyproject.toml's global 30s pytest-timeout: 20 concurrent
     # gated_call()s each running a real PII scan and a full audit-log scan
     # is measurably slower under CI's coverage-instrumented run than
-    # locally, and this test's own cleanup (below) needs enough headroom
-    # that pytest-timeout's SIGALRM can never fire *during* it -- an
-    # interrupted cleanup would leave exactly the leaked-thread problem
-    # this test exists to catch, just via a different trigger.
-    @pytest.mark.timeout(60)
+    # locally -- slower still on the macOS runner specifically (observed:
+    # the 8s budget this test started with wasn't enough there even after
+    # the leaked-thread race below was fixed) -- and this test's own
+    # cleanup (below) needs enough headroom that pytest-timeout's SIGALRM
+    # can never fire *during* it -- an interrupted cleanup would leave
+    # exactly the leaked-thread problem this test exists to catch, just via
+    # a different trigger.
+    @pytest.mark.timeout(120)
     async def test_past_the_old_literal_eight_every_approval_still_gets_rendered(self, monkeypatch, audit_dir):
         from concurrent.futures import ThreadPoolExecutor
 
@@ -2319,12 +2322,13 @@ class TestManyPendingApprovalsAreAllReviewable:
         try:
             # Generous timeout: 20 concurrent gated_call()s each doing a
             # real PII scan and a full audit-log scan is measurably slower
-            # under CI's coverage-instrumented run than locally.
-            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=8.0)
+            # under CI's coverage-instrumented run than locally, and slower
+            # again on the macOS runner specifically.
+            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=30.0)
             # The actual regression: every one of these must have real card
             # HTML, not merely be registered and listed -- a worker-starved
             # approval sits at html == "" forever.
-            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=8.0)
+            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=30.0)
         finally:
             # Registration races the event loop (each call does its own PII
             # scan / audit-log scan via asyncio.to_thread before it ever
@@ -2338,7 +2342,7 @@ class TestManyPendingApprovalsAreAllReviewable:
             # after pytest itself has already printed its final result.
             # Draining in a loop until every task has actually finished
             # closes that race instead of just narrowing it.
-            deadline = time.monotonic() + 15.0
+            deadline = time.monotonic() + 30.0
             while not all(t.done() for t in tasks) and time.monotonic() < deadline:
                 for approval in registry.list_pending():
                     registry.answer(approval.id, "deny")
@@ -2347,7 +2351,7 @@ class TestManyPendingApprovalsAreAllReviewable:
             # loop that could add up to minutes if something is still stuck
             # -- anything still running past this is cancelled rather than
             # awaited further, so this step can't itself run long.
-            _, still_pending = await asyncio.wait(tasks, timeout=5.0)
+            _, still_pending = await asyncio.wait(tasks, timeout=10.0)
             for t in still_pending:
                 t.cancel()
             test_executor.shutdown(wait=False)
