@@ -149,14 +149,36 @@ SYSTEM_ROOT = LINUX_SYSTEM_ROOT
 HANDOFF_DIR = SYSTEM_ROOT / HANDOFF_DIR_NAME
 PRIVILEGE_SEPARATION_MARKER = SYSTEM_ROOT / MARKER_FILE_NAME
 
+# systemd reserves a bare "-" as the unit-name hierarchy separator, so
+# systemd-xdg-autostart-generator escapes any "-" inside the desktop file's
+# own stem (systemd.unit(5)'s unit-name string escaping) before splicing it
+# into the generated unit name. Confirmed against the real systemd-escape
+# binary shipped in this environment (systemd 255, Ubuntu -- same lineage as
+# GitHub's ubuntu-latest runner image): `systemd-escape privacyfence-companion`
+# -> `privacyfence\x2dcompanion`, while `systemd-escape privacyfence` (no
+# dash) is unchanged -- which is why AUTOSTART_UNIT_NAME below always worked
+# (the daemon's stem has no dash) while COMPANION_AUTOSTART_UNIT_NAME didn't
+# (the companion's does).
+_UNIT_NAME_SAFE_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:_."
+)
+
+
+def _systemd_escape_unit_name_component(text: str) -> str:
+    """Mirrors systemd-escape(1)'s unit-name string escaping: every byte
+    outside the safe set above -- "-" included, since systemd reserves a
+    bare "-" as the unit-name hierarchy separator -- becomes a C-style
+    \\xAB hex escape."""
+    return "".join(c if c in _UNIT_NAME_SAFE_CHARS else f"\\x{ord(c):02x}" for c in text)
+
+
 # Empirically confirmed against the real systemd-xdg-autostart-generator
-# binary shipped in this environment (systemd 255, Ubuntu -- same lineage
-# as GitHub's ubuntu-latest runner image): a source .desktop file named
-# "<stem>.desktop" becomes unit "app-<stem>@autostart.service", listed
-# under xdg-desktop-autostart.target.wants/. Derived from
+# binary shipped in this environment: a source .desktop file named
+# "<stem>.desktop" becomes unit "app-<escaped-stem>@autostart.service",
+# listed under xdg-desktop-autostart.target.wants/. Derived from
 # AUTOSTART_DESKTOP_FILE rather than hardcoded so it can never silently
 # drift from the actual installed filename.
-AUTOSTART_UNIT_NAME = f"app-{AUTOSTART_DESKTOP_FILE.stem}@autostart.service"
+AUTOSTART_UNIT_NAME = f"app-{_systemd_escape_unit_name_component(AUTOSTART_DESKTOP_FILE.stem)}@autostart.service"
 
 # #428 D1/Phase 4 (B5b): the companion's own autostart entry -- what a
 # separated install's login session activates instead of the daemon's now-
@@ -164,7 +186,9 @@ AUTOSTART_UNIT_NAME = f"app-{AUTOSTART_DESKTOP_FILE.stem}@autostart.service"
 # AUTOSTART_UNIT_NAME, and the system unit `enable --auto` starts the daemon
 # under once separated (installer/linux/privacyfence-daemon.service.tmpl).
 COMPANION_AUTOSTART_DESKTOP_FILE = Path("/etc/xdg/autostart/privacyfence-companion.desktop")
-COMPANION_AUTOSTART_UNIT_NAME = f"app-{COMPANION_AUTOSTART_DESKTOP_FILE.stem}@autostart.service"
+COMPANION_AUTOSTART_UNIT_NAME = (
+    f"app-{_systemd_escape_unit_name_component(COMPANION_AUTOSTART_DESKTOP_FILE.stem)}@autostart.service"
+)
 COMPANION_BIN = OPT_DIR / "PrivacyFenceCompanion"
 DAEMON_SYSTEM_UNIT = "privacyfence-daemon.service"
 
