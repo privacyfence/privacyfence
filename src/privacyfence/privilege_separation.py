@@ -201,6 +201,15 @@ MARKER_VERSION = 1
 # against a ``tmp_path`` instead of a directory that needs root to create.
 # Every process of one install has to agree on it, which is exactly why a
 # real install uses the default and passes nothing.
+#
+# B11: the daemon's own environment is controlled by launchd/systemd, but the
+# companion and the MCPB shim honour this var too, and *their* environment is
+# whatever the logged-in user's session set -- on a genuinely separated
+# install, that is exactly the boundary this module exists to hold. So
+# system_root() below only honours it when the platform's real default root
+# has no marker of its own; once a real install is provisioned there, a
+# user-session process redirecting itself elsewhere is not a test, it's the
+# attack.
 SYSTEM_ROOT_ENV_VAR = "PRIVACYFENCE_SYSTEM_ROOT"
 
 HANDOFF_DIR_NAME = "handoff"
@@ -361,26 +370,10 @@ def platform_layout() -> PlatformLayout | None:
     return PLATFORM_LAYOUTS.get(current_platform())
 
 
-def system_root() -> Path | None:
-    """Where a separated install's root *would* be on this platform, whether
-    or not one has been provisioned -- None on a platform #428 P4 hasn't
-    shipped for yet, which is what makes every other function here a cheap
-    no-op there."""
-    override = os.environ.get(SYSTEM_ROOT_ENV_VAR)
-    if override:
-        # An override that isn't absolute would resolve differently per
-        # process depending on each one's cwd -- the daemon's is set by its
-        # LaunchDaemon/systemd unit, the companion's by whatever launched it.
-        # Rejecting it outright beats half the install silently using a
-        # different root.
-        candidate = Path(override)
-        if not candidate.is_absolute():
-            logger.warning(
-                "%s=%r is not an absolute path -- ignoring it and using the default layout.",
-                SYSTEM_ROOT_ENV_VAR, override,
-            )
-        else:
-            return candidate
+def _default_system_root() -> Path | None:
+    """``system_root()`` ignoring ``SYSTEM_ROOT_ENV_VAR`` entirely -- both
+    its own fallback, and what it checks for a *real* marker before trusting
+    the override at all (see B11 above)."""
     layout = platform_layout()
     if layout is None:
         return None
@@ -398,6 +391,42 @@ def system_root() -> Path | None:
         if program_data:
             return Path(program_data) / "PrivacyFence"
     return layout.system_root
+
+
+def system_root() -> Path | None:
+    """Where a separated install's root *would* be on this platform, whether
+    or not one has been provisioned -- None on a platform #428 P4 hasn't
+    shipped for yet, which is what makes every other function here a cheap
+    no-op there."""
+    default_root = _default_system_root()
+    override = os.environ.get(SYSTEM_ROOT_ENV_VAR)
+    if override:
+        # An override that isn't absolute would resolve differently per
+        # process depending on each one's cwd -- the daemon's is set by its
+        # LaunchDaemon/systemd unit, the companion's by whatever launched it.
+        # Rejecting it outright beats half the install silently using a
+        # different root.
+        candidate = Path(override)
+        if not candidate.is_absolute():
+            logger.warning(
+                "%s=%r is not an absolute path -- ignoring it and using the default layout.",
+                SYSTEM_ROOT_ENV_VAR, override,
+            )
+        elif default_root is not None and _parse_marker(default_root / MARKER_FILE_NAME) is not None:
+            # A real install is already provisioned at the platform's actual
+            # root. Honouring the override now would let whatever set it --
+            # on the companion or the MCPB shim, that's the user's own login
+            # session -- redirect a process onto a root it controls instead
+            # of the one the installer provisioned and locked down. That is
+            # exactly what privilege separation exists to prevent, so this is
+            # the one case the test/dev escape hatch does not get to bypass.
+            logger.warning(
+                "%s=%r ignored -- a real privilege-separation marker already exists at %s.",
+                SYSTEM_ROOT_ENV_VAR, override, default_root,
+            )
+        else:
+            return candidate
+    return default_root
 
 
 def marker_path() -> Path | None:
@@ -613,6 +642,34 @@ def accounts_equal(left: str, right: str) -> bool:
 def running_as_service_account() -> bool:
     state = separation()
     return state is not None and accounts_equal(current_user_name(), state.service_account)
+
+
+def service_account_uid() -> int | None:
+    """The daemon's service-account uid on a separated POSIX install --
+    None if this install isn't separated, if this platform has no uid
+    concept at all (Windows: the boundary is an ACL, not a uid, see
+    ``_current_user_security_attributes()`` in ``web/control_channel.py``),
+    or if the account named in the marker doesn't exist locally (a
+    half-removed install; the caller fails closed the same way
+    ``_current_user_security_attributes()`` skips a missing Windows trustee
+    rather than crashing).
+
+    #428 B10's own reason to exist: ``web/control_channel.py``'s companion
+    channel is the one place ``SO_PEERCRED``/``LOCAL_PEERCRED``'s uid is
+    actually meaningful (ADR 0002 decision 6 is explicit that it is *not*,
+    everywhere else, while the companion and the agent share a uid) --
+    once separated, the daemon is the one end of that channel that has
+    moved to a different account, so this is what a connecting peer's real
+    uid gets checked against."""
+    state = separation()
+    if state is None or current_platform() == "win32":
+        return None
+    import pwd
+
+    try:
+        return pwd.getpwnam(state.service_account).pw_uid
+    except KeyError:
+        return None
 
 
 def check_runtime_identity() -> None:

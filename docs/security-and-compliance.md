@@ -247,7 +247,7 @@ icon and no menu. That is not a convenience — a separated daemon has no deskto
 would have no way to show you a sign-in page. The clickable Applications-menu entry (Open
 Approvals, Open Settings, Quit) is unchanged and still one-shot.
 
-**What it closes.** Four things stop being true for a process running as your own account:
+**What it closes.** Five things stop being true for a process running as your own account:
 
 - it can no longer edit `config/settings.yaml` — the always-allow rules, auto-accept grants and PII
   configuration that decide what it is allowed to do without asking;
@@ -256,7 +256,11 @@ Approvals, Open Settings, Quit) is unchanged and still one-shot.
   a checkbox a local process ticks for itself;
 - it can no longer read the audit log's HMAC key, which is the caveat [Audit integrity and
   forwarding](#audit-integrity-and-forwarding) carries;
-- it can no longer read the connector credentials the daemon holds.
+- it can no longer read the connector credentials the daemon holds;
+- it can no longer drive the companion's browser-opening channel (`OPEN <url>`) — that socket stays
+  group-shared for the daemon's own use, but a connection is now refused unless it comes from the
+  daemon's service-account uid, so sharing the group no longer lets it hand your browser an
+  attacker-chosen http(s) URL under a connector-OAuth pretext (#428 B10).
 
 Those four files live under `<system root>/authority`: mode `0700` owned by the service account on
 macOS and Linux, and on Windows an ACL granting that account (plus `SYSTEM` and `Administrators`)

@@ -149,6 +149,20 @@ and still no new dependency. "No tray on Linux" is what that budget rules out; a
 tray. The clickable Applications-menu entry stays exactly as decision 4 describes it, and remains
 one-shot.
 
+**Amended by #428 B10, 2026-09-17: once separated, the companion's own socket checks who is
+asking.** Decision 6 below is explicit that `SO_PEERCRED`'s uid cannot distinguish the human from
+the agent — but that is a statement about the *daemon's* MINT/QUIT channel, where the companion and
+the agent are the two callers and always share a uid. This channel runs the other way: the
+companion listens, and the daemon is its only legitimate caller (`request_open_url()`,
+`oauth_loopback.py`). Before separation that channel is in the same boat decision 6 describes
+(companion, agent and daemon all one uid); after it, the daemon is the one end that has actually
+moved to a different account, so a peer's real uid *does* distinguish it from the agent for the
+first time. `CompanionChannelServer` (`web/control_channel.py`) now refuses a POSIX connection on a
+separated install unless its peer uid matches `privilege_separation.service_account_uid()` — closing
+what had been an unauthenticated way for anything sharing the socket's group (the agent included) to
+drive the human's browser to an arbitrary http(s) URL. Windows is unaffected: its named pipe was
+already ACL'd to the two accounts that are supposed to reach it.
+
 ### 5a. The install location is part of the boundary on Windows, so separation needs the elevated install tier
 
 **Added by #428 Phase 4 (B5c), 2026-09-16**, resolving the open question #428's own Phase 4 section

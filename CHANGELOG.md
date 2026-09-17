@@ -341,6 +341,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   path and remains a `config/settings.yaml` edit plus a restart, which is what keeps the existing
   "treat this install as compromised" banner meaningful — a disable it observes still can never have
   come from a browser control. See `step_up_config.py`'s `LiveStepUpConfig`.
+- B10 of the 4.1.0 action plan: on a privilege-separated install, the companion app's own control
+  channel (`OPEN <url>`, `web/control_channel.py`'s `CompanionChannelServer`) now refuses a
+  connection unless it comes from the daemon's service-account uid. The socket is `0660`
+  group-shared with the agent (same as the daemon's own MINT/QUIT channel), and before separation
+  that sharing is exactly ADR 0002 decision 6's deliberate trade-off — companion, agent and daemon
+  are all one uid, so no peer check could tell them apart. Separation changes that for this one
+  channel: the daemon moves to a different account while the companion and the agent stay on the
+  logged-in user's, so `SO_PEERCRED`/`LOCAL_PEERCRED`'s uid becomes meaningful here for the first
+  time, and an agent sharing the group could previously send `OPEN` itself to drive the human's
+  browser to an attacker-chosen http(s) URL. The daemon's own MINT/QUIT channel is unchanged — ADR
+  0002 decision 6 still applies there. See `privilege_separation.service_account_uid()`.
+- B11 of the 4.1.0 action plan: `PRIVACYFENCE_SYSTEM_ROOT` (`privilege_separation.py`'s
+  test/development escape hatch for relocating a separated install's authority root) is now
+  refused on a genuinely separated install instead of being honoured unconditionally. The
+  daemon's own environment is controlled by launchd/systemd, but the companion app and the MCPB
+  shim read this variable too, and *their* environment is whatever the signed-in user's session
+  set — exactly the boundary privilege separation exists to hold. `system_root()` and the shim's
+  `privilegeSeparationRoot()` now check the platform's real default root for an already-provisioned
+  marker before trusting the override; once one exists there, a user-session process can no longer
+  redirect itself onto a root it controls instead of the one the installer provisioned and locked
+  down. The override still works exactly as before on the common case — a dev/CI machine, which
+  has no real marker at that literal system root to begin with.
+- B13 of the 4.1.0 action plan: the Slack/Salesforce/Atlassian OAuth loopback listener
+  (`oauth_loopback.py`) no longer inherits `HTTPServer.allow_reuse_address`. On a privilege-separated
+  install the agent is a different, less-trusted process than the daemon (ADR 0002) and could bind
+  the fixed redirect port first; PKCE already stops it from completing the exchange, but leaving
+  address reuse on meant the daemon's own bind() could still silently succeed over that squatted
+  port on Windows, where `SO_REUSEADDR` on a *new* socket lets it steal a port another socket is
+  actively listening on regardless of that socket's own options — leaving it undefined which of the
+  two processes actually received the provider's callback. With reuse off, that bind() now always
+  fails, which the existing actionable `OAuthLoopbackError` already reports.
 
 ### Added
 
@@ -580,7 +611,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   live connector OAuth tokens and the audit log, moves back under `~/.privacyfence` instead of
   being left behind in a `0700` directory the user can no longer read, owned by an account whose
   only undo tool was just uninstalled. The operation is best-effort and never runs on a plain
-  upgrade, which must leave a running separated install alone.
+  upgrade, which must leave a separated install's data and account in place — it just gets briefly
+  stopped and restarted there too, see below.
+- A separated install's daemon (`privacyfence-daemon.service`, a packaged PyInstaller onedir
+  build running straight out of `/opt/privacyfence`) no longer risks crashing partway through a
+  `.deb` upgrade. dpkg unpacks the new version's files over that same directory before `postinst`
+  gets a chance to stop and restart the unit, so a shared library the still-running old process
+  lazily loads could vanish out from under it mid-upgrade. `debian/prerm` now stops
+  `privacyfence-daemon.service` first, on `upgrade`; `postinst`'s `enable --auto`, which already
+  runs on every upgrade (issue #428 D1), starts it again once the new files are in place, so the
+  daemon never ends up left down. A no-op, as before, on an unseparated install, which has no such
+  unit.
 - Issue #428 B8: `debian/postinst`'s header comment no longer claims installing the `.deb` never
   starts the daemon. That was true before D1 but not after: `enable --auto`, right below it, now
   starts `privacyfence-daemon.service` immediately (`systemctl enable --now`) whenever it can
@@ -590,6 +631,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   socket path under `~/.privacyfence`, which privilege separation moves out from under it, so the
   assertion could never fail regardless of what actually happened — fixed as part of splitting
   that test into separated/unseparated cases (issue #428 B7).
+- Issue #428 B14: two admins saving install-wide privacy/PII policy from `/settings/privacy` at
+  nearly the same moment no longer race to last-write-wins on `settings.yaml`.
+  `org_install_policy.apply_change`'s read-modify-write-and-adopt sequence is now serialized by a
+  module-level lock, so the second admin's save always starts from a `settings` that already
+  reflects the first's rather than overwriting it as if it had never happened. `docs/
+  org-mode-setup-guide.md` also no longer tells operators they can freely hand-edit `settings.yaml`
+  between browser saves: `apply_change` rewrites the whole file from its own in-memory copy, so any
+  hand edit made since the daemon last loaded the file — including comments — is silently discarded
+  the next time an admin saves from the browser, restarted or not.
 
 ## [4.0.0] — 2026-09-14
 

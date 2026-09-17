@@ -47,6 +47,12 @@ esac
 # and exits 0 rather than guessing, leaving the install opt-in exactly as before this. Idempotent
 # either way (enable already refreshes rather than fails on an already-separated install), and
 # best-effort: `|| true` means a failure here is never allowed to fail the package install.
+#
+# On an upgrade of an already-separated install, this is also what starts the daemon back up:
+# debian/prerm's `upgrade` case stops privacyfence-daemon.service before dpkg unpacks this
+# version's files over /opt/privacyfence, so the running PyInstaller onedir process is never
+# reading a directory being swapped out from under it. `enable` (inside cmd_enable's
+# install_services) is what starts it again, now against the new files.
 if [ "$1" = "configure" ] && [ -x /usr/sbin/privacyfence-privilege-separation ]; then
     /usr/sbin/privacyfence-privilege-separation enable --auto || true
 fi
