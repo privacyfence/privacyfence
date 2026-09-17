@@ -203,8 +203,9 @@ these add); `test-python-compat` (the same core suite, Node-free, against Python
 reported as three separate checks, one per Python version, since each matrix leg is its own GitHub
 check; 3.14 is there because it is the default `python3` on current Ubuntu releases, so it is what
 a plain `pip install privacyfence` resolves against on a fresh box); `org-mode-smoke` (`test_org_ubuntu_release_smoke.py`, see §3's row above); and
-`static-analysis`'s blocking `ruff check .` and `bandit` steps (its `mypy` step is still
-`continue-on-error` and stays informational — see `coding-and-testing-guidelines.md`). `scripts/update_branch_protection.py`'s
+`static-analysis`'s blocking `ruff check .`, `bandit` and `scripts/mypy_strict_modules.py` steps
+(its whole-tree `mypy` step is still `continue-on-error` and stays informational; the modules
+promoted by `[[tool.mypy.overrides]]` are blocking — see `coding-and-testing-guidelines.md`). `scripts/update_branch_protection.py`'s
 `REQUIRED_STATUS_CHECKS` is the reviewable record of exactly which of those checks are *meant* to
 be required — update it in the same PR whenever
 a job here is added, renamed, or removed.
@@ -483,7 +484,8 @@ release is happening.
 | `test_org_ubuntu_release_smoke.py` (`org-mode-smoke` job) | 3 | Yes, every PR (Ubuntu only) — also re-run in `build.yml`'s `build-deb` job at release time | Always — this is also a merge gate |
 | `pytest` on `test-python-compat` (core suite, Node-free, Python 3.11, 3.12 and 3.14) | 1, 2 | Yes, every PR (Ubuntu only) — three checks, one per Python version | Always — all three are also a merge gate |
 | `ruff check .` / `bandit` (`static-analysis` job) | — (static check, not a layer) | Yes, every PR | Always — both are also a merge gate |
-| `mypy` (`static-analysis` job) | — (static check, not a layer) | Yes, every PR, but `continue-on-error` | No — informational only, doesn't gate the job or the merge |
+| `mypy src/privacyfence` (whole tree, `static-analysis` job) | — (static check, not a layer) | Yes, every PR, but `continue-on-error` | No — informational only, doesn't gate the job or the merge |
+| `scripts/mypy_strict_modules.py` (modules promoted by `[[tool.mypy.overrides]]`, `static-analysis` job) | — (static check, not a layer) | Yes, every PR | Always — this is also a merge gate |
 | `check_coverage_floor.py` (coverage ratchet, TST-03) | — (a quality gate on layers 1–2, not a layer itself) | Yes, every PR | Always — this is also a merge gate |
 | `npm test` (mcpb/shim/'s own suite) | 1 | Yes, every PR | Always — this is the merge gate |
 | `npm run typecheck` (mcpb/shim/) | — (static check, not a layer) | Yes, every PR | Always — this is the merge gate |
