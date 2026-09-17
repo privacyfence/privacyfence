@@ -99,6 +99,15 @@ class TestLoopbackHTTPServer:
         finally:
             server.server_close()
 
+    def test_address_reuse_is_disabled(self):
+        # B13: HTTPServer.allow_reuse_address defaults to True, which is
+        # harmless on POSIX but lets a *new* bind() steal a port an existing
+        # socket is still actively listening on on Windows -- exactly what
+        # would let an agent process that squatted this fixed OAuth redirect
+        # port first go undetected instead of the daemon's bind() failing
+        # loudly. Regression guard against that flag creeping back on.
+        assert _LoopbackHTTPServer.allow_reuse_address is False
+
 
 class _DummyHandler:
     """Never instantiated in this test -- HTTPServer.__init__ only needs a
