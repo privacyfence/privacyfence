@@ -2286,16 +2286,20 @@ class TestManyPendingApprovalsAreAllReviewable:
 
     # Overrides pyproject.toml's global 30s pytest-timeout: 20 concurrent
     # gated_call()s each running a real PII scan and a full audit-log scan
-    # is measurably slower under CI's coverage-instrumented run than
-    # locally, and has been observed to vary by 2x+ between otherwise
-    # identical CI runs under real runner contention -- and this test's own
-    # cleanup (below) needs enough headroom that pytest-timeout's SIGALRM
-    # can never fire *during* it -- an interrupted cleanup would leave
-    # exactly the leaked-thread problem this test exists to catch, just via
-    # a different trigger. This is the real backstop against a genuine
-    # (non-racy) hang, since the cleanup loop below deliberately has none
-    # of its own.
-    @pytest.mark.timeout(180)
+    # -- both pure-Python, GIL-bound work handed to asyncio.to_thread's
+    # default pool -- is measurably slower under CI's coverage-instrumented
+    # run than locally, and has been observed on the Python 3.14 job
+    # specifically to need well over a minute even outside any coverage
+    # run, plausibly GIL contention across 20-way concurrency rather than
+    # true I/O latency. A large timeout here costs nothing on the success
+    # path (wait_until_async returns the moment its condition is met) and
+    # this test's own cleanup (below) needs enough headroom that
+    # pytest-timeout's SIGALRM can never fire *during* it -- an interrupted
+    # cleanup would leave exactly the leaked-thread problem this test
+    # exists to catch, just via a different trigger. This is the real
+    # backstop against a genuine (non-racy) hang, since the cleanup loop
+    # below deliberately has none of its own.
+    @pytest.mark.timeout(400)
     async def test_past_the_old_literal_eight_every_approval_still_gets_rendered(self, monkeypatch, audit_dir):
         from concurrent.futures import ThreadPoolExecutor
 
@@ -2321,15 +2325,14 @@ class TestManyPendingApprovalsAreAllReviewable:
             for i in range(n)
         ]
         try:
-            # Generous timeout: 20 concurrent gated_call()s each doing a
-            # real PII scan and a full audit-log scan is measurably slower
-            # under CI's coverage-instrumented run than locally, and slower
-            # again on the macOS runner specifically.
-            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=60.0)
+            # See the class's own timeout override above for why this
+            # budget is this large -- real, observed CI variance, not a
+            # defensive guess.
+            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=150.0)
             # The actual regression: every one of these must have real card
             # HTML, not merely be registered and listed -- a worker-starved
             # approval sits at html == "" forever.
-            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=60.0)
+            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=150.0)
         finally:
             # Registration races the event loop (each call does its own PII
             # scan / audit-log scan via asyncio.to_thread before it ever
