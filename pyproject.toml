@@ -54,6 +54,10 @@ dependencies = [
     "google-auth-oauthlib>=1.1.0",
     "google-api-python-client>=2.100.0",
     "pyyaml>=6.0",
+    # org_install_policy.apply_change's round-trip settings.yaml rewrite (comments/key
+    # order/quoting preserved across a browser edit) -- plain pyyaml has no round-trip
+    # mode, only load/dump through a plain dict. See that module's own docstring.
+    "ruamel.yaml>=0.18",
     "cryptography>=41.0.0",
     "slack-sdk>=3.27.0",
     "telethon>=1.36.0",

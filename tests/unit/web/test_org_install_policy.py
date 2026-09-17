@@ -8,6 +8,9 @@ for every principal in the process, not just the one whose registry entry
 """
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 import yaml
 
@@ -65,6 +68,25 @@ class TestActionSurface:
                 payload={"group": "privacy", "policy": "allow"},
             )
         assert settings == {}
+
+
+class TestMissingSettingsFile:
+    def test_a_config_path_naming_a_file_that_does_not_exist_yet_is_created(self, tmp_path):
+        # daemon_main requires install_wide_settings_path to already point at a
+        # real file before it'll start, but nothing stops that file being empty
+        # -- or, for a config_path this module is merely handed in isolation
+        # (as in these tests), simply not there yet. Either way apply_change
+        # should behave like an empty settings.yaml rather than raising.
+        path = tmp_path / "settings.yaml"
+        settings: dict = {}
+
+        org_install_policy.apply_change(
+            settings, str(path), action="set_default_policy",
+            payload={"group": "privacy", "policy": "redact"},
+        )
+
+        assert settings["privacy"]["default_policy"] == "redact"
+        assert yaml.safe_load(path.read_text())["privacy"]["default_policy"] == "redact"
 
 
 class TestDefaultPolicy:
@@ -258,6 +280,93 @@ class TestAuditFingerprint:
         for principal in (ALICE, BOB):
             with principal_scope(principal):
                 assert audit_log.get_audit_logger()._security_config_hash == expected
+
+
+class TestHandEditedFile:
+    """B14: org-mode-setup-guide.md tells operators "an admin can still
+    hand-edit" settings.yaml alongside the browser editor this module backs
+    -- both routes have to leave a hand edit's comments (and any hand edit
+    made on disk since the last browser save) intact.
+    """
+
+    def test_an_operators_comments_survive_a_browser_edit(self, tmp_path):
+        path = tmp_path / "settings.yaml"
+        path.write_text(
+            "# operator note: block everything by default\n"
+            "privacy:\n"
+            "  default_policy: block  # keep strict\n",
+            encoding="utf-8",
+        )
+        settings = yaml.safe_load(path.read_text())
+
+        org_install_policy.apply_change(
+            settings, str(path), action="set_default_policy",
+            payload={"group": "privacy", "policy": "redact"},
+        )
+
+        on_disk = path.read_text()
+        assert "# operator note: block everything by default" in on_disk
+        assert "# keep strict" in on_disk
+        assert yaml.safe_load(on_disk)["privacy"]["default_policy"] == "redact"
+
+    def test_a_hand_edit_made_since_the_last_browser_save_is_not_reverted(self, tmp_path):
+        # settings started life with just `privacy`; an admin hand-edits the
+        # file to add a second, unrelated group after that -- without ever
+        # going through the browser editor, so the live `settings` dict this
+        # module was handed never learns about it.
+        path = tmp_path / "settings.yaml"
+        settings = {"privacy": {"default_policy": "block"}}
+        path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+        path.write_text(
+            path.read_text() + "drive_privacy:\n  default_policy: allow\n", encoding="utf-8",
+        )
+
+        org_install_policy.apply_change(
+            settings, str(path), action="set_default_policy",
+            payload={"group": "privacy", "policy": "redact"},
+        )
+
+        on_disk = yaml.safe_load(path.read_text())
+        assert on_disk["privacy"]["default_policy"] == "redact"
+        assert on_disk["drive_privacy"]["default_policy"] == "allow"
+        assert settings["drive_privacy"]["default_policy"] == "allow"
+
+    def test_two_concurrent_admins_both_land_instead_of_last_write_wins(self, tmp_path, monkeypatch):
+        # Widens the window between apply_change's read and its write so two
+        # threads racing through it overlap for real, rather than relying on
+        # both happening to hit the same instant. Without _WRITE_LOCK
+        # serializing that window, the second write to land is a fresh copy
+        # taken before the first write happened and clobbers it outright.
+        real_write = org_install_policy.atomic_write_text
+
+        def _slow_write(*args, **kwargs):
+            time.sleep(0.05)
+            return real_write(*args, **kwargs)
+
+        monkeypatch.setattr(org_install_policy, "atomic_write_text", _slow_write)
+
+        path = tmp_path / "settings.yaml"
+        settings = {"privacy": {"default_policy": "block"}, "drive_privacy": {"default_policy": "block"}}
+        path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+
+        def _apply(group: str, policy: str) -> None:
+            org_install_policy.apply_change(
+                settings, str(path), action="set_default_policy",
+                payload={"group": group, "policy": policy},
+            )
+
+        threads = [
+            threading.Thread(target=_apply, args=("privacy", "redact")),
+            threading.Thread(target=_apply, args=("drive_privacy", "allow")),
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        on_disk = yaml.safe_load(path.read_text())
+        assert on_disk["privacy"]["default_policy"] == "redact"
+        assert on_disk["drive_privacy"]["default_policy"] == "allow"
 
 
 class TestFailedWrite:

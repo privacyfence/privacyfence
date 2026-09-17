@@ -798,9 +798,9 @@ pillow==12.3.0 ; sys_platform == 'darwin' or sys_platform == 'win32' \
     # via
     #   privacyfence (pyproject.toml)
     #   pystray
-platformdirs==4.11.8 \
-    --hash=sha256:52f2f181bbfde907966932cc8312d967d02976422d66d537ea16092b8e291081 \
-    --hash=sha256:f23abafea7dd4276d1f29104b83598d7dcc567cafd07c9c951e66665645437fc
+platformdirs==4.11.9 \
+    --hash=sha256:0a3958f58a9e30321eaef0a424dd0b77cce242886b36b8aa992f9731ef2d59c1 \
+    --hash=sha256:e2c66a8d384596cd98e3c4aea2d761df7bac95d9d8a2cc3946daa8cdafdaebc1
     # via zeep
 portalocker==4.3.2 \
     --hash=sha256:42f0362e7343af78b25eb095c0cde300e746a0ab6647a835cc30764918490c93 \
@@ -1297,6 +1297,10 @@ rsa==4.9.1 \
     --hash=sha256:68635866661c6836b8d39430f97a996acbd61bfa49406748ea243539fe239762 \
     --hash=sha256:e7bdbfdb5497da4c07dfd35530e1a902659db6ff241e39d9953cad06ebd0ae75
     # via telethon
+ruamel-yaml==0.19.1 \
+    --hash=sha256:27592957fedf6e0b62f281e96effd28043345e0e66001f97683aa9a40c667c93 \
+    --hash=sha256:53eb66cd27849eff968ebf8f0bf61f46cdac2da1d1f3576dd4ccee9b25c31993
+    # via privacyfence (pyproject.toml)
 simple-salesforce==1.12.10 \
     --hash=sha256:33eb4aedc5eb64d5d7067d4803f99ea1cdecdf660a8a8bd064e9488f219c7b92 \
     --hash=sha256:37737e6256a594e9f07b26bba0f1ba6681e8c7622665abd69311a6008a2d5c0e

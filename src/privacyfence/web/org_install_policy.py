@@ -45,17 +45,46 @@ builds a *newly* signed-in principal's registry entries, so a principal who
 arrives after an edit picks up the new policy with no sweep of their own,
 and the admin page re-renders from the same object it just wrote.
 
-A write that fails leaves nothing half-applied: the change is made on a deep
-copy, persisted, and only adopted into the live dict (and reloaded) once
-settings.yaml is actually on disk.
+A write that fails leaves nothing half-applied: the change is made on a copy of
+settings.yaml as it currently stands *on disk*, persisted, and only adopted into
+the live dict (and reloaded) once that write has actually landed.
+
+Reading from disk rather than mutating a deep copy of the live ``settings`` dict is
+deliberate, and fixes two related problems ``org-mode-setup-guide.md`` creates by
+telling operators "an admin can still hand-edit it" (settings.yaml) alongside the
+browser editor this module backs:
+
+- **An admin's hand-edited comments used to vanish on the next browser save.**
+  ``yaml.safe_dump``-ing the live dict has no memory of the comments the *file*
+  carried, only the values ``init_privacy_filter`` parsed out of it at startup.
+  Reading and rewriting through ``ruamel.yaml``'s round-trip loader/dumper
+  (``_ROUND_TRIP_YAML`` above) instead keeps an operator's comments, key order and
+  quoting intact across a browser edit, the same way a hand edit would.
+- **A hand edit made on disk between two browser edits used to be silently
+  discarded.** Basing the change on the live dict assumed nothing but this module
+  itself had touched settings.yaml since the process read it at startup -- false
+  precisely because the guide invites operators to hand-edit the same file. Basing
+  it on a fresh read instead makes disk the one source of truth both paths agree
+  on, so a hand edit either lands (if this call doesn't happen to touch the same
+  key) or is the one that's superseded (if it does) -- never invisibly reverted by
+  a change to some other field.
+
+``_WRITE_LOCK`` closes the third gap the same underlying assumption left open: two
+admins submitting around the same moment could each read, mutate their own copy and
+write it back with no idea of each other, so whichever write lands second wins
+outright rather than layering its change on top of the first's. The lock forces
+that same read-modify-write-reload cycle to run start to finish for one submission
+before the next one begins.
 """
 from __future__ import annotations
 
-import copy
+import io
 import logging
+import threading
 from typing import Any, Callable
 
 import yaml
+from ruamel.yaml import YAML
 
 from .. import pii_detector, privacy_filter
 from ..audit_log import compute_security_config_hash, set_security_config_hash_for_all_principals
@@ -63,6 +92,24 @@ from ..secure_files import atomic_write_text
 from ..settings_controller import PRIVACY_CATEGORY_LABELS, PRIVACY_GROUP_LABELS
 
 logger = logging.getLogger(__name__)
+
+# Round-trip loader/dumper (comments, key order, quoting style) for the settings.yaml
+# apply_change reads and rewrites -- see apply_change's own docstring for why a plain
+# yaml.safe_load/safe_dump round trip isn't good enough here. Module-level and reused
+# rather than constructed per call: a ``YAML()`` instance carries no per-document state,
+# only parser/dumper configuration, so there's nothing wrong with sharing one.
+_ROUND_TRIP_YAML = YAML()
+_ROUND_TRIP_YAML.preserve_quotes = True
+_ROUND_TRIP_YAML.width = 4096  # don't rewrap an operator's long lines differently than they wrote them
+
+# Serializes the whole read-modify-write-reload cycle in apply_change, one process-wide
+# lock rather than one per config_path: this module only ever has one install-wide
+# settings.yaml live at a time (daemon_main starts one OrgAuth per process), so there's
+# only ever one path to serialize. Without it, two admins submitting around the same
+# moment each read the file, mutate their own copy and write it back -- the second
+# write's copy was taken before the first's landed, so it silently overwrites the
+# first admin's change instead of layering on top of it.
+_WRITE_LOCK = threading.Lock()
 
 # The action names this module can apply, deliberately the same strings
 # `org_settings_scope.ADMIN_ONLY_ACTIONS` authorizes (#400 C3b/C3c) and
@@ -210,8 +257,8 @@ def apply_change(
 
     Raises ``PolicyChangeRejected`` for an unsupported action or a payload
     naming something this install doesn't have, and ``OSError`` if
-    settings.yaml can't be written -- in both cases ``settings`` is
-    untouched and nothing has been reloaded.
+    settings.yaml can't be read back or written -- in both cases ``settings``
+    is untouched and nothing has been reloaded.
     """
     if action not in _MUTATORS:
         raise PolicyChangeRejected(f"unsupported install-wide action {action!r}")
@@ -221,16 +268,29 @@ def apply_change(
             "so the policy cannot be edited from the browser"
         )
 
-    updated = copy.deepcopy(settings)
-    summary = _MUTATORS[action](updated, payload)
-    atomic_write_text(config_path, yaml.safe_dump(updated, default_flow_style=False, allow_unicode=True))
+    with _WRITE_LOCK:
+        try:
+            with open(config_path, encoding="utf-8") as f:
+                on_disk = _ROUND_TRIP_YAML.load(f)
+        except FileNotFoundError:
+            on_disk = None
+        if on_disk is None:
+            on_disk = {}
+        summary = _MUTATORS[action](on_disk, payload)
+        buf = io.StringIO()
+        _ROUND_TRIP_YAML.dump(on_disk, buf)
+        atomic_write_text(config_path, buf.getvalue())
 
-    # Only now that it's on disk: adopt it into the live dict every other
-    # reader of the install-wide config already holds a reference to (see
-    # this module's docstring), then make it live for every principal.
-    settings.clear()
-    settings.update(updated)
-    _reload_everywhere(updated)
+        # Only now that it's on disk: adopt it into the live dict every other
+        # reader of the install-wide config already holds a reference to (see
+        # this module's docstring), then make it live for every principal.
+        # Re-parsed with plain yaml.safe_load rather than reusing `on_disk`
+        # itself, so the object every other module treats as a plain dict
+        # (isinstance checks included) never becomes a ruamel CommentedMap.
+        updated = yaml.safe_load(buf.getvalue()) or {}
+        settings.clear()
+        settings.update(updated)
+        _reload_everywhere(updated)
     logger.info("Install-wide policy change applied: %s", summary)
     return summary
 

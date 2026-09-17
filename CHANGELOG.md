@@ -574,6 +574,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   socket path under `~/.privacyfence`, which privilege separation moves out from under it, so the
   assertion could never fail regardless of what actually happened — fixed as part of splitting
   that test into separated/unseparated cases (issue #428 B7).
+- Org mode: an admin editing the install-wide privacy/PII policy from `/settings/privacy` (#400
+  C3e) no longer wipes an operator's hand-written comments out of `settings.yaml`, and no longer
+  risks silently discarding a hand edit made to the file since the last browser save.
+  `org_install_policy.apply_change` used to rewrite the whole file from a plain-dict
+  `yaml.safe_dump` of the in-memory config the daemon loaded at startup — every comment
+  `org-mode-setup-guide.md` tells operators they can still add by hand vanished the first time an
+  admin used the browser editor, and a hand edit made in between two browser edits was based on a
+  stale in-memory copy and got overwritten rather than merged. It now reads the file fresh from
+  disk through a `ruamel.yaml` round-trip loader/dumper and rewrites only the changed keys, and a
+  new write lock serializes the whole read-modify-write-reload cycle so two admins submitting
+  around the same moment layer their changes instead of the second one clobbering the first.
 
 ## [4.0.0] — 2026-09-14
 
