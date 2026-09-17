@@ -462,6 +462,19 @@ class _LineProtocolServer:
             if refusal is not None:
                 with contextlib.suppress(OSError):
                     conn.sendall(refusal.encode(_ENCODING))
+                    # Then drain, before the caller's ``with conn:`` closes.
+                    # A refused peer is typically still mid-send -- it
+                    # connected and is writing its request -- and closing a
+                    # socket whose receive queue still holds unread data
+                    # resets the connection, so that peer's own send() fails
+                    # with EPIPE before it ever gets to read the refusal
+                    # just queued above. Reading it first is what makes the
+                    # diagnostic actually arrive; ``request_open_url()``'s
+                    # caller would otherwise see a broken pipe instead of
+                    # the "ERROR ..." line explaining why it was refused.
+                    # No new worst case: the accepted path's own recv below
+                    # already spends this same 5s budget on a silent client.
+                    conn.recv(_MAX_MESSAGE_BYTES)
                 return
         try:
             data = conn.recv(_MAX_MESSAGE_BYTES)

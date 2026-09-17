@@ -712,6 +712,42 @@ class TestQuitApp:
         assert r.status_code == 403
         assert called == []
 
+    def test_shutdown_is_signalled_only_after_the_response_body_is_written(
+        self, controller, sessions, monkeypatch,
+    ):
+        """controller.quit_app() signals daemon_main's own shutdown wait, so
+        calling it inline -- before this route's 21-byte body reaches the
+        socket -- let the process be torn down mid-write: the client got
+        "peer closed connection without sending complete message body
+        (received 0 bytes, expected 21)" instead of its confirmation.
+        Anyone clicking "Quit PrivacyFence" could hit that, and
+        tests/system/test_local_mode_system.py's own quit step did,
+        intermittently, in CI. Asserted as an ordering of real ASGI events
+        rather than by inspecting the response object, since the ordering
+        is the whole guarantee."""
+        from privacyfence.web.routes_settings import create_app as _create_app
+
+        events: list[str] = []
+        monkeypatch.setattr(daemon_main, "request_shutdown", lambda: events.append("shutdown"))
+
+        inner = _create_app(controller, sessions=sessions)
+
+        async def recording_app(scope, receive, send):
+            async def _send(message):
+                await send(message)
+                if message["type"] == "http.response.body" and not message.get("more_body", False):
+                    events.append("body")
+            await inner(scope, receive, _send)
+
+        client = TestClient(recording_app, base_url="http://localhost")
+        csrf = _authed(client, sessions)
+        events.clear()
+
+        r = client.post("/api/settings/quit_app", json={"csrf": csrf, "confirmed": True})
+
+        assert r.status_code == 200
+        assert events == ["body", "shutdown"], events
+
     def test_generic_dispatch_never_reaches_quit_app(self, client):
         # quit_app is deliberately absent from _ALLOWED_ACTIONS -- it only
         # has its own dedicated route (above), which carries the
