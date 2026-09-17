@@ -80,6 +80,7 @@ from pathlib import Path
 from typing import Any
 
 from starlette.applications import Starlette
+from starlette.background import BackgroundTask
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import BaseRoute, Route
@@ -544,8 +545,16 @@ def build_routes(
             # without it (a stray script, a replayed form) is refused
             # rather than treated as consent.
             return JSONResponse({"error": "confirmation required"}, status_code=400)
-        controller.quit_app()
-        return JSONResponse({"status": "quitting"})
+        # Shutdown runs as a background task, i.e. *after* this response's
+        # body has been written to the socket -- not inline above it.
+        # controller.quit_app() signals daemon_main's own shutdown wait, so
+        # calling it first raced the server writing these 21 bytes: the
+        # process could be torn down mid-write and the client saw
+        # "peer closed connection without sending complete message body"
+        # instead of its confirmation. Anyone clicking "Quit PrivacyFence"
+        # could hit that, and tests/system/test_local_mode_system.py's own
+        # quit step did, intermittently, in CI.
+        return JSONResponse({"status": "quitting"}, background=BackgroundTask(controller.quit_app))
 
     async def org_config_upload(request: Request) -> Response:
         if not _authenticated(request):

@@ -366,6 +366,52 @@ class TestCompanionChannelPeerVerification:
         finally:
             server.stop()
 
+    def test_a_refused_peer_still_mid_send_gets_the_refusal_not_a_broken_pipe(
+        self, tmp_path, monkeypatch,
+    ):
+        """The refusal path used to close without reading the request, and
+        closing a socket whose receive queue still holds unread data resets
+        the connection -- so the refused peer's own send() failed with
+        EPIPE before it could read the refusal, and request_open_url()'s
+        caller saw a broken pipe instead of the "ERROR ..." line explaining
+        why it was refused.
+
+        The other tests in this class never caught it because their client
+        wins that race on an unloaded machine; CI, loaded, did not (a
+        BrokenPipeError out of the client's own sendall). Sleeping between
+        connect() and sendall() makes the losing interleaving the only one,
+        so this is a deterministic version of that flake rather than a
+        second roll of the same dice.
+        """
+        import time
+
+        from privacyfence import paths, privilege_separation
+
+        opened = []
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: opened.append(url) or True)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "service_account_uid", lambda: os.getuid() + 1)
+
+        server = cc.CompanionChannelServer()
+        server.start()
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(5.0)
+            try:
+                client.connect(server.address)
+                # Long enough that the server has certainly refused and
+                # reached its close before this send starts.
+                time.sleep(0.25)
+                client.sendall(b"OPEN https://example.com/callback\n")
+                reply = client.recv(4096).decode("utf-8")
+            finally:
+                client.close()
+            assert reply.startswith("ERROR"), reply
+            assert opened == []
+        finally:
+            server.stop()
+
     def test_control_channel_server_never_checks_peer_identity(self, tmp_path, monkeypatch):
         """ADR 0002 decision 6: the daemon's own MINT/QUIT channel is
         deliberately not gated this way, separated or not -- companion and
