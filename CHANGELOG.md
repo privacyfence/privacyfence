@@ -488,6 +488,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Quitting from the settings page no longer truncates its own response.** `/api/settings/quit_app`
+  signalled the daemon's shutdown *before* returning, so the process could be torn down while its
+  21-byte confirmation was still being written and the client saw `peer closed connection without
+  sending complete message body` instead. Shutdown now runs as a background task, after the response
+  body reaches the socket. This also removes an intermittent CI failure in
+  `tests/system/test_local_mode_system.py`.
+- **A refused companion-channel connection now actually receives its refusal.** On a
+  privilege-separated install, `web/control_channel.py`'s peer check wrote `ERROR ...` and closed
+  without reading the request — and closing a socket whose receive queue still holds unread data
+  resets the connection, so the refused peer's own `send()` failed with `EPIPE` before it could read
+  that line. `request_open_url()`'s caller saw a broken pipe rather than the diagnostic explaining
+  why it was refused. The request is now drained before the close. This also removes an intermittent
+  CI failure in `tests/unit/web/test_control_channel.py`.
+
 - An approval that resolved without a human clicking a button — its pending TTL lapsing
   (`pop_expired_events()`), or an auto-accept rule appearing while it was still waiting
   (`reevaluate_all()`) — no longer leaks the worker thread that was blocked showing its card.
