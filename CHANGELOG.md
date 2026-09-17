@@ -381,6 +381,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "yes" without noticing no implementation backed it. `PER_PRINCIPAL_ACTIONS` now holds exactly the
   two actions with a real route; the rest moved to a new `PER_PRINCIPAL_ACTIONS_UNROUTED` set that
   `is_action_permitted` denies until each one gets its own route and moves over.
+- B23 of the 4.1.0 action plan: local mode's `/approvals` page now says, once, when step-up isn't
+  actually protecting anything — B9 gave the requirement a browser-reachable on switch, but the
+  default is still off and nothing said so. The two banners that already existed both fired on
+  transitions or misconfigurations (`step_up_config.py`'s `local_enrollment_banner` once
+  `require_passkey` is already in force and nothing is enrolled; `webauthn_stepup.py`'s
+  `step_up_disabled_notice` once a disable transition has been latched), so a fresh install — or any
+  install that has simply never turned this on — showed an approvals page that looked complete while
+  an agent session could still approve its own writes, with no hint beyond the Security card in
+  Settings. A new `StepUpConfig.off_notice()` fires exactly when step-up isn't genuinely required
+  (`enabled and require_passkey` together), and `/approvals` renders it as a dismissible strip
+  (`web_shell.wrap`'s new `dismissible_notice_html`) with a link to turn it on — advisory, not an
+  alarm, so it stays dismissed in that browser once seen rather than nagging on every visit for as
+  long as the install stays in its default state.
 
 ### Added
 
