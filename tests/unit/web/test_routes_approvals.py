@@ -320,6 +320,24 @@ class TestShowApproval:
         web_ui.resolve(card.id, "deny")
         t.join(timeout=2)
 
+    def test_a_registered_but_not_yet_rendered_card_shows_a_placeholder_not_a_500(self, client, sessions, web_ui):
+        # Regression: card HTML is only built inside gate.py's
+        # _popup_executor (build_card_html runs from within show_popup/
+        # show_read_popup, on that worker thread). Past that executor's
+        # worker count, a newly registered approval is listed and
+        # decidable but genuinely has card.html == "" until a worker frees
+        # up -- _inject_shim's first statement is html.index("</head>"),
+        # which raised ValueError on an empty string. This must never 500.
+        _signed_in(client, sessions)
+        approval, _ = web_ui.deferred_registry.register_or_coalesce(
+            dedupe_key="k1", connector="gmail", tool="t", gate_kind="review", request_id="r1",
+        )
+        assert approval.html == ""
+        r = client.get(f"/approvals/{approval.id}")
+        assert r.status_code == 200
+        assert "Preparing this request" in r.text
+        assert 'href="/approvals"' in r.text
+
 
 class TestDecide:
     def test_happy_path_releases_the_blocked_gate_call(self, client, sessions, web_ui):

@@ -129,6 +129,24 @@ class TestPrincipalScopedList:
         assert r.status_code == 200
         assert "CARD" in r.text
 
+    def test_show_approval_of_an_unrendered_card_is_a_placeholder_not_a_500(self):
+        # Regression: same defect as web/routes_approvals.py's own
+        # show_approval -- card HTML is only built on gate.py's
+        # _popup_executor, so a card whose worker hasn't run yet has
+        # card.html == "". _inject_shim's html.index("</head>") raised
+        # ValueError on that empty string; this must never 500.
+        app, sessions, web_ui = _app()
+        with principal_scope(ALICE):
+            approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key="a1", connector="gmail", tool="gmail_get_message", gate_kind="review", request_id="r1",
+            )
+        assert approval.html == ""
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get(f"/approvals/{approval.id}")
+        assert r.status_code == 200
+        assert "Preparing this request" in r.text
+
     def test_show_approval_wraps_the_webauthn_helper_js_in_a_script_tag(self):
         """Regression: _org_bridge_shim used to concatenate PF_WEBAUTHN_JS
         *before* its own <script> tag opened, so the helper functions

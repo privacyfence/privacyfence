@@ -70,6 +70,37 @@ class TestBlockOnCard:
         t.join(timeout=2)
         assert box["result"] == ("accept", None)
 
+    def test_an_expired_approval_releases_its_blocked_worker(self):
+        # Regression for the leaked popup-executor thread: pop_expired_
+        # events() used to set only finalize_event, never the UI-step
+        # `event` that card.event.wait() below actually blocks on -- only
+        # PendingApproval.answer() (a human clicking a button) ever set it.
+        # A worker parked here on an approval that instead expired (nobody
+        # answered before the pending TTL) never returned, permanently
+        # occupying one of gate.py's _popup_executor's 8 workers.
+        registry = PendingApprovalRegistry(pending_ttl=0.01)
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k", connector="gmail", tool="t", gate_kind="popup", request_id="r",
+        )
+        box = {}
+
+        def run():
+            box["result"] = web_prompt.block_on_card(registry, "<html></html>", approval)
+
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        assert wait_until(lambda: approval.html)
+        time.sleep(0.02)
+        expired = registry.pop_expired_events()
+        assert [a.id for a in expired] == [approval.id]
+        t.join(timeout=2)
+        assert not t.is_alive()
+        # Unrecognized (non-CARD_RESULTS) result defaults to "deny" -- the
+        # approval's own real outcome ("expired", recorded in
+        # final_decision) is untouched by this.
+        assert box["result"] == ("deny", None)
+        assert approval.final_decision == "expired"
+
 
 class TestBlockOnConfirm:
     def test_confirm_result_is_true(self):
