@@ -2325,11 +2325,11 @@ class TestManyPendingApprovalsAreAllReviewable:
             # real PII scan and a full audit-log scan is measurably slower
             # under CI's coverage-instrumented run than locally, and slower
             # again on the macOS runner specifically.
-            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=30.0)
+            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=60.0)
             # The actual regression: every one of these must have real card
             # HTML, not merely be registered and listed -- a worker-starved
             # approval sits at html == "" forever.
-            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=30.0)
+            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=60.0)
         finally:
             # Registration races the event loop (each call does its own PII
             # scan / audit-log scan via asyncio.to_thread before it ever
@@ -2353,12 +2353,25 @@ class TestManyPendingApprovalsAreAllReviewable:
             # the thread), so under a slow enough CI run that deadline was
             # observed to fire while approvals were still legitimately
             # registering, reintroducing the exact leaked-thread hang this
-            # loop exists to prevent. Denying is cheap and always makes
-            # forward progress the moment an approval appears, so looping
-            # for as long as it actually takes is both correct and the only
-            # thing that's actually safe; pytest's own per-test timeout
-            # above is the real backstop against a genuine (non-racy) hang.
-            while not all(t.done() for t in tasks):
+            # loop exists to prevent.
+            #
+            # The exit condition itself has to check the *registry*, not
+            # just the top-level tasks: a top-level gate.gated_call() task
+            # becomes done() the moment registry.hold_window (5s here)
+            # elapses, whether or not the underlying interaction was ever
+            # actually answered -- _resolve_decision() returns the
+            # "approval_pending" result on a plain timeout, decoupled from
+            # _drive_interaction (the real card-driving coroutine, started
+            # via a fire-and-forget asyncio.ensure_future() this test never
+            # tracks). So "all tasks done" can go true while an approval is
+            # still sitting unanswered in registry.list_pending() and its
+            # worker is still genuinely blocked -- observed directly in CI:
+            # the previous version of this loop exited, cleanup finished,
+            # pytest printed a result, and the job still hung for 35+
+            # minutes afterward. Looping until the registry itself reports
+            # nothing pending *and* every task has finished closes that gap
+            # instead of merely narrowing it further.
+            while registry.list_pending() or not all(t.done() for t in tasks):
                 for approval in registry.list_pending():
                     registry.answer(approval.id, "deny")
                 await asyncio.sleep(0.01)
