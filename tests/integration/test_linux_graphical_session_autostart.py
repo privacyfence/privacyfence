@@ -431,6 +431,22 @@ def _start_real_login_session(user: str, uid: int) -> tuple[dict, Callable[..., 
     subprocess.run(
         ["sudo", "-n", "loginctl", "enable-linger", user], check=True, capture_output=True, text=True, timeout=15,
     )
+    # `systemctl start` is a no-op against a manager that is already running,
+    # and on a CI runner this account's manager generally is -- which would
+    # make this a *continued* session, not a new one. That distinction is not
+    # cosmetic here: `enable --auto` adds the installing human to the
+    # `privacyfence` group during this very test's `dpkg -i`, and a process's
+    # supplementary groups are fixed when its session is created. A manager
+    # that predates the install hands every unit it starts -- the companion
+    # among them -- a group set without `privacyfence`, so the companion
+    # cannot create its socket in the 2770 group-owned handoff dir and fails
+    # exactly the way linux_privilege_separation.sh's own "log out and back
+    # in" note describes. Stopping first is what makes the start below a real
+    # login rather than a reused one.
+    subprocess.run(
+        ["sudo", "-n", "systemctl", "stop", f"user@{uid}.service"],
+        check=False, capture_output=True, text=True, timeout=30,
+    )
     subprocess.run(
         ["sudo", "-n", "systemctl", "start", f"user@{uid}.service"],
         check=True, capture_output=True, text=True, timeout=15,
@@ -450,10 +466,9 @@ def _start_real_login_session(user: str, uid: int) -> tuple[dict, Callable[..., 
         )
 
     # A real login's user manager always (re-)runs its generators
-    # (systemd-xdg-autostart-generator among them) on its own startup;
-    # daemon-reload makes that moment explicit and repeatable here, since
-    # the .deb's postinst just dropped a new autostart entry after this
-    # manager may already have been running for other CI reasons.
+    # (systemd-xdg-autostart-generator among them) on its own startup, which
+    # the restart above already guarantees; daemon-reload keeps that moment
+    # explicit and repeatable even if the stop above was refused.
     systemctl_user("daemon-reload")
     return user_env, systemctl_user
 
@@ -594,9 +609,28 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
     # companion's own CompanionChannelServer actually bound its socket --
     # the same rigor the unseparated test applies to the daemon's own
     # control.sock.
-    _wait_for_path_as_root(
-        companion_socket_path_under(HANDOFF_DIR), timeout=20, what="the companion's own control channel socket",
-    )
+    try:
+        _wait_for_path_as_root(
+            companion_socket_path_under(HANDOFF_DIR), timeout=20, what="the companion's own control channel socket",
+        )
+    except AssertionError as exc:
+        # The one failure mode worth naming rather than re-deriving from a
+        # bare "never appeared": handoff/ is 2770 and group-owned, so a
+        # companion whose session predates `enable --auto`'s `usermod -aG`
+        # simply cannot create a socket in it. Print what the process
+        # actually got, so this never costs a second workflow round.
+        try:
+            status = Path(f"/proc/{companion_pid}/status").read_text()
+        except OSError:  # the companion exited between the check above and here
+            credentials = f"<pid {companion_pid} is gone>"
+        else:
+            credentials = "\n".join(
+                ln for ln in status.splitlines() if ln.startswith(("Uid:", "Gid:", "Groups:"))
+            )
+        journal = systemctl_user("status", unit, "--no-pager", check=False).stdout
+        raise AssertionError(
+            f"{exc}\n\ncompanion process credentials:\n{credentials}\n\n{unit}:\n{journal}"
+        ) from exc
 
     # ── Cleanup: unlike the daemon, the companion's --serve mode has no
     # in-product "quit" of its own (companion.py only ever asks the *daemon*
