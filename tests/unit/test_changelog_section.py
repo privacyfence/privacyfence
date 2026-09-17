@@ -136,11 +136,37 @@ class TestKnownVersions:
         assert changelog_section.known_versions(SAMPLE) == ["Unreleased", "2.1.0", "2.0.0"]
 
 
+class TestUnreleasedBody:
+    def test_returns_pending_entries(self):
+        assert "Something not yet released" in changelog_section.unreleased_body(SAMPLE)
+
+    def test_stops_at_the_next_version_heading(self):
+        assert "A thing." not in changelog_section.unreleased_body(SAMPLE)
+
+    def test_empty_when_the_heading_has_nothing_under_it(self):
+        assert changelog_section.unreleased_body("# C\n\n## [Unreleased]\n\n## [1.0.0]\n\n- x\n") == ""
+
+    def test_empty_when_there_is_no_unreleased_heading(self):
+        assert changelog_section.unreleased_body("# C\n\n## [1.0.0]\n\n- x\n") == ""
+
+    def test_ignores_the_heading_quoted_in_the_top_of_file_comment(self):
+        # The real CHANGELOG.md explains the convention by quoting "## [Unreleased]" in a comment.
+        # Reading that as the heading would make this report pending content on an empty cycle.
+        commented = "# C\n\n<!--\n## [Unreleased] is permanent.\n-->\n\n## [Unreleased]\n\n## [1.0.0]\n\n- x\n"
+        assert changelog_section.unreleased_body(commented) == ""
+
+    def test_does_not_raise_on_two_unreleased_headings(self):
+        # section() raises on duplicates; this must still answer "yes, pending" rather than blow up.
+        assert changelog_section.unreleased_body("# C\n\n## [Unreleased]\n\n- a\n\n## [Unreleased]\n\n- b\n") == "- a"
+
+
 class TestMain:
     def test_prints_the_section_and_exits_zero(self, capsys, tmp_path):
+        # SAMPLE's [Unreleased] is populated, which is the normal mid-cycle state and is what
+        # --allow-unreleased is for; the guard itself is exercised below.
         path = tmp_path / "CHANGELOG.md"
         path.write_text(SAMPLE, encoding="utf-8")
-        assert changelog_section.main(["2.1.0", "--changelog", str(path)]) == 0
+        assert changelog_section.main(["2.1.0", "--changelog", str(path), "--allow-unreleased"]) == 0
         assert "A thing." in capsys.readouterr().out
 
     def test_missing_version_exits_non_zero_and_lists_what_is_available(self, capsys, tmp_path):
@@ -162,8 +188,41 @@ class TestMain:
         assert "cannot read" in capsys.readouterr().err
 
     def test_defaults_to_the_repo_changelog(self, capsys):
-        assert changelog_section.main(["4.0.0"]) == 0
+        # --allow-unreleased so this keeps testing the default --changelog path rather than
+        # doubling as an assertion about whether the release PR has merged [Unreleased] yet.
+        assert changelog_section.main(["4.0.0", "--allow-unreleased"]) == 0
         assert "Upgrading from 3.x" in capsys.readouterr().out
+
+    def test_populated_unreleased_exits_non_zero_rather_than_dropping_the_cycle(self, capsys, tmp_path):
+        # The other half of the B9/B10 trap. Doing only the "correct its date" half of CLAUDE.md's
+        # release step leaves one correct [2.1.0] heading with the whole cycle stranded above it:
+        # the duplicate guard sees nothing wrong, and the release ships without any of it.
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text(SAMPLE, encoding="utf-8")
+        assert changelog_section.main(["2.1.0", "--changelog", str(path)]) == 1
+        err = capsys.readouterr().err
+        assert "[Unreleased] section still has entries" in err
+        assert "merge [Unreleased] into [2.1.0]" in err
+
+    def test_empty_unreleased_renders_without_the_flag(self, capsys, tmp_path):
+        # The state the release PR is supposed to leave behind: a fresh empty [Unreleased].
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text(SAMPLE.replace("### Added\n\n- Something not yet released.\n\n", ""), encoding="utf-8")
+        assert changelog_section.main(["2.1.0", "--changelog", str(path)]) == 0
+        assert "A thing." in capsys.readouterr().out
+
+    def test_asking_for_unreleased_itself_is_not_blocked_by_its_own_content(self, capsys, tmp_path):
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text(SAMPLE, encoding="utf-8")
+        assert changelog_section.main(["Unreleased", "--changelog", str(path)]) == 0
+        assert "Something not yet released" in capsys.readouterr().out
+
+    def test_missing_version_is_reported_before_the_unreleased_guard(self, capsys, tmp_path):
+        # Both are true at once for a mistyped version; the more basic answer is the useful one.
+        path = tmp_path / "CHANGELOG.md"
+        path.write_text(SAMPLE, encoding="utf-8")
+        assert changelog_section.main(["3.0.0", "--changelog", str(path)]) == 1
+        assert "no section for 3.0.0" in capsys.readouterr().err
 
 
 class TestRealChangelog:

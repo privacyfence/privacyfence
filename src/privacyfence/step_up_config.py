@@ -131,6 +131,35 @@ class StepUpConfig:
             )
         return None
 
+    def off_notice(self) -> str | None:
+        """B23 of the 4.1.0 action plan: the residue B9 left behind.
+        ``local_enrollment_banner`` above only speaks once ``require_
+        passkey`` is actually in force, and webauthn_stepup.py's
+        ``step_up_disabled_notice`` only once a disable *transition* has
+        been latched -- neither says anything about the ordinary default
+        an install ships with (``enabled=False``, nothing in ``step_up:``
+        at all), so a fresh install gave no sign the control existed, let
+        alone that it was off. This is the fallback for exactly that gap:
+        ``None`` whenever step-up is actually in force (``enabled and
+        require_passkey`` -- the same pairing ``observe_step_up_
+        requirement`` treats as "required"), a short sentence otherwise.
+
+        Unlike the other two, this is advisory rather than a live
+        state indicator -- an install that has simply never turned this on
+        is not misconfigured or compromised, just less protected than it
+        could be -- so web_shell.wrap()'s caller renders it as a
+        dismissible notice (``dismissible_notice_html``), not the
+        non-dismissable ``banner_html`` strip: once a person has seen it,
+        it should not keep reappearing for as long as the install stays in
+        this same, safe-if-less-protected default state."""
+        if self.enabled and self.require_passkey:
+            return None
+        return (
+            "Approvals are not passkey-protected: anyone (or anything) with a session on this "
+            'install can approve its own writes. <a href="/settings">Turn on step-up</a> to '
+            "require a passkey first."
+        )
+
     @staticmethod
     def from_local_config(config: dict[str, Any]) -> "StepUpConfig":
         """local mode's own entry point (#426 Phase 1) -- ``config`` is the
@@ -175,7 +204,8 @@ class LiveStepUpConfig:
     This class closes that gap without touching any of those call sites:
     every attribute/method a ``StepUpConfig`` exposes (``enabled``,
     ``scope``, ``rp_id``, ``rp_name``, ``require_passkey``,
-    ``local_enrollment_banner``) is mirrored here, read fresh off whatever
+    ``local_enrollment_banner``, ``off_notice``) is mirrored here, read
+    fresh off whatever
     ``StepUpConfig`` is currently held rather than fixed at construction
     time -- so daemon_main.py's local-mode boot path can hand *this*
     object, instead of a bare ``StepUpConfig``, to every one of the above
@@ -229,6 +259,11 @@ class LiveStepUpConfig:
         with self._lock:
             current = self._current
         return current.local_enrollment_banner(has_credentials=has_credentials)
+
+    def off_notice(self) -> str | None:
+        with self._lock:
+            current = self._current
+        return current.off_notice()
 
     def update(self, cfg: StepUpConfig) -> None:
         """Swap in a freshly loaded ``StepUpConfig`` -- called by

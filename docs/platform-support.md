@@ -81,7 +81,7 @@ The installer:
 - removes the scheduled task, the companion task and the privilege-separation service on uninstall;
 - preserves the user's PrivacyFence state directory on uninstall.
 
-Optional signing is configured through `SIGN_CERT_PATH`, `SIGN_CERT_PASSWORD`, and optionally `SIGN_TIMESTAMP_URL`.
+Optional signing is configured through `CODESIGNTOOL_DIR`, `ES_USERNAME`, `ES_PASSWORD`, `ES_CREDENTIAL_ID`, and `ES_TOTP_SECRET` — see `scripts/build_installer.ps1`'s header comment. Signing goes through SSL.com's eSigner CodeSignTool rather than a local Authenticode `.pfx`, since CA/B Forum's 2023 key-storage rules mean code-signing private keys can no longer be exported to a portable `.pfx` at all.
 
 ### Privilege separation (opt-in)
 
@@ -435,6 +435,16 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   running the manual checks against the first 4.1 release this ships in is now more urgent, not
   less, precisely because the default now turns it on for people who never asked for it by name on
   those two platforms.
+  **macOS's own launchd wiring is now covered too** (B19,
+  [privacyfence/privacyfence#374](https://github.com/privacyfence/privacyfence/issues/374)):
+  `macos-graphical-session.yml`/`test_macos_graphical_session_autostart.py` drives
+  `scripts/macos_privilege_separation.sh enable` directly via passwordless `sudo` (the only path
+  a hosted runner can take at all — the daemon's own unattended trigger,
+  `maybe_auto_enable_macos()`, pops a real GUI admin-password dialog nothing in CI can answer) and
+  confirms both the daemon's `system/` LaunchDaemon and the companion's `gui/<uid>` LaunchAgent
+  actually come up, as the right account, with real control-channel sockets underneath — on the one
+  already-logged-in Aqua session a GitHub-hosted `macos-latest` runner gives it, not a second real
+  login the way a full soak would need.
   **Linux carries one thing macOS does not**: the companion is a `--serve` process autostarted by
   an XDG entry rather than a tray app, and XDG autostart is a desktop-environment behavior, not a
   systemd one — `linux-graphical-session.yml` covers the daemon's own autostart entry on a real

@@ -67,6 +67,7 @@ class TestCheckAll:
         runs = {
             "linux-graphical-session.yml": _run(conclusion="success", head_sha="good"),
             "windows-graphical-session.yml": _run(conclusion="failure", head_sha="bad"),
+            "macos-graphical-session.yml": _run(conclusion="success", head_sha="good"),
         }
 
         def fake_fetch(repo, workflow, branch, token):
@@ -101,9 +102,9 @@ class TestCheckAll:
 
         check_graphical_session_coverage.check_all("privacyfence/privacyfence", "deadbeef", "test-token")
 
-        assert seen_branches == ["releases/4.1-dev", "releases/4.1-dev"]
+        assert seen_branches == ["releases/4.1-dev"] * len(check_graphical_session_coverage.WORKFLOWS)
 
-    def test_no_warnings_when_both_workflows_are_green_and_reachable(self, monkeypatch):
+    def test_no_warnings_when_all_workflows_are_green_and_reachable(self, monkeypatch):
         monkeypatch.setattr(check_graphical_session_coverage, "resolve_release_branch", lambda commit: "main")
         monkeypatch.setattr(
             check_graphical_session_coverage,
@@ -131,7 +132,7 @@ class TestCheckAll:
             "privacyfence/privacyfence", "deadbeef", "test-token"
         )
 
-        assert len(warnings) == 2
+        assert len(warnings) == len(check_graphical_session_coverage.WORKFLOWS)
         assert all("could not check" in message for message in warnings)
 
     def test_never_calls_is_ancestor_when_there_is_no_run(self, monkeypatch):
@@ -151,7 +152,7 @@ class TestCheckAll:
             "privacyfence/privacyfence", "deadbeef", "test-token"
         )
 
-        assert len(warnings) == 2
+        assert len(warnings) == len(check_graphical_session_coverage.WORKFLOWS)
 
 
 class TestResolveReleaseBranch:
