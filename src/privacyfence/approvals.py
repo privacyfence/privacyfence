@@ -191,6 +191,16 @@ class PendingApproval:
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0.0        # pending-TTL deadline
     html: str = ""
+    # Stamped at registration by gate.py, from the exact ``preview`` dict it
+    # hands to show_popup()/show_read_popup() -- metadata only, per
+    # docs/coding-and-testing-guidelines.md §1.5 ("preview dicts carry
+    # metadata only... never body/content"), the same contract that already
+    # governs every preview a card renders. Known the moment this approval
+    # is registered, unlike ``html`` above, which stays "" until a
+    # _popup_executor worker frees up to run build_card_html -- a consumer
+    # that wants to disclose what's pending (a fragment endpoint, a future
+    # binder row) can read this without waiting on that worker at all.
+    preview: dict[str, Any] = field(default_factory=dict)
     # Re-evaluation context for the rules-changed broadcast (§6, Job 2).
     operation_key: str | None = None
     review_ctx: Any = None
@@ -310,6 +320,7 @@ class PendingApprovalRegistry:
         request_id: str,
         summary: str = "",
         tool_name: str = "",
+        preview: dict[str, Any] | None = None,
         operation_key: str | None = None,
         review_ctx: Any = None,
         pii_forces_confirmation: bool = False,
@@ -362,6 +373,7 @@ class PendingApprovalRegistry:
                 connector=connector, tool=tool, gate_kind=gate_kind,
                 request_id=request_id, summary=summary, tool_name=tool_name, dedupe_key=dedupe_key,
                 created_at=now, expires_at=now + self.pending_ttl,
+                preview=dict(preview or {}),
                 operation_key=operation_key, review_ctx=review_ctx,
                 pii_forces_confirmation=pii_forces_confirmation, pii_detected=pii_detected,
                 pii_categories=list(pii_categories or []), claude_reason=claude_reason,

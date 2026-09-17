@@ -111,6 +111,40 @@ class TestRegisterOrCoalesce:
         )
         assert created is False
 
+    def test_preview_is_stamped_onto_the_approval(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+            preview={"from": "alice@example.com", "size": "12 KB"},
+        )
+        assert approval.preview == {"from": "alice@example.com", "size": "12 KB"}
+        # Known at registration -- html is only ever set later, by
+        # WebApprovalUI's own _run_card (gate.py's _popup_executor), which
+        # nothing here ever triggers. A consumer that wants to disclose what
+        # this approval is about doesn't have to wait for that worker.
+        assert approval.html == ""
+
+    def test_no_preview_given_defaults_to_an_empty_dict(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        assert approval.preview == {}
+
+    def test_preview_is_copied_not_aliased(self):
+        # Mutating the caller's own dict after registration must not reach
+        # back into the stored approval -- the same defensive-copy contract
+        # pii_categories already gets a few lines below (list(pii_categories
+        # or [])).
+        registry = make_registry()
+        caller_dict = {"from": "alice@example.com"}
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+            preview=caller_dict,
+        )
+        caller_dict["from"] = "mallory@example.com"
+        assert approval.preview == {"from": "alice@example.com"}
+
 
 class TestAnswerVsFinalize:
     def test_answer_resolves_the_ui_step_only_not_the_whole_approval(self):
