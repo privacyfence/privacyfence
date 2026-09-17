@@ -61,7 +61,8 @@ logger = logging.getLogger(__name__)
 #   1 -- implicit, undocumented shape (every entry before SEC-23)
 #   2 -- SEC-23: + schema_version, event_id, deployment_id,
 #        security_config_hash, prev_hash, entry_hash
-CURRENT_SCHEMA_VERSION = 2
+#   3 -- approval binder Phase 2: + decided_via, batch_id
+CURRENT_SCHEMA_VERSION = 3
 
 # The hash chain's own root -- what the very first entry this install ever
 # records (or the first one after a chain-state file goes missing, e.g. a
@@ -257,6 +258,16 @@ class AuditEntry:
                               # decision, and was previously only recoverable by cross-referencing
                               # tool-call args, which isn't what the audit log is for. Set by gate.py's
                               # gated_call() (its own ``delivery`` kwarg) -- never inferred here.
+    decided_via: str = ""    # "binder" when this decision was released through the approval binder's
+                              # batch decide endpoint (Phase 2 of the binder plan) -- "" for every
+                              # ordinary single-decide entry, and for every entry recorded before
+                              # this field existed. See approvals.PendingApproval.decided_via's own
+                              # docstring for how a decision gets stamped with it.
+    batch_id: str = ""       # The server-minted id of the batch this decision was submitted as part
+                              # of, when decided_via == "binder" -- "" otherwise. Lets a reviewer (or
+                              # a compliance report) group every audit entry a single passkey
+                              # assertion released (Phase 3 of the binder plan) back into the one
+                              # human action that authorized them.
 
     # ---- SEC-23 fields ----
     # All six below default to a value meaning "not yet stamped" and are

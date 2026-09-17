@@ -90,6 +90,7 @@ from ..principal import LOCAL_PRINCIPAL
 from ..settings_controller import REPO_URL, SettingsController
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
+from . import step_up_decide
 from .csp import nonce_for as _csp_nonce_for
 from .routes_security import PF_WEBAUTHN_JS
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
@@ -471,14 +472,14 @@ def build_routes(
         ``_needs_step_up`` below); there is no Phase-2-style "let it through"
         configuration to fall back to here."""
         assert step_up is not None  # nosec B101  # _needs_step_up() already proved this before calling us
-        begun = webauthn_stepup.begin_assertion(LOCAL_PRINCIPAL, rp_id=step_up.rp_id) if step_up.rp_id else None
-        if begun is None:
+        fingerprint = _action_fingerprint(action, fingerprint_body)
+        options_json = step_up_decide.begin_step_up(
+            LOCAL_PRINCIPAL, rp_id=step_up.rp_id, subject_key=action, fingerprint=fingerprint, challenges=challenges,
+        )
+        if options_json is None:
             return JSONResponse(
                 {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
             )
-        options_json, challenge = begun
-        fingerprint = _action_fingerprint(action, fingerprint_body)
-        challenges.put(LOCAL_PRINCIPAL.id, action, challenge=challenge, fingerprint=fingerprint)
         return JSONResponse(
             {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
         )
@@ -509,15 +510,14 @@ def build_routes(
             assertion = payload.get("webauthn_assertion")
             if not isinstance(assertion, dict):
                 return _settings_step_up_response(action, fingerprint_body)
-            pending = challenges.pop(LOCAL_PRINCIPAL.id, action)
             expected_fp = _action_fingerprint(action, fingerprint_body)
-            if pending is None or pending.fingerprint != expected_fp:
-                return JSONResponse({"error": "step_up_expired"}, status_code=400)
             try:
-                webauthn_stepup.verify_assertion(
-                    LOCAL_PRINCIPAL, assertion, expected_challenge=pending.challenge,
-                    rp_id=step_up.rp_id, origin=step_up_origin.rstrip("/"),
+                step_up_decide.verify_step_up(
+                    LOCAL_PRINCIPAL, rp_id=step_up.rp_id, origin=step_up_origin.rstrip("/"), subject_key=action,
+                    fingerprint=expected_fp, assertion=assertion, challenges=challenges,
                 )
+            except step_up_decide.StepUpExpired:
+                return JSONResponse({"error": "step_up_expired"}, status_code=400)
             except WebAuthnError as exc:
                 return JSONResponse({"error": str(exc)}, status_code=401)
         try:

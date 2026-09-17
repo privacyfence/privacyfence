@@ -61,6 +61,7 @@ import logging
 import secrets
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
@@ -69,12 +70,13 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import Route
 
 from .. import approval_list_html, approval_window_html, org_identity, webauthn_stepup
+from ..approvals import BATCH_RESULTS
 from ..org_identity import IdpConfig
 from ..principal import Principal
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
 from ..web_approval_ui import WebApprovalUI
-from . import org_session
+from . import org_session, step_up_decide
 from .csp import nonce_for as _csp_nonce_for
 from .csp import set_nonce as _set_csp_nonce
 from .org_session import OrgSessionStore
@@ -349,13 +351,13 @@ def build_routes(
 
     def _step_up_response(principal: Principal, approval_id: str, *, result: str, choice: int | None) -> JSONResponse:
         body: dict = {"error": "step_up_required"}
-        begun = webauthn_stepup.begin_assertion(principal, rp_id=step_up.rp_id) if step_up.rp_id else None
-        if begun is not None:
-            options_json, challenge = begun
-            fingerprint = webauthn_stepup.decision_fingerprint(
-                approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
-            )
-            challenges.put(principal.id, approval_id, challenge=challenge, fingerprint=fingerprint)
+        fingerprint = webauthn_stepup.decision_fingerprint(
+            approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
+        )
+        options_json = step_up_decide.begin_step_up(
+            principal, rp_id=step_up.rp_id, subject_key=approval_id, fingerprint=fingerprint, challenges=challenges,
+        )
+        if options_json is not None:
             body["webauthn_options"] = json.loads(options_json)
         elif step_up.require_passkey:
             # No enrolled passkey, and this org has closed the IdP-reauth
@@ -400,17 +402,16 @@ def build_routes(
                 assertion = payload.get("webauthn_assertion")
                 if not isinstance(assertion, dict):
                     return _step_up_response(principal, approval_id, result=result, choice=choice)
-                pending = challenges.pop(principal.id, approval_id)
                 expected_fp = webauthn_stepup.decision_fingerprint(
                     approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
                 )
-                if pending is None or pending.fingerprint != expected_fp:
-                    return JSONResponse({"error": "step_up_expired"}, status_code=400)
                 try:
-                    webauthn_stepup.verify_assertion(
-                        principal, assertion, expected_challenge=pending.challenge,
-                        rp_id=step_up.rp_id, origin=origin,
+                    step_up_decide.verify_step_up(
+                        principal, rp_id=step_up.rp_id, origin=origin, subject_key=approval_id,
+                        fingerprint=expected_fp, assertion=assertion, challenges=challenges,
                     )
+                except step_up_decide.StepUpExpired:
+                    return JSONResponse({"error": "step_up_expired"}, status_code=400)
                 except WebAuthnError as exc:
                     return JSONResponse({"error": str(exc)}, status_code=401)
 
@@ -418,6 +419,38 @@ def build_routes(
         if not accepted:
             return JSONResponse({"status": "already_decided"}, status_code=409)
         return JSONResponse({"status": "ok"})
+
+    async def batch_decide(request: Request) -> Response:
+        """The org-mode counterpart of web/routes_approvals.py's own
+        ``batch_decide`` -- see that module's own docstring for the shape
+        (Phase 2 of the binder plan; no step-up yet, that's Phase 3). Scoped
+        to ``current_principal()`` the same way every other read/write here
+        is (module docstring, §10.5): another principal's id reports
+        "unknown" via ``answer_batch``, never "exists but forbidden"."""
+        principal = _current_principal(request)
+        if principal is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(payload, dict) or not org_session.check_csrf(request, payload.get("csrf")):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not org_session.check_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        items = payload.get("items")
+        if not isinstance(items, list) or not items:
+            return JSONResponse({"error": "missing items"}, status_code=400)
+        if len(items) > registry.max_pending:
+            return JSONResponse({"error": "too many items"}, status_code=400)
+        parsed: list[tuple[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str) or item.get("result") not in BATCH_RESULTS:
+                return JSONResponse({"error": "invalid item"}, status_code=400)
+            parsed.append((item["id"], item["result"]))
+        batch_id = uuid.uuid4().hex
+        results = registry.answer_batch(parsed, principal_id=principal.id, decided_via="binder", batch_id=batch_id)
+        return JSONResponse({"batch_id": batch_id, "results": results})
 
     async def stepup_idp_start(request: Request) -> Response:
         """A same-site navigation the user's own click on the failed
@@ -532,6 +565,9 @@ def build_routes(
         Route("/", index),
         Route("/approvals", list_approvals),
         Route("/approvals/{id}", show_approval),
+        # Registered ahead of "/api/approvals/{id}/decide" -- see web/
+        # routes_approvals.py's own copy of this comment.
+        Route("/api/approvals/batch/decide", batch_decide, methods=["POST"]),
         Route("/api/approvals/{id}/decide", decide, methods=["POST"]),
         Route("/api/approvals/{id}/preview", approval_preview),
         Route("/api/approvals/stream", approvals_stream),

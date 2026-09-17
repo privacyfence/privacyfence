@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -50,10 +51,12 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import BaseRoute, Route
 
 from .. import approval_list_html, approval_window_html, web_shell, webauthn_stepup
+from ..approvals import BATCH_RESULTS
 from ..principal import LOCAL_PRINCIPAL
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
 from ..web_approval_ui import WebApprovalUI
+from . import step_up_decide
 from .csp import nonce_for as _csp_nonce_for
 from .csp import set_nonce as _set_csp_nonce
 from .routes_security import PF_WEBAUTHN_JS
@@ -424,13 +427,14 @@ def create_app(
         configuration). With ``require_passkey`` on and nothing enrolled,
         this hard-fails with a ``403`` instead -- #426 Phase 3, mirroring
         org mode's own ``require_passkey`` branch exactly."""
-        begun = webauthn_stepup.begin_assertion(LOCAL_PRINCIPAL, rp_id=step_up.rp_id) if step_up.rp_id else None
-        if begun is not None:
-            options_json, challenge = begun
-            fingerprint = webauthn_stepup.decision_fingerprint(
-                approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
-            )
-            challenges.put(LOCAL_PRINCIPAL.id, approval_id, challenge=challenge, fingerprint=fingerprint)
+        fingerprint = webauthn_stepup.decision_fingerprint(
+            approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
+        )
+        options_json = step_up_decide.begin_step_up(
+            LOCAL_PRINCIPAL, rp_id=step_up.rp_id, subject_key=approval_id, fingerprint=fingerprint,
+            challenges=challenges,
+        )
+        if options_json is not None:
             return JSONResponse(
                 {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
             )
@@ -481,17 +485,16 @@ def create_app(
                     if stepup_response is not None:
                         return stepup_response
                 else:
-                    pending = challenges.pop(LOCAL_PRINCIPAL.id, approval_id)
                     expected_fp = webauthn_stepup.decision_fingerprint(
                         approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
                     )
-                    if pending is None or pending.fingerprint != expected_fp:
-                        return JSONResponse({"error": "step_up_expired"}, status_code=400)
                     try:
-                        webauthn_stepup.verify_assertion(
-                            LOCAL_PRINCIPAL, assertion, expected_challenge=pending.challenge,
-                            rp_id=step_up.rp_id, origin=origin,
+                        step_up_decide.verify_step_up(
+                            LOCAL_PRINCIPAL, rp_id=step_up.rp_id, origin=origin, subject_key=approval_id,
+                            fingerprint=expected_fp, assertion=assertion, challenges=challenges,
                         )
+                    except step_up_decide.StepUpExpired:
+                        return JSONResponse({"error": "step_up_expired"}, status_code=400)
                     except WebAuthnError as exc:
                         return JSONResponse({"error": str(exc)}, status_code=401)
 
@@ -503,6 +506,44 @@ def create_app(
             # an error worth alarming over.
             return JSONResponse({"status": "already_decided"}, status_code=409)
         return JSONResponse({"status": "ok"})
+
+    async def batch_decide(request: Request) -> Response:
+        """The approval binder's own batch decide endpoint (Phase 2 of the
+        binder plan): approve or deny a whole selected set in one request.
+        No step-up here yet -- that's Phase 3's own layer on top of this
+        same endpoint, once one bound passkey assertion can cover the
+        whole set; today this is a plain, CSRF/origin-checked batch of
+        single decisions, same auth posture as ``decide`` above.
+
+        Deliberately narrower than ``decide``: no ``choice`` (a choice
+        dialog is never batchable, see approvals.PendingApproval.
+        is_batchable), no ``accept_all`` (rule creation needs its own
+        scoped confirmation -- BATCH_RESULTS is exactly ``decide``'s own
+        ``result`` vocabulary minus that one value)."""
+        if not _authenticated(request):
+            return _unauthorized(request)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(payload, dict) or not _csrf_matches(request, payload.get("csrf")):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _origin_ok(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        items = payload.get("items")
+        if not isinstance(items, list) or not items:
+            return JSONResponse({"error": "missing items"}, status_code=400)
+        registry = web_ui.deferred_registry
+        if len(items) > registry.max_pending:
+            return JSONResponse({"error": "too many items"}, status_code=400)
+        parsed: list[tuple[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str) or item.get("result") not in BATCH_RESULTS:
+                return JSONResponse({"error": "invalid item"}, status_code=400)
+            parsed.append((item["id"], item["result"]))
+        batch_id = uuid.uuid4().hex
+        results = registry.answer_batch(parsed, decided_via="binder", batch_id=batch_id)
+        return JSONResponse({"batch_id": batch_id, "results": results})
 
     async def service_worker(request: Request) -> Response:
         # No auth check -- a service worker script itself carries no
@@ -518,6 +559,10 @@ def create_app(
         Route("/", index),
         Route("/approvals", list_approvals),
         Route("/approvals/{id}", show_approval),
+        # Registered ahead of "/api/approvals/{id}/decide" -- Starlette
+        # matches routes in registration order, and "{id}" would otherwise
+        # swallow the literal "batch" segment first.
+        Route("/api/approvals/batch/decide", batch_decide, methods=["POST"]),
         Route("/api/approvals/{id}/decide", decide, methods=["POST"]),
         Route("/api/approvals/{id}/preview", approval_preview),
         Route("/api/approvals/stream", approvals_stream),

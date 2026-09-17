@@ -459,6 +459,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `frame-ancestors 'none'` for cosmetics. Selection lives in the page's own JS state and survives
   the list's live SSE re-renders. Approving still opens the full card; there is still no bulk
   Allow.
+- Approval binder, Phase 2: a new `POST /api/approvals/batch/decide` endpoint approves or denies a
+  selected batch in one request (`{items: [{id, result}], csrf}`, `result` one of `accept`/`deny` —
+  no `accept_all`, which still needs its own scoped rule-creation confirmation). Each item resolves
+  independently and the response reports one outcome per item (`applied` / `already_decided` /
+  `unknown` / `not_batchable`) at HTTP 200 — a partial outcome (a rule elsewhere already resolved
+  one of the selected items) is normal, never silent. Every decision is still authorized against
+  `current_principal()`, unchanged from the single-decide endpoint: another principal's id reads as
+  `unknown`, never "exists but forbidden". Every applied decision is still audited individually,
+  now additionally stamped `decided_via: "binder"` with a server-minted `batch_id`, so a reviewer
+  can tell which audit entries a single binder submission released. No passkey step-up on this
+  endpoint yet — that lands with the batch's own bound assertion in the next phase. The
+  decide-time WebAuthn step-up sequence duplicated across `web/routes_approvals.py`, `web/
+  routes_org_approvals.py` and `web/routes_settings.py` is now one shared helper (`web/
+  step_up_decide.py`) all three call, behavior-preserving — the batch endpoint would otherwise have
+  been a fourth copy.
 
 ### Changed
 
