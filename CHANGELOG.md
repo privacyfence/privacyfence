@@ -584,7 +584,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   live connector OAuth tokens and the audit log, moves back under `~/.privacyfence` instead of
   being left behind in a `0700` directory the user can no longer read, owned by an account whose
   only undo tool was just uninstalled. The operation is best-effort and never runs on a plain
-  upgrade, which must leave a running separated install alone.
+  upgrade, which must leave a separated install's data and account in place — it just gets briefly
+  stopped and restarted there too, see below.
+- A separated install's daemon (`privacyfence-daemon.service`, a packaged PyInstaller onedir
+  build running straight out of `/opt/privacyfence`) no longer risks crashing partway through a
+  `.deb` upgrade. dpkg unpacks the new version's files over that same directory before `postinst`
+  gets a chance to stop and restart the unit, so a shared library the still-running old process
+  lazily loads could vanish out from under it mid-upgrade. `debian/prerm` now stops
+  `privacyfence-daemon.service` first, on `upgrade`; `postinst`'s `enable --auto`, which already
+  runs on every upgrade (issue #428 D1), starts it again once the new files are in place, so the
+  daemon never ends up left down. A no-op, as before, on an unseparated install, which has no such
+  unit.
 - Issue #428 B8: `debian/postinst`'s header comment no longer claims installing the `.deb` never
   starts the daemon. That was true before D1 but not after: `enable --auto`, right below it, now
   starts `privacyfence-daemon.service` immediately (`systemctl enable --now`) whenever it can
