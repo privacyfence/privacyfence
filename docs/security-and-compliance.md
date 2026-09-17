@@ -101,6 +101,12 @@ into the web UI that does not route a credential through the AI client
 ([#427](https://github.com/privacyfence/privacyfence/issues/427) — the companion app, Phase 3).
 Local-mode WebAuthn step-up ([#426](https://github.com/privacyfence/privacyfence/issues/426))
 depends on both: a passkey enrolled in a credential store the agent can rewrite is not a control.
+Phase 1 (config plus a `/security` enrollment page, mirroring org mode's) has landed for both
+modes now that Phase 4 above has, since the credential store it writes to is exactly the one
+Phase 4 makes service-owned -- but Phase 1 only lets you enroll a passkey; nothing in local mode
+yet checks for or demands one at decide time (Phase 2), and `require_passkey` still has no
+enforcement path there either (Phase 3). Treat an enrolled local-mode passkey today as inert, not
+as a control already in effect.
 
 ### Privilege separation (macOS, Linux and Windows)
 

@@ -1,9 +1,13 @@
-"""WebAuthn step-up (P9, D7): platform-authenticator proof (Face ID / Touch ID / Android fingerprint
+"""WebAuthn step-up (P9, D7; #426): platform-authenticator proof (Face ID / Touch ID / Android fingerprint
 / Windows Hello) that a human -- not merely a possessed, stolen session
-cookie -- is the one approving a gated *write*, in org mode. §10.6's own
-framing: "a borrowed or stolen unlocked phone with a live session becomes a
-remote approval instrument for live write actions ... the control that
-actually closes it is a step-up check on the approval itself."
+cookie -- is the one approving a gated *write*, in org mode, and (#426
+Phase 1) enrollable in local mode too, though nothing there consults it
+yet -- see step_up_config.py's own module docstring for why local mode
+gets this at all and what still has to land (#428 Phase 4) before it means
+anything there. §10.6's own framing: "a borrowed or stolen unlocked phone
+with a live session becomes a remote approval instrument for live write
+actions ... the control that actually closes it is a step-up check on the
+approval itself."
 
 Built on the ``webauthn`` package (py_webauthn), not hand-rolled -- the same
 D2 reasoning §8.2 already gives for the MCP SDK and PyJWT applies here:
@@ -13,7 +17,7 @@ already available; owning that by hand buys nothing.
 
 Two ceremonies, both delegated straight to the library after this module
 resolves *who* (``Principal``) and *what RP*
-(``org_mode.StepUpConfig.rp_id``/``rp_name``) the call is for:
+(``step_up_config.StepUpConfig.rp_id``/``rp_name``) the call is for:
 
 - **Registration** (``begin_registration``/``finish_registration``) --
   enrolling a new passkey, from web/routes_security.py's own ``/security``
@@ -391,10 +395,10 @@ class StepUpChallengeStore:
 
 def is_step_up_required(*, gate_kind: str, pii_detected: bool, scope: str) -> bool:
     """§10.6: "scope it to writes, or to writes plus PII-flagged reads."
-    ``scope`` is ``org_mode.StepUpConfig.scope`` -- kept as a bare string
-    parameter here (rather than importing ``org_mode.StepUpScope``) so this
-    module has no dependency on org_mode.py at all; the two string literals
-    are the whole of that type."""
+    ``scope`` is ``step_up_config.StepUpConfig.scope`` -- kept as a bare
+    string parameter here (rather than importing ``step_up_config.
+    StepUpScope``) so this module has no dependency on step_up_config.py at
+    all; the two string literals are the whole of that type."""
     if gate_kind == "popup":
         return True
     if scope == "writes_and_pii_reads" and gate_kind == "review" and pii_detected:

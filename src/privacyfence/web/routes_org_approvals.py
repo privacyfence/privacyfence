@@ -70,8 +70,8 @@ from starlette.routing import Route
 
 from .. import approval_list_html, approval_window_html, org_identity, webauthn_stepup
 from ..org_identity import IdpConfig
-from ..org_mode import StepUpConfig
 from ..principal import Principal
+from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
 from ..web_approval_ui import WebApprovalUI
 from . import org_session

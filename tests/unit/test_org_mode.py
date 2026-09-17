@@ -101,51 +101,6 @@ class TestDefaultsMatchLocalModePosture:
         assert org_mode.ServerConfig().tls_configured is False
 
 
-class TestStepUpConfigFromOrgConfig:
-    """P9, §10.6/§15 D7: WebAuthn step-up is off by default (an existing org
-    install with no "step_up" section keeps working exactly as before this
-    phase -- see web/routes_org_approvals.py's own decide()'s
-    ``if step_up.enabled`` gate)."""
-
-    def test_absent_section_is_disabled_with_defaults(self):
-        config = org_mode.StepUpConfig.from_org_config({})
-        assert config.enabled is False
-        assert config.scope == "writes"
-        assert config.rp_id == ""
-        assert config.rp_name == org_mode.DEFAULT_RP_NAME
-        assert config.require_passkey is False
-
-    def test_default_rp_id_falls_back_to_the_caller_supplied_default(self):
-        config = org_mode.StepUpConfig.from_org_config({}, default_rp_id="pf.example.com")
-        assert config.rp_id == "pf.example.com"
-
-    def test_explicit_rp_id_wins_over_the_default(self):
-        config = org_mode.StepUpConfig.from_org_config(
-            {"step_up": {"rp_id": "custom.example.com"}}, default_rp_id="pf.example.com",
-        )
-        assert config.rp_id == "custom.example.com"
-
-    def test_enabled_and_scope_and_rp_name(self):
-        config = org_mode.StepUpConfig.from_org_config({
-            "step_up": {"enabled": True, "scope": "writes_and_pii_reads", "rp_name": "Acme PrivacyFence"},
-        })
-        assert config.enabled is True
-        assert config.scope == "writes_and_pii_reads"
-        assert config.rp_name == "Acme PrivacyFence"
-
-    def test_invalid_scope_raises(self):
-        with pytest.raises(org_mode.ConfigurationError):
-            org_mode.StepUpConfig.from_org_config({"step_up": {"scope": "everything"}})
-
-    def test_require_passkey_defaults_false_and_reads_true(self):
-        assert org_mode.StepUpConfig.from_org_config(
-            {"step_up": {"enabled": True}},
-        ).require_passkey is False
-        assert org_mode.StepUpConfig.from_org_config(
-            {"step_up": {"enabled": True, "require_passkey": True}},
-        ).require_passkey is True
-
-
 class TestDownloadDeliveryConfigFromOrgConfig:
     """An existing org install with no "download_delivery" section keeps
     working exactly as before (inline-first, 8MB cap, staging allowed)."""

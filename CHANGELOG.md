@@ -232,6 +232,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   been, but not something an editable page could ship on top of). Install-wide log level and the
   Calendar free/busy toggle remain admin-only-in-principle but unwired — neither is privacy policy
   and each needs a reload path of its own. See issue #400.
+- Issue #426 Phase 1: `StepUpConfig` (the WebAuthn step-up decision, previously org-mode-only) moves
+  out of `org_mode.py` into a new `step_up_config.py`, and local mode gets its own entry point,
+  `from_local_config`, reading a new `step_up:` section of `config/settings.yaml` (`enabled`,
+  `scope`, `rp_id` — defaults to `localhost`, needing no TLS — `rp_name`, `require_passkey`).
+  `web/routes_security.py`'s `/security` enrollment page and its `/api/security/webauthn/*` routes
+  are now mode-agnostic — `build_routes` takes a principal/session resolver instead of an
+  `OrgSessionStore` directly — and are mounted in local mode too, linked from the Settings page's
+  General tab. This is enrollment only: nothing in local mode yet checks for or demands an
+  assertion before releasing an approval (that's Phase 2), and `require_passkey` has no enforcement
+  path there either (Phase 3) — an enrolled local-mode passkey today is inert, not a control
+  already in effect. This phase was gated on issue #428's Phase 4 (privilege separation) having
+  landed for the platform in question, since local mode's credential store is otherwise writable by
+  the same agent the check is meant to defend against — see issue #426 for the full dependency
+  reasoning, and the "Local-mode trust boundary" section of `docs/security-and-compliance.md` for
+  what still doesn't hold until later phases land. See issue #426.
 
 ### Added
 

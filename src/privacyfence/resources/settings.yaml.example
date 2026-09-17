@@ -288,3 +288,30 @@ web:
     #             mirror; never the default (docs/approval-list-ui-ux.md
     #             §4.3)
     detail: standard # minimal | standard | detailed
+
+# WebAuthn passkey step-up (#426 Phase 1) -- enrolling a passkey here mounts
+# /security (linked from the Settings page) and lets you register a Face
+# ID/Touch ID/Windows Hello credential against this install. Absent
+# entirely (the default) behaves exactly like `enabled: false` below: you
+# can still open /security and enroll, but nothing yet checks for or
+# demands an assertion before releasing an approval -- that's a later
+# phase (see the issue). Enrolled credentials live under a service-owned
+# subdirectory of the data directory, not here.
+step_up:
+  # Turns on step-up *enforcement* at decide time -- not implemented yet in
+  # local mode (Phase 2/3); safe to leave at the default either way.
+  enabled: false
+  # Which approvals require step-up once enforcement lands: "writes" (every
+  # approval popup) or "writes_and_pii_reads" (also a read PrivacyFence
+  # flagged as containing personal data).
+  scope: writes
+  # WebAuthn's Relying Party ID. Leave unset -- "localhost" is always
+  # correct for this daemon's own embedded server and needs no TLS.
+  rp_id: localhost
+  # Shown to your platform authenticator's own passkey picker/prompt.
+  rp_name: PrivacyFence
+  # Once enforcement lands (see `enabled` above), whether a passkey
+  # assertion is the *only* way to satisfy step-up. Local mode has no
+  # alternative path (no IdP to re-authenticate against), so this has no
+  # effect yet either.
+  require_passkey: false

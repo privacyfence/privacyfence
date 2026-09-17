@@ -1,18 +1,20 @@
-"""Tests for web/routes_security.py: passkey enrollment (P9)."""
+"""Tests for web/routes_security.py: passkey enrollment (P9; mode-agnostic since #426 Phase 1)."""
 from __future__ import annotations
 
 from unittest.mock import patch
 
 import pytest
 from starlette.applications import Starlette
+from starlette.responses import RedirectResponse
 from starlette.testclient import TestClient
 
 from privacyfence import paths, webauthn_stepup as wa
-from privacyfence.org_mode import StepUpConfig
-from privacyfence.principal import Principal
-from privacyfence.web import org_session, routes_security as rs
+from privacyfence.principal import LOCAL_PRINCIPAL, Principal
+from privacyfence.step_up_config import StepUpConfig
+from privacyfence.web import org_session, routes_security as rs, session_auth
 
 ISSUER = "https://pf.example.com"
+LOCAL_ISSUER = "http://localhost:8765"
 ALICE = Principal(id="alice", email="alice@example.com", display_name="Alice")
 BOB = Principal(id="bob", email="bob@example.com", display_name="Bob")
 
@@ -24,9 +26,41 @@ def _fake_data_dir(monkeypatch, tmp_path):
 
 
 def _app(*, step_up=None, sessions=None):
+    """org mode's own wiring -- org_session's three functions bound to an
+    ``OrgSessionStore``, and a redirect to ``/login`` when unauthenticated,
+    exactly what web/server.py's ``_build_org_app`` passes."""
     sessions = sessions or org_session.OrgSessionStore()
     step_up = step_up or StepUpConfig(rp_id="pf.example.com", rp_name="PrivacyFence")
-    routes = rs.build_routes(sessions=sessions, step_up=step_up, issuer_url=ISSUER)
+    routes = rs.build_routes(
+        resolve_principal=lambda request: org_session.authenticated(request, sessions),
+        check_csrf=org_session.check_csrf,
+        check_origin=org_session.check_origin,
+        unauthenticated_response=lambda request: RedirectResponse(
+            "/login?next=/security", status_code=302, headers={"Cache-Control": "no-store"},
+        ),
+        session_cookie_name=org_session.SESSION_COOKIE,
+        step_up=step_up, issuer_url=ISSUER,
+    )
+    app = Starlette(routes=routes)
+    return app, sessions
+
+
+def _local_app(*, step_up=None, sessions=None):
+    """local mode's own wiring -- session_auth's three functions bound to a
+    ``LocalSessionStore``, always resolving to ``LOCAL_PRINCIPAL``, exactly
+    what web/server.py's local branch of ``build_app`` passes."""
+    sessions = sessions or session_auth.LocalSessionStore()
+    step_up = step_up or StepUpConfig(rp_id="localhost", rp_name="PrivacyFence")
+    routes = rs.build_routes(
+        resolve_principal=lambda request: (
+            LOCAL_PRINCIPAL if session_auth.authenticated(request, sessions) else None
+        ),
+        check_csrf=session_auth.check_csrf,
+        check_origin=session_auth.check_origin,
+        unauthenticated_response=session_auth.unauthorized_html,
+        session_cookie_name=session_auth.SESSION_COOKIE,
+        step_up=step_up, issuer_url=LOCAL_ISSUER,
+    )
     app = Starlette(routes=routes)
     return app, sessions
 
@@ -38,6 +72,12 @@ def _client(app, follow_redirects=False) -> TestClient:
 def _signed_in(client, sessions, principal) -> str:
     session_id = sessions.create(principal)
     client.cookies.set(org_session.SESSION_COOKIE, session_id)
+    return session_id
+
+
+def _signed_in_local(client, sessions) -> str:
+    session_id = sessions.create()
+    client.cookies.set(session_auth.SESSION_COOKIE, session_id)
     return session_id
 
 
@@ -319,3 +359,56 @@ class TestCrossPrincipalIsolation:
             })
         assert r.status_code == 200
         assert wa.list_credentials(ALICE) != []
+
+
+# In-process ASGI TestClient, no real socket -- unit per testing-policy.md's
+# seven-layer taxonomy.
+@pytest.mark.unit
+class TestLocalModeEnrollment:
+    """#426 Phase 1: the exact same ``build_routes`` wired to web/
+    session_auth.py instead of org_session -- local mode has exactly one
+    identity (``LOCAL_PRINCIPAL``), so there's no cross-principal isolation
+    to prove the way ``TestCrossPrincipalIsolation`` above does for org
+    mode; this proves the generalized signature drives a real enroll/list/
+    delete flow end to end against local mode's own session store, and that
+    the two modes differ where they're supposed to (the unauthenticated
+    response)."""
+
+    def test_page_is_the_local_unauthorized_page_when_signed_out(self):
+        # Not a redirect to /login (org mode's own page) -- local mode has
+        # no such route, and shows session_auth.py's own recovery page
+        # instead (401, not 302).
+        app, _sessions = _local_app()
+        r = TestClient(app, base_url=LOCAL_ISSUER).get("/security")
+        assert r.status_code == 401
+        assert "Not authorized" in r.text
+
+    def test_enroll_list_and_delete_as_local_principal(self):
+        app, sessions = _local_app()
+        client = TestClient(app, base_url=LOCAL_ISSUER, follow_redirects=False)
+        session_id = _signed_in_local(client, sessions)
+
+        r = client.get("/security")
+        assert r.status_code == 200
+        assert "No passkeys added yet." in r.text
+
+        r = client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
+        assert r.status_code == 200
+        assert r.json()["options"]["rp"]["id"] == "localhost"
+
+        fake_verified = type("V", (), {
+            "credential_id": b"raw-id", "credential_public_key": b"pub-key", "sign_count": 0,
+            "credential_device_type": type("D", (), {"value": "single_device"})(),
+            "credential_backed_up": False,
+        })()
+        with patch.object(wa.webauthn, "verify_registration_response", return_value=fake_verified):
+            r = client.post("/api/security/webauthn/register/verify", json={
+                "csrf": session_id, "credential": {"id": "x"}, "label": "My Laptop",
+            })
+        assert r.status_code == 200
+        assert wa.list_credentials(LOCAL_PRINCIPAL)[0].label == "My Laptop"
+
+        cred_id = wa.list_credentials(LOCAL_PRINCIPAL)[0].credential_id
+        r = client.post(f"/security/credentials/{cred_id}/delete", data={"csrf": session_id})
+        assert r.status_code in (302, 303)
+        assert wa.list_credentials(LOCAL_PRINCIPAL) == []

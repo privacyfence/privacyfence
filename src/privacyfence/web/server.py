@@ -98,6 +98,7 @@ from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, principal_scope
 from ..settings_controller import SettingsController, set_main_dispatcher
+from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
 from . import org_session
 from . import routes_connect
@@ -116,6 +117,9 @@ from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, prot
 from .routes_settings import build_routes as build_settings_routes
 from .session_auth import BOOTSTRAP_QUERY_PARAM, BootstrapStore, LocalSessionStore
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
+from .session_auth import authenticated as _session_authenticated
+from .session_auth import check_csrf as _csrf_matches
+from .session_auth import check_origin as _origin_ok
 from .session_auth import set_session_cookie as _set_session_cookie
 from .session_auth import unauthorized_html as _unauthorized_response
 from .state_stream import StateStream
@@ -604,6 +608,8 @@ def build_app(
     loop_ready: threading.Event | None = None,
     principal_resolver: Callable[[Request], Principal] | None = None,
     org: OrgAuth | None = None,
+    step_up: StepUpConfig | None = None,
+    step_up_issuer_url: str = "",
 ) -> ASGIApp:
     """The approval routes, wrapped with the Host allowlist and security
     headers every real deployment needs -- routes_approvals.create_app()
@@ -653,6 +659,16 @@ def build_app(
     always constructs and shares one pair for its whole lifetime. Every new
     parameter defaults to ``None``/unchanged behavior, so every existing
     caller (including this module's own pre-P4 tests) is unaffected.
+
+    ``step_up``/``step_up_issuer_url`` (#426 Phase 1) mount ``/security`` in
+    local mode -- ignored when ``org`` is given, since ``_build_org_app``
+    resolves its own ``StepUpConfig`` from ``org.org_config`` directly (see
+    that function's own step_up handling). ``step_up_issuer_url`` is the
+    WebAuthn ceremony's expected origin (``http://<host>:<port>``, the same
+    role ``org.issuer_url`` plays for org mode's own mount below) -- passed
+    separately from ``step_up`` itself since local mode's origin depends on
+    ``WebServer``'s own ``host``/``port``, which this function has no other
+    way to see.
     """
     if org is not None:
         return _build_org_app(
@@ -676,6 +692,25 @@ def build_app(
         extra_routes.extend(build_settings_routes(
             controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
             notifications_detail=notifications_detail,
+        ))
+
+    # #426 Phase 1: mounted whenever step_up.rp_id is set -- which, unlike
+    # org mode, local mode's own StepUpConfig.from_local_config() always
+    # gives it (DEFAULT_LOCAL_RP_ID), so this is unconditional in practice
+    # for every real (non-test) caller. Enrollment only -- nothing yet
+    # consults an enrolled credential in local mode (#426 Phase 2/3).
+    if step_up is not None and step_up.rp_id:
+        from . import routes_security
+
+        extra_routes.extend(routes_security.build_routes(
+            resolve_principal=lambda request: (
+                LOCAL_PRINCIPAL if _session_authenticated(request, sessions) else None
+            ),
+            check_csrf=_csrf_matches,
+            check_origin=_origin_ok,
+            unauthenticated_response=_unauthorized_response,
+            session_cookie_name=_SESSION_COOKIE,
+            step_up=step_up, issuer_url=step_up_issuer_url,
         ))
 
     if state_stream is not None:
@@ -716,7 +751,7 @@ def _build_org_app(
     ``StepUpConfig``."""
     from urllib.parse import urlparse
 
-    from ..org_mode import AuthzPolicyConfig, StepUpConfig
+    from ..org_mode import AuthzPolicyConfig
     from . import routes_org_approvals, routes_org_settings, routes_security
 
     extra_routes: list[Route] = []
@@ -764,7 +799,14 @@ def _build_org_app(
     ))
     if step_up.rp_id:
         extra_routes.extend(routes_security.build_routes(
-            sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
+            resolve_principal=lambda request: org_session.authenticated(request, org.sessions),
+            check_csrf=org_session.check_csrf,
+            check_origin=org_session.check_origin,
+            unauthenticated_response=lambda request: RedirectResponse(
+                "/login?next=/security", status_code=302, headers={"Cache-Control": "no-store"},
+            ),
+            session_cookie_name=org_session.SESSION_COOKIE,
+            step_up=step_up, issuer_url=org.issuer_url,
         ))
     # #400: mounted unconditionally, same reasoning as /approvals above --
     # needs only org.sessions and the install-wide settings dict, both
@@ -814,6 +856,7 @@ class WebServer:
         ssl_certfile: str | None = None,
         ssl_keyfile: str | None = None,
         trusted_proxies: tuple[str, ...] = (),
+        step_up: StepUpConfig | None = None,
     ) -> None:
         """``org``, ``ssl_certfile``/``ssl_keyfile`` and ``trusted_proxies``
         are org mode's own additions (P7, §10.2) -- every local-mode caller
@@ -825,6 +868,13 @@ class WebServer:
         requires before ``X-Forwarded-For``/``X-Forwarded-Proto`` are
         honored at all -- empty (the default) means never, regardless of
         mode.
+
+        ``step_up`` (#426 Phase 1) is local mode's own ``StepUpConfig`` --
+        ``None`` (the default) mounts no ``/security`` route at all, which
+        is what every caller before this phase gets; daemon_main.py's real
+        boot path always passes one (``StepUpConfig.from_local_config``).
+        Ignored in org mode, which resolves its own from ``org.org_config``
+        (see ``_build_org_app``).
         """
         self.host = host
         self.port = port
@@ -921,6 +971,8 @@ class WebServer:
             loop_ready=self._loop_ready,
             principal_resolver=principal_resolver,
             org=org,
+            step_up=step_up,
+            step_up_issuer_url=f"http://{host}:{port}",
         )
         if trusted_proxies:
             # §10.2: honored only when this explicit list is non-empty --
