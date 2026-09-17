@@ -16,6 +16,23 @@ than editing either module, defines ``window.webkit.messageHandlers.pf.
 postMessage`` as a ``fetch()`` POST to this module's own decide endpoint --
 the two shipped documents never need to know whether they're running in a
 WKWebView or a browser tab.
+
+**Step-up (#426 Phase 2)** ports web/routes_org_approvals.py's own
+decide-time WebAuthn gate here, **minus the IdP re-auth fallback** -- local
+mode has no IdP to re-authenticate against, so the ``428`` this module's
+``decide()`` returns while step-up is outstanding never carries an
+``idp_stepup_url``, only ``webauthn_options`` (org mode's own
+``require_passkey=True`` shape is the only one available here, see
+step_up_config.py's own docstring). When no passkey is enrolled at all,
+``_step_up_response`` below returns ``None`` and the decision is let
+through unguarded rather than left permanently stuck behind a ceremony
+nobody could ever complete -- **this is the one place step-up stays
+evadable at this phase**: simply never enrolling a passkey dodges the
+gate entirely. Closing that gap by making ``step_up.require_passkey`` fail
+closed (refusing to release the write, rather than skipping the check) is
+#426 Phase 3, not this one -- see step_up_config.py's own ``StepUpConfig.
+require_passkey`` docstring for why that field is already parsed here but
+not yet read.
 """
 from __future__ import annotations
 
@@ -29,16 +46,25 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import BaseRoute, Route
 
-from .. import approval_list_html, approval_window_html, web_shell
+from .. import approval_list_html, approval_window_html, web_shell, webauthn_stepup
+from ..principal import LOCAL_PRINCIPAL
+from ..step_up_config import StepUpConfig
+from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
 from ..web_approval_ui import WebApprovalUI
 from .csp import nonce_for as _csp_nonce_for
 from .csp import set_nonce as _set_csp_nonce
+from .routes_security import PF_WEBAUTHN_JS
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
 from .session_auth import LocalSessionStore
 from .session_auth import authenticated as _session_authenticated
 from .session_auth import check_csrf as _csrf_matches
 from .session_auth import check_origin as _origin_ok
 from .session_auth import unauthorized_html as _unauthorized_response
+
+# Only an *approving* decision needs step-up -- same as
+# web/routes_org_approvals.py's own _STEP_UP_RESULTS: denying leaks
+# nothing, so step-up is scoped to the two approving results only.
+_STEP_UP_RESULTS = ("accept", "accept_all")
 
 # How often the SSE stream below checks for a change in what's pending --
 # not a hard real-time guarantee, just short enough that a human watching
@@ -90,6 +116,15 @@ def _bridge_shim(*, decide_url: str, csrf: str, nonce: str) -> str:
     error, an unexpected status) leaves the card on screen with an inline
     message -- there is nothing to navigate back to for those.
 
+    A ``428`` (#426 Phase 2) means step-up is outstanding: when the body
+    carries ``webauthn_options``, run the assertion ceremony
+    (``window.pfWebauthnGet``, defined by ``PF_WEBAUTHN_JS`` below --
+    mirrors web/routes_org_approvals.py's own ``_org_bridge_shim``) and
+    retry the same decide POST with a ``webauthn_assertion`` attached; a
+    ``428`` with no options (no passkey enrolled -- see module docstring)
+    or a failed ceremony both fall through to the generic failure message,
+    since local mode has no IdP link to offer instead.
+
     ``nonce`` (SEC-08): this
     shim is a real ``<script>`` element injected into an already-rendered
     card document (see ``_inject_shim`` below), so it has to carry the same
@@ -98,15 +133,36 @@ def _bridge_shim(*, decide_url: str, csrf: str, nonce: str) -> str:
     approval_window_html.extract_csp_nonce and passes it straight through.
     """
     return (
-        f'<script nonce="{nonce}">(function(){{'
+        f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
+        + f'<script nonce="{nonce}">(function(){{'
         "window.webkit = window.webkit || {};"
         "window.webkit.messageHandlers = window.webkit.messageHandlers || {};"
+        "function pfDecide(body){"
+        f"return fetch({decide_url!r}, {{method:'POST', credentials:'same-origin',"
+        "headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});"
+        "}"
         "window.webkit.messageHandlers.pf = {postMessage: function(payload) {"
         f"var body = Object.assign({{}}, payload, {{csrf: {csrf!r}}});"
         "var isDeny = payload.result === 'deny' || payload.result === 'cancel';"
-        f"fetch({decide_url!r}, {{method:'POST', credentials:'same-origin',"
-        "headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})"
-        ".then(function(r){"
+        "pfDecide(body).then(function(r){"
+        "  if (r.status === 428) {"
+        "    return r.json().then(function(data){"
+        "      if (data.webauthn_options && window.PublicKeyCredential) {"
+        "        return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function(assertion){"
+        "          var retryBody = Object.assign({}, body, {webauthn_assertion: assertion});"
+        "          return pfDecide(retryBody);"
+        "        }).catch(function(err){"
+        f"          document.body.innerHTML = {_FAILED_MESSAGE!r} + ' (' + err.message + ')';"
+        "          return null;"
+        "        });"
+        "      }"
+        f"      document.body.innerHTML = {_FAILED_MESSAGE!r};"
+        "      return null;"
+        "    });"
+        "  }"
+        "  return r;"
+        "}).then(function(r){"
+        "  if (r === null) { return; }"
         "  var msg = null;"
         f"  if (r.ok) {{ msg = isDeny ? {_DENIED_MESSAGE!r} : {_DECIDED_MESSAGE!r}; }}"
         f"  else if (r.status === 409) {{ msg = {_ALREADY_DECIDED_MESSAGE!r}; }}"
@@ -159,6 +215,8 @@ def create_app(
     lifespan=None,
     notifications_enabled: bool = True,
     notifications_detail: str = "minimal",
+    step_up: StepUpConfig | None = None,
+    step_up_origin: str = "",
 ) -> Starlette:
     """Build the Starlette app serving the approval surface. ``sessions``
     (SEC-06, see session_auth.py's own module docstring) is the local-mode
@@ -182,7 +240,19 @@ def create_app(
     own docstring for what it turns off. ``notifications_detail`` is that
     same config block's ``detail`` (minimal/standard/detailed, P5 --
     docs/approval-list-ui-ux.md §4.3) -- also passed straight through.
+
+    ``step_up``/``step_up_origin`` (#426 Phase 2) gate an approving
+    decision on a fresh WebAuthn assertion, mirroring web/
+    routes_org_approvals.py's own decide-time check -- see this module's
+    own docstring for what's deliberately different (no IdP fallback,
+    still evadable by not enrolling). Both default to "off" so every
+    existing caller of this function is unaffected; web/server.py's
+    ``build_app`` is the one real (non-test) caller that passes them,
+    using the same ``StepUpConfig`` it already resolves for web/
+    routes_security.py's own ``/security`` mount.
     """
+    challenges = StepUpChallengeStore()
+    origin = step_up_origin.rstrip("/")
 
     def _authenticated(request: Request) -> bool:
         return _session_authenticated(request, sessions)
@@ -275,6 +345,23 @@ def create_app(
             event_source(), media_type="text/event-stream", headers={"Cache-Control": "no-store"},
         )
 
+    def _step_up_response(approval_id: str, *, result: str, choice: int | None) -> JSONResponse | None:
+        """The local-mode counterpart of web/routes_org_approvals.py's own
+        ``_step_up_response`` -- ``None`` when there is no enrolled passkey
+        to challenge, which the caller takes as "let the decision through
+        unguarded" rather than a dead end with no fallback (see module
+        docstring: this is the phase's one deliberate evasion, closed by
+        #426 Phase 3's ``require_passkey`` enforcement, not this one)."""
+        begun = webauthn_stepup.begin_assertion(LOCAL_PRINCIPAL, rp_id=step_up.rp_id) if step_up.rp_id else None
+        if begun is None:
+            return None
+        options_json, challenge = begun
+        fingerprint = webauthn_stepup.decision_fingerprint(
+            approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
+        )
+        challenges.put(LOCAL_PRINCIPAL.id, approval_id, challenge=challenge, fingerprint=fingerprint)
+        return JSONResponse({"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428)
+
     async def decide(request: Request) -> Response:
         approval_id = request.path_params["id"]
         try:
@@ -304,6 +391,32 @@ def create_app(
             return JSONResponse({"error": "missing result"}, status_code=400)
         if not isinstance(result, str):
             result = str(int(result))
+
+        if step_up is not None and step_up.enabled and result in _STEP_UP_RESULTS:
+            approval = web_ui.deferred_registry.get(approval_id)
+            if approval is not None and webauthn_stepup.is_step_up_required(
+                gate_kind=approval.gate_kind, pii_detected=approval.pii_detected, scope=step_up.scope,
+            ):
+                assertion = payload.get("webauthn_assertion")
+                if not isinstance(assertion, dict):
+                    stepup_response = _step_up_response(approval_id, result=result, choice=choice)
+                    if stepup_response is not None:
+                        return stepup_response
+                else:
+                    pending = challenges.pop(LOCAL_PRINCIPAL.id, approval_id)
+                    expected_fp = webauthn_stepup.decision_fingerprint(
+                        approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
+                    )
+                    if pending is None or pending.fingerprint != expected_fp:
+                        return JSONResponse({"error": "step_up_expired"}, status_code=400)
+                    try:
+                        webauthn_stepup.verify_assertion(
+                            LOCAL_PRINCIPAL, assertion, expected_challenge=pending.challenge,
+                            rp_id=step_up.rp_id, origin=origin,
+                        )
+                    except WebAuthnError as exc:
+                        return JSONResponse({"error": str(exc)}, status_code=401)
+
         accepted = web_ui.resolve(approval_id, result, choice)
         if not accepted:
             # Idempotent by design (§7.1): the first accepted decision for

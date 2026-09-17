@@ -16,13 +16,19 @@ from __future__ import annotations
 
 import threading
 import time
+from unittest.mock import patch
 
 import pytest
 from starlette.testclient import TestClient
 
+from privacyfence import paths
+from privacyfence import webauthn_stepup as wa
+from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web.routes_approvals import _inject_shim, create_app
 from privacyfence.web.session_auth import SESSION_COOKIE, LocalSessionStore
 from privacyfence.web_approval_ui import WebApprovalUI
+
+ORIGIN = "http://localhost"
 
 
 @pytest.fixture
@@ -403,5 +409,209 @@ class TestDecide:
             headers={"Content-Type": "application/json"},
         )
         assert r.status_code == 400
+        web_ui.resolve(card.id, "deny")
+        t.join(timeout=2)
+
+
+def _register(web_ui: WebApprovalUI, *, gate_kind: str = "review", pii_detected: bool = False, dedupe_key: str = "k1"):
+    """The local-mode counterpart of test_routes_org_approvals.py's own
+    ``_register`` -- no ``principal_scope`` needed, since local mode's
+    ``current_principal()`` already defaults to ``LOCAL_PRINCIPAL``."""
+    approval, _ = web_ui.deferred_registry.register_or_coalesce(
+        dedupe_key=dedupe_key, connector="gmail", tool="gmail_get_message", gate_kind=gate_kind,
+        request_id="r1", summary="a message", tool_name="Get message", pii_detected=pii_detected,
+    )
+    web_ui.deferred_registry.set_html(approval.id, "<!doctype html><html><head></head><body>CARD</body></html>")
+    return approval
+
+
+def _app(*, step_up: StepUpConfig):
+    web_ui = WebApprovalUI()
+    sessions = LocalSessionStore()
+    app = create_app(web_ui, sessions=sessions, step_up=step_up, step_up_origin=ORIGIN)
+    return app, sessions, web_ui
+
+
+def _client(app) -> TestClient:
+    return TestClient(app, base_url=ORIGIN)
+
+
+class TestStepUpScoping:
+    """#426 Phase 2: step-up is off by default, and even when enabled,
+    applies only to approving decisions on writes (or PII reads, in the
+    wider scope) -- never to denies. Mirrors
+    test_routes_org_approvals.py's own TestStepUpScoping, minus the IdP
+    fallback local mode has no equivalent of."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _enroll(self):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def test_disabled_step_up_never_blocks_a_write_accept(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=False))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 200
+
+    def test_deny_never_needs_step_up_even_on_a_write(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "deny", "csrf": session_id})
+        assert r.status_code == 200
+
+    def test_plain_read_never_needs_step_up_in_default_scope(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost", scope="writes"))
+        approval = _register(web_ui, gate_kind="review", pii_detected=True)
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 200
+
+    def test_pii_read_needs_step_up_in_the_wider_scope(self):
+        self._enroll()
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", scope="writes_and_pii_reads"),
+        )
+        approval = _register(web_ui, gate_kind="review", pii_detected=True)
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+
+
+class TestStepUpEvadableWithNoPasskeyEnrolled:
+    """#426 Phase 2's own deliberate gap: with no passkey enrolled and no
+    IdP to fall back to (unlike org mode), the decide endpoint has no
+    ceremony left to demand -- the decision goes through unguarded rather
+    than deadlocking behind one nobody can complete. Closing this is #426
+    Phase 3's ``require_passkey`` enforcement, not this one."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def test_a_write_accept_with_step_up_enabled_but_nothing_enrolled_still_succeeds(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 200
+        assert r.json() == {"status": "ok"}
+
+
+class TestStepUpWebAuthnFlow:
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _enroll(self):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def test_first_attempt_with_a_credential_offers_webauthn_options_and_no_idp_url(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+        body = r.json()
+        assert "webauthn_options" in body
+        assert "idp_stepup_url" not in body
+
+    def test_valid_assertion_completes_the_decision(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        first = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert first.status_code == 428
+
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post(f"/api/approvals/{approval.id}/decide", json={
+                "result": "accept", "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert second.status_code == 200
+        assert second.json() == {"status": "ok"}
+
+    def test_an_assertion_for_a_different_decision_is_rejected(self):
+        # Fingerprint binding (§10.6): a challenge minted for "accept"
+        # cannot be reused to authorize "accept_all" on the same approval.
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={
+            "result": "accept_all", "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+        })
+        assert r.status_code == 400
+
+    def test_an_assertion_with_no_matching_pending_challenge_is_rejected(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        # No prior 428 round-trip -- nothing pending in the challenge store.
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={
+            "result": "accept", "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+        })
+        assert r.status_code == 400
+
+    def test_a_failed_assertion_does_not_release_the_decision(self):
+        self._enroll()
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        approval = _register(web_ui, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        with patch.object(wa.webauthn, "verify_authentication_response", side_effect=ValueError("bad sig")):
+            r = client.post(f"/api/approvals/{approval.id}/decide", json={
+                "result": "accept", "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert r.status_code == 401
+        stored = web_ui.deferred_registry.get(approval.id)
+        assert stored is not None
+        assert not stored.event.is_set()  # decision was never released
+
+
+class TestStepUpBridgeShim:
+    """The card document itself carries the WebAuthn ceremony helpers and
+    the 428-handling branch of the shim, regardless of whether step-up is
+    actually enabled for this install (see _bridge_shim's own docstring)."""
+
+    def test_show_approval_wraps_the_webauthn_helper_js_in_a_script_tag(self, client, sessions, web_ui):
+        _signed_in(client, sessions)
+        t, card, box = _pending_card(web_ui, connector="gmail")
+        r = client.get(f"/approvals/{card.id}")
+        assert "pfWebauthnGet" in r.text
+        assert "webauthn_assertion" in r.text
         web_ui.resolve(card.id, "deny")
         t.join(timeout=2)

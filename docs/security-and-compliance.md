@@ -101,12 +101,20 @@ into the web UI that does not route a credential through the AI client
 ([#427](https://github.com/privacyfence/privacyfence/issues/427) — the companion app, Phase 3).
 Local-mode WebAuthn step-up ([#426](https://github.com/privacyfence/privacyfence/issues/426))
 depends on both: a passkey enrolled in a credential store the agent can rewrite is not a control.
-Phase 1 (config plus a `/security` enrollment page, mirroring org mode's) has landed for both
-modes now that Phase 4 above has, since the credential store it writes to is exactly the one
-Phase 4 makes service-owned -- but Phase 1 only lets you enroll a passkey; nothing in local mode
-yet checks for or demands one at decide time (Phase 2), and `require_passkey` still has no
-enforcement path there either (Phase 3). Treat an enrolled local-mode passkey today as inert, not
-as a control already in effect.
+Phase 1 (config plus a `/security` enrollment page, mirroring org mode's) and Phase 2 (the
+decide-time check itself) have both landed for local mode now that Phase 4 above has, since the
+credential store the assertion is checked against is exactly the one Phase 4 makes service-owned.
+With `step_up.enabled` set, local mode's own `/api/approvals/{id}/decide` now demands a fresh
+WebAuthn assertion before releasing an approving decision on a write (or a PII-flagged read, in the
+wider scope) -- mirroring org mode's own gate, minus the IdP re-authentication fallback local mode
+has no equivalent of. **This is not yet the guarantee #426 exists for.** With no passkey enrolled,
+there is no ceremony left to demand and the decision goes through unguarded rather than deadlocking
+behind one nobody could complete -- so today, simply never enrolling a passkey dodges the check
+entirely. `require_passkey` still has no enforcement path (Phase 3): it does not yet make enrollment
+mandatory, and it does not yet gate the settings actions (adding an always-allow rule, disabling
+the requirement itself) that would otherwise let a local process route around the gate without ever
+touching the decide endpoint. Treat local-mode step-up today as real once a passkey is enrolled,
+but as opt-in, not a control every install can rely on being in effect.
 
 ### Privilege separation (macOS, Linux and Windows)
 

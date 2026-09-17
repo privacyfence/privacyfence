@@ -289,29 +289,34 @@ web:
     #             §4.3)
     detail: standard # minimal | standard | detailed
 
-# WebAuthn passkey step-up (#426 Phase 1) -- enrolling a passkey here mounts
-# /security (linked from the Settings page) and lets you register a Face
-# ID/Touch ID/Windows Hello credential against this install. Absent
-# entirely (the default) behaves exactly like `enabled: false` below: you
-# can still open /security and enroll, but nothing yet checks for or
-# demands an assertion before releasing an approval -- that's a later
-# phase (see the issue). Enrolled credentials live under a service-owned
-# subdirectory of the data directory, not here.
+# WebAuthn passkey step-up (#426 Phase 1/2) -- enrolling a passkey here
+# mounts /security (linked from the Settings page) and lets you register a
+# Face ID/Touch ID/Windows Hello credential against this install. Absent
+# entirely, this behaves exactly like `enabled: false` below.
+# Enrolled credentials live under a service-owned subdirectory of the data
+# directory, not here.
 step_up:
-  # Turns on step-up *enforcement* at decide time -- not implemented yet in
-  # local mode (Phase 2/3); safe to leave at the default either way.
+  # Turns on step-up at decide time: releasing an approving decision
+  # (accept/accept_all) on a gated write -- or, with the wider scope below,
+  # a PII-flagged read -- needs a fresh passkey assertion. `deny` never
+  # needs one. This is still opt-in machinery, not a guarantee you can rely
+  # on by itself: with nothing enrolled, there's no ceremony to demand and
+  # the decision goes through unguarded -- so this only does something once
+  # you've actually added a passkey at /security. Making enrollment
+  # mandatory is `require_passkey` below, not implemented yet (Phase 3).
   enabled: false
-  # Which approvals require step-up once enforcement lands: "writes" (every
-  # approval popup) or "writes_and_pii_reads" (also a read PrivacyFence
-  # flagged as containing personal data).
+  # Which approvals require step-up: "writes" (every approval popup) or
+  # "writes_and_pii_reads" (also a read PrivacyFence flagged as containing
+  # personal data).
   scope: writes
   # WebAuthn's Relying Party ID. Leave unset -- "localhost" is always
   # correct for this daemon's own embedded server and needs no TLS.
   rp_id: localhost
   # Shown to your platform authenticator's own passkey picker/prompt.
   rp_name: PrivacyFence
-  # Once enforcement lands (see `enabled` above), whether a passkey
-  # assertion is the *only* way to satisfy step-up. Local mode has no
-  # alternative path (no IdP to re-authenticate against), so this has no
-  # effect yet either.
+  # Once enforcement lands (Phase 3), whether a passkey assertion is the
+  # *only* way to satisfy step-up. Local mode has no alternative path (no
+  # IdP to re-authenticate against), so this has no effect yet -- today,
+  # not enrolling a passkey at all skips step-up entirely regardless of
+  # this setting.
   require_passkey: false
