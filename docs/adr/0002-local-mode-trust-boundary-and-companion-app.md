@@ -171,6 +171,19 @@ macOS and Linux do not face this: `/Applications` and `/opt/privacyfence` are ro
 effect of how those platforms install software at all, so the question never arose there and no
 equivalent check exists in their installers.
 
+**Amended by #428 B1, 2026-09-17: the macOS half of that last paragraph was wrong.**
+`/opt/privacyfence` is root-owned as claimed (dpkg-owned). `/Applications` is not: it is
+`root:admin drwxrwxr-x`, and a drag-installed `.app` is normally owned by the installing user —
+the same account the agent runs as. `privilege_separation.daemon_image_paths()` had documented
+itself as "the one check with no POSIX counterpart" on the strength of this paragraph, so until
+B1, nothing verified a macOS daemon image was not user-writable before `enable` elevated to it —
+the identical escalation this section already refuses on Windows, just unguarded on the platform
+whose install path (a drag to `/Applications`) makes it the easiest one to hit by accident.
+`scripts/macos_privilege_separation.sh enable`'s `resolve_executables` now refuses the same way
+`windows_privilege_separation.ps1`'s does, and `privilege_separation.audit_layout()` re-checks the
+image on every start there too, via the POSIX counterpart this section wrongly said didn't need to
+exist.
+
 Consequences:
 
 - `scripts/windows_privilege_separation.ps1`'s `enable` reads the install directory's ACL and

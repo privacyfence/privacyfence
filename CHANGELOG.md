@@ -180,6 +180,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the real-machine verification `docs/platform-support.md`'s "Known open items" describes — the
   automated contract coverage is unchanged, the manual pass against a release build is not done, and
   turning the default on makes running it sooner more important, not less. See issue #428.
+- Issue #428 Phase 4, macOS: `scripts/macos_privilege_separation.sh enable` (and D1's auto-enable
+  through it) now refuses to elevate a daemon or companion image that anyone but root or `wheel`
+  could have rewritten, and `privilege_separation.audit_layout()` re-checks the same thing on every
+  daemon start. ADR 0002 §5a asserted that `/Applications` was root-owned the way `/opt` is; it
+  isn't — it's `root:admin drwxrwxr-x`, and a drag-installed `.app` is normally owned by the
+  installing user, the same account the agent runs as — so nothing previously stopped that account
+  from replacing the bundle's executable and getting code execution as the service account once
+  privilege separation elevated to it, the identical escalation Windows already refused to permit.
+  Corrected in ADR 0002 §5a itself.
 - Issue #428 D1 follow-up: the macOS auto-enable prompt above ran whatever
   `scripts/macos_privilege_separation.sh` resolved to through an admin-password dialog without first
   checking what that was — on a packaged install the `.app`'s `Resources/` is as writable as anything
