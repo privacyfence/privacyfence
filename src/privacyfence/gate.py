@@ -162,7 +162,7 @@ from typing import Any
 
 from .approval_ui import get_approval_ui
 from .approval_window_html import NARROW, WIDE
-from .approvals import PendingApproval, PendingApprovalRegistry, canonical_key
+from .approvals import DEFAULT_MAX_PENDING, PendingApproval, PendingApprovalRegistry, canonical_key
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger
 from .auto_accept import (
     TOOL_TO_OPERATION,
@@ -311,7 +311,46 @@ _TOOL_LAYOUT: dict[str, str] = {
 # time, so a second worker would have sat idle. It's several now because
 # that's no longer true for the web surface: several approvals showing at
 # once is P3's whole point ("New coalescing case" / "Job 1... obsolete").
-_popup_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="pf-popup")
+#
+# Sized against approvals.DEFAULT_MAX_PENDING, not a literal worker count:
+# every approval the registry considers "live" needs a worker parked on it
+# for the whole time it's undecided (a worker blocks on an Event, not a
+# compute budget -- cheap to over-provision), and a card past whatever this
+# pool's size is renders as web/routes_approvals.py's "Preparing this
+# request" placeholder until one frees up, forever, if the registry can
+# hold more approvals live than this pool has workers for. Tying the two
+# together here means a future change to one default can't silently
+# reintroduce that stall in the other. daemon_main.py calls
+# configure_popup_executor() right after constructing the real registry, to
+# match settings.yaml's own web.approvals.max_pending override when one is
+# given.
+_popup_executor_max_workers = DEFAULT_MAX_PENDING
+_popup_executor = ThreadPoolExecutor(
+    max_workers=_popup_executor_max_workers, thread_name_prefix="pf-popup",
+)
+
+
+def configure_popup_executor(max_workers: int) -> None:
+    """Resize ``_popup_executor`` to ``max_workers`` -- called once by
+    daemon_main.py (both the local- and org-mode setup paths) right after
+    it constructs the real ``PendingApprovalRegistry``, passing that
+    registry's own ``max_pending`` so the two stay tied together even when
+    settings.yaml's ``web.approvals.max_pending`` overrides the default this
+    module was imported with (see ``_popup_executor``'s own comment).
+
+    ``ThreadPoolExecutor`` has no public API to change its worker count in
+    place, so this swaps in a fresh one; safe because daemon_main.py calls
+    this during startup, before the web server accepts its first request --
+    nothing has been submitted to the old executor yet. A no-op when the
+    size already matches, so re-calling it (e.g. from a test) is harmless.
+    """
+    global _popup_executor, _popup_executor_max_workers
+    if max_workers == _popup_executor_max_workers:
+        return
+    old = _popup_executor
+    _popup_executor_max_workers = max_workers
+    _popup_executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pf-popup")
+    old.shutdown(wait=False)
 
 
 async def _run_in_popup_executor(func, *args, **kwargs) -> Any:
@@ -385,6 +424,7 @@ async def _resolve_decision(
     request_id: str,
     summary: str,
     tool_name: str,
+    preview: dict[str, Any] | None,
     operation_key: str,
     ctx: ReviewContext,
     pii_forces_confirmation: list[str],
@@ -420,7 +460,7 @@ async def _resolve_decision(
 
     approval, created = registry.register_or_coalesce(
         dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind=gate_kind,
-        request_id=request_id, summary=summary, tool_name=tool_name,
+        request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
         operation_key=operation_key, review_ctx=ctx, pii_forces_confirmation=bool(pii_forces_confirmation),
         pii_detected=pii_detected, pii_categories=pii_categories, claude_reason=claude_reason,
     )
@@ -974,7 +1014,8 @@ async def gated_call(
 
             decision, rule_name, decided_at = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="review",
-                request_id=request_id, summary=summary, tool_name=tool_name, operation_key=operation_key, ctx=ctx,
+                request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
+                operation_key=operation_key, ctx=ctx,
                 pii_forces_confirmation=pii_forces_confirmation, pii_detected=bool(pii_categories),
                 pii_categories=audit_pii_categories, claude_reason=claude_reason, interact=_interact,
             )
@@ -1087,7 +1128,8 @@ async def gated_call(
 
             decision, rule_name, decided_at = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="popup",
-                request_id=request_id, summary=summary, tool_name=tool_name, operation_key=operation_key, ctx=ctx,
+                request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
+                operation_key=operation_key, ctx=ctx,
                 pii_forces_confirmation=upload_pii_categories, pii_detected=bool(upload_pii_categories),
                 pii_categories=audit_pii_categories, claude_reason=claude_reason, interact=_interact,
             )

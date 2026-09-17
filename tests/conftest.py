@@ -28,6 +28,7 @@ from privacyfence import (
     audit_log,
     daemon_main,
     download_staging,
+    gate,
     pii_detector,
     privacy_filter,
     privilege_separation,
@@ -61,6 +62,15 @@ def _reset() -> None:
     # for the next test's own _wait_for_shutdown() call to find already
     # signaled.
     daemon_main._shutdown_event.clear()
+    # gate._popup_executor (Phase 0 of the approval-binder plan): sized
+    # against the real PendingApprovalRegistry's own max_pending by
+    # daemon_main.py's configure_popup_executor() call -- a test that
+    # exercises that wiring (e.g. test_daemon_main.py's own web.approvals.
+    # max_pending overrides) would otherwise permanently shrink or grow the
+    # one process-wide executor every other test's real popups run on.
+    # configure_popup_executor() is a no-op once the size already matches,
+    # so this costs nothing on every other test.
+    gate.configure_popup_executor(gate.DEFAULT_MAX_PENDING)
 
 
 @pytest.fixture(autouse=True)

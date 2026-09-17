@@ -393,6 +393,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `card.html` is still `""`, which crashed `_inject_shim`'s `html.index("</head>")`. The card page
   now serves a "preparing this request" placeholder that auto-refreshes instead, in both local
   mode (`web/routes_approvals.py`) and org mode (`web/routes_org_approvals.py`).
+- `gate.py`'s dedicated popup executor (`_popup_executor`) is now sized against
+  `approvals.DEFAULT_MAX_PENDING` (and, once the daemon starts, against
+  `settings.yaml`'s own `web.approvals.max_pending` override, via the new
+  `gate.configure_popup_executor()`) instead of a literal 8 workers. The "preparing this
+  request" placeholder above covered the crash a worker-starved approval used to cause, but
+  not the underlying stall: past the executor's worker count, a card's HTML was never built at
+  all until an earlier one was decided, however many approvals the registry was otherwise
+  willing to hold pending. The pool and the registry's own cap now stay tied together, so a
+  future change to one can't silently reintroduce the gap between them.
+- `approvals.PendingApproval` now carries the `preview` dict `gated_call()` passes to
+  `show_popup()`/`show_read_popup()`, stamped at registration time rather than left for
+  `build_card_html` to derive later on a `_popup_executor` worker. `preview` stays
+  metadata-only by the same contract that already governs every card (`docs/coding-and-testing-
+  guidelines.md` §1.5) — this only moves *when* it's known, not what it contains — and lets a
+  future consumer (a read-only summary of what's pending) disclose without waiting on that
+  worker at all. No behavior change on its own.
 - Org mode: restarting the daemon no longer forces every connected MCP client through a full
   browser sign-in. The OAuth refresh tokens `/mcp` clients hold are now persisted across a
   restart, so the ordinary silent-refresh path survives one and a client re-authenticates with

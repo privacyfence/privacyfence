@@ -696,6 +696,7 @@ def _maybe_start_web_server(
     use_web_settings = bool(settings_config.get("enabled", False)) and controller is not None
 
     from .approvals import PendingApprovalRegistry
+    from .gate import configure_popup_executor
     from .web.mcp_dispatch import McpDispatcher
     from .web.server import DEFAULT_PORT, WebServer
     from .web_approval_ui import init_web_approval_ui
@@ -718,6 +719,10 @@ def _maybe_start_web_server(
         # comment for why this exists alongside max_pending above.
         max_pending_per_principal=int(approvals_config.get("max_pending_per_principal", 20)),
     )
+    # See gate.py's own _popup_executor comment: it must never hold fewer
+    # workers than the registry can have approvals live, or a card past
+    # that count renders as "Preparing this request" forever.
+    configure_popup_executor(registry.max_pending)
     web_ui = init_web_approval_ui(registry=registry)
     init_approval_ui(web_ui)
 
@@ -991,6 +996,7 @@ def _start_org_web_server(
     """
     from .approvals import PendingApprovalRegistry
     from .connector_registry import ConnectorRegistry
+    from .gate import configure_popup_executor
     from .org_identity import IdpConfig
     from .principal import Principal, current_principal
     from .web.mcp_dispatch import McpDispatcher
@@ -1017,6 +1023,13 @@ def _start_org_web_server(
         # comment for why this exists alongside max_pending above.
         max_pending_per_principal=int(approvals_config.get("max_pending_per_principal", 20)),
     )
+    # See gate.py's own _popup_executor comment: it must never hold fewer
+    # workers than the registry can have approvals live, or a card past
+    # that count renders as "Preparing this request" forever. This one
+    # registry serves every principal in org mode, so max_pending -- the
+    # whole-registry cap -- is the right number to size against, not
+    # max_pending_per_principal.
+    configure_popup_executor(approval_registry.max_pending)
     web_ui = init_web_approval_ui(registry=approval_registry)
     # WebApprovalUI is unconditionally the ApprovalUI here, same as local
     # mode's own _maybe_start_web_server above since P10 -- org mode never

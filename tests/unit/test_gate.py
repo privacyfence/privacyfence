@@ -2180,6 +2180,149 @@ class TestCoalescing:
         assert sorted(e["decision"] for e in entries) == ["approved", "approved"]
 
 
+class TestPendingApprovalCarriesPreview:
+    """Phase 0 of the approval-binder plan: the ``preview`` dict gated_call()
+    hands to show_popup()/show_read_popup() is now also stamped onto the
+    PendingApproval itself, at registration time -- before any
+    _popup_executor worker has ever run build_card_html for it. A future
+    consumer (the binder's own read-only fragment endpoint) can disclose
+    from it without waiting on that worker -- see approvals.PendingApproval.
+    preview's own docstring, and test_approvals.py's own registry-level
+    tests for the "known before html" ordering itself (deterministic there;
+    racy to observe through a real, unsaturated _popup_executor, which is
+    why this class doesn't try)."""
+
+    async def test_review_gate_stamps_the_preview_dict_at_registration(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+
+        task = asyncio.create_task(gate.gated_call(**base_kwargs(
+            gate="review", preview={"from": "alice@example.com", "subject": "Q3 plan"},
+        )))
+        try:
+            assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
+            approval = registry.list_pending()[0]
+            assert approval.preview == {"from": "alice@example.com", "subject": "Q3 plan"}
+        finally:
+            # Always release the still-blocked worker, even if an assertion
+            # above failed -- otherwise it's stuck on card.event.wait()
+            # forever and the test process never exits.
+            for pending in registry.list_pending():
+                registry.answer(pending.id, "deny")
+            with contextlib.suppress(RuntimeError):
+                await task
+
+    async def test_popup_gate_stamps_the_preview_dict_too(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_write_rule", lambda *a, **k: None)
+
+        task = asyncio.create_task(gate.gated_call(**base_kwargs(
+            gate="popup", tool="gmail_create_draft", preview={"to": "bob@example.com"},
+        )))
+        try:
+            assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
+            approval = registry.list_pending()[0]
+            assert approval.preview == {"to": "bob@example.com"}
+        finally:
+            for pending in registry.list_pending():
+                registry.answer(pending.id, "deny")
+            with contextlib.suppress(RuntimeError):
+                await task
+
+    async def test_no_preview_given_stamps_an_empty_dict_not_none(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+
+        task = asyncio.create_task(gate.gated_call(**base_kwargs(gate="review", preview=None)))
+        try:
+            assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
+            approval = registry.list_pending()[0]
+            assert approval.preview == {}
+        finally:
+            for pending in registry.list_pending():
+                registry.answer(pending.id, "deny")
+            with contextlib.suppress(RuntimeError):
+                await task
+
+    async def test_stamped_preview_never_carries_details_text_or_body_content(self, monkeypatch, audit_dir):
+        # §1.5: "preview dicts carry metadata only... never body/content".
+        # gated_call() never merges details_text/raw content into preview
+        # before it reaches register_or_coalesce -- assert that directly
+        # against gate.py's own call sites, not just against whatever a
+        # particular test happens to pass in.
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+
+        preview = {"from": "alice@example.com"}
+        task = asyncio.create_task(gate.gated_call(**base_kwargs(
+            gate="review", preview=preview, details_text="the full message body, never in preview",
+        )))
+        try:
+            assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
+            approval = registry.list_pending()[0]
+            assert approval.preview == preview
+            assert "the full message body" not in json.dumps(approval.preview)
+        finally:
+            for pending in registry.list_pending():
+                registry.answer(pending.id, "deny")
+            with contextlib.suppress(RuntimeError):
+                await task
+
+
+class TestManyPendingApprovalsAreAllReviewable:
+    """Phase 0 residual work: the popup executor must hold at least as many
+    workers as the registry can have approvals live at once, or an approval
+    past its worker count never gets its card HTML built at all -- 87c30cc's
+    fix only covered for that with a placeholder page, it didn't remove the
+    underlying stall (see gate.py's own _popup_executor comment)."""
+
+    async def test_past_the_old_literal_eight_every_approval_still_gets_rendered(self, monkeypatch, audit_dir):
+        from concurrent.futures import ThreadPoolExecutor
+
+        n = 20  # past the old literal-8 worker count; approvals.DEFAULT_MAX_PENDING_PER_PRINCIPAL
+        registry = PendingApprovalRegistry(
+            hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0,
+            max_pending=n, max_pending_per_principal=n,
+        )
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+        # Sized to the registry's own max_pending -- exactly the
+        # relationship daemon_main.py's configure_popup_executor() call
+        # establishes for the real executor -- so this proves the sizing
+        # relationship itself, not just that a bigger pool happens to work.
+        # (monkeypatch restores gate._popup_executor to whatever it was
+        # before this test regardless of how the test exits.)
+        test_executor = ThreadPoolExecutor(max_workers=registry.max_pending, thread_name_prefix="pf-popup-test")
+        monkeypatch.setattr(gate, "_popup_executor", test_executor)
+
+        tasks = [
+            asyncio.create_task(gate.gated_call(**base_kwargs(gate="review", tool=f"gmail_get_message_{i}")))
+            for i in range(n)
+        ]
+        try:
+            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=2.0)
+            # The actual regression: every one of these must have real card
+            # HTML, not merely be registered and listed -- a worker-starved
+            # approval sits at html == "" forever.
+            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=2.0)
+        finally:
+            for approval in registry.list_pending():
+                registry.answer(approval.id, "deny")
+            for t in tasks:
+                with contextlib.suppress(RuntimeError):
+                    await t
+            test_executor.shutdown(wait=False)
+
+
 class TestDeferredApprovalProtocol:
     """A call that doesn't get a human decision within the registry's hold
     window returns a structured
@@ -2886,3 +3029,55 @@ class TestRunInPopupExecutor:
 
         with pytest.raises(ValueError, match="boom"):
             await gate._run_in_popup_executor(fn)
+
+
+class TestConfigurePopupExecutor:
+    """gate.configure_popup_executor -- daemon_main.py's own hook for tying
+    _popup_executor's worker count to the real PendingApprovalRegistry's
+    max_pending (settings.yaml's web.approvals.max_pending can override the
+    module-import-time default -- see _popup_executor's own comment)."""
+
+    def _isolate(self, monkeypatch):
+        # Swaps in a throwaway starting executor before calling
+        # configure_popup_executor, so its own "shut down the old one"
+        # behavior never touches the real, process-wide _popup_executor
+        # every other test in this module (and this process) depends on.
+        # monkeypatch.setattr's teardown restores both globals to their
+        # real originals regardless of what configure_popup_executor does
+        # to them meanwhile.
+        from concurrent.futures import ThreadPoolExecutor
+
+        throwaway = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pf-popup-test-throwaway")
+        monkeypatch.setattr(gate, "_popup_executor", throwaway)
+        monkeypatch.setattr(gate, "_popup_executor_max_workers", 1)
+        return throwaway
+
+    def test_resizes_to_the_given_worker_count(self, monkeypatch):
+        self._isolate(monkeypatch)
+        gate.configure_popup_executor(3)
+        try:
+            assert gate._popup_executor_max_workers == 3
+            assert gate._popup_executor._max_workers == 3
+        finally:
+            gate._popup_executor.shutdown(wait=False)
+
+    def test_is_a_no_op_when_the_size_already_matches(self, monkeypatch):
+        throwaway = self._isolate(monkeypatch)
+        gate.configure_popup_executor(1)  # matches the throwaway's own size
+        assert gate._popup_executor is throwaway
+        throwaway.shutdown(wait=False)
+
+    async def test_the_new_executor_is_immediately_the_one_used(self, monkeypatch):
+        self._isolate(monkeypatch)
+        gate.configure_popup_executor(2)
+        try:
+            seen = {}
+
+            def fn():
+                seen["thread"] = threading.current_thread().name
+
+            await gate._run_in_popup_executor(fn)
+
+            assert seen["thread"].startswith("pf-popup")
+        finally:
+            gate._popup_executor.shutdown(wait=False)
