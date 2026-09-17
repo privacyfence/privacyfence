@@ -55,6 +55,19 @@ verified and, on success, actually runs the action.
 ``_ALLOWED_ACTIONS - _SENSITIVE_ACTIONS`` -- see TestSensitiveActionsCoverAllAllowedActions
 in this module's test file for why a derived set would silently swallow a
 future action nobody classified either way.
+
+**B9:** ``enable_step_up`` (SettingsController's own new method) is the one
+``_ALLOWED_ACTIONS`` entry that can turn ``step_up.require_passkey`` on in
+the first place -- previously only a hand edit of ``config/settings.yaml``
+plus a daemon restart could. It's listed in ``_SENSITIVE_ACTIONS`` for the
+same reason every rule/grant/policy/PII action is, but ``_needs_step_up``
+below never gates its own *first* call: that check only fires once
+``step_up.enabled``/``require_passkey`` are already both true, which by
+definition isn't the case yet the first time this action runs. See
+SettingsController.enable_step_up's own docstring for what does gate it
+(an already-enrolled passkey) and step_up_config.py's ``LiveStepUpConfig``
+for how the change reaches this dispatcher's own ``step_up`` without a
+restart.
 """
 from __future__ import annotations
 
@@ -116,7 +129,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "update_rule_row", "add_rule_row", "remove_rule_row",
     "toggle_grant_capability", "add_grant_row", "update_grant_row", "remove_grant_row",
     "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
-    "set_log_level", "set_notifications_detail",
+    "set_log_level", "set_notifications_detail", "enable_step_up",
 })
 
 # ---------------------------------------------------------------------------- #
@@ -137,6 +150,17 @@ _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "toggle_grant_capability", "add_grant_row", "update_grant_row", "remove_grant_row",
     "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
     "toggle_pii_detection", "toggle_pii_category",
+    # B9: changes *what gets gated* the same way every other entry here
+    # does -- once step-up is already required, turning it on again (a
+    # no-op SettingsController.enable_step_up already tolerates) still
+    # demands a fresh assertion like any other sensitive action. The very
+    # first enable is never gated this way -- _needs_step_up below only
+    # fires once step_up.enabled and require_passkey are *already* both
+    # true, which by definition isn't the case yet on that first call; its
+    # own precondition (a passkey enrolled) is what SettingsController.
+    # enable_step_up itself enforces instead. See that method's own
+    # docstring.
+    "enable_step_up",
 })
 
 _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({

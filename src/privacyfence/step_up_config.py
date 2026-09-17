@@ -29,6 +29,7 @@ passkey, and nothing yet asks you for it."
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -156,10 +157,93 @@ class StepUpConfig:
         )
 
 
+class LiveStepUpConfig:
+    """A thread-safe, mutable holder around a ``StepUpConfig`` (B9 of the
+    4.1.0 action plan): web/server.py's own build_app()/WebServer resolve
+    local mode's ``StepUpConfig`` exactly once, at daemon startup, and hand
+    that same object to every consumer that gates on it (web/
+    routes_approvals.py's decide endpoint, web/routes_settings.py's
+    sensitive-action gate and banner, web/routes_security.py's enrollment
+    page) -- "one StepUpConfig, read once, drives ... alike" (build_app()'s
+    own docstring). That made turning step-up *on* a config-file-plus-
+    restart operation with no UI path at all, the actual B9 gap: #426
+    shipped the whole chain and then defaulted it off with nothing in
+    /settings or /security able to flip it back on short of editing
+    ``config/settings.yaml`` by hand -- ``sudo`` and a text editor on a
+    privilege-separated install (#428 Phase 4).
+
+    This class closes that gap without touching any of those call sites:
+    every attribute/method a ``StepUpConfig`` exposes (``enabled``,
+    ``scope``, ``rp_id``, ``rp_name``, ``require_passkey``,
+    ``local_enrollment_banner``) is mirrored here, read fresh off whatever
+    ``StepUpConfig`` is currently held rather than fixed at construction
+    time -- so daemon_main.py's local-mode boot path can hand *this*
+    object, instead of a bare ``StepUpConfig``, to every one of the above
+    consumers with no change to any of them, and settings_controller.py's
+    ``enable_step_up`` (wired in via ``SettingsController.wire_step_up``,
+    the same after-the-fact pattern ``wire_unattended_listener`` already
+    uses) can call ``update()`` to make a config change take effect for the
+    very next request -- no restart, matching every other settings.yaml
+    write this codebase already hot-reloads (auto-accept rules, the privacy
+    filter).
+
+    Deliberately one-directional in what it's used for: only ``enable_step_
+    up`` ever calls ``update()``, always turning step-up *on* (see that
+    method's own docstring for why turning it back *off* stays a config-
+    file-plus-restart operation on purpose). Org mode has no equivalent of
+    this class -- its own ``StepUpConfig`` is re-derived from
+    ``org.org_config`` on every ``_build_org_app`` call instead (web/
+    server.py), which already has no restart problem to solve.
+    """
+
+    def __init__(self, initial: StepUpConfig) -> None:
+        self._lock = threading.Lock()
+        self._current = initial
+
+    @property
+    def enabled(self) -> bool:
+        with self._lock:
+            return self._current.enabled
+
+    @property
+    def scope(self) -> StepUpScope:
+        with self._lock:
+            return self._current.scope
+
+    @property
+    def rp_id(self) -> str:
+        with self._lock:
+            return self._current.rp_id
+
+    @property
+    def rp_name(self) -> str:
+        with self._lock:
+            return self._current.rp_name
+
+    @property
+    def require_passkey(self) -> bool:
+        with self._lock:
+            return self._current.require_passkey
+
+    def local_enrollment_banner(self, *, has_credentials: bool) -> str | None:
+        with self._lock:
+            current = self._current
+        return current.local_enrollment_banner(has_credentials=has_credentials)
+
+    def update(self, cfg: StepUpConfig) -> None:
+        """Swap in a freshly loaded ``StepUpConfig`` -- called by
+        settings_controller.py's ``enable_step_up`` right after it persists
+        the same change to ``config/settings.yaml``, so every consumer
+        holding this object sees the new value on its very next read."""
+        with self._lock:
+            self._current = cfg
+
+
 __all__ = [
     "DEFAULT_LOCAL_RP_ID",
     "DEFAULT_RP_NAME",
     "DEFAULT_STEP_UP_SCOPE",
+    "LiveStepUpConfig",
     "StepUpConfig",
     "StepUpScope",
 ]

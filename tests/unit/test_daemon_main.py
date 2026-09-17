@@ -1557,6 +1557,41 @@ class TestMaybeStartWebServer:
         assert result is not None
         assert result.controller is controller
 
+    def test_wires_a_live_step_up_config_into_the_controller(self, monkeypatch, tmp_path):
+        # B9: SettingsController.enable_step_up is a no-op without this --
+        # _maybe_start_web_server must hand the controller the same
+        # LiveStepUpConfig it hands the server itself (see that method's
+        # own docstring on why it needs to be the *same* object).
+        from privacyfence.step_up_config import LiveStepUpConfig
+        self._no_bind(monkeypatch, tmp_path)
+        controller = self._controller(tmp_path, monkeypatch)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"settings": {"enabled": True}}, "step_up": {"require_passkey": True}},
+            self._connector_host(), unattended_sessions_enabled=False, controller=controller,
+        )
+
+        assert result is not None
+        assert isinstance(controller._step_up, LiveStepUpConfig)
+        # The config this daemon actually booted with, not a fresh default.
+        assert controller._step_up.require_passkey is True
+
+    def test_settings_not_enabled_still_wires_step_up_into_the_controller(self, monkeypatch, tmp_path):
+        # Unlike controller wiring into the server itself (result.controller
+        # above), this is unconditional on web.settings.enabled -- wiring an
+        # attribute costs nothing, and nothing about /settings being
+        # unmounted should make a later enable_step_up() call silently
+        # look wired but do nothing.
+        from privacyfence.step_up_config import LiveStepUpConfig
+        self._no_bind(monkeypatch, tmp_path)
+        controller = self._controller(tmp_path, monkeypatch)
+
+        daemon_main._maybe_start_web_server(
+            {}, self._connector_host(), unattended_sessions_enabled=False, controller=controller,
+        )
+
+        assert isinstance(controller._step_up, LiveStepUpConfig)
+
     def test_mcp_dispatcher_gets_the_controllers_connector_status_provider(self, monkeypatch, tmp_path):
         # privacyfence_status's own connector view (issue #396 Phase 2) --
         # wired to SettingsController.status_connectors alongside the
