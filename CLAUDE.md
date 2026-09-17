@@ -91,6 +91,16 @@ accident. A *duplicated* section fails the same way and for the same reason — 
 existed, `changelog_section.py` matched the first heading and stopped at the next `##`, emitting
 whichever half came first, dropping the other, and exiting 0.
 
+**A still-populated `## [Unreleased]` fails the render too**, and that is the half the duplicate
+guard does not catch: do only the "correct its date" part of the step above and you are left with
+exactly one, correct `## [4.0.0]` heading and every entry from the cycle stranded above it, which
+the duplicate check is right not to complain about. Measured against the real file on 2026-09-17,
+that shipped a 142-line body containing none of the eSigner, `%LOCALAPPDATA%`,
+`privacyfence_status` or `SameSite` entries, green, at exit 0. Merging `[Unreleased]` is therefore
+not housekeeping to do eventually — it is what makes the release notes the release notes.
+`changelog_section.py --allow-unreleased` renders anyway, for reading a section by hand mid-cycle;
+nothing in `.github/workflows/` passes it, and a release build must not.
+
 Feature branches add under `## [Unreleased]` and never open a concrete version heading — that is
 the same `d929510` failure mode described above, in a different file.
 
