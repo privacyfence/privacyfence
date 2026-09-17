@@ -16,12 +16,13 @@
 # 0700 directory the user can no longer read and a stale systemd unit pointing at a binary that no
 # longer exists.
 #
-# So a real `remove` -- not `upgrade`/`deconfigure`, which must leave a running separated install
-# alone -- now runs `disable` first, while the tool that can still exists, undoing exactly what
-# `enable --auto` did: stops and removes the system unit, and moves the data (including those OAuth
-# tokens) back to ~/.privacyfence. Best-effort (`|| true`): this must never fail the removal, and
-# most installs -- anyone who never ran or was auto-enabled into privilege separation -- have no
-# marker for `disable` to find, which is exactly the ordinary case it exits non-zero for.
+# So a real `remove` -- not `upgrade`/`deconfigure`, which must leave a separated install *enabled*
+# (just briefly stopped on `upgrade`, see below) -- now runs `disable` first, while the tool that
+# can still exists, undoing exactly what `enable --auto` did: stops and removes the system unit,
+# and moves the data (including those OAuth tokens) back to ~/.privacyfence. Best-effort
+# (`|| true`): this must never fail the removal, and most installs -- anyone who never ran or was
+# auto-enabled into privilege separation -- have no marker for `disable` to find, which is exactly
+# the ordinary case it exits non-zero for.
 #
 # Per P2.2: this script must never reach into a user's $HOME on its own (that's where
 # ~/.privacyfence/ -- config, credentials, audit log -- lives, and it is not package-owned;
@@ -30,6 +31,17 @@
 # or overwriting anything they own, and only ever runs against a directory this same package's
 # postinst moved out of $HOME in the first place. Any other future edit adding cleanup logic here
 # must keep the original invariant.
+#
+# `upgrade` stops the system unit for the same reason `remove` above undoes separation entirely:
+# a separated install's daemon (privacyfence-daemon.service, running as the privacyfence system
+# account) runs the packaged PyInstaller onedir build straight out of /opt/privacyfence, and dpkg
+# unpacks the new version's files over that same directory *before* postinst runs -- a lazily
+# loaded shared library can vanish out from under the still-running old process mid-upgrade and
+# crash it. Stopping first avoids that window; postinst's `enable --auto`, which already runs on
+# every upgrade (see its own comment), starts the unit again once the new files are in place, so
+# this never leaves the daemon down. Best-effort and harmless on an unseparated install, where the
+# unit was never installed: `systemctl stop` on an unknown unit just fails, and `|| true` absorbs
+# it, same as `disable --now` already does elsewhere in this flow.
 set -e
 
 case "$1" in
@@ -38,7 +50,12 @@ case "$1" in
             /usr/sbin/privacyfence-privilege-separation disable || true
         fi
         ;;
-    upgrade|deconfigure)
+    upgrade)
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl stop privacyfence-daemon.service >/dev/null 2>&1 || true
+        fi
+        ;;
+    deconfigure)
         ;;
     failed-upgrade)
         ;;
