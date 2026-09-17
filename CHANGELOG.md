@@ -505,6 +505,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failure path these methods already had — previously the raw `OSError` skipped that wrapping
   entirely and fell through to the generic client-facing error message, leaving the calling agent
   with no way to tell what went wrong or that retrying with a different directory would help.
+- `apt remove` on a Linux install that privilege separation (auto-enabled by `postinst`, issue
+  #428 D1) turned on no longer strands it. `debian/prerm` now runs
+  `privacyfence-privilege-separation disable` on a real `remove` — before dpkg deletes the binary
+  that command needs — so the system unit is stopped and removed and the migrated data, including
+  live connector OAuth tokens and the audit log, moves back under `~/.privacyfence` instead of
+  being left behind in a `0700` directory the user can no longer read, owned by an account whose
+  only undo tool was just uninstalled. The operation is best-effort and never runs on a plain
+  upgrade, which must leave a running separated install alone.
 
 ## [4.0.0] — 2026-09-14
 
