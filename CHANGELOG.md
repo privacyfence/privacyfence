@@ -558,11 +558,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unconditionally. `test_deb_autostart_activates_daemon_via_real_login_session` had the same bug
   in test form: its "install must never start the daemon" assertion checked the daemon's pre-D1
   socket path under `~/.privacyfence`, which privilege separation moves out from under it, so the
-  assertion could never fail regardless of what actually happened. It now asks
-  `privilege_separation.separation()` which outcome this install actually got and checks whichever
-  socket that implies — the system unit's, reached via `handoff_dir()`, when separation
-  auto-enabled (the case this test's own passwordless-sudo install always hits), or the original
-  `~/.privacyfence` path otherwise.
+  assertion could never fail regardless of what actually happened — fixed as part of splitting
+  that test into separated/unseparated cases (issue #428 B7).
 
 ## [4.0.0] — 2026-09-14
 
