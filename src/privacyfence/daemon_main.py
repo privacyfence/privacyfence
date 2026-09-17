@@ -91,7 +91,8 @@ from . import __version__, audit_forwarding, org_bundle_signing, org_mode, privi
 from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, current_principal
-from .webauthn_stepup import has_credentials as has_webauthn_credentials
+from .webauthn_stepup import StepUpRequirementChange, has_credentials as has_webauthn_credentials
+from .webauthn_stepup import observe_step_up_requirement, step_up_disabled_notice
 from .app_credentials import telegram_app_credentials
 from .approval_ui import init_approval_ui
 from .audit_log import (
@@ -447,6 +448,39 @@ def log_org_config_bundle_hash(org_config: dict[str, Any]) -> None:
         logger.warning("Audit log write failed for organization config startup hash: %s", exc)
 
 
+def _audit_step_up_requirement_change(change: StepUpRequirementChange) -> None:
+    """#426 Phase 4: the audit half of ``observe_step_up_requirement`` --
+    called from ``_maybe_start_web_server()`` right after that function
+    reports a change. By the time that function runs, ``run_app()`` has
+    already called ``init_audit_logger()``, so there's an audit logger to
+    record to -- same ordering ``log_org_config_bundle_hash`` above relies
+    on. Kept out of webauthn_stepup.py itself so that module stays free of
+    any audit_log.py dependency -- see its own module docstring.
+    """
+    decision = "step_up_requirement_enabled" if change.is_required else "step_up_requirement_disabled"
+    summary = (
+        "local mode's step_up.require_passkey is now enforced" if change.is_required
+        else "local mode's step_up.require_passkey was turned off"
+    )
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=uuid.uuid4().hex[:12],
+            connector="",
+            tool="",
+            tool_name="",
+            summary=summary,
+            sender="",
+            decision=decision,
+            auto_accept_rule="",
+            latency_seconds=0.0,
+            pii_detected=False,
+        ))
+    except Exception as exc:
+        logger.warning("Audit log write failed for %s: %s", decision, exc)
+
+
 def get_or_create_deployment_id() -> str:
     """SEC-23: a stable, opaque identifier for *this installation* -- not per-principal,
     and not re-generated across restarts -- stamped onto every audit entry
@@ -717,6 +751,18 @@ def _maybe_start_web_server(
     # after server.start() reads the exact same config this daemon actually
     # booted with.
     local_step_up = step_up_config.StepUpConfig.from_local_config(config)
+    # #426 Phase 4: the only place a require_passkey/step_up.enabled
+    # *change* can be observed at all -- there's no UI path to flip it (see
+    # step_up_config.py's own docstring), so a startup-time comparison
+    # against what the previous startup last saw is the only option.
+    # webauthn_stepup.observe_step_up_requirement does the comparison and
+    # persists the new state; this daemon records the actual audit entry
+    # so that module stays free of any audit_log.py dependency.
+    step_up_change = observe_step_up_requirement(
+        LOCAL_PRINCIPAL, enabled=local_step_up.enabled, require_passkey=local_step_up.require_passkey,
+    )
+    if step_up_change is not None:
+        _audit_step_up_requirement_change(step_up_change)
     server = WebServer(
         web_ui,
         port=int(web_config.get("port", DEFAULT_PORT)),
@@ -745,6 +791,15 @@ def _maybe_start_web_server(
             "step_up.require_passkey is set but no passkey is enrolled yet -- approving decisions and "
             "sensitive settings changes will be refused until one is added at %s",
             server.mint_bootstrap_url("/security"),
+        )
+    # #426 Phase 4: the persistent half of the same banner posture -- a
+    # human reading only this log, not the web UI, should still see that
+    # the requirement was turned off, not just that it currently is off.
+    if step_up_disabled_notice(LOCAL_PRINCIPAL) is not None:
+        logger.warning(
+            "step_up.require_passkey was turned off after previously being required -- if this "
+            "wasn't done deliberately, treat this install as compromised (see "
+            "docs/security-and-compliance.md's Local-mode trust boundary section)",
         )
     if mcp_dispatcher is not None:
         # privacyfence_get_sign_in_link's own callback -- wired here rather
