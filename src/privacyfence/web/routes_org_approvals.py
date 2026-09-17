@@ -281,6 +281,22 @@ def build_routes(
                 status_code=200,
                 headers={"Cache-Control": "no-store"},
             )
+        if not card.html:
+            # See web/routes_approvals.py's own show_approval: card HTML is
+            # only built on gate.py's _popup_executor, so a card whose
+            # worker hasn't run yet has card.html == "" -- routine past that
+            # executor's worker count, not exceptional. Serve a placeholder
+            # rather than let _inject_shim's html.index("</head>") raise
+            # into a 500.
+            return HTMLResponse(
+                "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"2\">"
+                "</head><body style=\"font:15px sans-serif;padding:40px\">"
+                "Preparing this request — it will be ready in a moment. "
+                "<a href=\"/approvals\">Back to approvals</a>"
+                "</body></html>",
+                status_code=200,
+                headers={"Cache-Control": "no-store"},
+            )
         session_id = request.cookies.get(org_session.SESSION_COOKIE, "")
         # SEC-08 -- see
         # web/routes_approvals.py's own show_approval for why this document's

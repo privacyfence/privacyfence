@@ -155,6 +155,27 @@ class TestAnswerVsFinalize:
         assert registry.answer("nope", "accept") is False
         assert registry.finalize("nope", "accept") is False
 
+    def test_finalize_without_a_prior_answer_still_wakes_the_ui_step(self):
+        # Regression: finalize() used to set only finalize_event, never
+        # event. A thread blocked in web_prompt.block_on_card
+        # (card.event.wait(), no timeout) waits on `event`, not
+        # `finalize_event` -- so a finalize that never went through
+        # answer() first (reevaluate_all() finding a matching rule; see
+        # pop_expired_events() below for the other such path) left that
+        # thread, and its gate.py popup-executor worker, blocked forever.
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        assert not approval.event.is_set()
+        registry.finalize(approval.id, "auto_accepted", "some_rule")
+        assert approval.event.is_set()
+        # web_prompt.block_on_card maps a result outside CARD_RESULTS to
+        # "deny" -- finalize() must not overwrite the UI-step result with
+        # the final decision, since the real outcome ("auto_accepted")
+        # already lives in final_decision.
+        assert approval.result not in ("accept", "deny", "accept_all")
+
 
 class TestLedgerSingleUse:
     def test_review_gate_ledger_entry_is_reusable(self):
