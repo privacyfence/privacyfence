@@ -48,11 +48,23 @@ and the admin page re-renders from the same object it just wrote.
 A write that fails leaves nothing half-applied: the change is made on a deep
 copy, persisted, and only adopted into the live dict (and reloaded) once
 settings.yaml is actually on disk.
+
+``apply_change`` is also the only writer of settings.yaml that two admins can
+reach concurrently -- local mode's equivalent is one desktop app talking to
+one settings.yaml. Without serializing them, two browser tabs saving at
+nearly the same moment would each deep-copy the *same* starting ``settings``,
+so the second admin's write would land on disk as if the first admin's had
+never happened (the second admin's file write and live-dict adoption would
+simply overwrite the first's) -- a silent last-write-wins that neither admin
+would see, since each page would show its own change as applied. ``_write_lock``
+below serializes the whole read-modify-write-and-adopt sequence so the second
+call always starts from a ``settings`` that already reflects the first.
 """
 from __future__ import annotations
 
 import copy
 import logging
+import threading
 from typing import Any, Callable
 
 import yaml
@@ -63,6 +75,12 @@ from ..secure_files import atomic_write_text
 from ..settings_controller import PRIVACY_CATEGORY_LABELS, PRIVACY_GROUP_LABELS
 
 logger = logging.getLogger(__name__)
+
+# Serializes apply_change end to end (deep-copy through live-dict adoption)
+# across the daemon's request-handler threads, so two admins saving within
+# the same instant can't race to last-write-wins on settings.yaml -- see the
+# module docstring.
+_write_lock = threading.Lock()
 
 # The action names this module can apply, deliberately the same strings
 # `org_settings_scope.ADMIN_ONLY_ACTIONS` authorizes (#400 C3b/C3c) and
@@ -221,16 +239,17 @@ def apply_change(
             "so the policy cannot be edited from the browser"
         )
 
-    updated = copy.deepcopy(settings)
-    summary = _MUTATORS[action](updated, payload)
-    atomic_write_text(config_path, yaml.safe_dump(updated, default_flow_style=False, allow_unicode=True))
+    with _write_lock:
+        updated = copy.deepcopy(settings)
+        summary = _MUTATORS[action](updated, payload)
+        atomic_write_text(config_path, yaml.safe_dump(updated, default_flow_style=False, allow_unicode=True))
 
-    # Only now that it's on disk: adopt it into the live dict every other
-    # reader of the install-wide config already holds a reference to (see
-    # this module's docstring), then make it live for every principal.
-    settings.clear()
-    settings.update(updated)
-    _reload_everywhere(updated)
+        # Only now that it's on disk: adopt it into the live dict every other
+        # reader of the install-wide config already holds a reference to (see
+        # this module's docstring), then make it live for every principal.
+        settings.clear()
+        settings.update(updated)
+        _reload_everywhere(updated)
     logger.info("Install-wide policy change applied: %s", summary)
     return summary
 

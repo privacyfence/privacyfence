@@ -574,6 +574,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   socket path under `~/.privacyfence`, which privilege separation moves out from under it, so the
   assertion could never fail regardless of what actually happened — fixed as part of splitting
   that test into separated/unseparated cases (issue #428 B7).
+- Issue #428 B14: two admins saving install-wide privacy/PII policy from `/settings/privacy` at
+  nearly the same moment no longer race to last-write-wins on `settings.yaml`.
+  `org_install_policy.apply_change`'s read-modify-write-and-adopt sequence is now serialized by a
+  module-level lock, so the second admin's save always starts from a `settings` that already
+  reflects the first's rather than overwriting it as if it had never happened. `docs/
+  org-mode-setup-guide.md` also no longer tells operators they can freely hand-edit `settings.yaml`
+  between browser saves: `apply_change` rewrites the whole file from its own in-memory copy, so any
+  hand edit made since the daemon last loaded the file — including comments — is silently discarded
+  the next time an admin saves from the browser, restarted or not.
 
 ## [4.0.0] — 2026-09-14
 
