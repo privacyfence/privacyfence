@@ -565,6 +565,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   being left behind in a `0700` directory the user can no longer read, owned by an account whose
   only undo tool was just uninstalled. The operation is best-effort and never runs on a plain
   upgrade, which must leave a running separated install alone.
+- Issue #428 B8: `debian/postinst`'s header comment no longer claims installing the `.deb` never
+  starts the daemon. That was true before D1 but not after: `enable --auto`, right below it, now
+  starts `privacyfence-daemon.service` immediately (`systemctl enable --now`) whenever it can
+  safely tell who owns the install — the comment now says so instead of asserting the opposite
+  unconditionally. `test_deb_autostart_activates_daemon_via_real_login_session` had the same bug
+  in test form: its "install must never start the daemon" assertion checked the daemon's pre-D1
+  socket path under `~/.privacyfence`, which privilege separation moves out from under it, so the
+  assertion could never fail regardless of what actually happened — fixed as part of splitting
+  that test into separated/unseparated cases (issue #428 B7).
 
 ## [4.0.0] — 2026-09-14
 

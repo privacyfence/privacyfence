@@ -21,12 +21,19 @@ case "$1" in
         ;;
 esac
 
-# Deliberately nothing here starts the daemon. The XDG autostart entry
+# Nothing in this block starts the daemon. The XDG autostart entry
 # (/etc/xdg/autostart/privacyfence.desktop, installed above) only fires at the *next* graphical
 # login -- correct DMG-parity behavior (the DMG doesn't launch the app immediately after a
 # drag-install either). postinst runs as root, which can neither correctly determine the
 # installing user's desktop session nor safely start a per-user daemon on their behalf --
 # see the now-removed docs/linux-local-deb-packaging-plan.md P3.3.
+#
+# That is no longer the whole install, though: the D1 block right below hands startup to a
+# *system* unit instead, which root can start outright, and does -- whenever `enable --auto`
+# takes effect (see its own comment for exactly when), this package's `configure` step ends with
+# the daemon already running under privacyfence-daemon.service, not merely armed to start at the
+# next login. Whether that block takes effect is the only thing that decides which of the two
+# behaviors above this install actually gets.
 
 # #428 D1 (4.1, moved up from the original 4.2 plan): auto-enable privilege separation here,
 # on every install and upgrade (dpkg calls this same `configure` case for both -- $2 is the old
