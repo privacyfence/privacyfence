@@ -372,6 +372,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   actively listening on regardless of that socket's own options — leaving it undefined which of the
   two processes actually received the provider's callback. With reuse off, that bind() now always
   fails, which the existing actionable `OAuthLoopbackError` already reports.
+- B20 of the 4.1.0 action plan: `web/org_settings_scope.py`'s `PER_PRINCIPAL_ACTIONS` allow-list
+  named `add_rule_row`/`update_rule_row`, the grant equivalents, and the connector actions as
+  permitted for any signed-in principal, but `web/routes_org_settings.py` only ever wired routes
+  for removing a rule row and removing a grant row — the allow-list had run ahead of the routes.
+  No route currently calls `is_action_permitted` with any of the unwired action names, so nothing
+  was actually reachable, but a route added later in good faith could have trusted the allow-list's
+  "yes" without noticing no implementation backed it. `PER_PRINCIPAL_ACTIONS` now holds exactly the
+  two actions with a real route; the rest moved to a new `PER_PRINCIPAL_ACTIONS_UNROUTED` set that
+  `is_action_permitted` denies until each one gets its own route and moves over.
 
 ### Added
 
