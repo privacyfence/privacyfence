@@ -587,6 +587,52 @@ class TestRequirePasskeyBanner:
         assert "turned off" in r.text
 
 
+class TestStepUpOffNotice:
+    """B23 of the 4.1.0 action plan: the list page carries step_up_
+    config.py's own ``off_notice()`` as a dismissible strip (web_shell.
+    wrap's ``dismissible_notice_html``) exactly when step-up isn't
+    genuinely required -- see that function's own tests
+    (test_step_up_config.py) for the condition, and web_shell.py's
+    TestDismissibleNotice for the markup."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def test_notice_shown_on_the_ordinary_default(self):
+        app, sessions, _web_ui = _app(step_up=StepUpConfig())
+        client = _client(app)
+        _signed_in(client, sessions)
+        r = client.get("/approvals")
+        assert '<div class="pf-shell-notice"' in r.text
+        assert "/settings" in r.text
+
+    def test_no_notice_when_step_up_is_genuinely_required(self):
+        app, sessions, _web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True))
+        client = _client(app)
+        _signed_in(client, sessions)
+        r = client.get("/approvals")
+        assert '<div class="pf-shell-notice"' not in r.text
+
+    def test_notice_and_banner_can_both_render(self):
+        # local_enrollment_banner (required but nothing enrolled yet) and
+        # off_notice are mutually exclusive by construction -- required
+        # implies off_notice() is None -- so this documents that instead:
+        # the disabled-requirement banner (also fires only when NOT
+        # currently required) and the off notice can appear together.
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=True)
+        wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=False)
+        app, sessions, _web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=False))
+        client = _client(app)
+        _signed_in(client, sessions)
+        r = client.get("/approvals")
+        assert '<div class="pf-shell-banner"' in r.text
+        assert '<div class="pf-shell-notice"' in r.text
+
+
 class TestRequirePasskeyHardFail:
     """#426 Phase 3: with ``require_passkey`` on, the one deliberate gap
     TestStepUpEvadableWithNoPasskeyEnrolled documents above is closed --
