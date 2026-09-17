@@ -341,6 +341,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   path and remains a `config/settings.yaml` edit plus a restart, which is what keeps the existing
   "treat this install as compromised" banner meaningful — a disable it observes still can never have
   come from a browser control. See `step_up_config.py`'s `LiveStepUpConfig`.
+- B13 of the 4.1.0 action plan: the Slack/Salesforce/Atlassian OAuth loopback listener
+  (`oauth_loopback.py`) no longer inherits `HTTPServer.allow_reuse_address`. On a privilege-separated
+  install the agent is a different, less-trusted process than the daemon (ADR 0002) and could bind
+  the fixed redirect port first; PKCE already stops it from completing the exchange, but leaving
+  address reuse on meant the daemon's own bind() could still silently succeed over that squatted
+  port on Windows, where `SO_REUSEADDR` on a *new* socket lets it steal a port another socket is
+  actively listening on regardless of that socket's own options — leaving it undefined which of the
+  two processes actually received the provider's callback. With reuse off, that bind() now always
+  fails, which the existing actionable `OAuthLoopbackError` already reports.
 
 ### Added
 
