@@ -202,6 +202,38 @@ class TestQuitCommand:
         finally:
             server.stop()
 
+    def test_quit_is_refused_on_a_privilege_separated_install_even_when_allowed(
+        self, tmp_path, monkeypatch,
+    ):
+        """#428 B4: this socket is 0660 group-shared with the companion on a
+        separated install, which puts the agent in the same group -- so
+        unlike the ``allow_quit`` case above, this must not be a setting a
+        separated install can leave on."""
+        from privacyfence import daemon_main, privilege_separation
+
+        called = []
+        monkeypatch.setattr(daemon_main, "request_shutdown", lambda: called.append(True))
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        server = self._server(tmp_path, monkeypatch, allow_quit=True)
+        try:
+            reply = _mint(server.address, message="QUIT\n")
+            assert reply.startswith("ERROR")
+            assert called == []
+        finally:
+            server.stop()
+
+    def test_quit_refusal_names_this_platforms_stop_command(self, tmp_path, monkeypatch):
+        from privacyfence import privilege_separation
+
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="QUIT\n")
+            assert privilege_separation.PLATFORM_LAYOUTS["linux"].stop_command in reply
+        finally:
+            server.stop()
+
 
 class TestCompanionChannelServer:
     """#428 Phase 3: the reverse-direction channel -- the daemon is the
@@ -301,6 +333,20 @@ class TestControlChannelClientFunctions:
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         monkeypatch.setattr(paths, "is_windows", lambda: False)
         server = cc.ControlChannelServer(bootstrap=BootstrapStore(), allow_quit=False)
+        server.start()
+        try:
+            with pytest.raises(cc.ControlChannelError):
+                cc.request_quit()
+        finally:
+            server.stop()
+
+    def test_request_quit_raises_when_privilege_separated(self, tmp_path, monkeypatch):
+        from privacyfence import paths, privilege_separation
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore(), allow_quit=True)
         server.start()
         try:
             with pytest.raises(cc.ControlChannelError):
