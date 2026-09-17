@@ -446,6 +446,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   3.11, 3.12 and 3.14 (3.13 is the full `test` job's own version), so the interpreter that is the
   default `python3` on current Ubuntu releases is proven rather than merely implied by
   `requires-python = ">=3.11"`.
+- Approval binder, Phase 1: `/approvals` now groups pending, batchable approvals by
+  `(connector, operation)` with a per-group and page-level select-all, and **Deny selected**
+  clears a whole group of unwanted requests in one action (client-side over the existing per-id
+  decide endpoint — no new server-side batch path yet). A confirmation/selection dialog, or a card
+  a PII match forces a second confirmation on, is never offered a checkbox — `PendingApproval.
+  is_batchable()`/`blocked_reason()` classify every kind explicitly, with a coverage test that
+  fails the moment a new kind isn't classified either way. Each row also gets an inline "Details"
+  disclosure, fetched from a new read-only `GET /api/approvals/{id}/preview` fragment (the same
+  metadata-only `preview` dict already stamped onto every approval at registration) — never an
+  `<iframe>` onto the real card document, which would mean weakening the card's own
+  `frame-ancestors 'none'` for cosmetics. Selection lives in the page's own JS state and survives
+  the list's live SSE re-renders. Approving still opens the full card; there is still no bulk
+  Allow.
 
 ### Changed
 

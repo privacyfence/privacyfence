@@ -126,6 +126,31 @@ DEFAULT_MAX_PENDING_PER_PRINCIPAL = 20
 CARD_RESULTS = ("accept", "deny", "accept_all")
 CONFIRM_RESULTS = ("confirm", "cancel")
 
+# Approval binder (Phase 1 of docs/approval-list-ui-ux.md's future batching
+# work): every value PendingApproval.kind can take -- "card" (web_prompt.
+# block_on_card), "confirm" (block_on_confirm), "choice" (block_on_choice).
+# PendingApproval.is_batchable()/blocked_reason() below classify by explicit
+# membership in _BATCHABLE_KINDS/_NON_BATCHABLE_KINDS, never by complement
+# (kind not in _BATCHABLE_KINDS) -- the same reasoning web/routes_settings.py's
+# own _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS pair gives for staying
+# explicit rather than derived: TestBatchableKindsCoverAllApprovalKinds
+# (test_approvals.py) fails the moment a new kind lands in ALL_APPROVAL_KINDS
+# without a matching entry in both sets, so it can never silently default to
+# either "batchable" or "not batchable" by accident.
+ALL_APPROVAL_KINDS: frozenset[str] = frozenset({"card", "confirm", "choice"})
+
+# A "card" approval (accept/deny/accept_all) is the one shape the binder can
+# safely decide in bulk. "confirm"/"choice" resolve a different, mid-flight
+# result vocabulary (web_prompt.py's block_on_confirm/block_on_choice) --
+# batching those has no meaning, since there's no "accept"/"deny" to apply.
+_BATCHABLE_KINDS: frozenset[str] = frozenset({"card"})
+_NON_BATCHABLE_KINDS: frozenset[str] = frozenset({"confirm", "choice"})
+
+_NON_BATCHABLE_KIND_REASON: dict[str, str] = {
+    "confirm": "This is a confirmation dialog, not an approval — it can't be decided from the list.",
+    "choice": "This is a selection dialog, not an approval — it can't be decided from the list.",
+}
+
 
 class TooManyPendingApprovalsError(RuntimeError):
     """Raised by register_or_coalesce() when either cap is already reached
@@ -243,6 +268,36 @@ class PendingApproval:
     def is_finalized(self) -> bool:
         return self.finalize_event.is_set()
 
+    def is_batchable(self) -> bool:
+        """The approval binder's own gate (Phase 1): a ``kind == "card"``
+        approval that isn't itself PII-forced. Excluded, each for a
+        different reason (see this module's own ``_NON_BATCHABLE_KINDS``/
+        ``pii_forces_confirmation`` field docstrings): "confirm"/"choice"
+        dialogs resolve a different, mid-flight result vocabulary, and a
+        PII-forced card demands a second confirmation that only exists
+        *after* this card is answered -- batching those would spray a fresh
+        confirm dialog into the list for every batched item instead of
+        resolving anything. Classified by explicit membership in
+        ``_BATCHABLE_KINDS``, never by complement -- see that set's own
+        comment."""
+        return self.kind in _BATCHABLE_KINDS and not self.pii_forces_confirmation
+
+    def blocked_reason(self) -> str:
+        """Why this approval can't be selected in the binder -- "" exactly
+        when ``is_batchable()`` is True. Surfaced on the row so a human sees
+        *why* there's no checkbox, not just its absence. Falls back to a
+        generic reason for a kind ``_NON_BATCHABLE_KIND_REASON`` has no
+        specific entry for (fail-closed: still not batchable, just with a
+        less specific explanation) -- TestBatchableKindsCoverAllApprovalKinds
+        is what actually keeps that fallback from ever firing in practice."""
+        if self.is_batchable():
+            return ""
+        if self.pii_forces_confirmation:
+            return "This request needs its own PII confirmation — it can't be decided from the list."
+        return _NON_BATCHABLE_KIND_REASON.get(
+            self.kind, "This request can't be decided from the list.",
+        )
+
     def to_summary_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -258,6 +313,25 @@ class PendingApproval:
             # ``summary``, which is the one field that can carry real gated
             # content (see that field's own docstring below).
             "gate_kind": self.gate_kind,
+            # A settings.yaml rule-scoped key (e.g. "drive.read_file_contents"),
+            # never gated content -- the approval binder's own grouping key
+            # (Phase 1: groups by (connector, operation_key)). "" for a bare
+            # confirm/choice dialog, which has none.
+            "operation_key": self.operation_key or "",
+            # Category-level fact already shown on the card itself (a tinted
+            # banner naming the matched categories) -- never the categories
+            # themselves, which is what pii_categories carries; this is only
+            # "was anything flagged at all", which the binder needs to
+            # explain a PII-forced row's own blocked_reason.
+            "pii_detected": self.pii_detected,
+            # Whether the approval binder (Phase 1) may offer this approval
+            # for selection at all -- see is_batchable()'s own docstring.
+            "batchable": self.is_batchable(),
+            # Human-readable reason there's no checkbox on this row -- ""
+            # when batchable is True. Never gated content (see
+            # blocked_reason()'s own docstring): it names a category of
+            # approval, not anything about this particular one's data.
+            "blocked_reason": self.blocked_reason(),
             # The row's own title/content line -- can carry real gated data
             # (an event title, a contact name, a document title -- see
             # gate.py's call sites). Only ever shown by a consumer that's

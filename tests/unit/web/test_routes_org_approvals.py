@@ -99,6 +99,54 @@ class TestAuthRequired:
         r = _client(app).get("/api/approvals/stream")
         assert r.status_code == 401
 
+    def test_preview_is_401_when_signed_out(self):
+        app, _sessions, _web_ui = _app()
+        r = _client(app).get("/api/approvals/abc123/preview")
+        assert r.status_code == 401
+
+
+class TestApprovalPreview:
+    """GET /api/approvals/{id}/preview -- the org-mode counterpart of
+    web/routes_approvals.py's own preview fragment (Phase 1), scoped to
+    current_principal() the same way every other read here is (§10.5)."""
+
+    def test_returns_the_owning_principals_preview(self):
+        app, sessions, web_ui = _app()
+        with principal_scope(ALICE):
+            approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key="a1", connector="gmail", tool="gmail_get_message", gate_kind="review",
+                request_id="r1", preview={"From": "alice@example.com"},
+            )
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get(f"/api/approvals/{approval.id}/preview")
+        assert r.status_code == 200
+        assert r.json() == {"id": approval.id, "preview": {"From": "alice@example.com"}}
+
+    def test_a_foreign_principals_approval_reads_as_a_plain_404(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, BOB)
+        r = client.get(f"/api/approvals/{approval.id}/preview")
+        assert r.status_code == 404
+
+    def test_unknown_id_is_404(self):
+        app, sessions, _web_ui = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/api/approvals/nope/preview")
+        assert r.status_code == 404
+
+    def test_never_carries_details_text_or_html(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get(f"/api/approvals/{approval.id}/preview")
+        body = r.json()
+        assert set(body.keys()) == {"id", "preview"}
+
 
 class TestPrincipalScopedList:
     def test_only_shows_the_signed_in_principals_own_approvals(self):
