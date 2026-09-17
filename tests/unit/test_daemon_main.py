@@ -433,6 +433,40 @@ class TestLogOrgConfigBundleHash:
         assert "signed=True" in entries[0]["summary"]
 
 
+class TestAuditStepUpRequirementChange:
+    """#426 Phase 4: the audit half of webauthn_stepup.observe_step_up_
+    requirement -- see that function's own tests in
+    tests/unit/test_webauthn_stepup.py for the state-transition logic
+    itself; this only proves daemon_main.py turns a reported change into
+    the right audit entry."""
+
+    def test_enabling_writes_the_enabled_decision(self, tmp_path):
+        from privacyfence.audit_log import init_audit_logger
+        from privacyfence.webauthn_stepup import StepUpRequirementChange
+
+        init_audit_logger(str(tmp_path / "audit"))
+        daemon_main._audit_step_up_requirement_change(
+            StepUpRequirementChange(was_required=False, is_required=True),
+        )
+        jsonl_files = list((tmp_path / "audit").glob("*.jsonl"))
+        assert len(jsonl_files) == 1
+        entries = [json.loads(line) for line in jsonl_files[0].read_text().splitlines()]
+        assert len(entries) == 1
+        assert entries[0]["decision"] == "step_up_requirement_enabled"
+
+    def test_disabling_writes_the_disabled_decision(self, tmp_path):
+        from privacyfence.audit_log import init_audit_logger
+        from privacyfence.webauthn_stepup import StepUpRequirementChange
+
+        init_audit_logger(str(tmp_path / "audit"))
+        daemon_main._audit_step_up_requirement_change(
+            StepUpRequirementChange(was_required=True, is_required=False),
+        )
+        jsonl_files = list((tmp_path / "audit").glob("*.jsonl"))
+        entries = [json.loads(line) for line in jsonl_files[0].read_text().splitlines()]
+        assert entries[0]["decision"] == "step_up_requirement_disabled"
+
+
 class TestGetOrCreateDeploymentId:
     """SEC-23: a stable, opaque per-install id persisted once at
     data_dir()/deployment_id and reused across restarts."""

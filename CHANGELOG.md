@@ -273,6 +273,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to `/security` that fixes it) but logs a warning and shows a new persistent banner
   (`web_shell.wrap`'s `banner_html`) on every `/approvals`/`/settings` page until a passkey is added.
   See issue #426.
+- Issue #426 Phase 4: tamper-evidence, recovery, and an honest write-up for local-mode step-up.
+  Enrolling or removing a passkey, spending a recovery code, and `step_up.require_passkey` itself
+  being turned on or off (observable only at daemon startup, since there's no UI path to flip it —
+  see `step_up_config.py`) are all written to the audit log. Turning the requirement off latches a
+  persistent banner on `/approvals`/`/settings` and a daemon-log warning that survives further
+  restarts, not just a one-time audit line, until a later startup turns it back on. `web/
+  routes_security.py`'s enrollment flow now issues a one-time recovery code — shown to the browser
+  exactly once, stored only as a salted hash — the moment a principal doesn't have an unused one on
+  file, and a new `POST /security/recover` endpoint trades a valid code for the removal of every
+  credential enrolled for that principal, no WebAuthn ceremony required, so someone who loses their
+  only authenticator (a new machine, a wiped TPM) has a sanctioned way back in instead of the
+  shell-edit-and-restart door this feature exists to close. `docs/security-and-compliance.md` gets a
+  new "Tamper-evidence and recovery" subsection and an honest revision of the MCP-issued-sign-in-link
+  net-effect paragraph: with privilege separation active and `require_passkey` on, a session can no
+  longer release a gated write or loosen policy on its own, though it can still be minted and still
+  reaches the review screen. See issue #426.
 
 ### Added
 

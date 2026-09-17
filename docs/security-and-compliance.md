@@ -125,6 +125,57 @@ passkey is added, and releases nothing in the meantime. Treat local-mode step-up
 once `require_passkey` is on and a passkey is enrolled; with `enabled` alone it stays what it always
 was -- opt-in, evadable by simply not enrolling.
 
+### Tamper-evidence and recovery for local-mode step-up (#426 Phase 4)
+
+Four events on the credential-store/requirement lifecycle are written to the audit log, each on its
+own `decision` value (see `audit_log.py`'s own field docstring for the exact strings): enrolling a
+passkey, removing one, a recovery code being spent, and the `step_up.require_passkey` requirement
+itself turning on or off. None of these prevent anything on their own — see the framing in [What #426
+does and doesn't guarantee](#local-mode-trust-boundary) above: they are detection after the fact,
+recording that a change happened rather than stopping one that shouldn't have — see [Local-mode
+trust boundary](#local-mode-trust-boundary) above for what this feature does and does not guarantee
+on its own. They matter for the same reason the rest of the audit log does: a reviewer (or a future
+automated check) can reconstruct what changed and when, rather than trusting the current state of
+`config/settings.yaml` and `webauthn_credentials.json` to be the whole story.
+
+**Requirement changes are only observable at daemon startup.** There is no UI path to flip
+`step_up.require_passkey` — it is a `config/settings.yaml` edit plus a restart, deliberately, so its
+name and semantics can never drift from a settings-page control nobody asked for (`step_up_config.py`'s
+own docstring). That means a *change* can only be caught by comparing the value a fresh startup loads
+against what the previous startup last saw, which is exactly what `webauthn_stepup.
+observe_step_up_requirement` does: an install predating this feature, or one where the requirement
+has never changed, produces nothing extra to audit. Restarting with the same value twice in a row is
+silent, by design — only an actual transition is recorded.
+
+**Turning the requirement off latches a persistent banner**, not just a one-time audit line — the
+same `pf-shell-banner` the Phase 3 "nothing enrolled yet" notice uses, on both `/approvals` and
+`/settings`, and a matching warning in the daemon's own log at every startup while it holds. It
+survives further restarts on its own: a local process could otherwise flip the flag off, wait out a
+restart, and flip it back on before a human ever reads the log, leaving only a single easy-to-miss
+audit line as the record. The banner instead persists until a startup observes `require_passkey`
+back on — at which point turning it on is itself audited too, and the banner clears.
+
+**Recovery: what happens when the only enrolled authenticator is lost** (a new machine, a wiped
+TPM). With no IdP, local mode has no remote reset — before [privilege separation](#privilege-separation-macos-linux-and-windows),
+the honest answer was "edit `config/settings.yaml` from a shell and restart", which is the same door
+this whole feature exists to close for an adversary, not merely to close for everyone else too. Once
+that door needs the service account or an elevation prompt, a sanctioned way back in stops being
+optional. `web/routes_security.py`'s enrollment flow (`register_verify`) issues a one-time recovery
+code — a 16-character, human-typeable string in four groups — the moment a principal doesn't
+currently have an unused one on file, most often their very first enrollment. It is shown to the
+browser exactly once, in that same response, and never again: only a salted SHA-256 hash of it is
+stored (`webauthn_stepup.py`'s own `generate_recovery_code`/`consume_recovery_code`), alongside the
+credential file itself, under the same service-owned root a separated install protects. Trading the
+code in at `POST /security/recover` needs no WebAuthn ceremony — deliberately, since producing one is
+exactly what a locked-out human cannot do — only the still-valid session that got them to `/security`
+in the first place, which local mode's ordinary sign-in path (a bootstrap link) still provides even
+with `require_passkey` on, since step-up gates *decisions*, not sign-in itself. A successful trade-in
+removes every credential enrolled for that principal, clearing the stuck state so a fresh passkey can
+be enrolled immediately afterward, and is itself audited (`webauthn_recovery_code_used`) whether or
+not the human goes on to enroll again. The code is single-use: spending it, correctly or not, never
+grants a second attempt at the same code, and a fresh one is only issued at the next successful
+enrollment.
+
 ### Privilege separation (macOS, Linux and Windows)
 
 One script per platform runs the daemon under a dedicated account instead of yours. It creates that
@@ -253,6 +304,8 @@ Mutating requests require the authenticated session, same-origin checks, and CSR
 What bounds it instead: local mode only (it raises in org mode, which authenticates through IdP-backed OAuth rather than a bootstrap link, so it can never return a working credential there); the link it mints is the same single-use, short-lived bootstrap code every other sign-in path in this section uses, consumed by the first visit whether or not it succeeds; `page` is allowlisted to `approvals`/`settings`, never an arbitrary path; and the local web UI is bound to `localhost`, so the link is only useful from the same machine the MCP client and daemon are already both running on. Every call is written to the audit log under its own `sign_in_link_issued` decision, carrying the calling client's self-reported reason — the same disclosed-and-unverified posture every other tool's `reason` parameter has.
 
 Net effect: an MCP client can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. The justification this paragraph used to give — that such a client already holds equivalent-or-greater access via every other tool this daemon exposes — holds for connector reads and writes, which are themselves gated. It understates one case: a session also reaches the approval UI, so it can *release* a gated call rather than merely request one, and that is the product's central control rather than one more tool. This is not a weakness introduced by this tool — see [Local-mode trust boundary](#local-mode-trust-boundary), where a process running as the user mints the same session through the control channel without it — but it should not be described as a neutral consequence of existing trust either. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
+
+**Revised, #426 Phase 4:** the paragraph above is still true of a session by itself, and stays true regardless of configuration — this tool has no `step_up` awareness of its own, and doesn't need any: minting a session was never the part step-up narrows. What changes is what that session is *sufficient for*, and only under two conditions together, neither of which is this deployment's default. With [privilege separation](#privilege-separation-macos-linux-and-windows) active (default-on for macOS/Linux as of #428 D1, opt-in for Windows) **and** `step_up.require_passkey` turned on in `config/settings.yaml` (opt-in everywhere, no UI toggle by design — see `step_up_config.py`'s own docstring), the credential store a step-up assertion is checked against is no longer writable by the same process minting the session, so that session alone can no longer release an approving decision on a gated write, nor change what a future write can reach through `_SENSITIVE_ACTIONS` (an always-allow rule, a grant, a relaxed default policy). It can still mint the session, still view what's pending, and still hold read access to the review screen — the confidentiality half [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 names as the weaker guarantee, left open on purpose. With either condition missing — no privilege separation, or `step_up.require_passkey` left off — the original paragraph's net effect stands unqualified: the session is enough on its own.
 
 ### Local MCP
 
