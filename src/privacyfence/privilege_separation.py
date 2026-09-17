@@ -968,6 +968,65 @@ def _macos_installer_script_path() -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+# Absolute path, alongside _OSASCRIPT below and for the same bandit B607
+# reason: macOS ships this at a fixed location, so there is no PATH to
+# resolve it against in the first place.
+_CODESIGN = "/usr/bin/codesign"
+
+
+def _macos_auto_enable_script_problem(script: Path) -> str | None:
+    """#428 B2: whether ``script`` is safe to run as root via the admin
+    prompt ``maybe_auto_enable_macos()`` is about to trigger.
+
+    Both places ``_macos_installer_script_path()`` can resolve to are, on
+    their own, exactly as writable as any other file the logged-in user (and
+    therefore the agent) owns: the .app bundle's ``Resources/`` is not
+    special, and a source checkout is never root-owned. Running whatever is
+    at that path as root on the strength of a routine-looking password
+    dialog would hand an agent that can edit either of those a one-shot
+    local privilege escalation, so this refuses unless the resolved script
+    itself is owned by root and not group- or world-writable, and -- for a
+    packaged install, where there is a signature to check at all -- unless
+    the app bundle's signature still verifies. A source checkout can never
+    satisfy the first of those, which is the point: it leaves auto-enable
+    reachable only from a script the installer actually shipped, and every
+    other case (including this one) falls back to the existing opt-in path,
+    exactly as ``--auto`` already does whenever it cannot resolve something
+    it needs.
+
+    Returns ``None`` when ``script`` is safe to run, or a human-readable
+    reason it is not. Best-effort like the rest of this module: a ``stat``
+    or ``codesign`` failure reads as "not safe" rather than raising, since
+    this sits directly in front of an elevation prompt and must never turn a
+    transient error into one that runs anyway.
+    """
+    try:
+        st = os.stat(script)
+    except OSError as exc:
+        return f"could not stat {script}: {exc}"
+    if st.st_uid != 0:
+        return f"{script} is owned by uid {st.st_uid}, not root"
+    mode = stat.S_IMODE(st.st_mode)
+    if mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return f"{script} is group- or world-writable (mode {mode:04o})"
+
+    from . import paths
+
+    bundle = paths.app_bundle_path()
+    if bundle is None:
+        return None
+    try:
+        result = subprocess.run(  # nosec B603  # fixed argv list below, no shell, nothing here is attacker-controlled
+            [_CODESIGN, "--verify", "--deep", str(bundle)],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"could not verify {bundle}'s signature: {exc}"
+    if result.returncode != 0:
+        return f"{bundle}'s signature does not verify: {result.stderr.strip()}"
+    return None
+
+
 def _applescript_quoted(text: str) -> str:
     """Escape ``text`` for a double-quoted AppleScript string literal
     (``\\`` and ``"`` are the only two characters that mean anything there).
@@ -987,7 +1046,12 @@ def maybe_auto_enable_macos() -> None:
     and only on the path that starts the persistent daemon. A no-op on every
     other platform, on an already-separated install, and when the script
     this needs isn't packaged into the running app (a test process, or a
-    source checkout run without ``scripts/`` next to it).
+    source checkout run without ``scripts/`` next to it). Also a no-op --
+    logged, not raised -- when ``_macos_auto_enable_script_problem()`` finds
+    the resolved script is not something this prompt should run as root; see
+    that function for why (#428 B2). That check never passes for a source
+    checkout, which is deliberate: this prompt only ever runs a script the
+    installer itself shipped.
 
     Fires at most once per install: a marker file next to the (still
     unseparated) data directory records the attempt regardless of whether
@@ -1009,6 +1073,10 @@ def maybe_auto_enable_macos() -> None:
         return
     script = _macos_installer_script_path()
     if script is None:
+        return
+    problem = _macos_auto_enable_script_problem(script)
+    if problem is not None:
+        logger.warning("skipping automatic privilege-separation enable: %s", problem)
         return
 
     from . import paths

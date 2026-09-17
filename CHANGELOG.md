@@ -189,6 +189,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from replacing the bundle's executable and getting code execution as the service account once
   privilege separation elevated to it, the identical escalation Windows already refused to permit.
   Corrected in ADR 0002 §5a itself.
+- Issue #428 D1 follow-up: the macOS auto-enable prompt above ran whatever
+  `scripts/macos_privilege_separation.sh` resolved to through an admin-password dialog without first
+  checking what that was — on a packaged install the `.app`'s `Resources/` is as writable as anything
+  else the logged-in user owns, and a source checkout never belongs to root at all, so an agent able
+  to write either one could get its own script executed as root behind what looked like a routine
+  permission prompt. `maybe_auto_enable_macos()` now refuses to elevate a script that is not
+  root-owned and not group/world-writable, and, on a packaged install, whose `.app` bundle's
+  signature doesn't verify (`codesign --verify --deep`) — anything else logs why and leaves the
+  install opt-in, the same fallback `--auto` already takes for every other unresolvable case. A
+  source checkout can never satisfy the ownership check, which is deliberate: this prompt now only
+  ever runs a script the installer itself shipped.
 - Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
   `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
   that want hardware-bound passkeys as a hard requirement before releasing a write approval.
@@ -514,6 +525,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   failure path these methods already had — previously the raw `OSError` skipped that wrapping
   entirely and fell through to the generic client-facing error message, leaving the calling agent
   with no way to tell what went wrong or that retrying with a different directory would help.
+- `apt remove` on a Linux install that privilege separation (auto-enabled by `postinst`, issue
+  #428 D1) turned on no longer strands it. `debian/prerm` now runs
+  `privacyfence-privilege-separation disable` on a real `remove` — before dpkg deletes the binary
+  that command needs — so the system unit is stopped and removed and the migrated data, including
+  live connector OAuth tokens and the audit log, moves back under `~/.privacyfence` instead of
+  being left behind in a `0700` directory the user can no longer read, owned by an account whose
+  only undo tool was just uninstalled. The operation is best-effort and never runs on a plain
+  upgrade, which must leave a running separated install alone.
 
 ## [4.0.0] — 2026-09-14
 
