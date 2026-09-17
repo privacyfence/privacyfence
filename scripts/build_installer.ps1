@@ -25,17 +25,24 @@
 #                                # default Git for Windows install already
 #                                # does this)
 #   node + npm on PATH           # for scripts/build_mcpb.sh
-#   signtool.exe                # only if $env:SIGN_CERT_PATH is set (Phase 5) -- ships with the
-#                                # Windows SDK; used straight off PATH if present there, otherwise
-#                                # auto-located under Windows Kits' own install layout
+#   Java (JRE 11+) + eSigner CodeSignTool  # only if $env:CODESIGNTOOL_DIR is set -- SSL.com's IV
+#                                # code-signing cert's private key lives only in eSigner's cloud
+#                                # HSM (CA/B Forum's 2023 key-storage rules dropped exportable
+#                                # code-signing .pfx files entirely), so signing goes through
+#                                # SSL.com's CodeSignTool CLI (https://github.com/SSLcom/
+#                                # CodeSignTool/releases -- unzip and point $env:CODESIGNTOOL_DIR
+#                                # at the extracted directory) rather than signtool.exe against a
+#                                # local cert store.
 #
 # Usage:
 #   pwsh ./scripts/build_installer.ps1
 #
-# Optional signing env vars (Phase 5 -- unset means an unsigned build):
-#   SIGN_CERT_PATH       Path to an Authenticode .pfx
-#   SIGN_CERT_PASSWORD   The .pfx's export password
-#   SIGN_TIMESTAMP_URL   RFC 3161 timestamp server (default: DigiCert's)
+# Optional signing env vars (unset means an unsigned build):
+#   CODESIGNTOOL_DIR   Path to an extracted CodeSignTool release (contains CodeSignTool.bat)
+#   ES_USERNAME        SSL.com account username
+#   ES_PASSWORD        SSL.com account password
+#   ES_CREDENTIAL_ID   eSigner credential ID for the enrolled code-signing cert
+#   ES_TOTP_SECRET     eSigner TOTP secret (base32), for headless OTP generation
 #
 # Output: dist/PrivacyFence-<version>-setup.exe
 Set-StrictMode -Version Latest
@@ -131,30 +138,33 @@ bash scripts/build_mcpb.sh
 if ($LASTEXITCODE -ne 0) { throw "build_mcpb.sh failed" }
 $McpbPath = "dist/${ProductName}-${Version}.mcpb"
 
-# -- 6. Optional code-signing of the daemon executables (Phase 5) -----------
+# -- 6. Optional code-signing of the daemon executables ---------------------
 # Sign both PrivacyFenceApp.exe and privacyfence-app.exe -- signing only the
 # installer and not these would still show an unrecognized-publisher warning
 # if a user runs either directly rather than through the installer.
-$TimestampUrl = if ($env:SIGN_TIMESTAMP_URL) { $env:SIGN_TIMESTAMP_URL } else { "http://timestamp.digicert.com" }
-$script:SignToolPath = $null
-function Get-SignToolPath {
-    # windows-latest GitHub-hosted runners carry the Windows SDK but don't put signtool.exe on
-    # PATH -- only Visual Studio's dev shells (VsDevCmd/vcvarsall) do that, and this script runs in
-    # plain pwsh. Fall back to searching the SDK's own install layout before giving up.
-    $cmd = Get-Command signtool.exe -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-    $found = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue |
-        Sort-Object FullName -Descending | Select-Object -First 1
-    if ($found) { return $found.FullName }
-    throw "signtool.exe not found on PATH or under C:\Program Files (x86)\Windows Kits\10\bin -- install the Windows SDK"
-}
+#
+# Goes through eSigner CodeSignTool rather than signtool.exe against a local
+# cert store: the cert's private key lives only in eSigner's cloud HSM, so
+# there's no local .pfx/thumbprint for signtool to sign against. CodeSignTool
+# authenticates per call with the eSigner credential below and writes the
+# signed file into -output_dir_path, so each call signs into a scratch dir
+# and the result is moved back over $Path.
+$CodeSignOutDir = Join-Path ([System.IO.Path]::GetTempPath()) "privacyfence-codesigntool-out"
 function Invoke-Signing([string]$Path) {
-    if (-not $env:SIGN_CERT_PATH) { return }
-    if (-not $script:SignToolPath) { $script:SignToolPath = Get-SignToolPath }
+    if (-not $env:CODESIGNTOOL_DIR) { return }
     Write-Host "-> Signing $Path..."
-    & $script:SignToolPath sign /fd sha256 /f "$env:SIGN_CERT_PATH" /p "$env:SIGN_CERT_PASSWORD" `
-        /tr $TimestampUrl /td sha256 "$Path"
-    if ($LASTEXITCODE -ne 0) { throw "signtool failed on $Path" }
+    New-Item -ItemType Directory -Force -Path $CodeSignOutDir | Out-Null
+    $CodeSignTool = Join-Path $env:CODESIGNTOOL_DIR "CodeSignTool.bat"
+    & $CodeSignTool sign `
+        "-credential_id=$env:ES_CREDENTIAL_ID" `
+        "-username=$env:ES_USERNAME" `
+        "-password=$env:ES_PASSWORD" `
+        "-totp_secret=$env:ES_TOTP_SECRET" `
+        "-input_file_path=$Path" `
+        "-output_dir_path=$CodeSignOutDir" `
+        -override
+    if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed on $Path" }
+    Move-Item -Force (Join-Path $CodeSignOutDir (Split-Path -Leaf $Path)) $Path
 }
 Invoke-Signing $MainExe
 Invoke-Signing $AliasExe
@@ -174,7 +184,7 @@ if ($LASTEXITCODE -ne 0) { throw "Inno Setup (iscc.exe) failed" }
 
 $SetupPath = "dist/${SetupName}"
 
-# -- 8. Optional code-signing of the installer itself (Phase 5) -------------
+# -- 8. Optional code-signing of the installer itself ------------------------
 Invoke-Signing $SetupPath
 
 Write-Host ""

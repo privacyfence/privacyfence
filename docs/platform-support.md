@@ -38,7 +38,7 @@ The installer:
 - removes the scheduled task on uninstall;
 - preserves the user's PrivacyFence state directory on uninstall.
 
-Optional signing is configured through `SIGN_CERT_PATH`, `SIGN_CERT_PASSWORD`, and optionally `SIGN_TIMESTAMP_URL`.
+Optional signing is configured through `CODESIGNTOOL_DIR`, `ES_USERNAME`, `ES_PASSWORD`, `ES_CREDENTIAL_ID`, and `ES_TOTP_SECRET` — see `scripts/build_installer.ps1`'s header comment. Signing goes through SSL.com's eSigner CodeSignTool rather than a local Authenticode `.pfx`, since CA/B Forum's 2023 key-storage rules mean code-signing private keys can no longer be exported to a portable `.pfx` at all.
 
 The `platform-windows` job in `.github/workflows/tests.yml` runs the full core Python suite on `windows-latest` on every PR, alongside the normal Ubuntu suite. Windows packaging itself (the installer build, silent install/autostart/uninstall) is exercised only by the release build workflow (`build.yml`'s `build-windows` job, tag/`workflow_dispatch`-triggered), not per PR — see "Known open items" below for its current live status.
 
