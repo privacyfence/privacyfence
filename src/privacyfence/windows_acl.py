@@ -385,19 +385,20 @@ def owner_problems(path: Path, owner: str | None, *, service_account: str) -> li
 
 
 def image_problems(path: Path, aces: list[Ace], *, service_account: str) -> list[str]:
-    """The one Windows-specific weakness with no POSIX counterpart, and the
-    reason a per-user install cannot carry privilege separation (#407).
+    """The Windows half of this weakness, and the reason a per-user install
+    cannot carry privilege separation (#407). ``privilege_separation.
+    _posix_image_problems()`` is the POSIX half, added by B1 once it turned
+    out ``/Applications`` does not put a drag-installed ``.app`` somewhere
+    root owns the way ``/opt/privacyfence`` (dpkg-owned) does -- ADR 0002
+    §5a asserted otherwise and was wrong.
 
-    macOS and Linux put the daemon's own executable somewhere root owns --
-    ``/Applications``, ``/opt/privacyfence`` -- as a side effect of how those
-    platforms install software at all. Windows' installer offers both: an
-    elevated per-machine install under ``%ProgramFiles%``, and a
-    non-elevated per-user one under ``%LOCALAPPDATA%\\Programs``
-    (``PrivilegesRequired=lowest`` in ``installer/privacyfence.iss``). A
-    service that runs a binary the logged-in user can rewrite is not
-    privilege separation -- it is a way for the agent to execute its own
-    code *as the service account*, which is strictly worse than the
-    unseparated install it replaced.
+    Windows' installer offers both: an elevated per-machine install under
+    ``%ProgramFiles%``, and a non-elevated per-user one under
+    ``%LOCALAPPDATA%\\Programs`` (``PrivilegesRequired=lowest`` in
+    ``installer/privacyfence.iss``). A service that runs a binary the
+    logged-in user can rewrite is not privilege separation -- it is a way
+    for the agent to execute its own code *as the service account*, which
+    is strictly worse than the unseparated install it replaced.
 
     So this is checked, not documented: ``scripts/windows_privilege_
     separation.ps1`` refuses to enable against a user-writable image, and
