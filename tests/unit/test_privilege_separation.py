@@ -809,6 +809,24 @@ class TestInstallerContract:
         assert "privacyfence-privilege-separation enable --auto" in postinst
         assert '[ "$1" = "configure" ]' in postinst
 
+    def test_the_debian_prerm_disables_on_remove(self):
+        # #428 D1's auto-enable (above) needs an undo on the way out, or
+        # `apt remove` stops privacyfence-privilege-separation --auto ever
+        # wrote and strands a separated install's data (including live
+        # connector OAuth tokens) under a directory the user can no longer
+        # read, with the one tool that could reverse it just deleted.
+        prerm = (REPO_ROOT / "debian" / "prerm").read_text(encoding="utf-8")
+        assert "privacyfence-privilege-separation disable" in prerm
+        remove_case = re.search(r"remove\)(.*?);;", prerm, re.DOTALL)
+        assert remove_case is not None, "no `remove)` case in debian/prerm"
+        assert "privacyfence-privilege-separation disable" in remove_case.group(1)
+        assert "|| true" in remove_case.group(1)
+        # Must not run on a mere upgrade -- that would tear down a running
+        # separated install's unit mid-upgrade instead of leaving it alone.
+        upgrade_case = re.search(r"upgrade\|deconfigure\)(.*?);;", prerm, re.DOTALL)
+        assert upgrade_case is not None, "no `upgrade|deconfigure)` case in debian/prerm"
+        assert "privacyfence-privilege-separation" not in upgrade_case.group(1)
+
 
 class TestAutoEnableMacos:
     """#428 D1 (4.1): the daemon's own trigger for auto-enabling privilege
