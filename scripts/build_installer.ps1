@@ -25,14 +25,16 @@
 #                                # default Git for Windows install already
 #                                # does this)
 #   node + npm on PATH           # for scripts/build_mcpb.sh
-#   Java (JRE 11+) + eSigner CodeSignTool  # only if $env:CODESIGNTOOL_DIR is set -- SSL.com's IV
+#   eSigner CodeSignTool         # only if $env:CODESIGNTOOL_DIR is set -- SSL.com's IV
 #                                # code-signing cert's private key lives only in eSigner's cloud
 #                                # HSM (CA/B Forum's 2023 key-storage rules dropped exportable
 #                                # code-signing .pfx files entirely), so signing goes through
 #                                # SSL.com's CodeSignTool CLI (https://github.com/SSLcom/
-#                                # CodeSignTool/releases -- unzip and point $env:CODESIGNTOOL_DIR
-#                                # at the extracted directory) rather than signtool.exe against a
-#                                # local cert store.
+#                                # CodeSignTool/releases -- the Windows *-windows.zip asset --
+#                                # unzip and point $env:CODESIGNTOOL_DIR at the extracted
+#                                # directory) rather than signtool.exe against a local cert
+#                                # store. CodeSignTool.bat bundles its own JDK, so no separate
+#                                # Java install is needed.
 #
 # Usage:
 #   pwsh ./scripts/build_installer.ps1
@@ -146,14 +148,14 @@ $McpbPath = "dist/${ProductName}-${Version}.mcpb"
 # Goes through eSigner CodeSignTool rather than signtool.exe against a local
 # cert store: the cert's private key lives only in eSigner's cloud HSM, so
 # there's no local .pfx/thumbprint for signtool to sign against. CodeSignTool
-# authenticates per call with the eSigner credential below and writes the
-# signed file into -output_dir_path, so each call signs into a scratch dir
-# and the result is moved back over $Path.
-$CodeSignOutDir = Join-Path ([System.IO.Path]::GetTempPath()) "privacyfence-codesigntool-out"
+# authenticates per call with the eSigner credential below; -override with no
+# -output_dir_path (per `CodeSignTool sign -h`) signs $Path in place.
 function Invoke-Signing([string]$Path) {
     if (-not $env:CODESIGNTOOL_DIR) { return }
     Write-Host "-> Signing $Path..."
-    New-Item -ItemType Directory -Force -Path $CodeSignOutDir | Out-Null
+    # CodeSignTool.bat resolves its own bundled JDK/jar via %CODE_SIGN_TOOL_PATH% (falling back to
+    # its own working directory otherwise) -- set it explicitly so this works regardless of $PWD.
+    $env:CODE_SIGN_TOOL_PATH = $env:CODESIGNTOOL_DIR
     $CodeSignTool = Join-Path $env:CODESIGNTOOL_DIR "CodeSignTool.bat"
     & $CodeSignTool sign `
         "-credential_id=$env:ES_CREDENTIAL_ID" `
@@ -161,10 +163,8 @@ function Invoke-Signing([string]$Path) {
         "-password=$env:ES_PASSWORD" `
         "-totp_secret=$env:ES_TOTP_SECRET" `
         "-input_file_path=$Path" `
-        "-output_dir_path=$CodeSignOutDir" `
         -override
     if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed on $Path" }
-    Move-Item -Force (Join-Path $CodeSignOutDir (Split-Path -Leaf $Path)) $Path
 }
 Invoke-Signing $MainExe
 Invoke-Signing $AliasExe

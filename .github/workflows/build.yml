@@ -296,24 +296,25 @@ jobs:
       # HSM, so this goes through SSL.com's CodeSignTool CLI (a Java tool) instead of
       # signtool.exe against a locally imported .pfx. See this repo's CLAUDE.md
       # "Releasing" section.
-      # windows-latest already ships several Temurin JDKs (see actions/runner-images) at
-      # JAVA_HOME_<major>_X64 -- no need to pull in actions/setup-java (a new third-party
-      # action this repo doesn't otherwise use) just to get a `java` on PATH.
-      - name: Set up Java (for eSigner CodeSignTool)
-        if: env.ESIGNER_CREDENTIAL_ID != ''
-        shell: pwsh
-        run: |
-          echo "JAVA_HOME=$env:JAVA_HOME_17_X64" >> $env:GITHUB_ENV
-          echo "$env:JAVA_HOME_17_X64\bin" >> $env:GITHUB_PATH
-
+      # CodeSignTool's Windows release zip bundles its own JDK (CodeSignTool.bat shells out to
+      # .\jdk-11.0.2\bin\java, never a system `java`), so there's no separate JDK/setup-java step
+      # needed here at all.
       - name: Install eSigner CodeSignTool
         if: env.ESIGNER_CREDENTIAL_ID != ''
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://github.com/SSLcom/CodeSignTool/releases/latest/download/CodeSignTool.zip" -OutFile "$env:RUNNER_TEMP\CodeSignTool.zip"
+          # CodeSignTool's release assets are versioned (e.g. CodeSignTool-v1.3.2-windows.zip) --
+          # there's no unversioned "CodeSignTool.zip" for a plain releases/latest/download URL to
+          # resolve -- so this looks up the actual latest-release asset name via the GitHub API
+          # instead of hardcoding a version.
+          $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/SSLcom/CodeSignTool/releases/latest" -Headers @{ "User-Agent" = "privacyfence-ci" }
+          $Asset = $Release.assets | Where-Object { $_.name -like "*-windows.zip" } | Select-Object -First 1
+          if (-not $Asset) { throw "Could not find a Windows CodeSignTool release asset in $($Release.tag_name)" }
+          Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile "$env:RUNNER_TEMP\CodeSignTool.zip"
+          # The zip extracts flat -- CodeSignTool.bat, jar/, jdk-11.0.2/ etc. all sit directly at
+          # its root, no wrapping folder -- so the destination itself is $env:CODESIGNTOOL_DIR.
           Expand-Archive -Path "$env:RUNNER_TEMP\CodeSignTool.zip" -DestinationPath "$env:RUNNER_TEMP\CodeSignTool"
-          $ExtractedDir = Get-ChildItem "$env:RUNNER_TEMP\CodeSignTool" -Directory | Select-Object -First 1
-          echo "CODESIGNTOOL_DIR=$($ExtractedDir.FullName)" >> $env:GITHUB_ENV
+          echo "CODESIGNTOOL_DIR=$env:RUNNER_TEMP\CodeSignTool" >> $env:GITHUB_ENV
 
       - name: Build installer
         env:
