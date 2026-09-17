@@ -7,6 +7,7 @@ isn't part of the installed ``privacyfence`` distribution.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "check_graphical_session_coverage.py"
@@ -68,11 +69,13 @@ class TestCheckAll:
             "windows-graphical-session.yml": _run(conclusion="failure", head_sha="bad"),
         }
 
-        def fake_fetch(repo, workflow, token):
+        def fake_fetch(repo, workflow, branch, token):
             assert repo == "privacyfence/privacyfence"
+            assert branch == "main"
             assert token == "test-token"
             return runs[workflow]
 
+        monkeypatch.setattr(check_graphical_session_coverage, "resolve_release_branch", lambda commit: "main")
         monkeypatch.setattr(check_graphical_session_coverage, "fetch_latest_completed_run", fake_fetch)
         monkeypatch.setattr(check_graphical_session_coverage, "is_ancestor", lambda sha, commit: True)
 
@@ -83,11 +86,29 @@ class TestCheckAll:
         assert len(warnings) == 1
         assert "windows-graphical-session.yml" in warnings[0]
 
+    def test_queries_the_resolved_release_branch_not_main(self, monkeypatch):
+        seen_branches = []
+
+        def fake_fetch(repo, workflow, branch, token):
+            seen_branches.append(branch)
+            return _run(conclusion="success")
+
+        monkeypatch.setattr(
+            check_graphical_session_coverage, "resolve_release_branch", lambda commit: "releases/4.1-dev"
+        )
+        monkeypatch.setattr(check_graphical_session_coverage, "fetch_latest_completed_run", fake_fetch)
+        monkeypatch.setattr(check_graphical_session_coverage, "is_ancestor", lambda sha, commit: True)
+
+        check_graphical_session_coverage.check_all("privacyfence/privacyfence", "deadbeef", "test-token")
+
+        assert seen_branches == ["releases/4.1-dev", "releases/4.1-dev"]
+
     def test_no_warnings_when_both_workflows_are_green_and_reachable(self, monkeypatch):
+        monkeypatch.setattr(check_graphical_session_coverage, "resolve_release_branch", lambda commit: "main")
         monkeypatch.setattr(
             check_graphical_session_coverage,
             "fetch_latest_completed_run",
-            lambda repo, workflow, token: _run(conclusion="success"),
+            lambda repo, workflow, branch, token: _run(conclusion="success"),
         )
         monkeypatch.setattr(check_graphical_session_coverage, "is_ancestor", lambda sha, commit: True)
 
@@ -100,9 +121,10 @@ class TestCheckAll:
     def test_fetch_error_is_reported_not_raised(self, monkeypatch):
         import urllib.error
 
-        def fake_fetch(repo, workflow, token):
+        def fake_fetch(repo, workflow, branch, token):
             raise urllib.error.URLError("boom")
 
+        monkeypatch.setattr(check_graphical_session_coverage, "resolve_release_branch", lambda commit: "main")
         monkeypatch.setattr(check_graphical_session_coverage, "fetch_latest_completed_run", fake_fetch)
 
         warnings = check_graphical_session_coverage.check_all(
@@ -113,8 +135,11 @@ class TestCheckAll:
         assert all("could not check" in message for message in warnings)
 
     def test_never_calls_is_ancestor_when_there_is_no_run(self, monkeypatch):
+        monkeypatch.setattr(check_graphical_session_coverage, "resolve_release_branch", lambda commit: "main")
         monkeypatch.setattr(
-            check_graphical_session_coverage, "fetch_latest_completed_run", lambda repo, workflow, token: None
+            check_graphical_session_coverage,
+            "fetch_latest_completed_run",
+            lambda repo, workflow, branch, token: None,
         )
 
         def fail_if_called(sha, commit):
@@ -127,6 +152,39 @@ class TestCheckAll:
         )
 
         assert len(warnings) == 2
+
+
+class TestResolveReleaseBranch:
+    def test_defaults_to_main_when_no_releases_branch_contains_the_commit(self, monkeypatch):
+        def fake_run(cmd, check, capture_output, text):
+            return subprocess.CompletedProcess(cmd, 0, stdout="origin/main\n", stderr="")
+
+        monkeypatch.setattr(check_graphical_session_coverage.subprocess, "run", fake_run)
+
+        assert check_graphical_session_coverage.resolve_release_branch("deadbeef") == "main"
+
+    def test_prefers_the_releases_branch_that_contains_the_commit(self, monkeypatch):
+        def fake_run(cmd, check, capture_output, text):
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="origin/main\norigin/releases/4.1-dev\n", stderr=""
+            )
+
+        monkeypatch.setattr(check_graphical_session_coverage.subprocess, "run", fake_run)
+
+        assert check_graphical_session_coverage.resolve_release_branch("deadbeef") == "releases/4.1-dev"
+
+    def test_uses_git_branch_contains_with_the_given_commit(self, monkeypatch):
+        seen_cmd = []
+
+        def fake_run(cmd, check, capture_output, text):
+            seen_cmd.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(check_graphical_session_coverage.subprocess, "run", fake_run)
+
+        check_graphical_session_coverage.resolve_release_branch("deadbeef")
+
+        assert seen_cmd == [["git", "branch", "-r", "--contains", "deadbeef", "--format=%(refname:short)"]]
 
 
 class TestIsAncestor:
