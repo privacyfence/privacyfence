@@ -2,14 +2,14 @@
 """Report (never gate) whether the graphical-session/autostart workflows have a green run behind
 this release tag -- privacyfence/privacyfence#374, option 1 ("Report, don't gate").
 
-`linux-graphical-session.yml` and `windows-graphical-session.yml` are the only automated coverage
-for the thing every desktop user depends on and nobody notices until it breaks: the daemon
-starting itself at login. They run on packaging-related `main` pushes, a weekly schedule, and
-manual dispatch -- never on a tag push, and never as a `needs:` of `build.yml`'s `finalize-release`
-job, because this tier's own runtime cost must not sit on a release's critical path (see
-docs/testing-policy.md's Layer 6 row and this repo's CLAUDE.md). That leaves a gap: a tag can ship
-with autostart broken as long as the last packaging-touching push to `main` was green and nothing
-since then re-ran either workflow.
+`linux-graphical-session.yml`, `windows-graphical-session.yml` and `macos-graphical-session.yml`
+are the only automated coverage for the thing every desktop user depends on and nobody notices
+until it breaks: the daemon starting itself at login. They run on packaging-related `main` pushes,
+a weekly schedule, and manual dispatch -- never on a tag push, and never as a `needs:` of
+`build.yml`'s `finalize-release` job, because this tier's own runtime cost must not sit on a
+release's critical path (see docs/testing-policy.md's Layer 6 row and this repo's CLAUDE.md). That
+leaves a gap: a tag can ship with autostart broken as long as the last packaging-touching push to
+`main` was green and nothing since then re-ran any of the three workflows.
 
 This script closes the "nobody looked" half of that gap without touching the "must not gate"
 half. For each workflow it reads the single most recent *completed* run on `main` and checks two
@@ -43,8 +43,8 @@ from typing import Any
 
 API_ROOT = "https://api.github.com"
 
-# The two workflows privacyfence/privacyfence#374 is about -- see module docstring.
-WORKFLOWS = ("linux-graphical-session.yml", "windows-graphical-session.yml")
+# The three workflows privacyfence/privacyfence#374 is about -- see module docstring.
+WORKFLOWS = ("linux-graphical-session.yml", "windows-graphical-session.yml", "macos-graphical-session.yml")
 
 
 def _get(url: str, token: str) -> Any:
@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"::warning::{message}")
     if not warnings:
         print(
-            "Autostart coverage (linux-graphical-session.yml, windows-graphical-session.yml) "
+            "Autostart coverage (" + ", ".join(WORKFLOWS) + ") "
             "is green and reachable from this release."
         )
 
