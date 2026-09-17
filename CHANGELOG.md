@@ -292,6 +292,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Policy v2 redesign, P3: a new `policy/engine.py`/`policy/compat.py` evaluator for auto-accept
+  rules, built on the P1 tool registry and P2 scope/condition selectors, now runs alongside the
+  existing `AutoAcceptEvaluator` on every gated call (`gate.py`, shadow mode). Nothing on disk
+  changes, and nothing about what auto-accepts changes by default: the existing evaluator keeps
+  deciding, and a disagreement between the two is logged once at `WARNING` (operation key, each
+  side's matched rule, a redacted context fingerprint — never call content) rather than acted on.
+  A new `policy.engine: v1 | v2` key in `config/settings.yaml` (default `v1`) is the switch for
+  when the new evaluator becomes authoritative instead; flipping it back to `v1` is the documented
+  rollback, no release needed.
+
 - A new `privacyfence_status` meta-tool: the one tool guaranteed to exist even on a fresh,
   un-onboarded install, so an empty or partial tool list reads as "not set up yet, here's how to
   fix that" instead of "PrivacyFence has nothing to do with this". Reports which connectors are

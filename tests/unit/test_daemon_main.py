@@ -3004,6 +3004,25 @@ class TestLoadPrincipalSettings:
         assert alice_verdict == "auto_accept"
         assert bob_verdict == "requires_review"
 
+    def test_registers_the_principals_own_policy_engine_version(self, tmp_path, monkeypatch):
+        """P3 of the policy v2 redesign: the same class of silent-inert bug the two tests above
+        cover for auto-accept rules -- without init_policy_engine_version() here, every org
+        principal's policy.engine setting would stay at its dataclass default ("v1") regardless
+        of what that principal's own settings.yaml said."""
+        from privacyfence import auto_accept, paths
+        from privacyfence.principal import Principal, principal_scope
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        config_dir = tmp_path / "users" / "alice" / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "settings.yaml").write_text(
+            yaml.safe_dump({"policy": {"engine": "v2"}}), encoding="utf-8",
+        )
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings()
+            assert auto_accept.get_policy_engine_version() == "v2"
+
     def test_populates_the_privacy_filter_registry_for_the_principal(self, tmp_path, monkeypatch):
         """#400 Phase 0: before this fix, privacy_filter._REGISTRY kept its
         default empty-dict entry for every principal but whichever one a

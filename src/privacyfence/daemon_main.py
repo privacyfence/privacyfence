@@ -87,7 +87,15 @@ from typing import Any
 import portalocker
 import yaml
 
-from . import __version__, audit_forwarding, org_bundle_signing, org_mode, privilege_separation, step_up_config
+from . import (
+    __version__,
+    audit_forwarding,
+    org_bundle_signing,
+    org_mode,
+    policy_engine_config,
+    privilege_separation,
+    step_up_config,
+)
 from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, current_principal
@@ -104,6 +112,7 @@ from .audit_log import (
 )
 from .auto_accept import (
     init_config_path,
+    init_policy_engine_version,
     migrate_telegram_search_operation_key,
     reload_rules,
 )
@@ -879,6 +888,11 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
       disagreement between the two meta-tools is the symptom this fixes).
       Fail-safe, never fail-open, but it made unattended sessions and
       auto-accept as a whole unusable for every org principal.
+    - ``init_policy_engine_version()`` (P3 of the policy v2 redesign) -- without it, every org
+      principal's ``_AutoAcceptState.policy_engine_version`` stayed at its dataclass default
+      (``"v1"``) regardless of what that principal's own ``settings.yaml`` said under
+      ``policy.engine``, the same class of silent-inert bug the ``reload_rules`` fix above
+      already covers for the rules themselves.
     - ``init_privacy_filter()`` (#400 Phase 0) -- without it, ``privacy_
       filter._REGISTRY`` (also a ``PrincipalRegistry``, see that module's
       docstring) kept its default empty-dict entry for every principal but
@@ -922,6 +936,7 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     cfg = load_config(_resolve_authority_path("config/settings.yaml"))
     init_config_path(_resolve_authority_path("config/settings.yaml"))
     reload_rules(build_effective_rules(cfg))
+    init_policy_engine_version(policy_engine_config.PolicyEngineConfig.from_local_config(cfg).engine)
     install_wide = install_wide_config if install_wide_config is not None else cfg
     init_privacy_filter(install_wide, org_managed=True)
     pii_config = install_wide.get("pii_detection", {}) or {}
@@ -1707,6 +1722,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
             logger.warning("Could not persist auto-accept config migration: %s", exc)
 
     reload_rules(build_effective_rules(config))
+    init_policy_engine_version(policy_engine_config.PolicyEngineConfig.from_local_config(config).engine)
     # Issue #151 retired the settings.yaml-configurable rule_suggestion_priority
     # (every matching auto-accept rule now gets its own "Always allow" button, so
     # there's nothing left to prioritize or exclude) and this function logged an
