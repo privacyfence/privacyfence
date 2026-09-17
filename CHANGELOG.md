@@ -633,6 +633,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   between browser saves: `apply_change` rewrites the whole file from its own in-memory copy, so any
   hand edit made since the daemon last loaded the file — including comments — is silently discarded
   the next time an admin saves from the browser, restarted or not.
+- Issue #428 B17: `linux-graphical-session.yml`'s path triggers never gained
+  `scripts/linux_privilege_separation.sh` or `installer/linux/**`, the way `windows-graphical-
+  session.yml` gained its own `.ps1` when B5c landed. A change to the Linux privilege-separation
+  script or the unit templates it renders is exactly the kind of change most likely to break
+  Linux autostart, and it now re-runs the only test that exercises it instead of waiting for the
+  next `main` push that happens to touch something else on the existing path list, or the weekly
+  schedule.
 
 ## [4.0.0] — 2026-09-14
 
