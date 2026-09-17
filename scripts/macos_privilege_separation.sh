@@ -128,6 +128,55 @@ resolve_owner() {
   [ -n "$OWNER_HOME" ] || die "could not resolve ${OWNER_USER}'s home directory"
 }
 
+# Mirrors ``privilege_separation._TRUSTED_POSIX_IMAGE_GROUP``: root's own
+# group, and the only one besides root itself this trusts to replace what
+# the daemon runs (B1). Deliberately not "admin" -- the group
+# /Applications is actually group-owned by, and whose members are exactly
+# the accounts this check exists to stop trusting; see that constant's own
+# comment for the full reasoning. Not cross-checked by TestInstallerContract
+# the way SERVICE_ACCOUNT/SERVICE_GROUP/SYSTEM_ROOT are, because this has no
+# Linux counterpart to compare against -- /opt is already dpkg-owned.
+TRUSTED_IMAGE_GROUP="wheel"
+
+# B1: nothing previously verified the daemon/companion image was not
+# user-writable before this elevates to it. ADR 0002 §5a used to claim
+# /Applications was root-owned the same way /opt is; it is actually
+# root:admin drwxrwxr-x, and a drag-installed .app is normally owned by the
+# installing user -- the same account the agent runs as. Walks $1 and every
+# directory on the way to it (a root-owned, unwritable executable still
+# isn't safe if the directory holding it can be emptied and refilled by
+# someone else) and dies naming every path that fails: owned by anyone but
+# root, or writable by world or by a group other than $TRUSTED_IMAGE_GROUP.
+# Mirrors ``privilege_separation._posix_image_problems()``, which
+# ``audit_layout()`` re-runs on every daemon start in case the install is
+# replaced in place after this check has already passed once.
+require_trusted_image() {
+  local path="$1" owner group mode image_problems=()
+  while :; do
+    if [ -e "$path" ]; then
+      owner="$(stat -f '%Su' "$path")"
+      group="$(stat -f '%Sg' "$path")"
+      mode="$(stat -f '%OLp' "$path")"
+      if [ "$owner" != "root" ]; then
+        image_problems+=("${path} is owned by '${owner}', not root")
+      elif [ "$(( 8#${mode} & 2 ))" -ne 0 ]; then
+        image_problems+=("${path} is world-writable (mode ${mode})")
+      elif [ "$(( 8#${mode} & 16 ))" -ne 0 ] && [ "$group" != "$TRUSTED_IMAGE_GROUP" ]; then
+        image_problems+=("${path} is group-writable by '${group}' (mode ${mode}) -- only ${TRUSTED_IMAGE_GROUP} is trusted")
+      fi
+    fi
+    [ "$path" = "/" ] && break
+    path="$(dirname "$path")"
+  done
+  if [ "${#image_problems[@]}" -gt 0 ]; then
+    local p
+    for p in "${image_problems[@]}"; do
+      warn "$p"
+    done
+    die "$1 is not safe to run as ${SERVICE_ACCOUNT} (B1) -- anyone who can rewrite it, or a directory on the path to it, can run code as that account. Fix the ownership/permissions named above, or install PrivacyFenceApp.app somewhere only root can write to."
+  fi
+}
+
 resolve_executables() {
   if [ -z "$DAEMON_EXECUTABLE" ] || [ -z "$COMPANION_EXECUTABLE" ]; then
     APP_PATH="${APP_PATH:-$DEFAULT_APP}"
@@ -140,6 +189,8 @@ resolve_executables() {
   # its own, so a separated install without one is a locked door. Refuse rather
   # than install half of ADR 0002's inversion.
   [ -x "$COMPANION_EXECUTABLE" ] || die "not executable: ${COMPANION_EXECUTABLE} -- a separated install needs the companion app (ADR 0002 decision 2)"
+  require_trusted_image "$DAEMON_EXECUTABLE"
+  require_trusted_image "$COMPANION_EXECUTABLE"
 }
 
 # ── Account provisioning ──────────────────────────────────────────────────────
