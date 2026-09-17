@@ -52,7 +52,16 @@ not merely *a* signed-in principal -- otherwise a second IdP account
 signing in through a leaked step-up link could authorize someone else's
 pending decision. See ``_StepUpAuthAttemptStore``/``stepup_callback``
 below.
-"""
+
+**The approval binder's own batch step-up (Phase 3 of the binder plan)**
+gates ``POST /api/approvals/batch/decide`` (Phase 2) on one WebAuthn
+assertion bound to the whole submitted set
+(``webauthn_stepup.batch_decision_fingerprint``), scoped to
+``current_principal()`` the same way everything else here is. Unlike this
+module's own single-decision ``_step_up_response``, its batch counterpart
+never offers the IdP-reauth fallback -- see ``_batch_step_up_response``'s
+own docstring for what that costs when nothing is enrolled and
+``require_passkey`` is off."""
 from __future__ import annotations
 
 import asyncio
@@ -91,6 +100,11 @@ _STEP_UP_ATTEMPT_TTL_SECONDS = 10 * 60
 
 # Only an *approving* decision needs step-up -- see module docstring.
 _STEP_UP_RESULTS = ("accept", "accept_all")
+
+# The batch decide endpoint's own vocabulary (approvals.BATCH_RESULTS) has
+# no "accept_all" -- see that constant's own comment -- so the approving
+# result step-up applies to is just this one.
+_BATCH_STEP_UP_RESULTS = ("accept",)
 
 
 # --------------------------------------------------------------------- #
@@ -232,6 +246,11 @@ def _tokens_css() -> str:
 
 def _render_list_page(rows: list, *, csrf: str, nonce: str) -> str:
     body = approval_list_html.build_list_html(rows, csrf=csrf, nonce=nonce)
+    # PF_WEBAUTHN_JS (approval binder Phase 3): needed here whenever
+    # Approve-selected's own 428 branch (approval_list_html.py's own JS)
+    # has to run a ceremony -- always injected, same reasoning
+    # show_approval's own shim below gives.
+    body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PrivacyFence -- Approvals</title>
@@ -420,13 +439,62 @@ def build_routes(
             return JSONResponse({"status": "already_decided"}, status_code=409)
         return JSONResponse({"status": "ok"})
 
+    def _batch_needs_step_up(principal: Principal, parsed: list[tuple[str, str]]) -> bool:
+        """The org-mode counterpart of web/routes_approvals.py's own
+        ``_batch_needs_step_up`` -- scoped to ``principal`` the same way
+        every other read here is, so another principal's id (an "unknown"
+        item, per ``answer_batch``) never contributes to this check."""
+        for approval_id, result in parsed:
+            if result not in _BATCH_STEP_UP_RESULTS:
+                continue
+            approval = registry.get(approval_id, principal_id=principal.id)
+            if (
+                approval is not None and approval.is_batchable()
+                and webauthn_stepup.is_step_up_required(
+                    gate_kind=approval.gate_kind, pii_detected=approval.pii_detected, scope=step_up.scope,
+                )
+            ):
+                return True
+        return False
+
+    def _batch_step_up_response(principal: Principal, batch_id: str, *, fingerprint: str) -> JSONResponse | None:
+        """The org-mode counterpart of web/routes_approvals.py's own
+        ``_batch_step_up_response`` -- deliberately no IdP-reauth fallback
+        even here, unlike this module's own single-decision
+        ``_step_up_response``: the binder plan's own Phase 3 text treats
+        this as a page-level ceremony (like web/routes_settings.py's
+        sensitive actions), not a per-card one, and a page-level step-up
+        never offered an IdP link either. That absence means this can't
+        lean on ``require_passkey`` being off to fall back to an IdP link
+        the way single-decision does -- with nothing enrolled and
+        ``require_passkey`` off, this returns ``None`` (mirroring local
+        mode's own evadable fall-through) rather than inventing a third
+        behavior the binder plan explicitly rejects."""
+        options_json = step_up_decide.begin_step_up(
+            principal, rp_id=step_up.rp_id, subject_key=f"batch:{batch_id}", fingerprint=fingerprint,
+            challenges=challenges,
+        )
+        if options_json is not None:
+            return JSONResponse(
+                {"error": "step_up_required", "batch_id": batch_id, "webauthn_options": json.loads(options_json)},
+                status_code=428,
+            )
+        if step_up.require_passkey:
+            return JSONResponse(
+                {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
+            )
+        return None
+
     async def batch_decide(request: Request) -> Response:
         """The org-mode counterpart of web/routes_approvals.py's own
         ``batch_decide`` -- see that module's own docstring for the shape
-        (Phase 2 of the binder plan; no step-up yet, that's Phase 3). Scoped
-        to ``current_principal()`` the same way every other read/write here
-        is (module docstring, §10.5): another principal's id reports
-        "unknown" via ``answer_batch``, never "exists but forbidden"."""
+        (Phase 2: the plain batch mechanics; Phase 3: one WebAuthn
+        assertion bound to the whole submitted set gates an approving
+        batch, mirrored here). Scoped to ``current_principal()`` the same
+        way every other read/write here is (module docstring, §10.5):
+        another principal's id reports "unknown" via ``answer_batch``,
+        never "exists but forbidden" -- including as an input to whether
+        step-up is even needed, see ``_batch_needs_step_up``."""
         principal = _current_principal(request)
         if principal is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -448,7 +516,37 @@ def build_routes(
             if not isinstance(item, dict) or not isinstance(item.get("id"), str) or item.get("result") not in BATCH_RESULTS:
                 return JSONResponse({"error": "invalid item"}, status_code=400)
             parsed.append((item["id"], item["result"]))
-        batch_id = uuid.uuid4().hex
+
+        raw_batch_id = payload.get("batch_id")
+        batch_id = raw_batch_id if isinstance(raw_batch_id, str) and raw_batch_id else uuid.uuid4().hex
+
+        if step_up.enabled and _batch_needs_step_up(principal, parsed):
+            if step_up.batch == "per_item":
+                return JSONResponse(
+                    {
+                        "error": "batch_step_up_per_item",
+                        "message": "This organization requires a separate passkey check per decision -- "
+                        "decide these individually instead of as a batch.",
+                    },
+                    status_code=400,
+                )
+            fingerprint = webauthn_stepup.batch_decision_fingerprint(principal_id=principal.id, items=parsed)
+            assertion = payload.get("webauthn_assertion")
+            if not isinstance(assertion, dict):
+                stepup_response = _batch_step_up_response(principal, batch_id, fingerprint=fingerprint)
+                if stepup_response is not None:
+                    return stepup_response
+            else:
+                try:
+                    step_up_decide.verify_step_up(
+                        principal, rp_id=step_up.rp_id, origin=origin, subject_key=f"batch:{batch_id}",
+                        fingerprint=fingerprint, assertion=assertion, challenges=challenges,
+                    )
+                except step_up_decide.StepUpExpired:
+                    return JSONResponse({"error": "step_up_expired"}, status_code=400)
+                except WebAuthnError as exc:
+                    return JSONResponse({"error": str(exc)}, status_code=401)
+
         results = registry.answer_batch(parsed, principal_id=principal.id, decided_via="binder", batch_id=batch_id)
         return JSONResponse({"batch_id": batch_id, "results": results})
 

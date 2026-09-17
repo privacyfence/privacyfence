@@ -52,6 +52,16 @@ class TestStepUpConfigFromOrgConfig:
             {"step_up": {"enabled": True, "require_passkey": True}},
         ).require_passkey is True
 
+    def test_batch_defaults_to_single_assertion_and_reads_per_item(self):
+        assert step_up_config.StepUpConfig.from_org_config({}).batch == "single_assertion"
+        assert step_up_config.StepUpConfig.from_org_config(
+            {"step_up": {"batch": "per_item"}},
+        ).batch == "per_item"
+
+    def test_invalid_batch_raises(self):
+        with pytest.raises(org_mode.ConfigurationError):
+            step_up_config.StepUpConfig.from_org_config({"step_up": {"batch": "something_else"}})
+
 
 class TestStepUpConfigFromLocalConfig:
     """#426 Phase 1: local mode's own entry point. Unlike org mode, ``rp_id``
@@ -84,6 +94,16 @@ class TestStepUpConfigFromLocalConfig:
     def test_invalid_scope_raises(self):
         with pytest.raises(org_mode.ConfigurationError):
             step_up_config.StepUpConfig.from_local_config({"step_up": {"scope": "everything"}})
+
+    def test_batch_defaults_to_single_assertion_and_reads_per_item(self):
+        assert step_up_config.StepUpConfig.from_local_config({}).batch == "single_assertion"
+        assert step_up_config.StepUpConfig.from_local_config(
+            {"step_up": {"batch": "per_item"}},
+        ).batch == "per_item"
+
+    def test_invalid_batch_raises(self):
+        with pytest.raises(org_mode.ConfigurationError):
+            step_up_config.StepUpConfig.from_local_config({"step_up": {"batch": "something_else"}})
 
     def test_non_dict_section_is_treated_as_absent(self):
         config = step_up_config.StepUpConfig.from_local_config({"step_up": "nonsense"})
@@ -156,6 +176,7 @@ class TestLiveStepUpConfig:
     def test_reads_mirror_the_initial_config(self):
         initial = step_up_config.StepUpConfig(
             enabled=False, scope="writes", rp_id="localhost", rp_name="PrivacyFence", require_passkey=False,
+            batch="per_item",
         )
         live = step_up_config.LiveStepUpConfig(initial)
         assert live.enabled is False
@@ -163,6 +184,7 @@ class TestLiveStepUpConfig:
         assert live.rp_id == "localhost"
         assert live.rp_name == "PrivacyFence"
         assert live.require_passkey is False
+        assert live.batch == "per_item"
 
     def test_update_is_visible_to_every_subsequent_read(self):
         live = step_up_config.LiveStepUpConfig(step_up_config.StepUpConfig())

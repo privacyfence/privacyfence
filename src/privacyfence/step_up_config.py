@@ -36,8 +36,20 @@ from typing import Any, Literal
 from .org_mode import ConfigurationError
 
 StepUpScope = Literal["writes", "writes_and_pii_reads"]
+StepUpBatchMode = Literal["single_assertion", "per_item"]
 
 DEFAULT_STEP_UP_SCOPE: StepUpScope = "writes"
+# The approval binder's own knob (Phase 3 of the binder plan): "single_
+# assertion" is one bound WebAuthn ceremony over the whole selected set
+# (webauthn_stepup.batch_decision_fingerprint) -- the whole point of the
+# binder, and the default. "per_item" is the escape hatch for an install
+# that wants no single prompt to ever cover more than one decision: the
+# batch decide endpoint refuses outright to release anything that needs
+# step-up (nothing applied), rather than silently downgrading to one
+# assertion per item within the same request -- see web/routes_approvals.py's
+# own batch_decide for exactly what that refusal looks like. Deny-only
+# batches are unaffected either way, since denying never needs step-up.
+DEFAULT_STEP_UP_BATCH_MODE: StepUpBatchMode = "single_assertion"
 DEFAULT_RP_NAME = "PrivacyFence"
 # WebAuthn treats "localhost" as a secure context even over plain HTTP
 # (web/server.py already binds local mode's own embedded server to the
@@ -93,6 +105,11 @@ class StepUpConfig:
     rp_id: str = ""
     rp_name: str = DEFAULT_RP_NAME
     require_passkey: bool = False
+    # The approval binder's own batch-decide knob -- see
+    # DEFAULT_STEP_UP_BATCH_MODE's own comment. One key, one meaning, in
+    # both modes -- the same reasoning every other field on this class
+    # already gives for living here instead of duplicated per mode.
+    batch: StepUpBatchMode = DEFAULT_STEP_UP_BATCH_MODE
 
     @staticmethod
     def from_org_config(org_config: dict[str, Any], *, default_rp_id: str = "") -> "StepUpConfig":
@@ -104,12 +121,19 @@ class StepUpConfig:
                 f"org_config.json's \"step_up\".\"scope\" must be \"writes\" or "
                 f"\"writes_and_pii_reads\", got {scope!r}"
             )
+        batch = raw.get("batch", DEFAULT_STEP_UP_BATCH_MODE)
+        if batch not in ("single_assertion", "per_item"):
+            raise ConfigurationError(
+                f"org_config.json's \"step_up\".\"batch\" must be \"single_assertion\" or "
+                f"\"per_item\", got {batch!r}"
+            )
         return StepUpConfig(
             enabled=bool(raw.get("enabled", False)),
             scope=scope,
             rp_id=raw.get("rp_id", "") or default_rp_id,
             rp_name=raw.get("rp_name", DEFAULT_RP_NAME) or DEFAULT_RP_NAME,
             require_passkey=bool(raw.get("require_passkey", False)),
+            batch=batch,
         )
 
     def local_enrollment_banner(self, *, has_credentials: bool) -> str | None:
@@ -177,12 +201,19 @@ class StepUpConfig:
                 f"config/settings.yaml's \"step_up\".\"scope\" must be \"writes\" or "
                 f"\"writes_and_pii_reads\", got {scope!r}"
             )
+        batch = raw.get("batch", DEFAULT_STEP_UP_BATCH_MODE)
+        if batch not in ("single_assertion", "per_item"):
+            raise ConfigurationError(
+                f"config/settings.yaml's \"step_up\".\"batch\" must be \"single_assertion\" or "
+                f"\"per_item\", got {batch!r}"
+            )
         return StepUpConfig(
             enabled=bool(raw.get("enabled", False)),
             scope=scope,
             rp_id=raw.get("rp_id", "") or DEFAULT_LOCAL_RP_ID,
             rp_name=raw.get("rp_name", DEFAULT_RP_NAME) or DEFAULT_RP_NAME,
             require_passkey=bool(raw.get("require_passkey", False)),
+            batch=batch,
         )
 
 
@@ -255,6 +286,11 @@ class LiveStepUpConfig:
         with self._lock:
             return self._current.require_passkey
 
+    @property
+    def batch(self) -> StepUpBatchMode:
+        with self._lock:
+            return self._current.batch
+
     def local_enrollment_banner(self, *, has_credentials: bool) -> str | None:
         with self._lock:
             current = self._current
@@ -277,8 +313,10 @@ class LiveStepUpConfig:
 __all__ = [
     "DEFAULT_LOCAL_RP_ID",
     "DEFAULT_RP_NAME",
+    "DEFAULT_STEP_UP_BATCH_MODE",
     "DEFAULT_STEP_UP_SCOPE",
     "LiveStepUpConfig",
+    "StepUpBatchMode",
     "StepUpConfig",
     "StepUpScope",
 ]
