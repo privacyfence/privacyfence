@@ -312,6 +312,26 @@ def create_app(
                 status_code=200,
                 headers={"Cache-Control": "no-store"},
             )
+        if not card.html:
+            # Registered, but not yet rendered: card HTML is only built
+            # inside gate.py's _popup_executor (build_card_html runs from
+            # within show_popup/show_read_popup, on that worker thread), so
+            # a card whose worker hasn't been scheduled yet has card.html ==
+            # "". Past _popup_executor's worker count, that's routine, not
+            # exceptional -- _inject_shim below assumes a real document
+            # (its first statement is html.index("</head>")), so serve a
+            # placeholder instead of letting that raise into a 500. The list
+            # page's own SSE stream already re-renders every ~1s, so a
+            # human landing here early just needs a moment.
+            return HTMLResponse(
+                "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"2\">"
+                "</head><body style=\"font:15px sans-serif;padding:40px\">"
+                "Preparing this request — it will be ready in a moment. "
+                "<a href=\"/approvals\">Back to approvals</a>"
+                "</body></html>",
+                status_code=200,
+                headers={"Cache-Control": "no-store"},
+            )
         csrf = request.cookies.get(_SESSION_COOKIE, "")
         # SEC-08: card.html
         # was rendered once, at approval-creation time -- long before this

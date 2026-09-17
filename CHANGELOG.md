@@ -335,6 +335,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- An approval that resolved without a human clicking a button — its pending TTL lapsing
+  (`pop_expired_events()`), or an auto-accept rule appearing while it was still waiting
+  (`reevaluate_all()`) — no longer leaks the worker thread that was blocked showing its card.
+  `approvals.PendingApproval.finalize()`/`pop_expired_events()` used to set only the
+  approval-level `finalize_event`, never the UI-step `event` that `web_prompt.block_on_card`
+  actually blocks on (only a human's decision, via `answer()`, ever set that one) — so the
+  `gate.py` popup-executor worker driving that card's interaction never returned. Eight such
+  approvals (the executor's worker count) and the daemon could no longer render any approval
+  card at all, without a restart. Both paths now wake the UI step too; the interaction's own
+  eventual `finalize()` call is a harmless no-op once the real outcome is already recorded.
+- `GET /approvals/{id}` no longer 500s for a genuinely pending approval whose card hasn't been
+  rendered yet. Card HTML is only built on `gate.py`'s dedicated popup executor (`build_card_html`
+  runs from inside `show_popup`/`show_read_popup`, on that worker thread); once every worker is
+  occupied showing an earlier card, a newly registered approval is listed and decidable but its
+  `card.html` is still `""`, which crashed `_inject_shim`'s `html.index("</head>")`. The card page
+  now serves a "preparing this request" placeholder that auto-refreshes instead, in both local
+  mode (`web/routes_approvals.py`) and org mode (`web/routes_org_approvals.py`).
 - Org mode: restarting the daemon no longer forces every connected MCP client through a full
   browser sign-in. The OAuth refresh tokens `/mcp` clients hold are now persisted across a
   restart, so the ordinary silent-refresh path survives one and a client re-authenticates with

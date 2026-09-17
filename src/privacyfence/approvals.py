@@ -431,6 +431,18 @@ class PendingApprovalRegistry:
             if approval.dedupe_key is not None:
                 approval.ledger_expires_at = approval.decided_at + self.ledger_ttl
             approval.finalize_event.set()
+            # Also wake the UI step: a finalize that didn't go through
+            # answer() (pop_expired_events()'s own TTL sweep, or
+            # reevaluate_all() below finding a rule that now covers this)
+            # otherwise leaves any thread blocked in web_prompt.block_on_card
+            # -- gate.py's _run_in_popup_executor worker showing this exact
+            # card -- waiting on card.event.wait() forever, since only
+            # PendingApproval.answer() ever set that event before this fix.
+            # block_on_card already maps a result outside CARD_RESULTS to
+            # "deny", and finalize() is idempotent, so the woken worker's own
+            # eventual finalize() call is a harmless no-op: this call's real
+            # final_decision (e.g. "expired"/"auto_accepted") stands.
+            approval.event.set()
             return True
 
     def consume_ledger(self, dedupe_key: str) -> tuple[str, str, float] | None:
@@ -618,6 +630,12 @@ class PendingApprovalRegistry:
                 approval.final_decision = "expired"
                 approval.decided_at = now
                 approval.finalize_event.set()
+                # See finalize()'s own comment: this sweep resolves the whole
+                # approval directly rather than through finalize(), so it has
+                # to wake the UI-step event itself too, or a worker thread
+                # blocked showing this exact card (web_prompt.block_on_card)
+                # never returns.
+                approval.event.set()
                 if approval.dedupe_key is not None:
                     self._by_key.pop((approval.principal_id, approval.dedupe_key), None)
                 expired.append(approval)
