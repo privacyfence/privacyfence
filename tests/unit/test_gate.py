@@ -2311,6 +2311,16 @@ class TestManyPendingApprovalsAreAllReviewable:
         approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
         monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
         monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+        # What this test is actually proving is executor sizing, not PII
+        # detection -- the real regex scan is CPU-bound, GIL-holding work,
+        # and running 20 of them concurrently via asyncio.to_thread's
+        # default pool is exactly the kind of thing that gets dramatically
+        # slower under real contention on a loaded/weaker CI runner
+        # (observed: over 150s on Windows and macOS specifically, while
+        # every Linux job stays under a few seconds). Stubbing it out
+        # removes that variance at its source instead of chasing an ever
+        # larger timeout for a cost this test never needed to pay.
+        monkeypatch.setattr(gate, "detect_pii_categories", lambda text: [])
         # Sized to the registry's own max_pending -- exactly the
         # relationship daemon_main.py's configure_popup_executor() call
         # establishes for the real executor -- so this proves the sizing
