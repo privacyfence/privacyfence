@@ -255,6 +255,11 @@ class PlatformLayout:
     #: How the daemon is *supposed* to be started on a separated install --
     #: the thing to do instead of whatever produced a wrong-account process.
     start_command: str
+    #: How to stop the daemon on a separated install -- what the control
+    #: channel's own ``QUIT`` refuses in its place (#428 Phase 4 / B4):
+    #: once the daemon is a system service, only its service manager gets
+    #: to stop it, not a line on a socket the agent shares a group with.
+    stop_command: str
 
 
 # #428 P4 ships per platform (B5a/B5b/B5c) rather than as one "x3 platforms"
@@ -270,6 +275,7 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
         installer="scripts/macos_privilege_separation.sh",
         status_command="sudo scripts/macos_privilege_separation.sh status",
         start_command="sudo launchctl kickstart -k system/com.privacyfence.daemon",
+        stop_command="sudo launchctl bootout system/com.privacyfence.daemon",
     ),
     "linux": PlatformLayout(
         system_root=LINUX_SYSTEM_ROOT,
@@ -278,6 +284,7 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
         installer="scripts/linux_privilege_separation.sh",
         status_command="sudo privacyfence-privilege-separation status",
         start_command="sudo systemctl restart privacyfence-daemon.service",
+        stop_command="sudo systemctl stop privacyfence-daemon.service",
     ),
     "win32": PlatformLayout(
         system_root=WINDOWS_SYSTEM_ROOT,
@@ -302,6 +309,7 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
             '"$env:ProgramFiles\\PrivacyFence\\privilege-separation.ps1" status'
         ),
         start_command=f"sc.exe start {WINDOWS_SERVICE_NAME}",
+        stop_command=f"sc.exe stop {WINDOWS_SERVICE_NAME}",
     ),
 }
 
