@@ -2284,6 +2284,14 @@ class TestManyPendingApprovalsAreAllReviewable:
     fix only covered for that with a placeholder page, it didn't remove the
     underlying stall (see gate.py's own _popup_executor comment)."""
 
+    # Overrides pyproject.toml's global 30s pytest-timeout: 20 concurrent
+    # gated_call()s each running a real PII scan and a full audit-log scan
+    # is measurably slower under CI's coverage-instrumented run than
+    # locally, and this test's own cleanup (below) needs enough headroom
+    # that pytest-timeout's SIGALRM can never fire *during* it -- an
+    # interrupted cleanup would leave exactly the leaked-thread problem
+    # this test exists to catch, just via a different trigger.
+    @pytest.mark.timeout(60)
     async def test_past_the_old_literal_eight_every_approval_still_gets_rendered(self, monkeypatch, audit_dir):
         from concurrent.futures import ThreadPoolExecutor
 
@@ -2309,17 +2317,39 @@ class TestManyPendingApprovalsAreAllReviewable:
             for i in range(n)
         ]
         try:
-            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=2.0)
+            # Generous timeout: 20 concurrent gated_call()s each doing a
+            # real PII scan and a full audit-log scan is measurably slower
+            # under CI's coverage-instrumented run than locally.
+            assert await wait_until_async(lambda: len(registry.list_pending()) == n, timeout=8.0)
             # The actual regression: every one of these must have real card
             # HTML, not merely be registered and listed -- a worker-starved
             # approval sits at html == "" forever.
-            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=2.0)
+            assert await wait_until_async(lambda: all(a.html for a in registry.list_pending()), timeout=8.0)
         finally:
-            for approval in registry.list_pending():
-                registry.answer(approval.id, "deny")
-            for t in tasks:
-                with contextlib.suppress(RuntimeError):
-                    await t
+            # Registration races the event loop (each call does its own PII
+            # scan / audit-log scan via asyncio.to_thread before it ever
+            # reaches register_or_coalesce), so if either assert above timed
+            # out, some of the n calls may still not have registered yet --
+            # a single snapshot-and-deny here (this test's own first draft)
+            # would miss whichever ones show up a moment later, leaving
+            # their _run_in_popup_executor worker blocked on
+            # card.event.wait() forever: a leaked non-daemon thread the
+            # whole process then hangs on at interpreter shutdown, well
+            # after pytest itself has already printed its final result.
+            # Draining in a loop until every task has actually finished
+            # closes that race instead of just narrowing it.
+            deadline = time.monotonic() + 15.0
+            while not all(t.done() for t in tasks) and time.monotonic() < deadline:
+                for approval in registry.list_pending():
+                    registry.answer(approval.id, "deny")
+                await asyncio.sleep(0.01)
+            # One bounded wait for whatever's left, rather than a per-task
+            # loop that could add up to minutes if something is still stuck
+            # -- anything still running past this is cancelled rather than
+            # awaited further, so this step can't itself run long.
+            _, still_pending = await asyncio.wait(tasks, timeout=5.0)
+            for t in still_pending:
+                t.cancel()
             test_executor.shutdown(wait=False)
 
 
