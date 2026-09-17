@@ -12,6 +12,7 @@ import pytest
 
 from privacyfence.approvals import (
     ALL_APPROVAL_KINDS,
+    LedgerHit,
     PendingApprovalRegistry,
     TooManyPendingApprovalsError,
     _BATCHABLE_KINDS,
@@ -167,7 +168,7 @@ class TestAnswerVsFinalize:
         assert registry.finalize(approval.id, "accept", "some_rule") is True
         assert approval.is_finalized()
         hit = registry.consume_ledger("k1")
-        assert hit == ("accept", "some_rule", approval.decided_at)
+        assert hit == LedgerHit(decision="accept", rule_name="some_rule", decided_at=approval.decided_at)
 
     def test_answer_is_idempotent_first_wins(self):
         registry = make_registry()
@@ -570,7 +571,7 @@ class TestPrincipalDimension:
                 dedupe_key="same-key", connector="c", tool="t", gate_kind="popup", request_id="r1",
             )
             registry.finalize(approval.id, "accept")
-            assert registry.consume_ledger("same-key") == ("accept", "", approval.decided_at)
+            assert registry.consume_ledger("same-key") == LedgerHit(decision="accept", rule_name="", decided_at=approval.decided_at)
         with principal_scope(Principal(id="bob")):
             # Bob issuing the identical call must not see Alice's decision.
             assert registry.consume_ledger("same-key") is None

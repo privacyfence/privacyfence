@@ -835,3 +835,119 @@ class TestStepUpBridgeShim:
         assert "webauthn_assertion" in r.text
         web_ui.resolve(card.id, "deny")
         t.join(timeout=2)
+
+
+class TestBatchDecide:
+    """Phase 2 of the approval binder plan: ``POST /api/approvals/batch/
+    decide`` -- approve or deny a selected set in one request. No step-up
+    here yet (that's Phase 3, layered onto this same endpoint once a
+    single bound assertion can cover the whole set); this covers only the
+    plain batch mechanics and their own auth posture."""
+
+    def test_a_mixed_batch_applies_each_item_and_reports_its_own_outcome(self, client, sessions, web_ui):
+        session_id = _signed_in(client, sessions)
+        accept_me = _register(web_ui, dedupe_key="k1")
+        deny_me = _register(web_ui, dedupe_key="k2")
+        already_decided = _register(web_ui, dedupe_key="k3")
+        web_ui.resolve(already_decided.id, "accept")  # decided elsewhere, before the batch is submitted
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id,
+            "items": [
+                {"id": accept_me.id, "result": "accept"},
+                {"id": deny_me.id, "result": "deny"},
+                {"id": already_decided.id, "result": "accept"},
+                {"id": "does-not-exist", "result": "accept"},
+            ],
+        })
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["results"] == [
+            {"id": accept_me.id, "outcome": "applied"},
+            {"id": deny_me.id, "outcome": "applied"},
+            {"id": already_decided.id, "outcome": "already_decided"},
+            {"id": "does-not-exist", "outcome": "unknown"},
+        ]
+        assert accept_me.result == "accept"
+        assert deny_me.result == "deny"
+        # Audit provenance (Phase 2): every item this batch actually
+        # applied is stamped with the same server-minted batch id --
+        # already_decided/unknown items were never touched by it.
+        assert accept_me.decided_via == "binder"
+        assert deny_me.decided_via == "binder"
+        assert accept_me.batch_id == deny_me.batch_id == body["batch_id"]
+
+    def test_a_non_batchable_item_reports_not_batchable_and_is_left_untouched(self, client, sessions, web_ui):
+        session_id = _signed_in(client, sessions)
+        confirm = web_ui.deferred_registry.register_confirm()
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": confirm.id, "result": "accept"}],
+        })
+
+        assert r.status_code == 200
+        assert r.json()["results"] == [{"id": confirm.id, "outcome": "not_batchable"}]
+        assert not confirm.event.is_set()
+
+    def test_wrong_csrf_is_unauthorized(self, client, sessions, web_ui):
+        _signed_in(client, sessions)
+        approval = _register(web_ui)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": "not-the-real-token", "items": [{"id": approval.id, "result": "accept"}],
+        })
+        assert r.status_code == 401
+        assert not approval.event.is_set()
+
+    def test_cross_origin_request_is_rejected(self, client, sessions, web_ui):
+        session_id = _signed_in(client, sessions)
+        approval = _register(web_ui)
+        r = client.post(
+            "/api/approvals/batch/decide",
+            json={"csrf": session_id, "items": [{"id": approval.id, "result": "accept"}]},
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert r.status_code == 403
+        assert not approval.event.is_set()
+
+    def test_oversize_batch_is_rejected_with_nothing_applied(self):
+        # A small max_pending (default caps are 20/50, too many
+        # approvals to register just to exceed it) makes the size check
+        # itself easy to hit without also tripping the per-principal cap.
+        from privacyfence.approvals import PendingApprovalRegistry
+
+        registry = PendingApprovalRegistry(max_pending=3, max_pending_per_principal=3)
+        web_ui = WebApprovalUI(registry=registry)
+        sessions = LocalSessionStore()
+        app = create_app(web_ui, sessions=sessions, step_up=StepUpConfig())
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        approvals = [_register(web_ui, dedupe_key=f"k{i}") for i in range(registry.max_pending)]
+        items = [{"id": a.id, "result": "accept"} for a in approvals] + [{"id": "extra", "result": "accept"}]
+
+        r = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": items})
+
+        assert r.status_code == 400
+        assert all(not a.event.is_set() for a in approvals)
+
+    def test_missing_items_is_rejected(self, client, sessions, web_ui):
+        session_id = _signed_in(client, sessions)
+        r = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": []})
+        assert r.status_code == 400
+
+    def test_an_invalid_item_result_is_rejected(self, client, sessions, web_ui):
+        session_id = _signed_in(client, sessions)
+        approval = _register(web_ui)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "accept_all"}],
+        })
+        assert r.status_code == 400
+        assert not approval.event.is_set()
+
+    def test_unauthenticated_request_is_rejected(self, client, web_ui):
+        approval = _register(web_ui)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": "whatever", "items": [{"id": approval.id, "result": "accept"}],
+        })
+        assert r.status_code == 401
+        assert not approval.event.is_set()

@@ -122,9 +122,17 @@ DEFAULT_MAX_PENDING_PER_PRINCIPAL = 20
 # button says that); it's finalize()'s own sentinel for "a rule appeared
 # that already covers this, so no human ever needed to answer" -- gate.py's
 # interaction driver returns it directly to finalize() without going through
-# answer() at all. See gate.py's module docstring.
+# answer() at all. See gate.py's own module docstring.
 CARD_RESULTS = ("accept", "deny", "accept_all")
 CONFIRM_RESULTS = ("confirm", "cancel")
+
+# The approval binder's own batch decide endpoint (Phase 2 of the binder
+# plan): a deliberately narrower vocabulary than CARD_RESULTS above --
+# "accept_all" needs its own scoped rule-creation confirmation (a second UI
+# step that only exists per-item), and is never offered from the list, so a
+# batch item is decided as a plain accept or a deny only. See
+# PendingApprovalRegistry.answer_batch's own docstring.
+BATCH_RESULTS = ("accept", "deny")
 
 # Approval binder (Phase 1 of docs/approval-list-ui-ux.md's future batching
 # work): every value PendingApproval.kind can take -- "card" (web_prompt.
@@ -253,8 +261,19 @@ class PendingApproval:
     decided_at: float | None = None
     ledger_expires_at: float | None = None
     ledger_consumed: bool = False
+    # Audit provenance for the approval binder's batch decide endpoint
+    # (Phase 2) -- "" for every ordinary single-decide answer, unchanged
+    # from before these fields existed. Stamped by answer() itself (not a
+    # separate setter) so it can never be set without also resolving the
+    # UI step it describes. Carried forward into LedgerHit by
+    # consume_ledger() below, and from there into the audit entry that
+    # actually releases the call -- see gate.py's own module docstring.
+    decided_via: str = ""
+    batch_id: str = ""
 
-    def answer(self, result: str, chosen_index: int | None = None) -> bool:
+    def answer(
+        self, result: str, chosen_index: int | None = None, *, decided_via: str = "", batch_id: str = "",
+    ) -> bool:
         """Resolve this UI step. Idempotent: the first answer wins (mirrors
         WebApprovalUI's pre-P3 ``resolve()``/§7.1's "first accepted decision
         wins")."""
@@ -262,6 +281,8 @@ class PendingApproval:
             return False
         self.result = result
         self.chosen_index_result = chosen_index
+        self.decided_via = decided_via
+        self.batch_id = batch_id
         self.event.set()
         return True
 
@@ -342,6 +363,24 @@ class PendingApproval:
             "expires_at": _iso(self.expires_at),
             "decided": self.is_finalized(),
         }
+
+
+@dataclass(frozen=True)
+class LedgerHit:
+    """consume_ledger()'s return value -- replaces a bare
+    ``(decision, rule_name, decided_at)`` 3-tuple so a fourth field could
+    be added (Phase 2 of the approval binder plan: ``decided_via``/
+    ``batch_id``, audit provenance for a decision released through the
+    binder's batch decide endpoint) without every existing positional
+    consumer silently misreading a field. ``decided_via``/``batch_id``
+    default to "" -- the ordinary decided-inline-or-via-single-decide
+    case's own shape, unchanged from before these two fields existed."""
+
+    decision: str
+    rule_name: str
+    decided_at: float
+    decided_via: str = ""
+    batch_id: str = ""
 
 
 class PendingApprovalRegistry:
@@ -479,7 +518,8 @@ class PendingApprovalRegistry:
     # ------------------------------------------------------------------ #
 
     def answer(
-        self, approval_id: str, result: str, chosen_index: int | None = None, *, principal_id: str | None = None,
+        self, approval_id: str, result: str, chosen_index: int | None = None, *,
+        principal_id: str | None = None, decided_via: str = "", batch_id: str = "",
     ) -> bool:
         """Resolve one UI step -- called by web/routes_approvals.py's/
         web/routes_org_approvals.py's decide endpoint when a human clicks a
@@ -490,14 +530,64 @@ class PendingApprovalRegistry:
         approval belonging to a *different* principal exactly as if it
         didn't exist -- §10.5's "every ... decision ... is authorized
         against current_principal()", defense in depth on top of the
-        approval id's own 128 bits of entropy."""
+        approval id's own 128 bits of entropy.
+
+        ``decided_via``/``batch_id`` (Phase 2 of the approval binder plan)
+        are "" for every ordinary single-decide caller, unchanged from
+        before these parameters existed -- only answer_batch() below
+        passes real values."""
         with self._lock:
             approval = self._pending.get(approval_id)
         if approval is None:
             return False
         if principal_id is not None and approval.principal_id != principal_id:
             return False
-        return approval.answer(result, chosen_index)
+        return approval.answer(result, chosen_index, decided_via=decided_via, batch_id=batch_id)
+
+    def answer_batch(
+        self, items: list[tuple[str, str]], *, principal_id: str | None = None,
+        decided_via: str = "", batch_id: str = "",
+    ) -> list[dict[str, str]]:
+        """The approval binder's own batch decide endpoint (Phase 2),
+        shared between web/routes_approvals.py and web/
+        routes_org_approvals.py so neither reimplements this classify-then-
+        answer sequence. ``items`` is ``(approval_id, result)`` pairs, each
+        ``result`` already validated by the caller to be one of
+        BATCH_RESULTS.
+
+        Returns one outcome per item, in submitted order, each
+        ``{"id": ..., "outcome": ...}`` where outcome is one of:
+
+        - ``"applied"`` -- this decision was just recorded.
+        - ``"already_decided"`` -- the UI step was already answered
+          (a rule resolved it, a duplicate id in the same batch, or a
+          genuine race with another decide) -- not an error.
+        - ``"unknown"`` -- no such approval, *or* it belongs to a
+          different principal (``principal_id`` given and mismatched) --
+          the two are indistinguishable, per every other read/write here
+          (module docstring, §10.5).
+        - ``"not_batchable"`` -- exists, belongs to this principal, but
+          isn't a plain batchable card (PendingApproval.is_batchable()) --
+          a confirm/choice dialog or a PII-forced card. Never silently
+          coerced into "applied" or "unknown".
+
+        Never raises for a bad item -- a batch partially applying is the
+        normal case (module docstring's own note), not a failure worth
+        aborting the rest of the batch over."""
+        reports: list[dict[str, str]] = []
+        for approval_id, result in items:
+            approval = self.get(approval_id, principal_id=principal_id)
+            if approval is None:
+                reports.append({"id": approval_id, "outcome": "unknown"})
+            elif not approval.is_batchable():
+                reports.append({"id": approval_id, "outcome": "not_batchable"})
+            elif self.answer(
+                approval_id, result, principal_id=principal_id, decided_via=decided_via, batch_id=batch_id,
+            ):
+                reports.append({"id": approval_id, "outcome": "applied"})
+            else:
+                reports.append({"id": approval_id, "outcome": "already_decided"})
+        return reports
 
     def finalize(self, approval_id: str, decision: str, rule_name: str = "") -> bool:
         """Resolve the whole approval -- called once, by gate.py's own
@@ -531,11 +621,11 @@ class PendingApprovalRegistry:
             approval.event.set()
             return True
 
-    def consume_ledger(self, dedupe_key: str) -> tuple[str, str, float] | None:
+    def consume_ledger(self, dedupe_key: str) -> LedgerHit | None:
         """A re-issued (or coalesced-and-since-finalized) identical call's
         first stop: is there already a decision on file for this exact
-        ``(connector, tool, args)``, *for the calling principal*? Returns
-        ``(decision, rule_name, decided_at)`` or None. Single-use entries
+        ``(connector, tool, args)``, *for the calling principal*? Returns a
+        LedgerHit or None. Single-use entries
         (writes) are removed on the read that consumes them; read-gate
         entries stay reusable until ``ledger_ttl`` (§5.4: "Read decisions...
         stay TTL-bounded and reusable... unchanged").
@@ -563,7 +653,12 @@ class PendingApprovalRegistry:
                 approval.ledger_consumed = True
                 del self._by_key[key]
                 self._pending.pop(approval_id, None)
-            return approval.final_decision, approval.final_rule_name, approval.decided_at
+            assert approval.final_decision is not None  # nosec B101  # is_finalized() already proved this
+            assert approval.decided_at is not None  # nosec B101  # set alongside final_decision, always together
+            return LedgerHit(
+                decision=approval.final_decision, rule_name=approval.final_rule_name,
+                decided_at=approval.decided_at, decided_via=approval.decided_via, batch_id=approval.batch_id,
+            )
 
     # ------------------------------------------------------------------ #
     # Waiting (gate.py's hold window)

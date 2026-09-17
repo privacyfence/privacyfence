@@ -2447,6 +2447,38 @@ class TestDeferredApprovalProtocol:
         # from this entry's own (later) write time -- §5.4.
         assert entries[1]["decided_at"]
 
+    async def test_reissued_call_after_a_binder_decision_audits_with_the_batch_id(self, monkeypatch, audit_dir):
+        # Phase 2 of the approval binder plan: a decision released through
+        # answer_batch()'s decided_via/batch_id stamping (approvals.py)
+        # survives finalize() -> consume_ledger()'s LedgerHit ->
+        # gate.py's own audit() closure, all the way into the audit entry
+        # that actually releases the re-issued call -- see gate.py's
+        # module docstring.
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+
+        first = await gate.gated_call(**base_kwargs(gate="review"))
+        assert first["status"] == "approval_pending"
+
+        approval = registry.get(first["approval_id"])
+        assert registry.answer(approval.id, "accept", decided_via="binder", batch_id="batch-123") is True
+        assert await wait_until_async(lambda: approval.final_decision is not None, timeout=2.0)
+
+        second = await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert second is FILTERED
+        entries = read_audit_entries(audit_dir)
+        decisions = [e["decision"] for e in entries]
+        assert decisions == ["approval_pending", "approved"]
+        assert entries[1]["decided_via"] == "binder"
+        assert entries[1]["batch_id"] == "batch-123"
+        # The pending entry never carries binder provenance -- there was
+        # no decision yet when it was written.
+        assert entries[0]["decided_via"] == ""
+        assert entries[0]["batch_id"] == ""
+
     async def test_write_gate_ledger_entry_is_single_use(self, monkeypatch, audit_dir):
         # D3: read decisions stay reusable within the ledger TTL; write
         # decisions don't -- a second identical write must re-gate, not

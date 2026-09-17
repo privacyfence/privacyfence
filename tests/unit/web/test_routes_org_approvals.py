@@ -289,6 +289,117 @@ class TestDecideWithoutStepUp:
         assert web_ui.deferred_registry.get(approval.id).result == "1"
 
 
+class TestBatchDecide:
+    """Phase 2 of the approval binder plan: the org-mode counterpart of
+    test_routes_approvals.py's own TestBatchDecide -- same mechanics, with
+    every read/write additionally scoped to current_principal() (module
+    docstring, §10.5). No step-up yet -- that's Phase 3."""
+
+    def test_a_mixed_batch_applies_each_item_and_reports_its_own_outcome(self):
+        app, sessions, web_ui = _app()
+        accept_me = _register(web_ui, ALICE, gate_kind="review", dedupe_key="k1")
+        deny_me = _register(web_ui, ALICE, gate_kind="review", dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id,
+            "items": [
+                {"id": accept_me.id, "result": "accept"},
+                {"id": deny_me.id, "result": "deny"},
+            ],
+        })
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["results"] == [
+            {"id": accept_me.id, "outcome": "applied"},
+            {"id": deny_me.id, "outcome": "applied"},
+        ]
+        assert accept_me.decided_via == "binder"
+        assert accept_me.batch_id == deny_me.batch_id == body["batch_id"]
+
+    def test_another_principals_id_reads_as_unknown_not_forbidden(self):
+        # §10.5: indistinguishable from a nonexistent id -- never "exists
+        # but you can't touch it".
+        app, sessions, web_ui = _app()
+        alices = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, BOB)
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": alices.id, "result": "accept"}],
+        })
+
+        assert r.status_code == 200
+        assert r.json()["results"] == [{"id": alices.id, "outcome": "unknown"}]
+        assert not alices.event.is_set()
+
+    def test_unauthenticated_request_is_rejected(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": "whatever", "items": [{"id": approval.id, "result": "accept"}],
+        })
+        assert r.status_code == 401
+
+    def test_wrong_csrf_is_rejected(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": "wrong", "items": [{"id": approval.id, "result": "accept"}],
+        })
+        assert r.status_code == 401
+        assert not approval.event.is_set()
+
+    def test_mismatched_origin_is_rejected(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post(
+            "/api/approvals/batch/decide",
+            json={"csrf": session_id, "items": [{"id": approval.id, "result": "accept"}]},
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert r.status_code == 403
+        assert not approval.event.is_set()
+
+    def test_oversize_batch_is_rejected_with_nothing_applied(self):
+        registry = PendingApprovalRegistry(max_pending=3, max_pending_per_principal=3)
+        app, sessions, web_ui = _app(web_ui=WebApprovalUI(registry=registry))
+        approvals = [_register(web_ui, ALICE, gate_kind="review", dedupe_key=f"k{i}") for i in range(3)]
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        items = [{"id": a.id, "result": "accept"} for a in approvals] + [{"id": "extra", "result": "accept"}]
+
+        r = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": items})
+
+        assert r.status_code == 400
+        assert all(not a.event.is_set() for a in approvals)
+
+    def test_missing_items_is_rejected(self):
+        app, sessions, web_ui = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": []})
+        assert r.status_code == 400
+
+    def test_an_invalid_item_result_is_rejected(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "accept_all"}],
+        })
+        assert r.status_code == 400
+        assert not approval.event.is_set()
+
+
 class TestStepUpScoping:
     """§10.6/D7: step-up is off by default, and even when enabled, applies
     only to approving decisions on writes (or PII reads, in the wider

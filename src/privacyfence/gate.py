@@ -432,31 +432,33 @@ async def _resolve_decision(
     pii_categories: list[str],
     claude_reason: str,
     interact: Any,
-) -> tuple[Any, str, float | None]:
+) -> tuple[Any, str, float | None, str, str]:
     """Shared plumbing for the review/popup gate branches: get a decision
     for this call, either by running ``interact`` (see each branch's own
     definition of it) directly, or -- when ``registry`` is not None --
     checking the decision ledger first, then registering (or coalescing
     onto) a pending approval and waiting up to ``registry.hold_window``.
 
-    Returns ``(decision, rule_name, decided_at)``. ``decision`` is one of
-    "accept"/"deny"/"accept_all"/"auto_accepted", or the module-level
-    ``_PENDING`` sentinel -- in which case ``rule_name`` is instead the
-    ``PendingApproval`` the caller should build a pending result from (see
-    each branch's own handling immediately after calling this).
-    ``decided_at`` is None unless this decision came from the registry
-    (either a ledger hit, or a live wait that resolved) -- the "no
-    registry" / legacy path never had a separate decide-then-release split
-    to time, so there is nothing new to report for it.
+    Returns ``(decision, rule_name, decided_at, decided_via, batch_id)``.
+    ``decision`` is one of "accept"/"deny"/"accept_all"/"auto_accepted", or
+    the module-level ``_PENDING`` sentinel -- in which case ``rule_name``
+    is instead the ``PendingApproval`` the caller should build a pending
+    result from (see each branch's own handling immediately after calling
+    this). ``decided_at`` is None unless this decision came from the
+    registry (either a ledger hit, or a live wait that resolved) -- the
+    "no registry" / legacy path never had a separate decide-then-release
+    split to time, so there is nothing new to report for it.
+    ``decided_via``/``batch_id`` (Phase 2 of the approval binder plan) are
+    "" unless the human decided this through the binder's batch decide
+    endpoint -- see approvals.PendingApproval's own fields.
     """
     if registry is None:
         decision, rule_name = await interact(None)
-        return decision, rule_name, None
+        return decision, rule_name, None, "", ""
 
     ledger_hit = registry.consume_ledger(dedupe_key)
     if ledger_hit is not None:
-        decision, rule_name, decided_at = ledger_hit
-        return decision, rule_name, decided_at
+        return ledger_hit.decision, ledger_hit.rule_name, ledger_hit.decided_at, ledger_hit.decided_via, ledger_hit.batch_id
 
     approval, created = registry.register_or_coalesce(
         dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind=gate_kind,
@@ -469,8 +471,8 @@ async def _resolve_decision(
 
     decided = await registry.wait_async(approval, registry.hold_window)
     if not decided:
-        return _PENDING, approval, None
-    return approval.final_decision, approval.final_rule_name, approval.decided_at
+        return _PENDING, approval, None, "", ""
+    return approval.final_decision, approval.final_rule_name, approval.decided_at, approval.decided_via, approval.batch_id
 
 
 async def _drive_interaction(registry: PendingApprovalRegistry, approval: PendingApproval, interact: Any) -> None:
@@ -911,7 +913,10 @@ async def gated_call(
     # one; the `finally` block below only steps in if none of them did.
     audited = False
 
-    def audit(*, decision: str, auto_accept_rule: str, pii_detected: bool, decided_at: float | None = None) -> None:
+    def audit(
+        *, decision: str, auto_accept_rule: str, pii_detected: bool, decided_at: float | None = None,
+        decided_via: str = "", batch_id: str = "",
+    ) -> None:
         nonlocal audited
         audited = True
         _audit(
@@ -921,6 +926,7 @@ async def gated_call(
             pii_categories=audit_pii_categories,
             pii_match_details=_pii_match_details_for_audit(audit_pii_matches, decision),
             claude_reason=claude_reason, decided_at=decided_at, delivery=delivery,
+            decided_via=decided_via, batch_id=batch_id,
         )
 
     try:
@@ -1012,7 +1018,7 @@ async def gated_call(
                     d = "accept"
                 return d, ""
 
-            decision, rule_name, decided_at = await _resolve_decision(
+            decision, rule_name, decided_at, decided_via, batch_id = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="review",
                 request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
                 operation_key=operation_key, ctx=ctx,
@@ -1027,7 +1033,7 @@ async def gated_call(
             if decision == "auto_accepted":
                 audit(
                     decision="auto_accepted", auto_accept_rule=rule_name, pii_detected=bool(pii_categories),
-                    decided_at=decided_at,
+                    decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
                 )
                 logger.info(
                     "Pending approval auto-accepted after a rule changed: %s/%s rule=%r",
@@ -1036,18 +1042,25 @@ async def gated_call(
                 return filtered_data
 
             if decision == "deny":
-                audit(decision="rejected", auto_accept_rule="", pii_detected=bool(pii_categories), decided_at=decided_at)
+                audit(
+                    decision="rejected", auto_accept_rule="", pii_detected=bool(pii_categories),
+                    decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
+                )
                 raise GateDeniedError("Request denied by user")
 
             if decision == "accept_all":
                 audit(
                     decision="accepted_via_accept_all", auto_accept_rule=rule_name,
                     pii_detected=bool(pii_categories), decided_at=decided_at,
+                    decided_via=decided_via, batch_id=batch_id,
                 )
                 logger.info("Always allow: created rule %r for %s", rule_name, operation_key)
                 return filtered_data
 
-            audit(decision="approved", auto_accept_rule="", pii_detected=bool(pii_categories), decided_at=decided_at)
+            audit(
+                decision="approved", auto_accept_rule="", pii_detected=bool(pii_categories), decided_at=decided_at,
+                decided_via=decided_via, batch_id=batch_id,
+            )
             return filtered_data
 
         else:
@@ -1126,7 +1139,7 @@ async def gated_call(
                         d = "accept"
                 return d, ""
 
-            decision, rule_name, decided_at = await _resolve_decision(
+            decision, rule_name, decided_at, decided_via, batch_id = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="popup",
                 request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
                 operation_key=operation_key, ctx=ctx,
@@ -1141,6 +1154,7 @@ async def gated_call(
             if decision == "auto_accepted":
                 audit(
                     decision="auto_accepted", auto_accept_rule=rule_name, pii_detected=False, decided_at=decided_at,
+                    decided_via=decided_via, batch_id=batch_id,
                 )
                 return filtered_data
 
@@ -1148,6 +1162,7 @@ async def gated_call(
                 audit(
                     decision="accepted_via_accept_all", auto_accept_rule=rule_name,
                     pii_detected=bool(upload_pii_categories), decided_at=decided_at,
+                    decided_via=decided_via, batch_id=batch_id,
                 )
                 logger.info("Always allow: created rule %r for %s", rule_name, operation_key)
                 return filtered_data
@@ -1163,6 +1178,7 @@ async def gated_call(
                     audit(
                         decision="accepted_via_temp_session", auto_accept_rule="session_temp_accept",
                         pii_detected=bool(upload_pii_categories), decided_at=decided_at,
+                        decided_via=decided_via, batch_id=batch_id,
                     )
                     logger.info(
                         "Allow once (also armed 5 min grace window): op=%s file=%s (%s, %s)",
@@ -1171,13 +1187,13 @@ async def gated_call(
                 else:
                     audit(
                         decision="approved", auto_accept_rule="", pii_detected=bool(upload_pii_categories),
-                        decided_at=decided_at,
+                        decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
                     )
                 return filtered_data
 
             audit(
                 decision="rejected", auto_accept_rule="", pii_detected=bool(upload_pii_categories),
-                decided_at=decided_at,
+                decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
             )
             raise GateDeniedError("Request denied by user")
     except asyncio.CancelledError:
@@ -1402,7 +1418,7 @@ def _default_details(raw_data: Any) -> str:
 def _audit(
     *, created_at, request_id, connector, tool, tool_name, summary, sender, decision, auto_accept_rule,
     pii_detected=False, pii_categories=None, pii_match_details="", claude_reason="", decided_at=None,
-    delivery="",
+    delivery="", decided_via="", batch_id="",
 ) -> None:
     try:
         get_audit_logger().record(AuditEntry(
@@ -1433,6 +1449,12 @@ def _audit(
             decided_at=(
                 datetime.fromtimestamp(decided_at, tz=timezone.utc).isoformat() if decided_at else ""
             ),
+            # decided_via/batch_id (Phase 2 of the approval binder plan):
+            # "" unless this decision was released through the binder's
+            # batch decide endpoint -- see approvals.PendingApproval's own
+            # fields and LedgerHit's own docstring for how they get here.
+            decided_via=decided_via,
+            batch_id=batch_id,
         ))
     except Exception as exc:
         logger.warning("Audit log write failed: %s", exc)
