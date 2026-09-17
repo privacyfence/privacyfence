@@ -220,6 +220,11 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+    env:
+      # Job-level alias so the "if:" conditions below can read it -- the secrets context isn't
+      # a recognized named-value inside a step's own "if:" expression (GitHub's workflow parser
+      # rejects `secrets.X != ''` there directly), only env is.
+      ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -292,14 +297,14 @@ jobs:
       # signtool.exe against a locally imported .pfx. See this repo's CLAUDE.md
       # "Releasing" section.
       - name: Set up Java (for eSigner CodeSignTool)
-        if: ${{ secrets.ESIGNER_CREDENTIAL_ID != '' }}
+        if: env.ESIGNER_CREDENTIAL_ID != ''
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Install eSigner CodeSignTool
-        if: ${{ secrets.ESIGNER_CREDENTIAL_ID != '' }}
+        if: env.ESIGNER_CREDENTIAL_ID != ''
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri "https://github.com/SSLcom/CodeSignTool/releases/latest/download/CodeSignTool.zip" -OutFile "$env:RUNNER_TEMP\CodeSignTool.zip"
