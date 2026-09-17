@@ -2287,14 +2287,15 @@ class TestManyPendingApprovalsAreAllReviewable:
     # Overrides pyproject.toml's global 30s pytest-timeout: 20 concurrent
     # gated_call()s each running a real PII scan and a full audit-log scan
     # is measurably slower under CI's coverage-instrumented run than
-    # locally -- slower still on the macOS runner specifically (observed:
-    # the 8s budget this test started with wasn't enough there even after
-    # the leaked-thread race below was fixed) -- and this test's own
+    # locally, and has been observed to vary by 2x+ between otherwise
+    # identical CI runs under real runner contention -- and this test's own
     # cleanup (below) needs enough headroom that pytest-timeout's SIGALRM
     # can never fire *during* it -- an interrupted cleanup would leave
     # exactly the leaked-thread problem this test exists to catch, just via
-    # a different trigger.
-    @pytest.mark.timeout(120)
+    # a different trigger. This is the real backstop against a genuine
+    # (non-racy) hang, since the cleanup loop below deliberately has none
+    # of its own.
+    @pytest.mark.timeout(180)
     async def test_past_the_old_literal_eight_every_approval_still_gets_rendered(self, monkeypatch, audit_dir):
         from concurrent.futures import ThreadPoolExecutor
 
@@ -2340,20 +2341,28 @@ class TestManyPendingApprovalsAreAllReviewable:
             # card.event.wait() forever: a leaked non-daemon thread the
             # whole process then hangs on at interpreter shutdown, well
             # after pytest itself has already printed its final result.
+            #
             # Draining in a loop until every task has actually finished
-            # closes that race instead of just narrowing it.
-            deadline = time.monotonic() + 30.0
-            while not all(t.done() for t in tasks) and time.monotonic() < deadline:
+            # closes that race -- deliberately with NO give-up deadline of
+            # its own. An earlier version gave up after a fixed window and
+            # cancelled whatever was left, which turned out to be worse
+            # than doing nothing: cancelling the *asyncio* task never stops
+            # the *OS thread* actually blocked in card.event.wait() (that
+            # block is inside a loop.run_in_executor() call, which -- like
+            # asyncio.to_thread -- doesn't propagate cancellation down to
+            # the thread), so under a slow enough CI run that deadline was
+            # observed to fire while approvals were still legitimately
+            # registering, reintroducing the exact leaked-thread hang this
+            # loop exists to prevent. Denying is cheap and always makes
+            # forward progress the moment an approval appears, so looping
+            # for as long as it actually takes is both correct and the only
+            # thing that's actually safe; pytest's own per-test timeout
+            # above is the real backstop against a genuine (non-racy) hang.
+            while not all(t.done() for t in tasks):
                 for approval in registry.list_pending():
                     registry.answer(approval.id, "deny")
                 await asyncio.sleep(0.01)
-            # One bounded wait for whatever's left, rather than a per-task
-            # loop that could add up to minutes if something is still stuck
-            # -- anything still running past this is cancelled rather than
-            # awaited further, so this step can't itself run long.
-            _, still_pending = await asyncio.wait(tasks, timeout=10.0)
-            for t in still_pending:
-                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             test_executor.shutdown(wait=False)
 
 
