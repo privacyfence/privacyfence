@@ -248,24 +248,30 @@ class TestRegisterVerify:
 
 
 class TestDeleteCredential:
-    def test_unauthenticated_redirects_to_login(self):
+    def test_unauthenticated_is_401(self):
+        # A JSON/fetch endpoint now (#426 Phase 3), not a plain form submit
+        # -- see module docstring -- so this is a clean 401, not org mode's
+        # own /login redirect (a fetch() wouldn't usefully follow that
+        # anyway).
         app, _sessions = _app()
-        r = _client(app).post("/security/credentials/Y3JlZC0x/delete", data={"csrf": "x"})
-        assert r.status_code == 302
-        assert r.headers["location"] == "/login?next=/security"
+        r = _client(app).post("/security/credentials/Y3JlZC0x/delete", json={"csrf": "x"})
+        assert r.status_code == 401
 
-    def test_removes_the_credential(self):
+    def test_removes_a_credential_when_another_remains(self):
+        # Not the *last* credential -- see TestDeleteLastCredentialRequiresStepUp
+        # below for the gated case.
         app, sessions = _app()
         wa.add_credential(ALICE, wa.WebAuthnCredential(
             credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
         ))
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0y", public_key="cGs2", sign_count=0, device_type="single_device", backed_up=False,
+        ))
         client = _client(app)
         session_id = _signed_in(client, sessions, ALICE)
-        r = client.post(
-            "/security/credentials/Y3JlZC0x/delete", data={"csrf": session_id},
-        )
-        assert r.status_code in (302, 303)
-        assert wa.list_credentials(ALICE) == []
+        r = client.post("/security/credentials/Y3JlZC0x/delete", json={"csrf": session_id})
+        assert r.status_code == 200
+        assert [c.credential_id for c in wa.list_credentials(ALICE)] == ["Y3JlZC0y"]
 
     def test_wrong_csrf_does_not_delete(self):
         app, sessions = _app()
@@ -274,7 +280,103 @@ class TestDeleteCredential:
         ))
         client = _client(app)
         _signed_in(client, sessions, ALICE)
-        r = client.post("/security/credentials/Y3JlZC0x/delete", data={"csrf": "wrong"})
+        r = client.post("/security/credentials/Y3JlZC0x/delete", json={"csrf": "wrong"})
+        assert r.status_code == 401
+        assert len(wa.list_credentials(ALICE)) == 1
+
+
+class TestDeleteLastCredentialRequiresStepUp:
+    """#426 Phase 3: removing your *only* enrolled passkey needs a fresh
+    assertion first, regardless of ``step_up.require_passkey`` -- see
+    module docstring. Mirrors test_routes_approvals.py's own
+    TestStepUpWebAuthnFlow."""
+
+    def test_malformed_json_body_is_treated_as_empty_not_a_crash(self):
+        # No csrf in an unparseable body -- rejected as unauthorized, same
+        # as every other route's malformed-body handling, not a 500.
+        app, sessions = _app()
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.post(
+            "/security/credentials/Y3JlZC0x/delete", content=b"not json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 401
+        assert len(wa.list_credentials(ALICE)) == 1
+
+    def test_unconfigured_rp_id_is_a_clean_400(self):
+        app, sessions = _app(step_up=StepUpConfig(rp_id="", rp_name="PrivacyFence"))
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/security/credentials/Y3JlZC0x/delete", json={"csrf": session_id})
+        assert r.status_code == 400
+        assert len(wa.list_credentials(ALICE)) == 1
+
+    def test_an_assertion_with_no_matching_pending_challenge_is_rejected(self):
+        app, sessions = _app()
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        # No prior 428 round-trip -- nothing pending in the delete-challenge
+        # store.
+        r = client.post("/security/credentials/Y3JlZC0x/delete", json={
+            "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+        })
+        assert r.status_code == 400
+        assert len(wa.list_credentials(ALICE)) == 1
+
+    def test_no_assertion_offers_webauthn_options(self):
+        app, sessions = _app()
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/security/credentials/Y3JlZC0x/delete", json={"csrf": session_id})
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+        assert wa.list_credentials(ALICE) != []
+
+    def test_valid_assertion_completes_the_deletion(self):
+        app, sessions = _app()
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        first = client.post("/security/credentials/Y3JlZC0x/delete", json={"csrf": session_id})
+        assert first.status_code == 428
+
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post("/security/credentials/Y3JlZC0x/delete", json={
+                "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert second.status_code == 200
+        assert wa.list_credentials(ALICE) == []
+
+    def test_a_failed_assertion_does_not_delete(self):
+        app, sessions = _app()
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        client.post("/security/credentials/Y3JlZC0x/delete", json={"csrf": session_id})
+        with patch.object(wa.webauthn, "verify_authentication_response", side_effect=ValueError("bad sig")):
+            r = client.post("/security/credentials/Y3JlZC0x/delete", json={
+                "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
         assert r.status_code == 401
         assert len(wa.list_credentials(ALICE)) == 1
 
@@ -320,9 +422,11 @@ class TestCrossPrincipalIsolation:
         # a CSRF-bypass attempt, it's Bob legitimately POSTing to delete a
         # credential_id that happens to belong to Alice's account, not his
         # own. remove_credential() must scope to Bob's own credential list
-        # regardless.
-        r = bob_client.post("/security/credentials/Y3JlZC0x/delete", data={"csrf": bob_session_id})
-        assert r.status_code in (302, 303)
+        # regardless -- and since Bob has *no* credentials of his own,
+        # is_last (module docstring) is false, so this never even reaches
+        # the step-up gate.
+        r = bob_client.post("/security/credentials/Y3JlZC0x/delete", json={"csrf": bob_session_id})
+        assert r.status_code == 200
         assert len(wa.list_credentials(ALICE)) == 1
         assert wa.list_credentials(ALICE)[0].credential_id == "Y3JlZC0x"
 
@@ -408,7 +512,17 @@ class TestLocalModeEnrollment:
         assert r.status_code == 200
         assert wa.list_credentials(LOCAL_PRINCIPAL)[0].label == "My Laptop"
 
+        # The only enrolled credential -- deleting it needs a fresh
+        # assertion first (#426 Phase 3, TestDeleteLastCredentialRequiresStepUp).
         cred_id = wa.list_credentials(LOCAL_PRINCIPAL)[0].credential_id
-        r = client.post(f"/security/credentials/{cred_id}/delete", data={"csrf": session_id})
-        assert r.status_code in (302, 303)
+        first = client.post(f"/security/credentials/{cred_id}/delete", json={"csrf": session_id})
+        assert first.status_code == 428
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            r = client.post(f"/security/credentials/{cred_id}/delete", json={
+                "csrf": session_id, "webauthn_assertion": {"id": cred_id},
+            })
+        assert r.status_code == 200
         assert wa.list_credentials(LOCAL_PRINCIPAL) == []

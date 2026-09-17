@@ -670,8 +670,10 @@ def build_app(
     ``WebServer``'s own ``host``/``port``, which this function has no other
     way to see. The same two values (#426 Phase 2) also gate
     ``create_approvals_app``'s own decide endpoint on a fresh WebAuthn
-    assertion -- one ``StepUpConfig``, read once here, drives both the
-    enrollment surface and the decide-time check.
+    assertion, and (#426 Phase 3) ``build_settings_routes``'s own sensitive
+    settings actions when ``step_up.require_passkey`` is on -- one
+    ``StepUpConfig``, read once here, drives the enrollment surface, the
+    decide-time check, and the settings-action check alike.
     """
     if org is not None:
         return _build_org_app(
@@ -694,7 +696,7 @@ def build_app(
     if controller is not None:
         extra_routes.extend(build_settings_routes(
             controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
-            notifications_detail=notifications_detail,
+            notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_issuer_url,
         ))
 
     # #426 Phase 1: mounted whenever step_up.rp_id is set -- which, unlike

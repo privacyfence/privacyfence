@@ -17,15 +17,21 @@ from __future__ import annotations
 import subprocess
 import time
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import sys
 
 import pytest
 from starlette.testclient import TestClient
 
-from privacyfence import daemon_main, resource_names, settings_controller as sc, update_checker
-from privacyfence.web.routes_settings import _ALLOWED_ACTIONS, create_app
+from privacyfence import daemon_main, paths, resource_names, settings_controller as sc, update_checker
+from privacyfence import webauthn_stepup as wa
+from privacyfence.principal import LOCAL_PRINCIPAL
+from privacyfence.step_up_config import StepUpConfig
+from privacyfence.web.routes_settings import _ALLOWED_ACTIONS, _NON_SENSITIVE_ACTIONS, _SENSITIVE_ACTIONS, create_app
 from privacyfence.web.session_auth import SESSION_COOKIE, LocalSessionStore
+
+ORIGIN = "http://localhost"
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -271,6 +277,166 @@ class TestActionDispatch:
         # invalid value is a silent no-op snapshot, not a 400 (the
         # segmented control only ever sends its own three literals).
         assert r.json()["general"]["notifications_detail"] == "standard"
+
+
+class TestSensitiveActionsCoverAllAllowedActions:
+    """#426 Phase 3's own allowlist-within-the-allowlist -- see module
+    docstring on why _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS are both
+    explicit rather than one being derived as the other's complement: a
+    future action landing in _ALLOWED_ACTIONS with no matching entry in
+    either set must fail here, not silently default to unclassified."""
+
+    def test_every_allowed_action_is_classified_sensitive_or_not(self):
+        assert _SENSITIVE_ACTIONS | _NON_SENSITIVE_ACTIONS == _ALLOWED_ACTIONS
+
+    def test_no_action_is_classified_as_both(self):
+        assert _SENSITIVE_ACTIONS & _NON_SENSITIVE_ACTIONS == frozenset()
+
+
+def _step_up_client(controller, sessions, *, step_up: StepUpConfig) -> TestClient:
+    app = create_app(controller, sessions=sessions, step_up=step_up, step_up_origin=ORIGIN)
+    return TestClient(app, base_url=ORIGIN)
+
+
+class TestSensitiveActionStepUp:
+    """#426 Phase 3: with ``step_up.require_passkey`` on, a sensitive action
+    (module docstring's ``_SENSITIVE_ACTIONS``) needs a fresh WebAuthn
+    assertion the same two-round-trip way web/routes_approvals.py's decide()
+    does; a non-sensitive one is untouched. Mirrors test_routes_approvals.py's
+    own TestRequirePasskeyHardFail/TestStepUpWebAuthnFlow."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _enroll(self):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def test_a_non_sensitive_action_is_never_gated(self, controller, sessions):
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/set_log_level", json={"level": "DEBUG", "csrf": csrf})
+        assert r.status_code == 200
+
+    def test_disabled_step_up_never_gates_a_sensitive_action(self, controller, sessions):
+        client = _step_up_client(controller, sessions, step_up=StepUpConfig(enabled=False, require_passkey=True))
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert r.status_code == 200
+
+    def test_require_passkey_off_never_gates_a_sensitive_action(self, controller, sessions):
+        client = _step_up_client(controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert r.status_code == 200
+
+    def test_no_credential_hard_fails_a_sensitive_action(self, controller, sessions):
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert r.status_code == 403
+        body = r.json()
+        assert body["error"] == "passkey_enrollment_required"
+        assert body["enroll_url"] == "/security"
+
+    def test_with_a_credential_offers_webauthn_options(self, controller, sessions):
+        self._enroll()
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+        # Not actually toggled yet -- the ceremony hasn't completed.
+        assert controller.snapshot()["general"]["pii_enabled"] is True
+
+    def test_a_valid_assertion_completes_a_sensitive_action(self, controller, sessions):
+        self._enroll()
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        first = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert first.status_code == 428
+
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post("/api/settings/toggle_pii_detection", json={
+                "csrf": csrf, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert second.status_code == 200
+        assert second.json()["general"]["pii_enabled"] is False
+
+    def test_an_assertion_for_a_different_action_is_rejected(self, controller, sessions):
+        # Fingerprint binding (mirrors webauthn_stepup.decision_fingerprint):
+        # a challenge minted for toggle_pii_detection cannot be reused to
+        # authorize toggle_pii_category.
+        self._enroll()
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        r = client.post("/api/settings/toggle_pii_category", json={
+            "category_key": "email", "csrf": csrf, "webauthn_assertion": {"id": "Y3JlZC0x"},
+        })
+        assert r.status_code == 400
+
+    def test_a_failed_assertion_does_not_apply_the_change(self, controller, sessions):
+        self._enroll()
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        with patch.object(wa.webauthn, "verify_authentication_response", side_effect=ValueError("bad sig")):
+            r = client.post("/api/settings/toggle_pii_detection", json={
+                "csrf": csrf, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert r.status_code == 401
+        assert controller.snapshot()["general"]["pii_enabled"] is True
+
+
+class TestRequirePasskeyBanner:
+    """#426 Phase 3: the settings page carries the same banner the
+    approvals list does -- see test_routes_approvals.py's own
+    TestRequirePasskeyBanner and step_up_config.py's
+    local_enrollment_banner()."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def test_banner_shown_when_require_passkey_unmet(self, controller, sessions):
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert '<div class="pf-shell-banner"' in r.text
+        assert "/security" in r.text
+
+    def test_no_banner_once_a_credential_is_enrolled(self, controller, sessions):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert '<div class="pf-shell-banner"' not in r.text
 
 
 class TestConnectorAuthenticationEndToEnd:

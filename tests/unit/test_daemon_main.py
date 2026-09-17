@@ -1378,6 +1378,47 @@ class TestMaybeStartWebServer:
         registry = get_web_approval_ui().deferred_registry
         assert registry.max_pending_per_principal == DEFAULT_MAX_PENDING_PER_PRINCIPAL
 
+    def test_require_passkey_with_nothing_enrolled_logs_a_warning_but_still_starts(
+        self, monkeypatch, tmp_path, caplog,
+    ):
+        # #426 Phase 3: "start, release nothing, and show a loud persistent
+        # banner -- rather than refusing to boot." This is the "loud" half
+        # aimed at the daemon's own log; web_shell.py's TestBanner/
+        # test_routes_approvals.py's TestRequirePasskeyBanner cover the
+        # human-facing half.
+        self._no_bind(monkeypatch, tmp_path)
+        with caplog.at_level(logging.WARNING):
+            result = daemon_main._maybe_start_web_server(
+                {"step_up": {"enabled": True, "require_passkey": True}},
+                self._connector_host(), unattended_sessions_enabled=False,
+            )
+        assert result is not None  # never refuses to boot over this
+        assert "require_passkey" in caplog.text
+        assert "/security" in caplog.text
+
+    def test_require_passkey_with_a_credential_enrolled_logs_nothing(self, monkeypatch, tmp_path, caplog):
+        from privacyfence import webauthn_stepup as wa
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        self._no_bind(monkeypatch, tmp_path)
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        with caplog.at_level(logging.WARNING):
+            daemon_main._maybe_start_web_server(
+                {"step_up": {"enabled": True, "require_passkey": True}},
+                self._connector_host(), unattended_sessions_enabled=False,
+            )
+        assert "require_passkey" not in caplog.text
+
+    def test_require_passkey_off_logs_nothing(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        with caplog.at_level(logging.WARNING):
+            daemon_main._maybe_start_web_server(
+                {"step_up": {"enabled": True, "require_passkey": False}},
+                self._connector_host(), unattended_sessions_enabled=False,
+            )
+        assert "require_passkey" not in caplog.text
+
     def test_mcp_dispatcher_sees_the_connector_hosts_live_connector_set(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         connector_host = self._connector_host()

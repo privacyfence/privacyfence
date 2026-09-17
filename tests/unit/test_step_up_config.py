@@ -89,3 +89,29 @@ class TestStepUpConfigFromLocalConfig:
         config = step_up_config.StepUpConfig.from_local_config({"step_up": "nonsense"})
         assert config.rp_id == "localhost"
         assert config.enabled is False
+
+
+class TestLocalEnrollmentBanner:
+    """#426 Phase 3's "loud persistent banner" -- fires only in the one
+    state that actually means something is blocked: step-up genuinely in
+    force (``enabled`` *and* ``require_passkey``) and nothing enrolled yet.
+    See web_shell.py's own TestBanner for how the string this returns is
+    rendered."""
+
+    def test_none_when_require_passkey_is_off(self):
+        config = step_up_config.StepUpConfig(enabled=True, require_passkey=False)
+        assert config.local_enrollment_banner(has_credentials=False) is None
+
+    def test_none_when_step_up_itself_is_disabled(self):
+        config = step_up_config.StepUpConfig(enabled=False, require_passkey=True)
+        assert config.local_enrollment_banner(has_credentials=False) is None
+
+    def test_none_once_a_credential_is_enrolled(self):
+        config = step_up_config.StepUpConfig(enabled=True, require_passkey=True)
+        assert config.local_enrollment_banner(has_credentials=True) is None
+
+    def test_banner_text_when_genuinely_unmet(self):
+        config = step_up_config.StepUpConfig(enabled=True, require_passkey=True)
+        banner = config.local_enrollment_banner(has_credentials=False)
+        assert banner is not None
+        assert "/security" in banner
