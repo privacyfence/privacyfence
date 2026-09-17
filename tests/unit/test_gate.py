@@ -43,7 +43,7 @@ import pytest
 from privacyfence import approval_ui, gate
 from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
-from privacyfence.auto_accept import AutoAcceptEvaluator
+from privacyfence.auto_accept import AutoAcceptEvaluator, init_policy_engine_version
 from privacyfence.pii_detector import init_pii_detection
 from privacyfence.web_approval_ui import WebApprovalUI
 
@@ -93,6 +93,16 @@ class FakeEvaluator:
 
     def register_temp_accept(self, operation_key, file_key, ttl_seconds=None):
         self.temp_accepts_registered.append((operation_key, file_key))
+
+    # P3 (policy v2 redesign): gate._evaluate_auto_accept's shadow evaluation reads these off
+    # whatever evaluator get_auto_accept_evaluator() returns -- an empty rule set and no temp
+    # accepts, same as a real AutoAcceptEvaluator({}) would report.
+    @property
+    def effective_rules(self):
+        return {}
+
+    def is_temp_accepted(self, operation_key, file_key):
+        return False
 
 
 @pytest.fixture
@@ -177,6 +187,80 @@ class TestAutoAcceptPath:
 
         op_key, _ = evaluator.calls[0]
         assert op_key == "widget.widget_do_thing"
+
+
+class RaisingEffectiveRulesEvaluator(FakeEvaluator):
+    """A FakeEvaluator whose ``effective_rules`` raises -- exercises
+    gate._evaluate_auto_accept's own except Exception (P3): a v2 shadow-evaluation error must
+    never affect, or crash, the real (v1, by default) decision."""
+
+    @property
+    def effective_rules(self):
+        raise RuntimeError("boom")
+
+
+class TestPolicyEngineShadowMode:
+    """P3 of the policy v2 redesign: gate._evaluate_auto_accept runs the v2 engine alongside the
+    existing evaluator on every call. Both TestAutoAcceptPath above and every other class in this
+    file already exercise the default (``policy.engine`` unset -> "v1") path indirectly -- a
+    FakeEvaluator's canned result is what ends up acted on in every one of those tests, which is
+    only true if v1 stays authoritative by default. This class asserts that explicitly, plus the
+    two behaviors those tests can't reach: switching authority to "v2", and a shadow-evaluation
+    error never propagating."""
+
+    async def test_v1_result_is_acted_on_by_default_even_when_v2_would_disagree(
+        self, monkeypatch, audit_dir,
+    ):
+        # FakeEvaluator's own effective_rules is {} (no v2 rule can ever match), so v1's canned
+        # (True, "x") and v2's real (False, "") disagree on every call -- proving the default
+        # keeps v1's answer the one acted on, not just that no disagreement happened to arise.
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator((True, "x")))
+
+        result = await gate.gated_call(**base_kwargs())
+
+        assert result is FILTERED
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "auto_accepted"
+        assert entries[0]["auto_accept_rule"] == "x"
+
+    async def test_disagreement_is_logged_at_warning_without_content(self, caplog, monkeypatch, audit_dir):
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator((True, "x")))
+
+        with caplog.at_level("WARNING", logger="privacyfence.gate"):
+            await gate.gated_call(**base_kwargs())
+
+        [record] = [r for r in caplog.records if "Policy engine disagreement" in r.message]
+        assert "op='gmail.read_message'" in record.message
+        assert "v1=(True, 'x')" in record.message
+        assert "v2=(False, '')" in record.message
+        assert "alice@example.com" not in record.message  # base_kwargs()'s sender -- never logged
+
+    async def test_v2_authoritative_switch_overrides_v1s_canned_result(self, monkeypatch, audit_dir):
+        # policy.engine=v2 flips which side decides -- FakeEvaluator's (True, "x") is what v1
+        # would have decided, but with v2 authoritative and no v2 rule configured (effective_rules
+        # is {}), the call must fall through to the popup instead of auto-accepting.
+        init_policy_engine_version("v2")
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator((True, "x")))
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+        popup_calls = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popup_calls.append(1) or "accept", None))
+
+        result = await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert result is FILTERED
+        assert popup_calls == [1]  # v1's own (True, "x") was not acted on
+
+    async def test_shadow_evaluation_error_is_swallowed_not_propagated(self, caplog, monkeypatch, audit_dir):
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: RaisingEffectiveRulesEvaluator((True, "x")))
+
+        with caplog.at_level("WARNING", logger="privacyfence.gate"):
+            result = await gate.gated_call(**base_kwargs())
+
+        assert result is FILTERED  # v1's own result still won -- the raise never reached gated_call
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "auto_accepted"
+        assert entries[0]["auto_accept_rule"] == "x"
+        assert any("Policy v2 shadow evaluation raised" in r.message for r in caplog.records)
 
 
 class TestReviewGateDecisions:

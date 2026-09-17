@@ -388,6 +388,15 @@ class AutoAcceptEvaluator:
         self._temp_accepts: dict[tuple[str, str], float] = {}
         self._temp_accepts_lock = threading.Lock()
 
+    @property
+    def effective_rules(self) -> dict[str, list[dict]]:
+        """The live, hot-reloaded ``auto_accept_rules`` + grant-expanded ``auto_accept_grants``
+        this evaluator is currently holding -- the same shape ``reload_rules()`` last passed in.
+        P3's ``policy.compat.compile_rules()`` takes this directly, so a v2 shadow evaluation
+        (gate.py) always compiles from exactly what this evaluator is deciding against, never a
+        separate re-read of settings.yaml that could be one hot-reload out of date."""
+        return self._rules
+
     def should_auto_accept(self, operation_key: str, ctx: ReviewContext) -> tuple[bool, str]:
         """Return (should_auto_accept, matched_rule_name)."""
         for rule_cfg in self._rules.get(operation_key) or []:
@@ -492,6 +501,14 @@ class AutoAcceptEvaluator:
                 del self._temp_accepts[key]
                 return False
             return True
+
+    def is_temp_accepted(self, operation_key: str, file_key: str | None) -> bool:
+        """Public wrapper around ``_is_temp_accepted`` (P3): lets ``policy.engine.evaluate``/
+        ``preflight`` consult this evaluator's own temp-accept store instead of keeping a second,
+        divergent one -- a user's "Allow once" only ever registers here (``register_temp_accept``),
+        so a v2 shadow evaluation that checked a store of its own would spuriously disagree on
+        every temp-accepted call."""
+        return self._is_temp_accepted(operation_key, file_key)
 
     def _evaluate(self, rule_name: str, value: Any, ctx: ReviewContext) -> bool:
         fn = getattr(self, f"_rule_{rule_name}", None)
@@ -1541,6 +1558,10 @@ class _AutoAcceptState:
         self.rules_changed_listeners: list[Callable[[], None]] = []
         self.rules_changed_listener: Callable[[], None] | None = None  # see
         # set_rules_changed_listener's docstring
+        # P3 (policy v2 redesign): which evaluator gate.py treats as authoritative for this
+        # principal -- "v1" (default) or "v2". See policy_engine_config.PolicyEngineConfig and
+        # init_policy_engine_version()/get_policy_engine_version() below.
+        self.policy_engine_version: str = "v1"
 
 
 _REGISTRY: PrincipalRegistry[_AutoAcceptState] = PrincipalRegistry(_AutoAcceptState)
@@ -1549,6 +1570,21 @@ _REGISTRY: PrincipalRegistry[_AutoAcceptState] = PrincipalRegistry(_AutoAcceptSt
 def init_config_path(path: str) -> None:
     """Register the on-disk config path so add_auto_accept_rule() can persist."""
     _REGISTRY.get().config_path = path
+
+
+def init_policy_engine_version(version: str) -> None:
+    """Set the policy v2 engine switch (P3) for the current principal -- see
+    ``policy_engine_config.PolicyEngineConfig``, which validates ``version`` before this is
+    called. ``daemon_main.py`` calls this alongside ``init_config_path``/``reload_rules`` for
+    both local mode and each org principal, so it is always set before ``gate.py`` can read it."""
+    _REGISTRY.get().policy_engine_version = version
+
+
+def get_policy_engine_version() -> str:
+    """Which evaluator ``gate.py`` treats as authoritative for the current principal -- ``"v1"``
+    (default) or ``"v2"``. Both always run; this only decides which answer is acted on and which
+    is shadowed (see ``policy.engine`` and the redesign proposal's Safety net)."""
+    return _REGISTRY.get().policy_engine_version
 
 
 def add_auto_accept_rule(operation_key: str, rule_name: str, value: Any) -> None:

@@ -152,6 +152,7 @@ import asyncio
 import contextvars
 import functools
 import json
+import hashlib
 import logging
 import time
 import uuid
@@ -165,6 +166,7 @@ from .approvals import PendingApproval, PendingApprovalRegistry, canonical_key
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger
 from .auto_accept import (
     TOOL_TO_OPERATION,
+    AutoAcceptEvaluator,
     ReviewContext,
     add_auto_accept_rule,
     add_rules_changed_listener,
@@ -172,6 +174,7 @@ from .auto_accept import (
     describe_rule_change,
     describe_rule_short,
     get_auto_accept_evaluator,
+    get_policy_engine_version,
     known_rule_names,
     mutate_grants,
     remove_auto_accept_rule,
@@ -179,6 +182,8 @@ from .auto_accept import (
     suggest_write_rule,
     temp_accept_key,
 )
+from .policy import compat as policy_compat
+from .policy import engine as policy_engine
 from .pii_detector import (
     PIIAuditMatch,
     describe_match_for_audit,
@@ -509,6 +514,59 @@ def _on_rules_changed() -> None:
         )
 
 
+def _context_fingerprint(ctx: ReviewContext) -> str:
+    """A redacted stand-in for ``ctx`` in a shadow-mode disagreement log (P3): connector, tool
+    and the *set* of argument names -- never an argument value, and never ``ctx.raw_data``, which
+    is exactly the content (a message, a file, an event) auto-accept decisions exist to keep out
+    of logs. Stable across identical calls, so repeated disagreements on the same shape of call
+    are recognisable without a real correlation id."""
+    arg_names = ",".join(sorted(ctx.args.keys()))
+    fingerprint = hashlib.sha256(f"{ctx.connector}|{ctx.tool}|{arg_names}".encode()).hexdigest()[:12]
+    return f"{ctx.connector}.{ctx.tool}#{fingerprint}"
+
+
+def _evaluate_auto_accept(
+    evaluator: AutoAcceptEvaluator, operation_key: str, ctx: ReviewContext,
+) -> tuple[bool, str]:
+    """Decide whether ``operation_key`` auto-accepts, per P3 of the policy v2 redesign.
+
+    Both evaluators run on every call. By default (``policy.engine`` unset or ``"v1"``) the
+    existing ``AutoAcceptEvaluator`` -- unchanged by this function -- keeps deciding, and the new
+    ``policy.engine``/``policy.compat`` evaluator runs alongside it purely to compare; setting
+    ``policy.engine: v2`` flips which one is authoritative, with the other now the one shadowed
+    (see ``policy_engine_config.PolicyEngineConfig`` and ``auto_accept.get_policy_engine_version``
+    for the switch itself, and the redesign proposal's Safety net for why the default keeps v1
+    load-bearing for one release).
+
+    A disagreement -- either engine's boolean differs, or both matched but under different rule
+    identities -- is logged once at ``WARNING`` with the operation key, each side's matched rule,
+    and a redacted context fingerprint (``_context_fingerprint``) -- never ``ctx.args`` or
+    ``ctx.raw_data`` themselves. A v2 evaluation error is swallowed the same way an unrecognised
+    predicate already fails closed in ``policy.engine.evaluate`` -- shadow mode must never be able
+    to affect, or crash, the real (v1, by default) decision.
+    """
+    v1_ok, v1_rule = evaluator.should_auto_accept(operation_key, ctx)
+
+    v2_ok, v2_rule = False, ""
+    try:
+        v2_rules = policy_compat.compile_rules(evaluator.effective_rules)
+        v2_ok, v2_rule = policy_engine.evaluate(
+            v2_rules, operation_key, ctx, is_temp_accepted=evaluator.is_temp_accepted,
+        )
+    except Exception:
+        logger.warning("Policy v2 shadow evaluation raised for op=%r", operation_key, exc_info=True)
+    else:
+        if v1_ok != v2_ok or (v1_ok and v2_ok and v1_rule != v2_rule):
+            logger.warning(
+                "Policy engine disagreement: op=%r v1=(%r, %r) v2=(%r, %r) ctx=%s",
+                operation_key, v1_ok, v1_rule, v2_ok, v2_rule, _context_fingerprint(ctx),
+            )
+
+    if get_policy_engine_version() == "v2":
+        return v2_ok, v2_rule
+    return v1_ok, v1_rule
+
+
 # Set by web/mcp_dispatch.py's McpDispatcher.call() around a single
 # dispatched request, for the duration of that request only, when the
 # request came in on a Streamable HTTP session that called
@@ -827,7 +885,7 @@ async def gated_call(
 
     try:
         evaluator = get_auto_accept_evaluator()
-        auto_ok, matched_rule = evaluator.should_auto_accept(operation_key, ctx)
+        auto_ok, matched_rule = _evaluate_auto_accept(evaluator, operation_key, ctx)
 
         if auto_ok and not pii_forces_confirmation and not upload_pii_categories:
             audit(
@@ -856,7 +914,7 @@ async def gated_call(
             # pii_forces_confirmation, not pii_categories itself, since
             # pii_already_reviewed's own carve-out (see module docstring) is
             # unaffected by anything decided in the meantime.
-            auto_ok, matched_rule = evaluator.should_auto_accept(operation_key, ctx)
+            auto_ok, matched_rule = _evaluate_auto_accept(evaluator, operation_key, ctx)
             if auto_ok and not pii_forces_confirmation:
                 audit(decision="auto_accepted", auto_accept_rule=matched_rule, pii_detected=bool(pii_categories))
                 logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
@@ -970,7 +1028,7 @@ async def gated_call(
 
             # Same race as the review branch above: a rule may already cover
             # this by the time we get here.
-            auto_ok, matched_rule = evaluator.should_auto_accept(operation_key, ctx)
+            auto_ok, matched_rule = _evaluate_auto_accept(evaluator, operation_key, ctx)
             if auto_ok and not upload_pii_categories:
                 audit(decision="auto_accepted", auto_accept_rule=matched_rule, pii_detected=False)
                 logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
