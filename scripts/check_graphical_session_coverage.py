@@ -6,12 +6,12 @@ this release tag -- privacyfence/privacyfence#374, option 1 ("Report, don't gate
 for the thing every desktop user depends on and nobody notices until it breaks: the daemon
 starting itself at login. They run on packaging-related `main` pushes, a weekly schedule, and
 manual dispatch -- never on a tag push, and never as a `needs:` of `build.yml`'s `finalize-release`
-job, because a flaky run in this tier must never block a release (see docs/testing-policy.md's
-Layer 6 row and this repo's CLAUDE.md). That leaves a gap: a tag can ship with autostart broken as
-long as the last packaging-touching push to `main` was green and nothing since then re-ran either
-workflow.
+job, because this tier's own runtime cost must not sit on a release's critical path (see
+docs/testing-policy.md's Layer 6 row and this repo's CLAUDE.md). That leaves a gap: a tag can ship
+with autostart broken as long as the last packaging-touching push to `main` was green and nothing
+since then re-ran either workflow.
 
-This script closes the "nobody looked" half of that gap without touching the "must never block"
+This script closes the "nobody looked" half of that gap without touching the "must not gate"
 half. It first resolves which branch this release actually came from (`resolve_release_branch` --
 `main`, unless `commit` is on a `releases/*` branch, since those get the same packaging-related
 trigger as `main`; see CLAUDE.md's branch-protection section), then for each workflow reads the

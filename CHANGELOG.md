@@ -372,6 +372,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   actively listening on regardless of that socket's own options — leaving it undefined which of the
   two processes actually received the provider's callback. With reuse off, that bind() now always
   fails, which the existing actionable `OAuthLoopbackError` already reports.
+- B20 of the 4.1.0 action plan: `web/org_settings_scope.py`'s `PER_PRINCIPAL_ACTIONS` allow-list
+  named `add_rule_row`/`update_rule_row`, the grant equivalents, and the connector actions as
+  permitted for any signed-in principal, but `web/routes_org_settings.py` only ever wired routes
+  for removing a rule row and removing a grant row — the allow-list had run ahead of the routes.
+  No route currently calls `is_action_permitted` with any of the unwired action names, so nothing
+  was actually reachable, but a route added later in good faith could have trusted the allow-list's
+  "yes" without noticing no implementation backed it. `PER_PRINCIPAL_ACTIONS` now holds exactly the
+  two actions with a real route; the rest moved to a new `PER_PRINCIPAL_ACTIONS_UNROUTED` set that
+  `is_action_permitted` denies until each one gets its own route and moves over.
 
 ### Added
 
@@ -624,6 +633,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   between browser saves: `apply_change` rewrites the whole file from its own in-memory copy, so any
   hand edit made since the daemon last loaded the file — including comments — is silently discarded
   the next time an admin saves from the browser, restarted or not.
+- Issue #428 B17: `linux-graphical-session.yml`'s path triggers never gained
+  `scripts/linux_privilege_separation.sh` or `installer/linux/**`, the way `windows-graphical-
+  session.yml` gained its own `.ps1` when B5c landed. A change to the Linux privilege-separation
+  script or the unit templates it renders is exactly the kind of change most likely to break
+  Linux autostart, and it now re-runs the only test that exercises it instead of waiting for the
+  next `main` push that happens to touch something else on the existing path list, or the weekly
+  schedule.
+- B24 of the 4.1.0 action plan: `sudo scripts/linux_privilege_separation.sh enable` (and D1's
+  auto-enable) actually stops the daemon's own XDG autostart entry from autostarting now.
+  `stop_legacy_autostart()` only ever renamed `/etc/xdg/autostart/privacyfence.desktop` to
+  `....desktop.disabled`, on the assumption that XDG autostart only reads `*.desktop` files —
+  `systemd-xdg-autostart-generator` does not filter the autostart directories by filename, and
+  turned the renamed file into a unit under `xdg-desktop-autostart.target` just the same, starting
+  a second daemon in the logged-in user's own session at every login. It failed closed rather than
+  doing damage (`check_runtime_identity` already refuses to run as the wrong account on a
+  separated install), but the disable mechanism did not do what its own comment claimed, and
+  `status`'s `STILL AUTOSTARTS` check — which only ever looked at the original, un-renamed path —
+  reported no problem. The entry is now also marked `Hidden=true`, the key
+  `systemd-xdg-autostart-generator` (and every other XDG-autostart reader) actually honors to skip
+  a file without removing it; `disable` strips it back out when restoring the entry, and `status`
+  now checks the renamed file for it too. An already-separated install upgrading past this fix
+  self-heals the next time `enable --auto` runs (`debian/postinst`, on every install and upgrade),
+  with no separate migration needed.
 
 ## [4.0.0] — 2026-09-14
 
