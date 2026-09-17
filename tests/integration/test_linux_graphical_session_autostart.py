@@ -553,6 +553,22 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
         f"would never start it at login:\n{wants.stdout}"
     )
 
+    # B24: the earlier `assert not AUTOSTART_DESKTOP_FILE.exists()` above only
+    # proves stop_legacy_autostart() renamed the file -- it does not prove
+    # systemd actually stopped autostarting it. systemd-xdg-autostart-
+    # generator does not filter the autostart directories by filename, so
+    # the *renamed* file was still turned into AUTOSTART_UNIT_NAME and pulled
+    # into this same target -- a second daemon, started as this logged-in
+    # user, that check_runtime_identity then refused to run as the wrong
+    # account. This is the one assertion in this module that would actually
+    # have caught that: not the file move, but whether the generator honours
+    # it.
+    assert AUTOSTART_UNIT_NAME not in wants.stdout.split(), (
+        f"{AUTOSTART_UNIT_NAME} is still pulled in by xdg-desktop-autostart.target -- "
+        f"stop_legacy_autostart()'s rename of {AUTOSTART_DESKTOP_FILE} did not stop systemd's "
+        f"generator from autostarting the daemon's old entry under its renamed name:\n{wants.stdout}"
+    )
+
     _trigger_graphical_session_target(user_env)
 
     _wait_for_unit_property(systemctl_user, unit, "ActiveState", "active", timeout=20)

@@ -1593,6 +1593,53 @@ class TestSystemdAndAutostartTemplates:
     def test_the_user_unit_it_disables_is_the_one_this_repo_ships(self):
         assert (REPO_ROOT / "privacyfence.service").is_file()
 
+    def test_disabling_the_legacy_autostart_entry_also_hides_it(self):
+        # B24: systemd-xdg-autostart-generator does not filter the autostart
+        # directories by filename -- renaming the entry to *.desktop.disabled
+        # alone does not stop it from being turned into a unit and started at
+        # the next login. Hidden=true is the key the generator (and every
+        # other XDG-autostart reader) actually honours, so hiding the entry
+        # -- not just the rename -- has to be what stop_legacy_autostart does.
+        assert "hide_autostart_entry" in self.SCRIPT
+        assert 'hide_autostart_entry "$LEGACY_AUTOSTART_PATH"' in self.SCRIPT
+        # The rename is unconditional in stop_legacy_autostart; hiding has to
+        # run first so the file that lands at .disabled already carries it.
+        hide_call = self.SCRIPT.index('hide_autostart_entry "$LEGACY_AUTOSTART_PATH"')
+        rename_call = self.SCRIPT.index('mv "$LEGACY_AUTOSTART_PATH" "${LEGACY_AUTOSTART_PATH}.disabled"')
+        assert hide_call < rename_call
+
+    def test_an_already_disabled_but_unhidden_entry_is_healed(self):
+        # An install separated by a script version that predates B24 has a
+        # ${LEGACY_AUTOSTART_PATH}.disabled with no Hidden=true -- and
+        # systemd has been autostarting it under its renamed name the whole
+        # time. `enable --auto` re-runs on every package upgrade (debian/
+        # postinst's own -- auto invocation), so stop_legacy_autostart must
+        # heal that file in place rather than only handling a fresh entry
+        # still at its original path.
+        assert '"${LEGACY_AUTOSTART_PATH}.disabled" ] && ! autostart_entry_is_hidden' in self.SCRIPT
+
+    def test_restoring_the_legacy_entry_undoes_the_hide(self):
+        # `disable` puts the daemon's own autostart entry back in charge of
+        # starting it in the logged-in user's session -- a Hidden=true this
+        # script itself added would silently defeat that.
+        assert "unhide_autostart_entry" in self.SCRIPT
+        restore = self.SCRIPT[self.SCRIPT.index('restoring the daemon\'s XDG autostart entry'):]
+        unhide_call = restore.index('unhide_autostart_entry "${LEGACY_AUTOSTART_PATH}.disabled"')
+        rename_call = restore.index('mv "${LEGACY_AUTOSTART_PATH}.disabled" "$LEGACY_AUTOSTART_PATH"')
+        assert unhide_call < rename_call
+
+    def test_status_checks_the_disabled_entry_for_hidden_too(self):
+        # Before B24's fix, `status` only ever looked at $LEGACY_AUTOSTART_
+        # PATH -- which stop_legacy_autostart always renames away, so the
+        # check reported no problem even when the renamed file was still
+        # autostarting a second daemon. It has to also check the .disabled
+        # file it actually left behind.
+        assert (
+            '"${LEGACY_AUTOSTART_PATH}.disabled" ] && ! autostart_entry_is_hidden "${LEGACY_AUTOSTART_PATH}.disabled"'
+            in self.SCRIPT
+        )
+        assert self.SCRIPT.count('echo "  STILL AUTOSTARTS') == 2
+
     def test_every_placeholder_is_one_the_installer_substitutes(self):
         substituted = set(re.findall(r"-e \"s\|(__[A-Z_]+__)\|", self.SCRIPT))
         used = set(re.findall(r"__[A-Z_]+__", self.DAEMON + self.COMPANION))
