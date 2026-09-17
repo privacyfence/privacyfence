@@ -1081,9 +1081,28 @@ class TestInstallerContract:
         assert "|| true" in remove_case.group(1)
         # Must not run on a mere upgrade -- that would tear down a running
         # separated install's unit mid-upgrade instead of leaving it alone.
-        upgrade_case = re.search(r"upgrade\|deconfigure\)(.*?);;", prerm, re.DOTALL)
-        assert upgrade_case is not None, "no `upgrade|deconfigure)` case in debian/prerm"
+        upgrade_case = re.search(r"\bupgrade\)(.*?);;", prerm, re.DOTALL)
+        assert upgrade_case is not None, "no `upgrade)` case in debian/prerm"
         assert "privacyfence-privilege-separation" not in upgrade_case.group(1)
+
+    def test_the_debian_prerm_stops_the_unit_on_upgrade(self):
+        # dpkg unpacks the new version's files over /opt/privacyfence, where
+        # a separated install's daemon runs its packaged PyInstaller onedir
+        # build from, *before* postinst's
+        # `enable --auto` gets a chance to stop and restart it -- a lazily
+        # loaded shared library can vanish out from under the still-running
+        # old process mid-upgrade. Stop the unit here first; postinst's
+        # `enable --auto`, which already runs on every upgrade, starts it
+        # again once the new files are in place.
+        prerm = (REPO_ROOT / "debian" / "prerm").read_text(encoding="utf-8")
+        upgrade_case = re.search(r"\bupgrade\)(.*?);;", prerm, re.DOTALL)
+        assert upgrade_case is not None, "no `upgrade)` case in debian/prerm"
+        assert "systemctl stop privacyfence-daemon.service" in upgrade_case.group(1)
+        assert "|| true" in upgrade_case.group(1)
+        # A bare `deconfigure` (no file swap happening) must stay a no-op.
+        deconfigure_case = re.search(r"\bdeconfigure\)(.*?);;", prerm, re.DOTALL)
+        assert deconfigure_case is not None, "no `deconfigure)` case in debian/prerm"
+        assert deconfigure_case.group(1).strip() == ""
 
 
 class TestAutoEnableMacos:
