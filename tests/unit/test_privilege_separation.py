@@ -872,6 +872,10 @@ class TestAutoEnableMacos:
         script = tmp_path / "macos_privilege_separation.sh"
         script.write_text("#!/bin/sh\n", encoding="utf-8")
         monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
+        # B2's script-safety check is covered by its own TestMacosAutoEnableScriptProblem
+        # below; a script this test writes itself is never root-owned, so it is bypassed
+        # here to keep this test about the marker/threading behavior alone.
+        monkeypatch.setattr(privilege_separation, "_macos_auto_enable_script_problem", lambda _script: None)
         data_dir = tmp_path / "data"
         monkeypatch.setattr(paths, "data_dir", lambda: data_dir)
         started = []
@@ -899,6 +903,7 @@ class TestAutoEnableMacos:
         script = tmp_path / "macos_privilege_separation.sh"
         script.write_text("#!/bin/sh\n", encoding="utf-8")
         monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
+        monkeypatch.setattr(privilege_separation, "_macos_auto_enable_script_problem", lambda _script: None)
         # A file where the marker's parent directory should be: mkdir(parents=True,
         # exist_ok=True) on it raises FileExistsError (an OSError), since exist_ok
         # only tolerates an existing *directory*.
@@ -1002,6 +1007,160 @@ class TestAutoEnableMacos:
         monkeypatch.setattr(paths, "app_bundle_path", lambda: tmp_path / "Nothing.app")
 
         assert privilege_separation._macos_installer_script_path() is None
+
+    def test_noop_when_the_resolved_script_fails_its_safety_check(self, monkeypatch, tmp_path):
+        # #428 B2: whatever _macos_auto_enable_script_problem() decides (its
+        # own logic is covered by TestMacosAutoEnableScriptProblem below) --
+        # a script that fails it must produce no elevation prompt, no
+        # marker, just a log line naming why.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
+        privilege_separation.reset_cache()
+        script = tmp_path / "macos_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
+        monkeypatch.setattr(
+            privilege_separation,
+            "_macos_auto_enable_script_problem",
+            lambda _script: f"{script} is owned by uid 501, not root",
+        )
+        data_dir = tmp_path / "data"
+        monkeypatch.setattr(paths, "data_dir", lambda: data_dir)
+        started = []
+        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+
+        privilege_separation.maybe_auto_enable_macos()
+
+        assert started == []
+        assert not (data_dir / privilege_separation.AUTO_ENABLE_ATTEMPTED_MARKER_NAME).exists()
+
+
+class TestMacosAutoEnableScriptProblem:
+    """#428 B2: the check ``maybe_auto_enable_macos()`` runs immediately
+    before handing a script to ``osascript … with administrator
+    privileges`` -- the fix for a new local privilege-escalation path D1
+    introduced, where the elevated script was whatever the logged-in user
+    (and therefore the agent) most recently put at the resolved path.
+
+    CI cannot make a file root-owned, so ownership/mode are exercised
+    through a faked ``os.stat()`` result rather than a real one -- the
+    function only ever reads ``st_uid`` and ``st_mode`` off it."""
+
+    pytestmark = posix_permissions_only
+
+    @staticmethod
+    def _fake_stat(st_uid: int, st_mode: int):
+        return os.stat_result((st_mode, 0, 0, 1, st_uid, 0, 0, 0, 0, 0))
+
+    def test_root_owned_and_unwritable_with_no_bundle_is_safe(self, monkeypatch, tmp_path):
+        script = tmp_path / "macos_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(
+            privilege_separation.os, "stat", lambda _p: self._fake_stat(0, stat.S_IFREG | 0o755)
+        )
+        monkeypatch.setattr(paths, "app_bundle_path", lambda: None)
+
+        assert privilege_separation._macos_auto_enable_script_problem(script) is None
+
+    def test_not_root_owned_is_a_problem(self, monkeypatch, tmp_path):
+        script = tmp_path / "macos_privilege_separation.sh"
+        monkeypatch.setattr(
+            privilege_separation.os, "stat", lambda _p: self._fake_stat(501, stat.S_IFREG | 0o755)
+        )
+
+        problem = privilege_separation._macos_auto_enable_script_problem(script)
+
+        assert problem is not None
+        assert "not root" in problem
+
+    def test_group_writable_is_a_problem(self, monkeypatch, tmp_path):
+        script = tmp_path / "macos_privilege_separation.sh"
+        monkeypatch.setattr(
+            privilege_separation.os, "stat", lambda _p: self._fake_stat(0, stat.S_IFREG | 0o775)
+        )
+
+        problem = privilege_separation._macos_auto_enable_script_problem(script)
+
+        assert problem is not None
+        assert "writable" in problem
+
+    def test_world_writable_is_a_problem(self, monkeypatch, tmp_path):
+        script = tmp_path / "macos_privilege_separation.sh"
+        monkeypatch.setattr(
+            privilege_separation.os, "stat", lambda _p: self._fake_stat(0, stat.S_IFREG | 0o757)
+        )
+
+        problem = privilege_separation._macos_auto_enable_script_problem(script)
+
+        assert problem is not None
+        assert "writable" in problem
+
+    def test_a_script_that_cannot_be_stat_ed_is_a_problem(self, monkeypatch, tmp_path):
+        script = tmp_path / "does-not-exist.sh"
+
+        problem = privilege_separation._macos_auto_enable_script_problem(script)
+
+        assert problem is not None
+        assert "stat" in problem
+
+    def test_packaged_install_also_requires_the_bundle_signature_to_verify(self, monkeypatch, tmp_path):
+        script = tmp_path / "macos_privilege_separation.sh"
+        bundle = tmp_path / "PrivacyFenceApp.app"
+        monkeypatch.setattr(
+            privilege_separation.os, "stat", lambda _p: self._fake_stat(0, stat.S_IFREG | 0o755)
+        )
+        monkeypatch.setattr(paths, "app_bundle_path", lambda: bundle)
+        calls = []
+
+        class _Result:
+            returncode = 0
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return _Result()
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", fake_run)
+
+        assert privilege_separation._macos_auto_enable_script_problem(script) is None
+        assert calls == [[privilege_separation._CODESIGN, "--verify", "--deep", str(bundle)]]
+
+    def test_a_bundle_whose_signature_does_not_verify_is_a_problem(self, monkeypatch, tmp_path):
+        script = tmp_path / "macos_privilege_separation.sh"
+        bundle = tmp_path / "PrivacyFenceApp.app"
+        monkeypatch.setattr(
+            privilege_separation.os, "stat", lambda _p: self._fake_stat(0, stat.S_IFREG | 0o755)
+        )
+        monkeypatch.setattr(paths, "app_bundle_path", lambda: bundle)
+
+        class _Result:
+            returncode = 1
+            stderr = "code object is not signed at all"
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", lambda *a, **kw: _Result())
+
+        problem = privilege_separation._macos_auto_enable_script_problem(script)
+
+        assert problem is not None
+        assert "signature" in problem
+
+    def test_codesign_failing_to_run_at_all_is_a_problem_not_a_crash(self, monkeypatch, tmp_path):
+        script = tmp_path / "macos_privilege_separation.sh"
+        bundle = tmp_path / "PrivacyFenceApp.app"
+        monkeypatch.setattr(
+            privilege_separation.os, "stat", lambda _p: self._fake_stat(0, stat.S_IFREG | 0o755)
+        )
+        monkeypatch.setattr(paths, "app_bundle_path", lambda: bundle)
+
+        def raising_run(*a, **kw):
+            raise OSError("codesign not found")
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", raising_run)
+
+        problem = privilege_separation._macos_auto_enable_script_problem(script)
+
+        assert problem is not None
+        assert "signature" in problem
 
 
 class TestLaunchdTemplates:

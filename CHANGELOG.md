@@ -180,6 +180,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the real-machine verification `docs/platform-support.md`'s "Known open items" describes — the
   automated contract coverage is unchanged, the manual pass against a release build is not done, and
   turning the default on makes running it sooner more important, not less. See issue #428.
+- Issue #428 D1 follow-up: the macOS auto-enable prompt above ran whatever
+  `scripts/macos_privilege_separation.sh` resolved to through an admin-password dialog without first
+  checking what that was — on a packaged install the `.app`'s `Resources/` is as writable as anything
+  else the logged-in user owns, and a source checkout never belongs to root at all, so an agent able
+  to write either one could get its own script executed as root behind what looked like a routine
+  permission prompt. `maybe_auto_enable_macos()` now refuses to elevate a script that is not
+  root-owned and not group/world-writable, and, on a packaged install, whose `.app` bundle's
+  signature doesn't verify (`codesign --verify --deep`) — anything else logs why and leaves the
+  install opt-in, the same fallback `--auto` already takes for every other unresolvable case. A
+  source checkout can never satisfy the ownership check, which is deliberate: this prompt now only
+  ever runs a script the installer itself shipped.
 - Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
   `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
   that want hardware-bound passkeys as a hard requirement before releasing a write approval.
