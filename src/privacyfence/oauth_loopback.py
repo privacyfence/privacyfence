@@ -71,7 +71,24 @@ class _LoopbackHTTPServer(HTTPServer):
     user even sees a browser window. We never read server_name (log_message
     is overridden to a no-op below), so skip HTTPServer's override entirely
     and fall back to TCPServer's plain bind.
+
+    Also turns off ``HTTPServer.allow_reuse_address`` (on by default, purely
+    for the usual "restart the dev server without waiting out TIME_WAIT"
+    convenience, which a one-shot loopback listener never needs). On a
+    privilege-separated install the agent runs as a different, less-trusted
+    process than the daemon (ADR 0002) and could bind this fixed port first
+    to intercept the Slack/Salesforce/Atlassian callback. On POSIX that
+    squat already makes the daemon's own bind() fail loudly with the
+    actionable ``OAuthLoopbackError`` below. On Windows, ``SO_REUSEADDR`` on
+    the *new* socket lets it silently steal a port an existing socket is
+    still actively listening on -- regardless of what the first socket set
+    -- so leaving reuse enabled here would let the daemon's bind() succeed
+    over a squatted port instead of detecting it, and which of the two
+    processes then receives the provider's redirect becomes undefined. No
+    reuse means bind() always fails cleanly when the port is already held.
     """
+
+    allow_reuse_address = False
 
     def server_bind(self) -> None:
         socketserver.TCPServer.server_bind(self)

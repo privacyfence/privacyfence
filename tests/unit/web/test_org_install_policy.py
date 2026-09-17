@@ -8,6 +8,9 @@ for every principal in the process, not just the one whose registry entry
 """
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 import yaml
 
@@ -278,3 +281,69 @@ class TestFailedWrite:
         assert settings == {"privacy": {"default_policy": "block"}}
         with principal_scope(ALICE):
             assert privacy_filter.category_policy("privacy", "body") == "block"
+
+
+class TestConcurrentWrites:
+    def test_two_admins_saving_at_once_do_not_lose_either_change(self, tmp_path, monkeypatch):
+        # Two browser tabs saving within the same instant is exactly what
+        # `_write_lock` exists to serialize (see the module docstring): each
+        # admin's `apply_change` deep-copies `settings`, mutates its own
+        # copy, and only then writes + adopts it back. Without the lock,
+        # both copies are taken from the *same* unmodified `settings`, so
+        # whichever admin's write lands second on disk silently discards
+        # the first admin's change -- a last-write-wins loss neither admin
+        # would see, since each page reports its own change as applied.
+        #
+        # `atomic_write_text` is where the on-disk write happens, so it's
+        # also the narrowest place to prove mutual exclusion: this widens
+        # that call with a short sleep and records how many callers were
+        # inside it at once. Without the lock, both threads start close
+        # enough together that they reliably overlap there.
+        concurrency_lock = threading.Lock()
+        concurrent = 0
+        max_concurrent = 0
+        real_atomic_write_text = org_install_policy.atomic_write_text
+
+        def tracking_atomic_write_text(*args, **kwargs):
+            nonlocal concurrent, max_concurrent
+            with concurrency_lock:
+                concurrent += 1
+                max_concurrent = max(max_concurrent, concurrent)
+            try:
+                time.sleep(0.05)
+                return real_atomic_write_text(*args, **kwargs)
+            finally:
+                with concurrency_lock:
+                    concurrent -= 1
+
+        monkeypatch.setattr(org_install_policy, "atomic_write_text", tracking_atomic_write_text)
+
+        settings = {"privacy": {"default_policy": "block"}, "drive_privacy": {"default_policy": "block"}}
+        path = _settings_file(tmp_path, settings)
+
+        def change_privacy():
+            org_install_policy.apply_change(
+                settings, path, action="set_default_policy",
+                payload={"group": "privacy", "policy": "redact"},
+            )
+
+        def change_drive():
+            org_install_policy.apply_change(
+                settings, path, action="set_default_policy",
+                payload={"group": "drive_privacy", "policy": "allow"},
+            )
+
+        admin_a = threading.Thread(target=change_privacy)
+        admin_b = threading.Thread(target=change_drive)
+        admin_a.start()
+        admin_b.start()
+        admin_a.join(timeout=5)
+        admin_b.join(timeout=5)
+
+        assert max_concurrent == 1
+
+        on_disk = yaml.safe_load((tmp_path / "settings.yaml").read_text())
+        assert on_disk["privacy"]["default_policy"] == "redact"
+        assert on_disk["drive_privacy"]["default_policy"] == "allow"
+        assert settings["privacy"]["default_policy"] == "redact"
+        assert settings["drive_privacy"]["default_policy"] == "allow"
