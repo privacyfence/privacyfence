@@ -338,23 +338,65 @@ render_template() {
   chmod 644 "$destination"
 }
 
+# B24: renaming a *.desktop file to *.desktop.disabled does not stop it from
+# autostarting. systemd-xdg-autostart-generator does not filter the autostart
+# directories by filename -- it parses every entry it finds there and turns
+# each into an app-<name>@autostart.service unit regardless of what the file
+# is called -- so the renamed file still got pulled into
+# xdg-desktop-autostart.target under a different unit name. The key the
+# generator (and every other XDG-autostart reader) does honour is the
+# Desktop Entry Specification's own Hidden=true, which says "keep this file,
+# stop autostarting it" -- exactly the semantics `disable` needs. So the
+# rename stays (see below for why), but the content now carries Hidden=true
+# too, and that -- not the rename -- is what actually stops it.
+autostart_entry_is_hidden() {
+  grep -Eq '^Hidden=true[[:space:]]*$' "$1" 2>/dev/null
+}
+
+hide_autostart_entry() {
+  local path="$1"
+  if grep -Eq '^Hidden=' "$path"; then
+    sed -i -E 's/^Hidden=.*/Hidden=true/' "$path"
+  else
+    printf 'Hidden=true\n' >> "$path"
+  fi
+}
+
+unhide_autostart_entry() {
+  sed -i '/^Hidden=true[[:space:]]*$/d' "$1"
+}
+
 stop_legacy_autostart() {
   # The .deb's own autostart entry. Renamed rather than deleted so `disable`
-  # can put it back. XDG autostart only reads *.desktop, so the .disabled
-  # suffix is enough to stop it while leaving the file where dpkg expects it.
+  # can put it back, and marked Hidden=true (see above) so that the rename
+  # alone isn't what's relied on to stop it -- that part is still worth
+  # doing, because leaving the file at its dpkg-expected path where it can
+  # be found under its original name is what lets `disable` restore it later
+  # and what keeps this a plain, recoverable file move rather than a rewrite
+  # `apt` has to reconcile.
   #
   # That file is a dpkg conffile, so a later `apt upgrade` sees it as
-  # "removed by the local admin" and can put it back -- at which point the
-  # next graphical login starts a second daemon as the logged-in user. That
-  # one fails closed rather than doing damage (check_runtime_identity
-  # refuses to run as the wrong account on a separated install), and
-  # `status` reports it as STILL AUTOSTARTS with the reason. Re-running
-  # `enable` moves it aside again. Making dpkg itself aware of the opt-in
-  # would take a package trigger, which is more machinery than an opt-in
-  # this size earns; the loud-and-recoverable failure is the trade.
+  # "removed by the local admin" and can put back the *un*hidden original --
+  # at which point the next graphical login starts a second daemon as the
+  # logged-in user. That one fails closed rather than doing damage
+  # (check_runtime_identity refuses to run as the wrong account on a
+  # separated install), and `status` reports it as STILL AUTOSTARTS with the
+  # reason. Re-running `enable` moves it aside (and hides it) again. Making
+  # dpkg itself aware of the opt-in would take a package trigger, which is
+  # more machinery than an opt-in this size earns; the loud-and-recoverable
+  # failure is the trade.
   if [ -f "$LEGACY_AUTOSTART_PATH" ]; then
-    note "disabling the daemon's XDG autostart entry (${LEGACY_AUTOSTART_PATH} -> .disabled)"
+    note "disabling the daemon's XDG autostart entry (${LEGACY_AUTOSTART_PATH} -> .disabled, Hidden=true)"
+    hide_autostart_entry "$LEGACY_AUTOSTART_PATH"
     mv "$LEGACY_AUTOSTART_PATH" "${LEGACY_AUTOSTART_PATH}.disabled"
+  elif [ -f "${LEGACY_AUTOSTART_PATH}.disabled" ] && ! autostart_entry_is_hidden "${LEGACY_AUTOSTART_PATH}.disabled"; then
+    # Already renamed by a version of this script that predates B24's fix --
+    # systemd's generator has been autostarting it under the renamed name
+    # this whole time. Heal it in place: `enable --auto` re-runs on every
+    # package upgrade (debian/postinst), so an existing separated install
+    # picks this up the next time it's upgraded, with no separate migration.
+    note "the disabled autostart entry (${LEGACY_AUTOSTART_PATH}.disabled) predates Hidden=true -- adding it"
+    hide_autostart_entry "${LEGACY_AUTOSTART_PATH}.disabled"
   fi
   # The pip/pipx path's `--user` unit. Stopping it needs the owner's own
   # session bus, which exists only while they are logged in -- best-effort,
@@ -463,6 +505,11 @@ cmd_disable() {
 
   if [ -f "${LEGACY_AUTOSTART_PATH}.disabled" ]; then
     note "restoring the daemon's XDG autostart entry"
+    # Undo hide_autostart_entry's Hidden=true (stop_legacy_autostart above)
+    # before the rename, not after -- this file goes back to autostarting
+    # the daemon, and a stray Hidden=true left behind would silently stop it
+    # from doing that.
+    unhide_autostart_entry "${LEGACY_AUTOSTART_PATH}.disabled"
     mv "${LEGACY_AUTOSTART_PATH}.disabled" "$LEGACY_AUTOSTART_PATH"
   fi
   local user_unit="${OWNER_HOME}/.config/systemd/user/${LEGACY_USER_UNIT}"
@@ -554,8 +601,17 @@ cmd_status() {
     fi
   fi
 
+  # B24: presence at the *original* path used to be the whole check, but
+  # that only catches an `apt upgrade` restoring the plain (un-hidden)
+  # conffile -- it says nothing about the far more common case, the
+  # ${LEGACY_AUTOSTART_PATH}.disabled file `disable` actually left behind,
+  # which autostarts just the same unless it also carries Hidden=true (see
+  # stop_legacy_autostart above). Check whichever of the two exists.
   if [ -f "$LEGACY_AUTOSTART_PATH" ]; then
     echo "  STILL AUTOSTARTS ${LEGACY_AUTOSTART_PATH} would start a second daemon in your own session"
+    problems=1
+  elif [ -f "${LEGACY_AUTOSTART_PATH}.disabled" ] && ! autostart_entry_is_hidden "${LEGACY_AUTOSTART_PATH}.disabled"; then
+    echo "  STILL AUTOSTARTS ${LEGACY_AUTOSTART_PATH}.disabled has no Hidden=true -- systemd's XDG autostart generator ignores the rename and would start a second daemon in your own session"
     problems=1
   fi
 
