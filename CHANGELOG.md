@@ -352,6 +352,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   redirect itself onto a root it controls instead of the one the installer provisioned and locked
   down. The override still works exactly as before on the common case — a dev/CI machine, which
   has no real marker at that literal system root to begin with.
+- B13 of the 4.1.0 action plan: the Slack/Salesforce/Atlassian OAuth loopback listener
+  (`oauth_loopback.py`) no longer inherits `HTTPServer.allow_reuse_address`. On a privilege-separated
+  install the agent is a different, less-trusted process than the daemon (ADR 0002) and could bind
+  the fixed redirect port first; PKCE already stops it from completing the exchange, but leaving
+  address reuse on meant the daemon's own bind() could still silently succeed over that squatted
+  port on Windows, where `SO_REUSEADDR` on a *new* socket lets it steal a port another socket is
+  actively listening on regardless of that socket's own options — leaving it undefined which of the
+  two processes actually received the provider's callback. With reuse off, that bind() now always
+  fails, which the existing actionable `OAuthLoopbackError` already reports.
 
 ### Added
 
