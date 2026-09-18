@@ -23,6 +23,7 @@ import contextlib
 import urllib.parse as up
 
 import httpx
+import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from starlette.applications import Starlette
@@ -127,11 +128,11 @@ async def _mcp_session(app, session_manager, *, access_token: str):
     in one shared ``async with mcp_lifespan(session_manager):`` itself
     (see ``_two_mcp_sessions`` below) rather than each grabbing its own.
     """
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
+    transport = httpx2.ASGITransport(app=app)
+    async with httpx2.AsyncClient(
         transport=transport, base_url=ISSUER, headers={"Authorization": f"Bearer {access_token}"},
     ) as http_client:
-        async with streamable_http_client(f"{ISSUER}/mcp", http_client=http_client) as (read, write, _sid):
+        async with streamable_http_client(f"{ISSUER}/mcp", http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 yield session
@@ -152,7 +153,7 @@ async def test_dcr_authorize_token_and_a_real_tool_call_resolve_to_the_signed_in
     async with mcp_lifespan(session_manager):
         async with _mcp_session(app, session_manager, access_token=tokens["access_token"]) as session:
             result = await session.call_tool("whoami", {"reason": "test"})
-            assert result.structuredContent == {
+            assert result.structured_content == {
                 "id": "alice", "email": "alice@example.com", "display_name": "Alice A.", "is_admin": True,
             }
 
@@ -179,11 +180,11 @@ async def test_two_different_humans_authorizing_the_same_claude_client_get_isola
     async with mcp_lifespan(session_manager):
         async with _mcp_session(app, session_manager, access_token=tokens_a["access_token"]) as session:
             result = await session.call_tool("whoami", {"reason": "test"})
-            assert result.structuredContent["id"] == "alice"
+            assert result.structured_content["id"] == "alice"
 
         async with _mcp_session(app, session_manager, access_token=tokens_b["access_token"]) as session:
             result = await session.call_tool("whoami", {"reason": "test"})
-            assert result.structuredContent["id"] == "bob"
+            assert result.structured_content["id"] == "bob"
 
 
 async def test_mcp_access_token_is_rejected_as_an_org_session_cookie(tmp_path, monkeypatch):

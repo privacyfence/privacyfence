@@ -344,6 +344,7 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
                 ("calendar.create_modify_event", "personal_calendar"),
                 ("calendar.set_visibility", "personal_calendar"),
                 ("calendar.set_color", "personal_calendar"),
+                ("calendar.delete_event", "personal_calendar"),
             )),
         },
         resolver=_resolve_calendar,

@@ -428,6 +428,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   existing event, mirroring `calendar_set_event_visibility`. A new `calendar_list_colors` tool
   lists Calendar's fixed color palette (id, name e.g. "Tomato", hex background/foreground) so a
   color can be picked by name instead of a numeric id. See issue #414.
+- Calendar recurring-event management. `calendar_create_event` accepts a new `recurrence` parameter
+  (RRULE/EXDATE/RDATE/EXRULE lines, e.g. `"RRULE:FREQ=WEEKLY;COUNT=10"`) to create a recurring
+  series. `calendar_update_event` and a new `calendar_delete_event` tool both accept a `scope`
+  parameter (`"this"` default, `"following"`, or `"all"`) matching Google Calendar's own edit
+  picker, plus `send_updates` for attendee notification control; the approval popup gets a new
+  "Applies to" row showing which occurrences a scoped change covers. "This and following" splits
+  the series by ending the old one with an RRULE `UNTIL` and (for updates) inserting a new series
+  from that point — Google Calendar's own documented approach, there being no single API call for
+  it. `calendar_delete_event` shares `calendar_create_event`/`calendar_update_event`'s auto-accept
+  rule set (`i_am_organizer`, `no_external_attendees`, `personal_calendar`). `calendar_create_event`
+  always sends an explicit time zone for a recurring event even when `start_time`/`end_time` already
+  carry their own UTC offset — the Calendar API rejects a recurring event that omits one ("Missing
+  time zone definition for start time"), caught by `qa_fixture_recorder.py --lifecycle` against the
+  real API before this shipped. See issue #415.
 - Approval binder, Phase 1: `/approvals` now groups pending, batchable approvals by
   `(connector, operation)` with a per-group and page-level select-all, and **Deny selected**
   clears a whole group of unwanted requests in one action (client-side over the existing per-id
@@ -489,6 +503,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/approvals` instead of the one card's own link and asks for every outstanding id to be
   collected into a single `privacyfence_await_approval` call rather than relayed and awaited one
   at a time — `privacyfence_await_approval`'s own tool description now says the same thing.
+
+### Changed
+
+- **The MCP server now runs on the official Python SDK's 2.x API** (`mcp>=2.2,<3.0`, up from
+  `mcp>=1.28,<2.0`). A deliberate migration rather than a widened range: mcp 2.0 rewrote the
+  low-level server surface `/mcp` is built on, so the old pin could not simply be raised.
+  Handlers are registered as constructor arguments instead of decorators and receive a
+  per-request context, the per-session `lifespan` this daemon keyed its unattended-session and
+  deduplication state by is now entered once per session *manager*, and result/tool models
+  renamed their fields to snake_case. `/mcp` behaves the same on the wire — the same tools, the
+  same `initialize` instructions, the same `tools/list_changed` notification when connectors
+  change, the same tool-level error result (rather than a protocol error) for a failed call,
+  which 2.0 would otherwise have replaced with a generic "Error executing tool" message. Each
+  Streamable HTTP session is now identified by the transport's own `Mcp-Session-Id` rather than
+  an id minted by the server's lifespan, and its unattended-session state is released when the
+  session ends, exactly as before. The organization-mode authorization server explicitly refuses
+  SEP-990 identity assertions (the RFC 7523 `jwt-bearer` grant) that 2.x added to its provider
+  interface: in org mode a human authenticates at the identity provider through PrivacyFence's
+  own `/authorize`, which is what every downstream gate, audit entry and approval is scoped to.
+  `requirements/*.lock.txt` are regenerated accordingly, including mcp 2.x's new transitive
+  dependencies (`mcp-types`, `httpx2`, `httpcore2`, `truststore`), all hash-pinned. See
+  issue #250.
 
 ### Fixed
 
