@@ -157,6 +157,7 @@ def build_routes(
     session_cookie_name: str,
     step_up: StepUpConfig,
     issuer_url: str,
+    back_link: tuple[str, str] = ("/connect", "Back to connections"),
 ) -> list[Route]:
     """``resolve_principal``/``check_csrf``/``check_origin`` are the
     mode-specific half of this module (#426 Phase 1) -- org mode's caller
@@ -172,7 +173,12 @@ def build_routes(
     token (the double-submit scheme's session-id-doubles-as-token design,
     see either session module's own ``check_csrf`` docstring) -- reading it
     directly here rather than through another callable, since it's a bare
-    string either way.
+    string either way. ``back_link`` is an ``(href, label)`` pair for the
+    page's own footer link -- it defaults to org mode's ``/connect`` (routes_
+    connect.py) since that was this module's only caller until #426 Phase 1;
+    local mode's caller overrides it to ``/settings/connectors``, since it
+    has no ``/connect`` route to link to (settings_window_html.py's
+    Connectors tab is that mode's own equivalent).
     """
     challenges = RegistrationChallengeStore()
     delete_challenges = StepUpChallengeStore()
@@ -222,7 +228,7 @@ def build_routes(
         creds = webauthn_stepup.list_credentials(principal)
         html = _render_security_page(
             principal=principal, creds=creds, csrf=session_id, step_up=step_up,
-            nonce=_csp_nonce_for(request),
+            nonce=_csp_nonce_for(request), back_link=back_link,
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -533,6 +539,7 @@ def _credential_row_html(cred) -> str:
 
 def _render_security_page(
     *, principal: Principal, creds: list, csrf: str, step_up: StepUpConfig, nonce: str,
+    back_link: tuple[str, str],
 ) -> str:
     who = _esc(principal.email or principal.display_name or principal.id)
     rows = "".join(_credential_row_html(c) for c in creds)
@@ -553,7 +560,7 @@ really you before a write approval is released, even if someone else has your un
 <span id="pf-passkey-status" class="meta"></span></p>
 <p>Lost every passkey enrolled here? <button type="button" class="remove" id="pf-use-recovery-code">Use your recovery code</button>
 <span id="pf-recovery-status" class="meta"></span></p>
-<p><a href="/connect">Back to connections</a></p>
+<p><a href="{_esc(back_link[0])}">{_esc(back_link[1])}</a></p>
 <script nonce="{nonce}">{_PAGE_JS}</script>
 </body></html>"""
 
