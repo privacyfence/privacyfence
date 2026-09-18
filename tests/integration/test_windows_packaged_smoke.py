@@ -13,10 +13,15 @@ as possible to how a real user would.
    ``/VERYSILENT /SUPPRESSMSGBOXES``, same as a user clicking through the
    wizard with every default accepted. ``/DIR=`` is overridden to a scratch
    directory under this test's own ``tmp_path`` rather than the real
-   ``%ProgramFiles%``: ``installer/privacyfence.iss`` already declares
-   ``PrivilegesRequired=lowest`` specifically so a per-user-writable install
-   location needs no admin elevation at all -- this test relies on exactly
-   that, so it runs the same way an unprivileged CI runner does.
+   ``%ProgramFiles%`` purely for isolation from whatever else is on the
+   runner, not to dodge elevation: ``installer/privacyfence.iss`` is
+   ``PrivilegesRequired=admin`` (a non-elevated install can never register
+   the Task Scheduler autostart task at all -- see
+   ``docs/platform-support.md``'s "Known open items" -- so admin is no
+   longer optional), and this test relies on the hosted runner's own account
+   already carrying a full, unfiltered admin token (no interactive UAC
+   prompt to get in this test's way) rather than on the installer not
+   needing one.
 2. **Validate the autostart entry**: ``installer/privacyfence.iss``'s
    ``[Run]`` section registers the Task Scheduler task
    (the now-removed windows-support-plan.md Phase 3) as part of the (silent) install
@@ -440,10 +445,13 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     log_path = tmp_path / "install.log"
 
     # ── Install ──────────────────────────────────────────────────────────
-    # /DIR overrides installer/privacyfence.iss's DefaultDirName -- this is
-    # what lets PrivilegesRequired=lowest install without ever needing an
-    # admin elevation prompt: the target is a directory this test's own
-    # user already owns, not the real %ProgramFiles%.
+    # /DIR overrides installer/privacyfence.iss's DefaultDirName so this
+    # test's install stays under its own tmp_path instead of the real
+    # %ProgramFiles% -- isolation from whatever else is on the runner, not
+    # an elevation dodge: PrivilegesRequired=admin means Setup needs an
+    # elevated token regardless of which directory it's writing to, and
+    # this module's own docstring explains why this test still runs
+    # unattended (the hosted runner's account already has one).
     result = _run_installer(
         str(setup_exe),
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",

@@ -72,10 +72,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Authenticating, disabling, or refreshing a connector now pushes a real MCP `tools/list_changed`
   notification to every open Streamable HTTP session, so a client that already connected picks up
   the new tool list without needing to reconnect. See issue #396.
-- The Windows installer now offers to open the bundled `.mcpb` at the end of setup (checked by
-  default, alongside "Launch PrivacyFence now"), so Claude Desktop's install prompt appears
-  automatically for most users instead of requiring them to locate the file in File Explorer
-  first. See issue #407.
 - Python 3.14 is now covered by CI. The `test-python-compat` job's matrix runs the core suite on
   3.11, 3.12 and 3.14 (3.13 is the full `test` job's own version), so the interpreter that is the
   default `python3` on current Ubuntu releases is proven rather than merely implied by
@@ -101,11 +97,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   poll tool (`privacyfence_await_approval`) alongside every pending approval — this only
   strengthens the in-band instructions an MCP client sees, since a daemon has no way to push a
   notification into a chat turn on its own.
-- The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands
-  (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
-  current-user-only install) and how to get there in File Explorer, instead of just saying to
-  install it with no path given, for the case where the new automatic prompt above was declined.
-  See issue #407.
 - `privacyfence_get_sign_in_link`'s result text is now a single markdown link (naming the
   10-minute expiry in the link text itself, e.g. "Sign in to PrivacyFence — one-time link, expires
   in 10 minutes") instead of a raw `{"url": ...}` JSON blob, so a client that renders tool text as
@@ -147,6 +138,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `%ProgramFiles%\PrivacyFence\` — previously it only checked the latter, so a default (non-admin)
   install left both autostart *and* the shim's self-heal spawn unable to find the daemon, showing
   up as an MCP "unable to connect" with nothing in Task Manager.
+- The Windows installer no longer offers a non-admin install at all (`PrivilegesRequired=admin`,
+  was `lowest`), because that warning dialog above was not describing an occasional glitch: a
+  non-elevated install could never register the autostart task in the first place. Registering a
+  Task Scheduler task with a `LogonTrigger` needs the `SeCreateGlobalPrivilege` user right, which
+  an ordinary (non-elevated) token lacks by default — including a UAC-filtered admin account's own
+  token, the same token a `lowest`-privilege install runs Setup with unless the user explicitly
+  chooses "Run as administrator" — regardless of whether the task's principal is a group or that
+  user's own account. Every non-admin install hit "Access is denied" every time, not sometimes; two
+  real users reported it. Requiring elevation up front closes the gap at its actual cause instead
+  of around it.
 - Org mode's approval page no longer shows the WebAuthn step-up helper's JavaScript source as
   literal visible text above the approval card. `_org_bridge_shim` concatenated it ahead of its
   own `<script>` tag instead of inside one, so the browser rendered the function bodies as page
@@ -208,7 +209,10 @@ Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` pre-release.
 - **Windows support.** A signed Inno Setup installer (`PrivacyFence-<version>-setup.exe`) installs
   to `%ProgramFiles%\PrivacyFence\`, registers a Task Scheduler task so the daemon starts at
   login, and starts it immediately. A repeating time trigger on that task brings the daemon back
-  after a crash.
+  after a crash. The installer also offers to open the bundled `.mcpb` at the end of setup
+  (checked by default, alongside "Launch PrivacyFence now"), so Claude Desktop's install prompt
+  appears automatically for most users instead of requiring them to locate the file in File
+  Explorer first. See issue #407.
 - **Debian/Ubuntu support.** A `.deb` package (`sudo apt install ./privacyfence_<version>_amd64.deb`)
   installs to `/opt/privacyfence` and adds an XDG autostart entry, so the daemon starts at the next
   graphical login. Install, remove, purge, and upgrade are exercised by an automated lifecycle test
@@ -256,6 +260,23 @@ Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` pre-release.
   library's `ElementTree` — see "Security" below.
 - The project moved to the `privacyfence` GitHub organization, and the contact address is now
   `info@privacyfence.eu`.
+- The README's "Install on Windows" steps now say where `PrivacyFence.mcpb` actually lands
+  (`%ProgramFiles%\PrivacyFence\`, or `%LOCALAPPDATA%\Programs\PrivacyFence\` for a non-elevated,
+  current-user-only install) and how to get there in File Explorer, instead of just saying to
+  install it with no path given, for the case where the automatic Finish-page prompt above was
+  declined. See issue #407.
+- The Windows installer's "open the `.mcpb` after Finish" checkbox (issue #407, above) no longer
+  attempts to `ShellExecute` the `.mcpb` when nothing on the machine is registered to open one —
+  previously, that left Windows presenting its own "how do you want to open this file?" picker
+  instead of anything PrivacyFence-specific. This isn't only a first-run/Claude-Desktop-not-
+  installed-yet case: Claude Desktop's own installer doesn't always register the `.mcpb`
+  association cleanly on Windows the first time, so the failure was also reported on a machine
+  that already had Claude Desktop installed. The installer now checks the registry for a real,
+  working `.mcpb` association before deciding what Finish does: if one exists, it opens the
+  `.mcpb` exactly as before; otherwise the same checkbox opens File Explorer with the `.mcpb`
+  pre-selected instead, so the user always lands somewhere they can act on (double-click once
+  Claude Desktop is installed and associated, drag it onto Claude Desktop's Settings → Extensions
+  page, or fix the association via Open With) rather than at a dead-end system dialog.
 
 ### Removed
 

@@ -1017,10 +1017,13 @@ Current packaging paths are documented in [`platform-support.md`](platform-suppo
 ### Windows
 
 `installer/privacyfence.iss` (built by `scripts/build_installer.ps1`) installs the PyInstaller
-onedir output under `%ProgramFiles%\PrivacyFence\` (or a per-user-writable location instead, when
-the installer runs without admin elevation — `PrivilegesRequired=lowest`), the bundled `.mcpb`
-alongside it, and a Start Menu entry pointing at the embedded web settings UI rather than at the
-daemon executable directly.
+onedir output under `%ProgramFiles%\PrivacyFence\`, the bundled `.mcpb` alongside it, and a Start
+Menu entry pointing at the embedded web settings UI rather than at the daemon executable directly.
+The installer requires admin elevation (`PrivilegesRequired=admin`) — it used to allow a
+per-user-writable install without elevation (`PrivilegesRequired=lowest`), but that path could
+never register the Task Scheduler autostart task below at all: `schtasks /create /xml` registering
+a task with a `LogonTrigger` needs the `SeCreateGlobalPrivilege` user right, which a non-elevated
+token lacks regardless of the task's principal (see `platform-support.md`'s "Known open items").
 
 Autostart is a Task Scheduler task (`PrivacyFence`), not a Startup-folder shortcut, registered from
 `installer/privacyfence.iss`'s `[Code]` section (`CurStepChanged(ssPostInstall)` calling
