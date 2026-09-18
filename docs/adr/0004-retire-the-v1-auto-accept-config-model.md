@@ -1,12 +1,13 @@
-# ADR 0003: retire the v1 auto-accept config model
+# ADR 0004: retire the v1 auto-accept config model
 
 ## Status
 
 Accepted; implemented. No tracked GitHub issue number — like P3/P4/P6/P7/P8 before it, this phase's
 own CHANGELOG entries describe the work inline rather than against an issue. This is P9, the final
-phase of the policy v2 redesign (P0–P9) — see [`docs/adr/0002-local-mode-trust-boundary-and-companion-app.md`](0002-local-mode-trust-boundary-and-companion-app.md)
-for the unrelated ADR immediately before this one in sequence, and the P3/P4/P6/P7/P8 entries under
-`CHANGELOG.md`'s `## [Unreleased]` heading for the phases that got here.
+phase of the policy v2 redesign (P0–P9) — see [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md)
+and [ADR 0003](0003-separated-installs-only.md) for the two unrelated ADRs immediately before this
+one in sequence, and the P3/P4/P6/P7/P8 entries under `CHANGELOG.md`'s `## [Unreleased]` heading for
+the phases that got here.
 
 ## Context
 
@@ -182,8 +183,9 @@ generator with a CI drift guard makes that impossible rather than merely discour
 
 ## Related
 
-- [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md) — unrelated subsystem, immediately
-  preceding ADR in sequence.
+- [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md) — unrelated subsystem.
+- [ADR 0003](0003-separated-installs-only.md) — unrelated subsystem, immediately preceding ADR in
+  sequence (merged into `releases/4.2-dev` while this phase was in progress).
 - `CHANGELOG.md`'s `## [Unreleased]` → `### Added` — the P3/P4/P6/P7/P8/P9 entries record this
   redesign's phases in order.
 - `docs/TECHNICAL_REFERENCE.md#auto-accept` — the single model this ADR's docs decision produced.
