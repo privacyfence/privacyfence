@@ -19,6 +19,13 @@ turning the default on does not by itself satisfy that; see
 to show on a real machine. Supersedes [ADR 0001](0001-remove-macos-native-extra.md) in part — see
 "Relationship to ADR 0001" below.
 
+**Superseded in part by [ADR 0003](0003-separated-installs-only.md), 2026-09-18.** Decisions 1–4
+and 6 stand unchanged and are what ADR 0003 enforces. What it withdraws is decision 5a's answer —
+"two install tiers", the non-elevated Windows per-user path kept — and, with it, the premise every
+"opt-in"/"default-on but declinable" wording below rests on: separation stops being something an
+install may be without. The macOS DMG and D1's declinable first-start prompt go with it; see
+ADR 0003 decisions 2 and 6.
+
 ## Context
 
 P10 left local mode headless. The daemon has no window, no menu bar item and no dock icon; every
@@ -171,6 +178,8 @@ path documented in the README (see [#407](https://github.com/privacyfence/privac
 cannot have this. Either two install tiers, or that path is dropped."*
 
 **Decided: two install tiers. The per-user path stays, exactly as it is, and cannot be separated.**
+
+**Withdrawn by [ADR 0003](0003-separated-installs-only.md), 2026-09-18: one tier, elevated, separated by the installer.** The escalation argument below is unchanged and is *why* a user-writable install still cannot be separated; what changed is the conclusion drawn from it. This section's closing trade — "privilege separation is opt-in, so taking the product away from the user who cannot elevate is the wrong trade" — depended on separation being an optional hardening step, which #426 ended. See ADR 0003 decision 4, including what that costs the user who cannot elevate at all.
 
 The deciding argument is not that a service install needs administrator rights — that is merely
 inconvenient, and a one-time elevation prompt is a price this feature is plainly worth. It is that
