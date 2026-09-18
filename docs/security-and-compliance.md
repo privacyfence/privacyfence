@@ -48,8 +48,9 @@ Linux and Windows)](#privilege-separation-macos-linux-and-windows) below, which 
 [#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4 builds. macOS and Linux move
 it **by default** as of D1 (4.1); Windows remains opt-in, per that subsection. Everything in the
 rest of this section describes the un-separated install — still what a Windows install is unless
-`enable` is run by hand, still reachable on any platform via `... disable`, and still what a macOS
-install is until its one admin-password prompt is answered or a Linux install is until `enable
+`enable` is run by hand, still reachable on any platform via `... disable`, and still what a macOS DMG install is until its
+one admin-password prompt is answered (a macOS `.pkg` install, #428 D2, answers this at install
+time instead — see that subsection) or a Linux install is until `enable
 --auto` can resolve who owns it (see that subsection for when it can't); that subsection says
 exactly which of these statements a separated install changes and which it leaves standing.
 
@@ -236,15 +237,18 @@ All three still ship the manual `enable`/`disable`/`status` subcommands above; t
 live connector OAuth tokens, so take a backup first if running one by hand. `... disable` reverses
 it on any platform. **macOS and Linux now turn this on by default as of #428 D1 (4.1)**, rather than
 waiting out the originally-planned soak period: the `.deb`'s `postinst` runs `enable --auto` itself,
-root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)); macOS
-has no equivalent package-manager hook, so the daemon's own startup asks once, via the standard
-admin-password dialog, the first time it finds itself unseparated
-(`privilege_separation.maybe_auto_enable_macos()`). `--auto` (used by both triggers, never by a
-human directly) is the same `enable`, made safe to run unattended: anywhere it can't safely tell who
-owns the install or find the daemon's executables, it logs why and leaves the install opt-in rather
-than guessing or failing a package install. **Windows stays opt-in** — D1 does not extend to it, on
-top of the install-tier and mandatory-companion requirements below, which raise the bar for an
-unattended default beyond what the two POSIX platforms needed.
+root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)); a DMG
+install has no equivalent package-manager hook, so the daemon's own startup asks once, via the
+standard admin-password dialog, the first time it finds itself unseparated
+(`privilege_separation.maybe_auto_enable_macos()`). #428 D2 (4.1) gives macOS a second artifact that
+*does* get a root-context install-time hook of its own — `scripts/build_pkg.sh`'s signed `.pkg`,
+whose own `installer/macos/pkg/postinstall` script runs `enable --auto` itself while the package
+install is still running, the same shape as the `.deb`'s `postinst`. `--auto` (used by all three
+triggers now, never by a human directly) is the same `enable`, made safe to run unattended: anywhere
+it can't safely tell who owns the install or find the daemon's executables, it logs why and leaves
+the install opt-in rather than guessing or failing a package install. **Windows stays opt-in** — D1
+does not extend to it, on top of the install-tier and mandatory-companion requirements below, which
+raise the bar for an unattended default beyond what the two POSIX platforms needed.
 
 **Windows expresses the same layout in a different primitive, and adds one requirement the others
 do not have.** There are no permission bits there, so the modes below are NTFS ACLs
