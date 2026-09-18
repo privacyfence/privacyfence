@@ -648,6 +648,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   challenge this server began; every other path — no step-up required for the batch, or the
   no-credential-enrolled/`require_passkey`-off fall-through — mints a fresh one instead of trusting
   the request body.
+- Org mode: `/connect` ("Connect your accounts") had no way back to the rest of the web UI —
+  `/approvals`, `/security`, and `/settings` all link to it, and `/settings`/`/approvals` link back
+  to each other, but `/connect` itself only offered a sign-out button. It now carries the same
+  Approvals/Passkeys/Settings footer the approvals page uses, so a principal who lands there (from
+  a first sign-in, or from `/security`'s own "Back to connections" link) isn't stuck without a way
+  back short of editing the URL.
 
 ## [4.0.0] — 2026-09-18
 
