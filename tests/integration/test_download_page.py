@@ -77,6 +77,25 @@ STABLE_MANIFEST = {
     ],
 }
 
+# #428 D2: the .pkg is an additional macOS artifact alongside the DMG above, not a replacement --
+# STABLE_MANIFEST's own three artifacts plus this one, used by TestMacPkgInstaller below.
+STABLE_MANIFEST_WITH_PKG = {
+    **STABLE_MANIFEST,
+    "artifacts": [
+        *STABLE_MANIFEST["artifacts"],
+        {
+            "id": "macos-arm64-pkg",
+            "kind": "installer",
+            "platform": "macos",
+            "architecture": "arm64",
+            "filename": "PrivacyFence-4.3.0.pkg",
+            "key": "releases/stable/4.3.0/PrivacyFence-4.3.0.pkg",
+            "size": 104000000,
+            "sha256": "e" * 64,
+        },
+    ],
+}
+
 BETA_MANIFEST = {
     "schema": 1,
     "version": "4.4.0b1",
@@ -388,5 +407,46 @@ class TestDegradedApi:
             href = page.get_attribute("#download-fallback a", "href")
             assert href == "https://github.com/privacyfence/privacyfence/releases/latest"
             assert page.query_selector("#download-loading") is None
+        finally:
+            context.close()
+
+
+class TestMacPkgInstaller:
+    """#428 D2: the .pkg is an additional macOS artifact alongside the DMG, not a replacement --
+    a manifest that includes one must render both as separate cards (download.js's own "nothing
+    hardcoded" design means this needs no page change, only the extra manifest entry), and OS
+    detection must still recommend only the DMG: download.js's PLATFORMS map lists 'macos-arm64'
+    before 'macos-arm64-pkg', and detectPlatformId() returns the first id whose regex matches."""
+
+    MAC_UA = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+    )
+
+    def test_renders_alongside_the_dmg(self, browser, website_server):
+        context, page = _open_download_page(browser, website_server, stable=STABLE_MANIFEST_WITH_PKG)
+        try:
+            ids = page.eval_on_selector_all(
+                ".download-grid:not(.compact) .download-card", "cards => cards.map(c => c.dataset.artifactId)"
+            )
+            assert sorted(ids) == ["linux-x64", "macos-arm64", "macos-arm64-pkg", "windows-x64"]
+
+            href = page.get_attribute('.download-card[data-artifact-id="macos-arm64-pkg"] .download-button', "href")
+            assert href == f"{API_ORIGIN}/download/stable/macos-arm64-pkg"
+
+            body = page.inner_text("body")
+            assert "PrivacyFence-4.3.0.pkg" in body
+        finally:
+            context.close()
+
+    def test_only_the_dmg_is_recommended_for_a_mac_visitor(self, browser, website_server):
+        context, page = _open_download_page(
+            browser, website_server, stable=STABLE_MANIFEST_WITH_PKG, user_agent=self.MAC_UA,
+        )
+        try:
+            highlighted = page.eval_on_selector_all(
+                ".download-card.recommended", "cards => cards.map(c => c.dataset.artifactId)"
+            )
+            assert highlighted == ["macos-arm64"]
         finally:
             context.close()

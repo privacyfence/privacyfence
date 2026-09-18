@@ -13,6 +13,7 @@ import type { ManifestArtifact } from "./manifest.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   dmg: "application/x-apple-diskimage",
+  pkg: "application/octet-stream", // no widely-registered type for Apple's xar-based installer packages
   exe: "application/vnd.microsoft.portable-executable",
   deb: "application/vnd.debian.binary-package",
 };

@@ -248,6 +248,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a separated install keeps running the staged copy until `enable` is run again, which is the correct
   cost of closing this rather than a regression to work around (auto-refreshing from an
   already-elevated process would mean trusting `/Applications` again, silently). See issue #428.
+- Issue #428 D2 follow-up (download surface): the `.pkg` built above was uploading to R2 correctly
+  but was invisible everywhere a person would actually go looking for it — `scripts/
+  r2_release.py`'s `_INSTALLERS` (what `finalize` reads to decide a release's `manifest.json`, the
+  one thing the download page, `/api/releases`, and the Worker's own `/download/<channel>/<id>`
+  route all resolve through) recognized only the DMG/`.exe`/`.deb`, so a `.pkg` sat in the bucket
+  with no id, no listing, and no route to it — the first alpha built with #428 D2 (`v4.1.0a3`)
+  shipped exactly that way. `.pkg` is now a fourth recognized pattern there, given its own artifact
+  id (`macos-arm64-pkg`) distinct from the DMG's `macos-arm64` — deliberately *not* added to
+  `REQUIRED_ARTIFACT_IDS`, so a pkg-signing-cert gap or a pkg-specific smoke-test failure can never
+  block the DMG/`.exe`/`.deb` from reaching "latest" the way a missing *mandatory* installer does;
+  `finalize` already worked this way for every optional (non-manifest) upload, this just adds a
+  manifest-visible middle tier between "counted and required" and "never counted at all".
+  `website/download/download.js` needed no logic change to pick this up — its own "nothing about a
+  release is hardcoded here" design (each manifest artifact renders its own card) already covered
+  it, so this only adds `cloudflare/downloads/src/artifacts.ts`'s `.pkg` `Content-Type` mapping and
+  a `PLATFORMS` display-name entry for the new id, both purely additive. `README`s aside, this
+  release-side fix does not retroactively fix `v4.1.0a3`'s own manifest — a manifest is written
+  once by `finalize` and the bucket's contents for that version are otherwise immutable — the `.pkg`
+  becomes visible starting with the next tag `finalize` runs against with this fix in place. See
+  issue #428.
 - Issue #428 B4: the control channel's `QUIT` command is now refused unconditionally on a
   privilege-separated install, regardless of `allow_quit`. The control socket is `0660`
   group-shared after separation so the companion can still reach it, which puts the agent in the
