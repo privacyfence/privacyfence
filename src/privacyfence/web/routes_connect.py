@@ -658,6 +658,7 @@ def _render_connect_page(
 the same approval rules as everything else.</p>
 {_flash_html(flash_connected, flash_error)}
 <ul class="services">{google_rows}{other_rows}{telegram_row}</ul>
+<p style="text-align:center"><a href="/approvals">Approvals</a> &middot; <a href="/security">Passkeys</a> &middot; <a href="/settings">Settings</a></p>
 <form method="post" action="/logout"><button type="submit" class="cancel" style="cursor:pointer">Sign out</button></form>
 </body></html>"""
 

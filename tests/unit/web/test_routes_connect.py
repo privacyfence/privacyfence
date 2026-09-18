@@ -106,6 +106,17 @@ class TestConnectPage:
         assert "Connected" in r.text
         assert "Reconnect" in r.text
 
+    def test_footer_links_back_to_the_rest_of_the_org_mode_surface(self):
+        # Every other org-mode page (approvals/security/settings) links back
+        # here or onward; this page previously had no way back to any of
+        # them short of editing the URL bar.
+        app, sessions, _registry = _app()
+        session_id, _principal = _signed_in(sessions)
+        r = _client(app).get("/connect", cookies={org_session.SESSION_COOKIE: session_id})
+        assert 'href="/approvals"' in r.text
+        assert 'href="/security"' in r.text
+        assert 'href="/settings"' in r.text
+
 
 # ---------------------------------------------------------------------------- #
 # /oauth/start/{service}
