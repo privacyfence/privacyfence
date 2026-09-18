@@ -190,6 +190,7 @@ from .policy import catalogue as policy_catalogue
 from .policy import compat as policy_compat
 from .policy import describe as policy_describe
 from .policy import engine as policy_engine
+from .policy import store as policy_store
 from .pii_detector import (
     PIIAuditMatch,
     describe_match_for_audit,
@@ -609,8 +610,13 @@ def _context_fingerprint(ctx: ReviewContext) -> str:
 
 def _evaluate_auto_accept(
     evaluator: AutoAcceptEvaluator, operation_key: str, ctx: ReviewContext,
-) -> tuple[bool, str]:
-    """Decide whether ``operation_key`` auto-accepts, per P3 of the policy v2 redesign.
+) -> tuple[bool, str, str]:
+    """Decide whether ``operation_key`` auto-accepts, per P3 of the policy v2 redesign. Returns
+    ``(auto_ok, matched_rule, matched_rule_id)`` -- P8 adds the third element: the canonical,
+    content-derived id (``policy.store.rule_id_for_rule``) of the on-disk v2 rule row this
+    decision resolves to, or ``""`` when it can't be attributed to exactly one row (F9). Never
+    guessed: an ``"auto_accepted"`` audit entry with an empty ``rule_id`` means exactly that,
+    rather than pointing at a row that might not be the real one.
 
     Both evaluators run on every call. By default (``policy.engine`` unset or ``"v1"``) the
     existing ``AutoAcceptEvaluator`` -- unchanged by this function -- keeps deciding, and the new
@@ -625,16 +631,28 @@ def _evaluate_auto_accept(
     and a redacted context fingerprint (``_context_fingerprint``) -- never ``ctx.args`` or
     ``ctx.raw_data`` themselves. A v2 evaluation error is swallowed the same way an unrecognised
     predicate already fails closed in ``policy.engine.evaluate`` -- shadow mode must never be able
-    to affect, or crash, the real (v1, by default) decision.
+    to affect, or crash, the real (v1, by default) decision. ``matched_rule_id`` is only ever
+    taken from a v2 match that *agrees* with whichever side is primary -- a disagreement already
+    means the audit trail can't be sure which row actually applies, so it gets no id either,
+    exactly like the case where v2 raised outright.
     """
     v1_ok, v1_rule = evaluator.should_auto_accept(operation_key, ctx)
 
-    v2_ok, v2_rule = False, ""
+    v2_ok, v2_rule, v2_rule_id = False, "", ""
     try:
         v2_rules = policy_compat.compile_rules(evaluator.effective_rules)
-        v2_ok, v2_rule = policy_engine.evaluate(
-            v2_rules, operation_key, ctx, is_temp_accepted=evaluator.is_temp_accepted,
-        )
+        v2_matched = policy_engine.find_matching_rule(v2_rules, operation_key, ctx)
+        if v2_matched is not None:
+            v2_ok, v2_rule = True, v2_matched.id
+            v2_rule_id = policy_store.rule_id_for_rule(v2_matched)
+        elif evaluator.is_temp_accepted(operation_key, temp_accept_key(operation_key, ctx)):
+            # Same fallback `policy.engine.evaluate` itself would take -- reproduced explicitly
+            # here (rather than delegated to `evaluate()`) only so this function keeps the actual
+            # matched `PolicyRule` object in hand for `rule_id_for_rule` above; looking a rule back
+            # up by the *name* `evaluate()` returns would be exactly the F9 ambiguity this phase
+            # exists to close, since v1-compiled rules from `policy.compat.compile_rule_entry`
+            # reuse the raw predicate name as `.id` and several rows can share one.
+            v2_ok, v2_rule = True, "session_temp_accept"
     except Exception:
         logger.warning("Policy v2 shadow evaluation raised for op=%r", operation_key, exc_info=True)
     else:
@@ -644,9 +662,14 @@ def _evaluate_auto_accept(
                 operation_key, v1_ok, v1_rule, v2_ok, v2_rule, _context_fingerprint(ctx),
             )
 
-    primary_ok, primary_rule = (v2_ok, v2_rule) if get_policy_engine_version() == "v2" else (v1_ok, v1_rule)
+    agree = v1_ok and v2_ok and v1_rule == v2_rule
+    if get_policy_engine_version() == "v2":
+        primary_ok, primary_rule, primary_rule_id = v2_ok, v2_rule, v2_rule_id
+    else:
+        primary_ok, primary_rule = v1_ok, v1_rule
+        primary_rule_id = v2_rule_id if agree else ""
     if primary_ok:
-        return primary_ok, primary_rule
+        return primary_ok, primary_rule, primary_rule_id
 
     # P6: a rule that exists only in the on-disk v2 `auto_accept:` section -- authored directly
     # through the redesigned Auto-accept Settings page, or governing an operation v1 has no
@@ -654,17 +677,26 @@ def _evaluate_auto_accept(
     # v1 counterpart to be shadowed against, so it is checked here unconditionally rather than only
     # when `policy.engine: v2`. See `auto_accept._AutoAcceptState.policy_v2_store_rules`'s own
     # comment for why this is a separate, always-on layer instead of folded into the comparison
-    # above.
+    # above. Its own rows' `.id` IS the canonical id already -- minted by `merge_rules`/
+    # `rule_id_for` at migration or add-rule time, the exact same value settings_controller.
+    # _auto_accept_state lists and remove_policy_rule looks up by -- so this trusts `.id` directly
+    # rather than recomputing it via `rule_id_for_rule` (which the v1/shadow branch above needs,
+    # since *its* rules carry the ambiguous v1 predicate name as `.id` instead). Recomputing here
+    # would still agree in the ordinary case, but would silently diverge from what Settings
+    # actually keys on for a hand-edited settings.yaml whose v2 rule entry was given an `id` that
+    # isn't its own content hash -- and diverging from Settings is exactly the failure mode this
+    # phase exists to close, not one to reintroduce for a case Settings itself never rejects.
     try:
-        store_ok, store_rule = policy_engine.evaluate(
-            get_policy_v2_store_rules(), operation_key, ctx, is_temp_accepted=evaluator.is_temp_accepted,
-        )
+        store_rules = get_policy_v2_store_rules()
+        store_matched = policy_engine.find_matching_rule(store_rules, operation_key, ctx)
     except Exception:
         logger.warning("Policy v2 store evaluation raised for op=%r", operation_key, exc_info=True)
-        return primary_ok, primary_rule
-    if store_ok:
-        return store_ok, store_rule
-    return primary_ok, primary_rule
+        return primary_ok, primary_rule, primary_rule_id
+    if store_matched is not None:
+        return True, store_matched.id, store_matched.id
+    if evaluator.is_temp_accepted(operation_key, temp_accept_key(operation_key, ctx)):
+        return True, "session_temp_accept", ""
+    return primary_ok, primary_rule, primary_rule_id
 
 
 def preflight_auto_accept(
@@ -1044,7 +1076,7 @@ async def gated_call(
 
     def audit(
         *, decision: str, auto_accept_rule: str, pii_detected: bool, decided_at: float | None = None,
-        decided_via: str = "", batch_id: str = "",
+        decided_via: str = "", batch_id: str = "", rule_id: str = "",
     ) -> None:
         nonlocal audited
         audited = True
@@ -1055,16 +1087,16 @@ async def gated_call(
             pii_categories=audit_pii_categories,
             pii_match_details=_pii_match_details_for_audit(audit_pii_matches, decision),
             claude_reason=claude_reason, decided_at=decided_at, delivery=delivery,
-            decided_via=decided_via, batch_id=batch_id,
+            decided_via=decided_via, batch_id=batch_id, rule_id=rule_id,
         )
 
     try:
         evaluator = get_auto_accept_evaluator()
-        auto_ok, matched_rule = _evaluate_auto_accept(evaluator, operation_key, ctx)
+        auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(evaluator, operation_key, ctx)
 
         if auto_ok and not pii_forces_confirmation and not upload_pii_categories:
             audit(
-                decision="auto_accepted", auto_accept_rule=matched_rule,
+                decision="auto_accepted", auto_accept_rule=matched_rule, rule_id=matched_rule_id,
                 pii_detected=bool(pii_categories) or bool(upload_pii_categories),
             )
             logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
@@ -1089,9 +1121,12 @@ async def gated_call(
             # pii_forces_confirmation, not pii_categories itself, since
             # pii_already_reviewed's own carve-out (see module docstring) is
             # unaffected by anything decided in the meantime.
-            auto_ok, matched_rule = _evaluate_auto_accept(evaluator, operation_key, ctx)
+            auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(evaluator, operation_key, ctx)
             if auto_ok and not pii_forces_confirmation:
-                audit(decision="auto_accepted", auto_accept_rule=matched_rule, pii_detected=bool(pii_categories))
+                audit(
+                    decision="auto_accepted", auto_accept_rule=matched_rule, rule_id=matched_rule_id,
+                    pii_detected=bool(pii_categories),
+                )
                 logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
                 return filtered_data
 
@@ -1211,9 +1246,12 @@ async def gated_call(
 
             # Same race as the review branch above: a rule may already cover
             # this by the time we get here.
-            auto_ok, matched_rule = _evaluate_auto_accept(evaluator, operation_key, ctx)
+            auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(evaluator, operation_key, ctx)
             if auto_ok and not upload_pii_categories:
-                audit(decision="auto_accepted", auto_accept_rule=matched_rule, pii_detected=False)
+                audit(
+                    decision="auto_accepted", auto_accept_rule=matched_rule, rule_id=matched_rule_id,
+                    pii_detected=False,
+                )
                 logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
                 return filtered_data
 
@@ -1660,7 +1698,7 @@ def _default_details(raw_data: Any) -> str:
 def _audit(
     *, created_at, request_id, connector, tool, tool_name, summary, sender, decision, auto_accept_rule,
     pii_detected=False, pii_categories=None, pii_match_details="", claude_reason="", decided_at=None,
-    delivery="", decided_via="", batch_id="",
+    delivery="", decided_via="", batch_id="", rule_id="",
 ) -> None:
     try:
         get_audit_logger().record(AuditEntry(
@@ -1697,6 +1735,10 @@ def _audit(
             # fields and LedgerHit's own docstring for how they get here.
             decided_via=decided_via,
             batch_id=batch_id,
+            # P8 (policy v2 redesign) -- see AuditEntry.rule_id's own docstring. Set only by the
+            # "auto_accepted" audit() calls above that resolved a canonical id; every other
+            # decision (and every audit() call that predates this parameter) keeps the default.
+            rule_id=rule_id,
         ))
     except Exception as exc:
         logger.warning("Audit log write failed: %s", exc)

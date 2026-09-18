@@ -45,6 +45,7 @@ from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.auto_accept import AutoAcceptEvaluator, init_policy_engine_version
 from privacyfence.pii_detector import init_pii_detection
+from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.web_approval_ui import WebApprovalUI
 
@@ -299,6 +300,9 @@ class TestPolicyV2StoreOnlyRules:
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
         assert entries[0]["auto_accept_rule"] == "r-gmail-configure"
+        # P8: a v2-store rule's own `.id` IS the canonical rule_id, trusted directly rather than
+        # recomputed -- see gate._evaluate_auto_accept's own comment on this branch.
+        assert entries[0]["rule_id"] == "r-gmail-configure"
 
     async def test_checked_even_when_policy_engine_is_v2(self, monkeypatch, audit_dir):
         from privacyfence.policy.engine import PolicyRule
@@ -315,6 +319,7 @@ class TestPolicyV2StoreOnlyRules:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["auto_accept_rule"] == "r-gmail-anything"
+        assert entries[0]["rule_id"] == "r-gmail-anything"
 
     async def test_non_matching_v2_store_rule_falls_through_to_the_primary_result(
         self, monkeypatch, audit_dir,
@@ -355,6 +360,133 @@ class TestPolicyV2StoreOnlyRules:
         assert result is FILTERED  # fell through to the popup -- the raise never reached gated_call
         assert popup_calls == [1]
         assert any("Policy v2 store evaluation raised" in r.message for r in caplog.records)
+
+
+class AgreeingEvaluator(FakeEvaluator):
+    """A FakeEvaluator whose ``effective_rules`` actually names the same rule its canned
+    ``should_auto_accept`` result reports matching -- so ``policy.compat.compile_rules`` (the v2
+    shadow) genuinely agrees with it, rather than merely sharing an empty rule set. P8's rule_id
+    attribution only ever fires on real agreement (gate._evaluate_auto_accept's own docstring), so
+    the plain FakeEvaluator above (always {}) can never exercise it."""
+
+    def __init__(self, result, rules_config):
+        super().__init__(result)
+        self._rules_config = rules_config
+
+    @property
+    def effective_rules(self):
+        return self._rules_config
+
+
+class TestRuleIdAttribution:
+    """P8 (rule attribution and staleness): AuditEntry.rule_id, resolving F9 -- a decision in the
+    audit log attributes to exactly one on-disk rule row, never an ambiguous rule name."""
+
+    async def test_agreeing_v1_and_v2_rule_gets_the_canonical_content_derived_id(
+        self, monkeypatch, audit_dir,
+    ):
+        # always_allow matches unconditionally (no fetched data needed), so both v1's canned
+        # result and the real v2 shadow (compiled from effective_rules) genuinely agree here --
+        # unlike a FETCHED predicate such as i_am_sender, which the bare RAW sentinel this test
+        # harness passes as raw_data could never actually satisfy.
+        evaluator = AgreeingEvaluator(
+            (True, "always_allow"), {"gmail.read_message": [{"rule": "always_allow", "value": None}]},
+        )
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: evaluator)
+
+        result = await gate.gated_call(**base_kwargs())
+
+        assert result is FILTERED
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "auto_accepted"
+        assert entries[0]["rule_id"] == policy_store.rule_id_for("always_allow", None, ())
+
+    async def test_disagreeing_v1_and_v2_gets_no_rule_id(self, monkeypatch, audit_dir):
+        # FakeEvaluator's own effective_rules is {} -- v1's canned (True, "x") has nothing on the
+        # v2 side to agree with, so the audit log must not attribute this decision to any row.
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator((True, "x")))
+
+        await gate.gated_call(**base_kwargs())
+
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "auto_accepted"
+        assert entries[0]["auto_accept_rule"] == "x"
+        assert entries[0]["rule_id"] == ""
+
+    async def test_temp_accept_grace_window_gets_no_rule_id(self, monkeypatch, audit_dir):
+        # session_temp_accept is a session-scoped pseudo-match, never a stored rule row.
+        from privacyfence.auto_accept import AutoAcceptEvaluator
+
+        evaluator = AutoAcceptEvaluator({})
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: evaluator)
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
+
+        sheets_args = {"spreadsheet_id": "sheet-1", "range_a1": "A1:B2", "values": [["x"]]}
+        await gate.gated_call(
+            **base_kwargs(gate="popup", connector="drive", tool="drive_sheets_write_range", args=sheets_args),
+        )
+        await gate.gated_call(
+            **base_kwargs(gate="popup", connector="drive", tool="drive_sheets_write_range", args=sheets_args),
+        )
+
+        entries = read_audit_entries(audit_dir)
+        auto_accepted = [e for e in entries if e["decision"] == "auto_accepted"]
+        assert len(auto_accepted) == 1
+        assert auto_accepted[0]["auto_accept_rule"] == "session_temp_accept"
+        assert auto_accepted[0]["rule_id"] == ""
+
+    async def test_review_gates_own_race_recheck_also_carries_a_rule_id(self, monkeypatch, audit_dir):
+        # gated_call's review branch re-checks _evaluate_auto_accept a second time, right before
+        # showing the popup, for a rule created by another concurrently-resolved approval in the
+        # meantime (see that call site's own comment) -- this exercises that second call site's
+        # rule_id threading specifically, not just the first (outer) one every other test here
+        # reaches.
+        class NoThenYesEvaluator(AgreeingEvaluator):
+            def should_auto_accept(self, operation_key, ctx):
+                self.calls.append((operation_key, ctx))
+                return (False, "") if len(self.calls) == 1 else self.result
+
+        evaluator = NoThenYesEvaluator(
+            (True, "always_allow"), {"gmail.read_message": [{"rule": "always_allow", "value": None}]},
+        )
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: evaluator)
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+        popup_calls = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popup_calls.append(1) or "deny", None))
+
+        result = await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert result is FILTERED
+        assert popup_calls == []  # the second, in-branch check caught it before the popup ran
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "auto_accepted"
+        assert entries[0]["rule_id"] == policy_store.rule_id_for("always_allow", None, ())
+
+    async def test_write_gates_own_race_recheck_also_carries_a_rule_id(self, monkeypatch, audit_dir):
+        # The popup/write branch's own version of the review branch's re-check above.
+        class NoThenYesEvaluator(AgreeingEvaluator):
+            def should_auto_accept(self, operation_key, ctx):
+                self.calls.append((operation_key, ctx))
+                return (False, "") if len(self.calls) == 1 else self.result
+
+        evaluator = NoThenYesEvaluator(
+            (True, "always_allow"), {"sheets.write_range": [{"rule": "always_allow", "value": None}]},
+        )
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: evaluator)
+        monkeypatch.setattr(gate, "suggest_write_rule", lambda *a, **k: None)
+        popup_calls = []
+        monkeypatch.setattr(gate, "show_popup", lambda *a, **k: (popup_calls.append(1) or "deny", None))
+
+        result = await gate.gated_call(**base_kwargs(
+            gate="popup", connector="drive", tool="drive_sheets_write_range",
+            args={"spreadsheet_id": "sheet-1", "range_a1": "A1:B2", "values": [["x"]]},
+        ))
+
+        assert result is FILTERED
+        assert popup_calls == []  # the second, in-branch check caught it before the popup ran
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "auto_accepted"
+        assert entries[0]["rule_id"] == policy_store.rule_id_for("always_allow", None, ())
 
 
 class TestReviewGateDecisions:

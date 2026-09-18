@@ -1601,6 +1601,61 @@ class TestRemovePolicyRule:
         assert controller._load_config() == before
 
 
+class TestAutoAcceptRuleUsage:
+    """P8 (rule attribution and staleness): each Auto-accept row's own match_count/last_matched/
+    never_matched, from the audit log's rule_id field (see AuditEntry.rule_id's own docstring)."""
+
+    def _record(self, controller, **overrides):
+        from privacyfence.audit_log import AuditEntry, AuditLogger, current_week
+
+        log_dir = sc.authority_root(sc.data_dir()) / "logs" / "audit"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        defaults = dict(
+            timestamp="2026-07-06T12:00:00+00:00", week=current_week(), request_id="",
+            connector="drive", tool="drive_write_file", tool_name="Write Drive file",
+            summary="s", sender="", decision="auto_accepted", auto_accept_rule="approved_folder",
+            latency_seconds=1.0,
+        )
+        defaults.update(overrides)
+        AuditLogger(str(log_dir)).record(AuditEntry(**defaults))
+
+    def test_never_matched_rule_reports_zero_and_no_last_matched(self, controller):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        row = state["auto_accept"]["rules"][0]
+        assert row["match_count"] == 0
+        assert row["last_matched"] == ""
+        assert row["never_matched"] is True
+
+    def test_matched_rule_reports_count_and_last_matched(self, controller):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        rule_id = state["auto_accept"]["rules"][0]["id"]
+        self._record(controller, rule_id=rule_id)
+        self._record(controller, rule_id=rule_id, timestamp="2026-07-07T12:00:00+00:00")
+
+        state = controller.snapshot()
+        row = state["auto_accept"]["rules"][0]
+        assert row["match_count"] == 2
+        assert row["never_matched"] is False
+        assert row["last_matched"] != ""
+
+    def test_usage_for_a_different_rule_id_does_not_leak_across_rows(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        self._record(controller, rule_id="r-some-other-rule")
+
+        state = controller.snapshot()
+        row = state["auto_accept"]["rules"][0]
+        assert row["match_count"] == 0
+        assert row["never_matched"] is True
+
+    def test_entries_with_no_rule_id_do_not_count_as_a_match(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        self._record(controller, rule_id="")
+
+        state = controller.snapshot()
+        row = state["auto_accept"]["rules"][0]
+        assert row["never_matched"] is True
+
+
 class TestLegacyV1RuleAndGrantActionsForOrgMode:
     """add_rule_row/remove_rule_row/remove_grant_row survive P6 solely for org mode
     (web/routes_org_settings.py's own separate, unaffected settings surface) -- see their own

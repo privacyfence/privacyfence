@@ -149,6 +149,33 @@ class TestClaudeReasonField:
         assert entry.claude_reason == ""
 
 
+class TestRuleIdField:
+    """P8 (rule attribution and staleness): the canonical v2 rule id a matched "auto_accepted"
+    decision resolves to -- see AuditEntry.rule_id's own docstring."""
+
+    def test_defaults_to_empty_string(self):
+        assert make_entry().rule_id == ""
+
+    def test_round_trips_through_jsonl(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-abc1234567"))
+
+        line = (tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8").splitlines()[0]
+        assert json.loads(line)["rule_id"] == "r-abc1234567"
+
+    def test_old_jsonl_lines_without_the_field_still_parse(self):
+        # Same backward-compatibility need as claude_reason above -- entries written before this
+        # field existed have no "rule_id" key.
+        legacy = dict(
+            timestamp="2026-07-06T12:00:00+00:00", week="2026-W28", request_id="",
+            connector="gmail", tool="gmail_get_message", tool_name="Read Gmail message",
+            summary="s", sender="a@example.com", decision="auto_accepted",
+            auto_accept_rule="i_am_sender", latency_seconds=1.0,
+        )
+        entry = AuditEntry(**legacy)
+        assert entry.rule_id == ""
+
+
 class TestCurrentWeek:
     @freeze_time("2026-07-06")  # a Monday, ISO week 28 of 2026
     def test_format(self):
@@ -383,6 +410,64 @@ class TestRecentMatches:
             fh.write("not valid json\n")
 
         assert logger.recent_matches("gmail", "gmail_get_message", "Message from alice@example.com", week="2026-W28") == 1
+
+
+class TestRuleUsage:
+    """P8 (rule attribution and staleness): AuditLogger.rule_usage() -- the Settings Auto-accept
+    page's "Matched Nx, last <when>" line for each rule, grouped by AuditEntry.rule_id."""
+
+    def test_no_entries_gives_empty_usage(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        assert logger.rule_usage() == {}
+
+    def test_counts_auto_accepted_entries_sharing_a_rule_id(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", timestamp="2026-07-06T12:00:00+00:00"))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", timestamp="2026-07-07T12:00:00+00:00"))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-2", timestamp="2026-07-08T12:00:00+00:00"))
+
+        usage = logger.rule_usage()
+        assert usage["r-1"]["count"] == 2
+        assert usage["r-2"]["count"] == 1
+
+    def test_last_matched_is_the_most_recent_timestamp(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", timestamp="2026-07-06T12:00:00+00:00"))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", timestamp="2026-07-08T09:00:00+00:00"))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", timestamp="2026-07-07T12:00:00+00:00"))
+
+        assert logger.rule_usage()["r-1"]["last_matched"] == "2026-07-08T09:00:00+00:00"
+
+    def test_entries_without_a_rule_id_are_ignored(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="auto_accepted", rule_id=""))
+        assert logger.rule_usage() == {}
+
+    def test_non_auto_accepted_decisions_never_count_even_with_a_rule_id(self, tmp_path):
+        # rule_id is only ever set on an "auto_accepted" entry (see AuditEntry.rule_id's own
+        # docstring), but this guards the reader too, in case a future caller ever sets it
+        # elsewhere by mistake -- usage stats must never attribute a non-auto-accept decision.
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="approved", rule_id="r-1"))
+        assert logger.rule_usage() == {}
+
+    def test_scans_every_week_file_not_just_the_recent_ones(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", week="2020-W01",
+                                  timestamp="2020-01-06T12:00:00+00:00"))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1", week="2026-W28",
+                                  timestamp="2026-07-06T12:00:00+00:00"))
+
+        assert logger.rule_usage()["r-1"]["count"] == 2
+        assert logger.rule_usage()["r-1"]["last_matched"] == "2026-07-06T12:00:00+00:00"
+
+    def test_malformed_line_is_skipped_not_fatal(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry(decision="auto_accepted", rule_id="r-1"))
+        with open(tmp_path / "2026-W28.jsonl", "a", encoding="utf-8") as fh:
+            fh.write("not valid json\n")
+
+        assert logger.rule_usage()["r-1"]["count"] == 1
 
 
 class TestExportAllPending:

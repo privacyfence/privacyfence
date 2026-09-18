@@ -272,6 +272,8 @@ select.pf-input { cursor: pointer; }
 .pf-aa-sentence { font-size: 13.5px; color: var(--pf-text); flex: 1 1 300px; }
 .pf-aa-verbs { flex-shrink: 0; }
 .pf-aa-tools { font-size: 12px; color: var(--pf-text-muted); margin-top: 8px; line-height: 1.5; }
+.pf-aa-usage { font-size: 12px; color: var(--pf-text-muted); }
+.pf-aa-usage-stale { color: var(--pf-warn); font-weight: 600; }
 .pf-aa-add { max-width: 620px; }
 .pf-aa-add .pf-input { margin-top: 10px; width: 100%; }
 
@@ -758,6 +760,11 @@ _JS = r"""
   // no rule_type dropdown here the way the old per-operation rows had one,
   // because a scope's own verb checkboxes (aa.scope_groups[].verbs) are
   // what a v2 rule is actually keyed on, not a v1 rule name.
+  //
+  // P8 adds each row's own usage line (settings_controller._auto_accept_state, from
+  // AuditLogger.rule_usage()) -- "Matched Nx, last <when>" for a rule that has actually let
+  // something through, or a distinct stale badge next to the (already-existing) Remove link
+  // for one that never has, resolving F9's "which of my rules have never matched" question.
   // -------------------------------------------------------------------- //
 
   function verbChipsHtml(verbs) {
@@ -820,6 +827,13 @@ _JS = r"""
       html += '<div class="pf-link-danger" role="button" tabindex="0" aria-label="Remove rule" ' +
         dataAttr('remove_policy_rule', { rule_id: r.id }) + '>✕ Remove</div>';
       html += '</div>';
+      // P8: per-rule usage -- "Matched 42x, last 3 days ago" or, for a rule that has never
+      // fired, a distinct stale badge nudging toward the Remove link right above it.
+      html += '<div class="pf-aa-usage' + (r.never_matched ? ' pf-aa-usage-stale' : '') + '">' +
+        (r.never_matched
+          ? 'Never matched -- consider removing it above.'
+          : 'Matched ' + r.match_count + 'x' + (r.last_matched ? ', last ' + esc(r.last_matched) : '')) +
+        '</div>';
       if (isExpanded) {
         html += '<div class="pf-aa-tools">' + esc(r.covered_tools.join(', ')) + '</div>';
       }
