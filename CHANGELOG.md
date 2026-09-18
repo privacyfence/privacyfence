@@ -778,6 +778,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that information existed only in the underlying JSONL, never in the artifact an auditor is
   actually handed. `batch_id` is routed through the same formula-injection guard (`_excel_literal`)
   already applied to the export's other free-text columns.
+- B26 of the 4.1.0 action plan: `StepUpChallengeStore` now sweeps expired entries on every `put()`,
+  closing an unbounded-growth path in the approval binder's batch step-up flow. Its key space was
+  safe to leave unbounded only while it was `(principal_id, approval_id)` — `approval_id`s are
+  themselves bounded by `max_pending` — but the binder's batch decide endpoint keys its own
+  challenges on `f"batch:{batch_id}"`, and `batch_id` is read straight from the request body: a
+  session holding at least one real pending approval could mint an unbounded number of live
+  `StepUpChallengeStore` entries, each also costing a full `begin_assertion` call, just by resending
+  a fresh `batch_id` and never completing the ceremony. Not a privilege escalation, but a
+  slow, unbounded resource leak with a client-controlled multiplier.
 - B27 of the 4.1.0 action plan: the approval binder's `batch_id` is documented (`audit_log.py`) as
   server-minted, but `POST /api/approvals/batch/decide` (and its org-mode counterpart) accepted any
   non-empty string the client sent verbatim and stamped it straight into the audit entry — the field

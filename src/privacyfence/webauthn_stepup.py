@@ -434,6 +434,7 @@ class StepUpChallengeStore:
 
     def put(self, principal_id: str, approval_id: str, *, challenge: bytes, fingerprint: str) -> None:
         with self._lock:
+            self._sweep_expired_locked()
             self._pending[(principal_id, approval_id)] = _PendingStepUp(challenge=challenge, fingerprint=fingerprint)
 
     def pop(self, principal_id: str, approval_id: str) -> _PendingStepUp | None:
@@ -442,6 +443,19 @@ class StepUpChallengeStore:
         if entry is None or (time.time() - entry.created_at) > self._ttl:
             return None
         return entry
+
+    def _sweep_expired_locked(self) -> None:
+        """Evict entries past ``self._ttl`` -- called with ``self._lock``
+        already held. ``pop()`` only ever discards the one key it was asked
+        for, on read; the second half of the store's own key space
+        (``batch:<batch_id>``, B26) is chosen by the request body rather
+        than bounded by ``max_pending`` the way ``approval_id`` is, so
+        without a sweep here nothing ever evicts an entry nobody comes back
+        to pop."""
+        now = time.time()
+        expired = [key for key, entry in self._pending.items() if (now - entry.created_at) > self._ttl]
+        for key in expired:
+            del self._pending[key]
 
 
 def is_step_up_required(*, gate_kind: str, pii_detected: bool, scope: str) -> bool:
