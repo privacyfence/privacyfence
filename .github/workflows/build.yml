@@ -75,12 +75,22 @@ jobs:
       # below, so the version/channel lookup is skipped for those runs rather than failing them --
       # r2_release.py's channel command deliberately rejects a between-tags dev version (see its
       # own docstring), which every untagged commit's __version__ is.
+      #
+      # On a tag push the resolved version is checked against the tag that triggered the run before
+      # anything is built. setuptools_scm reads `git describe`, which reports one of the tags on
+      # this commit rather than specifically the pushed one, so retagging a commit for a second
+      # pre-release silently builds the *other* tag's version -- which then fails at the R2 upload,
+      # minutes and one signed artifact set later, against the immutability guard
+      # (https://github.com/privacyfence/privacyfence/actions/runs/35388772087
+      # is the run this happened on). Every job that resolves a version runs the same check, so
+      # none of them can get as far as building the wrong one.
       - name: Determine version and release channel
         id: release
         run: |
           VERSION="$(python -c 'from privacyfence import __version__; print(__version__)')"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
             CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
           else
             CHANNEL="n/a (not a tag push)"
@@ -339,6 +349,7 @@ jobs:
           VERSION="$(python -c 'from privacyfence import __version__; print(__version__)')"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
             CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
           else
             CHANNEL="n/a (not a tag push)"
@@ -514,6 +525,7 @@ jobs:
           VERSION="$(python -c 'from privacyfence import __version__; print(__version__)')"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
             CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
           else
             CHANNEL="n/a (not a tag push)"
@@ -613,6 +625,7 @@ jobs:
           VERSION="$(python3 -m setuptools_scm)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
             CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
           else
             CHANNEL="n/a (not a tag push)"
@@ -736,6 +749,7 @@ jobs:
           pip install --quiet setuptools_scm
           VERSION="$(python3 -m setuptools_scm)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
           CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Finalizing version=$VERSION channel=$CHANNEL"

@@ -47,6 +47,78 @@ class TestChannelForVersion:
             r2_release.channel_for_version("not-a-version")
 
 
+class TestAssertTagMatchesVersion:
+    """The guard that keeps a retagged commit from building someone else's version.
+
+    setuptools_scm resolves __version__ from `git describe`, which reports *a* tag on the commit
+    being built -- so a commit carrying both v4.1.0a6 and v4.1.0a7 can build as 4.1.0a6 on a
+    v4.1.0a7 push, then fail at upload time against the immutability guard below.
+    """
+
+    @pytest.mark.parametrize(
+        ("tag", "version"),
+        [
+            ("v4.1.0", "4.1.0"),
+            ("4.1.0", "4.1.0"),  # tolerates a tag spelled without the "v", same as channel above
+            ("v4.2.0b1", "4.2.0b1"),
+            ("v4.2.0rc2", "4.2.0rc2"),
+            # PEP 440 lets one pre-release be spelled several ways and setuptools_scm normalizes
+            # them all, so tag and resolved version are routinely spelled differently while naming
+            # one release. This check must not be stricter about that than setuptools_scm is.
+            ("v4.1.0-a1", "4.1.0a1"),
+            ("v4.1.0.rc2", "4.1.0rc2"),
+            ("v4.1.0_b3", "4.1.0b3"),
+            ("v4.1.0-alpha1", "4.1.0a1"),
+            ("v4.1.0-beta2", "4.1.0b2"),
+            ("v4.1.0-preview3", "4.1.0rc3"),
+            ("v4.1.0C4", "4.1.0rc4"),
+        ],
+    )
+    def test_accepts_matching_tag(self, tag, version):
+        assert r2_release.assert_tag_matches_version(tag, version) is None
+
+    @pytest.mark.parametrize(
+        ("tag", "version"),
+        [
+            ("v4.1.0a7", "4.1.0a6"),  # the real one: two alpha tags on one commit
+            ("v4.1.0a7", "4.1.0"),  # pre-release tag, stable version
+            ("v4.1.0", "4.1.0a7"),  # and the reverse
+            ("v4.2.0", "4.1.0"),
+            ("v4.1.1", "4.1.0"),
+            ("v4.2.0b1", "4.2.0a1"),  # same number, different stage
+        ],
+    )
+    def test_rejects_mismatched_tag(self, tag, version):
+        with pytest.raises(ValueError, match="does not name the version this build resolved"):
+            r2_release.assert_tag_matches_version(tag, version)
+
+    def test_rejects_dev_build_version(self):
+        # A shallow clone (or a tag history that never arrived) resolves to fallback_version or a
+        # dev version -- neither names a release, so this fails here rather than at upload.
+        with pytest.raises(ValueError, match="between-tags dev build"):
+            r2_release.assert_tag_matches_version("v4.1.0", "4.1.0.dev3+gabc1234")
+
+    def test_rejects_unparseable_tag(self):
+        with pytest.raises(ValueError, match="doesn't look like a release version"):
+            r2_release.assert_tag_matches_version("not-a-tag", "4.1.0")
+
+
+class TestCheckTagCommand:
+    """The `check-tag` CLI surface build.yml and publish-pypi.yml actually call."""
+
+    def test_exits_zero_on_match(self, capsys):
+        assert r2_release.main(["check-tag", "--tag", "v4.2.0b1", "--version", "4.2.0b1"]) == 0
+        assert "4.2.0b1" in capsys.readouterr().out
+
+    def test_exits_one_on_mismatch(self, capsys):
+        assert r2_release.main(["check-tag", "--tag", "v4.1.0a7", "--version", "4.1.0a6"]) == 1
+        # The message has to be enough to act on from a CI log alone -- both spellings, and why.
+        stderr = capsys.readouterr().err
+        assert "v4.1.0a7" in stderr
+        assert "4.1.0a6" in stderr
+        assert "git describe" in stderr
+
+
 class TestUploadRejectsDevBuild:
     def test_upload_raises_before_touching_r2(self, monkeypatch):
         # A dev-build version should fail fast on channel_for_version(), before upload() ever

@@ -27,6 +27,18 @@ git tag v4.0.0a13          # pre-release: a=alpha, b=beta, rc=release-candidate 
 git push origin <tag>
 ```
 
+**One release tag per commit.** `setuptools_scm` resolves the version through `git describe`,
+which reports *a* tag on the commit being built rather than specifically the one whose push started
+the run — so a commit carrying two release tags builds as whichever one `describe` prefers (the
+alphabetically earlier, for two lightweight tags of the same age), not as the tag just pushed. That
+is not hypothetical: `v4.1.0a7` was tagged onto the same commit as a stuck `v4.1.0a6` and the whole
+run built, signed and tried to publish `4.1.0a6` a second time, which R2's immutability guard
+refused ([the run](https://github.com/privacyfence/privacyfence/actions/runs/35388772087)). Every job that resolves a version now runs
+`scripts/r2_release.py check-tag` first, so this fails in the first few seconds instead of after a
+full artifact set has been built — but the fix is still to move the release forward onto a new
+commit, or to delete the unwanted tag before retagging. A version that has already published
+artifacts stays published; cut the next one.
+
 That tag push is what `.github/workflows/build.yml` **and** `.github/workflows/publish-pypi.yml`
 both trigger on (`on: push: tags: ['v*']`) — the former builds and signs the DMG/`.pkg`/Windows
 installer/`.deb` (running each one's own packaged-artifact smoke test, see "Packaged-artifact release gating"

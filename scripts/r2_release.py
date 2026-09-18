@@ -49,6 +49,9 @@ Examples:
     python3 scripts/r2_release.py channel 4.2.0b1
         -> prints "beta"
 
+    python3 scripts/r2_release.py check-tag --tag v4.2.0b1 --version 4.2.0b1
+        -> exits 0; exits 1 if the build resolved a version the tag doesn't name
+
     python3 scripts/r2_release.py upload --version 4.1.0 \\
         dist/PrivacyFence-4.1.0.dmg scripts/build_org_bundle.py scripts/sync_room_directory.py
         -> uploads each to releases/stable/4.1.0/<basename> in R2
@@ -90,6 +93,29 @@ from pathlib import Path
 # with a clear error, not to fall back to anything.
 _VERSION_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?(?:\.dev(\d+))?(?:\+.*)?$")
 _STAGE_TO_CHANNEL = {"a": "alpha", "b": "beta", "rc": "rc"}
+
+# Tag names, for assert_tag_matches_version() below only -- deliberately more permissive than
+# _VERSION_RE above, which parses versions setuptools_scm has already resolved and therefore
+# already canonicalized. A tag is written by hand, and PEP 440 lets one pre-release be spelled
+# several ways that all normalize to the same version ("v4.1.0-alpha1", "v4.1.0.a1" and "v4.1.0a1"
+# all resolve to "4.1.0a1"; this repo has shipped both the "v4.1.0-a1" and "v4.1.0a5" spellings).
+# A check that rejected a spelling setuptools_scm accepts would fail releases this guard has no
+# business failing, so the group layout is kept identical to _VERSION_RE's and the stage word is
+# mapped back to its short form below.
+_TAG_RE = re.compile(
+    r"^v?(\d+)\.(\d+)\.(\d+)(?:[-_.]?(alpha|beta|preview|pre|rc|c|a|b)[-_.]?(\d+))?(?:[-_.]?dev(\d+))?(?:\+.*)?$",
+    re.IGNORECASE,
+)
+_TAG_STAGE_ALIASES = {
+    "alpha": "a",
+    "a": "a",
+    "beta": "b",
+    "b": "b",
+    "preview": "rc",
+    "pre": "rc",
+    "c": "rc",
+    "rc": "rc",
+}
 
 DEFAULT_BUCKET = "privacyfence-releases"
 
@@ -154,6 +180,56 @@ def channel_for_version(version: str) -> str:
         )
     stage = match.group(4)
     return _STAGE_TO_CHANNEL[stage] if stage else "stable"
+
+
+def _release_identity(value: str, pattern: re.Pattern[str]) -> tuple[int, int, int, str, int]:
+    """Parses a release version (with _VERSION_RE) or a tag naming one (with _TAG_RE) into the
+    identity every spelling of that release shares: (major, minor, patch, stage, stage number).
+    Raises ValueError for anything that isn't a real tagged release, same as channel_for_version()
+    -- most importantly a between-tags dev build, which was never `git tag`d."""
+    match = pattern.match(value.strip())
+    if not match:
+        raise ValueError(f"{value!r} doesn't look like a release version (major.minor.patch[a|b|rc<n>])")
+    if match.group(6) is not None:
+        raise ValueError(
+            f"{value!r} is a between-tags dev build, not a tagged release -- nothing to publish "
+            "(run this against a commit that's actually tagged)"
+        )
+    stage = match.group(4)
+    return (
+        int(match.group(1)),
+        int(match.group(2)),
+        int(match.group(3)),
+        _TAG_STAGE_ALIASES[stage.lower()] if stage else "",
+        int(match.group(5) or 0),
+    )
+
+
+def assert_tag_matches_version(tag: str, version: str) -> None:
+    """Raises ValueError unless `version` -- what the build resolved -- is the release that the
+    pushed git tag `tag` names.
+
+    Guards the one failure mode that otherwise stays invisible until an upload is already being
+    attempted. setuptools_scm derives the version from `git describe`, which reports *a* tag on the
+    commit being built, not specifically the tag whose push started the run: when several release
+    tags point at one commit, describe picks one of them, and the build stamps every artifact with
+    a version nobody asked to release. Retagging a commit for a second pre-release is enough to
+    trigger it, and what it produces is a build trying to republish an already-published version
+    under different bytes -- which upload()'s immutability guard correctly refuses, minutes later,
+    once a full artifact set has been built and signed. The run that did this:
+    https://github.com/privacyfence/privacyfence/actions/runs/35388772087
+
+    Compares parsed identities rather than strings, so a tag spelled the long way ("v4.1.0-alpha1")
+    still matches the version setuptools_scm resolves it to ("4.1.0a1") -- see _TAG_RE."""
+    if _release_identity(tag, _TAG_RE) != _release_identity(version, _VERSION_RE):
+        raise ValueError(
+            f"tag {tag!r} does not name the version this build resolved ({version!r}).\n"
+            "setuptools_scm derives the version from `git describe`, which reports one of the tags "
+            "on the commit being built -- when a commit carries several release tags, that need "
+            "not be the tag whose push started this run. Delete the tag that isn't wanted and "
+            "re-run this workflow from the tag that is; a version already published stays "
+            "published, since release artifacts are immutable."
+        )
 
 
 def _r2_client():
@@ -425,6 +501,12 @@ def main(argv: list[str] | None = None) -> int:
     channel_parser = subparsers.add_parser("channel", help="Print the release channel for a version string")
     channel_parser.add_argument("version")
 
+    check_tag_parser = subparsers.add_parser(
+        "check-tag", help="Fail unless the resolved version is the one the pushed tag names"
+    )
+    check_tag_parser.add_argument("--tag", required=True, help="Tag that triggered the run, e.g. v4.2.0b1")
+    check_tag_parser.add_argument("--version", required=True, help="Version the build resolved, e.g. 4.2.0b1")
+
     upload_parser = subparsers.add_parser("upload", help="Upload files to the R2 release archive")
     upload_parser.add_argument("--version", required=True, help="Resolved release version, e.g. 4.2.0b1")
     upload_parser.add_argument("--bucket", default=None, help=f"R2 bucket (default: {DEFAULT_BUCKET})")
@@ -447,6 +529,15 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
+        return 0
+
+    if args.command == "check-tag":
+        try:
+            assert_tag_matches_version(args.tag, args.version)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"tag {args.tag} names the resolved version {args.version}")
         return 0
 
     handlers = {
