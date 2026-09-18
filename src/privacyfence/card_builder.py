@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import base64
 
-from . import approval_icons, approval_window_html
+from . import approval_icons, approval_window_html, write_effects
 
 # Shown above the button row for operations
 # auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS lists -- same copy as
@@ -95,6 +95,7 @@ def build_card_html(
     table_only: bool = False,
     upload_forced: bool = False,
     temp_accept_eligible: bool = False,
+    tool: str = "",
 ) -> str:
     """Build the full card-stack HTML document for one approval -- the web
     host's counterpart to ApprovalWindowController._build_content_view,
@@ -129,6 +130,18 @@ def build_card_html(
         for _rule_name, hint in (accept_all_choices or [])
     ]
 
+    # A read card ends with "What will be provided to Claude"; a write card
+    # had nothing that named its own consequence, only the payload and
+    # Claude's reason. This is that row -- last in §1 ("Action to perform"),
+    # so the payload is read first and the outcome last, which is the order
+    # the decision is actually made in. Read gates never get one: their
+    # consequence card already exists.
+    section_1 = dict(preview or {})
+    if not is_read:
+        effect = write_effects.effect_for(tool)
+        if effect:
+            section_1[write_effects.EFFECT_LABEL] = effect
+
     return approval_window_html.build_card_stack_html(
         layout=layout,
         title=title,
@@ -136,7 +149,7 @@ def build_card_html(
         shield_icon_data_uri=approval_icons.icon_data_uri(approval_icons.shield_icon_path()),
         is_read=is_read,
         seen_count_text=_seen_count_text(seen_count),
-        preview=preview or {},
+        preview=section_1,
         claude_reason=claude_reason or "",
         disclosure_rows=_disclosure_rows(is_read, new_info, visibility),
         pii_categories=pii_categories or [],

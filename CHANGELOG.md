@@ -491,6 +491,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   become two equal 48px targets with always-allow a quiet link below them rather than a third
   control in the thumb zone. Nothing changes above the breakpoint, or in the native window, whose
   frame already sized itself to the document.
+- **Write cards say what approving them actually does.** A read card ends with "What will be
+  provided to Claude"; a write card showed the payload and Claude's stated reason and nothing that
+  named the consequence — the difference between approving a payload and approving an outcome, and
+  it matters most where the payload looks harmless. "Add Gmail Label" and "Send Slack Message"
+  present almost identically and only one of them is irreversible. Every write card now ends its
+  action section with one plain sentence: "A label is added. Nothing is sent, moved or deleted." /
+  "The message is posted and cannot be unsent." A new test fails the build if a tool reaches the
+  write gate without one.
+- **The card's section numbers are gone; the labels stay.** Which sections render varies by tool and
+  direction, so the numbers only ever counted what happened to be on that one card — "03" was the
+  PII gate on one and the disclosure list on the next, which is exactly what a reviewer seeing many
+  of them cannot learn. Ordering is unchanged and still deliberate: the risk card renders before the
+  disclosure list, never one scroll away from being missed.
 - **Org mode's approvals page has a shell.** It was a bare document — design tokens, one body font
   rule, the list, and a centred footer of three links that nothing styled, so they rendered
   browser-default blue against a warm grey palette. No header, no brand, no nav, no favicon, and on

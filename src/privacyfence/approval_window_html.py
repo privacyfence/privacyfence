@@ -14,14 +14,19 @@ URIs; see that directory's fonts/OFL.txt for licensing) are vendored into
 vendored local ``@font-face`` -- this document must never trigger a network
 fetch just to render a popup.
 
-Every section is numbered dynamically (a running counter, not literal
-"01"/"02"/"03"/"04" strings) because which sections actually render varies by
-tool and by direction: §3 ("What will be provided to Claude") only ever
-renders for a review-gate call carrying a ``visibility`` dict today (see
-``disclosure_rows`` below), so the §4-equivalent risk card that follows it
-lands on "03" instead of "04" whenever §3 is absent -- a write-gate PII card
-is numbered "03" (no §3 exists on the write side at all), while a read-gate
-one is "04" wherever a §3 card also rendered on that same tool.
+Sections carry a label and no number. Which sections render varies by tool
+and by direction -- §3 ("What will be provided to Claude") only ever renders
+for a review-gate call carrying a ``visibility`` dict (see
+``disclosure_rows`` below), and the risk card never renders at all without a
+match -- so a number could only ever have been a running count of what
+happened to be on *this* card. It was: the PII card read "03" on a write
+gate and on a read gate whose §3 was absent, and "04" otherwise.
+
+That is the wrong thing to number. A reviewer who sees dozens of these
+cannot learn a position when "03" is the PII gate on one and the disclosure
+list on the next, and the ordering the numbers appeared to give is already
+given by the vertical stack. The labels carry the meaning; the numbers only
+carried a false promise that the meaning was stable.
 
 §3's rows are real values (the same rendering as §1's ``.pf-kv`` rows, just
 meaning "new to Claude" instead of "already known"), not an abstract policy
@@ -177,6 +182,10 @@ LINE_CLAMP_BY_LABEL = {
     # at two lines a realistic thread clips with only a title tooltip
     # behind it -- which touch has no way to reach at all.
     "Participants": 3,
+    # The write card's consequence sentence (write_effects.py). It is the
+    # row a reviewer is meant to be able to act on without hovering, so it
+    # gets the room to be read in full rather than a tooltip.
+    "Effect": 3,
     "Description": 4,
 }
 
@@ -386,24 +395,24 @@ def _card(kicker: str, inner_html: str, *, style: str = "", kicker_color: str = 
 _WRITE_KICKER_COLOR = "var(--color-accent-2-700)"
 
 
-def _section_1_html(number: int, is_read: bool, preview: dict[str, str]) -> str:
+def _section_1_html(is_read: bool, preview: dict[str, str]) -> str:
     if not preview:
         return ""
-    kicker = f"{number:02d} · " + ("What Claude already knows" if is_read else "Action to perform")
+    kicker = "What Claude already knows" if is_read else "Action to perform"
     return _card(
         kicker, _kv_rows_html(list(preview.items())),
         kicker_color="" if is_read else _WRITE_KICKER_COLOR,
     )
 
 
-def _section_2_html(number: int, is_read: bool, claude_reason: str) -> str:
+def _section_2_html(is_read: bool, claude_reason: str) -> str:
     if not claude_reason:
         return ""
     # §2 always shows Claude's stated *reason* (the quote below), on both
     # read and write. "Why Claude is doing this" matches what's actually
     # on screen -- the real write payload lives in §1/the right pane, not
     # here -- same as read's "Why Claude needs more data".
-    kicker = f"{number:02d} · " + ("Why Claude needs more data" if is_read else "Why Claude is doing this")
+    kicker = "Why Claude needs more data" if is_read else "Why Claude is doing this"
     # title="..." tooltip, same reasoning as _kv_rows_html's own -- shows
     # the full reason on hover with no JS, harmless when it isn't actually
     # clamped.
@@ -414,13 +423,12 @@ def _section_2_html(number: int, is_read: bool, claude_reason: str) -> str:
     return _card(kicker, body, kicker_color="" if is_read else _WRITE_KICKER_COLOR)
 
 
-def _section_3_html(number: int, disclosure_rows: list[tuple[str, str]]) -> str:
+def _section_3_html(disclosure_rows: list[tuple[str, str]]) -> str:
     # Read-gate only. Absent (not just empty) when a tool has nothing new to
     # disclose -- see module docstring for where disclosure_rows comes from.
     if not disclosure_rows:
         return ""
-    kicker = f"{number:02d} · What will be provided to Claude"
-    return _card(kicker, _kv_rows_html(disclosure_rows))
+    return _card("What will be provided to Claude", _kv_rows_html(disclosure_rows))
 
 
 def _tag_html(label: str, *, bg: str, color: str) -> str:
@@ -428,9 +436,9 @@ def _tag_html(label: str, *, bg: str, color: str) -> str:
 
 
 def _risk_section_html(
-    number: int, categories: list[str], *, variant: str,
+    categories: list[str], *, variant: str,
 ) -> str:
-    """§4 (or §3, if §3 above didn't render): the PII/content-flag card.
+    """The PII/content-flag card.
     ``variant`` is one of:
       - "read": review-gate PII match. Accent-2 tokens -- see module
         docstring, this card's job is to look distinct from "write" below.
@@ -442,7 +450,7 @@ def _risk_section_html(
     """
     if not categories:
         return ""
-    kicker = f"{number:02d} · Possible PII detected"
+    kicker = "Possible PII detected"
     if variant == "write":
         card_style = "background:var(--pii-w-bg);border:1px solid var(--pii-w-border)"
         ink = "var(--pii-w-ink)"
@@ -729,46 +737,35 @@ def build_card_stack_html(
     """
     nonce = nonce or _new_nonce()
     width = CONTENT_WIDTH[layout]
-    # A plain running counter, advanced only when a section actually
-    # renders -- not itertools.count()'d speculatively, since §1/§2 are
-    # effectively always present in production but §3/§4 aren't, and this
-    # must reflect exactly what's on screen (see module docstring on why
-    # §4's number is dynamic).
-    next_number = 1
     pinned_html = []  # header, §1, §2, risk card -- always fully visible
     scrollable_html = []  # §3 alone -- the only card that ever scrolls
 
-    sec1 = _section_1_html(next_number, is_read, preview)
+    sec1 = _section_1_html(is_read, preview)
     if sec1:
         pinned_html.append(sec1)
-        next_number += 1
 
-    sec2 = _section_2_html(next_number, is_read, claude_reason)
+    sec2 = _section_2_html(is_read, claude_reason)
     if sec2:
         pinned_html.append(sec2)
-        next_number += 1
 
-    # Pinned, and numbered *before* §3 -- the highest-consequence card
-    # must never end up scrolled out of view, and reads that way too:
-    # right after "why Claude needs this," before the disclosure detail.
+    # Pinned, and placed *before* §3 -- the highest-consequence card must
+    # never end up scrolled out of view, and reads that way too: right
+    # after "why Claude needs this," before the disclosure detail.
     if pii_categories:
-        risk_html = _risk_section_html(next_number, pii_categories, variant="read")
+        risk_html = _risk_section_html(pii_categories, variant="read")
     elif write_content_flags:
         variant = "write-forced" if upload_forced else "write"
-        risk_html = _risk_section_html(next_number, write_content_flags, variant=variant)
+        risk_html = _risk_section_html(write_content_flags, variant=variant)
     else:
         risk_html = ""
     if risk_html:
         pinned_html.append(risk_html)
-        next_number += 1
 
     if is_read:
-        # Write-gate calls never get §3 at all -- the counter simply never
-        # advances for one.
-        sec3 = _section_3_html(next_number, disclosure_rows)
+        # Write-gate calls never get §3 at all.
+        sec3 = _section_3_html(disclosure_rows)
         if sec3:
             scrollable_html.append(sec3)
-            next_number += 1
 
     header_html = _header_html(title, connector_icon_data_uri, shield_icon_data_uri, seen_count_text, is_read)
     pinned_joined = "".join(pinned_html)

@@ -142,33 +142,43 @@ class TestDisclosureRowsFromVisibility:
         assert disclosure_rows_from_visibility(visibility) == disclosure_rows_from_visibility(visibility)
 
 
-class TestSectionNumbering:
-    """Every section is numbered dynamically -- the risk card renders (and
-    is numbered) right after §2, *before* §3 -- pinned, never one scroll
-    away from being missed -- so §3 lands on "04" instead of "03" whenever
-    a risk card is also present. Absent a risk card, §3 (or nothing at
-    all) simply takes the next number, matching the design canvas's own
-    numbering."""
+class TestSectionPresenceAndOrder:
+    """Sections carry a label and no number. Which ones render varies by
+    tool and by direction, so a number could only ever count what happened
+    to be on *this* card -- "03" was the PII gate on one and the disclosure
+    list on the next, which is the one thing a reviewer seeing dozens of
+    these cannot learn. Order is still load-bearing and still asserted: the
+    risk card renders right after §2 and *before* §3, pinned, never one
+    scroll away from being missed."""
 
-    def test_read_call_with_disclosure_and_pii_numbers_pii_before_disclosure(self):
+    def test_sections_carry_labels_and_no_numbers(self):
         html = build_card_stack_html(**_minimal_kwargs(
             disclosure_rows=[("Cell values", "Full cell values")],
             pii_categories=["Phone number"],
         ))
-        assert "01 · What Claude already knows" in html
-        assert "02 · Why Claude needs more data" in html
-        assert "03 · Possible PII detected" in html
-        assert "04 · What will be provided to Claude" in html
-        # Pinned before §3 in the actual rendered order too, not just numbered
-        # first -- see build_card_stack_html's docstring.
+        for label in (
+            "What Claude already knows",
+            "Why Claude needs more data",
+            "Possible PII detected",
+            "What will be provided to Claude",
+        ):
+            assert label in html
+        for number in ("01 ·", "02 ·", "03 ·", "04 ·"):
+            assert number not in html
+
+    def test_risk_card_renders_before_the_disclosure_list(self):
+        html = build_card_stack_html(**_minimal_kwargs(
+            disclosure_rows=[("Cell values", "Full cell values")],
+            pii_categories=["Phone number"],
+        ))
         assert html.index("Possible PII detected") < html.index("What will be provided to Claude")
 
-    def test_read_call_without_disclosure_but_with_pii_numbers_03(self):
-        # A tool with nothing to disclose in §3 (empty disclosure_rows) whose
-        # content still matched the PII detector.
+    def test_a_read_call_with_no_disclosure_still_gets_its_risk_card(self):
+        # A tool with nothing to disclose in §3 (empty disclosure_rows)
+        # whose content still matched the PII detector.
         html = build_card_stack_html(**_minimal_kwargs(pii_categories=["Phone number"]))
-        assert "03 · Possible PII detected" in html
-        assert "04 ·" not in html
+        assert "Possible PII detected" in html
+        assert "What will be provided to Claude" not in html
 
     def test_write_call_never_gets_section_3_even_with_a_visibility_like_dict(self):
         # disclosure_rows is only ever consulted when is_read=True -- a
@@ -181,7 +191,7 @@ class TestSectionNumbering:
             write_content_flags=["Email address"],
         ))
         assert "What will be provided to Claude" not in html
-        assert "03 · Possible PII detected" in html
+        assert "Possible PII detected" in html
 
     def test_no_risk_card_when_neither_pii_list_is_populated(self):
         html = build_card_stack_html(**_minimal_kwargs())
@@ -190,8 +200,7 @@ class TestSectionNumbering:
     def test_section_1_is_skipped_entirely_when_preview_is_empty(self):
         html = build_card_stack_html(**_minimal_kwargs(preview={}))
         assert "What Claude already knows" not in html
-        # §2 still gets "01", not "02" -- the counter never advanced for §1.
-        assert "01 · Why Claude needs more data" in html
+        assert "Why Claude needs more data" in html
 
     def test_section_2_is_skipped_entirely_when_claude_reason_is_empty(self):
         html = build_card_stack_html(**_minimal_kwargs(claude_reason=""))
@@ -201,7 +210,7 @@ class TestSectionNumbering:
         # Defense in depth: build_card_stack_html() never calls this with an
         # empty list (it checks first), but the function's own guard is
         # still real behavior worth pinning directly.
-        assert _risk_section_html(3, [], variant="read") == ""
+        assert _risk_section_html([], variant="read") == ""
 
 
 class TestRiskCardVariants:
