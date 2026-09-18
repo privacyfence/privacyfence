@@ -556,6 +556,41 @@ class TestStepUpScoping:
         r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
         assert r.status_code == 428
 
+    def test_unflagged_read_needs_step_up_only_in_the_widest_scope(self):
+        """The gap ``writes_and_pii_reads`` leaves: a read pii_detector.py
+        never flagged is still a disclosure, and ``writes_and_reads`` is
+        what covers it. Same approval, same principal, both scopes --
+        org mode's own counterpart asserts this pair identically."""
+        self._enroll()
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", scope="writes_and_pii_reads"),
+        )
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        approval = _register(web_ui, gate_kind="review", pii_detected=False)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 200
+
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", scope="writes_and_reads"),
+        )
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        approval = _register(web_ui, gate_kind="review", pii_detected=False)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+
+    def test_denying_an_unflagged_read_in_the_widest_scope_still_needs_nothing(self):
+        self._enroll()
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", scope="writes_and_reads"),
+        )
+        approval = _register(web_ui, gate_kind="review", pii_detected=False)
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "deny", "csrf": session_id})
+        assert r.status_code == 200
+
 
 class TestStepUpEvadableWithNoPasskeyEnrolled:
     """#426 Phase 2's own deliberate gap: with no passkey enrolled and no

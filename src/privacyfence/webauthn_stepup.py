@@ -459,16 +459,26 @@ class StepUpChallengeStore:
 
 
 def is_step_up_required(*, gate_kind: str, pii_detected: bool, scope: str) -> bool:
-    """§10.6: "scope it to writes, or to writes plus PII-flagged reads."
-    ``scope`` is ``step_up_config.StepUpConfig.scope`` -- kept as a bare
-    string parameter here (rather than importing ``step_up_config.
-    StepUpScope``) so this module has no dependency on step_up_config.py at
-    all; the two string literals are the whole of that type."""
+    """§10.6: "scope it to writes, or to writes plus PII-flagged reads,"
+    plus ``"writes_and_reads"`` for an install that wants every gated read
+    covered too rather than trusting pii_detector.py to have flagged the
+    ones worth confirming. ``scope`` is
+    ``step_up_config.StepUpConfig.scope`` -- kept as a bare string parameter
+    here (rather than importing ``step_up_config.StepUpScope``) so this
+    module has no dependency on step_up_config.py at all; that type's
+    string literals are the whole of it.
+
+    A ``gate_kind`` that is neither (``""`` -- approvals.PendingApproval's
+    own bare confirm dialog) needs no step-up under any scope, including the
+    widest: a confirm is a second step *inside* a decision the caller's own
+    card already gated, never a release of its own."""
     if gate_kind == "popup":
         return True
-    if scope == "writes_and_pii_reads" and gate_kind == "review" and pii_detected:
+    if gate_kind != "review":
+        return False
+    if scope == "writes_and_reads":
         return True
-    return False
+    return scope == "writes_and_pii_reads" and pii_detected
 
 
 # --------------------------------------------------------------------- #
