@@ -19,6 +19,22 @@ turning the default on does not by itself satisfy that; see
 to show on a real machine. Supersedes [ADR 0001](0001-remove-macos-native-extra.md) in part — see
 "Relationship to ADR 0001" below.
 
+**Amended by #428 D2, 2026-09-18: macOS gets an install-time path to D1, not just the runtime
+one.** D1's own macOS mechanism is the daemon's first-start `osascript ... with administrator
+privileges` prompt — the only automatic path available to a DMG, which runs nothing as root at
+install time (see decision 5a's Windows-specific "install location is part of the boundary" and
+Linux's `.deb` `postinst`, both of which *do* get a root-context install step). That prompt is a
+bare, unexplained system dialog that can appear disconnected from anything the person just did, and
+a decline or a failed safety check (`_macos_auto_enable_script_problem()`) leaves it silently
+opt-in. `scripts/build_pkg.sh` adds a second macOS artifact, a signed `.pkg`, whose own
+`postinstall` script runs `enable --auto` itself while already running as root during the ordinary
+"Install PrivacyFence" step — the one elevation this requires happens where a non-technical user
+already expects an administrator-password prompt, with PrivacyFence's own explanatory text
+(`installer/macos/pkg/resources/`) instead of none. This does not replace the DMG or D1's own
+runtime prompt (a DMG-installed copy still needs it, and still can decline it) — it is an
+additional, fully-automated-install option for whoever downloads the `.pkg` instead. See
+`docs/platform-support.md`'s "`.pkg` installer (#428 D2)" section and `CHANGELOG.md`.
+
 ## Context
 
 P10 left local mode headless. The daemon has no window, no menu bar item and no dock icon; every

@@ -191,6 +191,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   install opt-in, the same fallback `--auto` already takes for every other unresolvable case. A
   source checkout can never satisfy the ownership check, which is deliberate: this prompt now only
   ever runs a script the installer itself shipped.
+- Issue #428 D2: a signed `PrivacyFence-<version>.pkg` installer (`scripts/build_pkg.sh`), built
+  alongside the DMG in `build.yml`'s release job, is a second macOS distributable that answers the
+  D1 entry above's own remaining gap — a DMG install has no root-context step to run `enable
+  --auto` from, so D1 could only ask the daemon's own first start to pop an admin-password dialog,
+  a real end-to-end path `docs/platform-support.md`'s "Known open items" still records as not yet
+  manually verified against a release build. A `.pkg` install already runs as root and already asks
+  for an administrator password as the ordinary "Install PrivacyFence" step, so its own
+  `postinstall` script (`installer/macos/pkg/postinstall`) runs `macos_privilege_separation.sh
+  enable --auto` there instead, resolving the human to provision it for from the logged-in console
+  user (`stat -f '%Su' /dev/console`, since a package script has no `$SUDO_USER` the way `sudo`
+  does) rather than waiting on a later, unexplained runtime prompt — and the installer's own
+  welcome/conclusion pages (`installer/macos/pkg/resources/`) say what that means and how to
+  reverse it, instead of a bare OS password dialog with no PrivacyFence-specific text at all. A
+  pkg-installed `.app` also lands root:wheel-owned by `pkgbuild`'s own default ownership, which is
+  exactly what `require_trusted_image()` (B1) wants to see without needing the codesign-verify
+  substitute proof the D1 follow-up entry above added for a drag-installed copy. Never fails the
+  package install over a privilege-separation hiccup — every failure path in the postinstall script
+  logs and exits 0, same posture `enable --auto` already takes for itself. The DMG remains the
+  primary distributable and is unaffected; the `.pkg` is an additional, fully-automated-install
+  option, covered the same two-tier way the DMG already is (`test_macos_pkg_smoke.py`, structural,
+  in `build.yml`'s release path; `test_macos_pkg_install.py`, a real `sudo installer -pkg ...
+  -target /` with no separate `enable` call, in the weekly `macos-graphical-session.yml`). See
+  issue #428.
 - Issue #428 B4: the control channel's `QUIT` command is now refused unconditionally on a
   privilege-separated install, regardless of `allow_quit`. The control socket is `0660`
   group-shared after separation so the companion can still reach it, which puts the agent in the

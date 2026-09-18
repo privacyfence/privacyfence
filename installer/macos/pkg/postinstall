@@ -1,0 +1,63 @@
+#!/bin/bash
+# PrivacyFence.pkg postinstall — provisions privilege separation (#428 D2,
+# Phase 4) at install time instead of leaving it to the daemon's own
+# admin-password runtime prompt (privilege_separation.maybe_auto_enable_macos(),
+# which a drag-installed DMG still depends on because a DMG has no root-context
+# install step of its own to run this from). This script IS that root-context
+# install step: Apple's installer already verified this package's signature
+# before running it and always runs package scripts as root, so by the time
+# this runs, "provision the _privacyfence account and hand it the daemon" is
+# exactly as safe to do unconditionally as scripts/macos_privilege_separation.sh
+# enable --auto already assumes its caller has confirmed.
+#
+# Must never fail the package install over this: a hiccup here is a reason to
+# leave privilege separation opt-in (the daemon's own runtime prompt will offer
+# it again once someone is logged in and starts the daemon), never a reason to
+# roll back installing the app at all. Every exit path below is therefore
+# explicit and this script always exits 0 -- no `set -e`, so one unexpected
+# failure can't accidentally take the whole install down with it.
+set -uo pipefail
+
+APP_PATH="/Applications/PrivacyFenceApp.app"
+SEPARATION_SCRIPT="${APP_PATH}/Contents/Resources/scripts/macos_privilege_separation.sh"
+
+log() { printf 'PrivacyFence postinstall: %s\n' "$*" >&2; }
+
+# Apple's installer runs this as root with no login session of its own --
+# $SUDO_USER (what macos_privilege_separation.sh normally reads) is unset here,
+# whether this ran from the Installer.app GUI or `sudo installer -pkg ...`.
+# The actual human to provision this for is whoever is logged in at the
+# console, the same thing `who`/Finder would show -- stat on /dev/console is
+# the standard, dependency-free way any macOS installer script resolves that.
+CONSOLE_USER="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
+
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ] || [ "$CONSOLE_USER" = "loginwindow" ]; then
+  # Nobody is actually logged in at install time (a remote/unattended install,
+  # or a package run at the login window) -- there is no human account yet to
+  # own this install or add to the service group. Leave it opt-in rather than
+  # guess; the daemon's own maybe_auto_enable_macos() asks again once someone
+  # is actually logged in and the daemon first starts in their session.
+  log "no logged-in console user detected (got '${CONSOLE_USER:-<empty>}') -- leaving privilege separation opt-in."
+  exit 0
+fi
+
+if [ ! -x "$SEPARATION_SCRIPT" ]; then
+  # Should not happen from a package this script itself ships inside of, but
+  # this postinstall's only job is a convenience layered on the opt-in path --
+  # never worth failing the install over.
+  log "${SEPARATION_SCRIPT} not found or not executable -- leaving privilege separation opt-in."
+  exit 0
+fi
+
+log "provisioning privilege separation for ${CONSOLE_USER} (#428 D2)…"
+if "$SEPARATION_SCRIPT" enable --auto --user "$CONSOLE_USER" --app "$APP_PATH"; then
+  log "privilege separation enabled -- ${CONSOLE_USER} still needs to log out and back in once before the companion app and MCP client can reach the daemon (macOS only evaluates group membership at login; see 'sudo ${SEPARATION_SCRIPT} status')."
+else
+  # enable --auto itself never exits non-zero (it logs and returns 0 on every
+  # failure path -- see that script's own --auto handling), so reaching this
+  # branch at all means the script couldn't even run to completion. Still not
+  # a reason to fail the package install.
+  log "automatic privilege-separation enable did not complete -- install continues; run 'sudo ${SEPARATION_SCRIPT} enable' by hand later, or check Console.app / /var/log/install.log for details."
+fi
+
+exit 0
