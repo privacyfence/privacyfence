@@ -289,24 +289,6 @@ Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` pre-release.
 
 ### Fixed
 
-- **The documented first-run sign-in path never worked.** The daemon has always logged the URL to
-  its approval UI on startup, and the README told you to read it there — but every logger in the
-  process runs through the secret-redacting formatter, which matched the word `bootstrap` and
-  scrubbed the code out of that line before it reached a terminal or a file. Restarting produced
-  an equally redacted line, and the menu bar fallback had already been removed with the rest of the
-  native UI. The link is now written to `~/.privacyfence/settings_url`, rewritten fresh on every
-  startup, and can also be fetched over MCP with `privacyfence_get_sign_in_link` (commit
-  `2a984a1`).
-- **The `.mcpb` shim failed silently in three ways**, each presenting to the user as "Claude cannot
-  connect to PrivacyFence" while the daemon log showed nothing at all: it refused to start on any
-  command-line flag it did not recognize, it never named what it was waiting on during a connection
-  wait (commit `7a9c98d`), it dropped a request outright when a forward failed instead of answering
-  it, and a rejected request could pin it to a session that was already dead.
-- Windows autostart registered the task but the daemon then killed itself at startup over its own
-  instance lock.
-- `atomic_write_bytes` retries `os.replace` on the transient `PermissionError` Windows raises when
-  another process still holds the destination open.
-- Ciphertext orphaned by a daemon restart is swept rather than left behind.
 - `--atlassian-oauth` no longer fails when Atlassian's accessible-resources response splits a single
   site across entries; the callback URL uses the shared grant key.
 - Drive API calls catch every exception, not just `HttpError`.
