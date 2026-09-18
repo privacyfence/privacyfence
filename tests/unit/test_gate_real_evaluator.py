@@ -1,31 +1,29 @@
-"""Integration tests for gate.gated_call() driven by a *real*
-AutoAcceptEvaluator (auto_accept.py), not the FakeEvaluator test_gate.py
-uses for its state-machine coverage.
+"""Integration tests for gate.gated_call() driven by *real* v2 auto-accept rules
+(policy/engine.py + policy/scopes.py + policy/conditions.py), not the FakeEvaluator
+test_gate.py uses for its state-machine coverage.
 
-FakeEvaluator
-returns a canned (bool, str) with no rule-matching logic of its own, so
-test_gate.py's ~50 tests prove gated_call's state machine is correct given
-*some* auto-accept verdict, but not that any specific auto_accept_rules
-entry from settings.yaml actually produces that verdict for a given
-connector call. That's exactly what a human currently checks by hand, rule
-by rule, connector by connector, across docs/connector-qa-testing.md's ten
-phases ("should NOT prompt" / "should still prompt" instructions). Each
-class below ports one of those checks into a deterministic test: a real
-AutoAcceptEvaluator, args/raw_data shaped the way the real connector module
-builds them, and an assertion on both the return value and the resulting
+A FakeEvaluator-style stub returns a canned (bool, str) with no rule-matching logic of its
+own, so test_gate.py's ~50 tests prove gated_call's state machine is correct given *some*
+auto-accept verdict, but not that any specific rule entry actually produces that verdict for
+a given connector call. That's exactly what a human currently checks by hand, rule by rule,
+connector by connector, across docs/connector-qa-testing.md's ten phases ("should NOT
+prompt" / "should still prompt" instructions). Each class below ports one of those checks
+into a deterministic test: real v2 rules (compiled from the same v1-shaped
+``{operation_key: [{"rule": name, "value": value}]}`` config this repo's own
+``policy.compat.compile_rule_entry`` translates 1:1 -- v2 scope predicates keep v1's rule
+names, see policy/scopes.py's ``SCOPE_SELECTORS``), args/raw_data shaped the way the real
+connector module builds them, and an assertion on both the return value and the resulting
 AuditEntry fields -- not just "a popup would/wouldn't show."
 
-The popup layer (``gate.show_read_popup``/``gate.show_popup`` -- P10
-deleted the native AppKit implementation behind them, so they now delegate
-to whichever ``ApprovalUI`` is current, i.e. ``WebApprovalUI``) is still
-monkeypatched to a scripted answer, same as test_gate.py -- that mock
-boundary is correct and unchanged; only the auto-accept side moves from
-fake to real. The actual card construction has its own coverage in
-test_approval_window_html.py/test_web_approval_ui.py.
+The popup layer (``gate.show_read_popup``/``gate.show_popup`` -- P10 deleted the native
+AppKit implementation behind them, so they now delegate to whichever ``ApprovalUI`` is
+current, i.e. ``WebApprovalUI``) is still monkeypatched to a scripted answer, same as before;
+only the auto-accept side moves from a v1 evaluator to real v2 rules (P9). The actual card
+construction has its own coverage in test_approval_window_html.py/test_web_approval_ui.py.
 
-salesforce.read_record's approved_object_types rule already has a
-real-evaluator regression test in test_gate.py::TestApprovedObjectTypesNeverPopsUp
-(added after a live QA discrepancy) -- not duplicated here.
+salesforce.read_record's approved_object_types rule already has a real-rule regression test
+in test_gate.py::TestApprovedObjectTypesNeverPopsUp (added after a live QA discrepancy) --
+not duplicated here.
 """
 from __future__ import annotations
 
@@ -36,7 +34,8 @@ import pytest
 
 from privacyfence import auto_accept, gate
 from privacyfence.audit_log import current_week, init_audit_logger
-from privacyfence.auto_accept import init_auto_accept_evaluator
+from privacyfence.policy import compat as policy_compat
+from privacyfence.policy import store as policy_store
 
 
 @pytest.fixture
@@ -74,9 +73,36 @@ def make_kwargs(**overrides):
     return kwargs
 
 
+def rule_id(predicate: str, value=None, conditions: tuple = ()) -> str:
+    """The canonical, content-derived rule id a matched v2-store rule reports as its
+    ``auto_accept_rule`` (P8/P9: ``gate._evaluate_auto_accept`` trusts ``matched.id`` directly
+    rather than the raw predicate name -- see that function's own docstring). Every
+    ``install_rules()``-installed rule below goes through ``policy.store.merge_rules``, which
+    always mints this id, so a plain regular-match ("auto_accepted") audit entry never reports
+    the bare predicate name the way a v1 ``matched_rule`` used to -- only the "Always allow"
+    flow's own ``accepted_via_accept_all`` entry still does (``chosen.scope.predicate``, gate.py's
+    own accept_all handling), since that path hasn't gone through the store yet at the moment it's
+    audited.
+    """
+    return policy_store.rule_id_for(predicate, value, conditions)
+
+
+def install_rules(rules_config: dict) -> None:
+    """Compile a v1-shaped ``{operation_key: [{"rule": name, "value": value}, ...]}``
+    ``rules_config`` -- the exact shape ``settings.yaml``'s old ``auto_accept_rules`` held,
+    and what every ``RULES`` class attribute below still spells its scenario in, since v2
+    scope predicates keep v1's rule names (``policy/scopes.py``'s own docstring) -- into real
+    ``policy.engine.PolicyRule``s and install them as the current principal's hot-reloaded
+    rule set. ``gate._evaluate_auto_accept`` reads exactly this via
+    ``auto_accept.get_policy_v2_store_rules()`` (P9: there is no more v1 evaluator to
+    construct, and no ``policy.engine: v1|v2`` switch to flip)."""
+    compiled = policy_compat.compile_rules(rules_config)
+    auto_accept.set_policy_v2_store_rules(policy_store.merge_rules(compiled))
+
+
 def fail_if_popup_shown(monkeypatch, *, review=True, popup=True):
-    """Assert neither popup function is called -- the auto-accept path must
-    resolve without ever reaching the interactive layer."""
+    """Assert neither popup function is called -- the auto-accept path must resolve without
+    ever reaching the interactive layer."""
     def boom(*a, **k):
         raise AssertionError("a native popup must not be shown for an auto-accepted call")
     if review:
@@ -92,7 +118,7 @@ class TestGmailTrustedSenderDomain:
     RULES = {"gmail.read_message": [{"rule": "trusted_sender_domain", "value": "trusted.com"}]}
 
     async def test_subdomain_sender_auto_accepts_with_no_popup(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -102,12 +128,12 @@ class TestGmailTrustedSenderDomain:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "trusted_sender_domain"
+        assert entries[0]["auto_accept_rule"] == rule_id("trusted_sender_domain", "trusted.com")
 
     async def test_unrelated_domain_still_prompts(self, monkeypatch, audit_dir):
         # Contrast case: proves the rule above is actually reachable, not
         # vacuously matching everything.
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -127,7 +153,7 @@ class TestDriveApprovedFolder:
     RULES = {"drive.read_file_contents": [{"rule": "approved_folder", "value": ["qa-folder-id"]}]}
 
     async def test_read_in_approved_folder_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -138,10 +164,10 @@ class TestDriveApprovedFolder:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "approved_folder"
+        assert entries[0]["auto_accept_rule"] == rule_id("approved_folder", ["qa-folder-id"])
 
     async def test_pii_content_overrides_the_matching_folder_rule(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
         monkeypatch.setattr(gate, "show_pii_confirmation_popup", lambda categories: True)
 
@@ -164,7 +190,7 @@ class TestDriveApprovedFolder:
         # Same folder, same fake-PII body, but a write: gate="popup" never
         # runs the PII scan (gate.py's module docstring) or consults
         # approved_folder (writes never auto-accept via that rule).
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -186,9 +212,7 @@ class TestDriveSandboxFolderCoveragePastComment:
     accepts end to end (the wiring was purely additive)."""
 
     async def test_comment_on_a_file_in_the_sandbox_folder_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(
-            {"drive.comment_file": [{"rule": "approved_sandbox_folder", "value": ["qa-folder-id"]}]}
-        )
+        install_rules({"drive.comment_file": [{"rule": "approved_sandbox_folder", "value": ["qa-folder-id"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -200,12 +224,10 @@ class TestDriveSandboxFolderCoveragePastComment:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "approved_sandbox_folder"
+        assert entries[0]["auto_accept_rule"] == rule_id("approved_sandbox_folder", ["qa-folder-id"])
 
     async def test_upload_into_the_allowlisted_folder_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(
-            {"drive.upload_file": [{"rule": "parent_folder_allowlist", "value": ["qa-folder-id"]}]}
-        )
+        install_rules({"drive.upload_file": [{"rule": "parent_folder_allowlist", "value": ["qa-folder-id"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -217,12 +239,10 @@ class TestDriveSandboxFolderCoveragePastComment:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "parent_folder_allowlist"
+        assert entries[0]["auto_accept_rule"] == rule_id("parent_folder_allowlist", ["qa-folder-id"])
 
     async def test_move_of_a_file_from_the_allowlisted_folder_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(
-            {"drive.move_file": [{"rule": "move_within_approved_folders", "value": ["qa-folder-id"]}]}
-        )
+        install_rules({"drive.move_file": [{"rule": "move_within_approved_folders", "value": ["qa-folder-id"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -234,18 +254,20 @@ class TestDriveSandboxFolderCoveragePastComment:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "move_within_approved_folders"
+        assert entries[0]["auto_accept_rule"] == rule_id("move_within_approved_folders", ["qa-folder-id"])
 
 
 class TestDriveTempAccept:
     """connector-qa-testing.md Phase 2 steps 5/13/16: accepting one
     temp-accept-eligible call must silently auto-accept a second call for
-    the same file, against the real evaluator's own in-memory temp-accept
-    store -- not FakeEvaluator's canned register_temp_accept() list (see
-    test_gate.py::TestTempAccept for that layer's coverage)."""
+    the same file, against the real, in-memory temp-accept store
+    (auto_accept.register_temp_accept/is_temp_accepted -- module-level
+    functions gate.py calls directly, P9) -- not test_gate.py::TestTempAccept's
+    FakeEvaluator, which only proves gate.py's own decision routing around
+    whatever that store reports."""
 
     async def test_second_call_for_the_same_file_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({})
+        install_rules({})
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
 
         first = await gate.gated_call(**make_kwargs(
@@ -270,7 +292,7 @@ class TestDriveTempAccept:
         assert entries[1]["auto_accept_rule"] == "session_temp_accept"
 
     async def test_a_different_file_is_not_covered(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({})
+        install_rules({})
         popup_calls = []
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: (popup_calls.append(1) or "accept", None))
         await gate.gated_call(**make_kwargs(
@@ -299,7 +321,7 @@ class TestSlackGroupDm:
     RULES = {"slack.read_messages": [{"rule": "group_dm"}]}
 
     async def test_group_dm_channel_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -311,10 +333,10 @@ class TestSlackGroupDm:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "group_dm"
+        assert entries[0]["auto_accept_rule"] == rule_id("group_dm")
 
     async def test_regular_channel_still_prompts_even_with_the_rule_configured(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -338,7 +360,7 @@ class TestSlackSearchAllResults:
     RULES = {"slack.read_messages": [{"rule": "approved_channel_all_results", "value": ["C1", "C2"]}]}
 
     async def test_all_results_in_approved_channels_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -350,10 +372,10 @@ class TestSlackSearchAllResults:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "approved_channel_all_results"
+        assert entries[0]["auto_accept_rule"] == rule_id("approved_channel_all_results", ["C1", "C2"])
 
     async def test_one_unapproved_result_gates_the_whole_call(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -368,7 +390,7 @@ class TestSlackSearchAllResults:
         assert entries[0]["auto_accept_rule"] == ""
 
     async def test_no_results_in_approved_channels_gates(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -390,7 +412,7 @@ class TestTelegramSearchAllResults:
     RULES = {"telegram.read_chat_messages": [{"rule": "approved_chats_all_results", "value": ["111", "222"]}]}
 
     async def test_all_results_in_approved_chats_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -402,10 +424,10 @@ class TestTelegramSearchAllResults:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "approved_chats_all_results"
+        assert entries[0]["auto_accept_rule"] == rule_id("approved_chats_all_results", ["111", "222"])
 
     async def test_one_unapproved_chat_gates_the_whole_call(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -421,7 +443,7 @@ class TestTelegramSearchAllResults:
     async def test_configured_rule_still_covers_a_plain_chat_read(self, monkeypatch, audit_dir):
         # The merged operation key must not break telegram_get_messages's
         # existing single-chat approved_chats rule.
-        init_auto_accept_evaluator({"telegram.read_chat_messages": [{"rule": "approved_chats", "value": ["111"]}]})
+        install_rules({"telegram.read_chat_messages": [{"rule": "approved_chats", "value": ["111"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -433,7 +455,7 @@ class TestTelegramSearchAllResults:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "approved_chats"
+        assert entries[0]["auto_accept_rule"] == rule_id("approved_chats", ["111"])
 
 
 class TestAlwaysAllowUnconditionalRule:
@@ -442,7 +464,7 @@ class TestAlwaysAllowUnconditionalRule:
     calendar_set_working_location (no calendar_id arg at all)."""
 
     async def test_gmail_draft_auto_accepts_regardless_of_recipient(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"gmail.create_draft": [{"rule": "always_allow"}]})
+        install_rules({"gmail.create_draft": [{"rule": "always_allow"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -454,10 +476,10 @@ class TestAlwaysAllowUnconditionalRule:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "always_allow"
+        assert entries[0]["auto_accept_rule"] == rule_id("always_allow")
 
     async def test_gmail_draft_still_prompts_without_the_rule_configured(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({})
+        install_rules({})
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -470,7 +492,7 @@ class TestAlwaysAllowUnconditionalRule:
         assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
 
     async def test_calendar_out_of_office_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"calendar.out_of_office": [{"rule": "always_allow"}]})
+        install_rules({"calendar.out_of_office": [{"rule": "always_allow"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -481,10 +503,10 @@ class TestAlwaysAllowUnconditionalRule:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "always_allow"
+        assert entries[0]["auto_accept_rule"] == rule_id("always_allow")
 
     async def test_calendar_working_location_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"calendar.working_location": [{"rule": "always_allow"}]})
+        install_rules({"calendar.working_location": [{"rule": "always_allow"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -495,7 +517,7 @@ class TestAlwaysAllowUnconditionalRule:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "always_allow"
+        assert entries[0]["auto_accept_rule"] == rule_id("always_allow")
 
 
 class TestCalendarIAmOrganizer:
@@ -504,7 +526,7 @@ class TestCalendarIAmOrganizer:
     RULES = {"calendar.read_event_details": [{"rule": "i_am_organizer"}]}
 
     async def test_own_event_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -516,7 +538,7 @@ class TestCalendarIAmOrganizer:
         assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
 
     async def test_someone_elses_event_still_prompts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -534,7 +556,7 @@ class TestJiraRules:
     i_am_assignee auto-accept independent of the project rule)."""
 
     async def test_issue_in_approved_project_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"jira.read_issue": [{"rule": "approved_project_keys", "value": ["PFQA"]}]})
+        install_rules({"jira.read_issue": [{"rule": "approved_project_keys", "value": ["PFQA"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -546,10 +568,10 @@ class TestJiraRules:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "approved_project_keys"
+        assert entries[0]["auto_accept_rule"] == rule_id("approved_project_keys", ["PFQA"])
 
     async def test_issue_in_other_project_still_prompts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"jira.read_issue": [{"rule": "approved_project_keys", "value": ["PFQA"]}]})
+        install_rules({"jira.read_issue": [{"rule": "approved_project_keys", "value": ["PFQA"]}]})
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -562,7 +584,7 @@ class TestJiraRules:
         assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
 
     async def test_reporter_auto_accepts_even_outside_the_approved_project(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"jira.read_issue": [{"rule": "i_am_reporter"}]})
+        install_rules({"jira.read_issue": [{"rule": "i_am_reporter"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -574,10 +596,10 @@ class TestJiraRules:
         assert result is FILTERED
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "auto_accepted"
-        assert entries[0]["auto_accept_rule"] == "i_am_reporter"
+        assert entries[0]["auto_accept_rule"] == rule_id("i_am_reporter")
 
     async def test_assignee_auto_accepts_independent_of_reporter_rule(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"jira.read_issue": [{"rule": "i_am_assignee"}]})
+        install_rules({"jira.read_issue": [{"rule": "i_am_assignee"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -587,7 +609,7 @@ class TestJiraRules:
         ))
 
         assert result is FILTERED
-        assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == "i_am_assignee"
+        assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == rule_id("i_am_assignee")
 
 
 class TestConfluenceRules:
@@ -596,7 +618,7 @@ class TestConfluenceRules:
     independent of the space rule)."""
 
     async def test_page_in_approved_space_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"confluence.read_page": [{"rule": "approved_space_keys", "value": ["PFQA"]}]})
+        install_rules({"confluence.read_page": [{"rule": "approved_space_keys", "value": ["PFQA"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -606,10 +628,10 @@ class TestConfluenceRules:
         ))
 
         assert result is FILTERED
-        assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == "approved_space_keys"
+        assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == rule_id("approved_space_keys", ["PFQA"])
 
     async def test_page_in_other_space_still_prompts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"confluence.read_page": [{"rule": "approved_space_keys", "value": ["PFQA"]}]})
+        install_rules({"confluence.read_page": [{"rule": "approved_space_keys", "value": ["PFQA"]}]})
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -622,7 +644,7 @@ class TestConfluenceRules:
         assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
 
     async def test_author_auto_accepts_even_outside_the_approved_space(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"confluence.read_page": [{"rule": "i_am_author"}]})
+        install_rules({"confluence.read_page": [{"rule": "i_am_author"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -632,7 +654,7 @@ class TestConfluenceRules:
         ))
 
         assert result is FILTERED
-        assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == "i_am_author"
+        assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == rule_id("i_am_author")
 
 
 class TestContactsNoContactInfoChange:
@@ -643,7 +665,7 @@ class TestContactsNoContactInfoChange:
     RULES = {"contacts.edit": [{"rule": "no_contact_info_change"}]}
 
     async def test_name_only_edit_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -655,7 +677,7 @@ class TestContactsNoContactInfoChange:
         assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
 
     async def test_email_change_still_prompts_even_with_the_rule_configured(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(self.RULES)
+        install_rules(self.RULES)
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -671,11 +693,10 @@ class TestTasksApprovedTaskList:
     """connector-qa-testing.md Phase 6 step 4 (create/update in an approved
     list) and step 6's move variant, which -- unlike every other operation
     this rule covers -- requires BOTH the source and destination list to be
-    on the allowlist (auto_accept.py::_rule_approved_task_list's
-    docstring)."""
+    on the allowlist (policy/scopes.py's own approved_task_list docstring)."""
 
     async def test_update_in_approved_list_auto_accepts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"tasks.update_task": [{"rule": "approved_task_list", "value": ["list-a"]}]})
+        install_rules({"tasks.update_task": [{"rule": "approved_task_list", "value": ["list-a"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -687,7 +708,7 @@ class TestTasksApprovedTaskList:
         assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
 
     async def test_update_in_unapproved_list_still_prompts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator({"tasks.update_task": [{"rule": "approved_task_list", "value": ["list-a"]}]})
+        install_rules({"tasks.update_task": [{"rule": "approved_task_list", "value": ["list-a"]}]})
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -699,9 +720,7 @@ class TestTasksApprovedTaskList:
         assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
 
     async def test_move_auto_accepts_only_when_both_ends_are_approved(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(
-            {"tasks.move_task": [{"rule": "approved_task_list", "value": ["list-a", "list-b"]}]}
-        )
+        install_rules({"tasks.move_task": [{"rule": "approved_task_list", "value": ["list-a", "list-b"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -713,9 +732,7 @@ class TestTasksApprovedTaskList:
         assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
 
     async def test_move_to_an_unapproved_destination_still_prompts(self, monkeypatch, audit_dir):
-        init_auto_accept_evaluator(
-            {"tasks.move_task": [{"rule": "approved_task_list", "value": ["list-a", "list-b"]}]}
-        )
+        install_rules({"tasks.move_task": [{"rule": "approved_task_list", "value": ["list-a", "list-b"]}]})
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -731,16 +748,18 @@ class TestAcceptAllPersistsARealRule:
     """connector-qa-testing.md's Always allow pattern (e.g. Phase 2 step 12):
     confirming 'Always allow' on one call must persist a real rule that then
     silently covers a second, different-but-matching call -- exercised here
-    against the real on-disk persistence path (auto_accept.add_auto_accept_rule),
-    not just the in-memory FakeEvaluator assertions test_gate.py::TestAcceptAll
-    already covers for the state-machine side of this flow.
+    against the real on-disk persistence path (gate.py's own accept_all
+    handling, unmocked: ``policy.propose.proposals_for``/``rules_for_proposal``
+    and ``auto_accept.add_policy_v2_rules``), not just the in-memory
+    FakeEvaluator assertions test_gate.py::TestAcceptAll already covers for
+    the state-machine side of this flow.
     """
 
     async def test_second_matching_call_is_silently_auto_accepted(self, monkeypatch, audit_dir, tmp_path):
         config_path = tmp_path / "settings.yaml"
         config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(config_path))
-        init_auto_accept_evaluator({})
+        install_rules({})
 
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept_all", 0))
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
@@ -752,9 +771,14 @@ class TestAcceptAllPersistsARealRule:
         assert first is FILTERED
         first_entry = read_audit_entries(audit_dir)[0]
         assert first_entry["decision"] == "accepted_via_accept_all"
+        # i_am_sender doesn't match (my_email is "me@example.com", not alice's), so the only
+        # proposal policy.propose.proposals_for offers for this call is trusted_sender_domain
+        # -- see policy/propose.py's PROPOSABLE_SCOPES gmail ordering (i_am_sender first, but
+        # filtered out here since it doesn't match this item).
         assert first_entry["auto_accept_rule"] == "trusted_sender_domain"
 
         on_disk = config_path.read_text(encoding="utf-8")
+        assert "auto_accept:" in on_disk
         assert "trusted_sender_domain" in on_disk
         assert "example.com" in on_disk
 
@@ -768,7 +792,7 @@ class TestAcceptAllPersistsARealRule:
         entries = read_audit_entries(audit_dir)
         assert len(entries) == 2
         assert entries[1]["decision"] == "auto_accepted"
-        assert entries[1]["auto_accept_rule"] == "trusted_sender_domain"
+        assert entries[1]["auto_accept_rule"] == rule_id("trusted_sender_domain", ["example.com"])
 
 
 class TestAcceptAllPersistsARealRuleForWrites:
@@ -782,7 +806,7 @@ class TestAcceptAllPersistsARealRuleForWrites:
         config_path = tmp_path / "settings.yaml"
         config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(config_path))
-        init_auto_accept_evaluator({})
+        install_rules({})
 
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept_all", 0))
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
@@ -812,7 +836,7 @@ class TestAcceptAllPersistsARealRuleForWrites:
         entries = read_audit_entries(audit_dir)
         assert len(entries) == 2
         assert entries[1]["decision"] == "auto_accepted"
-        assert entries[1]["auto_accept_rule"] == "label_name_allowlist"
+        assert entries[1]["auto_accept_rule"] == rule_id("label_name_allowlist", ["Newsletters"])
 
     # test_a_request_queued_behind_an_in_progress_accept_all_sees_the_new_rule
     # lived here through P2: two concurrent gated_call()s for *different*
