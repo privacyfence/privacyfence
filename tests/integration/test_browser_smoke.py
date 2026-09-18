@@ -777,6 +777,7 @@ class TestApprovalListBehavior:
                 "title": row.locator(".pf-approval-title").text_content(),
                 "kicker": row.locator(".pf-approval-kicker").text_content(),
                 "pill": row.locator(".pf-approval-pill").text_content(),
+                "icon": row.locator(".pf-approval-icon").get_attribute("class"),
             }
             # The object is the headline and the tool name has moved to the
             # meta line -- the raw tool id appears on neither.
@@ -784,6 +785,10 @@ class TestApprovalListBehavior:
             assert before["title"] == 'Read "Q3 forecast — legal review"'
             assert "Read Email Thread" in before["kicker"]
             assert "gmail_get_thread" not in before["kicker"]
+            # The real brand mark, not the letter-badge fallback -- this is
+            # the one that used to survive first paint and then degrade.
+            assert "pf-approval-icon-gmail" in before["icon"]
+            assert "pf-approval-icon-fallback" not in before["icon"]
 
             web_ui.resolve(card_b.id, "deny")
             thread_b.join(timeout=5)
@@ -793,8 +798,15 @@ class TestApprovalListBehavior:
                 "title": row.locator(".pf-approval-title").text_content(),
                 "kicker": row.locator(".pf-approval-kicker").text_content(),
                 "pill": row.locator(".pf-approval-pill").text_content(),
+                "icon": row.locator(".pf-approval-icon").get_attribute("class"),
             }
             assert after == before
+            # And the rule behind that class actually resolved to an image,
+            # rather than the class merely being present.
+            assert "url(\"data:image/png;base64," in page.evaluate(
+                "el => getComputedStyle(el).backgroundImage",
+                arg=row.locator(".pf-approval-icon").element_handle(),
+            )
         finally:
             for thread, card in ((thread_a, card_a), (thread_b, card_b)):
                 if thread.is_alive():

@@ -21,14 +21,13 @@ same thing at every width.
 see ``row_from_approval`` below); ``window.__pfRenderApprovals(state)`` is
 the live re-render web_shell.py's SSE dispatch calls with
 web/state_stream.py's own "approvals" event payload
-(``PendingApproval.to_summary_dict()``, which carries no icon -- building
-one needs approval_icons.py, a filesystem read this module deliberately
-doesn't do on every SSE tick). A live-updated row therefore renders with a
-plain connector-initial badge instead of the real icon; a decided row
-leaves the list within one poll interval regardless (web/state_stream.py's
-``_APPROVALS_POLL_SECONDS``), so the visual gap is real but short-lived --
-a documented simplification of this phase's own P1-compatible scope, not
-an oversight.
+(``PendingApproval.to_summary_dict()``, which carries no icon -- these are
+~15-135KB PNGs and base64'ing them into every tick would cost far more
+than it buys). The icon instead rides along once, as ``_icon_map``'s
+``{connector: data URI}`` baked into this page's own JS at first paint, so
+a live-updated row draws the same real mark the server-rendered one did
+rather than degrading to a letter badge within one poll interval. See
+``_icon_map`` for what that does and does not cover.
 
 **The approval binder (Phase 1 of the batch-decide plan):** a sequential
 agent can leave several approvals pending at once (P3's own removal of
@@ -83,6 +82,7 @@ yet doesn't need adding here too.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from datetime import datetime, timezone
 from html import escape as _html_escape
@@ -307,6 +307,20 @@ _JS = """
     return '<div class="pf-approval-details" id="pf-details-' + esc(id) + '" hidden></div>';
   }
 
+  // The connectors this document carries an icon rule for -- names only,
+  // no image data: the rule itself is already in the page's own <style>
+  // (see approval_list_html._icon_css), so a live-re-rendered row draws
+  // the real mark by naming the same class the first paint did.
+  var pfIconConnectors = %(icon_connectors)s;
+
+  // Mirrors approval_list_html._icon_html.
+  function iconHtml(connector, initial) {
+    if (pfIconConnectors.indexOf(connector) !== -1) {
+      return '<div class="pf-approval-icon pf-approval-icon-img pf-approval-icon-' + connector + '"></div>';
+    }
+    return '<div class="pf-approval-icon pf-approval-icon-fallback">' + esc(initial) + '</div>';
+  }
+
   // Mirrors approval_list_html._pill_html -- see that function.
   function pillHtml(gateKind) {
     if (gateKind === 'review') { return '<span class="pf-approval-pill pf-approval-pill-read">Read</span>'; }
@@ -330,7 +344,7 @@ _JS = """
       ' data-approval-id="' + esc(row.id) + '" data-tool="' + esc(row.tool || '') + '"' +
       ' data-batchable="' + (row.batchable ? '1' : '0') + '">' +
       checkbox +
-      '<div class="pf-approval-icon pf-approval-icon-fallback">' + esc(initial) + '</div>' +
+      iconHtml(row.connector || '', initial) +
       '<div class="pf-approval-main">' +
       '<div class="pf-approval-meta">' + pillHtml(row.gate_kind || '') +
       '<span class="pf-approval-kicker">' + esc(kicker) + '</span></div>' +
@@ -831,6 +845,75 @@ def _details_html(row_id: str) -> str:
     return f'<div class="pf-approval-details" id="pf-details-{_html_escape(row_id)}" hidden></div>'
 
 
+def _connector_icon_uri(connector: str) -> str:
+    return approval_icons.icon_data_uri(approval_icons.connector_icon_path(connector))
+
+
+# Interpolated into a CSS selector and a class attribute, so it is
+# restricted to what a connector identifier can legitimately be rather
+# than escaped -- a name that doesn't match simply gets the letter badge.
+_SAFE_CONNECTOR_RE = re.compile(r"^[a-z0-9_-]+$")
+
+
+def _icon_slug(connector: str) -> str:
+    slug = (connector or "").lower()
+    return slug if _SAFE_CONNECTOR_RE.match(slug) else ""
+
+
+def _icon_html(connector: str, initial: str, *, has_icon: bool) -> str:
+    """The row's connector mark, or a letter badge when no icon is bundled
+    for that connector. The mark is drawn from a per-connector CSS class
+    (see ``_icon_css``) rather than an inline ``src``, so the image data
+    appears once per document instead of once per row -- and so the JS
+    mirror (``iconHtml``) can render the identical element without being
+    handed any image data at all."""
+    if has_icon:
+        slug = _icon_slug(connector)
+        return f'<div class="pf-approval-icon pf-approval-icon-img pf-approval-icon-{slug}"></div>'
+    return f'<div class="pf-approval-icon pf-approval-icon-fallback">{_html_escape(initial)}</div>'
+
+
+def _icon_connectors(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """``{connector: data URI}`` for the distinct connectors on this page
+    that have a bundled icon.
+
+    The live re-render is driven by ``PendingApproval.to_summary_dict()``
+    (web/state_stream.py), which carries no icon and shouldn't: these are
+    ~15-135KB PNGs, and base64'ing them into every SSE tick would cost far
+    more than the letter badge it would replace. Emitting one CSS rule per
+    connector instead means the live re-render needs no image data at all
+    -- it renders the same class name and the rule already in the document
+    does the rest -- and it also makes the *first* paint cheaper than it
+    used to be, which embedded the same URI again for every row sharing a
+    connector.
+
+    A connector with nothing pending at load has no rule, so a row that
+    arrives for it later draws the letter badge until the next full page
+    load. That residue is bounded and self-healing; the previous behavior
+    degraded every row within one poll interval regardless."""
+    uris: dict[str, str] = {}
+    for row in rows:
+        connector = _icon_slug(row.get("connector") or "")
+        if connector and connector not in uris:
+            uri = _connector_icon_uri(connector)
+            if uri:
+                uris[connector] = uri
+    return uris
+
+
+def _icon_css(icon_uris: dict[str, str]) -> str:
+    if not icon_uris:
+        return ""
+    rules = "".join(
+        f'.pf-approval-icon-{slug}{{background-image:url("{uri}")}}'
+        for slug, uri in sorted(icon_uris.items())
+    )
+    return (
+        ".pf-approval-icon-img{background-size:contain;"
+        "background-repeat:no-repeat;background-position:center}" + rules
+    )
+
+
 _GATE_PILL = {"review": ("read", "Read"), "popup": ("write", "Write")}
 
 
@@ -862,10 +945,9 @@ def _row_html(row: dict[str, Any]) -> str:
     )
     rid = row["id"]
     batchable = bool(row.get("batchable"))
-    icon_uri = approval_icons.icon_data_uri(approval_icons.connector_icon_path(row.get("connector", "")))
-    icon_html = (
-        f'<img class="pf-approval-icon" src="{_html_escape(icon_uri)}" alt="">' if icon_uri
-        else f'<div class="pf-approval-icon pf-approval-icon-fallback">{_html_escape(connector[:1])}</div>'
+    icon_html = _icon_html(
+        row.get("connector") or "", connector[:1],
+        has_icon=bool(_connector_icon_uri(row.get("connector") or "")),
     )
     checkbox_html = (
         f'<input type="checkbox" data-select="{_html_escape(rid)}" aria-label="Select this approval">'
@@ -1003,9 +1085,15 @@ def build_list_html(rows: list[dict[str, Any]], *, csrf: str, nonce: str | None 
     nonce = nonce or secrets.token_urlsafe(18)
     body = "".join(_group_html(g) for g in _group_rows(rows)) if rows else _EMPTY_STATE
     toolbar = _toolbar_html(any_batchable=any(r.get("batchable") for r in rows)) if rows else ""
-    js = _JS % {"empty": json.dumps(_EMPTY_STATE), "csrf": json.dumps(csrf)}
+    icon_uris = _icon_connectors(rows)
+    js = _JS % {
+        "empty": json.dumps(_EMPTY_STATE),
+        "csrf": json.dumps(csrf),
+        # Names only -- the image data is in the <style> block below, once.
+        "icon_connectors": json.dumps(sorted(icon_uris)),
+    }
     return (
-        f'<style nonce="{nonce}">{_CSS}</style>'
+        f'<style nonce="{nonce}">{_CSS}{_icon_css(icon_uris)}</style>'
         '<div class="pf-approvals-page">'
         # Always emitted, even with nothing pending: render() below updates
         # it on every SSE tick, and an element that only exists when the

@@ -491,6 +491,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   become two equal 48px targets with always-allow a quiet link below them rather than a third
   control in the thumb zone. Nothing changes above the breakpoint, or in the native window, whose
   frame already sized itself to the document.
+- **Connector icons no longer disappear after the first live update.** The server-rendered first
+  paint drew each row's real brand icon, while the SSE re-render had no icon in its payload and
+  always drew the letter-badge fallback — so within one poll interval every row silently degraded,
+  on the page that most needs to look trustworthy. Each connector's icon is now a single CSS rule in
+  the page's own stylesheet, which both render paths reach by class name, so a live-updated row
+  draws exactly what the first paint did. Because the image data now appears once per *connector*
+  rather than once per *row*, this also makes the page substantially smaller: a ten-row list over
+  two connectors went from ~449KB to ~195KB. A connector with nothing pending when the page loaded
+  has no rule and still falls back to the letter badge until the next full load.
 - **An approvals row names what the request is about.** The row's title was `tool_name` and its
   second line was connector + the raw MCP tool id + age, so the row said `Read Gmail message` /
   `Gmail · gmail_get_thread · 2m ago` and never named the thread, document, event or contact being

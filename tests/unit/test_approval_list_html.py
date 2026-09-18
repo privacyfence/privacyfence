@@ -411,3 +411,53 @@ class TestApproveSelectedIsNotTheLoudestControl:
         # write hiding in a read-shaped batch -- the weight was wrong, not
         # this.
         assert "compositionLabel" in approval_list_html._JS
+
+
+class TestConnectorIconsSurviveLiveUpdates:
+    """F7: the first paint drew the real brand PNG and the live re-render
+    always drew a letter badge, so every row silently degraded within one
+    poll interval -- on the page that most needs to look trustworthy. The
+    icon now lives in one CSS rule per connector, which both render paths
+    reach by class name."""
+
+    def _rows(self, *connectors):
+        return [
+            approval_list_html.row_from_approval(_card(id=f"i{n}", connector=c))
+            for n, c in enumerate(connectors)
+        ]
+
+    def test_both_render_paths_emit_the_same_icon_element(self):
+        rows = self._rows("gmail")
+        first_paint = approval_list_html._row_html(rows[0])
+        assert 'class="pf-approval-icon pf-approval-icon-img pf-approval-icon-gmail"' in first_paint
+        # The JS mirror builds the identical class list, from a name list
+        # rather than any image data of its own.
+        js = approval_list_html._JS
+        assert "pf-approval-icon pf-approval-icon-img pf-approval-icon-" in js
+        assert "pfIconConnectors" in js
+
+    def test_the_image_data_appears_once_per_connector_not_once_per_row(self):
+        html = approval_list_html.build_list_html(self._rows("gmail", "gmail", "gmail"), csrf="t")
+        assert html.count("data:image/png;base64,") == 1
+
+    def test_a_connector_with_no_bundled_icon_still_gets_a_letter_badge(self):
+        rows = self._rows("nosuchconnector")
+        row_html = approval_list_html._row_html(rows[0])
+        assert 'class="pf-approval-icon pf-approval-icon-fallback">N<' in row_html
+
+    def test_the_connector_name_list_is_handed_to_the_page(self):
+        html = approval_list_html.build_list_html(self._rows("gmail", "slack"), csrf="t")
+        assert 'var pfIconConnectors = ["gmail", "slack"]' in html
+
+    def test_a_connector_name_that_is_not_a_safe_css_identifier_gets_no_rule(self):
+        # The slug is interpolated into a selector and a class attribute,
+        # so it is constrained rather than escaped -- anything else falls
+        # through to the letter badge.
+        assert approval_list_html._icon_slug("gmail") == "gmail"
+        assert approval_list_html._icon_slug('a"};x{y:z') == ""
+        assert approval_list_html._icon_slug("") == ""
+
+    def test_no_icon_css_at_all_when_nothing_is_pending(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert "data:image/png;base64," not in html
+        assert "var pfIconConnectors = []" in html
