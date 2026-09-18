@@ -516,6 +516,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that line. `request_open_url()`'s caller saw a broken pipe rather than the diagnostic explaining
   why it was refused. The request is now drained before the close. This also removes an intermittent
   CI failure in `tests/unit/web/test_control_channel.py`.
+- **`/security`'s "Back to connections" link no longer 404s in local mode.** It was hardcoded to
+  `/connect`, org mode's own per-principal connector-authorization page (`web/routes_connect.py`) —
+  a route local mode never mounts. `web/routes_security.py`'s `build_routes` now takes a `back_link`
+  `(href, label)` pair (defaulting to `/connect`, org mode's existing behavior); local mode's own
+  `web/server.py` wiring passes `/settings/connectors`, that mode's actual Connectors tab.
 
 - An approval that resolved without a human clicking a button — its pending TTL lapsing
   (`pop_expired_events()`), or an auto-accept rule appearing while it was still waiting

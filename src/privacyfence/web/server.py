@@ -716,6 +716,11 @@ def build_app(
             unauthenticated_response=_unauthorized_response,
             session_cookie_name=_SESSION_COOKIE,
             step_up=step_up, issuer_url=step_up_issuer_url,
+            # Local mode has no /connect route (that's routes_connect.py's
+            # org-mode-only surface) -- settings_window_html.py's Connectors
+            # tab is this mode's own equivalent, see routes_security.py's
+            # build_routes docstring on back_link.
+            back_link=("/settings/connectors", "Back to Connectors"),
         ))
 
     if state_stream is not None:

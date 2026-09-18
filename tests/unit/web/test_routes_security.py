@@ -68,6 +68,9 @@ def _local_app(*, step_up=None, sessions=None):
         unauthenticated_response=session_auth.unauthorized_html,
         session_cookie_name=session_auth.SESSION_COOKIE,
         step_up=step_up, issuer_url=LOCAL_ISSUER,
+        # Local mode has no /connect route (that's routes_connect.py's
+        # org-mode-only surface) -- matches web/server.py's actual wiring.
+        back_link=("/settings/connectors", "Back to Connectors"),
     )
     app = Starlette(routes=routes)
     return app, sessions
@@ -150,6 +153,21 @@ class TestSecurityPage:
         _signed_in(client, sessions, ALICE)
         r = client.get("/security")
         assert "My Phone" in r.text
+
+    def test_org_mode_links_back_to_connect_by_default(self):
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/security")
+        assert 'href="/connect"' in r.text
+
+    def test_local_mode_links_back_to_the_connectors_settings_tab(self):
+        app, sessions = _local_app()
+        client = _client(app)
+        _signed_in_local(client, sessions)
+        r = client.get("/security")
+        assert 'href="/settings/connectors"' in r.text
+        assert 'href="/connect"' not in r.text
 
 
 class TestRegisterOptions:
