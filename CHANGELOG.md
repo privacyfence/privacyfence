@@ -108,12 +108,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   See issue #407.
 - The Windows installer's "open the `.mcpb` after Finish" checkbox (see #407, above) no longer
   attempts to `ShellExecute` the `.mcpb` when nothing on the machine is registered to open one —
-  previously, that left Windows presenting its own "how do you want to open this file?" picker,
-  since PrivacyFence gets installed before Claude Desktop for most first-time users. The installer
-  now checks the registry for a real `.mcpb` file association first: if Claude Desktop has already
-  claimed it, Finish opens it exactly as before; otherwise the same checkbox opens File Explorer
-  with the `.mcpb` pre-selected instead, so the user always lands somewhere they can act on rather
-  than at a dead-end system dialog.
+  previously, that left Windows presenting its own "how do you want to open this file?" picker
+  instead of anything PrivacyFence-specific. This isn't only a first-run/Claude-Desktop-not-
+  installed-yet case: Claude Desktop's own installer doesn't always register the `.mcpb`
+  association cleanly on Windows the first time, so the failure was also reported on a machine
+  that already had Claude Desktop installed. The installer now checks the registry for a real,
+  working `.mcpb` association before deciding what Finish does: if one exists, it opens the
+  `.mcpb` exactly as before; otherwise the same checkbox opens File Explorer with the `.mcpb`
+  pre-selected instead, so the user always lands somewhere they can act on (double-click once
+  Claude Desktop is installed and associated, drag it onto Claude Desktop's Settings → Extensions
+  page, or fix the association via Open With) rather than at a dead-end system dialog.
 - `privacyfence_get_sign_in_link`'s result text is now a single markdown link (naming the
   10-minute expiry in the link text itself, e.g. "Sign in to PrivacyFence — one-time link, expires
   in 10 minutes") instead of a raw `{"url": ...}` JSON blob, so a client that renders tool text as

@@ -129,24 +129,33 @@ Filename: "{app}\{#AliasExeName}"; Description: "Launch {#AppName} now"; \
 ; value.
 ;
 ; Two mutually exclusive entries, gated by IsMcpbAssociated() below (see
-; [Code]), because "shellexec" only actually does something useful when
-; Claude Desktop is already installed *and* has already claimed the .mcpb
-; extension. If neither is true -- most commonly, Claude Desktop just isn't
-; installed yet, which for a first-time user is the normal order of
-; operations, not an edge case -- ShellExecuteEx has nothing to hand the
-; file to, and Windows answers with its own "how do you want to open this
-; file?" picker instead of anything PrivacyFence-specific. That's a dead
-; end for the user, not a helpful prompt, so in that case this shows File
-; Explorer with the .mcpb pre-selected instead -- always succeeds, since
-; explorer.exe needs no file association, and leaves the user exactly
-; where the README's own fallback instructions (see "Install on Windows"
-; step 3) already tell them to go double-click it from.
+; [Code]), because "shellexec" only actually does something useful once
+; Windows has a real, working .mcpb file association to dispatch to. That
+; is *not* the same thing as "Claude Desktop is installed": per Anthropic's
+; own docs, Claude Desktop's own installer does not always register the
+; .mcpb association cleanly on Windows on the first try, so a machine that
+; already has Claude Desktop can still have nothing at HKCR\.mcpb -- this
+; was reported against the single-entry shellexec-always version of this
+; section, on a machine with Claude Desktop already installed. So this
+; can't be "does Claude Desktop's installer exist somewhere" logic; it has
+; to be a direct read of the registry state ShellExecute will actually use.
+; Whatever the specific reason -- Claude Desktop not installed at all, or
+; installed but the association didn't take -- ShellExecuteEx has nothing
+; to hand the file to, and Windows answers with its own "how do you want
+; to open this file?" picker instead of anything PrivacyFence-specific.
+; That's a dead end for the user, not a helpful prompt, so in that case
+; this shows File Explorer with the .mcpb pre-selected instead -- always
+; succeeds, since explorer.exe needs no file association, and leaves the
+; user able to either double-click it (if Claude Desktop is installed and
+; they fix the association via Open With, see the README) or drag it onto
+; Claude Desktop's own Settings > Extensions page, which accepts a drop
+; regardless of file association.
 Filename: "{app}\{#AppName}-{#AppVersion}.mcpb"; \
     Description: "Install {#AppName} into Claude Desktop"; \
     Flags: postinstall shellexec skipifsilent; Check: IsMcpbAssociated
 Filename: "{win}\explorer.exe"; \
     Parameters: "/select,""{app}\{#AppName}-{#AppVersion}.mcpb"""; \
-    Description: "Show the {#AppName} Claude Desktop extension in File Explorer (install Claude Desktop, then double-click it there)"; \
+    Description: "Show the {#AppName} Claude Desktop extension in File Explorer"; \
     Flags: postinstall skipifsilent; Check: not IsMcpbAssociated
 
 [UninstallRun]
