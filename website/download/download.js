@@ -20,12 +20,65 @@
     'linux-x64': { name: 'Linux', detail: 'Debian / Ubuntu, 64-bit', match: /linux/i },
   };
 
-  // Which pre-release channel to offer testers, most production-ready first. A release candidate
-  // is a safer thing to hand someone than an alpha, so the page offers whichever mature channel
-  // actually has a release rather than assuming "pre-release" means "beta" -- this project has
-  // shipped only alphas so far, and hardcoding beta left the section permanently hidden with a
-  // perfectly good build published one channel over.
+  // Every pre-release channel the Worker knows about. Which one actually gets offered is decided
+  // by version, not by a fixed channel-name priority -- see pickPreRelease below for why "rc beats
+  // beta beats alpha regardless of version" broke as soon as more than one release cycle existed:
+  // an already-shipped cycle's rc/beta manifests don't get cleared out when a new cycle starts, so
+  // a fixed priority kept surfacing a stale, already-superseded rc over a genuinely newer alpha.
   const PRERELEASE_CHANNELS = ['rc', 'beta', 'alpha'];
+
+  // Mirrors cloudflare/downloads/src/channel.ts's VERSION_RE/STAGE_TO_CHANNEL -- kept in sync by
+  // hand for the same reason that module gives for duplicating scripts/r2_release.py's own copy:
+  // this is a separate deployable (a static site, not the Worker bundle) with nothing to import
+  // this from.
+  const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?(?:\.dev(\d+))?(?:\+.*)?$/;
+  const STAGE_RANK = { a: 0, b: 1, rc: 2 };
+
+  /** Parses a manifest version into comparable parts, or null if it doesn't look like one --
+   * a manifest this page fetched should always parse, but a null here just drops that channel
+   * from consideration rather than throwing and blanking the whole pre-release section. */
+  function parseVersion(version) {
+    const match = VERSION_RE.exec(String(version || '').trim());
+    if (!match || match[6] !== undefined) return null; // no match, or a between-tags dev build
+    const [, major, minor, patch, stage, stageNum] = match;
+    return {
+      major: Number(major), minor: Number(minor), patch: Number(patch),
+      // No stage (a stable version) outranks every pre-release of the same major.minor.patch --
+      // never actually reachable through PRERELEASE_CHANNELS, but keeps this comparator correct
+      // on its own terms rather than relying on the caller to never pass it a stable version.
+      stageRank: stage ? STAGE_RANK[stage] : 3,
+      stageNum: stage ? Number(stageNum) : 0,
+    };
+  }
+
+  /** True if version `a` is newer than version `b`: major.minor.patch first, then stage maturity
+   * (rc > beta > alpha), then stage number -- so a 4.1.0 alpha correctly outranks a 4.0.0 rc left
+   * over from an already-shipped cycle, and within one cycle an rc still outranks an earlier beta. */
+  function isNewerVersion(a, b) {
+    if (a.major !== b.major) return a.major > b.major;
+    if (a.minor !== b.minor) return a.minor > b.minor;
+    if (a.patch !== b.patch) return a.patch > b.patch;
+    if (a.stageRank !== b.stageRank) return a.stageRank > b.stageRank;
+    return a.stageNum > b.stageNum;
+  }
+
+  /** The published pre-release manifest with the highest actual version, or null if `manifests`
+   * (one settled fetch result per PRERELEASE_CHANNELS entry, same order, null for an unpublished
+   * channel) has nothing published. */
+  function pickPreRelease(manifests) {
+    let best = null;
+    let bestVersion = null;
+    for (const manifest of manifests) {
+      if (!manifest) continue;
+      const version = parseVersion(manifest.version);
+      if (!version) continue;
+      if (!best || isNewerVersion(version, bestVersion)) {
+        best = manifest;
+        bestVersion = version;
+      }
+    }
+    return best;
+  }
 
   const numberFormat = new Intl.NumberFormat('en');
 
@@ -166,20 +219,18 @@
   // exists to deliver.
   fetchJson('/api/releases/stable').then(renderStable).catch(showFallback);
 
-  /** The first pre-release channel with something published, or null if none has anything. */
-  async function firstPublishedPreRelease() {
-    for (const channel of PRERELEASE_CHANNELS) {
-      try {
-        return await fetchJson(`/api/releases/${channel}`);
-      } catch {
-        // 404 means nothing is published on that channel, which is a normal state rather than an
-        // error -- try the next one down.
-      }
-    }
-    return null;
+  /** The newest published pre-release across every channel, or null if none has anything.
+   * Fetches every channel (a 404 just means "unpublished", not an error -- see pickPreRelease)
+   * rather than stopping at the first one that answers, so a channel further down
+   * PRERELEASE_CHANNELS can still win on version. */
+  async function newestPublishedPreRelease() {
+    const manifests = await Promise.all(
+      PRERELEASE_CHANNELS.map((channel) => fetchJson(`/api/releases/${channel}`).catch(() => null)),
+    );
+    return pickPreRelease(manifests);
   }
 
-  firstPublishedPreRelease()
+  newestPublishedPreRelease()
     .then(renderPreRelease)
     .catch(() => {});
 
