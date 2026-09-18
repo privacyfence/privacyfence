@@ -718,6 +718,9 @@ def _maybe_start_web_server(
         # SEC-15: see approvals.DEFAULT_MAX_PENDING_PER_PRINCIPAL's own
         # comment for why this exists alongside max_pending above.
         max_pending_per_principal=int(approvals_config.get("max_pending_per_principal", 20)),
+        # Approval binder, Phase 4: see approvals.DEFAULT_ADAPTIVE_HOLD's own
+        # comment for what this collapses and why it's on by default.
+        adaptive_hold=bool(approvals_config.get("adaptive_hold", True)),
     )
     # See gate.py's own _popup_executor comment: it must never hold fewer
     # workers than the registry can have approvals live, or a card past
@@ -1034,6 +1037,9 @@ def _start_org_web_server(
         # SEC-15: see approvals.DEFAULT_MAX_PENDING_PER_PRINCIPAL's own
         # comment for why this exists alongside max_pending above.
         max_pending_per_principal=int(approvals_config.get("max_pending_per_principal", 20)),
+        # Approval binder, Phase 4: see approvals.DEFAULT_ADAPTIVE_HOLD's own
+        # comment for what this collapses and why it's on by default.
+        adaptive_hold=bool(approvals_config.get("adaptive_hold", True)),
     )
     # See gate.py's own _popup_executor comment: it must never hold fewer
     # workers than the registry can have approvals live, or a card past

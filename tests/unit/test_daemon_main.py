@@ -1412,6 +1412,30 @@ class TestMaybeStartWebServer:
         registry = get_web_approval_ui().deferred_registry
         assert registry.max_pending_per_principal == DEFAULT_MAX_PENDING_PER_PRINCIPAL
 
+    def test_adaptive_hold_defaults_on_when_not_configured(self, monkeypatch, tmp_path):
+        from privacyfence.web_approval_ui import get_web_approval_ui
+        self._no_bind(monkeypatch, tmp_path)
+
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False,
+        )
+
+        registry = get_web_approval_ui().deferred_registry
+        assert registry.adaptive_hold is True
+
+    def test_adaptive_hold_can_be_configured_off(self, monkeypatch, tmp_path):
+        from privacyfence.web_approval_ui import get_web_approval_ui
+        self._no_bind(monkeypatch, tmp_path)
+
+        daemon_main._maybe_start_web_server(
+            {"web": {"approvals": {"adaptive_hold": False}}}, self._connector_host(),
+            unattended_sessions_enabled=False,
+        )
+
+        registry = get_web_approval_ui().deferred_registry
+        assert registry.adaptive_hold is False
+
     def test_require_passkey_with_nothing_enrolled_logs_a_warning_but_still_starts(
         self, monkeypatch, tmp_path, caplog,
     ):
@@ -1772,6 +1796,17 @@ class TestMaybeStartWebServerOrgMode:
         )
         registry = get_web_approval_ui().deferred_registry
         assert registry.max_pending_per_principal == 7
+
+    def test_org_mode_registry_gets_adaptive_hold_too(self, monkeypatch, tmp_path):
+        from privacyfence.web_approval_ui import get_web_approval_ui
+
+        self._no_bind(monkeypatch, tmp_path)
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}, "approvals": {"adaptive_hold": False}}},
+            self._connector_host(), unattended_sessions_enabled=False, org_config=self._org_config(),
+        )
+        registry = get_web_approval_ui().deferred_registry
+        assert registry.adaptive_hold is False
 
     def test_org_mode_without_idp_section_raises(self, monkeypatch, tmp_path):
         # SEC-04's "org-mode-incomplete-IdP-or-server" case.

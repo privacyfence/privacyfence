@@ -416,6 +416,66 @@ class TestApprovalUrl:
         assert registry.approval_url("abc123") == "http://localhost:8765/approvals/abc123"
 
 
+class TestBinderUrl:
+    """Approval binder, Phase 4: the list page itself, distinct from any one
+    approval's own approval_url()."""
+
+    def test_no_base_url_configured_returns_none(self):
+        registry = make_registry()
+        assert registry.binder_url() is None
+
+    def test_base_url_is_used_once_set(self):
+        registry = make_registry()
+        registry.set_base_url("http://localhost:8765")
+        assert registry.binder_url() == "http://localhost:8765/approvals"
+
+
+class TestHasOtherLive:
+    """Approval binder, Phase 4: gate.py's adaptive hold window collapses to
+    zero exactly when this returns True for a call that just registered."""
+
+    def test_false_when_nothing_else_is_pending(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        assert registry.has_other_live(approval.principal_id, approval.id) is False
+
+    def test_true_when_another_approval_is_still_unfinalized(self):
+        registry = make_registry()
+        first, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t1", gate_kind="review", request_id="r1",
+        )
+        second, _ = registry.register_or_coalesce(
+            dedupe_key="k2", connector="c", tool="t2", gate_kind="review", request_id="r2",
+        )
+        assert registry.has_other_live(second.principal_id, second.id) is True
+        assert registry.has_other_live(first.principal_id, first.id) is True
+
+    def test_false_once_the_other_approval_is_finalized(self):
+        registry = make_registry()
+        first, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t1", gate_kind="review", request_id="r1",
+        )
+        second, _ = registry.register_or_coalesce(
+            dedupe_key="k2", connector="c", tool="t2", gate_kind="review", request_id="r2",
+        )
+        registry.finalize(first.id, "accept")
+        assert registry.has_other_live(second.principal_id, second.id) is False
+
+    def test_another_principals_pending_approval_does_not_count(self):
+        registry = make_registry()
+        with principal_scope(Principal(id="alice")):
+            registry.register_or_coalesce(
+                dedupe_key="k1", connector="c", tool="t1", gate_kind="review", request_id="r1",
+            )
+        with principal_scope(Principal(id="bob")):
+            bobs, _ = registry.register_or_coalesce(
+                dedupe_key="k2", connector="c", tool="t2", gate_kind="review", request_id="r2",
+            )
+        assert registry.has_other_live("bob", bobs.id) is False
+
+
 class TestAwaitStatus:
     def test_unknown_id_is_unknown(self):
         registry = make_registry()

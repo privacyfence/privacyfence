@@ -2505,6 +2505,138 @@ class TestDeferredApprovalProtocol:
         await asyncio.sleep(0.02)
 
 
+class TestAdaptiveHoldWindow:
+    """Approval binder, Phase 4: without this, a sequential agent never
+    fills the binder -- it stalls the full hold_window on call #1, relays
+    that one link, and only issues call #2 once a human has already
+    answered. Once this principal has one unfinalized approval outstanding,
+    a later, distinct gated call collapses its own wait to zero instead of
+    blocking the full window too."""
+
+    async def test_second_distinct_call_returns_pending_immediately(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+
+        first_task = asyncio.create_task(
+            gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_1"))
+        )
+        try:
+            assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
+
+            started = time.monotonic()
+            second = await gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_2"))
+            elapsed = time.monotonic() - started
+
+            assert second["status"] == "approval_pending"
+            # Nowhere near hold_window=5.0 -- proves the wait actually
+            # collapsed rather than merely returning to check twice as fast.
+            assert elapsed < 1.0
+        finally:
+            for pending in registry.list_pending():
+                registry.answer(pending.id, "deny")
+            with contextlib.suppress(RuntimeError):
+                await first_task
+
+    async def test_first_call_alone_still_holds_and_resolves_inline_when_a_human_is_quick(
+        self, monkeypatch, audit_dir,
+    ):
+        registry = PendingApprovalRegistry(hold_window=2.0, pending_ttl=5.0, ledger_ttl=5.0)
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+
+        async def _decide_once_pending():
+            assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
+            registry.answer(registry.list_pending()[0].id, "accept")
+
+        result, _ = await asyncio.gather(
+            gate.gated_call(**base_kwargs(gate="review")), _decide_once_pending(),
+        )
+
+        # No other approval was ever pending, so adaptive_hold never
+        # applies: the call holds long enough for the quick decision above
+        # to land, and returns the real result rather than "pending".
+        assert result is FILTERED
+
+    async def test_adaptive_hold_false_keeps_the_full_window_for_a_second_call(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(
+            hold_window=0.2, pending_ttl=5.0, ledger_ttl=5.0, adaptive_hold=False,
+        )
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+
+        first_task = asyncio.create_task(
+            gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_1"))
+        )
+        try:
+            assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
+
+            started = time.monotonic()
+            second = await gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_2"))
+            elapsed = time.monotonic() - started
+
+            assert second["status"] == "approval_pending"
+            assert elapsed >= 0.2
+        finally:
+            for pending in registry.list_pending():
+                registry.answer(pending.id, "deny")
+            with contextlib.suppress(RuntimeError):
+                await first_task
+
+
+class TestPendingResultPointsAtTheBinder:
+    """Approval binder, Phase 4: _pending_result() gains pending_count and
+    binder_url, and the message asks Claude to batch outstanding approvals
+    through privacyfence_await_approval instead of relaying one link at a
+    time -- but only once there's actually more than one to batch."""
+
+    async def test_solo_pending_result_carries_a_count_of_one_and_the_original_message(
+        self, monkeypatch, audit_dir,
+    ):
+        registry = PendingApprovalRegistry(hold_window=0.05, pending_ttl=5.0, ledger_ttl=5.0)
+        registry.set_base_url("http://localhost:8765")
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+
+        result = await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert result["pending_count"] == 1
+        assert result["binder_url"] == "http://localhost:8765/approvals"
+        assert "url so they can" in result["message"]  # unchanged single-approval wording
+
+        registry.answer(registry.get(result["approval_id"]).id, "deny")
+        await asyncio.sleep(0.02)
+
+    async def test_batched_pending_result_names_the_binder(self, monkeypatch, audit_dir):
+        registry = PendingApprovalRegistry(hold_window=5.0, pending_ttl=5.0, ledger_ttl=5.0)
+        registry.set_base_url("http://localhost:8765")
+        approval_ui.init_approval_ui(WebApprovalUI(registry=registry))
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+
+        first_task = asyncio.create_task(
+            gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_1"))
+        )
+        try:
+            assert await wait_until_async(lambda: bool(registry.list_pending()), timeout=2.0)
+
+            second = await gate.gated_call(**base_kwargs(gate="review", tool="gmail_get_message_2"))
+
+            assert second["pending_count"] == 2
+            assert second["binder_url"] == "http://localhost:8765/approvals"
+            assert "http://localhost:8765/approvals" in second["message"]
+            assert "privacyfence_await_approval once" in second["message"]
+        finally:
+            for pending in registry.list_pending():
+                registry.answer(pending.id, "deny")
+            with contextlib.suppress(RuntimeError):
+                await first_task
+
+
 class TestApprovedObjectTypesNeverPopsUp:
     """Regression/repro for a QA discrepancy that couldn't be resolved from
     the audit log alone: the operator reported seeing a live approval popup
