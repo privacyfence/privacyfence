@@ -144,13 +144,36 @@ Filename: "{app}\{#AliasExeName}"; Description: "Launch {#AppName} now"; \
 ; builds it as "{#AppName}-{#AppVersion}.mcpb" (ProductName-Version.mcpb),
 ; so that's reconstructed here rather than threaded through as its own /D
 ; value.
-; "shellexec" (not a bare Filename/CreateProcess launch) is required: a
-; .mcpb isn't something Windows can exec directly, so this needs
-; ShellExecute to dispatch it to whatever's registered to open it --
-; Claude Desktop, once it's installed and has claimed the extension.
+;
+; Two mutually exclusive entries, gated by IsMcpbAssociated() below (see
+; [Code]), because "shellexec" only actually does something useful once
+; Windows has a real, working .mcpb file association to dispatch to. That
+; is *not* the same thing as "Claude Desktop is installed": per Anthropic's
+; own docs, Claude Desktop's own installer does not always register the
+; .mcpb association cleanly on Windows on the first try, so a machine that
+; already has Claude Desktop can still have nothing at HKCR\.mcpb -- this
+; was reported against the single-entry shellexec-always version of this
+; section, on a machine with Claude Desktop already installed. So this
+; can't be "does Claude Desktop's installer exist somewhere" logic; it has
+; to be a direct read of the registry state ShellExecute will actually use.
+; Whatever the specific reason -- Claude Desktop not installed at all, or
+; installed but the association didn't take -- ShellExecuteEx has nothing
+; to hand the file to, and Windows answers with its own "how do you want
+; to open this file?" picker instead of anything PrivacyFence-specific.
+; That's a dead end for the user, not a helpful prompt, so in that case
+; this shows File Explorer with the .mcpb pre-selected instead -- always
+; succeeds, since explorer.exe needs no file association, and leaves the
+; user able to either double-click it (if Claude Desktop is installed and
+; they fix the association via Open With, see the README) or drag it onto
+; Claude Desktop's own Settings > Extensions page, which accepts a drop
+; regardless of file association.
 Filename: "{app}\{#AppName}-{#AppVersion}.mcpb"; \
     Description: "Install {#AppName} into Claude Desktop"; \
-    Flags: postinstall shellexec skipifsilent
+    Flags: postinstall shellexec skipifsilent; Check: IsMcpbAssociated
+Filename: "{win}\explorer.exe"; \
+    Parameters: "/select,""{app}\{#AppName}-{#AppVersion}.mcpb"""; \
+    Description: "Show the {#AppName} Claude Desktop extension in File Explorer"; \
+    Flags: postinstall skipifsilent; Check: not IsMcpbAssociated
 
 [UninstallRun]
 ; Must remove the scheduled task -- wired into the uninstaller here, not
@@ -173,6 +196,27 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#TaskName}"" /f"; \
 ; entries a "clean uninstall" for a typical app might add.
 
 [Code]
+(* Backs the [Run] section's Check: on the two mutually-exclusive
+   "open the .mcpb" entries above. HKCR is the merged classes-root view --
+   HKCU\Software\Classes overlaid on HKLM\Software\Classes -- so this sees a
+   per-user Claude Desktop install (matching this installer's own
+   PrivilegesRequired=lowest, which can land per-user too) exactly as
+   readily as a per-machine one; no separate HKCU fallback needed.
+
+   Deliberately checks for a real command line under the ProgId, not just
+   that HKCR\.mcpb has *a* ProgId value: a stale or partially-removed
+   association (ProgId key present, shell\open\command missing) would
+   otherwise still be reported as "associated" and ShellExecute would fail
+   at Finish-click time exactly as if this check didn't exist. *)
+function IsMcpbAssociated(): Boolean;
+var
+  ProgId: String;
+begin
+  Result := False;
+  if RegQueryStringValue(HKCR, '.mcpb', '', ProgId) and (ProgId <> '') then
+    Result := RegKeyExists(HKCR, ProgId + '\shell\open\command');
+end;
+
 (* Copies whatever schtasks.exe wrote on stdout/stderr into Setup's own log
    file, one line per log entry.
 
