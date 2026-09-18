@@ -147,6 +147,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `%ProgramFiles%\PrivacyFence\` — previously it only checked the latter, so a default (non-admin)
   install left both autostart *and* the shim's self-heal spawn unable to find the daemon, showing
   up as an MCP "unable to connect" with nothing in Task Manager.
+- The Windows installer no longer offers a non-admin install at all (`PrivilegesRequired=admin`,
+  was `lowest`), because that warning dialog above was not describing an occasional glitch: a
+  non-elevated install could never register the autostart task in the first place. Registering a
+  Task Scheduler task with a `LogonTrigger` needs the `SeCreateGlobalPrivilege` user right, which
+  an ordinary (non-elevated) token lacks by default — including a UAC-filtered admin account's own
+  token, the same token a `lowest`-privilege install runs Setup with unless the user explicitly
+  chooses "Run as administrator" — regardless of whether the task's principal is a group or that
+  user's own account. Every non-admin install hit "Access is denied" every time, not sometimes; two
+  real users reported it. Requiring elevation up front closes the gap at its actual cause instead
+  of around it.
 - Org mode's approval page no longer shows the WebAuthn step-up helper's JavaScript source as
   literal visible text above the approval card. `_org_bridge_shim` concatenated it ahead of its
   own `<script>` tag instead of inside one, so the browser rendered the function bodies as page

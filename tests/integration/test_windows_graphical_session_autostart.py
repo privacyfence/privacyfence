@@ -111,13 +111,17 @@ account already has PrivacyFence state, and removes whatever it creates
 afterwards -- see ``_real_home_state``. **Only ever run this against a
 disposable CI account.**
 
-The install also goes to a machine-wide directory rather than the
-installer's own default. ``installer/privacyfence.iss`` is
-``PrivilegesRequired=lowest``, so a silent install resolves ``{autopf}`` to
-``{userpf}`` -- ``%LOCALAPPDATA%\\Programs\\PrivacyFence``, inside the
-installing account's profile, which no *other* account can read. The shipped
-task's ``Builtin\\Users`` principal only composes with a per-machine layout,
-so that is what this test installs (see ``INSTALL_DIR``).
+The install also goes to a custom machine-wide directory rather than
+``installer/privacyfence.iss``'s own ``DefaultDirName``, though both are
+machine-wide now: ``PrivilegesRequired`` is ``admin`` (previously
+``lowest``, changed once a real non-admin install turned out to fail
+``RegisterAutostartTask()`` outright -- see ``docs/platform-support.md``'s
+"Known open items" for the full story, including why this very module,
+gated on ``_is_admin()`` below, never once exercised that failure), so
+``{autopf}`` always resolves to ``{pf}`` (``%ProgramFiles%``) regardless.
+``INSTALL_DIR`` exists for this module's own isolation from a real
+``%ProgramFiles%\\PrivacyFence`` some other install might already occupy,
+not to force a machine-wide layout the installer wouldn't otherwise pick.
 
 Skipped entirely unless running on real Windows, elevated (installing
 machine-wide and managing a Task Scheduler task needs it), with a just-built
