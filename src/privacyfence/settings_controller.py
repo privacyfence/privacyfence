@@ -1776,14 +1776,27 @@ class SettingsController:
         section, sentence-rendered, plus the "add a rule" scope catalogue -- one filterable list,
         replacing the per-connector Trusted-*/parallel-rule-row/Sheets-Docs-pointer-page surface
         this method used to build (``_rules_state``/``_drive_grant_summary``/``_grant_entry_label``,
-        through P5)."""
+        through P5).
+
+        P8 adds each row's own usage: ``match_count``/``last_matched`` (a relative-time string,
+        via ``_relative_time``, empty when the rule has never matched) and ``never_matched``,
+        from ``AuditLogger.rule_usage()`` grouped by the same ``rule.id`` this row is keyed on --
+        gate.py's ``_evaluate_auto_accept`` stamps every "auto_accepted" audit entry's ``rule_id``
+        with exactly this id when (and only when) it can attribute the decision to one row (see
+        that field's own docstring), so a count here is never a guess. Reads straight off this
+        principal's own ``logs/audit/`` directory, the same way ``_audit_state`` builds "Recent
+        decisions" -- not the process-wide ``get_audit_logger()`` singleton, which may be a
+        different principal's logger by the time this renders (P6, org mode)."""
         rules = policy_store.compile_rules_from_config(cfg)
         catalogue = _policy_scope_catalogue()
+        log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
+        usage = AuditLogger(str(log_dir)).rule_usage() if log_dir.exists() else {}
 
         rule_rows: list[dict[str, Any]] = []
         for rule in rules:
             connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
             connector = connectors_of_rule[0] if connectors_of_rule else ""
+            rule_usage = usage.get(rule.id) or {}
             rule_rows.append({
                 "id": rule.id,
                 "sentence": policy_describe.rule_sentence(rule),
@@ -1802,6 +1815,9 @@ class SettingsController:
                     for verb in policy_describe.rule_verbs(rule)
                 ],
                 "covered_tools": list(policy_describe.covered_tools(rule)),
+                "match_count": rule_usage.get("count", 0),
+                "last_matched": _relative_time(rule_usage["last_matched"]) if rule_usage else "",
+                "never_matched": not rule_usage,
             })
         rule_rows.sort(key=lambda row: row["sentence"])
 

@@ -53,7 +53,8 @@ def _make_state(**overrides):
             "rules": [
                 {"id": "r-abc123", "sentence": "Gmail - sender: allow read", "connector": "gmail",
                  "connector_label": "Gmail", "scope_type": "gmail.sender", "value": "", "value_ids": [],
-                 "verbs": [{"verb": "read", "family": "read"}], "covered_tools": ["gmail_get_message"]},
+                 "verbs": [{"verb": "read", "family": "read"}], "covered_tools": ["gmail_get_message"],
+                 "match_count": 0, "last_matched": "", "never_matched": True},
             ],
             "scope_groups": [
                 {"id": "drive.folder", "label": "Drive — folder", "connector": "drive", "needs_value": True,
@@ -251,6 +252,15 @@ class TestAutoAcceptTemplate:
         html = build_html(_make_state())
         assert "scope_groups" in html
         assert "covered_tools" in html
+
+    def test_usage_fields_wired(self):
+        # P8 (rule attribution and staleness): every row's match count/last-matched/never-matched
+        # trio is read and rendered, with a distinct class for a rule that has never fired.
+        html = build_html(_make_state())
+        assert "match_count" in html
+        assert "never_matched" in html
+        assert "pf-aa-usage" in html
+        assert "pf-aa-usage-stale" in html
 
     def test_copy_id_attribute_wired(self):
         # Right-click a rule row to copy its raw value ids (see

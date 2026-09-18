@@ -72,6 +72,37 @@ def _conditions_hold(rule: PolicyRule, ctx: ReviewContext) -> bool:
     return True
 
 
+def find_matching_rule(
+    rules: Iterable[PolicyRule], operation_key: str, ctx: ReviewContext,
+) -> "PolicyRule | None":
+    """The rule object ``evaluate()`` below would match, or ``None`` -- factored out for P8 (rule
+    attribution): a caller that needs to know *which row* matched, not just its ``.id`` (which,
+    for a ``policy/compat.py``-compiled rule, is the ambiguous v1 predicate name, not a stable
+    per-resource identity -- see ``policy.store.rule_id_for_rule``), needs the object itself, and
+    re-deriving it from ``evaluate()``'s returned id would be wrong whenever two rules in the same
+    list happen to share one (exactly the F9 shape this whole redesign exists to fix). Never
+    considers the temp-accept grace window -- that is a session-scoped fallback, not a rule row,
+    which is exactly why a caller resolving a decision to "one rule row" should get ``None`` here
+    for it, not a pseudo-rule.
+    """
+    for rule in rules:
+        if operation_key not in rule.operations:
+            continue
+        selector = _selector_for(rule.predicate)
+        if selector is None:
+            continue
+        try:
+            if not selector.matches(rule.value, ctx):
+                continue
+            if not _conditions_hold(rule, ctx):
+                continue
+        except Exception as exc:
+            logger.warning("Rule %r evaluation error: %s", rule.id, exc)
+            continue
+        return rule
+    return None
+
+
 def evaluate(
     rules: Iterable[PolicyRule],
     operation_key: str,
@@ -88,20 +119,8 @@ def evaluate(
     propagated -- fail closed, exactly as ``should_auto_accept``'s own ``except Exception``
     around ``self._evaluate`` does.
     """
-    for rule in rules:
-        if operation_key not in rule.operations:
-            continue
-        selector = _selector_for(rule.predicate)
-        if selector is None:
-            continue
-        try:
-            if not selector.matches(rule.value, ctx):
-                continue
-            if not _conditions_hold(rule, ctx):
-                continue
-        except Exception as exc:
-            logger.warning("Rule %r evaluation error: %s", rule.id, exc)
-            continue
+    rule = find_matching_rule(rules, operation_key, ctx)
+    if rule is not None:
         return True, rule.id
     if is_temp_accepted is not None and is_temp_accepted(operation_key, temp_accept_key(operation_key, ctx)):
         return True, "session_temp_accept"
@@ -163,4 +182,4 @@ def preflight(
     return "requires_review", "", "No configured rule matches these arguments."
 
 
-__all__ = ["PolicyRule", "evaluate", "preflight"]
+__all__ = ["PolicyRule", "evaluate", "find_matching_rule", "preflight"]

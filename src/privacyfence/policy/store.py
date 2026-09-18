@@ -73,6 +73,22 @@ def _sortable(value: Any) -> Any:
     return value
 
 
+def rule_id_for_rule(rule: PolicyRule) -> str:
+    """The canonical, content-derived id for an *already-compiled* ``PolicyRule`` -- P8 (rule
+    attribution and staleness). ``rule.id`` itself is only guaranteed to be this canonical id for
+    a rule read back from the on-disk v2 section (``compile_rules_from_config``, whose rows were
+    minted by ``merge_rules``/``rule_id_for`` at migration or add-rule time); a rule compiled
+    on-the-fly from v1's ``auto_accept_rules``/``auto_accept_grants`` (``policy.compat.
+    compile_rule_entry``) deliberately keeps the original v1 predicate name as its ``id`` instead
+    (see that module's own docstring on why), which is exactly the ambiguous identifier F9
+    complains about -- two different grants using the same predicate name are indistinguishable by
+    it. Recomputing from the rule's own ``(predicate, value, conditions)`` gets back the same id
+    either way, which is what lets gate.py attribute a live decision (matched against whichever
+    rule list happens to be authoritative) to the identical row Settings' Auto-accept page lists,
+    without caring which of the two shapes produced the ``PolicyRule`` it matched."""
+    return rule_id_for(rule.predicate, rule.value, rule.conditions)
+
+
 def merge_rules(rules: list[PolicyRule]) -> list[PolicyRule]:
     """Union rules that share a ``(predicate, value, conditions)`` key into one rule spanning every
     operation any of them covered, preserving first-seen order. This changes nothing about *whether*
@@ -207,6 +223,7 @@ __all__ = [
     "merge_rules",
     "rule_from_dict",
     "rule_id_for",
+    "rule_id_for_rule",
     "rule_to_dict",
     "rules_to_config",
     "verb_families",

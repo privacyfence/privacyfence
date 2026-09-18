@@ -48,6 +48,40 @@ class TestRuleIdFor:
         assert len(rule_id) == len("r-") + 10
 
 
+class TestRuleIdForRule:
+    """P8 (rule attribution and staleness): the canonical id for an already-compiled rule,
+    independent of whatever its own ``.id`` happens to be -- gate.py's ``_evaluate_auto_accept``
+    needs this to attribute a decision made against a ``policy.compat``-compiled rule (whose
+    ``.id`` is the ambiguous v1 predicate name, per that module's own docstring) to the same row
+    Settings' Auto-accept page lists."""
+
+    def test_matches_rule_id_for_of_the_same_fields(self):
+        rule = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F1"])
+        assert store.rule_id_for_rule(rule) == store.rule_id_for("approved_sandbox_folder", ["F1"], ())
+
+    def test_ignores_the_rules_own_id(self):
+        # Same (predicate, value, conditions) as above, but a completely different, made-up `.id`
+        # -- exactly the shape a v1-compiled rule has (compat.compile_rule_entry sets id=rule_name)
+        # and exactly why this function recomputes rather than trusting `.id`.
+        rule = _rule(id_="some ambiguous v1 name", predicate="approved_sandbox_folder", value=["F1"])
+        assert store.rule_id_for_rule(rule) == store.rule_id_for("approved_sandbox_folder", ["F1"], ())
+
+    def test_two_rules_with_the_same_id_but_different_values_get_different_canonical_ids(self):
+        # The exact F9 shape: two v1-compiled rules sharing one ambiguous name (`.id`) because
+        # they came from the same predicate, but naming two different resources.
+        a = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F1"])
+        b = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F2"])
+        assert store.rule_id_for_rule(a) != store.rule_id_for_rule(b)
+
+    def test_agrees_with_merge_rules_own_id_for_the_same_meaning(self):
+        rules = [
+            _rule(id_="a", predicate="approved_sandbox_folder", value=["F1"], operations=("drive.write_file",)),
+            _rule(id_="b", predicate="approved_sandbox_folder", value=["F1"], operations=("sheets.write_range",)),
+        ]
+        merged = store.merge_rules(rules)
+        assert store.rule_id_for_rule(merged[0]) == merged[0].id
+
+
 class TestMergeRules:
     def test_same_meaning_across_operations_merges_into_one_rule(self):
         rules = [

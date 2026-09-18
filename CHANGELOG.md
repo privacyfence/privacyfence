@@ -451,6 +451,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `privacyfence_list_auto_accept_rules`/`privacyfence_propose_auto_accept_rule_change` are kept,
   unchanged, as deprecated aliases for one minor release — an old-shape write still lands the same
   rule the new engine recognizes.
+- Policy v2 redesign, P8: every audit log entry for an auto-accepted decision now carries a
+  `rule_id` — the on-disk v2 rule's own stable, content-derived id — alongside the existing
+  (and, per F9, possibly ambiguous) rule name, whenever the decision resolves to exactly one rule
+  row rather than being guessed. The Auto-accept Settings page (P6) uses it to show each rule's
+  own usage — "Matched Nx, last \<when\>" — and flags a rule that has never matched with a
+  distinct badge next to its existing Remove link, so a rule list becomes something a person
+  maintains rather than one that only ever grows. No behavior change to what auto-accepts: this is
+  attribution and staleness reporting only.
 - Gmail draft bodies (`body_markdown` on all 6 draft tools) now support `# Heading 1`/`## Heading 2`
   syntax, rendered as Gmail's own "Large"/"Huge" font-size compose presets (not raw `<h1>`/`<h2>`
   tags, which render inconsistently across mail clients). See issue #414.
