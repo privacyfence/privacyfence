@@ -1100,13 +1100,11 @@ comparison:
   `privacyfence.service` below), or the repo-root `privacyfence.service` — a systemd **`--user`** unit
   for a single-user Linux desktop install via the same `pip`/`pipx` path, requiring
   `loginctl enable-linger` or a graphical session to autostart at login the way the `.deb`'s XDG entry
-  does. **Unverified on a real install, both paths**: nothing in `src/privacyfence/` imports a
-  platform-specific module any more, and the full suite runs headlessly on Linux CI on every PR
-  (`org-mode-smoke` exercises the daemon's own startup/authz/audit contract against a real subprocess
-  and a mocked IdP) — but neither a real `pip`/`pipx install privacyfence` nor a live third-party
-  IdP's actual OIDC round-trip has been run against a real server or desktop install yet. See
-  [`platform-support.md`](platform-support.md)'s "Known open items" and `privacyfence.service`'s own
-  header comment — the one place this status has stayed accurate throughout.
+  does. Nothing in `src/privacyfence/` imports a platform-specific module any more, and the full suite
+  runs headlessly on Linux CI on every PR (`org-mode-smoke` exercises the daemon's own
+  startup/authz/audit contract against a real subprocess and a mocked IdP); both paths have also now
+  been run end to end against a real install, including a live third-party IdP's actual OIDC
+  round-trip. See [`platform-support.md`](platform-support.md) for current status.
 
 ## Testing
 
