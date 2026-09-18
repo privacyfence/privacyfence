@@ -15,8 +15,9 @@ translation logic changes.
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 
-from . import approval_icons, approval_window_html
+from . import approval_icons, approval_window_html, pii_detector, write_effects
 
 # Shown above the button row for operations
 # auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS lists -- same copy as
@@ -44,7 +45,51 @@ def _reading_time_label(text: str) -> str:
 
 
 def _seen_count_text(seen_count: int) -> str:
+    """The frequency line, rendered on every card rather than only when
+    something has been seen before.
+
+    It used to be omitted entirely at ``seen_count == 0``, which made "this
+    is the first time Claude has asked for this" look identical to "this
+    kind of card doesn't carry this line" -- and absence read as the
+    latter. The frequency line is the card's main defence against
+    rubber-stamping a request that has quietly become routine, so the
+    first-time case is information, not the lack of it."""
+    if seen_count <= 0:
+        return "First time this week"
     return f"Seen {seen_count} time{'s' if seen_count != 1 else ''} this week"
+
+
+def _pii_highlighter(
+    pii_categories: list[str] | None,
+) -> Callable[[str], list[tuple[int, int]]] | None:
+    """Marks each PII match where it actually sits in the preview text, so
+    the risk card's category tags read as a legend rather than as a search
+    task -- "IBAN · National ID" otherwise tells a reviewer that something
+    matched and leaves them to find it in a multi-message thread by eye.
+
+    ``None`` unless this card is already declaring a PII match, so a card
+    with no risk section does no scanning and gains no marks.
+
+    Scoped to the categories the card names. Highlighting a category the
+    card doesn't declare would put a mark on screen that the legend above
+    it cannot explain -- and the two are derived from different scans (the
+    gate's, over the raw payload; this one, over the rendered preview), so
+    they are not guaranteed to agree on their own.
+
+    Nothing new is disclosed by any of this: the text is already the
+    contents of the pane, and ``scan_text`` returns positions only, never
+    the matched substring (see its own docstring).
+    """
+    declared = set(pii_categories or [])
+    if not declared:
+        return None
+
+    def spans(text: str) -> list[tuple[int, int]]:
+        return [
+            (m.start, m.end) for m in pii_detector.scan_text(text) if m.category in declared
+        ]
+
+    return spans
 
 
 def _disclosure_rows(
@@ -84,6 +129,7 @@ def build_card_html(
     table_only: bool = False,
     upload_forced: bool = False,
     temp_accept_eligible: bool = False,
+    tool: str = "",
 ) -> str:
     """Build the full card-stack HTML document for one approval -- the web
     host's counterpart to ApprovalWindowController._build_content_view,
@@ -111,6 +157,7 @@ def build_card_html(
     preview_body_html = approval_window_html.build_preview_body_html(
         body_text, image_data_uri=image_data_uri, pdf_data_uri=pdf_data_uri,
         tables=preview_tables, blocks=preview_blocks,
+        highlight=_pii_highlighter(pii_categories),
     )
 
     accept_all_labels = [
@@ -118,14 +165,26 @@ def build_card_html(
         for _rule_name, hint in (accept_all_choices or [])
     ]
 
+    # A read card ends with "What will be provided to Claude"; a write card
+    # had nothing that named its own consequence, only the payload and
+    # Claude's reason. This is that row -- last in §1 ("Action to perform"),
+    # so the payload is read first and the outcome last, which is the order
+    # the decision is actually made in. Read gates never get one: their
+    # consequence card already exists.
+    section_1 = dict(preview or {})
+    if not is_read:
+        effect = write_effects.effect_for(tool)
+        if effect:
+            section_1[write_effects.EFFECT_LABEL] = effect
+
     return approval_window_html.build_card_stack_html(
         layout=layout,
         title=title,
         connector_icon_data_uri=approval_icons.icon_data_uri(approval_icons.connector_icon_path(connector)),
         shield_icon_data_uri=approval_icons.icon_data_uri(approval_icons.shield_icon_path()),
         is_read=is_read,
-        seen_count_text=_seen_count_text(seen_count) if seen_count > 0 else "",
-        preview=preview or {},
+        seen_count_text=_seen_count_text(seen_count),
+        preview=section_1,
         claude_reason=claude_reason or "",
         disclosure_rows=_disclosure_rows(is_read, new_info, visibility),
         pii_categories=pii_categories or [],

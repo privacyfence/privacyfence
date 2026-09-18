@@ -144,7 +144,7 @@ release can sit in the bucket without ever becoming the one the Worker serves. T
 real conditions: a tag whose Windows build failed left its DMG, `.deb` and SBOMs in R2 with no
 manifest and no pointer to them.
 
-Three properties worth knowing before changing any of it:
+Four properties worth knowing before changing any of it:
 
 - **The manifest lists installers only.** SBOMs, org-config scripts and the sdist/wheel upload to
   the same prefix but never enter `artifacts[]`. This is correctness, not tidiness: the Worker
@@ -157,6 +157,13 @@ Three properties worth knowing before changing any of it:
 - **Uploads are immutable.** Identical bytes under an existing key are skipped (so re-running a
   partly-failed release job is safe); different bytes hard-fail rather than silently replacing
   something people may already have downloaded.
+- **Not every installer is mandatory.** `scripts/r2_release.py`'s `_INSTALLERS` marks each
+  recognized filename pattern required or optional; only the required ones (`REQUIRED_ARTIFACT_IDS`)
+  gate `latest.json`. The macOS `.pkg` (#428 D2) is the one optional entry today — an additional,
+  fully-automated-install option alongside the DMG, not a replacement for it — so a problem building
+  or signing it can never stall the DMG/`.exe`/`.deb` from reaching "latest" the way a missing
+  *mandatory* installer does. An optional installer still enters the manifest (and is downloadable
+  and counted) whenever it is actually present.
 
 `promote()` refuses to point a channel at a version with no manifest. `finalize` always writes the
 manifest first, so this never fires on that path — but `promote` exists to be run by hand, and by

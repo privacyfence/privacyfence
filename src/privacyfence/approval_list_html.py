@@ -7,19 +7,27 @@ from a one-line summary is exactly the habituation failure the card exists
 to prevent, so there is no "Allow" button here at all -- only "Review",
 which opens the real card.
 
+Within the action cluster the order is Details, Review, Deny -- Deny last,
+not adjacent to Review. Row controls are a 44px target at phone widths but
+only ~30px above them, and Deny resolves an approval outright with no undo
+path anywhere in the flow; putting the destructive control at the far end
+of the cluster rather than one 8px gap from the safe one is the cheapest
+guard against a mis-tap deciding it. This is a source-order change, not a
+CSS ``order`` one, specifically so focus order and visual order stay the
+same thing at every width.
+
 ``build_list_html(rows)`` is the first paint (web/routes_approvals.py, given
 ``approvals.PendingApproval`` objects, each with a real connector icon --
 see ``row_from_approval`` below); ``window.__pfRenderApprovals(state)`` is
 the live re-render web_shell.py's SSE dispatch calls with
 web/state_stream.py's own "approvals" event payload
-(``PendingApproval.to_summary_dict()``, which carries no icon -- building
-one needs approval_icons.py, a filesystem read this module deliberately
-doesn't do on every SSE tick). A live-updated row therefore renders with a
-plain connector-initial badge instead of the real icon; a decided row
-leaves the list within one poll interval regardless (web/state_stream.py's
-``_APPROVALS_POLL_SECONDS``), so the visual gap is real but short-lived --
-a documented simplification of this phase's own P1-compatible scope, not
-an oversight.
+(``PendingApproval.to_summary_dict()``, which carries no icon -- these are
+~15-135KB PNGs and base64'ing them into every tick would cost far more
+than it buys). The icon instead rides along once, as ``_icon_map``'s
+``{connector: data URI}`` baked into this page's own JS at first paint, so
+a live-updated row draws the same real mark the server-rendered one did
+rather than degrading to a letter badge within one poll interval. See
+``_icon_map`` for what that does and does not cover.
 
 **The approval binder (Phase 1 of the batch-decide plan):** a sequential
 agent can leave several approvals pending at once (P3's own removal of
@@ -74,6 +82,7 @@ yet doesn't need adding here too.
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from datetime import datetime, timezone
 from html import escape as _html_escape
@@ -88,14 +97,48 @@ _EMPTY_STATE = (
     "</div>"
 )
 
+# The same state, on an install where nothing is authenticated yet. The
+# copy above is exactly right on a working install and actively misleading
+# on this one: nothing is waiting because nothing *can* wait, and
+# "PrivacyFence is watching" claims a protection that isn't running. The
+# wording deliberately echoes settings_window_html.py's own
+# renderWelcomeBanner ("Nothing is governed until at least one connector
+# below is authenticated"), which is the only other place this state is
+# explained today -- and which the approvals page, a landing surface in its
+# own right, had no equivalent of.
+_EMPTY_STATE_NOTHING_AUTHED = (
+    '<div class="pf-approvals-empty">'
+    '<div class="pf-approvals-empty-title">Nothing is governed yet.</div>'
+    '<div class="pf-approvals-empty-sub pf-approvals-empty-body">'
+    "PrivacyFence sits between Claude and your real accounts. Until a connector is "
+    "authenticated, there is nothing for it to hold back."
+    "</div>"
+    '<a class="pf-approvals-empty-cta" href="/settings/connectors">Authenticate a connector</a>'
+    "</div>"
+)
+
+
+def _empty_state_html(*, any_authed: bool) -> str:
+    return _EMPTY_STATE if any_authed else _EMPTY_STATE_NOTHING_AUTHED
+
 _CSS = """
 .pf-approvals-page { max-width: 720px; margin: 0 auto; padding: 24px 20px 60px; width: 100%; }
-.pf-approvals-heading { font-size: 13px; color: var(--color-neutral-600); margin-bottom: 14px; }
+.pf-approvals-heading {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.pf-approvals-heading:empty { margin-bottom: 0; }
+.pf-approvals-count { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-text); }
+.pf-approvals-composition { font-size: 12.5px; color: var(--color-neutral-600); }
 .pf-approvals-empty {
   text-align: center; padding: 80px 20px; color: var(--color-neutral-600);
 }
 .pf-approvals-empty-title { font-size: 16px; font-weight: 600; color: var(--color-text); margin-bottom: 4px; }
 .pf-approvals-empty-sub { font-size: 13px; }
+.pf-approvals-empty-body { line-height: 1.6; max-width: 330px; margin: 0 auto 18px; }
+.pf-approvals-empty-cta {
+  display: inline-block; font-size: 12.5px; font-weight: 600; padding: 9px 14px;
+  border-radius: var(--radius-md); background: var(--color-accent); color: #fff; text-decoration: none;
+}
 .pf-approvals-toolbar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 10px 14px; margin-bottom: 12px; background: var(--color-surface); border-radius: var(--radius-lg);
@@ -107,9 +150,16 @@ _CSS = """
   border: 1px solid var(--color-divider); background: transparent; color: var(--color-danger); cursor: pointer;
 }
 .pf-btn-deny-selected:disabled { opacity: 0.5; cursor: default; }
+/* Outline, not filled. Review is the one filled control on this page and
+   it is the one that opens disclosure; approving a whole queue off
+   one-line summaries is the habituation failure the card exists to
+   prevent, so the least-informed action must not also be the loudest. The
+   composition label on it ("Approve 12 · 9 reads, 3 writes") stays -- that
+   part is the guard, not the problem. */
 .pf-btn-approve-selected {
   font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-md);
-  border: 1px solid var(--color-accent); background: var(--color-accent); color: #fff; cursor: pointer;
+  border: 1px solid var(--color-accent); background: transparent;
+  color: var(--color-accent-700); cursor: pointer;
 }
 .pf-btn-approve-selected:disabled { opacity: 0.5; cursor: default; }
 .pf-approval-group { margin-bottom: 14px; }
@@ -119,9 +169,13 @@ _CSS = """
 }
 .pf-approval-group-header label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .pf-approval-row {
-  display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+  display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px;
   background: var(--color-surface); border-radius: var(--radius-lg); margin-bottom: 10px; flex-wrap: wrap;
 }
+/* The row is two lines now (meta above, object below), so its controls
+   align to the top of the text block rather than to its centre. */
+.pf-approval-row > input[type="checkbox"] { margin-top: 5px; }
+.pf-approval-actions { margin-top: 1px; }
 .pf-approval-icon {
   width: 28px; height: 28px; border-radius: var(--radius-md); flex-shrink: 0; object-fit: contain;
   background: var(--color-neutral-200);
@@ -130,12 +184,28 @@ _CSS = """
   display: flex; align-items: center; justify-content: center;
   font-size: 12px; font-weight: 700; color: var(--color-neutral-600);
 }
-.pf-approval-main { flex: 1; min-width: 0; }
+.pf-approval-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+/* Meta above, object below -- the row's headline is what is being touched,
+   not which tool touches it. See _row_html. */
+.pf-approval-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pf-approval-title {
-  font-size: 14px; font-weight: 600; color: var(--color-text);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 15px; font-weight: 600; color: var(--color-text); line-height: 1.35;
+  /* Clamped rather than free-flowing: a summary is short by construction
+     (see gate.py's call sites) but nothing enforces it, and an unbounded
+     title would let one row push the rest of the queue off screen. */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; text-overflow: ellipsis;
 }
-.pf-approval-kicker { font-size: 12px; color: var(--color-neutral-600); margin-top: 2px; }
+.pf-approval-kicker { font-size: 12px; color: var(--color-neutral-600); }
+/* Read/write direction, from gate_kind -- the same two token families and
+   the same wording as the card's own .pf-pill, so a row and the card it
+   opens agree on sight. Both pairs invert in tokens.css's dark block. */
+.pf-approval-pill {
+  font: 600 10px ui-monospace, Menlo, monospace; letter-spacing: 0.05em;
+  text-transform: uppercase; padding: 2px 8px; border-radius: 20px; flex-shrink: 0;
+}
+.pf-approval-pill-read { background: var(--color-accent-100); color: var(--color-accent-700); }
+.pf-approval-pill-write { background: var(--color-accent-2-100); color: var(--color-accent-2-700); }
 .pf-approval-blocked-reason { font-size: 11.5px; color: var(--color-neutral-600); margin-top: 4px; font-style: italic; }
 .pf-approval-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .pf-btn-deny, .pf-btn-review, .pf-btn-details {
@@ -152,6 +222,46 @@ _CSS = """
 .pf-approval-details-row { display: flex; gap: 6px; }
 .pf-approval-details-row + .pf-approval-details-row { margin-top: 3px; }
 .pf-approval-details-key { font-weight: 600; color: var(--color-text); }
+
+/* — phone widths — the row's own flex-wrap never engages on its own:
+   .pf-approval-actions is flex-shrink:0 and holds ~220px of buttons, while
+   .pf-approval-main is flex:1;min-width:0, so the text column can legally
+   shrink to zero and does. At 393px the title truncates after two or three
+   characters and the kicker goes with it. Giving the text column a basis
+   too wide to sit beside the actions is what makes the wrap actually fire,
+   which turns the row into what it should have been: identity on top, a
+   full-width action strip underneath. */
+@media (max-width: 560px) {
+  .pf-approval-row { align-items: flex-start; row-gap: 0; }
+  .pf-approval-main { flex-basis: calc(100% - 96px); }
+  .pf-approval-actions { width: 100%; gap: 10px; margin-top: 12px; }
+  /* Review takes the remaining width; Deny and Details stay at their own
+     intrinsic size, so the destructive control is never the easiest one to
+     hit with a thumb. */
+  .pf-btn-review { flex: 1; text-align: center; }
+  .pf-btn-deny, .pf-btn-review, .pf-btn-details {
+    min-height: 44px; padding: 12px 14px; font-size: 13px;
+  }
+  /* Native checkboxes render near 13px, well under any usable target. */
+  .pf-approval-row > input[type="checkbox"],
+  .pf-approval-group-header input[type="checkbox"],
+  .pf-select-all input[type="checkbox"] { width: 20px; height: 20px; }
+  .pf-approval-row > input[type="checkbox"] { margin-top: 6px; }
+  .pf-select-all, .pf-approval-group-header label { min-height: 44px; }
+  /* Select-all, the count, and the two batch actions stop sharing one
+     line. A grid rather than a wrapping flex row because the two buttons
+     have to end up side by side and equal, which wrapping alone decides by
+     whatever happens to fit -- and grid keeps source and visual order
+     identical, so nothing here reorders focus. */
+  .pf-approvals-toolbar {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;
+  }
+  .pf-select-all, .pf-selected-count { grid-column: 1 / -1; }
+  .pf-selected-count:empty { display: none; }
+  .pf-btn-approve-selected { grid-column: 1; }
+  .pf-btn-deny-selected { grid-column: 2; }
+  .pf-btn-approve-selected, .pf-btn-deny-selected { min-height: 44px; }
+}
 """
 
 # Runtime dispatch: sessionStorage's pending toast (left by the card page's
@@ -226,25 +336,52 @@ _JS = """
     return '<div class="pf-approval-details" id="pf-details-' + esc(id) + '" hidden></div>';
   }
 
+  // The connectors this document carries an icon rule for -- names only,
+  // no image data: the rule itself is already in the page's own <style>
+  // (see approval_list_html._icon_css), so a live-re-rendered row draws
+  // the real mark by naming the same class the first paint did.
+  var pfIconConnectors = %(icon_connectors)s;
+
+  // Mirrors approval_list_html._icon_html.
+  function iconHtml(connector, initial) {
+    if (pfIconConnectors.indexOf(connector) !== -1) {
+      return '<div class="pf-approval-icon pf-approval-icon-img pf-approval-icon-' + connector + '"></div>';
+    }
+    return '<div class="pf-approval-icon pf-approval-icon-fallback">' + esc(initial) + '</div>';
+  }
+
+  // Mirrors approval_list_html._pill_html -- see that function.
+  function pillHtml(gateKind) {
+    if (gateKind === 'review') { return '<span class="pf-approval-pill pf-approval-pill-read">Read</span>'; }
+    if (gateKind === 'popup') { return '<span class="pf-approval-pill pf-approval-pill-write">Write</span>'; }
+    return '';
+  }
+
   function rowHtml(row) {
-    var title = esc(row.tool_name || row.summary || (row.kind === 'card' ? 'Approval' : 'Confirmation'));
-    var kicker = [row.connector ? row.connector.charAt(0).toUpperCase() + row.connector.slice(1) : '',
-      row.tool || '', relAge(row.created_at)].filter(Boolean).join(' \\u00b7 ');
+    // Mirrors approval_list_html._row_html: the object is the headline
+    // (summary), the tool that touches it is the meta line.
+    var title = esc(row.summary || row.tool_name || (row.kind === 'card' ? 'Approval' : 'Confirmation'));
+    var kicker = [row.tool_name || '',
+      row.connector ? row.connector.charAt(0).toUpperCase() + row.connector.slice(1) : '',
+      relAge(row.created_at)].filter(Boolean).join(' \\u00b7 ');
     var initial = (row.connector || '?').charAt(0).toUpperCase();
     var checkbox = row.batchable
       ? '<input type="checkbox" data-select="' + esc(row.id) + '" aria-label="Select this approval">' : '';
     var blockedNote = (!row.batchable && row.blocked_reason)
       ? '<div class="pf-approval-blocked-reason">' + esc(row.blocked_reason) + '</div>' : '';
     return '<div class="pf-approval-row' + (row.batchable ? '' : ' pf-approval-row-unbatchable') + '"' +
-      ' data-approval-id="' + esc(row.id) + '" data-batchable="' + (row.batchable ? '1' : '0') + '">' +
+      ' data-approval-id="' + esc(row.id) + '" data-tool="' + esc(row.tool || '') + '"' +
+      ' data-batchable="' + (row.batchable ? '1' : '0') + '">' +
       checkbox +
-      '<div class="pf-approval-icon pf-approval-icon-fallback">' + esc(initial) + '</div>' +
-      '<div class="pf-approval-main"><div class="pf-approval-title">' + title + '</div>' +
-      '<div class="pf-approval-kicker">' + esc(kicker) + '</div>' + blockedNote + '</div>' +
+      iconHtml(row.connector || '', initial) +
+      '<div class="pf-approval-main">' +
+      '<div class="pf-approval-meta">' + pillHtml(row.gate_kind || '') +
+      '<span class="pf-approval-kicker">' + esc(kicker) + '</span></div>' +
+      '<div class="pf-approval-title">' + title + '</div>' + blockedNote + '</div>' +
       '<div class="pf-approval-actions">' +
       '<button type="button" class="pf-btn-details" data-details="' + esc(row.id) + '">Details</button>' +
-      '<button type="button" class="pf-btn-deny" data-deny="' + esc(row.id) + '">Deny</button>' +
-      '<a class="pf-btn-review" href="/approvals/' + esc(row.id) + '">Review \\u2192</a></div>' +
+      '<a class="pf-btn-review" href="/approvals/' + esc(row.id) + '">Review \\u2192</a>' +
+      '<button type="button" class="pf-btn-deny" data-deny="' + esc(row.id) + '">Deny</button></div>' +
       detailsHtml(row.id) +
       '</div>';
   }
@@ -284,6 +421,33 @@ _JS = """
     if (composition.reads) { parts.push(composition.reads + (composition.reads === 1 ? ' read' : ' reads')); }
     if (composition.writes) { parts.push(composition.writes + (composition.writes === 1 ? ' write' : ' writes')); }
     return parts.join(', ');
+  }
+
+  // Mirrors approval_list_html._heading_html. The heading lives outside
+  // #pf-approvals-list, so unlike the rows it is not replaced by render()'s
+  // own innerHTML write -- without this it keeps whatever count the first
+  // paint happened to have, indefinitely.
+  function updateHeading(rows) {
+    var el = document.getElementById('pf-approvals-heading');
+    if (!el) return;
+    el.textContent = '';
+    if (!rows.length) return;
+    var reads = 0, writes = 0;
+    rows.forEach(function (r) {
+      if (r.gate_kind === 'popup') { writes++; } else if (r.gate_kind === 'review') { reads++; }
+    });
+    var count = document.createElement('span');
+    count.className = 'pf-approvals-count';
+    count.textContent = rows.length + ' approval' + (rows.length === 1 ? '' : 's') + ' pending';
+    el.appendChild(count);
+    var parts = [];
+    if (reads) { parts.push(reads + (reads === 1 ? ' read' : ' reads')); }
+    if (writes) { parts.push(writes + (writes === 1 ? ' write' : ' writes')); }
+    if (!parts.length) return;
+    var composition = document.createElement('span');
+    composition.className = 'pf-approvals-composition';
+    composition.textContent = parts.join(' \\u00b7 ');
+    el.appendChild(composition);
   }
 
   function updateToolbar(rows) {
@@ -346,6 +510,7 @@ _JS = """
       }
       applySelectionToCheckboxes();
     }
+    updateHeading(pfLastRows);
     updateToolbar(pfLastRows);
   }
   window.__pfRenderApprovals = render;
@@ -504,25 +669,43 @@ _JS = """
 
   var pfDetailsCache = {};
 
-  function renderDetails(container, preview) {
+  function detailsRow(container, key, value) {
+    var row = document.createElement('div');
+    row.className = 'pf-approval-details-row';
+    var k = document.createElement('span');
+    k.className = 'pf-approval-details-key';
+    k.textContent = key + ':';
+    var v = document.createElement('span');
+    v.textContent = value;
+    row.appendChild(k);
+    row.appendChild(v);
+    container.appendChild(row);
+  }
+
+  // `toolId` is the raw MCP tool id. It used to be the row's own kicker,
+  // where it displaced the connector and the age without telling anyone
+  // what the request was about; it belongs here, with the rest of the
+  // metadata someone opening a disclosure is asking for. It comes off the
+  // row payload this page already has -- no extra /preview field.
+  function renderDetails(container, preview, toolId) {
     container.textContent = '';
     var keys = Object.keys(preview || {});
+    if (toolId) { detailsRow(container, 'Tool', toolId); }
     if (!keys.length) {
-      container.textContent = 'No further details.';
+      if (!toolId) { container.textContent = 'No further details.'; }
       return;
     }
     keys.forEach(function (key) {
-      var row = document.createElement('div');
-      row.className = 'pf-approval-details-row';
-      var k = document.createElement('span');
-      k.className = 'pf-approval-details-key';
-      k.textContent = key + ':';
-      var v = document.createElement('span');
-      v.textContent = preview[key];
-      row.appendChild(k);
-      row.appendChild(v);
-      container.appendChild(row);
+      detailsRow(container, key, preview[key]);
     });
+  }
+
+  // Read off the row element rather than pfLastRows, which is only
+  // populated once __pfRenderApprovals has run at least once -- on first
+  // paint the rows are server-rendered and that array is still empty.
+  function toolIdFor(id) {
+    var row = document.querySelector('[data-approval-id="' + id + '"]');
+    return (row && row.getAttribute('data-tool')) || '';
   }
 
   function toggleDetails(id) {
@@ -533,7 +716,7 @@ _JS = """
       return;
     }
     if (pfDetailsCache[id]) {
-      renderDetails(container, pfDetailsCache[id]);
+      renderDetails(container, pfDetailsCache[id], toolIdFor(id));
       container.removeAttribute('hidden');
       return;
     }
@@ -541,7 +724,7 @@ _JS = """
       .then(function (r) { return r.ok ? r.json() : {preview: {}}; })
       .then(function (data) {
         pfDetailsCache[id] = data.preview || {};
-        renderDetails(container, pfDetailsCache[id]);
+        renderDetails(container, pfDetailsCache[id], toolIdFor(id));
         container.removeAttribute('hidden');
       })
       .catch(function () {
@@ -691,17 +874,109 @@ def _details_html(row_id: str) -> str:
     return f'<div class="pf-approval-details" id="pf-details-{_html_escape(row_id)}" hidden></div>'
 
 
+def _connector_icon_uri(connector: str) -> str:
+    return approval_icons.icon_data_uri(approval_icons.connector_icon_path(connector))
+
+
+# Interpolated into a CSS selector and a class attribute, so it is
+# restricted to what a connector identifier can legitimately be rather
+# than escaped -- a name that doesn't match simply gets the letter badge.
+_SAFE_CONNECTOR_RE = re.compile(r"^[a-z0-9_-]+$")
+
+
+def _icon_slug(connector: str) -> str:
+    slug = (connector or "").lower()
+    return slug if _SAFE_CONNECTOR_RE.match(slug) else ""
+
+
+def _icon_html(connector: str, initial: str, *, has_icon: bool) -> str:
+    """The row's connector mark, or a letter badge when no icon is bundled
+    for that connector. The mark is drawn from a per-connector CSS class
+    (see ``_icon_css``) rather than an inline ``src``, so the image data
+    appears once per document instead of once per row -- and so the JS
+    mirror (``iconHtml``) can render the identical element without being
+    handed any image data at all."""
+    if has_icon:
+        slug = _icon_slug(connector)
+        return f'<div class="pf-approval-icon pf-approval-icon-img pf-approval-icon-{slug}"></div>'
+    return f'<div class="pf-approval-icon pf-approval-icon-fallback">{_html_escape(initial)}</div>'
+
+
+def _icon_connectors(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """``{connector: data URI}`` for the distinct connectors on this page
+    that have a bundled icon.
+
+    The live re-render is driven by ``PendingApproval.to_summary_dict()``
+    (web/state_stream.py), which carries no icon and shouldn't: these are
+    ~15-135KB PNGs, and base64'ing them into every SSE tick would cost far
+    more than the letter badge it would replace. Emitting one CSS rule per
+    connector instead means the live re-render needs no image data at all
+    -- it renders the same class name and the rule already in the document
+    does the rest -- and it also makes the *first* paint cheaper than it
+    used to be, which embedded the same URI again for every row sharing a
+    connector.
+
+    A connector with nothing pending at load has no rule, so a row that
+    arrives for it later draws the letter badge until the next full page
+    load. That residue is bounded and self-healing; the previous behavior
+    degraded every row within one poll interval regardless."""
+    uris: dict[str, str] = {}
+    for row in rows:
+        connector = _icon_slug(row.get("connector") or "")
+        if connector and connector not in uris:
+            uri = _connector_icon_uri(connector)
+            if uri:
+                uris[connector] = uri
+    return uris
+
+
+def _icon_css(icon_uris: dict[str, str]) -> str:
+    if not icon_uris:
+        return ""
+    rules = "".join(
+        f'.pf-approval-icon-{slug}{{background-image:url("{uri}")}}'
+        for slug, uri in sorted(icon_uris.items())
+    )
+    return (
+        ".pf-approval-icon-img{background-size:contain;"
+        "background-repeat:no-repeat;background-position:center}" + rules
+    )
+
+
+_GATE_PILL = {"review": ("read", "Read"), "popup": ("write", "Write")}
+
+
+def _pill_html(gate_kind: str) -> str:
+    """The row's own Read/Write pill, from ``gate_kind`` -- already in
+    ``row_from_approval``'s output and already driving the Approve-selected
+    composition label, so this needs no new data. "" for a bare confirm/
+    choice dialog, which has no direction. The JS mirror is ``pillHtml``."""
+    variant = _GATE_PILL.get(gate_kind)
+    if variant is None:
+        return ""
+    modifier, text = variant
+    return f'<span class="pf-approval-pill pf-approval-pill-{modifier}">{text}</span>'
+
+
 def _row_html(row: dict[str, Any]) -> str:
     label = "Confirmation" if row.get("kind") != "card" else "Approval"
-    title = row.get("tool_name") or row.get("summary") or label
+    # The object is the headline; the tool that touches it is the meta
+    # line. `summary` is the one field naming what the request is actually
+    # about ("Read \"Q3 forecast — legal review\"" -- see gate.py's own
+    # connector call sites), and it used to be a fallback title that a
+    # normal row never reached, because tool_name is always populated. The
+    # fallback chain stays for a confirm/choice dialog, which has no
+    # summary at all.
+    title = row.get("summary") or row.get("tool_name") or label
     connector = (row.get("connector") or "").capitalize()
-    kicker = " · ".join(p for p in (connector, row.get("tool") or "", _relative_age(row.get("created_at", ""))) if p)
+    kicker = " · ".join(
+        p for p in (row.get("tool_name") or "", connector, _relative_age(row.get("created_at", ""))) if p
+    )
     rid = row["id"]
     batchable = bool(row.get("batchable"))
-    icon_uri = approval_icons.icon_data_uri(approval_icons.connector_icon_path(row.get("connector", "")))
-    icon_html = (
-        f'<img class="pf-approval-icon" src="{_html_escape(icon_uri)}" alt="">' if icon_uri
-        else f'<div class="pf-approval-icon pf-approval-icon-fallback">{_html_escape(connector[:1])}</div>'
+    icon_html = _icon_html(
+        row.get("connector") or "", connector[:1],
+        has_icon=bool(_connector_icon_uri(row.get("connector") or "")),
     )
     checkbox_html = (
         f'<input type="checkbox" data-select="{_html_escape(rid)}" aria-label="Select this approval">'
@@ -715,18 +990,22 @@ def _row_html(row: dict[str, Any]) -> str:
     row_class = "pf-approval-row" if batchable else "pf-approval-row pf-approval-row-unbatchable"
     return (
         f'<div class="{row_class}" data-approval-id="{_html_escape(rid)}" '
+        f'data-tool="{_html_escape(row.get("tool") or "")}" '
         f'data-batchable="{"1" if batchable else "0"}">'
         f"{checkbox_html}"
         f"{icon_html}"
         '<div class="pf-approval-main">'
+        '<div class="pf-approval-meta">'
+        f'{_pill_html(row.get("gate_kind") or "")}'
+        f'<span class="pf-approval-kicker">{_html_escape(kicker)}</span>'
+        "</div>"
         f'<div class="pf-approval-title">{_html_escape(title)}</div>'
-        f'<div class="pf-approval-kicker">{_html_escape(kicker)}</div>'
         f"{blocked_html}"
         "</div>"
         '<div class="pf-approval-actions">'
         f'<button type="button" class="pf-btn-details" data-details="{_html_escape(rid)}">Details</button>'
-        f'<button type="button" class="pf-btn-deny" data-deny="{_html_escape(rid)}">Deny</button>'
         f'<a class="pf-btn-review" href="/approvals/{_html_escape(rid)}">Review →</a>'
+        f'<button type="button" class="pf-btn-deny" data-deny="{_html_escape(rid)}">Deny</button>'
         "</div>"
         f"{_details_html(rid)}"
         "</div>"
@@ -772,6 +1051,35 @@ def _relative_age(iso_ts: str) -> str:
     return f"{hours // 24}d ago"
 
 
+def _composition_label(rows: list[dict[str, Any]]) -> str:
+    """"3 reads · 1 write" for the page heading -- the same read/write split
+    the Approve-selected button already names for a *selected* set, applied
+    to the whole queue. The JS mirror is ``headingHtml``/``compositionLabel``
+    in this module's own ``_JS`` string."""
+    reads = sum(1 for r in rows if r.get("gate_kind") == "review")
+    writes = sum(1 for r in rows if r.get("gate_kind") == "popup")
+    parts = []
+    if reads:
+        parts.append(f"{reads} read{'s' if reads != 1 else ''}")
+    if writes:
+        parts.append(f"{writes} write{'s' if writes != 1 else ''}")
+    return " · ".join(parts)
+
+
+def _heading_html(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    count = f"{len(rows)} approval{'s' if len(rows) != 1 else ''} pending"
+    composition = _composition_label(rows)
+    return (
+        f'<span class="pf-approvals-count">{_html_escape(count)}</span>'
+        + (
+            f'<span class="pf-approvals-composition">{_html_escape(composition)}</span>'
+            if composition else ""
+        )
+    )
+
+
 def _toolbar_html(*, any_batchable: bool) -> str:
     select_all_disabled = "" if any_batchable else " disabled"
     return (
@@ -788,7 +1096,9 @@ def _toolbar_html(*, any_batchable: bool) -> str:
     )
 
 
-def build_list_html(rows: list[dict[str, Any]], *, csrf: str, nonce: str | None = None) -> str:
+def build_list_html(
+    rows: list[dict[str, Any]], *, csrf: str, nonce: str | None = None, any_authed: bool = True,
+) -> str:
     """The ``/approvals`` page body (dropped into web_shell.wrap's
     ``<main>``) -- ``rows`` is a list of row_from_approval()'s shape,
     newest first (same order approvals.PendingApprovalRegistry.
@@ -802,18 +1112,34 @@ def build_list_html(rows: list[dict[str, Any]], *, csrf: str, nonce: str | None 
     web_shell.wrap() is given for the rest of this same document, since
     only one Content-Security-Policy header covers both. Defaults to a
     fresh one when omitted (every caller outside this module's own tests
-    always passes the real per-request value explicitly)."""
+    always passes the real per-request value explicitly).
+
+    ``any_authed``: whether this install has at least one authenticated
+    connector, which selects between the two empty states (see
+    ``_empty_state_html``). Defaults to True -- the steady-state copy --
+    so a caller that cannot determine it never shows a first-run message
+    to somebody who is already set up."""
     nonce = nonce or secrets.token_urlsafe(18)
-    body = "".join(_group_html(g) for g in _group_rows(rows)) if rows else _EMPTY_STATE
-    heading = (
-        f"{len(rows)} approval{'s' if len(rows) != 1 else ''} pending" if rows else ""
-    )
+    empty_state = _empty_state_html(any_authed=any_authed)
+    body = "".join(_group_html(g) for g in _group_rows(rows)) if rows else empty_state
     toolbar = _toolbar_html(any_batchable=any(r.get("batchable") for r in rows)) if rows else ""
-    js = _JS % {"empty": json.dumps(_EMPTY_STATE), "csrf": json.dumps(csrf)}
+    icon_uris = _icon_connectors(rows)
+    js = _JS % {
+        # Already branched: whether a connector is authenticated is fixed
+        # for this document's lifetime, so render() needs the resolved
+        # string rather than the flag and a second copy of the branch.
+        "empty": json.dumps(empty_state),
+        "csrf": json.dumps(csrf),
+        # Names only -- the image data is in the <style> block below, once.
+        "icon_connectors": json.dumps(sorted(icon_uris)),
+    }
     return (
-        f'<style nonce="{nonce}">{_CSS}</style>'
+        f'<style nonce="{nonce}">{_CSS}{_icon_css(icon_uris)}</style>'
         '<div class="pf-approvals-page">'
-        + (f'<div class="pf-approvals-heading">{_html_escape(heading)}</div>' if heading else "")
+        # Always emitted, even with nothing pending: render() below updates
+        # it on every SSE tick, and an element that only exists when the
+        # first paint had rows is an element the live re-render can't reach.
+        f'<div class="pf-approvals-heading" id="pf-approvals-heading">{_heading_html(rows)}</div>'
         + toolbar
         + f'<div id="pf-approvals-list">{body}</div>'
         "</div>"

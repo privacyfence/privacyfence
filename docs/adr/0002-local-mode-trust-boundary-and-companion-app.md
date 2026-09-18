@@ -25,6 +25,21 @@ and 6 stand unchanged and are what ADR 0003 enforces. What it withdraws is decis
 "opt-in"/"default-on but declinable" wording below rests on: separation stops being something an
 install may be without. The macOS DMG and D1's declinable first-start prompt go with it; see
 ADR 0003 decisions 2 and 6.
+**Amended by #428 D2, 2026-09-18: macOS gets an install-time path to D1, not just the runtime
+one.** D1's own macOS mechanism is the daemon's first-start `osascript ... with administrator
+privileges` prompt — the only automatic path available to a DMG, which runs nothing as root at
+install time (see decision 5a's Windows-specific "install location is part of the boundary" and
+Linux's `.deb` `postinst`, both of which *do* get a root-context install step). That prompt is a
+bare, unexplained system dialog that can appear disconnected from anything the person just did, and
+a decline or a failed safety check (`_macos_auto_enable_script_problem()`) leaves it silently
+opt-in. `scripts/build_pkg.sh` adds a second macOS artifact, a signed `.pkg`, whose own
+`postinstall` script runs `enable --auto` itself while already running as root during the ordinary
+"Install PrivacyFence" step — the one elevation this requires happens where a non-technical user
+already expects an administrator-password prompt, with PrivacyFence's own explanatory text
+(`installer/macos/pkg/resources/`) instead of none. This does not replace the DMG or D1's own
+runtime prompt (a DMG-installed copy still needs it, and still can decline it) — it is an
+additional, fully-automated-install option for whoever downloads the `.pkg` instead. See
+`docs/platform-support.md`'s "`.pkg` installer (#428 D2)" section and `CHANGELOG.md`.
 
 ## Context
 
@@ -222,6 +237,26 @@ Consequences:
   installable by someone who cannot elevate at all, and privilege separation is opt-in — taking the
   product away from that user to make an optional hardening step universally available is the wrong
   trade in the wrong direction.
+
+**Amended by #428 D2, 2026-09-18: B1's own macOS check, as written, refused every real install.**
+`test_macos_pkg_install.py` (D2's `.pkg` installer coverage) was the first thing to actually run
+`enable` against a real `/Applications` path rather than a pre-staged or synthetic one, and found
+that `require_trusted_image()` — which walks every ancestor directory, `/Applications` included —
+always failed there, since `/Applications` is `root:admin drwxrwxr-x` on every real Mac regardless
+of how the `.app` inside it is owned. Not a `.pkg`-specific bug: D1's own daemon-triggered runtime
+prompt and a human running `enable` by hand against a real drag-installed copy both go through the
+identical `require_trusted_image()` call, so a real macOS install could never actually have
+separated under *any* of B1's three trigger paths — `test_macos_graphical_session_autostart.py`'s
+own coverage had missed this because it pre-staged a root-owned copy under `/Library` by hand before
+ever calling `enable`, sidestepping the exact case a real install hits.
+`scripts/macos_privilege_separation.sh`'s `enable` now stages its own root:wheel-owned copy (into a
+new `TRUSTED_IMAGE_DIR`, `/Library/PrivacyFence/image`) before trusting anything, and
+`require_trusted_image()` runs against that copy instead of wherever `--app` originally pointed —
+closing the hole B1 opened without reopening it, since the copy still only ever happens under an
+already-authenticated `enable` invocation, never from a running, already-elevated process. See
+`CHANGELOG.md`'s `#428 D2 follow-up (B1)` entry for the full account, including the one behavior
+change this brings: a separated install no longer picks up an in-place `/Applications` replacement
+on its own.
 
 ### 6. Session minting is made insufficient, not uncallable
 

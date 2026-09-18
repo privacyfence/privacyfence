@@ -20,7 +20,7 @@ import sys
 import pytest
 from webauthn.helpers import bytes_to_base64url
 
-from privacyfence import paths, webauthn_stepup as wa
+from privacyfence import paths, step_up_config, webauthn_stepup as wa
 from privacyfence.principal import Principal
 
 ALICE = Principal(id="alice", email="alice@example.com", display_name="Alice")
@@ -335,6 +335,15 @@ class TestIsStepUpRequired:
     def test_pii_read_requires_it_only_in_the_wider_scope(self):
         assert wa.is_step_up_required(gate_kind="review", pii_detected=True, scope="writes") is False
         assert wa.is_step_up_required(gate_kind="review", pii_detected=True, scope="writes_and_pii_reads") is True
+
+    def test_the_widest_scope_covers_every_read_flagged_or_not(self):
+        assert wa.is_step_up_required(gate_kind="popup", pii_detected=False, scope="writes_and_reads") is True
+        assert wa.is_step_up_required(gate_kind="review", pii_detected=True, scope="writes_and_reads") is True
+        assert wa.is_step_up_required(gate_kind="review", pii_detected=False, scope="writes_and_reads") is True
+
+    def test_a_bare_confirm_dialog_never_requires_it_under_any_scope(self):
+        for scope in step_up_config.STEP_UP_SCOPES:
+            assert wa.is_step_up_required(gate_kind="", pii_detected=True, scope=scope) is False
 
 
 class TestRecoveryCode:

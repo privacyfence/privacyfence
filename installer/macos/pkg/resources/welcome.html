@@ -1,0 +1,27 @@
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font: 13px -apple-system, sans-serif; margin: 12px; color: #1d1d1f; }
+  h2 { font-size: 15px; margin: 0 0 8px; }
+  p { margin: 0 0 10px; line-height: 1.4; }
+  ul { margin: 0 0 10px 18px; padding: 0; }
+  li { margin-bottom: 6px; line-height: 1.4; }
+</style>
+</head>
+<body>
+<h2>Installing PrivacyFence</h2>
+<p>This installs PrivacyFence to /Applications and, since it needs an administrator
+password anyway, also sets it up to run independently of any AI client on this Mac:</p>
+<ul>
+  <li>A dedicated <code>_privacyfence</code> system account owns PrivacyFence's data,
+  settings and audit log — so the AI client PrivacyFence governs can no longer read or
+  rewrite them.</li>
+  <li>A menu-bar item (PrivacyFence) starts at login, giving you Open Approvals and
+  Open Settings without going through the AI client at all.</li>
+</ul>
+<p>This is the same change described in this project's ADR 0002 and issue #428 — it can
+be reversed at any time from Terminal with
+<code>sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh disable</code>.</p>
+</body>
+</html>

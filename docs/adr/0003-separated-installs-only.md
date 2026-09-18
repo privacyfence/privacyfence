@@ -5,12 +5,6 @@
 Accepted; not yet implemented. This ADR is the decision — the work it commits to is enumerated
 under "Consequences", and each platform's half lands in its own PR.
 
-Landing on `releases/4.2-dev`, which forked from `main` before #428 D2 did: the `.pkg` decision 2
-makes macOS' only artifact (`scripts/build_pkg.sh`, `installer/macos/pkg/`) is not in this branch's
-tree yet and arrives with `main`'s merge-back. The decision is about the product, not about which
-branch currently carries the file — this note is here so a reader of this branch does not go looking
-for one that isn't there, and it stops being true the moment the two converge.
-
 Supersedes [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md) decision 5a's answer
 ("two install tiers", the non-elevated Windows per-user path kept), and retires the macOS DMG and
 the declinable first-start admin prompt (#428 D1) as *shipping* mechanisms. ADR 0002's decisions

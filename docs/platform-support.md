@@ -6,7 +6,7 @@ PrivacyFence local mode is packaged for macOS, Windows, and Debian/Ubuntu Linux.
 
 | Platform | Distribution | Startup model | Release automation |
 |---|---|---|---|
-| macOS | signed/notarized DMG containing the PyInstaller app bundle and MCPB | packaged app/LaunchAgent path, or (default-on, see below) a LaunchDaemon under a dedicated account | `.github/workflows/build.yml` on `macos-latest` |
+| macOS | signed/notarized DMG (primary) or `.pkg` installer, both containing the PyInstaller app bundle; MCPB ships alongside | packaged app/LaunchAgent path, or (default-on, see below) a LaunchDaemon under a dedicated account -- the `.pkg` provisions the latter at install time, no runtime prompt needed | `.github/workflows/build.yml` on `macos-latest` |
 | Windows | Inno Setup installer containing the PyInstaller executable and MCPB | Task Scheduler entry created by the installer, or an opt-in Windows service under a virtual service account (see below) | `.github/workflows/build.yml` on `windows-latest` |
 | Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | XDG autostart desktop entry, or (default-on, see below) a system systemd unit under a dedicated account | `.github/workflows/build.yml` on `ubuntu-latest` |
 | Linux Python install | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
@@ -62,6 +62,51 @@ tokens. Linux has the same thing (below); Windows also has privilege separation 
 stays opt-in — D1 does not extend to it.
 See [`security-and-compliance.md`](security-and-compliance.md#privilege-separation-macos-linux-and-windows) for
 what the separation does and does not buy.
+
+### `.pkg` installer (#428 D2)
+
+`scripts/build_pkg.sh` packages the same `.app` `scripts/build_dmg.sh` builds into a second macOS
+artifact: a signed installer package (`installer -pkg PrivacyFence-<version>.pkg -target /`, or the
+ordinary double-click Installer.app flow) whose own `postinstall` script
+(`installer/macos/pkg/postinstall`) runs `macos_privilege_separation.sh enable --auto` while the
+package install is still running, as root. This exists because D1's own runtime admin-password
+prompt (`maybe_auto_enable_macos()`) is the *only* automatic path a DMG install has — a drag
+install runs nothing as root, so D1 could only ask the daemon's own first start to pop a dialog,
+with no PrivacyFence-specific explanation, that can appear disconnected from anything the person
+just did, and that a decline or a failed safety check silently leaves unresolved. A `.pkg` install
+already runs as root and already asks for an administrator password as the ordinary "Install
+PrivacyFence" step non-technical users already expect, so the one elevation macOS requires for this
+happens there instead — once, with `installer/macos/pkg/resources/welcome.html`/`conclusion.html.tmpl`
+explaining what it does, rather than a bare system dialog.
+
+Since Apple's installer runs package scripts with no login session and no `$SUDO_USER`, the
+postinstall script resolves the human to provision this for from the logged-in console account
+(`stat -f '%Su' /dev/console`) instead — the same thing Finder/`who` would show. If nobody is
+logged in at install time, or the daemon's bundled `macos_privilege_separation.sh` can't be found,
+it logs why and leaves the install opt-in (the daemon's own D1 prompt still offers this later) --
+it never fails the package install itself over this.
+
+A pkg-installed `.app` lands root:wheel-owned by `pkgbuild`'s own default ownership -- but
+`/Applications` itself is always `root:admin`, so that alone was found not to satisfy
+`require_trusted_image()` (B1), which walks every ancestor directory including `/Applications`
+itself. `enable` now closes that itself, for every caller (this `.pkg`'s postinstall, D1's own
+runtime prompt, and a human running it by hand) rather than the `.pkg` alone: it stages its own
+root:wheel-owned copy of whatever `--app` points at before trusting anything. See
+`macos_privilege_separation.sh`'s `stage_trusted_image()` and `CHANGELOG.md`'s `#428 D2` B1
+follow-up entry for the full story.
+
+The DMG remains the primary distributable; the `.pkg` is an additional artifact for anyone who
+wants a fully-automated install with no separate runtime prompt at all. Signing a `.pkg` needs a
+"Developer ID **Installer**" certificate -- a different type from the "Developer ID **Application**"
+one `scripts/build_dmg.sh --sign` uses -- so `build.yml`'s own pkg-signing step
+(`SIGN_IDENTITY_INSTALLER`/`MACOS_INSTALLER_CERTIFICATE*`) is a separate, optional secret set; an
+unsigned `.pkg` is still a valid local dev build, same as an unsigned DMG. Covered by the same
+two-tier split as the DMG: `test_macos_pkg_smoke.py` (structural only -- `pkgutil --expand-full`,
+no install, no root) runs inline in `build.yml`'s release-critical `build` job; `test_macos_pkg_install.py`
+(a real `sudo installer -pkg ... -target /`, with no separate `enable` call, proving the postinstall
+script alone wires up both the LaunchDaemon and the companion LaunchAgent) runs in the weekly
+`macos-graphical-session.yml`, alongside `test_macos_graphical_session_autostart.py`'s own coverage
+of the manual-script path.
 
 ## Windows
 
@@ -463,6 +508,25 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   running the manual checks against the first 4.1 release this ships in is now more urgent, not
   less, precisely because the default now turns it on for people who never asked for it by name on
   those two platforms.
+  **The `.pkg` installer (#428 D2, above) is a separate path from the DMG's own runtime prompt, and
+  has its own real-CI coverage** (`test_macos_pkg_install.py`, in this same `macos-graphical-
+  session.yml`): a real `sudo installer -pkg ... -target /` with no separate `enable` call,
+  confirming the postinstall script alone -- not this test -- wires up the LaunchDaemon and
+  companion LaunchAgent. This coverage found a real bug the first time it ran, not just a gap: `enable`
+  refused *every* real `/Applications` install outright (B1's `require_trusted_image()` walk always
+  failed on `/Applications` itself, `root:admin` on every real Mac) -- true for D1's own runtime
+  prompt and a hand-run `enable` too, not only the `.pkg`, since all three share the same check. Fixed
+  by having `enable` stage its own root:wheel-owned copy before trusting anything (see `CHANGELOG.md`'s
+  `#428 D2 follow-up (B1)` entry and ADR 0002's matching amendment); `test_macos_pkg_install.py` now
+  passes against the fix. That closes the "does the automatic path even run to completion, and
+  actually separate anything" half of this gap for the `.pkg`, the same way `test_macos_graphical_
+  session_autostart.py` -- no longer pre-staging a workaround copy itself -- now does for `enable`
+  run by hand. It does **not** close the manual-check gap above for the DMG's own path: `installer
+  -pkg` from the command line never invokes Installer.app's GUI or a real admin-password dialog, so a
+  human double-clicking the `.pkg` (or, on the DMG side, the daemon's own `osascript` prompt actually
+  appearing and being answered) against a real signed release build is still the same still-open
+  manual check this bullet has always described -- now at least backed by a mechanism proven to work
+  once it runs, rather than one that was silently a dead end.
   **macOS's own launchd wiring is now covered too** (B19,
   [privacyfence/privacyfence#374](https://github.com/privacyfence/privacyfence/issues/374)):
   `macos-graphical-session.yml`/`test_macos_graphical_session_autostart.py` drives
