@@ -1,4 +1,4 @@
-"""v1 -> v2 in-memory rule compiler -- P3 of the policy v2 redesign.
+"""v1 -> v2 rule compilation and migration -- P3 and P4 of the policy v2 redesign.
 
 Compiles the exact ``rules_config`` shape ``auto_accept.AutoAcceptEvaluator.__init__`` already
 takes -- ``{operation_key: [{"rule": name, "value": value}, ...]}``, i.e. ``auto_accept_rules``
@@ -8,10 +8,10 @@ list of ``policy.engine.PolicyRule``. Grant expansion happens once, upstream, th
 already does for v1; this module does not re-derive it, so a compiled rule always reflects whatever
 the live v1 evaluator is currently holding.
 
-P3's ``policy/compat.py`` is only this compiler. The on-disk v1 -> v2 migration the redesign
-proposal's §09 also files under ``compat.py`` (writing an ``auto_accept:`` section, a ``.bak``, the
-``migrated_to_policy_v2`` marker) is P4's job -- nothing on disk changes here, and nothing here reads
-or writes ``settings.yaml`` directly.
+``compile_rule_entry``/``compile_rules`` (P3) are purely in-memory -- ``gate.py``'s shadow mode
+calls them on every gated call, and nothing here reads or writes ``settings.yaml`` directly.
+``migrate_to_policy_v2`` (P4) is the one-time, on-disk v1 -> v2 migration built out of that same
+compiler -- see its own docstring below.
 
 Because v1's rule list is a flat union (any one entry matching auto-accepts -- there is no
 conjunction between entries), and every predicate is either a P2 scope selector or a P2 condition
@@ -32,12 +32,22 @@ This makes the translation law trivial to check by construction rather than by r
 rule's ``operations`` is always exactly ``{operation_key}``, the one v1 entry it came from -- never
 that operation's verb family, never another operation sharing the same rule name. Widening is not a
 risk this compiler can introduce.
+
+``migrate_to_policy_v2`` below is built entirely out of this module's own ``compile_rules`` (the
+exact compiler shadow mode already runs on every call) plus ``policy.store``'s
+``merge_rules``/``rules_to_config`` -- migrating a config produces provably the same rule set
+compiling that config live already would, because it's the same function. Like
+``resource_grants.migrate_rules_to_grants``/``auto_accept.migrate_telegram_search_operation_key``,
+it is pure (no disk I/O), idempotent (checks/sets ``policy.store.MIGRATED_TO_POLICY_V2_MARKER``),
+and never mutates its argument -- ``daemon_main.run_app`` is the caller that actually persists the
+result, backs up the original file first, and logs a summary.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
-from . import conditions, scopes
+from . import conditions, scopes, store
 from .engine import PolicyRule
 
 # The v1 pseudo-rule name `should_auto_accept`/`preflight_from_args` return for a match against
@@ -84,4 +94,43 @@ def compile_rules(rules_config: dict[str, list[dict[str, Any]]]) -> list[PolicyR
     return compiled
 
 
-__all__ = ["compile_rule_entry", "compile_rules"]
+def migrate_to_policy_v2(
+    cfg: dict[str, Any], rules_config: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, Any], bool]:
+    """One-time v1 -> v2 on-disk migration (P4). ``rules_config`` is the caller's already-built
+    ``resource_grants.build_effective_rules(cfg)`` -- passed in rather than derived here, same
+    reason ``compile_rules`` takes it directly: this module never reads ``settings.yaml`` keys
+    itself.
+
+    Idempotent: returns ``(cfg, False)``, the *same* ``cfg`` object, once
+    ``store.MIGRATED_TO_POLICY_V2_MARKER`` is already set -- mirrors ``resource_grants.
+    migrate_rules_to_grants``'s own short-circuit (its own test asserts ``new_cfg is cfg`` for
+    exactly this reason: a caller that hasn't checked the return value shouldn't pay for, or be
+    able to detect, a copy on every already-migrated startup). Otherwise returns a deep copy with
+    a new ``auto_accept:`` section (``store.rules_to_config`` of the merged, compiled v1 rule set)
+    and the marker set either way -- but the second element is ``True`` only when that section
+    actually got at least one rule. A config with no v1 auto-accept rules configured at all compiles
+    to none, and the marker still gets set on the copy returned (so a *later* run that does add one
+    starts from "already migrated, nothing more to fold in" rather than re-discovering an empty v1
+    config every startup) -- but the caller is told there's nothing worth writing to disk for.
+    ``daemon_main.run_app`` reads that second element the same way it already reads
+    ``migrate_rules_to_grants``'s own ``summary``/``migrate_telegram_search_operation_key``'s own
+    bool: as "is there anything to actually persist", not "did this function run". Without this, a
+    fresh install with zero configured rules would still perform a real disk write, a ``.bak``, and
+    a log line the very first time it starts -- for a migration that moved nothing.
+
+    Deliberately never touches ``auto_accept_rules``/``auto_accept_grants`` -- v1 sections stay on
+    disk, readable indefinitely, for a hand-edited install (redesign proposal's P4). Only the
+    marker being set changes what a *future* migration run does; nothing here changes which engine
+    is authoritative (``policy_engine_config.PolicyEngineConfig`` alone decides that).
+    """
+    if cfg.get(store.MIGRATED_TO_POLICY_V2_MARKER):
+        return cfg, False
+    cfg = deepcopy(cfg)
+    compiled = store.merge_rules(compile_rules(rules_config))
+    cfg[store.AUTO_ACCEPT_CONFIG_KEY] = store.rules_to_config(compiled)
+    cfg[store.MIGRATED_TO_POLICY_V2_MARKER] = True
+    return cfg, bool(compiled)
+
+
+__all__ = ["compile_rule_entry", "compile_rules", "migrate_to_policy_v2"]

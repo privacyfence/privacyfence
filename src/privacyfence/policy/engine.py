@@ -7,8 +7,8 @@ declared ``resolves_from`` rather than kept in sync by hand across ``ARGS_ONLY_R
 ``DATA_DEPENDENT_RULES`` (F6).
 
 This module knows nothing about where a ``PolicyRule`` list comes from -- ``policy/compat.py``
-compiles one from today's ``auto_accept_rules``/``auto_accept_grants`` config; a later phase's
-``policy/store.py`` will compile one straight from the on-disk v2 schema. Either way, ``evaluate()``
+compiles one from today's ``auto_accept_rules``/``auto_accept_grants`` config; ``policy/store.py``
+(P4) compiles one straight from the on-disk v2 ``auto_accept:`` schema. Either way, ``evaluate()``
 and ``preflight()`` are drop-in replacements for ``should_auto_accept()``/``preflight_from_args()``:
 same ``(bool, matched_rule_id)`` / ``(verdict, matched_rule_id, reason)`` shapes, same fail-closed
 behaviour on an unrecognised predicate or an evaluation error, same temp-accept fallback -- delegated

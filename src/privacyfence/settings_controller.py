@@ -26,6 +26,7 @@ flows, grant name resolution) runs on a background thread via
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -51,6 +52,7 @@ from .drive_client import DriveClient
 from .gmail_client import GmailClient
 from .paths import authority_root, data_dir, org_dir
 from .pii_detector import set_pii_category_enabled, set_pii_detection_enabled
+from .policy import store as policy_store
 from .principal import LOCAL_PRINCIPAL
 from .privacy_filter import _parse_group as _parse_privacy_group
 from .privacy_filter import _VALID_POLICIES as PRIVACY_POLICIES
@@ -725,6 +727,36 @@ class SettingsController:
         other consumer on their very next request, with no daemon restart
         -- see step_up_config.py's own ``LiveStepUpConfig`` docstring."""
         self._step_up = step_up
+
+    def policy_v2_migration_notice_html(self) -> str | None:
+        """P4 of the policy v2 redesign's Settings banner: ``None`` unless this install's config
+        has actually been migrated to the v2 on-disk ``auto_accept:`` schema (``policy.store.
+        MIGRATED_TO_POLICY_V2_MARKER``) *and* at least one migrated rule's expansion now names a
+        destructive (``delete``) or send (``send``/``draft``/``share``) verb -- e.g. F4's sandbox-
+        folder "Write" grant, which today silently includes ``sheets.delete_dimensions``. Those are
+        exactly the rules whose real reach a v1 config never spelled out to the user in those terms.
+
+        web/routes_settings.py renders this as ``web_shell.wrap()``'s ``dismissible_notice_html``,
+        not the persistent ``banner_html`` strip -- like ``step_up_config.StepUpConfig.off_notice``,
+        this is advisory rather than a live problem: once a person has seen which of their existing
+        rules this covers, it should not keep reappearing while nothing about those rules changes.
+        """
+        cfg = self._load_config()
+        if not cfg.get(policy_store.MIGRATED_TO_POLICY_V2_MARKER):
+            return None
+        flagged = policy_store.destructive_or_send_rules(cfg)
+        if not flagged:
+            return None
+        items = "".join(
+            f"<li><code>{html.escape(rule.id)}</code> "
+            f"({html.escape(', '.join(OPERATION_LABELS.get(op, op) for op in sorted(rule.operations)))})</li>"
+            for rule in flagged
+        )
+        return (
+            "Your auto-accept rules were migrated to the new format. "
+            f"{len(flagged)} existing rule(s) allow a <b>destructive</b> or <b>send</b> action "
+            f"without review: <ul>{items}</ul> Review them under Rules."
+        )
 
     def set_connectors_changed_listener(self, callback: Callable[[], None] | None) -> None:
         """``callback`` is ``McpDispatcher.notify_tools_changed`` in

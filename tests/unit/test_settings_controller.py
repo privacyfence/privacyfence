@@ -44,6 +44,7 @@ import pytest
 
 from privacyfence import auto_accept, daemon_main, org_mode, resource_names, settings_controller as sc, update_checker
 from privacyfence import resource_grants as rg
+from privacyfence.policy import store as policy_store
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -1564,6 +1565,63 @@ class TestRuleRows:
         state = controller._rules_state(controller._load_config())
         read_file = next(s for s in state["sections_by_connector"]["drive"] if s["op_key"] == "drive.read_file_contents")
         assert read_file["rows"] == []
+
+
+class TestPolicyV2MigrationNotice:
+    """P4 of the policy v2 redesign's Settings banner: policy_v2_migration_notice_html() -- see
+    settings_controller.py's own docstring on it for why this is the dismissible-notice mechanism
+    (web_shell.wrap's dismissible_notice_html), not the persistent banner."""
+
+    def _seed(self, controller, *, migrated, rules):
+        cfg = controller._load_config()
+        if migrated:
+            cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] = True
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = {"version": 2, "rules": rules}
+        controller._save_config(cfg)
+
+    def test_no_notice_before_migration_even_with_a_destructive_rule_present(self, controller):
+        self._seed(
+            controller, migrated=False,
+            rules=[{"id": "r1", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]}],
+        )
+        assert controller.policy_v2_migration_notice_html() is None
+
+    def test_no_notice_after_migration_when_nothing_is_destructive_or_send(self, controller):
+        self._seed(
+            controller, migrated=True,
+            rules=[{"id": "r1", "predicate": "approved_folder", "value": ["F1"],
+                     "operations": ["drive.read_file_contents"]}],
+        )
+        assert controller.policy_v2_migration_notice_html() is None
+
+    def test_notice_lists_destructive_rule_after_migration(self, controller):
+        self._seed(
+            controller, migrated=True,
+            rules=[{"id": "r-delete", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]}],
+        )
+        notice = controller.policy_v2_migration_notice_html()
+        assert notice is not None
+        assert "r-delete" in notice
+        assert "1 existing rule" in notice
+
+    def test_notice_lists_send_rule_after_migration(self, controller):
+        self._seed(
+            controller, migrated=True,
+            rules=[{"id": "r-send", "predicate": "always_allow", "operations": ["slack.send_message"]}],
+        )
+        notice = controller.policy_v2_migration_notice_html()
+        assert notice is not None
+        assert "r-send" in notice
+
+    def test_notice_html_escapes_rule_id(self, controller):
+        self._seed(
+            controller, migrated=True,
+            rules=[{"id": "<script>bad</script>", "predicate": "always_allow",
+                     "operations": ["sheets.delete_dimensions"]}],
+        )
+        notice = controller.policy_v2_migration_notice_html()
+        assert "<script>bad</script>" not in notice
+        assert "&lt;script&gt;" in notice
 
 
 class TestGrantRows:
