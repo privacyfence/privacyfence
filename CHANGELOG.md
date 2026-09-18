@@ -37,6 +37,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- `step_up.scope` takes a third value, `writes_and_reads`, which requires a passkey assertion before
+  releasing *any* approving decision — a write, a read PII detection flagged, and a read it did not.
+  The two scopes that existed before (`writes`, the default, and `writes_and_pii_reads`) both leave
+  an unflagged read releasable by a session on its own, which is the right trade only for an install
+  that trusts `pii_detector.py` to have flagged everything worth a second factor; this value is for
+  the installs that would rather not depend on that. It behaves identically in both deployment
+  modes — one `StepUpConfig` and one `webauthn_stepup.is_step_up_required` serve both — and is
+  configured the same way every other step-up setting already is: `config/settings.yaml`'s
+  `step_up:` section in local mode, `scripts/build_org_bundle.py --step-up-scope writes_and_reads`
+  (or the `step_up` section of `org_config.json` directly) in org mode. Denying still needs no
+  step-up under any scope, and a read an auto-accept rule already covers never becomes an approval
+  in the first place, so no scope asks for a passkey on one. `/security` now states which of the
+  three is in force rather than assuming one of the first two.
 - ADR 0002 (`docs/adr/0002-local-mode-trust-boundary-and-companion-app.md`) records the architecture
   decision that follows from the statement above: local mode's trust boundary is the OS user
   account, and a minimal companion app (tray/menu-bar item — Open Approvals, Open Settings, Quit)

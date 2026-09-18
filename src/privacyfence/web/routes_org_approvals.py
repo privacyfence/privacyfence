@@ -22,7 +22,8 @@ routes_settings.py.
 
 **Step-up (§10.6, D7)** is the one piece with no local-mode analogue at
 all: before releasing a *write* decision (or, with ``step_up.scope ==
-"writes_and_pii_reads"``, a PII-flagged read too), the decide endpoint
+"writes_and_pii_reads"``, a PII-flagged read too -- or, with
+``"writes_and_reads"``, every gated read), the decide endpoint
 demands proof of a fresh WebAuthn platform-authenticator assertion --
 webauthn_stepup.py's own module docstring covers the ceremony and the
 decision-fingerprint binding; this module is only the HTTP protocol

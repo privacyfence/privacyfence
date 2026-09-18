@@ -161,6 +161,17 @@ class TestSecurityPage:
         r = client.get("/security")
         assert 'href="/connect"' in r.text
 
+    def test_the_lead_names_what_the_configured_scope_actually_covers(self):
+        for scope, expected in (
+            ("writes", "Required to approve a write."),
+            ("writes_and_pii_reads", "Required to approve a write, or a read that detected personal data."),
+            ("writes_and_reads", "Required to approve a write or a read."),
+        ):
+            app, sessions = _app(step_up=StepUpConfig(rp_id="pf.example.com", scope=scope))
+            client = _client(app)
+            _signed_in(client, sessions, ALICE)
+            assert expected in client.get("/security").text
+
     def test_local_mode_links_back_to_the_connectors_settings_tab(self):
         app, sessions = _local_app()
         client = _client(app)

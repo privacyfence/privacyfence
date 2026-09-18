@@ -537,6 +537,16 @@ def _credential_row_html(cred) -> str:
     )
 
 
+# Keyed by step_up_config.StepUpScope; an unrecognized value can only reach
+# here from a StepUpConfig built by hand in a test, and reads as the
+# narrowest scope rather than overstating what the passkey covers.
+_SCOPE_NOTES = {
+    "writes": "Required to approve a write.",
+    "writes_and_pii_reads": "Required to approve a write, or a read that detected personal data.",
+    "writes_and_reads": "Required to approve a write or a read.",
+}
+
+
 def _render_security_page(
     *, principal: Principal, creds: list, csrf: str, step_up: StepUpConfig, nonce: str,
     back_link: tuple[str, str],
@@ -544,10 +554,7 @@ def _render_security_page(
     who = _esc(principal.email or principal.display_name or principal.id)
     rows = "".join(_credential_row_html(c) for c in creds)
     body = f'<ul class="creds">{rows}</ul>' if creds else '<div class="empty">No passkeys added yet.</div>'
-    scope_note = (
-        "Required to approve a write." if step_up.scope == "writes"
-        else "Required to approve a write, or a read that detected personal data."
-    )
+    scope_note = _SCOPE_NOTES.get(step_up.scope, _SCOPE_NOTES["writes"])
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PrivacyFence -- Security</title><style nonce="{nonce}">{_STYLE}</style></head>
