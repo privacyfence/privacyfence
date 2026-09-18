@@ -12,7 +12,13 @@ from __future__ import annotations
 import time
 
 import pytest
-from mcp.server.auth.provider import AccessToken, AuthorizationParams, RefreshToken, TokenError
+from mcp.server.auth.provider import (
+    AccessToken,
+    AuthorizationParams,
+    IdentityAssertionParams,
+    RefreshToken,
+    TokenError,
+)
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
@@ -300,6 +306,20 @@ class TestVerifyToken:
         via_verify = await provider.verify_token(tokens.access_token)
         via_load = await provider.load_access_token(tokens.access_token)
         assert via_verify == via_load
+
+
+class TestIdentityAssertion:
+    """mcp 2.x's ``OAuthAuthorizationServerProvider`` grew a SEP-990 leg 2
+    hook (the RFC 7523 ``jwt-bearer`` grant). PrivacyFence's org AS refuses
+    it on purpose -- see the method's own docstring -- and this is what keeps
+    that a decision rather than a missing method nobody noticed."""
+
+    async def test_jwt_bearer_grant_is_refused_as_unsupported(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        params = IdentityAssertionParams(assertion="an.id-jag.jwt")
+        with pytest.raises(TokenError) as exc_info:
+            await provider.exchange_identity_assertion(_client_info(), params)
+        assert exc_info.value.error == "unsupported_grant_type"
 
 
 class TestRefreshToken:

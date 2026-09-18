@@ -29,7 +29,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -39,10 +38,11 @@ from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAut
 from mcp.server.auth.provider import TokenVerifier
 from mcp.server.auth.routes import build_resource_metadata_url, create_auth_routes, create_protected_resource_routes
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+from mcp.server.connection import Connection
+from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.lowlevel.server import Server as MCPServer
 from mcp.server.models import InitializationOptions
-from mcp.server.session import ServerSession
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from pydantic import AnyHttpUrl
 from starlette.middleware.authentication import AuthenticationMiddleware
@@ -89,42 +89,104 @@ SERVER_INSTRUCTIONS = (
 )
 
 
-def _session_key(server: MCPServer) -> str:
-    """The current request's session key -- a fresh ``uuid4`` handed out
-    once per Streamable HTTP session by ``_session_lifespan`` below and
-    threaded through every request in that session via
-    ``request_context.lifespan_context`` (the low-level ``Server``'s own
-    per-session state slot -- see ``mcp.server.lowlevel.server.Server.run``,
-    which enters ``self.lifespan(self)`` once per session, before that
-    session's first request). Plays the same role as ``id(writer)`` in
-    ipc_server.py: stable for one logical connection, and nothing more."""
-    return server.request_context.lifespan_context["session_key"]
+# The header a Streamable HTTP client stamps on every request that belongs
+# to an established session -- the string form of ``_MCP_SESSION_ID_HEADER``
+# further down, which the ASGI middleware below matches on raw ASGI headers.
+_MCP_SESSION_ID = "mcp-session-id"
+
+# The session key a request that carries no session id at all falls back to.
+# Unreachable on this daemon's own wiring (``mount_mcp`` runs the session
+# manager stateful, so every request after ``initialize`` carries the header
+# the manager itself minted), but a transport without session ids -- stdio, or
+# a stateless manager -- must still land somewhere stable rather than raise.
+_SESSIONLESS_KEY = "sessionless"
+
+
+def _connection_of(ctx: ServerRequestContext) -> Connection | None:
+    """The per-connection ``Connection`` behind this request, or ``None`` when
+    this SDK build doesn't expose it where we expect it.
+
+    mcp 2.x hands a request handler a ``ServerRequestContext``, whose
+    ``session`` is built fresh per *request* (see
+    ``mcp.server.session.ServerSession``'s own docstring) -- the
+    connection-scoped object, with the per-connection ``state`` dict and the
+    ``exit_stack`` unwound when the session ends, is the ``Connection`` behind
+    it. ``mcp.server.context.Context`` exposes that as a public ``.connection``
+    property, but ``ServerRunner`` doesn't build a ``Context`` yet (that
+    module's own ``TODO(L54)``), so a handler's only route to it today is
+    through the session that holds it.
+
+    Same "degrade to doing nothing rather than break /mcp" posture as
+    ``_RehomeStaleInitialize._is_live`` below, and for the same reason: the pin
+    is a range (``mcp>=1.28,<3.0``), so an internal rename must cost this
+    module its tools/list_changed notifications and its session cleanup, not
+    its ability to serve a tool call.
+    """
+    connection = getattr(ctx.session, "_connection", None)
+    return connection if isinstance(connection, Connection) else None
+
+
+def _session_key(ctx: ServerRequestContext) -> str:
+    """The current request's session key -- stable for one Streamable HTTP
+    session and nothing more, exactly like ``id(writer)`` was in ipc_server.py.
+
+    Under mcp 1.x this was a ``uuid4`` minted by the server's own ``lifespan``,
+    which that SDK entered once per session. mcp 2.x enters the lifespan once
+    per session *manager* instead (``StreamableHTTPSessionManager.run`` enters
+    it before any session exists and hands the one ``lifespan_context`` to
+    every session it later starts -- see its own "the manager's already-entered
+    lifespan is reused rather than re-entered per session" comment), so a
+    lifespan-minted id would now be one id for the whole daemon: every client
+    would share one unattended-session flag and one dedupe window.
+
+    The transport's own session id is the per-session identity now. It is the
+    same value the manager mints, stamps on the ``initialize`` response and
+    keys ``_server_instances`` by, and the client echoes it on every
+    subsequent request -- which is every request that reaches a handler here,
+    since ``initialize`` is the runner's own and never dispatched to one.
+    """
+    request = ctx.request
+    header = request.headers.get(_MCP_SESSION_ID) if request is not None else None
+    if header:
+        return header
+    connection = _connection_of(ctx)
+    return getattr(connection, "session_id", None) or _SESSIONLESS_KEY
 
 
 class _PrivacyFenceServer(MCPServer):
     """Overrides ``create_initialization_options()`` to always advertise
-    ``tools.listChanged = True`` (issue #396 Part C).
+    ``tools.list_changed = True`` (issue #396 Part C).
 
-    Confirmed against a real ``mcp==1.30.0`` install (Phase 0 spike):
-    ``StreamableHTTPSessionManager`` (``mcp/server/streamable_http_
-    manager.py``, what this module's ``mount_mcp`` actually uses) always
-    calls ``self.app.create_initialization_options()`` with zero arguments,
-    so the base implementation's own ``notification_options or
-    NotificationOptions()`` falls through to ``NotificationOptions()``'s
-    default ``tools_changed=False`` on every real request -- there is no
-    argument for a caller to pass here that this class would need to
-    respect instead. Overriding the method itself is the only lever
-    available without patching the manager.
+    ``StreamableHTTPSessionManager`` (``mcp/server/streamable_http_manager.py``,
+    what this module's ``mount_mcp`` actually uses) drives each session with
+    ``serve_loop(..., init_options=None)``, so the runner answering
+    ``initialize`` falls back to ``self.server.create_initialization_options()``
+    -- called with zero arguments, whose own ``notification_options or
+    NotificationOptions()`` then falls through to the default
+    ``tools_changed=False``. There is no argument for a caller to pass here
+    that this class would need to respect instead; overriding the method
+    itself is the only lever available without patching the manager.
+
+    Scope note (mcp 2.x): this is the handshake-era capability, which is what
+    every client this daemon serves negotiates -- ``initialize`` is answered
+    with a handshake protocol version whatever the client asks for (see
+    ``ServerRunner._negotiate_initialize``). A 2026-07-28-era client that skips
+    the handshake entirely gets its change notifications from
+    ``subscriptions/listen`` streams instead, a method this server doesn't
+    serve (and ``get_capabilities`` correctly won't claim ``listChanged`` for);
+    adding it is its own piece of work, not part of the 2.x migration.
     """
 
     def create_initialization_options(
         self,
         notification_options: NotificationOptions | None = None,
         experimental_capabilities: dict[str, dict[str, Any]] | None = None,
+        extensions: dict[str, dict[str, Any]] | None = None,
     ) -> InitializationOptions:
         return super().create_initialization_options(
             notification_options=NotificationOptions(tools_changed=True),
             experimental_capabilities=experimental_capabilities,
+            extensions=extensions,
         )
 
 
@@ -132,31 +194,54 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
     """Builds the low-level MCP ``Server``, wired to ``dispatcher`` for both
     tool listing and tool calls. A fresh ``Server`` per daemon process
     (there's exactly one dispatcher, and its connector set can change live --
-    see ``McpDispatcher.connectors``), not a decorator per connector tool:
+    see ``McpDispatcher.connectors``), not a handler per connector tool:
     the tool set is only known at request time.
+
+    Handlers are constructor arguments (``on_list_tools``/``on_call_tool``),
+    not ``@server.list_tools()`` decorators: mcp 2.0 replaced the decorator
+    registry with constructor-based registration, and a handler is now
+    ``(ctx, params) -> Result`` -- the per-request context carries what
+    ``Server.request_context`` used to, and the handler returns the whole
+    ``ListToolsResult``/``CallToolResult`` rather than the SDK wrapping a
+    bare list for it.
     """
 
     # issue #396 Part C: every currently-open Streamable HTTP session's own
-    # live ``ServerSession`` -- the SDK object ``send_tool_list_changed()``
-    # actually lives on (confirmed reachable as
-    # ``server.request_context.session`` from inside a request handler,
-    # Phase 0 spike) -- keyed by the same session_key
-    # dispatcher.end_session() already uses. This dict, not McpDispatcher,
-    # is the right owner: it's routes_mcp.py-specific transport state with
-    # no meaning outside one running MCPServer, whereas McpDispatcher's own
-    # session-scoped state (unattended flags, dedupe) is protocol-level and
-    # already has its own home. Populated from inside handle_list_tools/
-    # handle_call_tool below (RequestContext.session is only reachable
-    # inside a request, not from _session_lifespan's own `yield`), evicted
-    # in _session_lifespan's existing `finally`.
-    live_sessions: dict[str, ServerSession] = {}
+    # live ``Connection`` -- the SDK object ``send_tool_list_changed()``
+    # lives on, and the one that outlives a single request (unlike
+    # ``ServerSession``, which mcp 2.x rebuilds per request) -- keyed by the
+    # same session_key dispatcher.end_session() already uses. This dict, not
+    # McpDispatcher, is the right owner: it's routes_mcp.py-specific
+    # transport state with no meaning outside one running MCPServer, whereas
+    # McpDispatcher's own session-scoped state (unattended flags, dedupe) is
+    # protocol-level and already has its own home. Populated from inside
+    # handle_list_tools/handle_call_tool below, and emptied by the
+    # per-connection cleanup each entry registers as it goes in.
+    live_connections: dict[str, Connection] = {}
 
-    def _capture_session(session_key: str, session: ServerSession) -> None:
-        live_sessions[session_key] = session
+    async def _forget_session(session_key: str) -> None:
+        # Runs from ``Connection.exit_stack`` when the session ends, however
+        # it ends (client DELETE, idle timeout, crash -- see
+        # StreamableHTTPSessionManager._serve_opening_request's own
+        # ``finally``). The direct counterpart of ipc_server.py's
+        # ``_handle_connection`` ``finally`` clearing ``id(writer)`` from
+        # ``_unattended_connections`` when a bridge connection dropped, and of
+        # the per-session ``lifespan`` this module used under mcp 1.x.
+        live_connections.pop(session_key, None)
+        dispatcher.end_session(session_key)
 
-    async def _send_tool_list_changed(session: ServerSession) -> None:
+    def _track_session(ctx: ServerRequestContext, session_key: str) -> None:
+        if session_key in live_connections or session_key == _SESSIONLESS_KEY:
+            return
+        connection = _connection_of(ctx)
+        if connection is None:
+            return
+        live_connections[session_key] = connection
+        connection.exit_stack.push_async_callback(_forget_session, session_key)
+
+    async def _send_tool_list_changed(connection: Connection) -> None:
         try:
-            await session.send_tool_list_changed()
+            await connection.send_tool_list_changed()
         except Exception as exc:  # noqa: BLE001 -- one dead/closing session must not
             # stop the others in the same broadcast from being notified.
             logger.info("tools/list_changed notification failed for one session: %s", exc)
@@ -171,39 +256,20 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
         # web/state_stream.call_soon_threadsafe), so a running loop is
         # always available here in production; a test that calls this
         # directly with no loop running (e.g. exercising the dispatcher in
-        # isolation) simply notifies nobody, since live_sessions is empty
+        # isolation) simply notifies nobody, since live_connections is empty
         # in that case anyway.
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        for session in list(live_sessions.values()):
-            loop.create_task(_send_tool_list_changed(session))
+        for connection in list(live_connections.values()):
+            loop.create_task(_send_tool_list_changed(connection))
 
     dispatcher.set_tools_changed_broadcaster(_broadcast_tools_changed)
 
-    @contextlib.asynccontextmanager
-    async def _session_lifespan(_: MCPServer) -> AsyncIterator[dict[str, Any]]:
-        # Entered once per Streamable HTTP session, exited when that
-        # session ends (normal close, idle timeout, or crash) -- see
-        # _session_key's docstring. The `finally` here is the direct
-        # counterpart of ipc_server.py's `_handle_connection`'s own
-        # `finally` block clearing `id(writer)` from
-        # `_unattended_connections` when a bridge connection drops.
-        session_key = uuid.uuid4().hex
-        try:
-            yield {"session_key": session_key}
-        finally:
-            dispatcher.end_session(session_key)
-            live_sessions.pop(session_key, None)
-
-    server: MCPServer = _PrivacyFenceServer(
-        "privacyfence", version=PRIVACYFENCE_VERSION, lifespan=_session_lifespan,
-        instructions=SERVER_INSTRUCTIONS,
-    )
-
-    @server.list_tools()
-    async def handle_list_tools() -> list[types.Tool]:
+    async def handle_list_tools(
+        ctx: ServerRequestContext, _params: types.PaginatedRequestParams | None,
+    ) -> types.ListToolsResult:
         # Principal-scoped for the same reason handle_call_tool below is:
         # ``dispatcher.connectors`` is
         # ``connector_registry.get(current_principal()).connectors`` in org
@@ -217,7 +283,7 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
         # handle_call_tool (correctly scoped) could resolve those same
         # connectors perfectly well -- a client simply had no way to learn
         # the tools existed to call them.
-        _capture_session(_session_key(server), server.request_context.session)
+        _track_session(ctx, _session_key(ctx))
         principal = principal_from_access_token(get_access_token())
         with principal_scope(principal):
             tools = [
@@ -226,12 +292,15 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
                 for spec in connector.tool_specs()
             ]
         tools.extend(mcp_tools.META_TOOLS)
-        return tools
+        return types.ListToolsResult(tools=tools)
 
-    @server.call_tool()
-    async def handle_call_tool(name: str, arguments: dict[str, Any]) -> types.CallToolResult:
-        session_key = _session_key(server)
-        _capture_session(session_key, server.request_context.session)
+    async def handle_call_tool(
+        ctx: ServerRequestContext, params: types.CallToolRequestParams,
+    ) -> types.CallToolResult:
+        session_key = _session_key(ctx)
+        _track_session(ctx, session_key)
+        name = params.name
+        arguments = dict(params.arguments or {})
         # Entered once per tool call, in the one place this surface
         # dispatches one (P6) --
         # every per-principal registry downstream (auto_accept.py,
@@ -259,6 +328,12 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
                 # generic message unless exc's type is on the reviewed
                 # allowlist, since a connector or OAuth failure can wrap a
                 # third-party exception carrying a token or auth code.
+                #
+                # Still this module's job under mcp 2.x, not the SDK's: 2.0
+                # made an escaping handler exception a generic "Error
+                # executing tool <name>" *protocol* error, which is neither
+                # the tool-level error result the bridge protocol promised
+                # nor something the model can act on.
                 logger.info("Tool call %s failed: %s", name, exc)
                 return mcp_tools.error_result(public_message(exc))
         if name == mcp_tools.GET_SIGN_IN_LINK_TOOL.name:
@@ -268,7 +343,10 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
             return mcp_tools.sign_in_link_result(result)
         return mcp_tools.to_call_tool_result(result)
 
-    return server
+    return _PrivacyFenceServer(
+        "privacyfence", version=PRIVACYFENCE_VERSION, instructions=SERVER_INSTRUCTIONS,
+        on_list_tools=handle_list_tools, on_call_tool=handle_call_tool,
+    )
 
 
 async def _dispatch_connector_tool(
@@ -516,7 +594,7 @@ class _RehomeStaleInitialize:
 
     def _is_live(self, session_id: str) -> bool | None:
         """``None`` when this SDK build doesn't expose its session map where
-        we expect it -- the pin is a range (``mcp>=1.28,<2.0``), so an
+        we expect it -- the pin is a range (``mcp>=1.28,<3.0``), so an
         internal rename must degrade to "do nothing" rather than break /mcp.
         """
         instances = getattr(self._session_manager, "_server_instances", None)

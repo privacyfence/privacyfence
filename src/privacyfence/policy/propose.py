@@ -336,8 +336,8 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
     # check for them -- derivation over their ``create``/``update`` verbs has to be told so.
     _scope(
         "personal_calendar", "calendar.calendar", "calendar",
-        (Verb.READ, Verb.CREATE, Verb.UPDATE, Verb.SHARE), _args_values("calendar_id"), "this calendar",
-        excludes=("calendar.out_of_office", "calendar.working_location"),
+        (Verb.READ, Verb.CREATE, Verb.UPDATE, Verb.SHARE, Verb.DELETE), _args_values("calendar_id"),
+        "this calendar", excludes=("calendar.out_of_office", "calendar.working_location"),
     ),
     _scope("i_am_organizer", "calendar.organized_by_me", "calendar", (Verb.READ,), _no_value_needed, "if I organize it"),
     # ── Slack ─────────────────────────────────────────────────────────────────────────────────

@@ -10,6 +10,8 @@ from typing import Any
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..calendar_client import (
     EVENT_COLOR_NAMES,
+    VALID_EVENT_SCOPES,
+    VALID_SEND_UPDATES,
     VALID_VISIBILITIES,
     CalendarClient,
     CalendarClientError,
@@ -70,6 +72,38 @@ def _normalize_color_arg(color: str) -> str:
         return normalize_event_color(color)
     except CalendarClientError as exc:
         raise ValueError(str(exc)) from exc
+
+
+_SCOPE_LABELS = {
+    "this": "This event",
+    "following": "This and following events",
+    "all": "All events in the series",
+}
+
+
+def _normalize_scope_arg(scope: str) -> str:
+    """Validate a tool's ``scope`` argument before gating -- same reasoning
+    as _normalize_color_arg. Re-raises CalendarClientError as ValueError,
+    matching every other connector-level "reject this bad argument before
+    gating" check."""
+    scope = (scope or "this").strip().lower()
+    if scope not in VALID_EVENT_SCOPES:
+        raise ValueError(
+            f"scope must be one of {sorted(VALID_EVENT_SCOPES)}, got {scope!r}"
+        )
+    return scope
+
+
+def _normalize_send_updates_arg(send_updates: str) -> str:
+    """Validate a tool's ``send_updates`` argument before gating. "" (not
+    given) is valid and means "let the Calendar API apply its own
+    default"."""
+    send_updates = (send_updates or "").strip()
+    if send_updates and send_updates not in VALID_SEND_UPDATES:
+        raise ValueError(
+            f"send_updates must be one of {sorted(VALID_SEND_UPDATES)}, got {send_updates!r}"
+        )
+    return send_updates
 
 
 def _downgrade_to_busy_only(entry: dict) -> dict:
@@ -253,12 +287,23 @@ class CalendarConnector(Connector):
                     ToolParam("color", "str", required=False, default="",
                               description="Event color id (1-11) or name, e.g. \"Tomato\" -- see "
                                           "calendar_list_colors"),
+                    ToolParam("recurrence", "str", required=False, default="",
+                              description="RRULE line(s) to make this a recurring event, e.g. "
+                                          "\"RRULE:FREQ=WEEKLY;COUNT=10\". One rule per line for "
+                                          "more than one (RRULE plus EXDATE/RDATE/EXRULE). Omit "
+                                          "for a non-recurring event."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
             ToolSpec(
                 name="calendar_update_event",
-                description="Update an existing calendar event. Requires user approval.",
+                description=(
+                    "Update an existing calendar event. For a recurring event, 'scope' controls "
+                    "which occurrences this touches: 'this' (default) affects only the given "
+                    "event_id; 'following' splits the series so this instance and every later one "
+                    "get the changes, leaving earlier ones untouched; 'all' updates the entire "
+                    "series. Requires user approval."
+                ),
                 params=[
                     ToolParam("calendar_id", "str"),
                     ToolParam("event_id", "str"),
@@ -274,6 +319,35 @@ class CalendarConnector(Connector):
                     ToolParam("color", "str", required=False, default="",
                               description="Event color id (1-11) or name, e.g. \"Tomato\" -- see "
                                           "calendar_list_colors"),
+                    ToolParam("scope", "str", required=False, default="this",
+                              description="For a recurring event: 'this', 'following', or 'all'. "
+                                          "Ignored (has no other meaning) for a non-recurring event."),
+                    ToolParam("send_updates", "str", required=False, default="",
+                              description="Who gets a notification email about this change: "
+                                          "'none', 'all', or 'externalOnly'. Omit to use Calendar's "
+                                          "own default."),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+            ),
+            ToolSpec(
+                name="calendar_delete_event",
+                description=(
+                    "Delete a calendar event. For a recurring event, 'scope' controls what's "
+                    "deleted: 'this' (default) deletes only the given event_id; 'following' ends "
+                    "the series just before this instance, deleting it and every later occurrence "
+                    "but keeping earlier ones; 'all' deletes the entire series. Requires user "
+                    "approval."
+                ),
+                params=[
+                    ToolParam("calendar_id", "str"),
+                    ToolParam("event_id", "str"),
+                    ToolParam("scope", "str", required=False, default="this",
+                              description="For a recurring event: 'this', 'following', or 'all'. "
+                                          "Ignored (has no other meaning) for a non-recurring event."),
+                    ToolParam("send_updates", "str", required=False, default="",
+                              description="Who gets a notification email about this cancellation: "
+                                          "'none', 'all', or 'externalOnly'. Omit to use Calendar's "
+                                          "own default."),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -349,6 +423,8 @@ class CalendarConnector(Connector):
             return await self._create_event(**args)
         if tool == "calendar_update_event":
             return await self._update_event(**args)
+        if tool == "calendar_delete_event":
+            return await self._delete_event(**args)
         if tool == "calendar_create_out_of_office":
             return await self._create_out_of_office(**args)
         if tool == "calendar_set_working_location":
@@ -544,6 +620,7 @@ class CalendarConnector(Connector):
         add_google_meet: bool = False,
         rooms: str = "",
         color: str = "",
+        recurrence: str = "",
     ) -> Any:
         color_id = _normalize_color_arg(color)
         attendee_list = [e.strip() for e in attendees.split(",") if e.strip()] if attendees else []
@@ -563,12 +640,17 @@ class CalendarConnector(Connector):
             preview["Attendees"] = ", ".join(attendee_list)
         if color_id:
             preview["Color"] = EVENT_COLOR_NAMES.get(color_id, color_id)
+        if recurrence:
+            # Shown verbatim -- humanizing every RRULE/EXDATE/RDATE/EXRULE
+            # variant into a friendly sentence is out of scope; the reviewer
+            # sees exactly what's being sent to the Calendar API.
+            preview["Recurrence"] = recurrence
         raw_data = {
             "calendar_id": calendar_id, "title": title,
             "start_time": start_time, "end_time": end_time,
             "description": description, "attendees": attendee_list,
             "location": location, "add_google_meet": add_google_meet, "rooms": room_list,
-            "color": color_id,
+            "color": color_id, "recurrence": recurrence,
         }
         await gated_call(
             connector=self.name,
@@ -588,6 +670,7 @@ class CalendarConnector(Connector):
             self._calendar.create_event,
             calendar_id, title, start_time, end_time, description,
             attendee_list or None, location, add_google_meet, room_list or None, color_id,
+            recurrence,
         )
         result = {"id": event.id, "title": event.title, "start_time": event.start_time,
                   "end_time": event.end_time, "html_link": event.html_link}
@@ -607,8 +690,12 @@ class CalendarConnector(Connector):
         add_google_meet: bool = False,
         rooms: str = "",
         color: str = "",
+        scope: str = "this",
+        send_updates: str = "",
     ) -> Any:
         color_id = _normalize_color_arg(color)
+        scope = _normalize_scope_arg(scope)
+        send_updates = _normalize_send_updates_arg(send_updates)
         event = await self._fetch(self._calendar.get_event, calendar_id, event_id)
         room_list = [r.strip() for r in rooms.split(",") if r.strip()] if rooms else []
         # Event/Start/End always appear (unlike Description/Location/
@@ -641,6 +728,11 @@ class CalendarConnector(Connector):
             new_color = EVENT_COLOR_NAMES.get(color_id, color_id)
             changes["Color"] = f"{old_color} → {new_color}"
         changed_field_names.extend(changes.keys())
+        # "Applies to" only means anything for a recurring event -- a plain
+        # event has no series for scope to distinguish between, so the row
+        # is omitted rather than always showing a moot "This event".
+        if event.recurring_event_id or event.recurrence:
+            changes["Applies to"] = _SCOPE_LABELS[scope]
         preview = {
             "Event": _diff_or_value(title, event.title),
             # Calendar can never change via this tool (no destination-
@@ -657,7 +749,7 @@ class CalendarConnector(Connector):
             "start_time": start_time, "end_time": end_time,
             "description": description, "location": location,
             "add_google_meet": add_google_meet, "rooms": room_list,
-            "color": color_id,
+            "color": color_id, "scope": scope,
             "organizer_email": event.organizer_email,
             "attendees": [a.email for a in (event.attendees or [])],
         }
@@ -678,19 +770,59 @@ class CalendarConnector(Connector):
             preview=preview,
             details_text=details_text,
             my_email=self.my_email,
-            args={"calendar_id": calendar_id, "event_id": event_id},
+            args={"calendar_id": calendar_id, "event_id": event_id, "scope": scope},
         )
         updated = await self._fetch(
             self._calendar.update_event,
             calendar_id, event_id, title or None, start_time or None,
             end_time or None, description or None, location or None,
             add_google_meet, room_list or None, color_id or None,
+            scope, send_updates,
         )
         result = {"id": updated.id, "title": updated.title, "start_time": updated.start_time,
                   "end_time": updated.end_time, "html_link": updated.html_link}
         if updated.conference_link or updated.hangout_link:
             result["conference_link"] = updated.conference_link or updated.hangout_link
         return result
+
+    async def _delete_event(
+        self,
+        calendar_id: str,
+        event_id: str,
+        scope: str = "this",
+        send_updates: str = "",
+    ) -> Any:
+        scope = _normalize_scope_arg(scope)
+        send_updates = _normalize_send_updates_arg(send_updates)
+        event = await self._fetch(self._calendar.get_event, calendar_id, event_id)
+        preview = {
+            "Event": event.title or "(untitled)",
+            "Calendar": await self._calendar_name_for(calendar_id),
+            "Time": f"{event.start_time} – {event.end_time}",
+        }
+        if event.recurring_event_id or event.recurrence:
+            preview["Applies to"] = _SCOPE_LABELS[scope]
+        raw_data = {
+            "calendar_id": calendar_id, "event_id": event_id, "scope": scope,
+            "organizer_email": event.organizer_email,
+            "attendees": [a.email for a in (event.attendees or [])],
+        }
+        await gated_call(
+            connector=self.name,
+            tool="calendar_delete_event",
+            tool_name="Delete Calendar Event",
+            summary=f"Delete \"{event.title}\"",
+            sender=event.organizer_email or calendar_id,
+            raw_data=raw_data,
+            filtered_data=None,
+            gate="popup",
+            preview=preview,
+            details_text=f"{_SCOPE_LABELS[scope]} will be permanently deleted.",
+            my_email=self.my_email,
+            args={"calendar_id": calendar_id, "event_id": event_id, "scope": scope},
+        )
+        await self._fetch(self._calendar.delete_event, calendar_id, event_id, scope, send_updates)
+        return {"id": event_id, "deleted": True, "scope": scope}
 
     async def _create_out_of_office(
         self,

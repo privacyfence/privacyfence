@@ -74,6 +74,7 @@ from mcp.server.auth.provider import (
     AuthorizationCode,
     AuthorizationParams,
     AuthorizeError,
+    IdentityAssertionParams,
     RefreshToken,
     RegistrationError,
     TokenError,
@@ -498,6 +499,36 @@ class OrgOAuthProvider:
         return self._mint_tokens(
             client_id=client.client_id, scopes=scopes or refresh_token.scopes,
             resource=None, principal=principal, refresh_issued_at=refresh_token.issued_at,
+        )
+
+    async def exchange_identity_assertion(
+        self, client: OAuthClientInformationFull, params: IdentityAssertionParams,
+    ) -> OAuthToken:
+        """Refuses SEP-990 leg 2 (the RFC 7523 ``jwt-bearer`` grant), which
+        this authorization server deliberately does not implement.
+
+        Never reached in practice: ``routes_mcp.mount_org_oauth`` leaves
+        ``create_auth_routes``'s ``identity_assertion_enabled`` at its default
+        ``False``, so the SDK's own ``TokenHandler`` answers the grant with
+        exactly this error before any provider hook runs. Defined anyway
+        because mcp 2.x added the member to
+        ``OAuthAuthorizationServerProvider``, and this class satisfies that
+        protocol structurally: a silently missing member would make
+        "PrivacyFence does not accept an IdP-issued ID-JAG in place of its own
+        authorization-code dance" an accident of which methods happen to
+        exist rather than a decision.
+
+        That decision is deliberate. The grant's whole point is letting an
+        enterprise IdP mint an assertion a client trades for an access token
+        without the human ever seeing this server; PrivacyFence's org mode is
+        built the other way round (P7): the human authenticates *at* the IdP
+        through this server's own ``/authorize``, and the principal that
+        every downstream gate, audit entry and approval is scoped to comes
+        from that round trip -- see ``handle_idp_callback``.
+        """
+        raise TokenError(
+            error="unsupported_grant_type",
+            error_description="This authorization server does not accept identity assertions",
         )
 
     # ------------------------------------------------------------------ #

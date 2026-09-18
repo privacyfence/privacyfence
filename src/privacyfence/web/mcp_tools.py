@@ -40,7 +40,7 @@ from .session_auth import BOOTSTRAP_TTL_SECONDS
 # TECHNICAL_REFERENCE.md's "Why every tool is advertised as read-only",
 # referenced by §8.1 of the refactor plan).
 _UNIFORM_READ_ONLY_ANNOTATIONS = types.ToolAnnotations(
-    readOnlyHint=True, destructiveHint=False, idempotentHint=True,
+    read_only_hint=True, destructive_hint=False, idempotent_hint=True,
 )
 
 _JSON_SCHEMA_TYPE = {"int": "integer", "float": "number", "bool": "boolean"}
@@ -80,7 +80,7 @@ def to_mcp_tool(spec: ToolSpec) -> types.Tool:
     return types.Tool(
         name=spec.name,
         description=spec.description,
-        inputSchema=tool_input_schema(spec),
+        input_schema=tool_input_schema(spec),
         annotations=_UNIFORM_READ_ONLY_ANNOTATIONS,
     )
 
@@ -96,9 +96,9 @@ def to_call_tool_result(value: Any) -> types.CallToolResult:
     if isinstance(value, str):
         return types.CallToolResult(content=[types.TextContent(type="text", text=value)])
     text = json.dumps(value, default=str)
-    content = [types.TextContent(type="text", text=text)]
+    content: list[types.ContentBlock] = [types.TextContent(type="text", text=text)]
     if isinstance(value, dict):
-        return types.CallToolResult(content=content, structuredContent=value)
+        return types.CallToolResult(content=content, structured_content=value)
     return types.CallToolResult(content=content)
 
 
@@ -121,12 +121,12 @@ def sign_in_link_result(value: dict[str, str]) -> types.CallToolResult:
     minutes = BOOTSTRAP_TTL_SECONDS // 60
     text = f"[Sign in to PrivacyFence]({url}) — one-time link, expires in {minutes} minutes"
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text=text)], structuredContent=value,
+        content=[types.TextContent(type="text", text=text)], structured_content=value,
     )
 
 
 def error_result(message: str) -> types.CallToolResult:
-    return types.CallToolResult(content=[types.TextContent(type="text", text=message)], isError=True)
+    return types.CallToolResult(content=[types.TextContent(type="text", text=message)], is_error=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -154,7 +154,7 @@ CHECK_POLICY_TOOL = types.Tool(
         "before and during a scheduled/unattended Cowork run, to plan around steps that would "
         "otherwise need a human who isn't there."
     ),
-    inputSchema={
+    input_schema={
         "type": "object",
         "properties": {
             "connector": {"type": "string"},
@@ -164,7 +164,7 @@ CHECK_POLICY_TOOL = types.Tool(
         },
         "required": ["connector", "tool", "reason"],
     },
-    annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+    annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
 )
 
 LIST_RULES_TOOL = types.Tool(
@@ -182,8 +182,8 @@ LIST_RULES_TOOL = types.Tool(
         "same as every other gated/meta tool's reason param, since this discloses the full "
         "current rule set)."
     ),
-    inputSchema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
-    annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+    input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
+    annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
 )
 
 PROPOSE_RULE_CHANGE_TOOL = types.Tool(
@@ -214,7 +214,7 @@ PROPOSE_RULE_CHANGE_TOOL = types.Tool(
         "reason: one sentence on why you're proposing this change -- logged, self-reported, "
         "unverified, same as every other gated tool's reason param."
     ),
-    inputSchema={
+    input_schema={
         "type": "object",
         "properties": {
             "target": {"type": "string", "enum": ["rule", "grant"]},
@@ -233,7 +233,7 @@ PROPOSE_RULE_CHANGE_TOOL = types.Tool(
         },
         "required": ["target", "operation", "reason"],
     },
-    annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+    annotations=types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
 )
 
 BEGIN_UNATTENDED_SESSION_TOOL = types.Tool(
@@ -252,8 +252,8 @@ BEGIN_UNATTENDED_SESSION_TOOL = types.Tool(
         "unattended (e.g. the Routine/schedule that triggered it) -- logged in the audit "
         "entry for this session change, since no popup is shown for it to appear in."
     ),
-    inputSchema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
-    annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+    input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
+    annotations=types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
 )
 
 AWAIT_APPROVAL_TOOL = types.Tool(
@@ -286,7 +286,7 @@ AWAIT_APPROVAL_TOOL = types.Tool(
         "returns as soon as any status changes, or once timeout_seconds elapses, whichever comes "
         "first."
     ),
-    inputSchema={
+    input_schema={
         "type": "object",
         "properties": {
             "approval_ids": {"type": "array", "items": {"type": "string"}},
@@ -294,7 +294,7 @@ AWAIT_APPROVAL_TOOL = types.Tool(
         },
         "required": ["approval_ids"],
     },
-    annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+    annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
 )
 
 GET_SIGN_IN_LINK_TOOL = types.Tool(
@@ -319,7 +319,7 @@ GET_SIGN_IN_LINK_TOOL = types.Tool(
         "unverified, same as every other meta tool's reason param, since this hands out a "
         "working (if short-lived) credential for a human-facing surface."
     ),
-    inputSchema={
+    input_schema={
         "type": "object",
         "properties": {
             "page": {"type": "string", "enum": ["approvals", "settings", "connectors"], "default": "approvals"},
@@ -327,7 +327,7 @@ GET_SIGN_IN_LINK_TOOL = types.Tool(
         },
         "required": ["reason"],
     },
-    annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=False),
+    annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=False),
 )
 
 PRIVACYFENCE_STATUS_TOOL = types.Tool(
@@ -356,8 +356,8 @@ PRIVACYFENCE_STATUS_TOOL = types.Tool(
         "now -- logged, self-reported, unverified, same as every other meta tool's reason param, "
         "since this discloses which connectors are authenticated."
     ),
-    inputSchema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
-    annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
+    input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
+    annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
 )
 
 END_UNATTENDED_SESSION_TOOL = types.Tool(
@@ -370,8 +370,8 @@ END_UNATTENDED_SESSION_TOOL = types.Tool(
         "afterward for something interactive. reason: one sentence on why the unattended "
         "session is ending now -- logged the same way as privacyfence_begin_unattended_session's."
     ),
-    inputSchema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
-    annotations=types.ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True),
+    input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
+    annotations=types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
 )
 
 META_TOOLS: tuple[types.Tool, ...] = (

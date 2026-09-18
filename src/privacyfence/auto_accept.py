@@ -110,6 +110,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
     "calendar_get_event_details":     "calendar.read_event_details",
     "calendar_create_event":          "calendar.create_modify_event",
     "calendar_update_event":          "calendar.create_modify_event",
+    "calendar_delete_event":          "calendar.delete_event",
     "calendar_create_out_of_office":  "calendar.out_of_office",
     "calendar_set_working_location":  "calendar.working_location",
     "calendar_set_event_visibility":  "calendar.set_visibility",
@@ -231,6 +232,7 @@ TOOL_TO_GATE: dict[str, str] = {
     "calendar_get_event_details":      "review",
     "calendar_create_event":           "popup",
     "calendar_update_event":           "popup",
+    "calendar_delete_event":           "popup",
     "calendar_create_out_of_office":   "popup",
     "calendar_set_working_location":   "popup",
     "calendar_set_event_visibility":   "popup",
@@ -1318,6 +1320,9 @@ WRITE_RULE_SUGGESTIONS: dict[str, WriteRuleSuggestion] = {
         "personal_calendar", lambda ctx: [ctx.args["calendar_id"]] if ctx.args.get("calendar_id") else _NO_SUGGESTION
     ),
     "calendar.set_color": WriteRuleSuggestion(
+        "personal_calendar", lambda ctx: [ctx.args["calendar_id"]] if ctx.args.get("calendar_id") else _NO_SUGGESTION
+    ),
+    "calendar.delete_event": WriteRuleSuggestion(
         "personal_calendar", lambda ctx: [ctx.args["calendar_id"]] if ctx.args.get("calendar_id") else _NO_SUGGESTION
     ),
     # Drive/Sheets/Docs writes -- see _DRIVE_SANDBOX_WRITE_SUGGESTIONS above.
