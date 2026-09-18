@@ -17,7 +17,7 @@ import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import date as _date
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from google.auth.transport.requests import Request
@@ -35,6 +35,20 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 # Values the Calendar API accepts for Event.visibility. "confidential" is a
 # legacy synonym for "private" that the API still accepts on write.
 VALID_VISIBILITIES = {"default", "public", "private", "confidential"}
+
+# calendar_update_event/calendar_delete_event's edit-scope semantics for a
+# recurring event instance -- "this" acts on exactly the given event id
+# (the only behavior that existed before recurrence support, and still the
+# default), "all" redirects to the series' master event, "following"
+# splits the series in two at this instance (see
+# _truncate_recurrence_before/_continuing_recurrence below).
+VALID_EVENT_SCOPES = {"this", "following", "all"}
+
+# Calendar API's sendUpdates values for insert/update/delete -- who gets a
+# notification email about the change. "" (the default everywhere this is
+# accepted below) omits the argument entirely, leaving the Calendar API's
+# own default in effect rather than this client silently picking one.
+VALID_SEND_UPDATES = {"none", "all", "externalOnly"}
 
 # Calendar's fixed event color palette (Event.colorId, "1".."11"). The
 # Calendar API's own colors().get() endpoint returns each id's hex
@@ -130,6 +144,13 @@ class CalendarEvent:
     attachments: list[CalendarAttachment] = field(default_factory=list)
     visibility: str = "default"  # "default" | "public" | "private" | "confidential"
     color_id: str = ""  # "1".."11" (see EVENT_COLOR_NAMES), or "" for the calendar's default color
+    recurrence: list[str] = field(default_factory=list)  # raw RRULE/EXDATE/RDATE/EXRULE lines --
+        # only ever present on a series' own master event, empty otherwise (including on
+        # individual expanded instances, which carry recurring_event_id instead)
+    recurring_event_id: str = ""  # non-empty iff this is one expanded instance of a recurring
+        # series -- the id of that series' master event (a distinct id from this instance's own)
+    original_start_time: str = ""  # this instance's originally-scheduled start (ISO 8601 or
+        # date), before any per-instance reschedule -- only present on a recurring instance
 
     def short_summary(self) -> str:
         return f"{self.title} ({self.start_time})"
@@ -176,6 +197,86 @@ def _has_timezone(iso_str: str) -> bool:
         return datetime.fromisoformat(iso_str).tzinfo is not None
     except (ValueError, TypeError):
         return False
+
+
+# --------------------------------------------------------------------------- #
+# Recurring-series splitting (update_event/delete_event scope="following"):
+# Google Calendar's API has no single-call primitive for "this and following
+# events" -- the documented approach is to end the original series with an
+# UNTIL on its RRULE and, for an update, insert a new recurring event
+# starting at that instance with the remaining pattern. These helpers do the
+# RRULE string surgery that takes; see update_event's own docstring for the
+# full two-call sequence and its documented limitations.
+# --------------------------------------------------------------------------- #
+
+def _rrule_parts(line: str) -> tuple[str, list[str]]:
+    """Split one RRULE line ("RRULE:FREQ=WEEKLY;COUNT=10") into its
+    "RRULE" prefix and a list of "KEY=VALUE" parts, for editing individual
+    parts without disturbing the rest."""
+    prefix, _, body = line.partition(":")
+    return prefix, [p for p in body.split(";") if p]
+
+
+def _set_rrule_until(line: str, until_value: str) -> str:
+    """Replace (or add) an RRULE's UNTIL part with ``until_value``,
+    dropping any existing COUNT -- RRULE forbids specifying both. This is
+    the "old half" of a series split at some instance."""
+    prefix, parts = _rrule_parts(line)
+    kept = [p for p in parts if not p.startswith("UNTIL=") and not p.startswith("COUNT=")]
+    kept.append(f"UNTIL={until_value}")
+    return f"{prefix}:{';'.join(kept)}"
+
+
+def _strip_rrule_bounds(line: str) -> str:
+    """Drop UNTIL/COUNT from an RRULE, leaving it open-ended. This is the
+    "new half" of a series split at some instance: it continues the
+    original pattern indefinitely rather than trying to carry over an
+    exact remaining occurrence count, which isn't recoverable from the
+    original RRULE alone -- a documented simplification, not an oversight."""
+    prefix, parts = _rrule_parts(line)
+    kept = [p for p in parts if not p.startswith("UNTIL=") and not p.startswith("COUNT=")]
+    return f"{prefix}:{';'.join(kept)}"
+
+
+def _until_before(start: dict[str, str]) -> str:
+    """The RRULE UNTIL value that excludes the instance whose Calendar API
+    ``start`` dict (or ``originalStartTime``) is given -- one second before
+    a timed start, one day before an all-day start. UNTIL is *inclusive*,
+    so landing exactly on the instance's own start would still recur it.
+    Per RFC 5545, UNTIL must be a bare date for an all-day DTSTART, and a
+    UTC date-time (trailing "Z") otherwise."""
+    if "date" in start and "dateTime" not in start:
+        cutoff_date = _date.fromisoformat(start["date"]) - timedelta(days=1)
+        return cutoff_date.strftime("%Y%m%d")
+    dt = datetime.fromisoformat(start.get("dateTime", ""))
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    cutoff_dt = dt - timedelta(seconds=1)
+    return cutoff_dt.strftime("%Y%m%dT%H%M%SZ")
+
+
+def _truncate_recurrence_before(recurrence: list[str], start: dict[str, str]) -> list[str]:
+    """The master series' own ``recurrence`` list, truncated so it ends
+    just before ``start`` -- the "old half" of a series split at some
+    instance. Non-RRULE lines (EXDATE/RDATE/EXRULE) pass through
+    unchanged; any landing on or after the split point become inert once
+    past the new UNTIL, so leaving them in is harmless for this half."""
+    until_value = _until_before(start)
+    return [
+        _set_rrule_until(line, until_value) if line.startswith("RRULE:") else line
+        for line in recurrence
+    ]
+
+
+def _continuing_recurrence(recurrence: list[str]) -> list[str]:
+    """The recurrence list for the "new half" of a series split at some
+    instance -- same RRULE pattern(s), no end bound. EXDATE/RDATE/EXRULE
+    lines are dropped rather than carried over: they named specific dates
+    in the old series, and reapplying them verbatim to a newly-inserted
+    event risks either the Calendar API rejecting an EXDATE that no longer
+    matches an occurrence, or silently resurrecting one the old series had
+    cancelled. Documented limitation, not a crash risk either way."""
+    return [_strip_rrule_bounds(line) for line in recurrence if line.startswith("RRULE:")]
 
 
 class CalendarClient:
@@ -478,8 +579,16 @@ class CalendarClient:
         add_google_meet: bool = False,
         room_emails: list[str] | None = None,
         color: str = "",
+        recurrence: str = "",
     ) -> CalendarEvent:
-        """Create a new event and return the created CalendarEvent."""
+        """Create a new event and return the created CalendarEvent.
+
+        ``recurrence`` is one or more RRULE/EXDATE/RDATE/EXRULE lines
+        (e.g. ``"RRULE:FREQ=WEEKLY;COUNT=10"``), one per line -- passed
+        straight through to the Calendar API's own ``recurrence`` field.
+        Empty (the default) creates a non-recurring event, unchanged from
+        this method's behavior before recurrence support existed.
+        """
         start_entry: dict[str, str] = {"dateTime": start_time}
         end_entry: dict[str, str] = {"dateTime": end_time}
         # Only inject a UTC fallback when the ISO string has no embedded offset.
@@ -499,6 +608,9 @@ class CalendarClient:
             body["location"] = location
         if color:
             body["colorId"] = normalize_event_color(color)
+        recurrence_lines = [line.strip() for line in recurrence.splitlines() if line.strip()]
+        if recurrence_lines:
+            body["recurrence"] = recurrence_lines
         all_attendees = list(attendees or [])
         if room_emails:
             body["attendees"] = (
@@ -536,12 +648,47 @@ class CalendarClient:
         add_google_meet: bool = False,
         room_emails: list[str] | None = None,
         color: str | None = None,
+        scope: str = "this",
+        send_updates: str = "",
     ) -> CalendarEvent:
-        """Update fields on an existing event and return the updated CalendarEvent."""
+        """Update fields on an existing event and return the updated CalendarEvent.
+
+        ``scope`` controls which occurrences of a recurring event this
+        touches, matching Google Calendar's own "This event" / "This and
+        following events" / "All events" edit picker (VALID_EVENT_SCOPES):
+
+        - ``"this"`` (default, and the only meaning for a non-recurring
+          event): acts on exactly ``event_id`` as given -- unchanged from
+          this method's behavior before recurrence support existed.
+        - ``"all"``: redirects to the series' master event
+          (``recurringEventId``) when ``event_id`` names one instance, so
+          the whole series updates in one call.
+        - ``"following"``: splits the series at this instance -- the
+          master's own ``recurrence`` gets an UNTIL ending the old series
+          just before this instance, and a new event is inserted starting
+          here, carrying this call's changes and the original recurrence
+          pattern continued open-ended. There is no single Calendar API
+          call for this; see _update_event_following for the two-call
+          sequence and its documented limitations.
+
+        ``send_updates`` is Calendar's own ``sendUpdates`` -- "none",
+        "all", or "externalOnly" -- controlling who gets a notification
+        email about the change. "" (default) omits the argument, leaving
+        the Calendar API's own default in effect.
+        """
+        if scope not in VALID_EVENT_SCOPES:
+            raise CalendarClientError(
+                f"update_event: scope must be one of {sorted(VALID_EVENT_SCOPES)}, got {scope!r}"
+            )
+        if send_updates and send_updates not in VALID_SEND_UPDATES:
+            raise CalendarClientError(
+                f"update_event: send_updates must be one of {sorted(VALID_SEND_UPDATES)}, got {send_updates!r}"
+            )
         # Validate before the fetch, not after -- a doomed call shouldn't
         # cost a wasted events().get() round trip, same reasoning as
         # set_event_visibility/set_event_color's own early validation.
         color_id = normalize_event_color(color) if color is not None else None
+
         try:
             raw = (
                 self._get_service()
@@ -552,6 +699,69 @@ class CalendarClient:
         except HttpError as exc:
             raise CalendarClientError(f"update_event get({event_id}) failed: {exc}") from exc
 
+        if scope == "following":
+            return self._update_event_following(
+                calendar_id, event_id, raw, title=title, start_time=start_time, end_time=end_time,
+                description=description, location=location, add_google_meet=add_google_meet,
+                room_emails=room_emails, color_id=color_id, send_updates=send_updates,
+            )
+
+        target_id = event_id
+        if scope == "all" and raw.get("recurringEventId"):
+            target_id = raw["recurringEventId"]
+            try:
+                raw = (
+                    self._get_service()
+                    .events()
+                    .get(calendarId=calendar_id, eventId=target_id)
+                    .execute()
+                )
+            except HttpError as exc:
+                raise CalendarClientError(f"update_event get master({target_id}) failed: {exc}") from exc
+
+        self._apply_event_field_changes(
+            raw, title=title, description=description, location=location, color_id=color_id,
+            start_time=start_time, end_time=end_time, room_emails=room_emails,
+        )
+
+        kwargs: dict[str, Any] = {"calendarId": calendar_id, "eventId": target_id, "body": raw}
+        if add_google_meet and not raw.get("conferenceData"):
+            raw["conferenceData"] = {
+                "createRequest": {
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                    "requestId": str(uuid.uuid4()),
+                }
+            }
+            kwargs["conferenceDataVersion"] = 1
+        elif raw.get("conferenceData"):
+            kwargs["conferenceDataVersion"] = 1
+        if send_updates:
+            kwargs["sendUpdates"] = send_updates
+
+        try:
+            updated = self._get_service().events().update(**kwargs).execute()
+        except HttpError as exc:
+            raise CalendarClientError(f"update_event({target_id}) failed: {exc}") from exc
+        event = self._parse_event(updated, calendar_id)
+        logger.info("update_event: %s", event.short_summary())
+        return event
+
+    def _apply_event_field_changes(
+        self,
+        raw: dict[str, Any],
+        *,
+        title: str | None,
+        description: str | None,
+        location: str | None,
+        color_id: str | None,
+        start_time: str | None,
+        end_time: str | None,
+        room_emails: list[str] | None,
+    ) -> None:
+        """Mutate ``raw`` in place with only the fields actually given --
+        the same fetch-modify-update field application update_event has
+        always done, factored out so every scope branch (this/all/
+        following) applies changes identically."""
         if title is not None:
             raw["summary"] = title
         if description is not None:
@@ -570,25 +780,200 @@ class CalendarClient:
             existing = [a for a in raw.get("attendees", []) if not a.get("resource")]
             raw["attendees"] = existing + [{"email": r, "resource": True} for r in room_emails]
 
-        kwargs: dict[str, Any] = {"calendarId": calendar_id, "eventId": event_id, "body": raw}
-        if add_google_meet and not raw.get("conferenceData"):
-            raw["conferenceData"] = {
+    def _update_event_following(
+        self,
+        calendar_id: str,
+        event_id: str,
+        instance_raw: dict[str, Any],
+        *,
+        title: str | None,
+        start_time: str | None,
+        end_time: str | None,
+        description: str | None,
+        location: str | None,
+        add_google_meet: bool,
+        room_emails: list[str] | None,
+        color_id: str | None,
+        send_updates: str,
+    ) -> CalendarEvent:
+        """scope="following": split the series at ``event_id`` (already
+        fetched as ``instance_raw``) -- truncate the master's recurrence
+        with an UNTIL just before this instance, then insert a new event
+        here carrying this call's changes and the original recurrence
+        pattern continued open-ended (see _continuing_recurrence).
+
+        Known limitations, documented rather than silently wrong: the new
+        half's recurrence drops any EXDATE/RDATE/EXRULE the old series had
+        (see _continuing_recurrence), and conferencing (a Meet link tied
+        to the old event id) isn't carried over -- pass ``add_google_meet``
+        again on this call for the new half to get its own.
+        """
+        recurring_event_id = instance_raw.get("recurringEventId", "")
+        if recurring_event_id:
+            split_point = instance_raw.get("originalStartTime") or instance_raw.get("start") or {}
+            try:
+                master_raw = (
+                    self._get_service()
+                    .events()
+                    .get(calendarId=calendar_id, eventId=recurring_event_id)
+                    .execute()
+                )
+            except HttpError as exc:
+                raise CalendarClientError(
+                    f"update_event get master({recurring_event_id}) failed: {exc}"
+                ) from exc
+        elif instance_raw.get("recurrence"):
+            # event_id already names the series' own master -- "following"
+            # from the master's own first instance is the whole series.
+            recurring_event_id = event_id
+            master_raw = instance_raw
+            split_point = instance_raw.get("start") or {}
+        else:
+            raise CalendarClientError(
+                f"update_event: event {event_id!r} is not part of a recurring series; "
+                "scope='following' requires a recurring event"
+            )
+
+        master_recurrence = master_raw.get("recurrence") or []
+        truncate_kwargs: dict[str, Any] = {
+            "calendarId": calendar_id,
+            "eventId": recurring_event_id,
+            "body": {**master_raw, "recurrence": _truncate_recurrence_before(master_recurrence, split_point)},
+        }
+        if send_updates:
+            truncate_kwargs["sendUpdates"] = send_updates
+        try:
+            self._get_service().events().update(**truncate_kwargs).execute()
+        except HttpError as exc:
+            raise CalendarClientError(
+                f"update_event truncate master({recurring_event_id}) failed: {exc}"
+            ) from exc
+
+        new_body = dict(instance_raw)
+        for key in (
+            "id", "recurringEventId", "originalStartTime", "etag", "iCalUID",
+            "htmlLink", "hangoutLink", "conferenceData", "created", "updated", "sequence", "status",
+        ):
+            new_body.pop(key, None)
+        new_body["recurrence"] = _continuing_recurrence(master_recurrence)
+        self._apply_event_field_changes(
+            new_body, title=title, description=description, location=location, color_id=color_id,
+            start_time=start_time, end_time=end_time, room_emails=room_emails,
+        )
+
+        insert_kwargs: dict[str, Any] = {"calendarId": calendar_id, "body": new_body}
+        if add_google_meet:
+            new_body["conferenceData"] = {
                 "createRequest": {
                     "conferenceSolutionKey": {"type": "hangoutsMeet"},
                     "requestId": str(uuid.uuid4()),
                 }
             }
-            kwargs["conferenceDataVersion"] = 1
-        elif raw.get("conferenceData"):
-            kwargs["conferenceDataVersion"] = 1
+            insert_kwargs["conferenceDataVersion"] = 1
+        if send_updates:
+            insert_kwargs["sendUpdates"] = send_updates
 
         try:
-            updated = self._get_service().events().update(**kwargs).execute()
+            created = self._get_service().events().insert(**insert_kwargs).execute()
         except HttpError as exc:
-            raise CalendarClientError(f"update_event({event_id}) failed: {exc}") from exc
-        event = self._parse_event(updated, calendar_id)
-        logger.info("update_event: %s", event.short_summary())
+            raise CalendarClientError(f"update_event insert new series({event_id}) failed: {exc}") from exc
+        event = self._parse_event(created, calendar_id)
+        logger.info("update_event: split series at %s -> new head %s", event_id, event.id)
         return event
+
+    def delete_event(self, calendar_id: str, event_id: str, scope: str = "this", send_updates: str = "") -> None:
+        """Delete an event. ``scope`` mirrors update_event's own "this"/
+        "following"/"all" semantics (see its docstring):
+
+        - ``"this"``: deletes exactly ``event_id``.
+        - ``"all"``: deletes the whole series via its master id.
+        - ``"following"``: truncates the series' recurrence so it ends
+          just before this instance, rather than deleting anything
+          outright -- the instances after the cutoff simply stop being
+          generated. There is nothing to insert here, unlike
+          update_event's own "following": deleting the remainder needs no
+          replacement series.
+        """
+        if scope not in VALID_EVENT_SCOPES:
+            raise CalendarClientError(
+                f"delete_event: scope must be one of {sorted(VALID_EVENT_SCOPES)}, got {scope!r}"
+            )
+        if send_updates and send_updates not in VALID_SEND_UPDATES:
+            raise CalendarClientError(
+                f"delete_event: send_updates must be one of {sorted(VALID_SEND_UPDATES)}, got {send_updates!r}"
+            )
+
+        if scope == "this":
+            self._delete_event_id(calendar_id, event_id, send_updates)
+            logger.info("delete_event: %s (this instance)", event_id)
+            return
+
+        try:
+            raw = (
+                self._get_service()
+                .events()
+                .get(calendarId=calendar_id, eventId=event_id)
+                .execute()
+            )
+        except HttpError as exc:
+            raise CalendarClientError(f"delete_event get({event_id}) failed: {exc}") from exc
+        recurring_event_id = raw.get("recurringEventId", "")
+
+        if scope == "all":
+            target_id = recurring_event_id or event_id
+            self._delete_event_id(calendar_id, target_id, send_updates)
+            logger.info("delete_event: %s (entire series)", target_id)
+            return
+
+        # scope == "following"
+        if recurring_event_id:
+            split_point = raw.get("originalStartTime") or raw.get("start") or {}
+        elif raw.get("recurrence"):
+            # event_id already names the master -- "following" from its
+            # own first instance deletes the whole series.
+            self._delete_event_id(calendar_id, event_id, send_updates)
+            logger.info("delete_event: %s (entire series)", event_id)
+            return
+        else:
+            raise CalendarClientError(
+                f"delete_event: event {event_id!r} is not part of a recurring series; "
+                "scope='following' requires a recurring event"
+            )
+
+        try:
+            master_raw = (
+                self._get_service()
+                .events()
+                .get(calendarId=calendar_id, eventId=recurring_event_id)
+                .execute()
+            )
+        except HttpError as exc:
+            raise CalendarClientError(f"delete_event get master({recurring_event_id}) failed: {exc}") from exc
+        truncated = _truncate_recurrence_before(master_raw.get("recurrence") or [], split_point)
+        kwargs: dict[str, Any] = {
+            "calendarId": calendar_id,
+            "eventId": recurring_event_id,
+            "body": {**master_raw, "recurrence": truncated},
+        }
+        if send_updates:
+            kwargs["sendUpdates"] = send_updates
+        try:
+            self._get_service().events().update(**kwargs).execute()
+        except HttpError as exc:
+            raise CalendarClientError(f"delete_event truncate master({recurring_event_id}) failed: {exc}") from exc
+        logger.info(
+            "delete_event: truncated series %s before %s (this and following)",
+            recurring_event_id, event_id,
+        )
+
+    def _delete_event_id(self, calendar_id: str, event_id: str, send_updates: str) -> None:
+        kwargs: dict[str, Any] = {"calendarId": calendar_id, "eventId": event_id}
+        if send_updates:
+            kwargs["sendUpdates"] = send_updates
+        try:
+            self._get_service().events().delete(**kwargs).execute()
+        except HttpError as exc:
+            raise CalendarClientError(f"delete_event({event_id}) failed: {exc}") from exc
 
     def set_event_visibility(self, calendar_id: str, event_id: str, visibility: str) -> CalendarEvent:
         """Set an event's visibility, leaving every other field untouched.
@@ -838,6 +1223,9 @@ class CalendarClient:
             for a in raw.get("attachments", []) or []
         ]
 
+        original_start = raw.get("originalStartTime") or {}
+        original_start_time = original_start.get("dateTime") or original_start.get("date", "")
+
         return CalendarEvent(
             id=raw.get("id", ""),
             calendar_id=calendar_id,
@@ -856,4 +1244,7 @@ class CalendarClient:
             attachments=attachments,
             visibility=raw.get("visibility", "default"),
             color_id=raw.get("colorId", ""),
+            recurrence=list(raw.get("recurrence") or []),
+            recurring_event_id=raw.get("recurringEventId", ""),
+            original_start_time=original_start_time,
         )

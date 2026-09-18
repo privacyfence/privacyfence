@@ -30,6 +30,8 @@ import pytest
 from privacyfence.calendar_client import (
     EVENT_COLOR_NAMES,
     SCOPES,
+    VALID_EVENT_SCOPES,
+    VALID_SEND_UPDATES,
     CalendarAttachment,
     CalendarAttendee,
     CalendarClient,
@@ -38,7 +40,13 @@ from privacyfence.calendar_client import (
     EventColor,
     FreeBusyResult,
     FreeBusySlot,
+    _continuing_recurrence,
     _has_timezone,
+    _rrule_parts,
+    _set_rrule_until,
+    _strip_rrule_bounds,
+    _truncate_recurrence_before,
+    _until_before,
     normalize_event_color,
 )
 from googleapiclient.errors import HttpError
@@ -307,6 +315,78 @@ class TestHasTimezone:
 
 
 # ---------------------------------------------------------------------------- #
+# RRULE splitting helpers (update_event/delete_event scope="following")
+# ---------------------------------------------------------------------------- #
+
+class TestRruleParts:
+    def test_splits_prefix_and_parts(self):
+        assert _rrule_parts("RRULE:FREQ=WEEKLY;COUNT=10") == ("RRULE", ["FREQ=WEEKLY", "COUNT=10"])
+
+    def test_no_body_yields_empty_parts(self):
+        assert _rrule_parts("RRULE:") == ("RRULE", [])
+
+
+class TestSetRruleUntil:
+    def test_adds_until_when_absent(self):
+        assert _set_rrule_until("RRULE:FREQ=WEEKLY", "20260901T000000Z") == \
+            "RRULE:FREQ=WEEKLY;UNTIL=20260901T000000Z"
+
+    def test_replaces_existing_until(self):
+        assert _set_rrule_until("RRULE:FREQ=WEEKLY;UNTIL=20260101T000000Z", "20260901T000000Z") == \
+            "RRULE:FREQ=WEEKLY;UNTIL=20260901T000000Z"
+
+    def test_drops_count_since_until_and_count_are_mutually_exclusive(self):
+        assert _set_rrule_until("RRULE:FREQ=WEEKLY;COUNT=10", "20260901T000000Z") == \
+            "RRULE:FREQ=WEEKLY;UNTIL=20260901T000000Z"
+
+    def test_preserves_other_parts(self):
+        assert _set_rrule_until("RRULE:FREQ=WEEKLY;BYDAY=MO,WE;COUNT=10", "20260901") == \
+            "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;UNTIL=20260901"
+
+
+class TestStripRruleBounds:
+    def test_drops_until(self):
+        assert _strip_rrule_bounds("RRULE:FREQ=WEEKLY;UNTIL=20260901T000000Z") == "RRULE:FREQ=WEEKLY"
+
+    def test_drops_count(self):
+        assert _strip_rrule_bounds("RRULE:FREQ=WEEKLY;COUNT=10") == "RRULE:FREQ=WEEKLY"
+
+    def test_no_bound_present_is_a_no_op(self):
+        assert _strip_rrule_bounds("RRULE:FREQ=WEEKLY;BYDAY=MO") == "RRULE:FREQ=WEEKLY;BYDAY=MO"
+
+
+class TestUntilBefore:
+    def test_all_day_start_returns_prior_day(self):
+        assert _until_before({"date": "2026-08-10"}) == "20260809"
+
+    def test_all_day_start_rolls_back_over_month_boundary(self):
+        assert _until_before({"date": "2026-09-01"}) == "20260831"
+
+    def test_timed_utc_start_returns_one_second_before(self):
+        assert _until_before({"dateTime": "2026-08-10T10:00:00Z"}) == "20260810T095959Z"
+
+    def test_timed_offset_start_converted_to_utc(self):
+        # 10:00 at +02:00 is 08:00 UTC -- one second before is 07:59:59.
+        assert _until_before({"dateTime": "2026-08-10T10:00:00+02:00"}) == "20260810T075959Z"
+
+
+class TestTruncateRecurrenceBefore:
+    def test_rrule_lines_get_until_other_lines_pass_through(self):
+        recurrence = ["RRULE:FREQ=WEEKLY;COUNT=10", "EXDATE:20260817T100000Z"]
+        result = _truncate_recurrence_before(recurrence, {"dateTime": "2026-08-24T10:00:00Z"})
+        assert result == ["RRULE:FREQ=WEEKLY;UNTIL=20260824T095959Z", "EXDATE:20260817T100000Z"]
+
+
+class TestContinuingRecurrence:
+    def test_strips_bounds_and_drops_non_rrule_lines(self):
+        recurrence = ["RRULE:FREQ=WEEKLY;COUNT=10", "EXDATE:20260817T100000Z"]
+        assert _continuing_recurrence(recurrence) == ["RRULE:FREQ=WEEKLY"]
+
+    def test_empty_recurrence_yields_empty(self):
+        assert _continuing_recurrence([]) == []
+
+
+# ---------------------------------------------------------------------------- #
 # _parse_event
 # ---------------------------------------------------------------------------- #
 
@@ -395,6 +475,45 @@ class TestParseEvent:
         client = make_client(MagicMock())
         event = client._parse_event({"id": "e1"}, "someone@x.com")
         assert event.calendar_id == "someone@x.com"
+
+    def test_no_recurrence_yields_empty_list(self):
+        client = make_client(MagicMock())
+        event = client._parse_event({"id": "e1"}, "primary")
+        assert event.recurrence == []
+
+    def test_recurrence_parsed_from_master_event(self):
+        client = make_client(MagicMock())
+        raw = {"id": "e1", "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=10"]}
+        event = client._parse_event(raw, "primary")
+        assert event.recurrence == ["RRULE:FREQ=WEEKLY;COUNT=10"]
+
+    def test_no_recurring_event_id_defaults_to_empty_string(self):
+        client = make_client(MagicMock())
+        event = client._parse_event({"id": "e1"}, "primary")
+        assert event.recurring_event_id == ""
+
+    def test_recurring_event_id_parsed_from_instance(self):
+        client = make_client(MagicMock())
+        raw = {"id": "e1_20260810T100000Z", "recurringEventId": "e1"}
+        event = client._parse_event(raw, "primary")
+        assert event.recurring_event_id == "e1"
+
+    def test_no_original_start_time_defaults_to_empty_string(self):
+        client = make_client(MagicMock())
+        event = client._parse_event({"id": "e1"}, "primary")
+        assert event.original_start_time == ""
+
+    def test_original_start_time_parsed_for_timed_instance(self):
+        client = make_client(MagicMock())
+        raw = {"id": "e1", "originalStartTime": {"dateTime": "2026-08-10T10:00:00Z"}}
+        event = client._parse_event(raw, "primary")
+        assert event.original_start_time == "2026-08-10T10:00:00Z"
+
+    def test_original_start_time_parsed_for_all_day_instance(self):
+        client = make_client(MagicMock())
+        raw = {"id": "e1", "originalStartTime": {"date": "2026-08-10"}}
+        event = client._parse_event(raw, "primary")
+        assert event.original_start_time == "2026-08-10"
 
     def test_no_attachments_yields_empty_list(self):
         client = make_client(MagicMock())
@@ -786,6 +905,41 @@ class TestCreateEvent:
             client.create_event("primary", "M", "t1", "t2", color="Chartreuse")
         service.events.return_value.insert.assert_not_called()
 
+    def test_recurrence_line_included_in_body(self):
+        service = MagicMock()
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.create_event("primary", "M", "t1", "t2", recurrence="RRULE:FREQ=WEEKLY;COUNT=10")
+        body = service.events.return_value.insert.call_args.kwargs["body"]
+        assert body["recurrence"] == ["RRULE:FREQ=WEEKLY;COUNT=10"]
+
+    def test_multiple_recurrence_lines_split_on_newline(self):
+        service = MagicMock()
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.create_event(
+            "primary", "M", "t1", "t2",
+            recurrence="RRULE:FREQ=WEEKLY;COUNT=10\nEXDATE:20260817T100000Z",
+        )
+        body = service.events.return_value.insert.call_args.kwargs["body"]
+        assert body["recurrence"] == ["RRULE:FREQ=WEEKLY;COUNT=10", "EXDATE:20260817T100000Z"]
+
+    def test_no_recurrence_omits_the_field(self):
+        service = MagicMock()
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.create_event("primary", "M", "t1", "t2")
+        body = service.events.return_value.insert.call_args.kwargs["body"]
+        assert "recurrence" not in body
+
+    def test_blank_lines_in_recurrence_are_ignored(self):
+        service = MagicMock()
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.create_event("primary", "M", "t1", "t2", recurrence="\nRRULE:FREQ=DAILY\n\n")
+        body = service.events.return_value.insert.call_args.kwargs["body"]
+        assert body["recurrence"] == ["RRULE:FREQ=DAILY"]
+
 
 # ---------------------------------------------------------------------------- #
 # update_event: partial field updates + room replacement + conferencing
@@ -824,6 +978,39 @@ class TestUpdateEvent:
 
         body = service.events.return_value.update.call_args.kwargs["body"]
         assert body["start"] == {"dateTime": "2024-01-01T10:00:00", "timeZone": "UTC"}
+
+    def test_end_time_update_defaults_timezone_to_utc(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1"}
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+
+        client.update_event("primary", "e1", end_time="2024-01-01T11:00:00")
+
+        body = service.events.return_value.update.call_args.kwargs["body"]
+        assert body["end"] == {"dateTime": "2024-01-01T11:00:00", "timeZone": "UTC"}
+
+    def test_description_field_is_updated_when_given(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1", "description": "Old"}
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+
+        client.update_event("primary", "e1", description="New")
+
+        body = service.events.return_value.update.call_args.kwargs["body"]
+        assert body["description"] == "New"
+
+    def test_location_field_is_updated_when_given(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1", "location": "Old"}
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+
+        client.update_event("primary", "e1", location="New")
+
+        body = service.events.return_value.update.call_args.kwargs["body"]
+        assert body["location"] == "New"
 
     def test_room_emails_replace_existing_room_attendees_only(self):
         service = MagicMock()
@@ -900,6 +1087,416 @@ class TestUpdateEvent:
         with pytest.raises(CalendarClientError, match="color must be an event color id"):
             client.update_event("primary", "e1", color="Chartreuse")
         service.events.return_value.get.assert_not_called()
+
+
+# ---------------------------------------------------------------------------- #
+# update_event: scope ("this" / "all" / "following") and send_updates
+# ---------------------------------------------------------------------------- #
+
+class TestEventScopeAndSendUpdatesConstants:
+    def test_valid_event_scopes(self):
+        assert VALID_EVENT_SCOPES == {"this", "following", "all"}
+
+    def test_valid_send_updates(self):
+        assert VALID_SEND_UPDATES == {"none", "all", "externalOnly"}
+
+
+class TestUpdateEventScope:
+    def test_default_scope_is_this_unchanged_behavior(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {
+            "id": "e1_instance", "recurringEventId": "master1",
+        }
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1_instance"}
+        client = make_client(service)
+
+        client.update_event("primary", "e1_instance", title="New")
+
+        # scope="this" never looks up the master -- exactly one get() call.
+        assert service.events.return_value.get.call_count == 1
+        assert service.events.return_value.update.call_args.kwargs["eventId"] == "e1_instance"
+
+    def test_scope_all_redirects_to_master_event(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {"id": "e1_instance", "recurringEventId": "master1"},
+            {"id": "master1", "summary": "Old", "recurrence": ["RRULE:FREQ=WEEKLY"]},
+        ]
+        service.events.return_value.update.return_value.execute.return_value = {"id": "master1"}
+        client = make_client(service)
+
+        client.update_event("primary", "e1_instance", title="New", scope="all")
+
+        assert service.events.return_value.get.call_count == 2
+        update_kwargs = service.events.return_value.update.call_args.kwargs
+        assert update_kwargs["eventId"] == "master1"
+        assert update_kwargs["body"]["summary"] == "New"
+        assert update_kwargs["body"]["recurrence"] == ["RRULE:FREQ=WEEKLY"]
+
+    def test_scope_all_on_a_non_recurring_event_updates_it_directly(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1"}
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+
+        client.update_event("primary", "e1", title="New", scope="all")
+
+        assert service.events.return_value.get.call_count == 1
+        assert service.events.return_value.update.call_args.kwargs["eventId"] == "e1"
+
+    def test_scope_all_on_the_master_itself_updates_it_directly(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {
+            "id": "master1", "recurrence": ["RRULE:FREQ=WEEKLY"],
+        }
+        service.events.return_value.update.return_value.execute.return_value = {"id": "master1"}
+        client = make_client(service)
+
+        client.update_event("primary", "master1", title="New", scope="all")
+
+        assert service.events.return_value.get.call_count == 1
+        assert service.events.return_value.update.call_args.kwargs["eventId"] == "master1"
+
+    def test_scope_all_get_master_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {"id": "e1_instance", "recurringEventId": "master1"},
+            http_error(404),
+        ]
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="update_event get master"):
+            client.update_event("primary", "e1_instance", title="New", scope="all")
+
+    def test_invalid_scope_raises_before_any_api_call(self):
+        service = MagicMock()
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="scope must be one of"):
+            client.update_event("primary", "e1", title="New", scope="bogus")
+        service.events.return_value.get.assert_not_called()
+
+    def test_invalid_send_updates_raises_before_any_api_call(self):
+        service = MagicMock()
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="send_updates must be one of"):
+            client.update_event("primary", "e1", title="New", send_updates="everyone")
+        service.events.return_value.get.assert_not_called()
+
+    def test_send_updates_passed_through_to_the_update_call(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1"}
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+
+        client.update_event("primary", "e1", title="New", send_updates="all")
+
+        assert service.events.return_value.update.call_args.kwargs["sendUpdates"] == "all"
+
+    def test_send_updates_omitted_when_not_given(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1"}
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+
+        client.update_event("primary", "e1", title="New")
+
+        assert "sendUpdates" not in service.events.return_value.update.call_args.kwargs
+
+
+# ---------------------------------------------------------------------------- #
+# update_event scope="following": series-splitting -- truncate the master
+# with an UNTIL, insert a new series starting at the split instance.
+# ---------------------------------------------------------------------------- #
+
+class TestUpdateEventScopeFollowing:
+    def test_splits_series_truncating_master_and_inserting_new_series(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {  # the instance
+                "id": "master1_20260824T100000Z", "recurringEventId": "master1",
+                "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"},
+                "summary": "Old Title", "start": {"dateTime": "2026-08-24T10:00:00Z"},
+                "end": {"dateTime": "2026-08-24T11:00:00Z"},
+            },
+            {  # the master
+                "id": "master1", "summary": "Old Title",
+                "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=10"],
+                "start": {"dateTime": "2026-08-03T10:00:00Z"},
+                "end": {"dateTime": "2026-08-03T11:00:00Z"},
+            },
+        ]
+        service.events.return_value.update.return_value.execute.return_value = {"id": "master1"}
+        service.events.return_value.insert.return_value.execute.return_value = {
+            "id": "new-series-head", "summary": "New Title",
+        }
+        client = make_client(service)
+
+        event = client.update_event(
+            "primary", "master1_20260824T100000Z", title="New Title", scope="following",
+        )
+
+        # 1: truncate the master's recurrence with an UNTIL just before the split instance.
+        truncate_kwargs = service.events.return_value.update.call_args.kwargs
+        assert truncate_kwargs["eventId"] == "master1"
+        assert truncate_kwargs["body"]["recurrence"] == ["RRULE:FREQ=WEEKLY;UNTIL=20260824T095959Z"]
+
+        # 2: insert a new series starting at the split instance, open-ended.
+        insert_kwargs = service.events.return_value.insert.call_args.kwargs
+        assert insert_kwargs["body"]["summary"] == "New Title"
+        assert insert_kwargs["body"]["recurrence"] == ["RRULE:FREQ=WEEKLY"]
+        assert "id" not in insert_kwargs["body"]
+        assert "recurringEventId" not in insert_kwargs["body"]
+        assert "originalStartTime" not in insert_kwargs["body"]
+
+        assert event.id == "new-series-head"
+
+    def test_not_a_recurring_event_raises(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1", "summary": "Solo"}
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="is not part of a recurring series"):
+            client.update_event("primary", "e1", title="New", scope="following")
+
+    def test_following_on_the_master_itself_is_the_whole_series(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {
+            "id": "master1", "summary": "Old", "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=10"],
+            "start": {"dateTime": "2026-08-03T10:00:00Z"},
+        }
+        service.events.return_value.update.return_value.execute.return_value = {"id": "master1"}
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "new-head"}
+        client = make_client(service)
+
+        client.update_event("primary", "master1", title="New", scope="following")
+
+        # only one get() -- the master doubles as its own "master lookup".
+        assert service.events.return_value.get.call_count == 1
+
+    def test_conferencing_not_carried_over_unless_requested_again(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {
+                "id": "master1_20260824T100000Z", "recurringEventId": "master1",
+                "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"},
+                "conferenceData": {"entryPoints": [{"entryPointType": "video", "uri": "https://old"}]},
+            },
+            {"id": "master1", "recurrence": ["RRULE:FREQ=WEEKLY"]},
+        ]
+        service.events.return_value.update.return_value.execute.return_value = {"id": "master1"}
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "new-head"}
+        client = make_client(service)
+
+        client.update_event("primary", "master1_20260824T100000Z", scope="following")
+
+        insert_kwargs = service.events.return_value.insert.call_args.kwargs
+        assert "conferenceData" not in insert_kwargs["body"]
+        assert "conferenceDataVersion" not in insert_kwargs
+
+    def test_add_google_meet_on_following_creates_conferencing_on_new_half(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {"id": "master1_20260824T100000Z", "recurringEventId": "master1",
+             "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"}},
+            {"id": "master1", "recurrence": ["RRULE:FREQ=WEEKLY"]},
+        ]
+        service.events.return_value.update.return_value.execute.return_value = {"id": "master1"}
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "new-head"}
+        client = make_client(service)
+
+        client.update_event("primary", "master1_20260824T100000Z", scope="following", add_google_meet=True)
+
+        insert_kwargs = service.events.return_value.insert.call_args.kwargs
+        assert insert_kwargs["conferenceDataVersion"] == 1
+        assert insert_kwargs["body"]["conferenceData"]["createRequest"]["conferenceSolutionKey"]["type"] == "hangoutsMeet"
+
+    def test_get_master_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {"id": "e1", "recurringEventId": "master1", "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"}},
+            http_error(404),
+        ]
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="update_event get master"):
+            client.update_event("primary", "e1", title="New", scope="following")
+
+    def test_send_updates_passed_through_to_both_truncate_and_insert_calls(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {"id": "e1", "recurringEventId": "master1", "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"}},
+            {"id": "master1", "recurrence": ["RRULE:FREQ=WEEKLY"]},
+        ]
+        service.events.return_value.update.return_value.execute.return_value = {"id": "master1"}
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "new-head"}
+        client = make_client(service)
+
+        client.update_event("primary", "e1", title="New", scope="following", send_updates="all")
+
+        assert service.events.return_value.update.call_args.kwargs["sendUpdates"] == "all"
+        assert service.events.return_value.insert.call_args.kwargs["sendUpdates"] == "all"
+
+    def test_truncate_master_update_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {"id": "e1", "recurringEventId": "master1", "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"}},
+            {"id": "master1", "recurrence": ["RRULE:FREQ=WEEKLY"]},
+        ]
+        service.events.return_value.update.return_value.execute.side_effect = http_error(400)
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="update_event truncate master"):
+            client.update_event("primary", "e1", title="New", scope="following")
+
+    def test_insert_new_series_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {"id": "e1", "recurringEventId": "master1", "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"}},
+            {"id": "master1", "recurrence": ["RRULE:FREQ=WEEKLY"]},
+        ]
+        service.events.return_value.update.return_value.execute.return_value = {"id": "master1"}
+        service.events.return_value.insert.return_value.execute.side_effect = http_error(400)
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="update_event insert new series"):
+            client.update_event("primary", "e1", title="New", scope="following")
+
+
+# ---------------------------------------------------------------------------- #
+# delete_event: scope ("this" / "all" / "following") and send_updates
+# ---------------------------------------------------------------------------- #
+
+class TestDeleteEvent:
+    def test_invalid_scope_raises_before_any_api_call(self):
+        service = MagicMock()
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="scope must be one of"):
+            client.delete_event("primary", "e1", scope="bogus")
+        service.events.return_value.delete.assert_not_called()
+        service.events.return_value.get.assert_not_called()
+
+    def test_invalid_send_updates_raises_before_any_api_call(self):
+        service = MagicMock()
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="send_updates must be one of"):
+            client.delete_event("primary", "e1", send_updates="everyone")
+        service.events.return_value.delete.assert_not_called()
+
+    def test_scope_this_deletes_exactly_the_given_id(self):
+        service = MagicMock()
+        client = make_client(service)
+        client.delete_event("primary", "e1", scope="this")
+        service.events.return_value.delete.assert_called_once_with(calendarId="primary", eventId="e1")
+        service.events.return_value.get.assert_not_called()
+
+    def test_scope_this_is_the_default(self):
+        service = MagicMock()
+        client = make_client(service)
+        client.delete_event("primary", "e1")
+        service.events.return_value.delete.assert_called_once_with(calendarId="primary", eventId="e1")
+
+    def test_send_updates_passed_through(self):
+        service = MagicMock()
+        client = make_client(service)
+        client.delete_event("primary", "e1", send_updates="all")
+        service.events.return_value.delete.assert_called_once_with(
+            calendarId="primary", eventId="e1", sendUpdates="all",
+        )
+
+    def test_scope_this_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.events.return_value.delete.return_value.execute.side_effect = http_error(404)
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match=r"delete_event\(e1\) failed"):
+            client.delete_event("primary", "e1")
+
+    def test_scope_all_redirects_to_master(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {
+            "id": "e1_instance", "recurringEventId": "master1",
+        }
+        client = make_client(service)
+        client.delete_event("primary", "e1_instance", scope="all")
+        service.events.return_value.delete.assert_called_once_with(calendarId="primary", eventId="master1")
+
+    def test_scope_all_on_non_recurring_event_deletes_it_directly(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.delete_event("primary", "e1", scope="all")
+        service.events.return_value.delete.assert_called_once_with(calendarId="primary", eventId="e1")
+
+    def test_scope_following_truncates_master_recurrence(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {
+                "id": "master1_20260824T100000Z", "recurringEventId": "master1",
+                "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"},
+            },
+            {"id": "master1", "recurrence": ["RRULE:FREQ=WEEKLY;COUNT=10"]},
+        ]
+        client = make_client(service)
+
+        client.delete_event("primary", "master1_20260824T100000Z", scope="following")
+
+        service.events.return_value.delete.assert_not_called()
+        update_kwargs = service.events.return_value.update.call_args.kwargs
+        assert update_kwargs["eventId"] == "master1"
+        assert update_kwargs["body"]["recurrence"] == ["RRULE:FREQ=WEEKLY;UNTIL=20260824T095959Z"]
+
+    def test_scope_following_on_master_itself_deletes_the_whole_series(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {
+            "id": "master1", "recurrence": ["RRULE:FREQ=WEEKLY"],
+        }
+        client = make_client(service)
+
+        client.delete_event("primary", "master1", scope="following")
+
+        service.events.return_value.delete.assert_called_once_with(calendarId="primary", eventId="master1")
+        service.events.return_value.update.assert_not_called()
+
+    def test_scope_following_not_a_recurring_event_raises(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="is not part of a recurring series"):
+            client.delete_event("primary", "e1", scope="following")
+
+    def test_scope_following_get_master_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {"id": "e1", "recurringEventId": "master1", "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"}},
+            http_error(404),
+        ]
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="delete_event get master"):
+            client.delete_event("primary", "e1", scope="following")
+
+    def test_scope_following_send_updates_passed_through(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {"id": "e1", "recurringEventId": "master1", "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"}},
+            {"id": "master1", "recurrence": ["RRULE:FREQ=WEEKLY"]},
+        ]
+        client = make_client(service)
+
+        client.delete_event("primary", "e1", scope="following", send_updates="externalOnly")
+
+        assert service.events.return_value.update.call_args.kwargs["sendUpdates"] == "externalOnly"
+
+    def test_scope_all_get_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = http_error(404)
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match=r"delete_event get\(e1\)"):
+            client.delete_event("primary", "e1", scope="all")
+
+    def test_scope_following_truncate_update_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = [
+            {"id": "e1", "recurringEventId": "master1", "originalStartTime": {"dateTime": "2026-08-24T10:00:00Z"}},
+            {"id": "master1", "recurrence": ["RRULE:FREQ=WEEKLY"]},
+        ]
+        service.events.return_value.update.return_value.execute.side_effect = http_error(400)
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="delete_event truncate master"):
+            client.delete_event("primary", "e1", scope="following")
 
 
 # ---------------------------------------------------------------------------- #

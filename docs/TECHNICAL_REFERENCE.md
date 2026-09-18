@@ -264,8 +264,9 @@ bound, since it isn't racing anyone's timeout.
 | `calendar_get_event_details` | read | review | title, time, organizer, attendee count | Description, full attendee list, conferencing link, file attachments (e.g. Gemini meeting notes/transcript) |
 | `calendar_get_event_visibility` | read | auto | — | — |
 | `calendar_list_colors` | read | auto | — | — (lists Calendar's fixed event color palette — id, name e.g. "Tomato", hex background/foreground — via the Calendar API's own `colors().get()`) |
-| `calendar_create_event` | write | popup | — | Title, time, attendees, description, location, Google Meet flag, room bookings, color |
-| `calendar_update_event` | write | popup | — | Title, time, fields changing (old → new), Google Meet flag, room bookings, color |
+| `calendar_create_event` | write | popup | — | Title, time, attendees, description, location, Google Meet flag, room bookings, color, recurrence rule |
+| `calendar_update_event` | write | popup | — | Title, time, fields changing (old → new), Google Meet flag, room bookings, color, "Applies to" scope (recurring events only) |
+| `calendar_delete_event` | write | popup | — | Event title, calendar, time, "Applies to" scope (recurring events only) |
 | `calendar_set_event_visibility` | write | popup | — | Event title, calendar, visibility change (old → new) |
 | `calendar_set_event_color` | write | popup | — | Event title, calendar, color change (old → new) |
 | `calendar_create_out_of_office` | write | popup | — | Title, time, fixed "auto-decline new conflicts only" note, decline message |
@@ -292,6 +293,29 @@ field) all accept either a numeric Calendar event color id (`"1"`-`"11"`) or a c
 (`"Tomato"`, `"Sage"`, ...) — see `calendar_list_colors` for the full id → name → hex mapping. Names
 are this connector's own static table (the Calendar API's `colors().get()` returns hex values per id
 but never a name), matching what Calendar's own web UI shows for each id.
+
+**Recurring events.** `calendar_create_event`'s `recurrence` parameter is one or more
+RRULE/EXDATE/RDATE/EXRULE lines (e.g. `"RRULE:FREQ=WEEKLY;COUNT=10"`, one per line for more than
+one), passed straight through to the Calendar API's own `recurrence` field; omit it for a
+non-recurring event. `calendar_update_event` and `calendar_delete_event` both take a `scope`
+parameter — `"this"` (default), `"following"`, or `"all"` — matching Google Calendar's own "This
+event" / "This and following events" / "All events" edit picker:
+
+- `"this"` acts on exactly the given `event_id`, and is the only meaning `scope` has for a
+  non-recurring event.
+- `"all"` redirects to the series' master event so the whole series changes in one call.
+- `"following"` splits the series at this instance: the old series gets an `UNTIL` ending it just
+  before this instance, and (for `calendar_update_event` only — a delete has nothing to insert)
+  a new event is created starting here with this call's changes and the original recurrence
+  pattern continued open-ended. There is no single Calendar API call for this — Google's own
+  documented approach is exactly these two calls. Known limitations of the split, documented
+  rather than silently wrong: the new half's recurrence drops any `EXDATE`/`RDATE`/`EXRULE` the old
+  series had, and conferencing on the old event isn't carried over to the new half (pass
+  `add_google_meet` again on the same call to get one there too).
+
+Both tools also accept `send_updates` (`"none"`, `"all"`, or `"externalOnly"`) — the Calendar API's
+own `sendUpdates`, controlling who gets a notification email about the change or cancellation.
+Omit it to leave the Calendar API's own default in effect.
 
 ### Google Contacts
 
@@ -853,8 +877,8 @@ channel(s) alike.
 
 > **`personal_calendar` is grant-managed** — see [Auto-accept grants](#auto-accept-grants) →
 > `calendar.calendars`. One calendar grant's `read`/`write` capabilities cover
-> `calendar.read_event_details`, `calendar.create_modify_event`, `calendar.set_visibility`, and
-> `calendar.set_color`.
+> `calendar.read_event_details`, `calendar.create_modify_event`, `calendar.set_visibility`,
+> `calendar.set_color`, and `calendar.delete_event`.
 
 `calendar_create_out_of_office` (`calendar.out_of_office`) and `calendar_set_working_location`
 (`calendar.working_location`) each have their own operation key, but none of the rules above apply
@@ -864,13 +888,16 @@ auto-accept is the unconditional `always_allow` — there's no narrower resource
 rule to, so it's a plain yes/no rather than the organizer/calendar-scoped rules
 `calendar_create_event`/`calendar_update_event` support.
 
-`calendar_set_event_visibility` (`calendar.set_visibility`) and `calendar_set_event_color`
-(`calendar.set_color`) are writes like `calendar_create_event`/`calendar_update_event`, so both
-share `calendar.create_modify_event`'s rule set (`i_am_organizer`, `no_external_attendees`,
-`personal_calendar`) rather than getting a rule of their own — `non_private_event` only applies to
-`calendar.read_event_details`. Clicking **Always allow** on a "Read Calendar Event" prompt proposes
-`non_private_event` when the event isn't private and neither `i_am_organizer` nor
-`no_external_attendees` apply.
+`calendar_set_event_visibility` (`calendar.set_visibility`), `calendar_set_event_color`
+(`calendar.set_color`), and `calendar_delete_event` (`calendar.delete_event`) are writes like
+`calendar_create_event`/`calendar_update_event`, so all three share `calendar.create_modify_event`'s
+rule set (`i_am_organizer`, `no_external_attendees`, `personal_calendar`) rather than getting a rule
+of their own — `non_private_event` only applies to `calendar.read_event_details`. Clicking
+**Always allow** on a "Read Calendar Event" prompt proposes `non_private_event` when the event isn't
+private and neither `i_am_organizer` nor `no_external_attendees` apply. None of these rules consider
+`calendar_update_event`/`calendar_delete_event`'s own `scope` parameter — an auto-accept rule that
+matches the event still auto-accepts regardless of whether the call is scoped to this instance, the
+rest of the series, or all of it.
 
 **Salesforce**
 
