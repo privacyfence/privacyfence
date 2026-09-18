@@ -568,7 +568,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sections become one. Fixes a latent bug found while porting org mode: `daemon_main.py`'s org
   principal loader never ran P4's migration, only local mode's startup path did, so an org
   principal's hand-edited v1 config could go un-migrated indefinitely. See
-  [ADR 0003](docs/adr/0003-retire-the-v1-auto-accept-config-model.md) for the full decision record,
+  [ADR 0004](docs/adr/0004-retire-the-v1-auto-accept-config-model.md) for the full decision record,
   including why this phase's scope grew beyond its one-paragraph charter.
 - Gmail draft bodies (`body_markdown` on all 6 draft tools) now support `# Heading 1`/`## Heading 2`
   syntax, rendered as Gmail's own "Large"/"Huge" font-size compose presets (not raw `<h1>`/`<h2>`
