@@ -37,6 +37,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- ADR 0003 (`docs/adr/0003-separated-installs-only.md`) decides that every local-mode install
+  PrivacyFence ships is privilege-separated, and that a distribution channel which cannot separate
+  itself at install time is not published. Today separation is effectively a user choice made by
+  file format and dialog box — a macOS DMG separates only if a bare admin-password prompt at first
+  daemon start is accepted, a Windows install never separates unless a command is typed by hand into
+  an elevated PowerShell, and a pip install has no installer hook at all — while an unseparated
+  install renders the same approval UI, accepts the same passkey enrollment and writes the same
+  audit log, none of which mean what they say when the daemon and the AI client share a uid. The
+  decision retires the macOS DMG in favor of the `.pkg` that already provisions separation as root
+  during the ordinary install, makes the Windows installer separate the install itself (retiring the
+  non-elevated per-user tier of issue #407, and superseding ADR 0002's decision 5a), stops the
+  `.deb`'s postinst from falling back to an opt-in install, splits provisioning into a machine half
+  that never needs to know who the human is and a re-runnable per-user half, and has a packaged
+  daemon that still finds itself unseparated refuse to serve rather than serve a guarantee it cannot
+  keep. Source checkouts and pip installs stay for development and org mode, behind an explicit
+  `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED` opt-out that says what it is. No behavior changes with this
+  entry — the ADR is the decision, and each platform's half lands in its own change.
 - `step_up.scope` takes a third value, `writes_and_reads`, which requires a passkey assertion before
   releasing *any* approving decision — a write, a read PII detection flagged, and a read it did not.
   The two scopes that existed before (`writes`, the default, and `writes_and_pii_reads`) both leave
@@ -141,7 +158,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (materialized by the Service Control Manager with the service, its own SID, no password for
   anyone to store), the data directory moves from `%LOCALAPPDATA%\PrivacyFence` to
   `%ProgramData%\PrivacyFence`, and the Scheduled Task that used to start the daemon in your
-  session is disabled in favour of a new one that starts the companion tray app there instead. It
+  session is disabled in favor of a new one that starts the companion tray app there instead. It
   closes the same four things — the agent can no longer edit the always-allow rules and PII policy,
   forge a WebAuthn credential, read the audit log's HMAC key, or read the daemon's connector
   credentials — and the marker file, the three directories and the `handoff` contents are identical
