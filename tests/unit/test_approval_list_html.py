@@ -461,3 +461,39 @@ class TestConnectorIconsSurviveLiveUpdates:
         html = approval_list_html.build_list_html([], csrf="t")
         assert "data:image/png;base64," not in html
         assert "var pfIconConnectors = []" in html
+
+
+class TestFirstRunEmptyState:
+    """F8: "Nothing is waiting. / PrivacyFence is watching." is exactly
+    right on a working install and misleading on one where no connector is
+    authenticated -- nothing is waiting because nothing *can* wait, and the
+    reassurance claims a protection that isn't running."""
+
+    def test_steady_state_copy_when_something_is_authenticated(self):
+        html = approval_list_html.build_list_html([], csrf="t", any_authed=True)
+        assert "Nothing is waiting." in html
+        assert "PrivacyFence is watching." in html
+        assert "Nothing is governed yet." not in html
+
+    def test_first_run_copy_and_call_to_action_when_nothing_is(self):
+        html = approval_list_html.build_list_html([], csrf="t", any_authed=False)
+        assert "Nothing is governed yet." in html
+        assert "Nothing is waiting." not in html
+        assert 'href="/settings/connectors"' in html
+
+    def test_defaults_to_the_steady_state_copy(self):
+        # A caller that cannot determine the answer must never tell someone
+        # who is already set up that they aren't.
+        assert "Nothing is waiting." in approval_list_html.build_list_html([], csrf="t")
+
+    def test_the_live_rerender_uses_the_same_branch(self):
+        # render() writes the empty state too, on the tick that takes the
+        # last approval away -- it must not revert to the other copy.
+        first_run = approval_list_html.build_list_html([], csrf="t", any_authed=False)
+        assert first_run.count("Nothing is governed yet.") == 2  # markup + the JS constant
+        assert "Nothing is waiting." not in first_run
+
+    def test_only_the_empty_state_changes_not_a_populated_list(self):
+        rows = [approval_list_html.row_from_approval(_real_card())]
+        html = approval_list_html.build_list_html(rows, csrf="t", any_authed=False)
+        assert "Nothing is governed yet." not in html.split("<script")[0]

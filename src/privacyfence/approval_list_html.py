@@ -97,6 +97,30 @@ _EMPTY_STATE = (
     "</div>"
 )
 
+# The same state, on an install where nothing is authenticated yet. The
+# copy above is exactly right on a working install and actively misleading
+# on this one: nothing is waiting because nothing *can* wait, and
+# "PrivacyFence is watching" claims a protection that isn't running. The
+# wording deliberately echoes settings_window_html.py's own
+# renderWelcomeBanner ("Nothing is governed until at least one connector
+# below is authenticated"), which is the only other place this state is
+# explained today -- and which the approvals page, a landing surface in its
+# own right, had no equivalent of.
+_EMPTY_STATE_NOTHING_AUTHED = (
+    '<div class="pf-approvals-empty">'
+    '<div class="pf-approvals-empty-title">Nothing is governed yet.</div>'
+    '<div class="pf-approvals-empty-sub pf-approvals-empty-body">'
+    "PrivacyFence sits between Claude and your real accounts. Until a connector is "
+    "authenticated, there is nothing for it to hold back."
+    "</div>"
+    '<a class="pf-approvals-empty-cta" href="/settings/connectors">Authenticate a connector</a>'
+    "</div>"
+)
+
+
+def _empty_state_html(*, any_authed: bool) -> str:
+    return _EMPTY_STATE if any_authed else _EMPTY_STATE_NOTHING_AUTHED
+
 _CSS = """
 .pf-approvals-page { max-width: 720px; margin: 0 auto; padding: 24px 20px 60px; width: 100%; }
 .pf-approvals-heading {
@@ -110,6 +134,11 @@ _CSS = """
 }
 .pf-approvals-empty-title { font-size: 16px; font-weight: 600; color: var(--color-text); margin-bottom: 4px; }
 .pf-approvals-empty-sub { font-size: 13px; }
+.pf-approvals-empty-body { line-height: 1.6; max-width: 330px; margin: 0 auto 18px; }
+.pf-approvals-empty-cta {
+  display: inline-block; font-size: 12.5px; font-weight: 600; padding: 9px 14px;
+  border-radius: var(--radius-md); background: var(--color-accent); color: #fff; text-decoration: none;
+}
 .pf-approvals-toolbar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 10px 14px; margin-bottom: 12px; background: var(--color-surface); border-radius: var(--radius-lg);
@@ -1067,7 +1096,9 @@ def _toolbar_html(*, any_batchable: bool) -> str:
     )
 
 
-def build_list_html(rows: list[dict[str, Any]], *, csrf: str, nonce: str | None = None) -> str:
+def build_list_html(
+    rows: list[dict[str, Any]], *, csrf: str, nonce: str | None = None, any_authed: bool = True,
+) -> str:
     """The ``/approvals`` page body (dropped into web_shell.wrap's
     ``<main>``) -- ``rows`` is a list of row_from_approval()'s shape,
     newest first (same order approvals.PendingApprovalRegistry.
@@ -1081,13 +1112,23 @@ def build_list_html(rows: list[dict[str, Any]], *, csrf: str, nonce: str | None 
     web_shell.wrap() is given for the rest of this same document, since
     only one Content-Security-Policy header covers both. Defaults to a
     fresh one when omitted (every caller outside this module's own tests
-    always passes the real per-request value explicitly)."""
+    always passes the real per-request value explicitly).
+
+    ``any_authed``: whether this install has at least one authenticated
+    connector, which selects between the two empty states (see
+    ``_empty_state_html``). Defaults to True -- the steady-state copy --
+    so a caller that cannot determine it never shows a first-run message
+    to somebody who is already set up."""
     nonce = nonce or secrets.token_urlsafe(18)
-    body = "".join(_group_html(g) for g in _group_rows(rows)) if rows else _EMPTY_STATE
+    empty_state = _empty_state_html(any_authed=any_authed)
+    body = "".join(_group_html(g) for g in _group_rows(rows)) if rows else empty_state
     toolbar = _toolbar_html(any_batchable=any(r.get("batchable") for r in rows)) if rows else ""
     icon_uris = _icon_connectors(rows)
     js = _JS % {
-        "empty": json.dumps(_EMPTY_STATE),
+        # Already branched: whether a connector is authenticated is fixed
+        # for this document's lifetime, so render() needs the resolved
+        # string rather than the flag and a second copy of the branch.
+        "empty": json.dumps(empty_state),
         "csrf": json.dumps(csrf),
         # Names only -- the image data is in the <style> block below, once.
         "icon_connectors": json.dumps(sorted(icon_uris)),

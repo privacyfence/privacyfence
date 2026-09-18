@@ -204,6 +204,31 @@ class TestListApprovals:
         r = c.get("/approvals")
         assert "NOTIFICATIONS_ENABLED = false" in r.text
 
+    def test_empty_state_names_the_first_run_case(self, web_ui, sessions):
+        from privacyfence.web.routes_approvals import create_app
+
+        app = create_app(web_ui, sessions=sessions, any_connector_authenticated=lambda: False)
+        c = TestClient(app, base_url="http://localhost")
+        _signed_in(c, sessions)
+        r = c.get("/approvals")
+        assert "Nothing is governed yet." in r.text
+        assert "/settings/connectors" in r.text
+
+    def test_empty_state_is_re_evaluated_per_request(self, web_ui, sessions):
+        # Authenticating a connector has to take effect on the next page
+        # load, not the next daemon restart.
+        from privacyfence.web.routes_approvals import create_app
+
+        authed = {"value": False}
+        app = create_app(
+            web_ui, sessions=sessions, any_connector_authenticated=lambda: authed["value"],
+        )
+        c = TestClient(app, base_url="http://localhost")
+        _signed_in(c, sessions)
+        assert "Nothing is governed yet." in c.get("/approvals").text
+        authed["value"] = True
+        assert "Nothing is waiting" in c.get("/approvals").text
+
     def test_pending_card_row_has_a_deny_button_and_review_link(self, client, sessions, web_ui):
         _signed_in(client, sessions)
         t, card, box = _pending_card(web_ui)

@@ -29,7 +29,20 @@ Deny sits at the far end of the cluster. That ordering is source order in both t
 and the live-re-rendered row, not a CSS `order` override, so focus order and visual order stay the
 same at every width.
 
-When there are no pending requests the page shows the empty state.
+When there are no pending requests the page shows an empty state, and which one depends on whether
+this install has anything to govern:
+
+- **At least one connector authenticated** — "Nothing is waiting. / PrivacyFence is watching."
+- **Nothing authenticated** — "Nothing is governed yet.", explaining that PrivacyFence sits between
+  Claude and the user's real accounts and holds nothing back until a connector exists, with a link
+  to `/settings/connectors`. The steady-state copy is misleading here: nothing is waiting because
+  nothing *can* wait, and the reassurance claims a protection that isn't running. The wording
+  matches the settings page's own welcome banner, which is the only other place this state is
+  explained.
+
+The distinction is re-evaluated per request, so authenticating a connector takes effect on the next
+page load. A caller that cannot determine it (no settings controller mounted) gets the steady-state
+copy — never tell someone who is already set up that they are not.
 
 ## The approval binder
 

@@ -491,6 +491,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   become two equal 48px targets with always-allow a quiet link below them rather than a third
   control in the thumb zone. Nothing changes above the breakpoint, or in the native window, whose
   frame already sized itself to the document.
+- **The approvals page explains a first run instead of claiming it is watching.** First run and
+  steady state shared one empty state, written for steady state: "Nothing is waiting. / PrivacyFence
+  is watching." On an install where no connector is authenticated that is misleading in both halves
+  — nothing is waiting because nothing *can* wait, and nothing is being watched. That case now gets
+  its own copy ("Nothing is governed yet."), explaining what PrivacyFence does and linking to
+  `/settings/connectors`, reusing the wording of the settings page's own welcome banner. The
+  steady-state copy is unchanged, and is what still shows whenever the answer can't be determined.
 - **Connector icons no longer disappear after the first live update.** The server-rendered first
   paint drew each row's real brand icon, while the SSE re-render had no icon in its payload and
   always drew the letter-badge fallback — so within one poll interval every row silently degraded,

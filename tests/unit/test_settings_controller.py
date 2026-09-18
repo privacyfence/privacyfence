@@ -2050,3 +2050,21 @@ class TestRuleUiCompleteness:
         prefixes = {op_key.split(".", 1)[0] for op_key in sc.OPERATION_LABELS}
         missing = prefixes - set(sc.RULES_MENU_GROUPS)
         assert missing == set()
+
+
+class TestAnyConnectorAuthenticated:
+    """The one boolean web/routes_approvals.py's list route needs to pick
+    between the approvals page's two empty states -- the same fact
+    _connectors_state's per-row ``authed`` is built from."""
+
+    def test_false_with_nothing_authenticated(self, controller):
+        assert controller.any_connector_authenticated() is False
+
+    def test_true_once_a_connector_is(self, controller):
+        controller._connectors = ["gmail"]
+        assert controller.any_connector_authenticated() is True
+
+    def test_agrees_with_the_per_connector_snapshot_rows(self, controller):
+        controller._connectors = ["gmail"]
+        rows = controller.snapshot()["connectors"]
+        assert any(r["authed"] for r in rows) is controller.any_connector_authenticated()
