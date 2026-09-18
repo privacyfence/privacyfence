@@ -291,6 +291,18 @@ class TestStepUpChallengeStore:
         assert store.pop("alice", "a2") is None
         assert store.pop("alice", "a1") is not None
 
+    def test_put_sweeps_expired_entries_so_unpopped_keys_dont_accumulate(self):
+        """B26: a client-chosen key (routes_approvals.py's batch decide
+        mints one straight from the request body) that is never popped
+        must not grow the store without bound -- ``put()`` itself has to
+        evict anything past the TTL, since nothing else ever will."""
+        store = wa.StepUpChallengeStore(ttl=0.01)
+        for i in range(50):
+            store.put("alice", f"batch:{i}", challenge=b"chal", fingerprint="fp")
+        time.sleep(0.02)
+        store.put("alice", "batch:new", challenge=b"chal", fingerprint="fp")
+        assert len(store._pending) == 1
+
 
 class TestRegistrationChallengeStore:
     def test_put_then_pop(self):
