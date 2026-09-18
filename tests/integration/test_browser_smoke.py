@@ -1118,6 +1118,53 @@ class TestMobileLayoutViewport:
             web_ui.resolve(card.id, "deny")
             thread.join(timeout=5)
 
+    def test_list_row_keeps_a_readable_title_column(self, mobile_page, local_server):
+        """F2, as it actually reaches a phone: ``.pf-approval-actions`` is
+        ``flex-shrink:0`` around ~220px of buttons while
+        ``.pf-approval-main`` is ``flex:1;min-width:0``, so the row's own
+        ``flex-wrap`` never fires -- the text column shrinks to roughly
+        25px instead, and the title truncates after two or three
+        characters. The number is the assertion: a title column narrower
+        than the icon beside it is not a row anyone can decide from."""
+        server, web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        thread, card = _register_card(web_ui)
+        try:
+            mobile_page.goto(f"{server.base_url}/approvals")
+            mobile_page.wait_for_load_state("load")
+            main = mobile_page.locator(".pf-approval-main").first.bounding_box()
+            assert main["width"] > 200, main
+            _assert_no_horizontal_overflow(mobile_page)
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    def test_list_row_controls_are_a_real_touch_target_and_deny_is_not_beside_review(
+        self, mobile_page, local_server,
+    ):
+        server, web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        thread, card = _register_card(web_ui)
+        try:
+            mobile_page.goto(f"{server.base_url}/approvals")
+            mobile_page.wait_for_load_state("load")
+            review = mobile_page.locator(".pf-btn-review").first.bounding_box()
+            deny = mobile_page.locator(".pf-btn-deny").first.bounding_box()
+            details = mobile_page.locator(".pf-btn-details").first.bounding_box()
+            for box in (review, deny, details):
+                assert box["height"] >= 44, box
+            # Deny sits at the far end of the strip, not one 8px gap from
+            # the safe action -- denial is irreversible and has no undo
+            # path anywhere in the flow.
+            assert details["x"] < review["x"] < deny["x"]
+            # And the strip is its own band under the identity block, not
+            # squeezed onto the same line as the title.
+            main = mobile_page.locator(".pf-approval-main").first.bounding_box()
+            assert review["y"] >= main["y"] + main["height"]
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
 
 class TestResponsiveLayout:
     @pytest.mark.parametrize("viewport_name", sorted(_VIEWPORTS))

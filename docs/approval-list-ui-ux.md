@@ -11,8 +11,15 @@ Each row contains:
 - connector/tool identity;
 - a short operation label/summary;
 - relative age;
-- **Deny**;
-- **Review**.
+- **Details**;
+- **Review**;
+- **Deny**.
+
+The action cluster is ordered Details, Review, Deny — the destructive action last, not adjacent to
+the safe one. Denying resolves an approval outright and no undo path exists anywhere in the flow, so
+Deny sits at the far end of the cluster. That ordering is source order in both the server-rendered
+and the live-re-rendered row, not a CSS `order` override, so focus order and visual order stay the
+same at every width.
 
 When there are no pending requests the page shows the empty state.
 
@@ -98,6 +105,10 @@ At `detailed` level the notification can include the approval summary; operators
 ## Responsive behavior
 
 The approval list and cards are browser pages and must remain usable at desktop, tablet, and phone widths. Primary actions must remain visible without horizontal page scrolling. Subjective layout/contrast review is covered by [`release-testing.md`](release-testing.md); objective browser behavior belongs in Playwright tests.
+
+Every document served here declares `<meta name="viewport" content="width=device-width, initial-scale=1">`. Without it a phone lays the document out in its default ~980px viewport and scales the result down to fit, which makes body text unreadable and leaves every phone-width `@media` rule in the document permanently unmatched. A test that only narrows a desktop browser's window cannot detect this, because a desktop context lays out at whatever width it is given; the Playwright coverage for it therefore runs in a `is_mobile=True` context and asserts on `window.innerWidth`.
+
+Below 560px the list row stacks: identity on top, a full-width action strip underneath. Row controls and selection checkboxes are a minimum 44px target at those widths — above them the row stays a single line.
 
 ## Implementation anchors
 

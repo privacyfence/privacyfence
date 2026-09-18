@@ -247,3 +247,53 @@ class TestBinderMarkup:
         html = approval_list_html.build_list_html(rows, csrf="t")
         assert 'data-details="' in html
         assert 'id="pf-details-' in html
+
+
+class TestRowActionOrder:
+    """Deny is last in the cluster, not beside Review -- see the module
+    docstring. Asserted on source order in both renderers rather than on a
+    CSS ``order`` declaration, because keeping focus order and visual order
+    the same thing at every width is the point of doing it this way."""
+
+    def test_first_paint_renders_details_review_deny(self):
+        row_html = approval_list_html._row_html(approval_list_html.row_from_approval(_real_card()))
+        assert (
+            row_html.index("pf-btn-details")
+            < row_html.index("pf-btn-review")
+            < row_html.index("pf-btn-deny")
+        )
+
+    def test_live_rerender_mirrors_the_same_order(self):
+        # rowHtml is a hand-kept mirror of _row_html (see the module
+        # docstring); an ordering that holds on first paint but not after
+        # the first SSE tick would be worse than not doing it at all.
+        js = approval_list_html._JS
+        body = js[js.index("function rowHtml("):js.index("function groupHtml(")]
+        assert body.index("pf-btn-details") < body.index("pf-btn-review") < body.index("pf-btn-deny")
+
+
+class TestPhoneWidthRules:
+    """F2/F3: the row's own ``flex-wrap`` never engages, because
+    ``.pf-approval-main`` is ``flex:1;min-width:0`` against a
+    ``flex-shrink:0`` action cluster -- so the text column shrinks to about
+    25px at 393px instead of the row wrapping. These assert the rules that
+    make it wrap and give the controls a real target; that the rendered
+    result actually follows is covered by the Playwright suite."""
+
+    def test_text_column_gets_a_basis_too_wide_to_sit_beside_the_actions(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert "@media (max-width: 560px)" in html
+        assert ".pf-approval-main { flex-basis: calc(100% - 96px); }" in html
+
+    def test_action_strip_goes_full_width(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert ".pf-approval-actions { width: 100%; gap: 10px; margin-top: 12px; }" in html
+
+    def test_row_controls_get_a_real_touch_target(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert "min-height: 44px; padding: 12px 14px; font-size: 13px;" in html
+
+    def test_batch_actions_sit_side_by_side_without_reordering_focus(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert ".pf-btn-approve-selected { grid-column: 1; }" in html
+        assert ".pf-btn-deny-selected { grid-column: 2; }" in html

@@ -491,6 +491,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   become two equal 48px targets with always-allow a quiet link below them rather than a third
   control in the thumb zone. Nothing changes above the breakpoint, or in the native window, whose
   frame already sized itself to the document.
+- **The approvals list is usable on a phone.** `.pf-approval-actions` is `flex-shrink: 0` around
+  three buttons while `.pf-approval-main` is `flex: 1; min-width: 0`, so the row's own `flex-wrap`
+  never engaged — the text column shrank to roughly 25px at 393px instead, truncating the title
+  after two or three characters and taking the connector/age line with it. Below 560px the row now
+  stacks into identity on top and a full-width action strip underneath, row controls and selection
+  checkboxes are a 44px target rather than ~30px and ~13px, and the toolbar's select-all and two
+  batch actions stop competing for one line. **Deny** also moves to the far end of the action
+  cluster, after **Review**, rather than sitting one 8px gap from it: denying resolves an approval
+  outright and there is no undo path anywhere in the flow. That reorder is source order in both the
+  server-rendered and the live-re-rendered row, so focus order and visual order still agree.
 - **Quitting from the settings page no longer truncates its own response.** `/api/settings/quit_app`
   signalled the daemon's shutdown *before* returning, so the process could be torn down while its
   21-byte confirmation was still being written and the client saw `peer closed connection without

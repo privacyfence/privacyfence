@@ -7,6 +7,15 @@ from a one-line summary is exactly the habituation failure the card exists
 to prevent, so there is no "Allow" button here at all -- only "Review",
 which opens the real card.
 
+Within the action cluster the order is Details, Review, Deny -- Deny last,
+not adjacent to Review. Row controls are a 44px target at phone widths but
+only ~30px above them, and Deny resolves an approval outright with no undo
+path anywhere in the flow; putting the destructive control at the far end
+of the cluster rather than one 8px gap from the safe one is the cheapest
+guard against a mis-tap deciding it. This is a source-order change, not a
+CSS ``order`` one, specifically so focus order and visual order stay the
+same thing at every width.
+
 ``build_list_html(rows)`` is the first paint (web/routes_approvals.py, given
 ``approvals.PendingApproval`` objects, each with a real connector icon --
 see ``row_from_approval`` below); ``window.__pfRenderApprovals(state)`` is
@@ -152,6 +161,46 @@ _CSS = """
 .pf-approval-details-row { display: flex; gap: 6px; }
 .pf-approval-details-row + .pf-approval-details-row { margin-top: 3px; }
 .pf-approval-details-key { font-weight: 600; color: var(--color-text); }
+
+/* — phone widths — the row's own flex-wrap never engages on its own:
+   .pf-approval-actions is flex-shrink:0 and holds ~220px of buttons, while
+   .pf-approval-main is flex:1;min-width:0, so the text column can legally
+   shrink to zero and does. At 393px the title truncates after two or three
+   characters and the kicker goes with it. Giving the text column a basis
+   too wide to sit beside the actions is what makes the wrap actually fire,
+   which turns the row into what it should have been: identity on top, a
+   full-width action strip underneath. */
+@media (max-width: 560px) {
+  .pf-approval-row { align-items: flex-start; row-gap: 0; }
+  .pf-approval-main { flex-basis: calc(100% - 96px); }
+  .pf-approval-actions { width: 100%; gap: 10px; margin-top: 12px; }
+  /* Review takes the remaining width; Deny and Details stay at their own
+     intrinsic size, so the destructive control is never the easiest one to
+     hit with a thumb. */
+  .pf-btn-review { flex: 1; text-align: center; }
+  .pf-btn-deny, .pf-btn-review, .pf-btn-details {
+    min-height: 44px; padding: 12px 14px; font-size: 13px;
+  }
+  /* Native checkboxes render near 13px, well under any usable target. */
+  .pf-approval-row > input[type="checkbox"],
+  .pf-approval-group-header input[type="checkbox"],
+  .pf-select-all input[type="checkbox"] { width: 20px; height: 20px; }
+  .pf-approval-row > input[type="checkbox"] { margin-top: 6px; }
+  .pf-select-all, .pf-approval-group-header label { min-height: 44px; }
+  /* Select-all, the count, and the two batch actions stop sharing one
+     line. A grid rather than a wrapping flex row because the two buttons
+     have to end up side by side and equal, which wrapping alone decides by
+     whatever happens to fit -- and grid keeps source and visual order
+     identical, so nothing here reorders focus. */
+  .pf-approvals-toolbar {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: center;
+  }
+  .pf-select-all, .pf-selected-count { grid-column: 1 / -1; }
+  .pf-selected-count:empty { display: none; }
+  .pf-btn-approve-selected { grid-column: 1; }
+  .pf-btn-deny-selected { grid-column: 2; }
+  .pf-btn-approve-selected, .pf-btn-deny-selected { min-height: 44px; }
+}
 """
 
 # Runtime dispatch: sessionStorage's pending toast (left by the card page's
@@ -243,8 +292,8 @@ _JS = """
       '<div class="pf-approval-kicker">' + esc(kicker) + '</div>' + blockedNote + '</div>' +
       '<div class="pf-approval-actions">' +
       '<button type="button" class="pf-btn-details" data-details="' + esc(row.id) + '">Details</button>' +
-      '<button type="button" class="pf-btn-deny" data-deny="' + esc(row.id) + '">Deny</button>' +
-      '<a class="pf-btn-review" href="/approvals/' + esc(row.id) + '">Review \\u2192</a></div>' +
+      '<a class="pf-btn-review" href="/approvals/' + esc(row.id) + '">Review \\u2192</a>' +
+      '<button type="button" class="pf-btn-deny" data-deny="' + esc(row.id) + '">Deny</button></div>' +
       detailsHtml(row.id) +
       '</div>';
   }
@@ -725,8 +774,8 @@ def _row_html(row: dict[str, Any]) -> str:
         "</div>"
         '<div class="pf-approval-actions">'
         f'<button type="button" class="pf-btn-details" data-details="{_html_escape(rid)}">Details</button>'
-        f'<button type="button" class="pf-btn-deny" data-deny="{_html_escape(rid)}">Deny</button>'
         f'<a class="pf-btn-review" href="/approvals/{_html_escape(rid)}">Review →</a>'
+        f'<button type="button" class="pf-btn-deny" data-deny="{_html_escape(rid)}">Deny</button>'
         "</div>"
         f"{_details_html(rid)}"
         "</div>"
