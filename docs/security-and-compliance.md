@@ -181,6 +181,42 @@ not the human goes on to enroll again. The code is single-use: spending it, corr
 grants a second attempt at the same code, and a fresh one is only issued at the next successful
 enrollment.
 
+### The approval binder's single assertion
+
+`POST /api/approvals/batch/decide` lets a human release several pending approvals at once from
+`/approvals` (see [`approval-list-ui-ux.md`](approval-list-ui-ux.md#the-approval-binder)) behind a
+single WebAuthn ceremony, in both local and org mode, whenever `step_up` applies to anything
+selected. `webauthn_stepup.batch_decision_fingerprint` plays the role for the batch that
+`decision_fingerprint` plays for one decision: a SHA-256 over the canonicalized, sorted
+`approval_id:result` pairs of the *entire* submitted set, deny items included. The server
+recomputes it from the resubmitted items on completion and compares against the one it minted the
+challenge for — it never trusts a client-supplied set — so an assertion obtained for one selection
+cannot be replayed to authorize a larger set, a smaller one, or the same set with one result
+flipped; like the single-decision challenge, it is single-use and short-lived.
+
+**What one assertion establishes is the same as a per-item one, extended to a set:** the same
+freshness and the same user-verification requirement `step_up.enabled` already demands per
+decision, now bound to an exact, tamper-evident set of decisions rather than to one.
+`step_up.require_passkey` fails the whole batch closed — the same `403` naming `/security`,
+nothing applied — exactly as it already does for a single decision, because it is the same check,
+run once instead of N times. An install that wants no single-assertion batching at all can set
+`step_up.batch: per_item`, which refuses to admit a batch containing anything that needs step-up
+and pushes those items back to their own card, one ceremony each.
+
+**What it does not establish is per-item attention, and that is not new to the binder.** Per [ADR
+0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6, step-up's own guarantee
+was already asymmetric: *integrity* is the strong half — the agent cannot approve its own request —
+and *confidentiality of the review screen* is the weaker half — an agent that reaches the web UI
+can still read what is pending. The binder inherits that asymmetry rather than widening it:
+batching changes how many times a human authorizes, never what they are shown before doing so.
+Every batched row still carries only the metadata-only inline disclosure described in
+[`approval-list-ui-ux.md`](approval-list-ui-ux.md#the-approval-binder), never the full card, and
+the classes that would make one ceremony stand in for a materially different kind of decision — a
+PII-forced confirmation, a `confirm`/`choice` dialog — are excluded from batching altogether
+(`approvals.PendingApproval.is_batchable()`). A batch assertion authorizes exactly the set of rows
+a human selected, with the disclosure the list already showed for each; it authorizes nothing wider
+and is no substitute for opening a card when the human wants one.
+
 ### Privilege separation (macOS, Linux and Windows)
 
 One script per platform runs the daemon under a dedicated account instead of yours. It creates that
