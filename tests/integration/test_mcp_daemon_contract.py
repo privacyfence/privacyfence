@@ -6,7 +6,7 @@ That test existed because the bridge (TypeScript) and the daemon (Python)
 were two independently hand-maintained implementations of one wire
 protocol, and nothing else in the suite proved they agreed with each
 other -- tests/unit/web/test_routes_mcp.py drives the real ASGI app, but
-over an in-process ``httpx.ASGITransport`` with no real socket, so a
+over an in-process ``httpx2.ASGITransport`` with no real socket, so a
 real-network-stack bug (uvicorn startup, real TCP binding, real HTTP
 framing) could still slip through.
 
@@ -31,7 +31,7 @@ import time
 import uuid
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 mcp_client = pytest.importorskip(
@@ -139,8 +139,8 @@ async def test_real_mcp_client_lists_and_calls_the_real_daemons_tools_over_a_rea
     connector, server, _dispatcher = running_mcp_server
     headers = {"Authorization": f"Bearer {server.mcp_token}"}
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write, _get_session_id):
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 init_result = await session.initialize()
 
@@ -159,15 +159,15 @@ async def test_real_mcp_client_lists_and_calls_the_real_daemons_tools_over_a_rea
                 assert "privacyfence_end_unattended_session" in names
 
                 result = await session.call_tool("contract_test_echo", {"message": "hello over a real socket"})
-                assert result.isError is not True
-                assert result.structuredContent == {"echoed": {"message": "hello over a real socket"}}
+                assert result.is_error is not True
+                assert result.structured_content == {"echoed": {"message": "hello over a real socket"}}
 
     assert connector.calls == [("contract_test_echo", {"message": "hello over a real socket"})]
 
 
 async def test_connector_set_swap_pushes_a_real_tools_list_changed_notification(running_mcp_server):
     """Issue #396 Part C, end to end: a real client sees
-    tools.listChanged=True at initialize (the NotificationOptions override
+    tools.list_changed=True at initialize (the NotificationOptions override
     Phase 0's spike found necessary), and a connector-set swap -- the same
     call SettingsController.refresh_connectors() makes in production --
     actually reaches it as a real notifications/tools/list_changed message,
@@ -189,14 +189,14 @@ async def test_connector_set_swap_pushes_a_real_tools_list_changed_notification(
         if isinstance(message, types.ServerNotification):
             notifications.append(message)
 
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write, _get_session_id):
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write, message_handler=_message_handler) as session:
                 init_result = await session.initialize()
                 assert init_result.capabilities.tools is not None
-                assert init_result.capabilities.tools.listChanged is True
+                assert init_result.capabilities.tools.list_changed is True
 
-                # Captures this session's live ServerSession server-side
+                # Captures this session's live Connection server-side
                 # (routes_mcp.py's build_mcp_server) -- notify_tools_changed()
                 # has nothing to notify before at least one request handler
                 # has run for this session.
@@ -209,4 +209,7 @@ async def test_connector_set_swap_pushes_a_real_tools_list_changed_notification(
                     await asyncio.sleep(0.02)
 
     assert len(notifications) == 1
-    assert isinstance(notifications[0].root, types.ToolListChangedNotification)
+    # mcp 2.x hands the handler the concrete notification model:
+    # ``types.ServerNotification`` is a plain union of them now, not the 1.x
+    # RootModel wrapper whose payload had to be unwrapped from ``.root``.
+    assert isinstance(notifications[0], types.ToolListChangedNotification)

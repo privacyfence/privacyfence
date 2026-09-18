@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import contextlib
 
-import httpx
+import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -45,15 +45,15 @@ class PrincipalEchoingConnector(Connector):
 @contextlib.asynccontextmanager
 async def _connected_session(dispatcher: McpDispatcher, *, token: str = TOKEN):
     app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
-    transport = httpx.ASGITransport(app=app)
+    transport = httpx2.ASGITransport(app=app)
 
     async with mcp_lifespan(session_manager):
-        async with httpx.AsyncClient(
+        async with httpx2.AsyncClient(
             transport=transport, base_url="http://testserver", headers={"Authorization": f"Bearer {token}"},
         ) as http_client:
             async with streamable_http_client(
                 "http://testserver/mcp", http_client=http_client,
-            ) as (read, write, _get_session_id):
+            ) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     yield session
@@ -69,7 +69,7 @@ async def test_a_tool_call_over_mcp_sees_the_local_principal():
     dispatcher = McpDispatcher(lambda: {"principal_echo": PrincipalEchoingConnector()})
     async with _connected_session(dispatcher) as session:
         result = await session.call_tool("whoami", {"reason": "test"})
-        assert result.structuredContent == {"principal_id": LOCAL_PRINCIPAL_ID}
+        assert result.structured_content == {"principal_id": LOCAL_PRINCIPAL_ID}
 
 
 async def test_principal_scope_does_not_leak_outside_the_call():

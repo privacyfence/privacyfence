@@ -99,13 +99,26 @@ dependencies = [
     # runtime one at P2 (D2):
     # web/routes_mcp.py hosts the real Streamable HTTP MCP endpoint on it,
     # not just tests/integration/test_mcp_daemon_contract.py's client
-    # side anymore. Capped below 2.0 for the same reason the test-only pin
-    # originally was -- v2 (released 2026-07-28) removes ClientSession,
-    # stdio_client and StdioServerParameters and renames isError ->
-    # is_error, which would break that contract test's client-side imports
-    # outright. Bump the cap only alongside a rewrite of that test and a
-    # check of web/routes_mcp.py's own server-side surface against 2.0.
-    "mcp>=1.28,<2.0.0",
+    # side anymore. Migrated off the 1.x surface at issue #250: this is now
+    # a v2-only floor, not a widened range, because the 2.0 server API is
+    # not additive over 1.x's -- the low-level `Server` registers handlers
+    # as constructor arguments (`on_list_tools=`/`on_call_tool=`) instead of
+    # `@server.list_tools()` decorators, a handler is `(ctx, params) ->
+    # Result` rather than a bare return value read back off
+    # `Server.request_context`, and the per-session `lifespan` this module
+    # keyed its unattended-session/dedupe state by is entered once per
+    # session *manager* now (see routes_mcp._session_key). None of that
+    # runs on 1.x, so a range starting below 2 would resolve to an install
+    # that imports and then fails on the first request.
+    # The floor is the exact minor this was migrated and tested against
+    # rather than a bare >=2.0: 2.x is still moving its own server-side
+    # surface (`create_initialization_options`'s `extensions` argument, the
+    # `Context`/middleware rework its own TODO(L54) flags), and this package
+    # overrides that method. Model field names are snake_case with
+    # camelCase aliases from 2.0 on (`is_error`/`structured_content`/
+    # `input_schema`) -- constructing by alias still validates, reading one
+    # back by alias does not.
+    "mcp>=2.2,<3.0.0",
     # Verifying the org IdP's ID token (P7: PrivacyFence is its own minimal OAuth 2.1 authorization
     # server, authenticating the human against the org's
     # IdP by OIDC behind the scenes) means checking a JWT signature against
@@ -225,6 +238,16 @@ test = [
     # starlette.testclient.TestClient's transport -- test-only, exercising
     # web/ routes (tests/unit/web/) without a real socket.
     "httpx>=0.27",
+    # The *other* httpx, and not a typo: mcp 2.x's own client transports are
+    # written against httpx2 (`streamable_http_client(url, http_client=...)`
+    # is annotated `httpx2.AsyncClient` and hands the response to httpx2's
+    # own EventSource), so every test driving /mcp through the official
+    # client -- over a real socket or an in-process ASGI transport -- builds
+    # its client from this package while the rest of the suite keeps using
+    # httpx for starlette's TestClient. Already installed as a transitive
+    # dependency of `mcp`; declared here because these tests import it
+    # directly rather than relying on that staying true.
+    "httpx2>=2.5",
     # tests/integration/test_browser_smoke.py (TST-06, docs/security-
     # remediation-plan.md Phase 2 item 2.5) -- drives the real web approval
     # surface in a real headless browser, for the CSP/SameSite-cookie/SSE

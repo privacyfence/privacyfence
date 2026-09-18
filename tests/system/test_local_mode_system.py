@@ -81,6 +81,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
+import httpx2
 import pytest
 import yaml
 
@@ -289,8 +290,8 @@ async def _call_tool(mcp_url: str, token: str, message: str):
     identical call" step is a fresh MCP request in production too (a new
     Claude tool-call turn), not a second call reusing one open session."""
     headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write, _get_session_id):
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 tools = await session.list_tools()
@@ -307,15 +308,15 @@ async def _call_status_tool(mcp_url: str, token: str) -> dict:
     rather than the in-process dispatcher tests in
     tests/unit/web/test_mcp_dispatch.py."""
     headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write, _get_session_id):
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool(
                     "privacyfence_status", {"reason": "system test: checking setup state"},
                 )
-                assert result.isError is not True, result
-                return result.structuredContent
+                assert result.is_error is not True, result
+                return result.structured_content
 
 
 async def _call_get_sign_in_link_tool(mcp_url: str, token: str, *, page: str) -> dict:
@@ -325,16 +326,16 @@ async def _call_get_sign_in_link_tool(mcp_url: str, token: str, *, page: str) ->
     follow-up: minting happens because a human asked, not because a model
     checked status)."""
     headers = {"Authorization": f"Bearer {token}"}
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write, _get_session_id):
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool(
                     "privacyfence_get_sign_in_link",
                     {"page": page, "reason": "system test: human asked to sign in"},
                 )
-                assert result.isError is not True, result
-                return result.structuredContent
+                assert result.is_error is not True, result
+                return result.structured_content
 
 
 async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
@@ -391,9 +392,9 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
             assert "system_test_send" in names
             assert "privacyfence_check_policy" in names
             assert "privacyfence_begin_unattended_session" in names
-            assert first.isError is not True
-            assert first.structuredContent["status"] == "approval_pending"
-            allow_id = first.structuredContent["approval_id"]
+            assert first.is_error is not True
+            assert first.structured_content["status"] == "approval_pending"
+            allow_id = first.structured_content["approval_id"]
             assert allow_id
 
             # The pending card is visible on the real /approvals page,
@@ -420,13 +421,13 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
             # A second, identical call finds the decision already in the
             # ledger and releases the real result -- no second prompt.
             _, second = await _call_tool(mcp_url, mcp_token, "hello from the system test")
-            assert second.isError is not True
-            assert second.structuredContent == {"message": "hello from the system test"}
+            assert second.is_error is not True
+            assert second.structured_content == {"message": "hello from the system test"}
 
             # ── 7: repeat, resolved Deny ─────────────────────────────────
             _, third = await _call_tool(mcp_url, mcp_token, "please deny me")
-            assert third.structuredContent["status"] == "approval_pending"
-            deny_id = third.structuredContent["approval_id"]
+            assert third.structured_content["status"] == "approval_pending"
+            deny_id = third.structured_content["approval_id"]
 
             deny_resp = await web_client.post(
                 f"/api/approvals/{deny_id}/decide", json={"result": "deny", "csrf": session_id},
@@ -434,7 +435,7 @@ async def test_local_mode_daemon_mcp_approval_audit_contract(tmp_path):
             assert deny_resp.status_code == 200, deny_resp.text
 
             _, fourth = await _call_tool(mcp_url, mcp_token, "please deny me")
-            assert fourth.isError is True
+            assert fourth.is_error is True
 
             # ── 8: audit log confirms both real decisions ────────────────
             audit_dir = sandbox / "authority" / "logs" / "audit"
