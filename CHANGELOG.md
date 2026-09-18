@@ -35,174 +35,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Security
-
-- `docs/security-and-compliance.md` now states the local-mode trust boundary explicitly: it is the
-  operating-system user account, so a process running as the signed-in user — including an AI client
-  with shell access, which is the normal local-mode install — can mint a session and release a
-  pending approval without a browser. The CSRF, same-origin, TTL and expiry controls on that path are
-  defenses against a hostile web page and against leaked credentials, not against local code
-  execution, and the document previously left that easy to read more broadly than it holds. Nothing
-  about the implementation changed; this corrects what is claimed for it, and names the work that
-  closes the gap (issues #426, #427, #428). Org mode is unaffected — its daemon runs on a server the
-  client has no loopback access to.
-
-### Added
-
-- A new `privacyfence_status` meta-tool: the one tool guaranteed to exist even on a fresh,
-  un-onboarded install, so an empty or partial tool list reads as "not set up yet, here's how to
-  fix that" instead of "PrivacyFence has nothing to do with this". Reports which connectors are
-  authenticated (and, for the rest, whether they were never configured, never authenticated, or
-  hit a real error). It never mints a sign-in credential itself: in local mode, when nothing is
-  authenticated yet, it tells the model to offer the human a one-time sign-in link and only mint
-  one (via `privacyfence_get_sign_in_link`) if they say yes — a bootstrap code is a live
-  credential, and minting one because a model decided to check status rather than because a human
-  asked is a wider grant than this tool is meant to be. See issue #396.
-- The MCP server now returns `instructions` in its `initialize` response, telling the connecting
-  client what PrivacyFence is and that an empty or partial tool list means its connectors aren't
-  set up yet, not that PrivacyFence has nothing to do with the conversation — and when to call
-  `privacyfence_status` to find out more. Previously the `initialize` result carried no
-  instructions at all, so a fresh install had no way to explain its own silence. See issue #396.
-- `privacyfence_status` and `privacyfence_get_sign_in_link` (which now also accepts `page:
-  "connectors"`) hand back a link straight to Settings' Connectors section — a new `GET
-  /settings/connectors` route — instead of landing an un-onboarded user on the General page with
-  no indication of what to do next. That page also shows a short, dismissible welcome banner
-  explaining what PrivacyFence does and the order of setup steps while no connector is
-  authenticated yet. See issue #396.
-- Authenticating, disabling, or refreshing a connector now pushes a real MCP `tools/list_changed`
-  notification to every open Streamable HTTP session, so a client that already connected picks up
-  the new tool list without needing to reconnect. See issue #396.
-- Python 3.14 is now covered by CI. The `test-python-compat` job's matrix runs the core suite on
-  3.11, 3.12 and 3.14 (3.13 is the full `test` job's own version), so the interpreter that is the
-  default `python3` on current Ubuntu releases is proven rather than merely implied by
-  `requires-python = ">=3.11"`.
-
-### Changed
-
-- Every daemon log line now carries the running `privacyfence` version (e.g. `v4.0.1`, or the
-  `setuptools_scm` dev form like `v4.0.1.dev3+gabc1234` between tags) right before the log level,
-  so a log excerpt is self-describing without having to correlate it against when a build was
-  installed. `setup_logging()` in `daemon_main.py` is the one place the format string lives, so
-  every logger in the process picks this up.
-- The README's Quick start steps for all three local-mode installers (DMG, Windows, `.deb`) now
-  say "ask Claude to set up PrivacyFence" instead of "ask Claude for a sign-in link" — the latter
-  named a specific tool (`privacyfence_get_sign_in_link`) a user had no way to know about unless
-  they'd already read this far; the former matches what a fresh install's own `initialize`
-  instructions already tell Claude to do on its own via `privacyfence_status`. The step also now
-  says the link lands on Settings' Connectors page rather than Settings in general. See issue #396.
-- A pending approval's `message` field, and `privacyfence_await_approval`'s own tool description,
-  now explicitly tell the calling agent to relay the approval `url` to the user right away and
-  either await or schedule a follow-up check, instead of leaving the agent to sit on a
-  `approval_pending` result quietly. PrivacyFence itself was already returning the `url` and a
-  poll tool (`privacyfence_await_approval`) alongside every pending approval — this only
-  strengthens the in-band instructions an MCP client sees, since a daemon has no way to push a
-  notification into a chat turn on its own.
-- `privacyfence_get_sign_in_link`'s result text is now a single markdown link (naming the
-  10-minute expiry in the link text itself, e.g. "Sign in to PrivacyFence — one-time link, expires
-  in 10 minutes") instead of a raw `{"url": ...}` JSON blob, so a client that renders tool text as
-  markdown shows something clickable instead of a link a human has to copy out by hand, and the
-  expiry stays legible even if only the link text survives into a screenshot or shared transcript.
-  `structuredContent` is unchanged.
-- Windows installer/executable signing now goes through SSL.com's eSigner CodeSignTool instead of
-  a locally imported Authenticode `.pfx`. CA/B Forum's June 2023 key-storage rules mean code-signing
-  private keys can no longer be issued as an exportable `.pfx` at all — SSL.com holds this one in
-  its eSigner cloud HSM — so `build.yml`'s `build-windows` job and `scripts/build_installer.ps1`'s
-  `Invoke-Signing` helper now authenticate to eSigner per signing call (`ESIGNER_USERNAME`/
-  `ESIGNER_PASSWORD`/`ESIGNER_CREDENTIAL_ID`/`ESIGNER_TOTP_SECRET`) rather than reading
-  `WINDOWS_CERTIFICATE`/`WINDOWS_CERTIFICATE_PWD`. See `docs/platform-support.md`.
-
-### Fixed
-
-- The `/approvals` and `/settings` pages no longer get logged out from under a tab that's been
-  open and actively watching (live SSE indicator, incoming approvals rendering) for longer than
-  the 30-minute idle timeout. The session was only ever touched once, when the stream connected —
-  watching it registered as zero activity — so the next click or refresh after 30 minutes returned
-  401 even though the page still reported itself as live. The stream now refreshes its own session
-  on every poll tick; an open connection is itself proof the tab is open, so the 24-hour absolute
-  cap is the only cap left for a tab that's never closed. The live indicator also now reports
-  "session expired" instead of a permanent, misleading "reconnecting…" once the browser gives up
-  for good, and the expired-session page leads with "ask Claude for a new sign-in link" rather
-  than burying it a paragraph down. See issue #423.
-- Windows installs now store per-user state (config, credentials, the audit log) under
-  `%LOCALAPPDATA%\PrivacyFence` instead of a literal `.privacyfence` folder dropped into
-  `%USERPROFILE%`. A dot-prefixed name isn't a hiding convention Windows Explorer honors the way
-  it is on POSIX, so it showed up as an ordinary, oddly-named folder sitting directly in the
-  user's profile root; `%LOCALAPPDATA%` is the idiomatic per-machine "Known Folder" location
-  (hidden by default, and the *Local* rather than *Roaming* one since this directory holds
-  credentials and audit logs that shouldn't follow a roaming profile). No migration is provided —
-  the Windows build has not had a stable release yet.
-- On Windows, the daemon staying down after a reboot is no longer silent on either side. The
-  installer now warns (instead of only logging) when it can't register the Task Scheduler
-  autostart task, and the Claude Desktop shim's own fallback launch now checks the non-admin
-  per-user install location (`%LOCALAPPDATA%\Programs\PrivacyFence\`) as well as
-  `%ProgramFiles%\PrivacyFence\` — previously it only checked the latter, so a default (non-admin)
-  install left both autostart *and* the shim's self-heal spawn unable to find the daemon, showing
-  up as an MCP "unable to connect" with nothing in Task Manager.
-- The Windows installer no longer offers a non-admin install at all (`PrivilegesRequired=admin`,
-  was `lowest`), because that warning dialog above was not describing an occasional glitch: a
-  non-elevated install could never register the autostart task in the first place. Registering a
-  Task Scheduler task with a `LogonTrigger` needs the `SeCreateGlobalPrivilege` user right, which
-  an ordinary (non-elevated) token lacks by default — including a UAC-filtered admin account's own
-  token, the same token a `lowest`-privilege install runs Setup with unless the user explicitly
-  chooses "Run as administrator" — regardless of whether the task's principal is a group or that
-  user's own account. Every non-admin install hit "Access is denied" every time, not sometimes; two
-  real users reported it. Requiring elevation up front closes the gap at its actual cause instead
-  of around it.
-- Org mode's approval page no longer shows the WebAuthn step-up helper's JavaScript source as
-  literal visible text above the approval card. `_org_bridge_shim` concatenated it ahead of its
-  own `<script>` tag instead of inside one, so the browser rendered the function bodies as page
-  content and passkey step-up never actually ran.
-- Authorizing a Google connector in org mode no longer fails with `Scope has changed from "..." to
-  "..."`. The authorization request asked Google for incremental authorization
-  (`include_granted_scopes`), so the token came back covering every scope that OAuth client already
-  held for the user and the exchange rejected it — which broke the second Google connector always,
-  and the first whenever the same client also served org-mode sign-in. The request no longer asks
-  for it, and a granted scope wider than the requested one is accepted rather than refused; a
-  grant *missing* a requested scope is still an error.
-- Org mode now rejects an `org_config.json` whose `server.issuer_url` is not an absolute `http(s)`
-  URL with a hostname, naming that key, instead of starting and then answering every request with
-  `Invalid Host header`. Surrounding whitespace in the value is stripped rather than silently
-  becoming part of the hostname the Host allowlist is built from.
-- The org-mode startup log line now lists the `Host` header values the daemon accepts, so a reverse
-  proxy forwarding a hostname the bundle doesn't name is diagnosable from `journalctl` alone.
-- Org-mode sign-in no longer ends in an infinite redirect loop. The browser session cookie was
-  `SameSite=Strict`, which a browser withholds on the landing request after the identity provider's
-  redirect — so the post-login page saw no session and bounced back to `/login`, where the
-  already-consented IdP sent the browser straight back. The cookie is now `SameSite=Lax`; CSRF
-  protection is unchanged (the double-submit token and `Origin` check guard every mutation).
-- Auto-accept rules and resource grants configured in an org-mode user's `settings.yaml` are now
-  actually applied. Every principal's rule evaluator was left empty regardless of what that user's
-  `settings.yaml` said, so each gated call went to a human approval even when a configured rule
-  covered it, and unattended sessions could make no progress at all. `privacyfence_check_policy`
-  reported `No auto-accept rule is configured for this operation` for operations that plainly had
-  one, while `privacyfence_list_auto_accept_rules` — which reads the file from disk — kept listing
-  it; the two meta-tools now agree. Local mode was never affected, and no call was ever
-  auto-accepted that shouldn't have been: the failure was always toward asking a human.
-- Org-mode clients are now offered their own connector tools over `/mcp`. The tool listing was
-  built outside the signed-in principal's scope, so it enumerated the *local* principal's
-  connectors; on an org server nobody authorizes services as `local`, so every connector was
-  skipped and the advertised tool list collapsed to PrivacyFence's own meta-tools. Gmail, Drive,
-  Slack and the rest were invisible to Claude in org mode — calls to them resolved correctly, but
-  no client could discover the tools existed to make one. Local mode was never affected, and a
-  principal is never shown tools backed by another principal's credentials.
-- `drive_download_file`, `gmail_download_attachment`, and `confluence_download_attachment` no
-  longer fail with a bare, unhelpful "Tool call failed" when `destination_dir` can't actually be
-  written to (a permissions error, or — as observed on macOS — the synthetic `/home` mount point,
-  which rejects any direct `mkdir`/`open` under it with `[Errno 45] Operation not supported`). The
-  underlying `os.makedirs`/`open` failure is now caught and re-raised as the connector's own
-  `*ClientError` naming the path and asking for a different `destination_dir`, matching every other
-  failure path these methods already had — previously the raw `OSError` skipped that wrapping
-  entirely and fell through to the generic client-facing error message, leaving the calling agent
-  with no way to tell what went wrong or that retrying with a different directory would help.
-
-## [4.0.0] — 2026-09-14
+## [4.0.0] — 2026-09-18
 
 PrivacyFence 4.0 moves the entire user interface off macOS-native AppKit and onto a local web
 server, ships on Windows and Debian/Ubuntu for the first time, and adds a centrally managed
 organization mode. If you are on 3.x, read "Upgrading from 3.x" at the end of this entry before
 installing — the menu bar icon you use today no longer exists.
 
-Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` pre-release.
+Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` / `v4.0.0b*` pre-release.
 
 ### Added
 
@@ -246,6 +86,33 @@ Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` pre-release.
   centrally hosted deployment, where the file cannot simply be written to the user's own disk.
 - **Audit-log append integrity and centralized forwarding**, so a deployment can verify its log
   has not been rewritten and ship entries to a central collector.
+- A new `privacyfence_status` meta-tool: the one tool guaranteed to exist even on a fresh,
+  un-onboarded install, so an empty or partial tool list reads as "not set up yet, here's how to
+  fix that" instead of "PrivacyFence has nothing to do with this". Reports which connectors are
+  authenticated (and, for the rest, whether they were never configured, never authenticated, or
+  hit a real error). It never mints a sign-in credential itself: in local mode, when nothing is
+  authenticated yet, it tells the model to offer the human a one-time sign-in link and only mint
+  one (via `privacyfence_get_sign_in_link`) if they say yes — a bootstrap code is a live
+  credential, and minting one because a model decided to check status rather than because a human
+  asked is a wider grant than this tool is meant to be. See issue #396.
+- The MCP server now returns `instructions` in its `initialize` response, telling the connecting
+  client what PrivacyFence is and that an empty or partial tool list means its connectors aren't
+  set up yet, not that PrivacyFence has nothing to do with the conversation — and when to call
+  `privacyfence_status` to find out more. Previously the `initialize` result carried no
+  instructions at all, so a fresh install had no way to explain its own silence. See issue #396.
+- `privacyfence_status` and `privacyfence_get_sign_in_link` (which now also accepts `page:
+  "connectors"`) hand back a link straight to Settings' Connectors section — a new `GET
+  /settings/connectors` route — instead of landing an un-onboarded user on the General page with
+  no indication of what to do next. That page also shows a short, dismissible welcome banner
+  explaining what PrivacyFence does and the order of setup steps while no connector is
+  authenticated yet. See issue #396.
+- Authenticating, disabling, or refreshing a connector now pushes a real MCP `tools/list_changed`
+  notification to every open Streamable HTTP session, so a client that already connected picks up
+  the new tool list without needing to reconnect. See issue #396.
+- Python 3.14 is now covered by CI. The `test-python-compat` job's matrix runs the core suite on
+  3.11, 3.12 and 3.14 (3.13 is the full `test` job's own version), so the interpreter that is the
+  default `python3` on current Ubuntu releases is proven rather than merely implied by
+  `requires-python = ">=3.11"`.
 
 ### Changed
 
@@ -277,6 +144,37 @@ Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` pre-release.
   pre-selected instead, so the user always lands somewhere they can act on (double-click once
   Claude Desktop is installed and associated, drag it onto Claude Desktop's Settings → Extensions
   page, or fix the association via Open With) rather than at a dead-end system dialog.
+- Every daemon log line now carries the running `privacyfence` version (e.g. `v4.0.1`, or the
+  `setuptools_scm` dev form like `v4.0.1.dev3+gabc1234` between tags) right before the log level,
+  so a log excerpt is self-describing without having to correlate it against when a build was
+  installed. `setup_logging()` in `daemon_main.py` is the one place the format string lives, so
+  every logger in the process picks this up.
+- The README's Quick start steps for all three local-mode installers (DMG, Windows, `.deb`) now
+  say "ask Claude to set up PrivacyFence" instead of "ask Claude for a sign-in link" — the latter
+  named a specific tool (`privacyfence_get_sign_in_link`) a user had no way to know about unless
+  they'd already read this far; the former matches what a fresh install's own `initialize`
+  instructions already tell Claude to do on its own via `privacyfence_status`. The step also now
+  says the link lands on Settings' Connectors page rather than Settings in general. See issue #396.
+- A pending approval's `message` field, and `privacyfence_await_approval`'s own tool description,
+  now explicitly tell the calling agent to relay the approval `url` to the user right away and
+  either await or schedule a follow-up check, instead of leaving the agent to sit on a
+  `approval_pending` result quietly. PrivacyFence itself was already returning the `url` and a
+  poll tool (`privacyfence_await_approval`) alongside every pending approval — this only
+  strengthens the in-band instructions an MCP client sees, since a daemon has no way to push a
+  notification into a chat turn on its own.
+- `privacyfence_get_sign_in_link`'s result text is now a single markdown link (naming the
+  10-minute expiry in the link text itself, e.g. "Sign in to PrivacyFence — one-time link, expires
+  in 10 minutes") instead of a raw `{"url": ...}` JSON blob, so a client that renders tool text as
+  markdown shows something clickable instead of a link a human has to copy out by hand, and the
+  expiry stays legible even if only the link text survives into a screenshot or shared transcript.
+  `structuredContent` is unchanged.
+- Windows installer/executable signing now goes through SSL.com's eSigner CodeSignTool instead of
+  a locally imported Authenticode `.pfx`. CA/B Forum's June 2023 key-storage rules mean code-signing
+  private keys can no longer be issued as an exportable `.pfx` at all — SSL.com holds this one in
+  its eSigner cloud HSM — so `build.yml`'s `build-windows` job and `scripts/build_installer.ps1`'s
+  `Invoke-Signing` helper now authenticate to eSigner per signing call (`ESIGNER_USERNAME`/
+  `ESIGNER_PASSWORD`/`ESIGNER_CREDENTIAL_ID`/`ESIGNER_TOTP_SECRET`) rather than reading
+  `WINDOWS_CERTIFICATE`/`WINDOWS_CERTIFICATE_PWD`. See `docs/platform-support.md`.
 
 ### Removed
 
@@ -292,6 +190,15 @@ Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` pre-release.
 - `--atlassian-oauth` no longer fails when Atlassian's accessible-resources response splits a single
   site across entries; the callback URL uses the shared grant key.
 - Drive API calls catch every exception, not just `HttpError`.
+- `drive_download_file`, `gmail_download_attachment`, and `confluence_download_attachment` no
+  longer fail with a bare, unhelpful "Tool call failed" when `destination_dir` can't actually be
+  written to (a permissions error, or — as observed on macOS — the synthetic `/home` mount point,
+  which rejects any direct `mkdir`/`open` under it with `[Errno 45] Operation not supported`). The
+  underlying `os.makedirs`/`open` failure is now caught and re-raised as the connector's own
+  `*ClientError` naming the path and asking for a different `destination_dir`, matching every other
+  failure path these methods already had — previously the raw `OSError` skipped that wrapping
+  entirely and fell through to the generic client-facing error message, leaving the calling agent
+  with no way to tell what went wrong or that retrying with a different directory would help.
 
 ### Security
 
@@ -325,6 +232,15 @@ Rolls up every `v4.0.0-alpha*` / `v4.0.0a*` pre-release.
   controls on the org-mode OAuth provider.
 - Dependency lock files and a scheduled dependency audit now gate the build, for the Python
   runtime and for the download Worker's own tree.
+- `docs/security-and-compliance.md` now states the local-mode trust boundary explicitly: it is the
+  operating-system user account, so a process running as the signed-in user — including an AI client
+  with shell access, which is the normal local-mode install — can mint a session and release a
+  pending approval without a browser. The CSRF, same-origin, TTL and expiry controls on that path are
+  defenses against a hostile web page and against leaked credentials, not against local code
+  execution, and the document previously left that easy to read more broadly than it holds. Nothing
+  about the implementation changed; this corrects what is claimed for it, and names the work that
+  closes the gap (issues #426, #427, #428). Org mode is unaffected — its daemon runs on a server the
+  client has no loopback access to.
 
 ### Upgrading from 3.x
 
