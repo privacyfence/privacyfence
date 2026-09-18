@@ -771,6 +771,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now checks the renamed file for it too. An already-separated install upgrading past this fix
   self-heals the next time `enable --auto` runs (`debian/postinst`, on every install and upgrade),
   with no separate migration needed.
+- B28 of the 4.1.0 action plan: the approval binder's `decided_via` and `batch_id` fields (Phase 2,
+  schema v3) are now included in the audit log's XLSX export. The row builder wrote nineteen
+  columns and neither field was among them, so a compliance reviewer working from the exported
+  workbook had no way to tell which decisions were released together under one passkey assertion —
+  that information existed only in the underlying JSONL, never in the artifact an auditor is
+  actually handed. `batch_id` is routed through the same formula-injection guard (`_excel_literal`)
+  already applied to the export's other free-text columns.
 
 ## [4.0.0] — 2026-09-14
 

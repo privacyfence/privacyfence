@@ -789,3 +789,37 @@ class TestExportIncludesSec23Columns:
 
         row = [ws.cell(row=2, column=c).value for c in range(16, 20)]
         assert row == [entry.event_id, "dep-1", "cfg-1", entry.entry_hash]
+
+
+class TestExportIncludesBinderColumns:
+    def test_decided_via_and_batch_id_present_with_expected_values(self, tmp_path):
+        pytest.importorskip("openpyxl")
+        import openpyxl
+
+        logger = AuditLogger(str(tmp_path))
+        entry = make_entry(decided_via="binder", batch_id="batch-123")
+        logger.record(entry)
+
+        output = logger.export_week_to_excel("2026-W28")
+        wb = openpyxl.load_workbook(output)
+        ws = wb["Decisions"]
+
+        headers = [ws.cell(row=1, column=c).value for c in range(20, 22)]
+        assert headers == ["Decided Via", "Batch ID"]
+
+        row = [ws.cell(row=2, column=c).value for c in range(20, 22)]
+        assert row == ["binder", "batch-123"]
+
+    def test_batch_id_formula_injection_is_neutralised(self, tmp_path):
+        pytest.importorskip("openpyxl")
+        import openpyxl
+
+        logger = AuditLogger(str(tmp_path))
+        entry = make_entry(decided_via="binder", batch_id="=WEBSERVICE(\"evil\")")
+        logger.record(entry)
+
+        output = logger.export_week_to_excel("2026-W28")
+        wb = openpyxl.load_workbook(output)
+        ws = wb["Decisions"]
+
+        assert ws.cell(row=2, column=21).value == "'=WEBSERVICE(\"evil\")"

