@@ -15,6 +15,15 @@ jobs:
       # by the "Import notarization credentials" step below — not a secret,
       # just needs to match between that step and the build step.
       NOTARIZE_PROFILE: privacyfence-ci-notary
+      # Job-level alias so the "if:" conditions below can read it -- same reasoning as
+      # build-windows's own ESIGNER_CREDENTIAL_ID alias (the secrets context isn't a recognized
+      # named-value inside a step's own "if:" expression). Signing scripts/build_pkg.sh's .pkg
+      # needs a "Developer ID Installer" identity -- a different certificate *type* than
+      # SIGN_IDENTITY/MACOS_CERTIFICATE above sign the .app/.dmg with, so it's a separate,
+      # optional secret: unset entirely (e.g. before a maintainer has provisioned one) just means
+      # the "Import pkg signing certificate" step below is skipped and the .pkg ships unsigned,
+      # same as scripts/build_pkg.sh's own --sign staying optional for a local dev build.
+      SIGN_IDENTITY_INSTALLER: ${{ secrets.SIGN_IDENTITY_INSTALLER }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,6 +118,30 @@ jobs:
             -k "" build.keychain
           rm certificate.p12
 
+      # ── Import pkg signing certificate (optional) ───────────────────────────
+      # A "Developer ID Installer" certificate, distinct from the "Developer ID
+      # Application" one imported above -- see this job's own SIGN_IDENTITY_INSTALLER
+      # comment. Same build.keychain as above (security import can hold both cert
+      # types at once); skipped entirely when the secret isn't set, so a repo that
+      # hasn't provisioned one yet still builds a valid (unsigned) .pkg rather than
+      # failing here. Requires these GitHub secrets once provisioned:
+      #   MACOS_INSTALLER_CERTIFICATE      — base64-encoded "Developer ID Installer"
+      #                                      .p12 (cert + private key)
+      #   MACOS_INSTALLER_CERTIFICATE_PWD  — the .p12 export password
+      #   SIGN_IDENTITY_INSTALLER          — e.g. "Developer ID Installer: Your Name (TEAMID)"
+      - name: Import pkg signing certificate
+        if: env.SIGN_IDENTITY_INSTALLER != ''
+        env:
+          MACOS_INSTALLER_CERTIFICATE: ${{ secrets.MACOS_INSTALLER_CERTIFICATE }}
+          MACOS_INSTALLER_CERTIFICATE_PWD: ${{ secrets.MACOS_INSTALLER_CERTIFICATE_PWD }}
+        run: |
+          echo "$MACOS_INSTALLER_CERTIFICATE" | base64 --decode > installer_certificate.p12
+          security import installer_certificate.p12 -k build.keychain \
+            -P "$MACOS_INSTALLER_CERTIFICATE_PWD" -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "" build.keychain
+          rm installer_certificate.p12
+
       # ── Import notarization credentials ─────────────────────────────────────
       # Runners are ephemeral, so the notarytool profile is (re-)registered
       # fresh every run rather than assumed to already exist. Requires an
@@ -175,12 +208,46 @@ jobs:
           path: dist/PrivacyFence-*.dmg
           retention-days: 30
 
-      # Every channel's DMG + the two org config build scripts land in the private R2 release
-      # archive (releases/<channel>/<version>/...) -- see scripts/r2_release.py's module
+      # scripts/build_pkg.sh packages the .app scripts/build_dmg.sh just built (above) into a
+      # second macOS artifact: a signed installer package whose own postinstall script provisions
+      # privilege separation (#428 D2) at install time, instead of the daemon's own runtime
+      # admin-password prompt the DMG path still depends on (#428 D1). Never re-runs PyInstaller --
+      # see that script's own header comment -- so this is cheap on top of the DMG build above. The
+      # DMG remains the primary distributable; this is an additional, fully-automated-install option.
+      - name: Build .pkg
+        env:
+          SIGN_IDENTITY: ${{ secrets.SIGN_IDENTITY_INSTALLER }}
+        run: bash scripts/build_pkg.sh
+
+      # The .pkg's own structural smoke test -- see that module's own docstring for why this
+      # stays the fast, no-install half (mirroring test_macos_packaged_smoke.py above) while the
+      # real `sudo installer -pkg ...` + launchd verification (test_macos_pkg_install.py) lives in
+      # the separate, weekly-scheduled macos-graphical-session.yml instead.
+      - name: Run pkg smoke test
+        run: pytest tests/integration/test_macos_pkg_smoke.py -v
+
+      - name: Upload pkg smoke failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-pkg-smoke-failure-diagnostics
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Upload pkg as artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: PrivacyFence-pkg
+          path: dist/PrivacyFence-*.pkg
+          retention-days: 30
+
+      # Every channel's DMG + pkg + the two org config build scripts land in the private R2
+      # release archive (releases/<channel>/<version>/...) -- see scripts/r2_release.py's module
       # docstring. This runs for stable *and* pre-release tags alike: R2 is the one archive that
       # has everything, regardless of what's also public elsewhere.
       #
-      # Alongside the DMG, also upload the two org config build scripts (scripts/
+      # Alongside the DMG and pkg, also upload the two org config build scripts (scripts/
       # build_org_bundle.py and scripts/sync_room_directory.py). They're stdlib-only / a checked-
       # out copy is not what IT admins are expected to go find -- unlike the rest of scripts/,
       # these two are themselves a release output, run by org admins (not contributors) to
@@ -204,6 +271,7 @@ jobs:
           python3 -m pip install --quiet --user boto3
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/PrivacyFence-*.dmg \
+            dist/PrivacyFence-*.pkg \
             scripts/build_org_bundle.py \
             scripts/sync_room_directory.py
 
@@ -726,6 +794,7 @@ jobs:
         with:
           files: |
             release-assets/PrivacyFence-*.dmg
+            release-assets/PrivacyFence-*.pkg
             scripts/build_org_bundle.py
             scripts/sync_room_directory.py
             release-assets/PrivacyFence-*-setup.exe
