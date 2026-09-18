@@ -778,6 +778,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that information existed only in the underlying JSONL, never in the artifact an auditor is
   actually handed. `batch_id` is routed through the same formula-injection guard (`_excel_literal`)
   already applied to the export's other free-text columns.
+- B27 of the 4.1.0 action plan: the approval binder's `batch_id` is documented (`audit_log.py`) as
+  server-minted, but `POST /api/approvals/batch/decide` (and its org-mode counterpart) accepted any
+  non-empty string the client sent verbatim and stamped it straight into the audit entry — the field
+  the provenance guarantee rests on was, in the one case that mattered, whatever the caller chose. A
+  caller could stamp unrelated decisions with the same `batch_id`, or replay one from a genuine
+  passkey assertion, and make the audit trail read as though one human action authorized them; the
+  WebAuthn authorization itself was unaffected (the fingerprint binds the decided set and is
+  recomputed server-side), only the grouping claim in the record. A resubmitted `batch_id` is now
+  kept only when the WebAuthn challenge-store lookup inside `verify_step_up()` proves it names a live
+  challenge this server began; every other path — no step-up required for the batch, or the
+  no-credential-enrolled/`require_passkey`-off fall-through — mints a fresh one instead of trusting
+  the request body.
 
 ## [4.0.0] — 2026-09-14
 

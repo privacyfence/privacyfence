@@ -519,6 +519,7 @@ def build_routes(
 
         raw_batch_id = payload.get("batch_id")
         batch_id = raw_batch_id if isinstance(raw_batch_id, str) and raw_batch_id else uuid.uuid4().hex
+        batch_id_verified = False
 
         if step_up.enabled and _batch_needs_step_up(principal, parsed):
             if step_up.batch == "per_item":
@@ -546,6 +547,13 @@ def build_routes(
                     return JSONResponse({"error": "step_up_expired"}, status_code=400)
                 except WebAuthnError as exc:
                     return JSONResponse({"error": str(exc)}, status_code=401)
+                # See routes_approvals.py's own batch_decide -- the challenge store lookup
+                # inside verify_step_up() is what proves this batch_id is one the server
+                # actually minted a live challenge under, not just a client-chosen string.
+                batch_id_verified = True
+
+        if not batch_id_verified:
+            batch_id = uuid.uuid4().hex
 
         results = registry.answer_batch(parsed, principal_id=principal.id, decided_via="binder", batch_id=batch_id)
         return JSONResponse({"batch_id": batch_id, "results": results})

@@ -267,7 +267,13 @@ class AuditEntry:
                               # of, when decided_via == "binder" -- "" otherwise. Lets a reviewer (or
                               # a compliance report) group every audit entry a single passkey
                               # assertion released (Phase 3 of the binder plan) back into the one
-                              # human action that authorized them.
+                              # human action that authorized them. Genuinely server-minted, not just
+                              # documented as such: routes_approvals.py's and
+                              # routes_org_approvals.py's own batch_decide only keep a
+                              # client-supplied value here when the WebAuthn challenge-store lookup
+                              # inside verify_step_up() proves it names a live challenge this server
+                              # began; every other path mints a fresh uuid4 instead of trusting the
+                              # request body.
 
     # ---- SEC-23 fields ----
     # All six below default to a value meaning "not yet stamped" and are
