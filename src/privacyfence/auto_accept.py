@@ -21,7 +21,8 @@ from .secure_files import atomic_write_text
 
 if TYPE_CHECKING:
     # Only for the type hint on `_AutoAcceptState.policy_v2_store_rules`/`set_policy_v2_store_rules`
-    # below (P6) -- a real (non-TYPE_CHECKING) import would be circular: `policy.engine` itself
+    # (P6) and `get_policy_v2_rules`/`add_policy_v2_rules`/`remove_policy_v2_rule` (P7) below -- a
+    # real (non-TYPE_CHECKING) import would be circular: `policy.engine` itself
     # imports `ReviewContext`/`temp_accept_key` from this module.
     from .policy.engine import PolicyRule
 
@@ -1621,6 +1622,82 @@ def set_policy_v2_store_rules(rules: "list[PolicyRule]") -> None:
 
 def get_policy_v2_store_rules() -> "list[PolicyRule]":
     return _REGISTRY.get().policy_v2_store_rules
+
+
+def get_policy_v2_rules() -> "list[PolicyRule]":
+    """Read-only snapshot of the on-disk v2 ``auto_accept:`` section, straight from disk -- the P7
+    bridge counterpart of ``get_current_config()``'s v1 read. Backs ``privacyfence_list_policy``,
+    which needs each rule's real, stable id (``policy.store.rule_id_for``) to give a model something
+    ``privacyfence_propose_policy_change``'s ``update``/``remove`` can actually target -- unlike
+    ``get_policy_v2_store_rules()`` above, which is the in-memory hot-reloaded cache ``gate.py``
+    evaluates against, this always re-reads the file, the same "addressable, not cached" posture
+    ``get_current_config()`` already takes for the v1 side.
+
+    Imports ``policy.store`` locally rather than at module level: ``policy.engine`` (imported by
+    ``policy.store``) itself imports ``ReviewContext``/``temp_accept_key`` from this module, so a
+    module-level import here would be circular -- see the ``TYPE_CHECKING`` import above this
+    function's own comment for the same constraint.
+    """
+    from .policy import store as policy_store
+
+    state = _REGISTRY.get()
+    if state.config_path is None:
+        raise RuntimeError("auto_accept config path not initialized")
+    with state.write_lock:
+        with open(state.config_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+    return policy_store.compile_rules_from_config(cfg)
+
+
+def add_policy_v2_rules(rules: "list[PolicyRule]") -> bool:
+    """Merge ``rules`` into the on-disk v2 ``auto_accept:`` section and hot-reload the v2-only store
+    layer (``set_policy_v2_store_rules``) -- the P7 bridge-facing counterpart of
+    ``settings_controller.SettingsController.add_policy_rule``, sharing the same
+    ``policy.store.merge_rules``/``rules_to_config`` shape but against this module's own config
+    path/write lock rather than a live ``SettingsController`` instance, which ``gate.py`` (no web
+    surface of its own) has no way to reach. Returns whether the on-disk rule set actually changed --
+    merging a rule that adds no new ``(predicate, value, conditions)`` row and no new operation to an
+    existing one is a no-op, mirroring ``add_auto_accept_rule``'s own idempotence.
+    """
+    from .policy import store as policy_store
+
+    state = _REGISTRY.get()
+    if state.config_path is None:
+        raise RuntimeError("auto_accept config path not initialized")
+    with state.write_lock:
+        with open(state.config_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        existing = policy_store.compile_rules_from_config(cfg)
+        merged = policy_store.merge_rules(existing + list(rules))
+        if merged == existing:
+            return False
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(merged)
+        cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] = True
+        atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
+        set_policy_v2_store_rules(merged)
+        return True
+
+
+def remove_policy_v2_rule(rule_id: str) -> bool:
+    """Remove the rule with this stable id from the on-disk v2 ``auto_accept:`` section entirely --
+    the P7 bridge-facing counterpart of ``SettingsController.remove_policy_rule``. Returns whether
+    anything was actually removed."""
+    from .policy import store as policy_store
+
+    state = _REGISTRY.get()
+    if state.config_path is None:
+        raise RuntimeError("auto_accept config path not initialized")
+    with state.write_lock:
+        with open(state.config_path, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        existing = policy_store.compile_rules_from_config(cfg)
+        remaining = [rule for rule in existing if rule.id != rule_id]
+        if len(remaining) == len(existing):
+            return False
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(remaining)
+        atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
+        set_policy_v2_store_rules(remaining)
+        return True
 
 
 def add_auto_accept_rule(operation_key: str, rule_name: str, value: Any) -> None:

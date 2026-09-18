@@ -234,6 +234,36 @@ class TestMetaToolManifest:
         assert mcp_tools.PRIVACYFENCE_STATUS_TOOL in mcp_tools.META_TOOLS
         assert mcp_tools.PRIVACYFENCE_STATUS_TOOL.name in mcp_tools.META_TOOL_NAMES
 
+    def test_check_policy_documents_matched_rule_id_in_its_description(self):
+        # P7: check_policy's contract gained a field: no schema to assert against (it's part of
+        # the free-form result dict), so the description is the one place this is documented.
+        assert "matched_rule_id" in mcp_tools.CHECK_POLICY_TOOL.description
+
+    def test_list_policy_and_propose_policy_change_are_in_the_meta_tool_manifest(self):
+        assert mcp_tools.LIST_POLICY_TOOL in mcp_tools.META_TOOLS
+        assert mcp_tools.PROPOSE_POLICY_CHANGE_TOOL in mcp_tools.META_TOOLS
+
+    def test_propose_policy_change_requires_only_operation_and_reason(self):
+        # rule_id/group/value/verbs are each conditionally required depending on operation --
+        # gate.propose_policy_change enforces that at call time (ValueError before any popup),
+        # not the schema, the same posture propose_rule_change's own operation_key/rule_name/... vs
+        # connector/config_key/... split already takes.
+        schema = mcp_tools.PROPOSE_POLICY_CHANGE_TOOL.input_schema
+        assert schema["properties"]["operation"]["enum"] == ["add", "update", "remove"]
+        assert set(schema["required"]) == {"operation", "reason"}
+        assert schema["properties"]["value"]["type"] == "array"
+        assert schema["properties"]["verbs"]["type"] == "array"
+
+    def test_list_policy_requires_only_reason(self):
+        schema = mcp_tools.LIST_POLICY_TOOL.input_schema
+        assert schema["required"] == ["reason"]
+
+    def test_old_tool_descriptions_point_at_their_replacements(self):
+        assert "privacyfence_list_policy" in mcp_tools.LIST_RULES_TOOL.description
+        assert "DEPRECATED" in mcp_tools.LIST_RULES_TOOL.description
+        assert "privacyfence_propose_policy_change" in mcp_tools.PROPOSE_RULE_CHANGE_TOOL.description
+        assert "DEPRECATED" in mcp_tools.PROPOSE_RULE_CHANGE_TOOL.description
+
 
 # --------------------------------------------------------------------------- #
 # TST-02's three named behaviors, driven end to end over the real /mcp
@@ -415,3 +445,53 @@ class TestListAutoAcceptRulesDisclosureIsAudited:
             await session.call_tool("privacyfence_list_auto_accept_rules", {"reason": "second check"})
         entries = _read_audit_entries(self._audit_dir)
         assert [e["claude_reason"] for e in entries] == ["first check", "second check"]
+
+
+class TestListAndProposePolicyOverRealTransport:
+    """P7's two new meta-tools, driven end to end the same way
+    TestListAutoAcceptRulesDisclosureIsAudited above proves the older pair's wiring."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence import gate
+        init_audit_logger(str(tmp_path))
+        self._audit_dir = tmp_path
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        auto_accept.init_config_path(str(config_path))
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+
+    async def test_list_policy_starts_empty_with_a_real_scope_catalogue(self):
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("privacyfence_list_policy", {"reason": "checking"})
+        assert result.is_error is False
+        assert result.structured_content["rules"] == []
+        assert any(g["id"] == "drive.folder" for g in result.structured_content["scope_groups"])
+
+        entries = _read_audit_entries(self._audit_dir)
+        assert entries[0]["decision"] == "policy_listed"
+
+    async def test_propose_then_list_round_trips_the_rule_by_id(self):
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            propose_result = await session.call_tool("privacyfence_propose_policy_change", {
+                "operation": "add", "reason": "Trusting the sandbox folder.",
+                "group": "drive.folder", "value": ["folder1"], "verbs": ["read"],
+            })
+            assert propose_result.is_error is False
+            rule_id = propose_result.structured_content["rule_ids"][0]
+
+            list_result = await session.call_tool("privacyfence_list_policy", {"reason": "checking"})
+        rows = list_result.structured_content["rules"]
+        assert [row["id"] for row in rows] == [rule_id]
+
+    async def test_a_verb_the_group_cannot_govern_is_a_tool_error_not_a_popup(self):
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("privacyfence_propose_policy_change", {
+                "operation": "add", "reason": "x",
+                "group": "drive.folder", "value": ["folder1"], "verbs": ["send"],
+            })
+        assert result.is_error is True
+        assert "cannot govern" in result.content[0].text
