@@ -879,6 +879,24 @@ class TestBatchDecide:
         assert deny_me.decided_via == "binder"
         assert accept_me.batch_id == deny_me.batch_id == body["batch_id"]
 
+    def test_a_client_supplied_batch_id_is_never_recorded_verbatim(self, client, sessions, web_ui):
+        # B27: batch_id is documented (audit_log.py) as server-minted. With
+        # no step-up in play there is never a live challenge to prove a
+        # submitted batch_id against, so a forged one must be replaced
+        # rather than trusted straight into the audit trail.
+        session_id = _signed_in(client, sessions)
+        approval = _register(web_ui)
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "accept"}],
+            "batch_id": "attacker-forged-batch-id",
+        })
+
+        assert r.status_code == 200
+        assert r.json()["batch_id"] != "attacker-forged-batch-id"
+        assert approval.batch_id == r.json()["batch_id"]
+        assert approval.batch_id != "attacker-forged-batch-id"
+
     def test_a_non_batchable_item_reports_not_batchable_and_is_left_untouched(self, client, sessions, web_ui):
         session_id = _signed_in(client, sessions)
         confirm = web_ui.deferred_registry.register_confirm()
@@ -981,8 +999,13 @@ class TestBatchStepUp:
         session_id = _signed_in(client, sessions)
         r = client.post("/api/approvals/batch/decide", json={
             "csrf": session_id, "items": [{"id": approval.id, "result": "deny"}],
+            "batch_id": "attacker-forged-batch-id",
         })
         assert r.status_code == 200
+        # B27: _batch_needs_step_up() never runs verify_step_up() here, so a
+        # client-supplied batch_id must not survive into the audit trail.
+        assert r.json()["batch_id"] != "attacker-forged-batch-id"
+        assert approval.batch_id == r.json()["batch_id"]
 
     def test_no_assertion_offers_a_428_with_a_batch_id(self):
         self._enroll()
@@ -1150,9 +1173,15 @@ class TestBatchStepUp:
         session_id = _signed_in(client, sessions)
         r = client.post("/api/approvals/batch/decide", json={
             "csrf": session_id, "items": [{"id": approval.id, "result": "accept"}],
+            "batch_id": "attacker-forged-batch-id",
         })
         assert r.status_code == 200
         assert r.json()["results"] == [{"id": approval.id, "outcome": "applied"}]
+        # B27: this fallthrough (no enrolled credential, require_passkey off)
+        # never verified the assertion, so the client-supplied batch_id must
+        # not reach the audit trail either.
+        assert r.json()["batch_id"] != "attacker-forged-batch-id"
+        assert approval.batch_id == r.json()["batch_id"]
 
     def test_per_item_mode_refuses_the_batch_with_nothing_applied(self):
         self._enroll()

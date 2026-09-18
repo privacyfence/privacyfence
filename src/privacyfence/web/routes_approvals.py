@@ -624,6 +624,7 @@ def create_app(
 
         raw_batch_id = payload.get("batch_id")
         batch_id = raw_batch_id if isinstance(raw_batch_id, str) and raw_batch_id else uuid.uuid4().hex
+        batch_id_verified = False
 
         if step_up is not None and step_up.enabled and _batch_needs_step_up(parsed, registry):
             if step_up.batch == "per_item":
@@ -651,6 +652,13 @@ def create_app(
                     return JSONResponse({"error": "step_up_expired"}, status_code=400)
                 except WebAuthnError as exc:
                     return JSONResponse({"error": str(exc)}, status_code=401)
+                # The challenge store lookup inside verify_step_up() only succeeds for a
+                # batch_id this server minted a live challenge under -- that's the one case
+                # a client-supplied batch_id is provably genuine rather than an arbitrary string.
+                batch_id_verified = True
+
+        if not batch_id_verified:
+            batch_id = uuid.uuid4().hex
 
         results = registry.answer_batch(parsed, decided_via="binder", batch_id=batch_id)
         return JSONResponse({"batch_id": batch_id, "results": results})
