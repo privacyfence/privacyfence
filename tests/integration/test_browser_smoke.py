@@ -331,6 +331,48 @@ def _register_card(web_ui: WebApprovalUI, **kwargs) -> tuple[threading.Thread, o
     return t, card
 
 
+def _register_gated_card(
+    web_ui: WebApprovalUI, *, gate_kind: str, dedupe_key: str, summary: str,
+    tool: str, tool_name: str, connector: str = "gmail",
+) -> tuple[threading.Thread, object]:
+    """Like ``_register_card`` above, but pre-registers a real
+    ``PendingApproval`` and hands it to the blocking call the way gate.py's
+    own deferred protocol does -- so the row carries a genuine
+    ``gate_kind``/``summary``/``tool_name``, which is what the list row
+    actually renders from. ``_register_card``'s direct call has no gated
+    context to attach any of that to and registers confirm-shaped (see
+    web_approval_ui._run_card), which is fine for the decision-flow tests
+    but renders a row with no direction and no object."""
+    approval, _created = web_ui.deferred_registry.register_or_coalesce(
+        dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind=gate_kind,
+        request_id=f"req-{dedupe_key}", summary=summary, tool_name=tool_name,
+        operation_key=f"{connector}.{tool}",
+    )
+    box: dict = {}
+
+    def run():
+        if gate_kind == "review":
+            box["result"] = web_ui.show_read_popup(
+                tool_name, {"From": "a@b.com"}, "body text", None, approval=approval,
+            )
+        else:
+            box["result"] = web_ui.show_popup(
+                tool_name, {"To": "a@b.com"}, "body text", approval=approval,
+            )
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    # The card's own HTML is written by the blocking call, so it is also
+    # the readiness signal that the call has actually parked on this
+    # approval and a resolve() will reach it.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not approval.html:
+        time.sleep(0.01)
+    assert approval.html, "gated card never parked on its approval"
+    t.result_box = box
+    return t, approval
+
+
 def _register_confirm(web_ui: WebApprovalUI, categories: list[str]) -> tuple[threading.Thread, object]:
     """Same pattern as ``_register_card`` above, but for the PII/rule
     confirmation dialog shape (``show_pii_confirmation_popup``) -- a bare
@@ -699,6 +741,97 @@ class TestApprovalListBehavior:
             thread_b.join(timeout=5)
             page.wait_for_selector(f'[data-approval-id="{card_b.id}"]', state="detached", timeout=5000)
             assert page.get_by_text("Nothing is waiting.").is_visible()
+        finally:
+            for thread, card in ((thread_a, card_a), (thread_b, card_b)):
+                if thread.is_alive():
+                    web_ui.resolve(card.id, "deny")
+                    thread.join(timeout=5)
+
+    def test_row_survives_an_sse_rerender_unchanged(self, page, local_server):
+        """``_row_html`` (first paint) and ``rowHtml`` (live re-render) are
+        hand-kept mirrors of each other, and every SSE tick replaces the
+        list's markup wholesale -- so anything the two disagree about shows
+        up as a row that silently changes shape a poll interval after the
+        page loads. This pins the fields that carry the decision: the
+        object as the title, the direction pill, and the tool name on the
+        meta line.
+
+        Driven by resolving a *second* card, which forces a re-render of
+        the row under test without touching it."""
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread_a, card_a = _register_gated_card(
+            web_ui, gate_kind="review", dedupe_key="ka", tool="gmail_get_thread",
+            tool_name="Read Email Thread", summary='Read "Q3 forecast — legal review"',
+        )
+        thread_b, card_b = _register_gated_card(
+            web_ui, gate_kind="popup", dedupe_key="kb", tool="gmail_add_label",
+            tool_name="Add Gmail Label", summary="Label as Work/Forecast",
+        )
+        assert card_a.id != card_b.id
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            row = page.locator(f'[data-approval-id="{card_a.id}"]')
+            page.wait_for_selector(f'[data-approval-id="{card_a.id}"]')
+            before = {
+                "title": row.locator(".pf-approval-title").text_content(),
+                "kicker": row.locator(".pf-approval-kicker").text_content(),
+                "pill": row.locator(".pf-approval-pill").text_content(),
+            }
+            # The object is the headline and the tool name has moved to the
+            # meta line -- the raw tool id appears on neither.
+            assert before["pill"] == "Read"
+            assert before["title"] == 'Read "Q3 forecast — legal review"'
+            assert "Read Email Thread" in before["kicker"]
+            assert "gmail_get_thread" not in before["kicker"]
+
+            web_ui.resolve(card_b.id, "deny")
+            thread_b.join(timeout=5)
+            page.wait_for_selector(f'[data-approval-id="{card_b.id}"]', state="detached", timeout=5000)
+
+            after = {
+                "title": row.locator(".pf-approval-title").text_content(),
+                "kicker": row.locator(".pf-approval-kicker").text_content(),
+                "pill": row.locator(".pf-approval-pill").text_content(),
+            }
+            assert after == before
+        finally:
+            for thread, card in ((thread_a, card_a), (thread_b, card_b)):
+                if thread.is_alive():
+                    web_ui.resolve(card.id, "deny")
+                    thread.join(timeout=5)
+
+    def test_heading_count_follows_the_live_list(self, page, local_server):
+        """The heading sits outside ``#pf-approvals-list``, so render()'s
+        own innerHTML write does not touch it -- without an explicit
+        update it keeps whatever count the first paint had, forever."""
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread_a, card_a = _register_gated_card(
+            web_ui, gate_kind="review", dedupe_key="ka", tool="gmail_get_thread",
+            tool_name="Read Email Thread", summary="Q3 forecast",
+        )
+        thread_b, card_b = _register_gated_card(
+            web_ui, gate_kind="popup", dedupe_key="kb", tool="gmail_add_label",
+            tool_name="Add Gmail Label", summary="Label as Work/Forecast",
+        )
+        assert card_a.id != card_b.id
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(f'[data-approval-id="{card_b.id}"]')
+            heading_text = page.locator("#pf-approvals-heading").text_content()
+            assert "2 approvals pending" in heading_text
+            assert "1 read · 1 write" in heading_text
+
+            web_ui.resolve(card_b.id, "deny")
+            thread_b.join(timeout=5)
+            page.wait_for_selector(f'[data-approval-id="{card_b.id}"]', state="detached", timeout=5000)
+            heading = page.locator("#pf-approvals-heading")
+            page.wait_for_function(
+                "el => el.textContent.indexOf('1 approval pending') !== -1",
+                arg=heading.element_handle(),
+                timeout=5000,
+            )
         finally:
             for thread, card in ((thread_a, card_a), (thread_b, card_b)):
                 if thread.is_alive():

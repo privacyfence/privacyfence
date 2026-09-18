@@ -99,7 +99,12 @@ _EMPTY_STATE = (
 
 _CSS = """
 .pf-approvals-page { max-width: 720px; margin: 0 auto; padding: 24px 20px 60px; width: 100%; }
-.pf-approvals-heading { font-size: 13px; color: var(--color-neutral-600); margin-bottom: 14px; }
+.pf-approvals-heading {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;
+}
+.pf-approvals-heading:empty { margin-bottom: 0; }
+.pf-approvals-count { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: var(--color-text); }
+.pf-approvals-composition { font-size: 12.5px; color: var(--color-neutral-600); }
 .pf-approvals-empty {
   text-align: center; padding: 80px 20px; color: var(--color-neutral-600);
 }
@@ -116,9 +121,16 @@ _CSS = """
   border: 1px solid var(--color-divider); background: transparent; color: var(--color-danger); cursor: pointer;
 }
 .pf-btn-deny-selected:disabled { opacity: 0.5; cursor: default; }
+/* Outline, not filled. Review is the one filled control on this page and
+   it is the one that opens disclosure; approving a whole queue off
+   one-line summaries is the habituation failure the card exists to
+   prevent, so the least-informed action must not also be the loudest. The
+   composition label on it ("Approve 12 · 9 reads, 3 writes") stays -- that
+   part is the guard, not the problem. */
 .pf-btn-approve-selected {
   font-size: 12.5px; font-weight: 600; padding: 7px 12px; border-radius: var(--radius-md);
-  border: 1px solid var(--color-accent); background: var(--color-accent); color: #fff; cursor: pointer;
+  border: 1px solid var(--color-accent); background: transparent;
+  color: var(--color-accent-700); cursor: pointer;
 }
 .pf-btn-approve-selected:disabled { opacity: 0.5; cursor: default; }
 .pf-approval-group { margin-bottom: 14px; }
@@ -128,9 +140,13 @@ _CSS = """
 }
 .pf-approval-group-header label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .pf-approval-row {
-  display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+  display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px;
   background: var(--color-surface); border-radius: var(--radius-lg); margin-bottom: 10px; flex-wrap: wrap;
 }
+/* The row is two lines now (meta above, object below), so its controls
+   align to the top of the text block rather than to its centre. */
+.pf-approval-row > input[type="checkbox"] { margin-top: 5px; }
+.pf-approval-actions { margin-top: 1px; }
 .pf-approval-icon {
   width: 28px; height: 28px; border-radius: var(--radius-md); flex-shrink: 0; object-fit: contain;
   background: var(--color-neutral-200);
@@ -139,12 +155,28 @@ _CSS = """
   display: flex; align-items: center; justify-content: center;
   font-size: 12px; font-weight: 700; color: var(--color-neutral-600);
 }
-.pf-approval-main { flex: 1; min-width: 0; }
+.pf-approval-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+/* Meta above, object below -- the row's headline is what is being touched,
+   not which tool touches it. See _row_html. */
+.pf-approval-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pf-approval-title {
-  font-size: 14px; font-weight: 600; color: var(--color-text);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 15px; font-weight: 600; color: var(--color-text); line-height: 1.35;
+  /* Clamped rather than free-flowing: a summary is short by construction
+     (see gate.py's call sites) but nothing enforces it, and an unbounded
+     title would let one row push the rest of the queue off screen. */
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; text-overflow: ellipsis;
 }
-.pf-approval-kicker { font-size: 12px; color: var(--color-neutral-600); margin-top: 2px; }
+.pf-approval-kicker { font-size: 12px; color: var(--color-neutral-600); }
+/* Read/write direction, from gate_kind -- the same two token families and
+   the same wording as the card's own .pf-pill, so a row and the card it
+   opens agree on sight. Both pairs invert in tokens.css's dark block. */
+.pf-approval-pill {
+  font: 600 10px ui-monospace, Menlo, monospace; letter-spacing: 0.05em;
+  text-transform: uppercase; padding: 2px 8px; border-radius: 20px; flex-shrink: 0;
+}
+.pf-approval-pill-read { background: var(--color-accent-100); color: var(--color-accent-700); }
+.pf-approval-pill-write { background: var(--color-accent-2-100); color: var(--color-accent-2-700); }
 .pf-approval-blocked-reason { font-size: 11.5px; color: var(--color-neutral-600); margin-top: 4px; font-style: italic; }
 .pf-approval-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .pf-btn-deny, .pf-btn-review, .pf-btn-details {
@@ -275,21 +307,34 @@ _JS = """
     return '<div class="pf-approval-details" id="pf-details-' + esc(id) + '" hidden></div>';
   }
 
+  // Mirrors approval_list_html._pill_html -- see that function.
+  function pillHtml(gateKind) {
+    if (gateKind === 'review') { return '<span class="pf-approval-pill pf-approval-pill-read">Read</span>'; }
+    if (gateKind === 'popup') { return '<span class="pf-approval-pill pf-approval-pill-write">Write</span>'; }
+    return '';
+  }
+
   function rowHtml(row) {
-    var title = esc(row.tool_name || row.summary || (row.kind === 'card' ? 'Approval' : 'Confirmation'));
-    var kicker = [row.connector ? row.connector.charAt(0).toUpperCase() + row.connector.slice(1) : '',
-      row.tool || '', relAge(row.created_at)].filter(Boolean).join(' \\u00b7 ');
+    // Mirrors approval_list_html._row_html: the object is the headline
+    // (summary), the tool that touches it is the meta line.
+    var title = esc(row.summary || row.tool_name || (row.kind === 'card' ? 'Approval' : 'Confirmation'));
+    var kicker = [row.tool_name || '',
+      row.connector ? row.connector.charAt(0).toUpperCase() + row.connector.slice(1) : '',
+      relAge(row.created_at)].filter(Boolean).join(' \\u00b7 ');
     var initial = (row.connector || '?').charAt(0).toUpperCase();
     var checkbox = row.batchable
       ? '<input type="checkbox" data-select="' + esc(row.id) + '" aria-label="Select this approval">' : '';
     var blockedNote = (!row.batchable && row.blocked_reason)
       ? '<div class="pf-approval-blocked-reason">' + esc(row.blocked_reason) + '</div>' : '';
     return '<div class="pf-approval-row' + (row.batchable ? '' : ' pf-approval-row-unbatchable') + '"' +
-      ' data-approval-id="' + esc(row.id) + '" data-batchable="' + (row.batchable ? '1' : '0') + '">' +
+      ' data-approval-id="' + esc(row.id) + '" data-tool="' + esc(row.tool || '') + '"' +
+      ' data-batchable="' + (row.batchable ? '1' : '0') + '">' +
       checkbox +
       '<div class="pf-approval-icon pf-approval-icon-fallback">' + esc(initial) + '</div>' +
-      '<div class="pf-approval-main"><div class="pf-approval-title">' + title + '</div>' +
-      '<div class="pf-approval-kicker">' + esc(kicker) + '</div>' + blockedNote + '</div>' +
+      '<div class="pf-approval-main">' +
+      '<div class="pf-approval-meta">' + pillHtml(row.gate_kind || '') +
+      '<span class="pf-approval-kicker">' + esc(kicker) + '</span></div>' +
+      '<div class="pf-approval-title">' + title + '</div>' + blockedNote + '</div>' +
       '<div class="pf-approval-actions">' +
       '<button type="button" class="pf-btn-details" data-details="' + esc(row.id) + '">Details</button>' +
       '<a class="pf-btn-review" href="/approvals/' + esc(row.id) + '">Review \\u2192</a>' +
@@ -333,6 +378,33 @@ _JS = """
     if (composition.reads) { parts.push(composition.reads + (composition.reads === 1 ? ' read' : ' reads')); }
     if (composition.writes) { parts.push(composition.writes + (composition.writes === 1 ? ' write' : ' writes')); }
     return parts.join(', ');
+  }
+
+  // Mirrors approval_list_html._heading_html. The heading lives outside
+  // #pf-approvals-list, so unlike the rows it is not replaced by render()'s
+  // own innerHTML write -- without this it keeps whatever count the first
+  // paint happened to have, indefinitely.
+  function updateHeading(rows) {
+    var el = document.getElementById('pf-approvals-heading');
+    if (!el) return;
+    el.textContent = '';
+    if (!rows.length) return;
+    var reads = 0, writes = 0;
+    rows.forEach(function (r) {
+      if (r.gate_kind === 'popup') { writes++; } else if (r.gate_kind === 'review') { reads++; }
+    });
+    var count = document.createElement('span');
+    count.className = 'pf-approvals-count';
+    count.textContent = rows.length + ' approval' + (rows.length === 1 ? '' : 's') + ' pending';
+    el.appendChild(count);
+    var parts = [];
+    if (reads) { parts.push(reads + (reads === 1 ? ' read' : ' reads')); }
+    if (writes) { parts.push(writes + (writes === 1 ? ' write' : ' writes')); }
+    if (!parts.length) return;
+    var composition = document.createElement('span');
+    composition.className = 'pf-approvals-composition';
+    composition.textContent = parts.join(' \\u00b7 ');
+    el.appendChild(composition);
   }
 
   function updateToolbar(rows) {
@@ -395,6 +467,7 @@ _JS = """
       }
       applySelectionToCheckboxes();
     }
+    updateHeading(pfLastRows);
     updateToolbar(pfLastRows);
   }
   window.__pfRenderApprovals = render;
@@ -553,25 +626,43 @@ _JS = """
 
   var pfDetailsCache = {};
 
-  function renderDetails(container, preview) {
+  function detailsRow(container, key, value) {
+    var row = document.createElement('div');
+    row.className = 'pf-approval-details-row';
+    var k = document.createElement('span');
+    k.className = 'pf-approval-details-key';
+    k.textContent = key + ':';
+    var v = document.createElement('span');
+    v.textContent = value;
+    row.appendChild(k);
+    row.appendChild(v);
+    container.appendChild(row);
+  }
+
+  // `toolId` is the raw MCP tool id. It used to be the row's own kicker,
+  // where it displaced the connector and the age without telling anyone
+  // what the request was about; it belongs here, with the rest of the
+  // metadata someone opening a disclosure is asking for. It comes off the
+  // row payload this page already has -- no extra /preview field.
+  function renderDetails(container, preview, toolId) {
     container.textContent = '';
     var keys = Object.keys(preview || {});
+    if (toolId) { detailsRow(container, 'Tool', toolId); }
     if (!keys.length) {
-      container.textContent = 'No further details.';
+      if (!toolId) { container.textContent = 'No further details.'; }
       return;
     }
     keys.forEach(function (key) {
-      var row = document.createElement('div');
-      row.className = 'pf-approval-details-row';
-      var k = document.createElement('span');
-      k.className = 'pf-approval-details-key';
-      k.textContent = key + ':';
-      var v = document.createElement('span');
-      v.textContent = preview[key];
-      row.appendChild(k);
-      row.appendChild(v);
-      container.appendChild(row);
+      detailsRow(container, key, preview[key]);
     });
+  }
+
+  // Read off the row element rather than pfLastRows, which is only
+  // populated once __pfRenderApprovals has run at least once -- on first
+  // paint the rows are server-rendered and that array is still empty.
+  function toolIdFor(id) {
+    var row = document.querySelector('[data-approval-id="' + id + '"]');
+    return (row && row.getAttribute('data-tool')) || '';
   }
 
   function toggleDetails(id) {
@@ -582,7 +673,7 @@ _JS = """
       return;
     }
     if (pfDetailsCache[id]) {
-      renderDetails(container, pfDetailsCache[id]);
+      renderDetails(container, pfDetailsCache[id], toolIdFor(id));
       container.removeAttribute('hidden');
       return;
     }
@@ -590,7 +681,7 @@ _JS = """
       .then(function (r) { return r.ok ? r.json() : {preview: {}}; })
       .then(function (data) {
         pfDetailsCache[id] = data.preview || {};
-        renderDetails(container, pfDetailsCache[id]);
+        renderDetails(container, pfDetailsCache[id], toolIdFor(id));
         container.removeAttribute('hidden');
       })
       .catch(function () {
@@ -740,11 +831,35 @@ def _details_html(row_id: str) -> str:
     return f'<div class="pf-approval-details" id="pf-details-{_html_escape(row_id)}" hidden></div>'
 
 
+_GATE_PILL = {"review": ("read", "Read"), "popup": ("write", "Write")}
+
+
+def _pill_html(gate_kind: str) -> str:
+    """The row's own Read/Write pill, from ``gate_kind`` -- already in
+    ``row_from_approval``'s output and already driving the Approve-selected
+    composition label, so this needs no new data. "" for a bare confirm/
+    choice dialog, which has no direction. The JS mirror is ``pillHtml``."""
+    variant = _GATE_PILL.get(gate_kind)
+    if variant is None:
+        return ""
+    modifier, text = variant
+    return f'<span class="pf-approval-pill pf-approval-pill-{modifier}">{text}</span>'
+
+
 def _row_html(row: dict[str, Any]) -> str:
     label = "Confirmation" if row.get("kind") != "card" else "Approval"
-    title = row.get("tool_name") or row.get("summary") or label
+    # The object is the headline; the tool that touches it is the meta
+    # line. `summary` is the one field naming what the request is actually
+    # about ("Read \"Q3 forecast — legal review\"" -- see gate.py's own
+    # connector call sites), and it used to be a fallback title that a
+    # normal row never reached, because tool_name is always populated. The
+    # fallback chain stays for a confirm/choice dialog, which has no
+    # summary at all.
+    title = row.get("summary") or row.get("tool_name") or label
     connector = (row.get("connector") or "").capitalize()
-    kicker = " · ".join(p for p in (connector, row.get("tool") or "", _relative_age(row.get("created_at", ""))) if p)
+    kicker = " · ".join(
+        p for p in (row.get("tool_name") or "", connector, _relative_age(row.get("created_at", ""))) if p
+    )
     rid = row["id"]
     batchable = bool(row.get("batchable"))
     icon_uri = approval_icons.icon_data_uri(approval_icons.connector_icon_path(row.get("connector", "")))
@@ -764,12 +879,16 @@ def _row_html(row: dict[str, Any]) -> str:
     row_class = "pf-approval-row" if batchable else "pf-approval-row pf-approval-row-unbatchable"
     return (
         f'<div class="{row_class}" data-approval-id="{_html_escape(rid)}" '
+        f'data-tool="{_html_escape(row.get("tool") or "")}" '
         f'data-batchable="{"1" if batchable else "0"}">'
         f"{checkbox_html}"
         f"{icon_html}"
         '<div class="pf-approval-main">'
+        '<div class="pf-approval-meta">'
+        f'{_pill_html(row.get("gate_kind") or "")}'
+        f'<span class="pf-approval-kicker">{_html_escape(kicker)}</span>'
+        "</div>"
         f'<div class="pf-approval-title">{_html_escape(title)}</div>'
-        f'<div class="pf-approval-kicker">{_html_escape(kicker)}</div>'
         f"{blocked_html}"
         "</div>"
         '<div class="pf-approval-actions">'
@@ -821,6 +940,35 @@ def _relative_age(iso_ts: str) -> str:
     return f"{hours // 24}d ago"
 
 
+def _composition_label(rows: list[dict[str, Any]]) -> str:
+    """"3 reads · 1 write" for the page heading -- the same read/write split
+    the Approve-selected button already names for a *selected* set, applied
+    to the whole queue. The JS mirror is ``headingHtml``/``compositionLabel``
+    in this module's own ``_JS`` string."""
+    reads = sum(1 for r in rows if r.get("gate_kind") == "review")
+    writes = sum(1 for r in rows if r.get("gate_kind") == "popup")
+    parts = []
+    if reads:
+        parts.append(f"{reads} read{'s' if reads != 1 else ''}")
+    if writes:
+        parts.append(f"{writes} write{'s' if writes != 1 else ''}")
+    return " · ".join(parts)
+
+
+def _heading_html(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    count = f"{len(rows)} approval{'s' if len(rows) != 1 else ''} pending"
+    composition = _composition_label(rows)
+    return (
+        f'<span class="pf-approvals-count">{_html_escape(count)}</span>'
+        + (
+            f'<span class="pf-approvals-composition">{_html_escape(composition)}</span>'
+            if composition else ""
+        )
+    )
+
+
 def _toolbar_html(*, any_batchable: bool) -> str:
     select_all_disabled = "" if any_batchable else " disabled"
     return (
@@ -854,15 +1002,15 @@ def build_list_html(rows: list[dict[str, Any]], *, csrf: str, nonce: str | None 
     always passes the real per-request value explicitly)."""
     nonce = nonce or secrets.token_urlsafe(18)
     body = "".join(_group_html(g) for g in _group_rows(rows)) if rows else _EMPTY_STATE
-    heading = (
-        f"{len(rows)} approval{'s' if len(rows) != 1 else ''} pending" if rows else ""
-    )
     toolbar = _toolbar_html(any_batchable=any(r.get("batchable") for r in rows)) if rows else ""
     js = _JS % {"empty": json.dumps(_EMPTY_STATE), "csrf": json.dumps(csrf)}
     return (
         f'<style nonce="{nonce}">{_CSS}</style>'
         '<div class="pf-approvals-page">'
-        + (f'<div class="pf-approvals-heading">{_html_escape(heading)}</div>' if heading else "")
+        # Always emitted, even with nothing pending: render() below updates
+        # it on every SSE tick, and an element that only exists when the
+        # first paint had rows is an element the live re-render can't reach.
+        f'<div class="pf-approvals-heading" id="pf-approvals-heading">{_heading_html(rows)}</div>'
         + toolbar
         + f'<div id="pf-approvals-list">{body}</div>'
         "</div>"

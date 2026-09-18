@@ -491,6 +491,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   become two equal 48px targets with always-allow a quiet link below them rather than a third
   control in the thumb zone. Nothing changes above the breakpoint, or in the native window, whose
   frame already sized itself to the document.
+- **An approvals row names what the request is about.** The row's title was `tool_name` and its
+  second line was connector + the raw MCP tool id + age, so the row said `Read Gmail message` /
+  `Gmail · gmail_get_thread · 2m ago` and never named the thread, document, event or contact being
+  touched. `summary` — the field that does name it — was only a *fallback* title, and `tool_name` is
+  always populated, so a normal row never reached it. The summary is now the title, the tool name
+  moves to the meta line above it, and the raw tool id moves into the **Details** disclosure with
+  the rest of the metadata preview. Rows with no summary (a bare confirm/choice dialog) still fall
+  back to the tool name.
+- **Read and write are visible on the row.** The card commits hard to the distinction — a pill in
+  its header and a coloured rail down the window edge — while the row showed neither, though
+  `gate_kind` was already in the row payload and already drove the **Approve selected** button's
+  reads/writes count. Rows now carry the same pill, in the same token pairs as the card, and the
+  page heading names the queue's composition ("4 approvals pending · 3 reads · 1 write"). That
+  heading also now follows the live list: it sits outside the re-rendered region, so it previously
+  kept whatever count the first paint had for as long as the page stayed open.
+- **Approve selected is no longer styled as loudly as Review.** Both were filled
+  `var(--color-accent)`, which made select-all-plus-one-click — the least-informed action available,
+  taken off one-line summaries — as prominent as the control that opens disclosure. It is now an
+  outline; Review keeps the fill. The composition label on it is unchanged, since that part is the
+  guard rather than the problem.
 - **The approvals list is usable on a phone.** `.pf-approval-actions` is `flex-shrink: 0` around
   three buttons while `.pf-approval-main` is `flex: 1; min-width: 0`, so the row's own `flex-wrap`
   never engaged — the text column shrank to roughly 25px at 393px instead, truncating the title

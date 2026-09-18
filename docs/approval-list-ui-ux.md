@@ -8,12 +8,20 @@ PrivacyFence uses the embedded web UI for approvals. The implementation is share
 
 Each row contains:
 
-- connector/tool identity;
-- a short operation label/summary;
-- relative age;
+- the operation summary as its title — what the request is *about*, not which tool makes it;
+- a read/write pill, from the approval's own `gate_kind`;
+- connector and tool identity, and relative age, on a meta line above the title;
 - **Details**;
 - **Review**;
 - **Deny**.
+
+The raw MCP tool id is not on the row. It appears in the **Details** disclosure alongside the rest
+of the metadata-only preview. A row whose approval carries no summary — a bare confirm/choice
+dialog — falls back to the tool name for its title, and a row with no direction (the same case)
+renders no pill.
+
+The page heading names the queue's own composition ("4 approvals pending · 3 reads · 1 write"), the
+same read/write split the **Approve selected** button names for a selected set.
 
 The action cluster is ordered Details, Review, Deny — the destructive action last, not adjacent to
 the safe one. Denying resolves an approval outright and no undo path exists anywhere in the flow, so
@@ -39,7 +47,9 @@ and two selection-scoped actions:
   anything selected — see [`security-and-compliance.md`](security-and-compliance.md#the-approval-binders-single-assertion)
   for what that assertion does and does not establish. The submit button names the selected set's
   composition ("Approve 12 · 9 reads, 3 writes") so an unintended write can't hide inside a
-  read-shaped batch.
+  read-shaped batch. It is styled as an outline, not a filled button: **Review** is the one filled
+  control on the page and it is the one that opens disclosure, so the least-informed action is
+  deliberately not also the loudest.
 
 **Disclosure, not the full card, is what a selected row shows.** Each batchable row gets an inline
 "Details" disclosure, fetched from a read-only `GET /api/approvals/{id}/preview` fragment — the

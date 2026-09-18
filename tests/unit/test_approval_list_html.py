@@ -297,3 +297,117 @@ class TestPhoneWidthRules:
         html = approval_list_html.build_list_html([], csrf="t")
         assert ".pf-btn-approve-selected { grid-column: 1; }" in html
         assert ".pf-btn-deny-selected { grid-column: 2; }" in html
+
+
+class TestRowNamesItsObject:
+    """F4: ``tool_name`` was the row's title and ``summary`` only its
+    fallback -- and ``tool_name`` is always populated, so a normal row never
+    reached the fallback and the one fact that decides the request was never
+    on screen. The raw MCP tool id was the kicker instead, which is what
+    README positions the product *against*."""
+
+    def test_title_is_the_summary_and_the_kicker_is_the_tool(self):
+        row = approval_list_html.row_from_approval(
+            _card(summary='Read "Q3 forecast — legal review"', tool="gmail_get_thread"),
+        )
+        html = approval_list_html._row_html(row)
+        title_at = html.index('class="pf-approval-title"')
+        kicker_at = html.index('class="pf-approval-kicker"')
+        assert 'Read &quot;Q3 forecast — legal review&quot;' in html[title_at:]
+        assert "Read Gmail message" in html[kicker_at:title_at]
+        assert "Gmail" in html[kicker_at:title_at]
+
+    def test_raw_tool_id_leaves_the_kicker_and_is_available_to_the_disclosure(self):
+        row = approval_list_html.row_from_approval(_card(summary="Read a thing", tool="gmail_get_thread"))
+        html = approval_list_html._row_html(row)
+        kicker_at = html.index('class="pf-approval-kicker"')
+        title_at = html.index('class="pf-approval-title"')
+        assert "gmail_get_thread" not in html[kicker_at:title_at]
+        # Carried on the row itself, so the Details disclosure can show it
+        # on first paint too -- pfLastRows is empty until the first SSE tick.
+        assert 'data-tool="gmail_get_thread"' in html
+
+    def test_falls_back_to_tool_name_when_there_is_no_summary(self):
+        # A confirm/choice dialog has no summary at all.
+        row = approval_list_html.row_from_approval(_card(summary="", tool_name="Read Gmail message"))
+        html = approval_list_html._row_html(row)
+        title_at = html.index('class="pf-approval-title"')
+        assert "Read Gmail message" in html[title_at:]
+
+    def test_live_rerender_uses_the_same_precedence(self):
+        js = approval_list_html._JS
+        body = js[js.index("function rowHtml("):js.index("function groupHtml(")]
+        assert "row.summary || row.tool_name ||" in body
+
+
+class TestReadWriteDirectionOnTheRow:
+    """F6: the card commits hard to read vs write -- a pill in the header
+    and a coloured rail down the window edge -- while the row carried
+    neither, though ``gate_kind`` was already in the payload and already
+    drove the Approve-selected composition label."""
+
+    def test_read_gate_gets_a_read_pill(self):
+        row = approval_list_html.row_from_approval(_card(gate_kind="review"))
+        assert 'class="pf-approval-pill pf-approval-pill-read">Read<' in approval_list_html._row_html(row)
+
+    def test_write_gate_gets_a_write_pill(self):
+        row = approval_list_html.row_from_approval(_card(gate_kind="popup"))
+        assert 'class="pf-approval-pill pf-approval-pill-write">Write<' in approval_list_html._row_html(row)
+
+    def test_a_bare_confirm_dialog_has_no_direction_and_no_pill(self):
+        row = approval_list_html.row_from_approval(_card(gate_kind=""))
+        assert "pf-approval-pill" not in approval_list_html._row_html(row)
+
+    def test_pill_uses_the_same_token_families_as_the_card(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert "var(--color-accent-100)" in html and "var(--color-accent-700)" in html
+        assert "var(--color-accent-2-100)" in html and "var(--color-accent-2-700)" in html
+
+    def test_live_rerender_mirrors_the_pill(self):
+        js = approval_list_html._JS
+        assert "pf-approval-pill-read" in js
+        assert "pf-approval-pill-write" in js
+
+
+class TestHeadingComposition:
+    def test_names_the_read_write_split(self):
+        rows = [
+            approval_list_html.row_from_approval(_card(id="a", gate_kind="review")),
+            approval_list_html.row_from_approval(_card(id="b", gate_kind="review")),
+            approval_list_html.row_from_approval(_card(id="c", gate_kind="popup")),
+        ]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert "3 approvals pending" in html
+        assert "2 reads · 1 write" in html
+
+    def test_heading_element_exists_even_with_nothing_pending(self):
+        # render() has to be able to reach it on the tick that takes the
+        # page from empty to non-empty; an element conditional on the first
+        # paint having had rows is one the live re-render cannot update.
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert 'id="pf-approvals-heading"' in html
+
+    def test_live_rerender_updates_the_heading(self):
+        assert "function updateHeading(" in approval_list_html._JS
+        assert "updateHeading(pfLastRows)" in approval_list_html._JS
+
+
+class TestApproveSelectedIsNotTheLoudestControl:
+    """F5: both Approve-selected and Review were filled
+    ``var(--color-accent)``, so the least-informed action -- select-all
+    plus one click, off one-line summaries -- was as loud as the one that
+    opens disclosure."""
+
+    def test_approve_selected_is_an_outline(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert "border: 1px solid var(--color-accent); background: transparent;" in html
+
+    def test_review_keeps_the_fill(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert ".pf-btn-review { background: var(--color-accent); color: #fff; }" in html
+
+    def test_the_composition_guard_on_the_label_is_kept(self):
+        # The label naming "9 reads, 3 writes" is what stops an unintended
+        # write hiding in a read-shaped batch -- the weight was wrong, not
+        # this.
+        assert "compositionLabel" in approval_list_html._JS
