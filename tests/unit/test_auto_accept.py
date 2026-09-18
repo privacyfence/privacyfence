@@ -20,7 +20,9 @@ migration (telegram's search-key rename) that's unrelated to the v1/v2 engine sp
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
+import pytest
 import yaml
 from freezegun import freeze_time
 
@@ -29,10 +31,14 @@ from privacyfence.auto_accept import (
     TEMP_ACCEPT_ELIGIBLE_OPERATIONS,
     TOOL_TO_GATE,
     TOOL_TO_OPERATION,
+    _attendee_email,
     add_policy_v2_rules,
+    add_rules_changed_listener,
     init_config_path,
     is_temp_accepted,
     register_temp_accept,
+    remove_policy_v2_rule,
+    remove_rules_changed_listener,
     set_rules_changed_listener,
     temp_accept_key,
 )
@@ -123,6 +129,29 @@ class TestDriveSheetsDocsSingleSourceOfTruth:
         for op_key, arg_name in TEMP_ACCEPT_ELIGIBLE_OPERATIONS.items():
             expected = "spreadsheet_id" if op_key.startswith("sheets.") else "file_id"
             assert arg_name == expected, (op_key, arg_name)
+
+
+class TestAttendeeEmail:
+    """_attendee_email is a live dependency of policy.conditions._no_external_attendees_matches
+    (no_external_attendees), unlike every other predicate helper this module used to own -- it's
+    imported by, not just kept alongside, P2's condition selectors."""
+
+    def test_dict_shaped_attendee(self):
+        assert _attendee_email({"email": "a@example.com"}) == "a@example.com"
+
+    def test_dict_shaped_attendee_missing_email(self):
+        assert _attendee_email({}) == ""
+
+    def test_object_shaped_attendee(self):
+        assert _attendee_email(SimpleNamespace(email="a@example.com")) == "a@example.com"
+
+    def test_object_shaped_attendee_with_no_email_attribute(self):
+        assert _attendee_email(SimpleNamespace()) == ""
+
+    def test_plain_string_attendee(self):
+        # calendar_create_event/update_event pass bare email strings, parsed from a
+        # comma-separated arg, since the event doesn't exist yet to have real Attendee objects.
+        assert _attendee_email("a@example.com") == "a@example.com"
 
 
 # --------------------------------------------------------------------------- #
@@ -263,6 +292,75 @@ class TestRulesChangedListener:
         )])
 
         assert calls == [1]
+
+    def test_remove_policy_v2_rule_fires_listener(self, tmp_path):
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+        add_policy_v2_rules([PolicyRule(
+            id="i_am_sender", predicate="i_am_sender", value=None,
+            operations=frozenset({"gmail.read_message"}),
+        )])
+        rule_id = policy_store.rule_id_for("i_am_sender", None, ())
+        calls = []
+        set_rules_changed_listener(lambda: calls.append(1))
+
+        assert remove_policy_v2_rule(rule_id) is True
+        assert calls == [1]
+
+    def test_remove_policy_v2_rule_is_a_no_op_for_an_unknown_id(self, tmp_path):
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text(yaml.dump({}), encoding="utf-8")
+        init_config_path(str(config_path))
+        assert remove_policy_v2_rule("no-such-rule") is False
+
+    def test_set_rules_changed_listener_replaces_the_previous_one(self):
+        first_calls, second_calls = [], []
+        set_rules_changed_listener(lambda: first_calls.append(1))
+        set_rules_changed_listener(lambda: second_calls.append(1))
+
+        auto_accept.notify_rules_changed()
+
+        assert first_calls == []
+        assert second_calls == [1]
+
+    def test_add_and_remove_rules_changed_listener(self):
+        calls = []
+
+        def listener():
+            calls.append(1)
+
+        add_rules_changed_listener(listener)
+        auto_accept.notify_rules_changed()
+        assert calls == [1]
+
+        remove_rules_changed_listener(listener)
+        auto_accept.notify_rules_changed()
+        assert calls == [1]  # not called again once removed
+
+    def test_remove_rules_changed_listener_is_a_no_op_for_an_unregistered_callback(self):
+        remove_rules_changed_listener(lambda: None)  # must not raise
+
+    def test_notify_rules_changed_survives_a_raising_listener(self):
+        calls = []
+        add_rules_changed_listener(lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+        add_rules_changed_listener(lambda: calls.append(1))
+
+        auto_accept.notify_rules_changed()  # must not raise, and later listeners still fire
+
+        assert calls == [1]
+
+    def test_get_policy_v2_rules_requires_an_initialized_config_path(self):
+        with pytest.raises(RuntimeError, match="not initialized"):
+            auto_accept.get_policy_v2_rules()
+
+    def test_add_policy_v2_rules_requires_an_initialized_config_path(self):
+        with pytest.raises(RuntimeError, match="not initialized"):
+            add_policy_v2_rules([])
+
+    def test_remove_policy_v2_rule_requires_an_initialized_config_path(self):
+        with pytest.raises(RuntimeError, match="not initialized"):
+            remove_policy_v2_rule("some-id")
 
 
 # --------------------------------------------------------------------------- #
