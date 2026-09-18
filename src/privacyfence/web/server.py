@@ -716,6 +716,11 @@ def build_app(
             unauthenticated_response=_unauthorized_response,
             session_cookie_name=_SESSION_COOKIE,
             step_up=step_up, issuer_url=step_up_issuer_url,
+            # Local mode has no /connect route (that's routes_connect.py's
+            # org-mode-only surface) -- settings_window_html.py's Connectors
+            # tab is this mode's own equivalent, see routes_security.py's
+            # build_routes docstring on back_link.
+            back_link=("/settings/connectors", "Back to Connectors"),
         ))
 
     if state_stream is not None:
@@ -734,6 +739,12 @@ def build_app(
         web_ui, sessions=sessions, extra_routes=extra_routes, lifespan=lifespan,
         notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
         step_up=step_up, step_up_origin=step_up_issuer_url,
+        # Only the settings controller knows whether anything is
+        # authenticated. With no controller mounted, the approvals page
+        # keeps its steady-state empty text -- see create_app's docstring.
+        any_connector_authenticated=(
+            controller.any_connector_authenticated if controller is not None else None
+        ),
     )
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(bootstrapped, principal_resolver or _default_principal)

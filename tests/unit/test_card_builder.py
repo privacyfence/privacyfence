@@ -29,6 +29,13 @@ class TestSeenCountText:
     def test_plural(self):
         assert card_builder._seen_count_text(3) == "Seen 3 times this week"
 
+    def test_first_time_is_stated_rather_than_left_blank(self):
+        # An absent line is indistinguishable from a card that never
+        # carries one, so "not seen before" read as "no information" -- on
+        # the card's main guard against rubber-stamping a request that has
+        # quietly become routine.
+        assert card_builder._seen_count_text(0) == "First time this week"
+
 
 class TestDisclosureRows:
     def test_write_calls_never_get_disclosure_rows(self):
@@ -118,9 +125,40 @@ class TestBuildCardHtml:
         assert "The message body." not in html
         assert "<table" in html
 
-    def test_seen_count_zero_shows_no_caption(self):
+    def test_write_card_states_what_approving_actually_does(self):
+        # A read card ends with "What will be provided to Claude"; a write
+        # card had nothing naming its own consequence -- only the payload
+        # and Claude's reason.
+        html = card_builder.build_card_html(
+            **self._kwargs(is_read=False, title="Add Gmail Label", tool="gmail_add_label"),
+        )
+        assert "Effect" in html
+        assert "A label is added. Nothing is sent, moved or deleted." in html
+
+    def test_the_effect_row_comes_last_in_the_action_section(self):
+        # The payload is read first and the outcome last, which is the
+        # order the decision is actually made in.
+        html = card_builder.build_card_html(**self._kwargs(
+            is_read=False, title="Add Gmail Label", tool="gmail_add_label",
+            preview={"From": "a@b.com", "Subject": "Q3"},
+        ))
+        assert html.index("Subject") < html.index("Effect")
+
+    def test_read_cards_never_get_an_effect_row(self):
+        # Their consequence card already exists, and the tool id of a read
+        # gate is never in the effect table anyway.
+        html = card_builder.build_card_html(**self._kwargs(is_read=True, tool="gmail_get_thread"))
+        assert ">Effect<" not in html
+
+    def test_a_write_tool_with_no_sentence_renders_no_row_rather_than_a_vague_one(self):
+        html = card_builder.build_card_html(
+            **self._kwargs(is_read=False, tool="some_tool_nobody_has_written_copy_for"),
+        )
+        assert ">Effect<" not in html
+
+    def test_seen_count_zero_still_states_the_frequency(self):
         html = card_builder.build_card_html(**self._kwargs(seen_count=0))
-        assert "Seen" not in html
+        assert "First time this week" in html
 
     def test_seen_count_positive_shows_caption(self):
         html = card_builder.build_card_html(**self._kwargs(seen_count=2))

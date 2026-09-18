@@ -53,6 +53,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from starlette.applications import Starlette
@@ -238,6 +239,7 @@ def create_app(
     notifications_detail: str = "minimal",
     step_up: StepUpConfig | None = None,
     step_up_origin: str = "",
+    any_connector_authenticated: Callable[[], bool] | None = None,
 ) -> Starlette:
     """Build the Starlette app serving the approval surface. ``sessions``
     (SEC-06, see session_auth.py's own module docstring) is the local-mode
@@ -271,6 +273,16 @@ def create_app(
     ``build_app`` is the one real (non-test) caller that passes them,
     using the same ``StepUpConfig`` it already resolves for web/
     routes_security.py's own ``/security`` mount.
+
+    ``any_connector_authenticated`` picks the approvals page's empty state
+    (approval_list_html's own ``_empty_state_html``): "Nothing is waiting"
+    is right on a working install and misleading on one where nothing is
+    authenticated, since nothing is waiting because nothing *can*. Called
+    per request rather than resolved once, so authenticating a connector
+    takes effect on the next load rather than the next restart. ``None``
+    (the default, and every caller that has no settings controller to ask)
+    keeps the steady-state copy -- never tell somebody who is already set
+    up that they aren't.
     """
     challenges = StepUpChallengeStore()
     origin = step_up_origin.rstrip("/")
@@ -329,7 +341,10 @@ def create_app(
         nonce = _csp_nonce_for(request)
         csrf = request.cookies.get(_SESSION_COOKIE, "")
         rows = [approval_list_html.row_from_approval(card) for card in _list_rows()]
-        body = approval_list_html.build_list_html(rows, csrf=csrf, nonce=nonce)
+        body = approval_list_html.build_list_html(
+            rows, csrf=csrf, nonce=nonce,
+            any_authed=any_connector_authenticated() if any_connector_authenticated else True,
+        )
         # PF_WEBAUTHN_JS (#426 Phase 3, approval binder Phase 3): the same
         # ceremony helpers web/routes_settings.py's own settings page
         # carries, needed here whenever Approve-selected's own 428 branch

@@ -82,6 +82,19 @@ body {
 .pf-shell-live-dot.live { background: #2fa84f; }
 .pf-shell-live-dot.reconnecting { background: #d9a520; }
 .pf-shell-live-dot.down { background: var(--color-danger); }
+/* Who this queue belongs to -- org mode only (see wrap's principal_label);
+   local mode has exactly one principal and renders nothing here. */
+.pf-shell-principal {
+  font-size: 12px; color: var(--color-neutral-700); white-space: nowrap;
+  padding-left: 10px; border-left: 1px solid var(--color-divider);
+}
+.pf-shell-live + .pf-shell-principal { margin-left: 0; }
+/* Neither tokens.css nor anything above styles a bare <a>, so any link a
+   page renders outside the nav/banner/notice classes lands on the
+   browser's default blue -- against a warm grey palette, on pages that
+   are otherwise fully tokenized. */
+.pf-shell-main a { color: var(--color-accent-700); }
+.pf-shell-main a:hover { color: var(--color-accent); }
 .pf-shell-banner {
   padding: 8px 20px; font-size: 13px; font-weight: 600; text-align: center;
   background: var(--color-danger); color: #fff; flex-shrink: 0;
@@ -350,10 +363,22 @@ _STREAM_JS = """
 
 _NAV_ITEMS = (("approvals", "Approvals", "/approvals"), ("settings", "Settings", "/settings"))
 
+# Org mode's own route set. It has no local-mode ``/settings`` dispatcher
+# (see web/server.py's module docstring for what org mode deliberately
+# doesn't mount -- ``/settings`` there is routes_org_settings.py's own,
+# much smaller surface), and ``/connect``/``/security`` are surfaces local
+# mode has no equivalent of.
+ORG_NAV_ITEMS = (
+    ("approvals", "Approvals", "/approvals"),
+    ("connections", "Connections", "/connect"),
+    ("passkeys", "Passkeys", "/security"),
+    ("settings", "Settings", "/settings"),
+)
 
-def _nav_html(active: str) -> str:
+
+def _nav_html(active: str, nav_items: tuple[tuple[str, str, str], ...]) -> str:
     items = []
-    for key, label, href in _NAV_ITEMS:
+    for key, label, href in nav_items:
         cls = "pf-shell-nav-item active" if key == active else "pf-shell-nav-item"
         items.append(f'<a class="{cls}" href="{href}">{_html_escape(label)}</a>')
     return "".join(items)
@@ -364,6 +389,9 @@ def wrap(
     notifications_enabled: bool = True, notifications_detail: str = "minimal",
     banner_html: str | None = None,
     dismissible_notice_html: str | None = None, dismissible_notice_key: str = "",
+    nav_items: tuple[tuple[str, str, str], ...] = _NAV_ITEMS,
+    principal_label: str = "",
+    live_updates: bool = True,
 ) -> str:
     """Full ``<!DOCTYPE html>`` document: tokens.css + the shell's own CSS,
     the header (brand, nav between Approvals/Settings, live indicator), and
@@ -422,14 +450,50 @@ def wrap(
     dismissal is recorded under, and must be a real, distinguishing string
     whenever ``dismissible_notice_html`` is given -- distinct notices need
     distinct keys or dismissing one silently dismisses the other too.
+
+    ``nav_items``/``principal_label``/``live_updates`` are what let org
+    mode share this shell rather than serve a bare document (F9). Local
+    mode passes none of them and is byte-for-byte unchanged.
+
+    ``nav_items`` is ``(key, label, href)`` per item, matched against
+    ``active`` -- ``ORG_NAV_ITEMS`` above is org mode's set.
+    ``principal_label`` renders the signed-in principal at the right of the
+    header; org mode's entire authorization model is per-principal and its
+    approvals page otherwise never says whose queue is being looked at.
+    Empty (the default) renders nothing, which is right for local mode,
+    where there is only ever one.
+
+    ``live_updates=False`` omits both the live indicator and the
+    ``EventSource`` script. The indicator is not decoration -- it tells a
+    reviewer whether the queue in front of them is current -- so it must
+    not render in a mode that has no stream behind it: org mode's app
+    (web/server.py's ``_build_org_app``) mounts no
+    ``GET /api/state/stream`` at all, and a dot that says "live" against
+    nothing, or sits permanently on "can't reach PrivacyFence" against a
+    404, is worse than no dot on the one surface whose whole job is to be
+    trusted. The post-decision toast is unaffected: it is driven by the
+    list page's own script, not this one.
     """
     if dismissible_notice_html and not dismissible_notice_key:
         raise ValueError("wrap(): dismissible_notice_html needs a dismissible_notice_key")
     nonce = nonce or secrets.token_urlsafe(18)
-    stream_js = _STREAM_JS % {
-        "notifications_enabled": "true" if notifications_enabled else "false",
-        "notifications_detail": json.dumps(notifications_detail),
-    }
+    stream_script = ""
+    if live_updates:
+        stream_js = _STREAM_JS % {
+            "notifications_enabled": "true" if notifications_enabled else "false",
+            "notifications_detail": json.dumps(notifications_detail),
+        }
+        stream_script = f'<script nonce="{nonce}">{stream_js}</script>'
+    live_html = (
+        '<div class="pf-shell-live" role="status" aria-live="polite">'
+        '<span class="pf-shell-live-dot" id="pf-shell-live-dot"></span>'
+        '<span id="pf-shell-live-label">connecting…</span>'
+        "</div>"
+    ) if live_updates else ""
+    principal_html = (
+        f'<div class="pf-shell-principal">{_html_escape(principal_label)}</div>'
+        if principal_label else ""
+    )
     banner = f'<div class="pf-shell-banner" role="alert">{banner_html}</div>' if banner_html else ""
     notice = ""
     if dismissible_notice_html:
@@ -453,18 +517,15 @@ def wrap(
 <body>
 <header class="pf-shell-header">
 <div class="pf-shell-brand">PrivacyFence</div>
-<nav class="pf-shell-nav">{_nav_html(active)}</nav>
-<div class="pf-shell-live" role="status" aria-live="polite">
-<span class="pf-shell-live-dot" id="pf-shell-live-dot"></span>
-<span id="pf-shell-live-label">connecting…</span>
-</div>
+<nav class="pf-shell-nav">{_nav_html(active, nav_items)}</nav>
+{live_html}{principal_html}
 </header>
 {banner}
 {notice}
 <main class="pf-shell-main">{body_html}</main>
 <div class="pf-shell-toast" id="pf-shell-toast" role="status"></div>
 <div class="pf-sr-only" id="pf-shell-announcer" aria-live="polite"></div>
-<script nonce="{nonce}">{stream_js}</script>
+{stream_script}
 </body>
 </html>
 """

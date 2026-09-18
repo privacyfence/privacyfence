@@ -19,11 +19,18 @@
 #   2. adds you to that group, so the companion app can still reach the daemon;
 #   3. moves ~/.privacyfence to /Library/Application Support/PrivacyFence and
 #      re-owns it -- authority/ at 0700, handoff/ at 2770, the root at 0711;
-#   4. writes the marker file every PrivacyFence process reads to agree on that
+#   4. copies the daemon/companion image (from --app, normally /Applications/
+#      PrivacyFenceApp.app) into a fresh root:wheel-owned copy under
+#      /Library/PrivacyFence/image -- see stage_trusted_image()'s own comment
+#      for why: /Applications itself is admin-group-writable on every real
+#      Mac, so nothing installed directly under it can ever be trusted (B1)
+#      without this;
+#   5. writes the marker file every PrivacyFence process reads to agree on that
 #      layout (src/privacyfence/privilege_separation.py);
-#   5. replaces the login-session LaunchAgent with a LaunchDaemon for the
+#   6. replaces the login-session LaunchAgent with a LaunchDaemon for the
 #      daemon and a LaunchAgent for the companion app -- ADR 0002's "startup
-#      wiring inverts".
+#      wiring inverts" -- both pointed at step 4's staged copy, not the
+#      original image.
 #
 # Step 3 moves live connector OAuth tokens. `disable` moves them back, but this
 # is still the step to take a backup before: it is the one part of this that
@@ -138,6 +145,17 @@ resolve_owner() {
 # Linux counterpart to compare against -- /opt is already dpkg-owned.
 TRUSTED_IMAGE_GROUP="wheel"
 
+# B1 follow-up: where stage_trusted_image() (below) copies the daemon/
+# companion image to before ever trusting it. Deliberately NOT under
+# SYSTEM_ROOT -- apply_layout() chowns that whole tree, itself included, to
+# ${SERVICE_ACCOUNT}, which require_trusted_image()'s own "owned by anyone
+# but root" check would then refuse the moment this lived underneath it. A
+# sibling of SYSTEM_ROOT's own parent instead: /Library itself is root:wheel
+# on stock macOS (unlike /Applications), the same anchor test_macos_
+# graphical_session_autostart.py's own _ROOT_STAGING_PARENT already trusts
+# for exactly this reason.
+TRUSTED_IMAGE_DIR="/Library/PrivacyFence/image"
+
 # B1: nothing previously verified the daemon/companion image was not
 # user-writable before this elevates to it. ADR 0002 §5a used to claim
 # /Applications was root-owned the same way /opt is; it is actually
@@ -177,6 +195,72 @@ require_trusted_image() {
   fi
 }
 
+# B1 follow-up, discovered by #428 D2's own real `installer -pkg ... -target /`
+# coverage (test_macos_pkg_install.py): require_trusted_image() walks every
+# directory on the way to the image, and /Applications itself is root:admin
+# drwxrwxr-x on every real Mac -- group-writable by the same admin account
+# the agent runs as. That made the walk refuse *any* app installed at the
+# standard /Applications/PrivacyFenceApp.app location, no matter how the
+# bundle itself was owned -- not just for a .pkg install, but for the DMG's
+# own daemon-triggered runtime prompt (privilege_separation.
+# maybe_auto_enable_macos()) and for a human running `enable` by hand
+# against a real drag-installed copy, since all three funnel through this
+# same require_trusted_image() call.
+#
+# Rather than trust wherever --app/--daemon-exec/--companion-exec point,
+# `enable` now copies that image -- right now, as root, while it already has
+# the administrator authentication this whole command required to run at
+# all -- into TRUSTED_IMAGE_DIR, a location this script itself provisions as
+# root:wheel and nothing else ever writes to. Everything launchd runs from
+# here on is what THIS copy contains: the LaunchDaemon/LaunchAgent plists
+# point at it (install_services() renders them from DAEMON_EXECUTABLE/
+# COMPANION_EXECUTABLE, which this reassigns), and the running daemon's own
+# audit_layout() re-check (privilege_separation.daemon_image_paths(), keyed
+# off sys.executable) sees the same trusted path on every subsequent start.
+#
+# One real consequence: once separated, replacing /Applications/
+# PrivacyFenceApp.app in place (a fresh DMG drag) no longer takes effect on
+# its own -- the separated daemon keeps running the staged copy until `enable`
+# is run again. That is not a bug this introduces so much as the one honest
+# way to close the hole above: auto-refreshing the staged copy from an
+# already-running, already-elevated process would mean trusting
+# /Applications again, silently, which is exactly what this exists to stop
+# doing. Re-authenticating (by hand, or a future re-prompt) is the correct
+# cost of an upgrade on a separated macOS install.
+#
+# Called from cmd_enable() only, and only after apply_layout() -- apply_layout()
+# chowns SYSTEM_ROOT recursively to ${SERVICE_ACCOUNT}, which would undo this
+# function's own root:wheel ownership if staging ran first, and TRUSTED_IMAGE_DIR
+# is deliberately outside SYSTEM_ROOT for exactly that reason regardless.
+stage_trusted_image() {
+  note "staging a root-owned copy of the app image under ${TRUSTED_IMAGE_DIR} (B1)"
+  rm -rf "$TRUSTED_IMAGE_DIR"
+  mkdir -p "$TRUSTED_IMAGE_DIR"
+  if [ -n "$APP_PATH" ]; then
+    local staged_app="${TRUSTED_IMAGE_DIR}/$(basename "$APP_PATH")"
+    ditto "$APP_PATH" "$staged_app"
+    DAEMON_EXECUTABLE="${staged_app}/Contents/MacOS/PrivacyFenceApp"
+    COMPANION_EXECUTABLE="${staged_app}/Contents/MacOS/PrivacyFenceCompanion"
+  else
+    # --daemon-exec/--companion-exec given directly (a source/venv install,
+    # no single .app bundle to copy as a unit) -- stage each file on its own.
+    local staged_daemon="${TRUSTED_IMAGE_DIR}/$(basename "$DAEMON_EXECUTABLE")"
+    local staged_companion="${TRUSTED_IMAGE_DIR}/$(basename "$COMPANION_EXECUTABLE")"
+    cp -p "$DAEMON_EXECUTABLE" "$staged_daemon"
+    cp -p "$COMPANION_EXECUTABLE" "$staged_companion"
+    DAEMON_EXECUTABLE="$staged_daemon"
+    COMPANION_EXECUTABLE="$staged_companion"
+  fi
+  # The parent (/Library/PrivacyFence), not just $TRUSTED_IMAGE_DIR itself --
+  # require_trusted_image() walks every ancestor, and while `mkdir -p` as
+  # root ordinarily leaves a freshly-created parent root-owned too, this
+  # makes it explicit rather than relying on root's own default umask/group.
+  chown -R root:wheel "$(dirname "$TRUSTED_IMAGE_DIR")"
+  chmod -R go-w "$(dirname "$TRUSTED_IMAGE_DIR")"
+  require_trusted_image "$DAEMON_EXECUTABLE"
+  require_trusted_image "$COMPANION_EXECUTABLE"
+}
+
 resolve_executables() {
   if [ -z "$DAEMON_EXECUTABLE" ] || [ -z "$COMPANION_EXECUTABLE" ]; then
     APP_PATH="${APP_PATH:-$DEFAULT_APP}"
@@ -189,8 +273,9 @@ resolve_executables() {
   # its own, so a separated install without one is a locked door. Refuse rather
   # than install half of ADR 0002's inversion.
   [ -x "$COMPANION_EXECUTABLE" ] || die "not executable: ${COMPANION_EXECUTABLE} -- a separated install needs the companion app (ADR 0002 decision 2)"
-  require_trusted_image "$DAEMON_EXECUTABLE"
-  require_trusted_image "$COMPANION_EXECUTABLE"
+  # Trust is established after staging, not here -- see stage_trusted_image()'s
+  # own comment for why checking require_trusted_image() against wherever
+  # these point (typically /Applications) would refuse every real install.
 }
 
 # ── Account provisioning ──────────────────────────────────────────────────────
@@ -430,6 +515,11 @@ cmd_enable() {
   add_owner_to_service_group
   migrate_data
   apply_layout
+  # After apply_layout(), never before -- see stage_trusted_image()'s own
+  # comment on why (apply_layout() recursively re-owns SYSTEM_ROOT itself,
+  # which would undo this if it ran first; TRUSTED_IMAGE_DIR lives outside
+  # SYSTEM_ROOT regardless, so the two never actually touch each other).
+  stage_trusted_image
   write_marker
   install_services
 
@@ -464,6 +554,7 @@ cmd_disable() {
 
   note "stopping and removing the LaunchDaemon and companion LaunchAgent"
   uninstall_services
+  rm -rf "$(dirname "$TRUSTED_IMAGE_DIR")"
 
   local legacy
   legacy="$(legacy_data_dir)"

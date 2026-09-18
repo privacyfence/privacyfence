@@ -37,6 +37,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- `step_up.scope` takes a third value, `writes_and_reads`, which requires a passkey assertion before
+  releasing *any* approving decision — a write, a read PII detection flagged, and a read it did not.
+  The two scopes that existed before (`writes`, the default, and `writes_and_pii_reads`) both leave
+  an unflagged read releasable by a session on its own, which is the right trade only for an install
+  that trusts `pii_detector.py` to have flagged everything worth a second factor; this value is for
+  the installs that would rather not depend on that. It behaves identically in both deployment
+  modes — one `StepUpConfig` and one `webauthn_stepup.is_step_up_required` serve both — and is
+  configured the same way every other step-up setting already is: `config/settings.yaml`'s
+  `step_up:` section in local mode, `scripts/build_org_bundle.py --step-up-scope writes_and_reads`
+  (or the `step_up` section of `org_config.json` directly) in org mode. Denying still needs no
+  step-up under any scope, and a read an auto-accept rule already covers never becomes an approval
+  in the first place, so no scope asks for a passkey on one. `/security` now states which of the
+  three is in force rather than assuming one of the first two.
 - ADR 0002 (`docs/adr/0002-local-mode-trust-boundary-and-companion-app.md`) records the architecture
   decision that follows from the statement above: local mode's trust boundary is the OS user
   account, and a minimal companion app (tray/menu-bar item — Open Approvals, Open Settings, Quit)
@@ -191,6 +204,70 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   install opt-in, the same fallback `--auto` already takes for every other unresolvable case. A
   source checkout can never satisfy the ownership check, which is deliberate: this prompt now only
   ever runs a script the installer itself shipped.
+- Issue #428 D2: a signed `PrivacyFence-<version>.pkg` installer (`scripts/build_pkg.sh`), built
+  alongside the DMG in `build.yml`'s release job, is a second macOS distributable that answers the
+  D1 entry above's own remaining gap — a DMG install has no root-context step to run `enable
+  --auto` from, so D1 could only ask the daemon's own first start to pop an admin-password dialog,
+  a real end-to-end path `docs/platform-support.md`'s "Known open items" still records as not yet
+  manually verified against a release build. A `.pkg` install already runs as root and already asks
+  for an administrator password as the ordinary "Install PrivacyFence" step, so its own
+  `postinstall` script (`installer/macos/pkg/postinstall`) runs `macos_privilege_separation.sh
+  enable --auto` there instead, resolving the human to provision it for from the logged-in console
+  user (`stat -f '%Su' /dev/console`, since a package script has no `$SUDO_USER` the way `sudo`
+  does) rather than waiting on a later, unexplained runtime prompt — and the installer's own
+  welcome/conclusion pages (`installer/macos/pkg/resources/`) say what that means and how to
+  reverse it, instead of a bare OS password dialog with no PrivacyFence-specific text at all. Never
+  fails the package install over a privilege-separation hiccup — every failure path in the
+  postinstall script logs and exits 0, same posture `enable --auto` already takes for itself. The
+  DMG remains the primary distributable and is unaffected; the `.pkg` is an additional,
+  fully-automated-install option, covered the same two-tier way the DMG already is
+  (`test_macos_pkg_smoke.py`, structural, in `build.yml`'s release path; `test_macos_pkg_install.py`,
+  a real `sudo installer -pkg ... -target /` with no separate `enable` call, in the weekly
+  `macos-graphical-session.yml`). See issue #428.
+- Issue #428 D2 follow-up (B1): `test_macos_pkg_install.py` — the real install above ran for the
+  first time against a real `/Applications` path and found `enable` always refused to separate
+  anything installed there. `require_trusted_image()` walks every ancestor directory up to `/`, and
+  `/Applications` itself is `root:admin drwxrwxr-x` on every real Mac — group-writable by the same
+  `admin` account the agent runs as on a typical single-user machine — so the walk always failed at
+  `/Applications` itself, regardless of how the `.app` inside it was owned. This wasn't specific to
+  the `.pkg`: the same `require_trusted_image()` call is what D1's own daemon-triggered runtime
+  prompt and a human running `enable` by hand against a real drag-installed copy both go through
+  too, so a real `/Applications` install could never actually have separated under any of the three
+  paths — the gap `docs/platform-support.md`'s "Known open items" already flagged as unverified
+  against a release build turned out to hide a real dead end, not just missing coverage.
+  `macos_privilege_separation.sh`'s `enable` now copies the image — as root, immediately, while it
+  already has the administrator authentication this command required to run at all — into a fresh
+  root:wheel-owned `TRUSTED_IMAGE_DIR` (`/Library/PrivacyFence/image`) before trusting anything, and
+  points the LaunchDaemon/LaunchAgent at the copy; `require_trusted_image()` now runs against that
+  copy, not wherever `--app`/`--daemon-exec`/`--companion-exec` originally pointed.
+  `test_macos_graphical_session_autostart.py` no longer needs its own pre-staging workaround
+  (`_stage_as_root`) to get past this check — it now hands `enable` a plain, `/tmp`-extracted,
+  user-owned copy directly, the real DMG-drag-install shape, and asserts the running daemon/companion
+  actually execute from the staged copy. One real consequence: once separated, replacing
+  `/Applications/PrivacyFenceApp.app` in place (a fresh DMG drag) no longer takes effect on its own —
+  a separated install keeps running the staged copy until `enable` is run again, which is the correct
+  cost of closing this rather than a regression to work around (auto-refreshing from an
+  already-elevated process would mean trusting `/Applications` again, silently). See issue #428.
+- Issue #428 D2 follow-up (download surface): the `.pkg` built above was uploading to R2 correctly
+  but was invisible everywhere a person would actually go looking for it — `scripts/
+  r2_release.py`'s `_INSTALLERS` (what `finalize` reads to decide a release's `manifest.json`, the
+  one thing the download page, `/api/releases`, and the Worker's own `/download/<channel>/<id>`
+  route all resolve through) recognized only the DMG/`.exe`/`.deb`, so a `.pkg` sat in the bucket
+  with no id, no listing, and no route to it — the first alpha built with #428 D2 (`v4.1.0a3`)
+  shipped exactly that way. `.pkg` is now a fourth recognized pattern there, given its own artifact
+  id (`macos-arm64-pkg`) distinct from the DMG's `macos-arm64` — deliberately *not* added to
+  `REQUIRED_ARTIFACT_IDS`, so a pkg-signing-cert gap or a pkg-specific smoke-test failure can never
+  block the DMG/`.exe`/`.deb` from reaching "latest" the way a missing *mandatory* installer does;
+  `finalize` already worked this way for every optional (non-manifest) upload, this just adds a
+  manifest-visible middle tier between "counted and required" and "never counted at all".
+  `website/download/download.js` needed no logic change to pick this up — its own "nothing about a
+  release is hardcoded here" design (each manifest artifact renders its own card) already covered
+  it, so this only adds `cloudflare/downloads/src/artifacts.ts`'s `.pkg` `Content-Type` mapping and
+  a `PLATFORMS` display-name entry for the new id, both purely additive. `README`s aside, this
+  release-side fix does not retroactively fix `v4.1.0a3`'s own manifest — a manifest is written
+  once by `finalize` and the bucket's contents for that version are otherwise immutable — the `.pkg`
+  becomes visible starting with the next tag `finalize` runs against with this fix in place. See
+  issue #428.
 - Issue #428 B4: the control channel's `QUIT` command is now refused unconditionally on a
   privilege-separated install, regardless of `allow_quit`. The control socket is `0660`
   group-shared after separation so the companion can still reach it, which puts the agent in the
@@ -480,7 +557,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   always sends an explicit time zone for a recurring event even when `start_time`/`end_time` already
   carry their own UTC offset — the Calendar API rejects a recurring event that omits one ("Missing
   time zone definition for start time"), caught by `qa_fixture_recorder.py --lifecycle` against the
-  real API before this shipped. See issue #415.
+  real API before this shipped. `calendar_delete_event`'s write card names its own effect, like
+  every other write card: the event goes for everyone, cannot be restored from PrivacyFence, and
+  its attendees may be told it was cancelled — the "Applies to" row above it already says how much
+  of a recurring series that covers. See issue #415.
 - Approval binder, Phase 1: `/approvals` now groups pending, batchable approvals by
   `(connector, operation)` with a per-group and page-level select-all, and **Deny selected**
   clears a whole group of unwanted requests in one action (client-side over the existing per-id
@@ -567,6 +647,94 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Approval cards and confirmation dialogs are readable on a phone.** Neither document declared a
+  `<meta name="viewport">`, so iOS and Android laid it out in their default ~980px viewport and
+  scaled the result down to fit: 13px body text rendered near 5px, Deny and Allow once were roughly
+  36×13 device pixels side by side, and the `@media (max-width: 700px)` rules written to prevent
+  exactly that never matched, because the viewport reported 980 regardless of the device. Both
+  documents now declare a device-width viewport, and the phone-width rules they already carried are
+  joined by the ones that layout needs to hold up: the heading wraps instead of overflowing
+  horizontally at 25px, key/value rows stack rather than competing for one line, and Deny/Allow once
+  become two equal 48px targets with always-allow a quiet link below them rather than a third
+  control in the thumb zone. Nothing changes above the breakpoint, or in the native window, whose
+  frame already sized itself to the document.
+- **Detected PII is marked where it actually appears.** The card named the matched categories
+  ("IBAN · National ID · Financial figures") and left the reviewer to find them by eye in a
+  multi-message thread — the work the card exists to have already done. Matches are now highlighted
+  in the preview pane itself, in the same tints as the category tags, so the tags read as a legend.
+  Nothing extra is disclosed: the text is already the contents of the pane, the detector returns
+  positions rather than matched substrings, marking is scoped to the categories the card already
+  names, and a card with no PII section does no scanning at all.
+- **Write cards say what approving them actually does.** A read card ends with "What will be
+  provided to Claude"; a write card showed the payload and Claude's stated reason and nothing that
+  named the consequence — the difference between approving a payload and approving an outcome, and
+  it matters most where the payload looks harmless. "Add Gmail Label" and "Send Slack Message"
+  present almost identically and only one of them is irreversible. Every write card now ends its
+  action section with one plain sentence: "A label is added. Nothing is sent, moved or deleted." /
+  "The message is posted and cannot be unsent." A new test fails the build if a tool reaches the
+  write gate without one.
+- **The card's section numbers are gone; the labels stay.** Which sections render varies by tool and
+  direction, so the numbers only ever counted what happened to be on that one card — "03" was the
+  PII gate on one and the disclosure list on the next, which is exactly what a reviewer seeing many
+  of them cannot learn. Ordering is unchanged and still deliberate: the risk card renders before the
+  disclosure list, never one scroll away from being missed.
+- **Org mode's approvals page has a shell.** It was a bare document — design tokens, one body font
+  rule, the list, and a centred footer of three links that nothing styled, so they rendered
+  browser-default blue against a warm grey palette. No header, no brand, no nav, no favicon, and on
+  a phone no navigation at all; local mode's identical list had all of it. Both modes now render
+  through the same shell, with the nav set (Approvals / Connections / Passkeys / Settings) and the
+  signed-in principal passed in per mode — org mode's whole authorization model is per-principal and
+  the page never said whose queue was on screen. The shell also gained a link colour for ordinary
+  `<a>` elements in page content, which nothing had styled before.
+  Org mode deliberately renders **no** live indicator: its app mounts no `GET /api/state/stream`, so
+  an indicator there would either claim a liveness that doesn't exist or sit permanently on a
+  connection error. Tier-0/1 notifications, which ride the same stream, are off with it.
+- **The approvals page explains a first run instead of claiming it is watching.** First run and
+  steady state shared one empty state, written for steady state: "Nothing is waiting. / PrivacyFence
+  is watching." On an install where no connector is authenticated that is misleading in both halves
+  — nothing is waiting because nothing *can* wait, and nothing is being watched. That case now gets
+  its own copy ("Nothing is governed yet."), explaining what PrivacyFence does and linking to
+  `/settings/connectors`, reusing the wording of the settings page's own welcome banner. The
+  steady-state copy is unchanged, and is what still shows whenever the answer can't be determined.
+- **Connector icons no longer disappear after the first live update.** The server-rendered first
+  paint drew each row's real brand icon, while the SSE re-render had no icon in its payload and
+  always drew the letter-badge fallback — so within one poll interval every row silently degraded,
+  on the page that most needs to look trustworthy. Each connector's icon is now a single CSS rule in
+  the page's own stylesheet, which both render paths reach by class name, so a live-updated row
+  draws exactly what the first paint did. Because the image data now appears once per *connector*
+  rather than once per *row*, this also makes the page substantially smaller: a ten-row list over
+  two connectors went from ~449KB to ~195KB. A connector with nothing pending when the page loaded
+  has no rule and still falls back to the letter badge until the next full load.
+- **An approvals row names what the request is about.** The row's title was `tool_name` and its
+  second line was connector + the raw MCP tool id + age, so the row said `Read Gmail message` /
+  `Gmail · gmail_get_thread · 2m ago` and never named the thread, document, event or contact being
+  touched. `summary` — the field that does name it — was only a *fallback* title, and `tool_name` is
+  always populated, so a normal row never reached it. The summary is now the title, the tool name
+  moves to the meta line above it, and the raw tool id moves into the **Details** disclosure with
+  the rest of the metadata preview. Rows with no summary (a bare confirm/choice dialog) still fall
+  back to the tool name.
+- **Read and write are visible on the row.** The card commits hard to the distinction — a pill in
+  its header and a coloured rail down the window edge — while the row showed neither, though
+  `gate_kind` was already in the row payload and already drove the **Approve selected** button's
+  reads/writes count. Rows now carry the same pill, in the same token pairs as the card, and the
+  page heading names the queue's composition ("4 approvals pending · 3 reads · 1 write"). That
+  heading also now follows the live list: it sits outside the re-rendered region, so it previously
+  kept whatever count the first paint had for as long as the page stayed open.
+- **Approve selected is no longer styled as loudly as Review.** Both were filled
+  `var(--color-accent)`, which made select-all-plus-one-click — the least-informed action available,
+  taken off one-line summaries — as prominent as the control that opens disclosure. It is now an
+  outline; Review keeps the fill. The composition label on it is unchanged, since that part is the
+  guard rather than the problem.
+- **The approvals list is usable on a phone.** `.pf-approval-actions` is `flex-shrink: 0` around
+  three buttons while `.pf-approval-main` is `flex: 1; min-width: 0`, so the row's own `flex-wrap`
+  never engaged — the text column shrank to roughly 25px at 393px instead, truncating the title
+  after two or three characters and taking the connector/age line with it. Below 560px the row now
+  stacks into identity on top and a full-width action strip underneath, row controls and selection
+  checkboxes are a 44px target rather than ~30px and ~13px, and the toolbar's select-all and two
+  batch actions stop competing for one line. **Deny** also moves to the far end of the action
+  cluster, after **Review**, rather than sitting one 8px gap from it: denying resolves an approval
+  outright and there is no undo path anywhere in the flow. That reorder is source order in both the
+  server-rendered and the live-re-rendered row, so focus order and visual order still agree.
 - **Quitting from the settings page no longer truncates its own response.** `/api/settings/quit_app`
   signalled the daemon's shutdown *before* returning, so the process could be torn down while its
   21-byte confirmation was still being written and the client saw `peer closed connection without
@@ -580,6 +748,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that line. `request_open_url()`'s caller saw a broken pipe rather than the diagnostic explaining
   why it was refused. The request is now drained before the close. This also removes an intermittent
   CI failure in `tests/unit/web/test_control_channel.py`.
+- **`/security`'s "Back to connections" link no longer 404s in local mode.** It was hardcoded to
+  `/connect`, org mode's own per-principal connector-authorization page (`web/routes_connect.py`) —
+  a route local mode never mounts. `web/routes_security.py`'s `build_routes` now takes a `back_link`
+  `(href, label)` pair (defaulting to `/connect`, org mode's existing behavior); local mode's own
+  `web/server.py` wiring passes `/settings/connectors`, that mode's actual Connectors tab.
 
 - An approval that resolved without a human clicking a button — its pending TTL lapsing
   (`pop_expired_events()`), or an auto-accept rule appearing while it was still waiting

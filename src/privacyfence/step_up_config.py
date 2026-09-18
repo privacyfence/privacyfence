@@ -35,8 +35,15 @@ from typing import Any, Literal
 
 from .org_mode import ConfigurationError
 
-StepUpScope = Literal["writes", "writes_and_pii_reads"]
+StepUpScope = Literal["writes", "writes_and_pii_reads", "writes_and_reads"]
 StepUpBatchMode = Literal["single_assertion", "per_item"]
+
+# Widening ladder, narrowest first -- also the order both validators below
+# name them in, and the order scripts/build_org_bundle.py's own
+# --step-up-scope choices list repeats (that script is deliberately
+# stdlib-only, so it cannot import this tuple; keep the two in sync).
+STEP_UP_SCOPES: tuple[StepUpScope, ...] = ("writes", "writes_and_pii_reads", "writes_and_reads")
+_SCOPE_CHOICES_TEXT = ", ".join(f'"{name}"' for name in STEP_UP_SCOPES)
 
 DEFAULT_STEP_UP_SCOPE: StepUpScope = "writes"
 # The approval binder's own knob (Phase 3 of the binder plan): "single_
@@ -92,6 +99,12 @@ class StepUpConfig:
     # configurable" (§10.6). "writes_and_pii_reads" additionally covers a
     # read whose PendingApproval.pii_detected is True, the same signal
     # gate.py's own PII "are you sure?" confirmation already gates on.
+    # "writes_and_reads" goes one step further and covers every gated read,
+    # flagged or not -- D7's two named scopes both leave an unflagged read
+    # releasable by a session alone, which is only the guarantee an install
+    # wants if it trusts pii_detector.py to have seen everything worth
+    # confirming; this third value is for the installs that don't (a read
+    # nobody flagged still discloses whatever the connector returned).
     # Defaults to "writes" in both modes -- one key name meaning two
     # different things by mode is exactly what this module exists to stop.
     scope: StepUpScope = DEFAULT_STEP_UP_SCOPE
@@ -116,10 +129,10 @@ class StepUpConfig:
         raw = org_config.get("step_up")
         raw = raw if isinstance(raw, dict) else {}
         scope = raw.get("scope", DEFAULT_STEP_UP_SCOPE)
-        if scope not in ("writes", "writes_and_pii_reads"):
+        if scope not in STEP_UP_SCOPES:
             raise ConfigurationError(
-                f"org_config.json's \"step_up\".\"scope\" must be \"writes\" or "
-                f"\"writes_and_pii_reads\", got {scope!r}"
+                f"org_config.json's \"step_up\".\"scope\" must be one of "
+                f"{_SCOPE_CHOICES_TEXT}, got {scope!r}"
             )
         batch = raw.get("batch", DEFAULT_STEP_UP_BATCH_MODE)
         if batch not in ("single_assertion", "per_item"):
@@ -196,10 +209,10 @@ class StepUpConfig:
         raw = config.get("step_up")
         raw = raw if isinstance(raw, dict) else {}
         scope = raw.get("scope", DEFAULT_STEP_UP_SCOPE)
-        if scope not in ("writes", "writes_and_pii_reads"):
+        if scope not in STEP_UP_SCOPES:
             raise ConfigurationError(
-                f"config/settings.yaml's \"step_up\".\"scope\" must be \"writes\" or "
-                f"\"writes_and_pii_reads\", got {scope!r}"
+                f"config/settings.yaml's \"step_up\".\"scope\" must be one of "
+                f"{_SCOPE_CHOICES_TEXT}, got {scope!r}"
             )
         batch = raw.get("batch", DEFAULT_STEP_UP_BATCH_MODE)
         if batch not in ("single_assertion", "per_item"):
@@ -316,6 +329,7 @@ __all__ = [
     "DEFAULT_STEP_UP_BATCH_MODE",
     "DEFAULT_STEP_UP_SCOPE",
     "LiveStepUpConfig",
+    "STEP_UP_SCOPES",
     "StepUpBatchMode",
     "StepUpConfig",
     "StepUpScope",
