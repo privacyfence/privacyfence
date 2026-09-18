@@ -67,6 +67,19 @@ user would.
    the *identical* version) left open: a real version transition, not just a
    reinstall.
 
+Every scenario above is deliberately the pre-D1, unseparated lifecycle: issue
+#428 D1 made ``debian/postinst`` auto-enable privilege separation (``enable
+--auto``) on every install *and* upgrade whenever ``$SUDO_USER`` resolves to
+a real, non-root account -- true for this module's own passwordless-``sudo``
+CI account, same as a real human's ``sudo dpkg -i``. Left alone, that would
+move the daemon to its own system account/unit and rename away the autostart
+entry this module validates, neither of which this module is testing (see
+``test_linux_graphical_session_autostart.py`` for the separated-by-default
+path instead). ``_disable_auto_enabled_privilege_separation()`` undoes it
+right after each ``_dpkg("-i", ...)`` call, pinning the mechanism this module
+has always tested -- still exactly what a bare ``pip``/``pipx`` install gets
+today, and still reachable from a ``.deb`` install by running ``disable``.
+
 Skipped entirely unless running on real Linux with a just-built ``.deb`` on
 disk, ``dpkg``/``dpkg-deb``/``desktop-file-validate`` on ``PATH``, and
 passwordless root (via ``sudo -n``, or already running as root) -- installing
@@ -80,6 +93,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import getpass
 import json
 import os
 import platform
@@ -176,6 +190,31 @@ def _dpkg(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     if check:
         assert result.returncode == 0, f"dpkg {' '.join(args)} failed:\n{result.stdout}{result.stderr}"
     return result
+
+
+def _disable_auto_enabled_privilege_separation() -> None:
+    """Undoes issue #428 D1's ``postinst``-triggered ``enable --auto``, which
+    runs on every ``dpkg -i`` (install *and* upgrade) whenever ``$SUDO_USER``
+    resolves to a real, non-root account -- exactly what this CI runner's own
+    passwordless-``sudo``-invoking account satisfies, same as a real human's
+    ``sudo dpkg -i``/``sudo apt install`` would. This module's whole scenario
+    (an autostart ``.desktop`` conffile that survives a plain remove, a daemon
+    started directly via the installed wrapper against an isolated ``$HOME``)
+    is the pre-D1, unseparated lifecycle -- ``test_linux_graphical_session_
+    autostart.py``'s own "unseparated path" test pins the identical mechanism
+    the identical way, right after its own ``_dpkg("-i", ...)``, for the same
+    reason: once separation auto-enables, the daemon runs as its own system
+    account under ``privacyfence-daemon.service``, the legacy autostart entry
+    is renamed to ``.disabled``, and a second, directly-launched instance
+    against an isolated ``$HOME`` either can't bind its ports/sockets or gets
+    refused outright by ``check_runtime_identity`` -- none of which is what
+    this module is testing. Must be re-run after every ``_dpkg("-i", ...)``
+    in this module, including the upgrade-in-place one: ``enable --auto``
+    fires on upgrade too, not just on a fresh install."""
+    subprocess.run(
+        ["sudo", "-n", "privacyfence-privilege-separation", "disable", "--user", getpass.getuser()],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
 
 
 def _purge_if_present() -> None:
@@ -416,7 +455,14 @@ async def _resolve_pending_card(web_client: httpx.AsyncClient, session_id: str, 
         # (``'<div class="pf-approval-row" data-approval-id="' + esc(row.id)
         # + '">'``), which itself contains that literal opening substring
         # and would match immediately, before anything is actually pending.
-        match = re.search(r'<div class="pf-approval-row" data-approval-id="([0-9a-f]{16,})"', page.text)
+        # The class attribute's optional trailing " pf-approval-row-
+        # unbatchable" modifier (approval_list_html.py's _row_html) is what
+        # a confirm-kind card -- like the rule-confirmation one this
+        # scenario drives, never batchable -- actually carries.
+        match = re.search(
+            r'<div class="pf-approval-row(?: pf-approval-row-unbatchable)?" data-approval-id="([0-9a-f]{16,})"',
+            page.text,
+        )
         if match:
             approval_id = match.group(1)
             break
@@ -512,6 +558,7 @@ async def test_deb_install_validate_scenario_remove_purge_lifecycle(tmp_path):
 
     # ── Install ──────────────────────────────────────────────────────────
     _dpkg("-i", str(deb_path))
+    _disable_auto_enabled_privilege_separation()
 
     assert DAEMON_BIN.is_file(), f"{DAEMON_BIN} missing after dpkg -i"
     assert os.access(DAEMON_BIN, os.X_OK), f"{DAEMON_BIN} is not executable after dpkg -i"
@@ -604,6 +651,7 @@ async def test_upgrade_in_place_preserves_user_state(tmp_path):
     # applied (an auto-accept rule confirmed through the real MCP/approval
     # round trip -- not a hand-written settings.yaml) ────────────────────
     _dpkg("-i", str(deb_n))
+    _disable_auto_enabled_privilege_separation()
     with _running_daemon(home) as daemon:
         async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
             session_id = await _bootstrap_session(web_client, daemon.data_dir)
@@ -625,6 +673,7 @@ async def test_upgrade_in_place_preserves_user_state(tmp_path):
     deb_n1 = tmp_path / "upgrade-build" / "privacyfence_next.deb"
     new_version = _synthetic_next_version_deb(deb_n, deb_n1)
     _dpkg("-i", str(deb_n1))
+    _disable_auto_enabled_privilege_separation()
 
     status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True, check=True)
     assert f"Version: {new_version}" in status.stdout
