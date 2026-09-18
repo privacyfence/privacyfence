@@ -317,9 +317,10 @@ class TestPreReleaseSection:
         finally:
             context.close()
 
-    def test_prefers_the_most_production_ready_channel_available(self, browser, website_server):
-        # rc beats beta beats alpha: handing a tester a release candidate over an alpha is the
-        # safer default when more than one pre-release is published.
+    def test_prefers_the_most_production_ready_channel_of_the_same_cycle(self, browser, website_server):
+        # Within one release cycle, rc beats beta beats alpha: handing a tester a release
+        # candidate over an earlier-stage build of the *same* upcoming version is the safer
+        # default when more than one of its pre-releases is published at once.
         context, page = _open_download_page(
             browser,
             website_server,
@@ -329,6 +330,23 @@ class TestPreReleaseSection:
             summary = page.inner_text("#prerelease-summary")
             assert "4.4.0rc1" in summary
             assert "rc" in summary
+        finally:
+            context.close()
+
+    def test_a_newer_alpha_beats_a_stale_rc_from_an_already_shipped_cycle(self, browser, website_server):
+        # The bug this module used to have no coverage for: nothing clears a channel's latest.json
+        # once its own cycle ships stable, so an already-superseded rc can sit there indefinitely.
+        # A fixed "rc always wins" priority kept surfacing that stale rc over a genuinely newer
+        # alpha published for the *next* cycle -- the page must pick by version instead.
+        stale_rc = {**RC_MANIFEST, "version": "4.0.0rc1"}
+        fresh_alpha = {**ALPHA_MANIFEST, "version": "4.1.0a1"}
+        context, page = _open_download_page(
+            browser, website_server, prereleases={"rc": stale_rc, "alpha": fresh_alpha}
+        )
+        try:
+            summary = page.inner_text("#prerelease-summary")
+            assert "4.1.0a1" in summary
+            assert "alpha" in summary
         finally:
             context.close()
 
