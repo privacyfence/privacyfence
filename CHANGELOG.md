@@ -394,6 +394,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`web_shell.wrap`'s new `dismissible_notice_html`) with a link to turn it on — advisory, not an
   alarm, so it stays dismissed in that browser once seen rather than nagging on every visit for as
   long as the install stays in its default state.
+- Approval binder, Phase 5: `docs/approval-list-ui-ux.md`'s "there is intentionally no Allow action
+  on the list" — true up through Phase 2, superseded by Phase 3's batch approve — is replaced with
+  the rule that actually holds, **no approval without disclosure**: what the binder discloses
+  inline, which approval kinds it refuses to batch, and why. `docs/security-and-compliance.md`
+  gains a new "The approval binder's single assertion" subsection stating what one WebAuthn
+  assertion over a whole selected set establishes (the same freshness and user-verification
+  `step_up.enabled` already requires per decision, now bound to an exact, tamper-evident set) and
+  what it does not (per-item attention) — framed against [ADR
+  0002](docs/adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6's own
+  integrity-strong/confidentiality-weak asymmetry rather than as a new claim. No behavior changes
+  with this entry.
 
 ### Added
 

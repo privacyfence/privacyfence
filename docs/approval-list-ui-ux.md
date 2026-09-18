@@ -14,9 +14,55 @@ Each row contains:
 - **Deny**;
 - **Review**.
 
-There is intentionally no **Allow** action on the list. Approval requires opening the full card so the user sees the operation context before authorizing it. Denial can be performed directly from the row because it releases no protected content and performs no protected write.
-
 When there are no pending requests the page shows the empty state.
+
+## The approval binder
+
+The rule that actually holds, and has held since the row-level Allow question was first raised, is
+**no approval without disclosure** — not "no Allow action on the list". The list groups pending,
+**batchable** rows by `(connector, operation_key)`, with a per-group and a page-level select-all,
+and two selection-scoped actions:
+
+- **Deny selected** clears a whole group of unwanted requests in one action, client-side over the
+  existing per-id decide endpoint. Denying releases no protected content and performs no protected
+  write, so it needs no passkey ceremony and no new server endpoint.
+- **Approve selected** posts the same set to `POST /api/approvals/batch/decide` with every item's
+  result set to `accept`. Server-side this is gated on one WebAuthn passkey assertion bound to the
+  exact submitted set (`webauthn_stepup.batch_decision_fingerprint`) whenever step-up applies to
+  anything selected — see [`security-and-compliance.md`](security-and-compliance.md#the-approval-binders-single-assertion)
+  for what that assertion does and does not establish. The submit button names the selected set's
+  composition ("Approve 12 · 9 reads, 3 writes") so an unintended write can't hide inside a
+  read-shaped batch.
+
+**Disclosure, not the full card, is what a selected row shows.** Each batchable row gets an inline
+"Details" disclosure, fetched from a read-only `GET /api/approvals/{id}/preview` fragment — the
+same metadata-only `preview` dict `gate.py` stamps onto every approval at registration
+(`docs/coding-and-testing-guidelines.md` §1.5 bounds what a preview may ever contain). It is
+rendered with `textContent`, never an `<iframe>` onto the real card document: card documents ship
+`frame-ancestors 'none'` and this page's own `frame-src` admits `data:` only, so embedding the card
+would mean weakening the CSP for cosmetics. **Approving a selected batch still never shows more
+than that metadata disclosure** — the binder trades one ceremony per decision for one ceremony per
+batch, not attention to any decision's full context for none. A human who wants the full card
+before deciding one item still has **Review**, unchanged.
+
+**Not every row is batchable, and never by silent default.** `PendingApproval.is_batchable()` and
+`blocked_reason()` classify every approval kind explicitly — by membership in an allowed/excluded
+pair, never by complement — with a coverage test that fails the moment a new kind isn't classified
+either way, so nothing lands in the binder by falling through an `else`. Two kinds are excluded, each
+for its own reason:
+
+- a `confirm`/`choice` dialog — a mid-flight second step with a different result vocabulary than
+  `accept`/`deny`;
+- anything the PII scanner has already forced a second confirmation on (`pii_forces_confirmation`)
+  — that confirmation only materializes *after* the card is answered, so batching the first step
+  would spray a fresh queue of confirm dialogs into the list, defeating the point of the PII gate.
+
+Excluded rows still appear in the list — with no checkbox, and `blocked_reason()` naming why — so
+their existence isn't hidden, only their inclusion in a batch.
+
+**Selection survives live updates.** It lives in the page's own JS state (a `Set` keyed by
+approval id) and is reconciled after every SSE re-render rather than being wiped by one, since
+`__pfRenderApprovals` replaces the list's markup wholesale on every tick.
 
 ## Live updates
 
@@ -62,6 +108,9 @@ The approval list and cards are browser pages and must remain usable at desktop,
 - `src/privacyfence/web_approval_ui.py`
 - `src/privacyfence/web/routes_approvals.py`
 - `src/privacyfence/web/routes_org_approvals.py`
+- `src/privacyfence/web/step_up_decide.py`
+- `src/privacyfence/webauthn_stepup.py`
+- `src/privacyfence/step_up_config.py`
 - `src/privacyfence/web/state_stream.py`
 - `src/privacyfence/web_shell.py`
 - `src/privacyfence/resources/sw.js`
