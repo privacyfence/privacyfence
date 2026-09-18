@@ -350,7 +350,14 @@ async def _resolve_pending_card(web_client: httpx.AsyncClient, session_id: str, 
     while time.monotonic() < deadline:
         page = await web_client.get("/approvals")
         assert page.status_code == 200, page.text
-        match = re.search(r'<div class="pf-approval-row" data-approval-id="([0-9a-f]{16,})"', page.text)
+        # Matches both the plain and the binder's "unbatchable" modifier class
+        # (approval_list_html.py's _row_html: a confirm-kind card, like the
+        # rule-confirmation one this scenario drives, is never batchable) --
+        # see approval_list_html.py's own row_class comment.
+        match = re.search(
+            r'<div class="pf-approval-row(?: pf-approval-row-unbatchable)?" data-approval-id="([0-9a-f]{16,})"',
+            page.text,
+        )
         if match:
             approval_id = match.group(1)
             break
