@@ -101,6 +101,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+import httpx2
 import pytest
 import yaml
 
@@ -502,11 +503,11 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
             await asyncio.to_thread(_confirm_pending_rule_change, running_packaged_daemon.bootstrap_url)
             result = await call_task
 
-    assert result.isError is not True, getattr(result, "content", result)
-    assert result.structuredContent is not None
-    assert result.structuredContent["confirmed"] is True
-    assert result.structuredContent["changed"] is True
-    assert "trusted_sender_domain" in result.structuredContent["description"]
+    assert result.is_error is not True, getattr(result, "content", result)
+    assert result.structured_content is not None
+    assert result.structured_content["confirmed"] is True
+    assert result.structured_content["changed"] is True
+    assert "trusted_sender_domain" in result.structured_content["description"]
 
     # Confirms the round trip actually reached persisted state, not just a
     # confirmed-but-inert in-memory result.
@@ -676,8 +677,8 @@ async def _propose_trusted_sender_rule(mcp_url: str, mcp_token: str, *, value: l
     this module; this test's own job is proving state survival across a
     bundle swap, not re-proving the shim a second time."""
     headers = {"Authorization": f"Bearer {mcp_token}"}
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write, _sid):
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await session.call_tool(
@@ -760,8 +761,8 @@ async def test_macos_upgrade_preserves_user_state(tmp_path):
             )
             await _resolve_pending_card(daemon.base_url, daemon.bootstrap_url)
             result = await propose_task
-            assert result.isError is not True, getattr(result, "content", result)
-            assert result.structuredContent["changed"] is True
+            assert result.is_error is not True, getattr(result, "content", result)
+            assert result.structured_content["changed"] is True
 
         settings_path = home / ".privacyfence" / "authority" / "config" / "settings.yaml"
         assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
