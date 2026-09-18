@@ -14,12 +14,15 @@
 # exists at all. The DMG remains the primary distributable; this is an
 # additional artifact for anyone who wants the fully-automated install.
 #
-# A pkg-installed .app also lands root:wheel-owned by pkgbuild's own default
-# ownership, which is exactly what macos_privilege_separation.sh's B1
-# trusted-image check wants to see -- unlike a drag-installed DMG copy
-# (owned by the installing user), a pkg-installed .app never needs the
-# codesign-verify substitute proof privilege_separation.py's
-# _macos_auto_enable_script_problem() falls back to for that case.
+# A pkg-installed .app lands root:wheel-owned by pkgbuild's own default
+# ownership -- but /Applications itself is always root:admin, so that alone
+# doesn't satisfy macos_privilege_separation.sh's B1 trusted-image check
+# (require_trusted_image() walks every ancestor directory, /Applications
+# included). `enable` -- run by this package's own postinstall script --
+# closes that itself: it copies the image into a root:wheel-owned location
+# of its own (TRUSTED_IMAGE_DIR) before trusting anything, regardless of
+# where --app pointed. See that function's own comment for the full story
+# (#428 D2's own B1 follow-up).
 #
 # Packages the *already-built* dist/PrivacyFenceApp.app -- this script never
 # runs PyInstaller itself, so run scripts/build_dmg.sh first (its DMG and

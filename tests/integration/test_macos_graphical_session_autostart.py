@@ -33,17 +33,19 @@ That's deliberately as far as this goes: proving both halves of the inversion vi
 physical login, which is out of scope here the same way it is for
 ``test_windows_graphical_session_autostart.py``'s own single logged-on account.
 
-``enable`` also runs a real B1 check (``require_trusted_image()``) against whatever
-``--app`` points at, walking every directory up to ``/`` and refusing to elevate
-anything staged somewhere user-writable -- correctly, since a writable image is a
-writable "run this as a different, more trusted account" primitive. That is exactly
-what makes ``/tmp`` (where ``tempfile.mkdtemp()`` lands, and macOS's own always-
-world-writable regardless of the sticky bit) the wrong place to stage the extracted
-bundle from: this module first extracts the DMG into an ordinary scratch directory
-(``_copy_app_from_dmg``), then promotes that copy into a fresh root:wheel-owned,
-non-writable tree under ``/Library`` (``_stage_as_root``) before ever calling
-``enable`` -- the same shape a genuinely trusted install needs, proven rather than
-bypassed.
+``enable`` also runs a real B1 check (``require_trusted_image()``), but not against
+whatever ``--app`` points at directly any more: #428 D2 found that walking every
+directory up to ``/`` from a real ``/Applications/PrivacyFenceApp.app`` always failed
+it, since ``/Applications`` itself is admin-group-writable on every real Mac -- not a
+CI-only quirk, but the reason the *daemon's own* runtime auto-enable prompt
+(``maybe_auto_enable_macos()``) could never have actually separated a real install
+either. ``enable`` now stages its own root:wheel-owned copy of whatever ``--app``
+points at (``stage_trusted_image()``, into ``TRUSTED_IMAGE_DIR``) before trusting
+anything, and checks *that* copy instead -- so this module hands it a plain,
+``/tmp``-extracted, user-owned copy directly (``_copy_app_from_dmg``), the same shape
+a real DMG drag-install has, rather than pre-staging a trusted one itself. The
+daemon/companion assertions below confirm the running processes actually come from
+``TRUSTED_IMAGE_DIR``, not just that a same-named binary is running from somewhere.
 
 Proves, all for real:
 
@@ -118,9 +120,11 @@ def _copy_app_from_dmg(dst_dir: Path) -> Path:
     runnable" posture that module's own ``built_shim_entry`` fixture already
     states for itself.
 
-    Lands under a plain user-owned scratch directory -- this is only ever the
-    *extraction* step. ``_stage_as_root`` below is what produces a path
-    ``macos_privilege_separation.sh`` will actually accept."""
+    Lands under a plain user-owned scratch directory -- the same shape a real
+    DMG drag-install has, and (#428 D2's B1 follow-up) exactly what `enable`
+    now accepts directly: it stages its own root:wheel-owned copy internally
+    before trusting anything, so this module no longer needs to pre-stage
+    one itself."""
     dmg_path = _built_dmgs()[-1]
     mount_point = Path(tempfile.mkdtemp(prefix="pf-dmg-mount-"))
     subprocess.run(
@@ -136,44 +140,6 @@ def _copy_app_from_dmg(dst_dir: Path) -> Path:
     finally:
         subprocess.run(["hdiutil", "detach", str(mount_point), "-force"], capture_output=True, text=True, timeout=30)
         shutil.rmtree(mount_point, ignore_errors=True)
-
-
-# B1 (ADR 0002): macos_privilege_separation.sh's own require_trusted_image() walks the daemon/
-# companion executable's path *and every directory above it, up to "/"*, refusing to elevate
-# anything unless each one is root-owned and not world/group-writable (group "wheel" excepted).
-# /tmp (what tempfile.mkdtemp() -- and this module's own app_dir fixture -- lands under) is always
-# world-writable on macOS, sticky bit or not, so nothing staged there can ever pass that walk no
-# matter how the leaf directory itself is chmod'd. /Library is the parent every existing
-# MACOS_SYSTEM_ROOT write already trusts (the daemon's own "/Library/Application Support/
-# PrivacyFence" lives right under it), so it's the natural, already-safe place to stage from here
-# too, rather than inventing a new top-level path.
-_ROOT_STAGING_PARENT = Path("/Library")
-
-
-def _stage_as_root(app_path: Path) -> Path:
-    """Copies ``app_path`` (freshly extracted from the DMG into a user-owned scratch dir) into a
-    fresh, root:wheel-owned, non-group/world-writable directory under ``_ROOT_STAGING_PARENT`` --
-    the shape ``require_trusted_image()`` actually accepts, see the module-level comment above.
-    Every copy/chown/chmod goes through ``sudo`` since the destination is never writable by this
-    test's own (non-root) uid once it exists. Caller owns removing the returned tree (via
-    ``_remove_root_owned``) once the test is done with it."""
-    staging_dir = _ROOT_STAGING_PARENT / f"pf-graphical-session-test-{os.getpid()}"
-    _sudo_run("rm", "-rf", str(staging_dir), check=False)
-    _sudo_run("mkdir", "-p", str(staging_dir))
-    staged_app = staging_dir / app_path.name
-    _sudo_run("cp", "-R", str(app_path), str(staged_app))
-    # Recursive chown covers both directories and files in one pass; chmod afterwards so nothing
-    # in between is briefly group/world-writable under the new root ownership. 755 everywhere is
-    # coarser than a real signed bundle's own per-file modes, but this workflow never signs
-    # (scripts/build_dmg.sh runs with no --sign here) and require_trusted_image() only cares about
-    # "not writable by anyone but root", never execute bits on non-executables.
-    _sudo_run("chown", "-R", "root:wheel", str(staging_dir))
-    _sudo_run("chmod", "-R", "755", str(staging_dir))
-    return staged_app
-
-
-def _remove_root_owned(path: Path) -> None:
-    _sudo_run("rm", "-rf", str(path), check=False)
 
 
 def _can_sudo() -> bool:
@@ -339,17 +305,17 @@ def _clean_separation_state(request):
 # The test
 # --------------------------------------------------------------------------- #
 
+TRUSTED_IMAGE_DIR = "/Library/PrivacyFence/image"  # macos_privilege_separation.sh's own TRUSTED_IMAGE_DIR
+
+
 def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_separation_state):
     app_dir = Path(tempfile.mkdtemp(prefix="pf-graphical-session-"))
-    staged_app: Path | None = None
     try:
-        extracted_app = _copy_app_from_dmg(app_dir)
-        # require_trusted_image() (B1) refuses to elevate anything staged under a user-writable
-        # path -- see _stage_as_root's own comment -- so this promotes the extracted bundle to a
-        # root-owned tree before handing it to `enable`, the same way a real trusted install would
-        # need to already be laid out.
-        staged_app = _stage_as_root(extracted_app)
-        app_path = staged_app
+        # No pre-staging: `enable` itself now copies whatever --app points at into its own
+        # root:wheel-owned TRUSTED_IMAGE_DIR before trusting it (B1 follow-up, #428 D2) -- handing
+        # it a plain user-owned, /tmp-extracted copy directly is exactly the real DMG-drag-install
+        # shape this is supposed to accept, not a workaround for it.
+        app_path = _copy_app_from_dmg(app_dir)
         user = _current_user()
         uid = os.getuid()
 
@@ -366,6 +332,12 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
         daemon_command = _process_command(daemon_pid)
         assert daemon_command.endswith("PrivacyFenceApp"), (
             f"{DAEMON_LABEL} (pid {daemon_pid}) is not running the packaged daemon binary: {daemon_command!r}"
+        )
+        # Running from the staged copy, not the original --app path this test handed `enable` --
+        # the actual B1 follow-up fix, not just "some binary called PrivacyFenceApp is running".
+        daemon_printed = _launchctl_print(f"system/{DAEMON_LABEL}") or ""
+        assert TRUSTED_IMAGE_DIR in daemon_printed, (
+            f"{DAEMON_LABEL} (pid {daemon_pid}) is not running from {TRUSTED_IMAGE_DIR}:\n{daemon_printed}"
         )
 
         # Functional proof, not just "launchd thinks it's active": the
@@ -395,11 +367,16 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
             f"{COMPANION_LABEL} (pid {companion_pid}) is not running the packaged companion binary: "
             f"{companion_command!r}"
         )
+        companion_printed = _launchctl_print(companion_domain) or ""
+        assert TRUSTED_IMAGE_DIR in companion_printed, (
+            f"{COMPANION_LABEL} (pid {companion_pid}) is not running from {TRUSTED_IMAGE_DIR}:\n{companion_printed}"
+        )
 
         _wait_for_path_as_root(
             companion_socket_path_under(HANDOFF_DIR), timeout=20, what="the companion's own control channel socket",
         )
     finally:
-        if staged_app is not None:
-            _remove_root_owned(staged_app.parent)
+        # TRUSTED_IMAGE_DIR itself is root-owned, but its parent (/Library/PrivacyFence) and
+        # everything under it is torn down by `disable` -- see _disable_if_separated(), which
+        # _clean_separation_state's own teardown already calls unconditionally.
         shutil.rmtree(app_dir, ignore_errors=True)

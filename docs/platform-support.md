@@ -86,10 +86,14 @@ logged in at install time, or the daemon's bundled `macos_privilege_separation.s
 it logs why and leaves the install opt-in (the daemon's own D1 prompt still offers this later) --
 it never fails the package install itself over this.
 
-A pkg-installed `.app` also lands root:wheel-owned by `pkgbuild`'s own default ownership, which is
-exactly what `require_trusted_image()` (B1) checks for -- unlike a drag-installed DMG copy (owned
-by the installing user), a pkg-installed `.app` never needs the codesign-verify substitute proof
-D1's own follow-up entry added for that case (see `CHANGELOG.md`).
+A pkg-installed `.app` lands root:wheel-owned by `pkgbuild`'s own default ownership -- but
+`/Applications` itself is always `root:admin`, so that alone was found not to satisfy
+`require_trusted_image()` (B1), which walks every ancestor directory including `/Applications`
+itself. `enable` now closes that itself, for every caller (this `.pkg`'s postinstall, D1's own
+runtime prompt, and a human running it by hand) rather than the `.pkg` alone: it stages its own
+root:wheel-owned copy of whatever `--app` points at before trusting anything. See
+`macos_privilege_separation.sh`'s `stage_trusted_image()` and `CHANGELOG.md`'s `#428 D2` B1
+follow-up entry for the full story.
 
 The DMG remains the primary distributable; the `.pkg` is an additional artifact for anyone who
 wants a fully-automated install with no separate runtime prompt at all. Signing a `.pkg` needs a
@@ -508,13 +512,21 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   has its own real-CI coverage** (`test_macos_pkg_install.py`, in this same `macos-graphical-
   session.yml`): a real `sudo installer -pkg ... -target /` with no separate `enable` call,
   confirming the postinstall script alone -- not this test -- wires up the LaunchDaemon and
-  companion LaunchAgent. That closes the "does the automatic path even run to completion" half of
-  this gap for the `.pkg`, the same way `test_macos_graphical_session_autostart.py` already does for
-  `enable` run by hand. It does **not** close the manual-check gap above for the DMG's own path:
-  `installer -pkg` from the command line never invokes Installer.app's GUI or a real admin-password
-  dialog, so a human double-clicking the `.pkg` (or, on the DMG side, the daemon's own `osascript`
-  prompt actually appearing and being answered) against a real signed release build is still the
-  same still-open manual check this bullet has always described.
+  companion LaunchAgent. This coverage found a real bug the first time it ran, not just a gap: `enable`
+  refused *every* real `/Applications` install outright (B1's `require_trusted_image()` walk always
+  failed on `/Applications` itself, `root:admin` on every real Mac) -- true for D1's own runtime
+  prompt and a hand-run `enable` too, not only the `.pkg`, since all three share the same check. Fixed
+  by having `enable` stage its own root:wheel-owned copy before trusting anything (see `CHANGELOG.md`'s
+  `#428 D2 follow-up (B1)` entry and ADR 0002's matching amendment); `test_macos_pkg_install.py` now
+  passes against the fix. That closes the "does the automatic path even run to completion, and
+  actually separate anything" half of this gap for the `.pkg`, the same way `test_macos_graphical_
+  session_autostart.py` -- no longer pre-staging a workaround copy itself -- now does for `enable`
+  run by hand. It does **not** close the manual-check gap above for the DMG's own path: `installer
+  -pkg` from the command line never invokes Installer.app's GUI or a real admin-password dialog, so a
+  human double-clicking the `.pkg` (or, on the DMG side, the daemon's own `osascript` prompt actually
+  appearing and being answered) against a real signed release build is still the same still-open
+  manual check this bullet has always described -- now at least backed by a mechanism proven to work
+  once it runs, rather than one that was silently a dead end.
   **macOS's own launchd wiring is now covered too** (B19,
   [privacyfence/privacyfence#374](https://github.com/privacyfence/privacyfence/issues/374)):
   `macos-graphical-session.yml`/`test_macos_graphical_session_autostart.py` drives

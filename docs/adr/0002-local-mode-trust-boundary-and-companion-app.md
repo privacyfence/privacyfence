@@ -230,6 +230,26 @@ Consequences:
   product away from that user to make an optional hardening step universally available is the wrong
   trade in the wrong direction.
 
+**Amended by #428 D2, 2026-09-18: B1's own macOS check, as written, refused every real install.**
+`test_macos_pkg_install.py` (D2's `.pkg` installer coverage) was the first thing to actually run
+`enable` against a real `/Applications` path rather than a pre-staged or synthetic one, and found
+that `require_trusted_image()` — which walks every ancestor directory, `/Applications` included —
+always failed there, since `/Applications` is `root:admin drwxrwxr-x` on every real Mac regardless
+of how the `.app` inside it is owned. Not a `.pkg`-specific bug: D1's own daemon-triggered runtime
+prompt and a human running `enable` by hand against a real drag-installed copy both go through the
+identical `require_trusted_image()` call, so a real macOS install could never actually have
+separated under *any* of B1's three trigger paths — `test_macos_graphical_session_autostart.py`'s
+own coverage had missed this because it pre-staged a root-owned copy under `/Library` by hand before
+ever calling `enable`, sidestepping the exact case a real install hits.
+`scripts/macos_privilege_separation.sh`'s `enable` now stages its own root:wheel-owned copy (into a
+new `TRUSTED_IMAGE_DIR`, `/Library/PrivacyFence/image`) before trusting anything, and
+`require_trusted_image()` runs against that copy instead of wherever `--app` originally pointed —
+closing the hole B1 opened without reopening it, since the copy still only ever happens under an
+already-authenticated `enable` invocation, never from a running, already-elevated process. See
+`CHANGELOG.md`'s `#428 D2 follow-up (B1)` entry for the full account, including the one behavior
+change this brings: a separated install no longer picks up an in-place `/Applications` replacement
+on its own.
+
 ### 6. Session minting is made insufficient, not uncallable
 
 The companion runs as the same user as the agent. `SO_PEERCRED`'s uid — or
