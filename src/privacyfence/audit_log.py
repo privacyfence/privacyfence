@@ -595,8 +595,11 @@ class AuditLogger:
             # tooling/tests already rely on (Decision at 8, PII Detected at
             # 11, ...) stay stable.
             "Event ID", "Deployment ID", "Security Config Hash", "Integrity Hash",
+            # Appended for the same reason as the SEC-23 block above: existing
+            # column indices stay stable.
+            "Decided Via", "Batch ID",
         ]
-        COL_WIDTHS = [22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22]
+        COL_WIDTHS = [22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22, 14, 30]
 
         hdr_font  = Font(bold=True, color="FFFFFF")
         hdr_fill  = PatternFill("solid", fgColor="2D4A6B")
@@ -641,6 +644,7 @@ class AuditLogger:
                 _excel_literal(entry.claude_reason or ""), entry.delivery or "",
                 entry.event_id or "", entry.deployment_id or "",
                 entry.security_config_hash or "", entry.entry_hash or "",
+                entry.decided_via or "", _excel_literal(entry.batch_id or ""),
             ])
             fill = decision_fills.get(entry.decision, PatternFill())
             for col in range(1, len(HEADERS) + 1):
