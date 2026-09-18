@@ -192,3 +192,18 @@ class TestCspNonce:
         a = build_confirmation_html(title="T", message_lines=["m"], cancel_label="Cancel", confirm_label="OK")
         b = build_confirmation_html(title="T", message_lines=["m"], cancel_label="Cancel", confirm_label="OK")
         assert extract_csp_nonce(a) != extract_csp_nonce(b)
+
+
+class TestResponsiveViewport:
+    """Both dialog shapes are served in an ordinary browser tab by the web
+    approval surface, not only inside a fixed native frame -- so both need
+    the same device-width viewport build_card_stack_html declares, for the
+    same reason (see that function's own head)."""
+
+    def test_confirmation_declares_a_device_width_viewport(self):
+        html = build_confirmation_html(title="T", message_lines=["m"], cancel_label="Cancel", confirm_label="OK")
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
+
+    def test_choice_declares_a_device_width_viewport(self):
+        html = build_choice_html(title="T", prompt="p", options=["a"])
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html

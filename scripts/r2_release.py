@@ -65,8 +65,10 @@ bucket but publishes nothing; only `finalize` moves the channel's latest.json, a
 confirming every artifact the manifest references is really there with the right size and digest.
 An incomplete release can therefore exist in R2 without ever being the one the Worker serves.
 
-Only installers (DMG / -setup.exe / .deb) enter the manifest -- see _INSTALLERS for why SBOMs,
-the org-config scripts and the sdist/wheel are uploaded here but deliberately left out of it.
+Only installers (DMG / .pkg / -setup.exe / .deb) enter the manifest -- see _INSTALLERS for why
+SBOMs, the org-config scripts and the sdist/wheel are uploaded here but deliberately left out of
+it, and for which installers are mandatory for a release to reach "latest" versus optional (the
+.pkg is not -- see that entry's own comment).
 """
 
 from __future__ import annotations
@@ -118,15 +120,23 @@ _SHA256_METADATA_KEY = "sha256"
 # findArtifact(). These three match the runners in build.yml that produce them (macos-latest is
 # arm64, windows-latest x64, ubuntu-latest amd64) and the fixtures in
 # cloudflare/downloads/test/fixtures/.
-_INSTALLERS: tuple[tuple[re.Pattern[str], str, str, str], ...] = (
-    (re.compile(r"^PrivacyFence-[^/]*\.dmg$"), "macos-arm64", "macos", "arm64"),
-    (re.compile(r"^PrivacyFence-[^/]*-setup\.exe$"), "windows-x64", "windows", "x64"),
-    (re.compile(r"^privacyfence_[^/]*_amd64\.deb$"), "linux-x64", "linux", "x64"),
+#
+# The fifth element is whether this installer is *required* for a release to reach "latest" --
+# see REQUIRED_ARTIFACT_IDS below. The DMG/.exe/.deb are; the .pkg (#428 D2) deliberately is not:
+# it is an additional, fully-automated-install option alongside the DMG, not a replacement for
+# it, so a pkg-signing-cert hiccup or a pkg-specific smoke-test failure must never block the
+# DMG/.exe/.deb from reaching "latest" the way a missing *required* installer does.
+_INSTALLERS: tuple[tuple[re.Pattern[str], str, str, str, bool], ...] = (
+    (re.compile(r"^PrivacyFence-[^/]*\.dmg$"), "macos-arm64", "macos", "arm64", True),
+    (re.compile(r"^PrivacyFence-[^/]*-setup\.exe$"), "windows-x64", "windows", "x64", True),
+    (re.compile(r"^privacyfence_[^/]*_amd64\.deb$"), "linux-x64", "linux", "x64", True),
+    (re.compile(r"^PrivacyFence-[^/]*\.pkg$"), "macos-arm64-pkg", "macos", "arm64", False),
 )
 
 # Every one of these must be present before a release may become "latest". A release missing any
 # mandatory installer can still exist in R2 -- it just never gets a latest.json pointing at it.
-REQUIRED_ARTIFACT_IDS = frozenset(spec[1] for spec in _INSTALLERS)
+# Not every _INSTALLERS entry is mandatory -- see the .pkg's own comment above.
+REQUIRED_ARTIFACT_IDS = frozenset(spec[1] for spec in _INSTALLERS if spec[4])
 
 
 def channel_for_version(version: str) -> str:
@@ -178,7 +188,7 @@ def sha256_file(path: Path) -> str:
 def classify_installer(filename: str) -> tuple[str, str, str] | None:
     """Maps an installer filename to its (id, platform, architecture), or None for anything
     that is not an installer -- SBOMs, org-config scripts, sdist/wheel. See _INSTALLERS."""
-    for pattern, artifact_id, platform, architecture in _INSTALLERS:
+    for pattern, artifact_id, platform, architecture, _required in _INSTALLERS:
         if pattern.match(filename):
             return artifact_id, platform, architecture
     return None

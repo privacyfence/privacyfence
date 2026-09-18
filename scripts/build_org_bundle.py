@@ -281,9 +281,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--step-up-disabled", action="store_true", help="Explicitly turn step-up back off (useful with --merge).",
     )
     step_up.add_argument(
-        "--step-up-scope", choices=["writes", "writes_and_pii_reads"], default=None,
+        # Repeats step_up_config.STEP_UP_SCOPES rather than importing it:
+        # this script is stdlib-only on purpose (see the module docstring),
+        # so it runs with no PrivacyFence install. Keep the two in sync.
+        "--step-up-scope", choices=["writes", "writes_and_pii_reads", "writes_and_reads"], default=None,
         help="Default: writes. \"writes_and_pii_reads\" additionally requires step-up before a "
-             "read that detected personal data, not just a write.",
+             "read that detected personal data, not just a write; \"writes_and_reads\" requires it "
+             "before every gated read, flagged or not.",
     )
     step_up.add_argument(
         "--step-up-rp-id", metavar="DOMAIN",

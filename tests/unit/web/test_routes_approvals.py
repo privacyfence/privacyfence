@@ -204,6 +204,31 @@ class TestListApprovals:
         r = c.get("/approvals")
         assert "NOTIFICATIONS_ENABLED = false" in r.text
 
+    def test_empty_state_names_the_first_run_case(self, web_ui, sessions):
+        from privacyfence.web.routes_approvals import create_app
+
+        app = create_app(web_ui, sessions=sessions, any_connector_authenticated=lambda: False)
+        c = TestClient(app, base_url="http://localhost")
+        _signed_in(c, sessions)
+        r = c.get("/approvals")
+        assert "Nothing is governed yet." in r.text
+        assert "/settings/connectors" in r.text
+
+    def test_empty_state_is_re_evaluated_per_request(self, web_ui, sessions):
+        # Authenticating a connector has to take effect on the next page
+        # load, not the next daemon restart.
+        from privacyfence.web.routes_approvals import create_app
+
+        authed = {"value": False}
+        app = create_app(
+            web_ui, sessions=sessions, any_connector_authenticated=lambda: authed["value"],
+        )
+        c = TestClient(app, base_url="http://localhost")
+        _signed_in(c, sessions)
+        assert "Nothing is governed yet." in c.get("/approvals").text
+        authed["value"] = True
+        assert "Nothing is waiting" in c.get("/approvals").text
+
     def test_pending_card_row_has_a_deny_button_and_review_link(self, client, sessions, web_ui):
         _signed_in(client, sessions)
         t, card, box = _pending_card(web_ui)
@@ -555,6 +580,41 @@ class TestStepUpScoping:
         session_id = _signed_in(client, sessions)
         r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
         assert r.status_code == 428
+
+    def test_unflagged_read_needs_step_up_only_in_the_widest_scope(self):
+        """The gap ``writes_and_pii_reads`` leaves: a read pii_detector.py
+        never flagged is still a disclosure, and ``writes_and_reads`` is
+        what covers it. Same approval, same principal, both scopes --
+        org mode's own counterpart asserts this pair identically."""
+        self._enroll()
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", scope="writes_and_pii_reads"),
+        )
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        approval = _register(web_ui, gate_kind="review", pii_detected=False)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 200
+
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", scope="writes_and_reads"),
+        )
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        approval = _register(web_ui, gate_kind="review", pii_detected=False)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+
+    def test_denying_an_unflagged_read_in_the_widest_scope_still_needs_nothing(self):
+        self._enroll()
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", scope="writes_and_reads"),
+        )
+        approval = _register(web_ui, gate_kind="review", pii_detected=False)
+        client = _client(app)
+        session_id = _signed_in(client, sessions)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "deny", "csrf": session_id})
+        assert r.status_code == 200
 
 
 class TestStepUpEvadableWithNoPasskeyEnrolled:

@@ -181,6 +181,10 @@ def _document(*, width: int, body_html: str) -> str:
 <html>
 <head>
 <meta charset="utf-8">
+<!-- See approval_window_html.build_card_stack_html's own head: without
+     this a phone renders the document in a ~980px viewport at ~40% scale
+     and every phone-width @media rule below silently never matches. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <style nonce="{nonce}">
 {_STYLES_CSS}

@@ -247,3 +247,253 @@ class TestBinderMarkup:
         html = approval_list_html.build_list_html(rows, csrf="t")
         assert 'data-details="' in html
         assert 'id="pf-details-' in html
+
+
+class TestRowActionOrder:
+    """Deny is last in the cluster, not beside Review -- see the module
+    docstring. Asserted on source order in both renderers rather than on a
+    CSS ``order`` declaration, because keeping focus order and visual order
+    the same thing at every width is the point of doing it this way."""
+
+    def test_first_paint_renders_details_review_deny(self):
+        row_html = approval_list_html._row_html(approval_list_html.row_from_approval(_real_card()))
+        assert (
+            row_html.index("pf-btn-details")
+            < row_html.index("pf-btn-review")
+            < row_html.index("pf-btn-deny")
+        )
+
+    def test_live_rerender_mirrors_the_same_order(self):
+        # rowHtml is a hand-kept mirror of _row_html (see the module
+        # docstring); an ordering that holds on first paint but not after
+        # the first SSE tick would be worse than not doing it at all.
+        js = approval_list_html._JS
+        body = js[js.index("function rowHtml("):js.index("function groupHtml(")]
+        assert body.index("pf-btn-details") < body.index("pf-btn-review") < body.index("pf-btn-deny")
+
+
+class TestPhoneWidthRules:
+    """F2/F3: the row's own ``flex-wrap`` never engages, because
+    ``.pf-approval-main`` is ``flex:1;min-width:0`` against a
+    ``flex-shrink:0`` action cluster -- so the text column shrinks to about
+    25px at 393px instead of the row wrapping. These assert the rules that
+    make it wrap and give the controls a real target; that the rendered
+    result actually follows is covered by the Playwright suite."""
+
+    def test_text_column_gets_a_basis_too_wide_to_sit_beside_the_actions(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert "@media (max-width: 560px)" in html
+        assert ".pf-approval-main { flex-basis: calc(100% - 96px); }" in html
+
+    def test_action_strip_goes_full_width(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert ".pf-approval-actions { width: 100%; gap: 10px; margin-top: 12px; }" in html
+
+    def test_row_controls_get_a_real_touch_target(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert "min-height: 44px; padding: 12px 14px; font-size: 13px;" in html
+
+    def test_batch_actions_sit_side_by_side_without_reordering_focus(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert ".pf-btn-approve-selected { grid-column: 1; }" in html
+        assert ".pf-btn-deny-selected { grid-column: 2; }" in html
+
+
+class TestRowNamesItsObject:
+    """F4: ``tool_name`` was the row's title and ``summary`` only its
+    fallback -- and ``tool_name`` is always populated, so a normal row never
+    reached the fallback and the one fact that decides the request was never
+    on screen. The raw MCP tool id was the kicker instead, which is what
+    README positions the product *against*."""
+
+    def test_title_is_the_summary_and_the_kicker_is_the_tool(self):
+        row = approval_list_html.row_from_approval(
+            _card(summary='Read "Q3 forecast — legal review"', tool="gmail_get_thread"),
+        )
+        html = approval_list_html._row_html(row)
+        title_at = html.index('class="pf-approval-title"')
+        kicker_at = html.index('class="pf-approval-kicker"')
+        assert 'Read &quot;Q3 forecast — legal review&quot;' in html[title_at:]
+        assert "Read Gmail message" in html[kicker_at:title_at]
+        assert "Gmail" in html[kicker_at:title_at]
+
+    def test_raw_tool_id_leaves_the_kicker_and_is_available_to_the_disclosure(self):
+        row = approval_list_html.row_from_approval(_card(summary="Read a thing", tool="gmail_get_thread"))
+        html = approval_list_html._row_html(row)
+        kicker_at = html.index('class="pf-approval-kicker"')
+        title_at = html.index('class="pf-approval-title"')
+        assert "gmail_get_thread" not in html[kicker_at:title_at]
+        # Carried on the row itself, so the Details disclosure can show it
+        # on first paint too -- pfLastRows is empty until the first SSE tick.
+        assert 'data-tool="gmail_get_thread"' in html
+
+    def test_falls_back_to_tool_name_when_there_is_no_summary(self):
+        # A confirm/choice dialog has no summary at all.
+        row = approval_list_html.row_from_approval(_card(summary="", tool_name="Read Gmail message"))
+        html = approval_list_html._row_html(row)
+        title_at = html.index('class="pf-approval-title"')
+        assert "Read Gmail message" in html[title_at:]
+
+    def test_live_rerender_uses_the_same_precedence(self):
+        js = approval_list_html._JS
+        body = js[js.index("function rowHtml("):js.index("function groupHtml(")]
+        assert "row.summary || row.tool_name ||" in body
+
+
+class TestReadWriteDirectionOnTheRow:
+    """F6: the card commits hard to read vs write -- a pill in the header
+    and a coloured rail down the window edge -- while the row carried
+    neither, though ``gate_kind`` was already in the payload and already
+    drove the Approve-selected composition label."""
+
+    def test_read_gate_gets_a_read_pill(self):
+        row = approval_list_html.row_from_approval(_card(gate_kind="review"))
+        assert 'class="pf-approval-pill pf-approval-pill-read">Read<' in approval_list_html._row_html(row)
+
+    def test_write_gate_gets_a_write_pill(self):
+        row = approval_list_html.row_from_approval(_card(gate_kind="popup"))
+        assert 'class="pf-approval-pill pf-approval-pill-write">Write<' in approval_list_html._row_html(row)
+
+    def test_a_bare_confirm_dialog_has_no_direction_and_no_pill(self):
+        row = approval_list_html.row_from_approval(_card(gate_kind=""))
+        assert "pf-approval-pill" not in approval_list_html._row_html(row)
+
+    def test_pill_uses_the_same_token_families_as_the_card(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert "var(--color-accent-100)" in html and "var(--color-accent-700)" in html
+        assert "var(--color-accent-2-100)" in html and "var(--color-accent-2-700)" in html
+
+    def test_live_rerender_mirrors_the_pill(self):
+        js = approval_list_html._JS
+        assert "pf-approval-pill-read" in js
+        assert "pf-approval-pill-write" in js
+
+
+class TestHeadingComposition:
+    def test_names_the_read_write_split(self):
+        rows = [
+            approval_list_html.row_from_approval(_card(id="a", gate_kind="review")),
+            approval_list_html.row_from_approval(_card(id="b", gate_kind="review")),
+            approval_list_html.row_from_approval(_card(id="c", gate_kind="popup")),
+        ]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert "3 approvals pending" in html
+        assert "2 reads · 1 write" in html
+
+    def test_heading_element_exists_even_with_nothing_pending(self):
+        # render() has to be able to reach it on the tick that takes the
+        # page from empty to non-empty; an element conditional on the first
+        # paint having had rows is one the live re-render cannot update.
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert 'id="pf-approvals-heading"' in html
+
+    def test_live_rerender_updates_the_heading(self):
+        assert "function updateHeading(" in approval_list_html._JS
+        assert "updateHeading(pfLastRows)" in approval_list_html._JS
+
+
+class TestApproveSelectedIsNotTheLoudestControl:
+    """F5: both Approve-selected and Review were filled
+    ``var(--color-accent)``, so the least-informed action -- select-all
+    plus one click, off one-line summaries -- was as loud as the one that
+    opens disclosure."""
+
+    def test_approve_selected_is_an_outline(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert "border: 1px solid var(--color-accent); background: transparent;" in html
+
+    def test_review_keeps_the_fill(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert ".pf-btn-review { background: var(--color-accent); color: #fff; }" in html
+
+    def test_the_composition_guard_on_the_label_is_kept(self):
+        # The label naming "9 reads, 3 writes" is what stops an unintended
+        # write hiding in a read-shaped batch -- the weight was wrong, not
+        # this.
+        assert "compositionLabel" in approval_list_html._JS
+
+
+class TestConnectorIconsSurviveLiveUpdates:
+    """F7: the first paint drew the real brand PNG and the live re-render
+    always drew a letter badge, so every row silently degraded within one
+    poll interval -- on the page that most needs to look trustworthy. The
+    icon now lives in one CSS rule per connector, which both render paths
+    reach by class name."""
+
+    def _rows(self, *connectors):
+        return [
+            approval_list_html.row_from_approval(_card(id=f"i{n}", connector=c))
+            for n, c in enumerate(connectors)
+        ]
+
+    def test_both_render_paths_emit_the_same_icon_element(self):
+        rows = self._rows("gmail")
+        first_paint = approval_list_html._row_html(rows[0])
+        assert 'class="pf-approval-icon pf-approval-icon-img pf-approval-icon-gmail"' in first_paint
+        # The JS mirror builds the identical class list, from a name list
+        # rather than any image data of its own.
+        js = approval_list_html._JS
+        assert "pf-approval-icon pf-approval-icon-img pf-approval-icon-" in js
+        assert "pfIconConnectors" in js
+
+    def test_the_image_data_appears_once_per_connector_not_once_per_row(self):
+        html = approval_list_html.build_list_html(self._rows("gmail", "gmail", "gmail"), csrf="t")
+        assert html.count("data:image/png;base64,") == 1
+
+    def test_a_connector_with_no_bundled_icon_still_gets_a_letter_badge(self):
+        rows = self._rows("nosuchconnector")
+        row_html = approval_list_html._row_html(rows[0])
+        assert 'class="pf-approval-icon pf-approval-icon-fallback">N<' in row_html
+
+    def test_the_connector_name_list_is_handed_to_the_page(self):
+        html = approval_list_html.build_list_html(self._rows("gmail", "slack"), csrf="t")
+        assert 'var pfIconConnectors = ["gmail", "slack"]' in html
+
+    def test_a_connector_name_that_is_not_a_safe_css_identifier_gets_no_rule(self):
+        # The slug is interpolated into a selector and a class attribute,
+        # so it is constrained rather than escaped -- anything else falls
+        # through to the letter badge.
+        assert approval_list_html._icon_slug("gmail") == "gmail"
+        assert approval_list_html._icon_slug('a"};x{y:z') == ""
+        assert approval_list_html._icon_slug("") == ""
+
+    def test_no_icon_css_at_all_when_nothing_is_pending(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert "data:image/png;base64," not in html
+        assert "var pfIconConnectors = []" in html
+
+
+class TestFirstRunEmptyState:
+    """F8: "Nothing is waiting. / PrivacyFence is watching." is exactly
+    right on a working install and misleading on one where no connector is
+    authenticated -- nothing is waiting because nothing *can* wait, and the
+    reassurance claims a protection that isn't running."""
+
+    def test_steady_state_copy_when_something_is_authenticated(self):
+        html = approval_list_html.build_list_html([], csrf="t", any_authed=True)
+        assert "Nothing is waiting." in html
+        assert "PrivacyFence is watching." in html
+        assert "Nothing is governed yet." not in html
+
+    def test_first_run_copy_and_call_to_action_when_nothing_is(self):
+        html = approval_list_html.build_list_html([], csrf="t", any_authed=False)
+        assert "Nothing is governed yet." in html
+        assert "Nothing is waiting." not in html
+        assert 'href="/settings/connectors"' in html
+
+    def test_defaults_to_the_steady_state_copy(self):
+        # A caller that cannot determine the answer must never tell someone
+        # who is already set up that they aren't.
+        assert "Nothing is waiting." in approval_list_html.build_list_html([], csrf="t")
+
+    def test_the_live_rerender_uses_the_same_branch(self):
+        # render() writes the empty state too, on the tick that takes the
+        # last approval away -- it must not revert to the other copy.
+        first_run = approval_list_html.build_list_html([], csrf="t", any_authed=False)
+        assert first_run.count("Nothing is governed yet.") == 2  # markup + the JS constant
+        assert "Nothing is waiting." not in first_run
+
+    def test_only_the_empty_state_changes_not_a_populated_list(self):
+        rows = [approval_list_html.row_from_approval(_real_card())]
+        html = approval_list_html.build_list_html(rows, csrf="t", any_authed=False)
+        assert "Nothing is governed yet." not in html.split("<script")[0]
