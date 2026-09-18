@@ -77,6 +77,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import sys
 import threading
 import uuid
@@ -96,6 +97,8 @@ from . import (
     privilege_separation,
     step_up_config,
 )
+from .policy import compat as policy_compat
+from .policy import store as policy_store
 from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
 from .principal import LOCAL_PRINCIPAL, LOCAL_PRINCIPAL_ID, current_principal
@@ -1734,10 +1737,33 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
     config, migration_summary = migrate_rules_to_grants(config)
     config, telegram_search_migrated = migrate_telegram_search_operation_key(config)
-    if migration_summary or telegram_search_migrated:
+    # P4 of the policy v2 redesign: runs after the two v1-internal migrations above, over their
+    # *result*, so the v2 rule set it derives reflects the same effective v1 config those already
+    # produced -- not a stale pre-migration snapshot. Never runs twice (policy.store.
+    # MIGRATED_TO_POLICY_V2_MARKER), and never touches auto_accept_rules/auto_accept_grants
+    # themselves, which stay on disk for a hand-edited install. policy_v2_migrated is True only
+    # when at least one rule was actually compiled -- like migration_summary/
+    # telegram_search_migrated above, it means "there is something to persist", not "this ran":
+    # a config with no auto-accept rules configured at all still gets marked migrated on the
+    # in-memory copy (so a later run doesn't re-discover the same empty config), but that alone
+    # is never a reason to write the file, back it up, or log about it.
+    config, policy_v2_migrated = policy_compat.migrate_to_policy_v2(config, build_effective_rules(config))
+    if migration_summary or telegram_search_migrated or policy_v2_migrated:
+        resolved_config_path = _resolve_path(config_path)
+        if policy_v2_migrated:
+            # A real, deterministic (unversioned) .bak -- the redesign proposal's own P4 scope
+            # calls for one specifically for this migration, unlike the two above it runs
+            # alongside: it's the one that introduces a whole new on-disk schema, so a config as
+            # it stood immediately before this run touched it at all is worth keeping. Best-
+            # effort: a failed backup must never block the migration itself from being persisted
+            # (same fail-soft posture as the atomic_write_text below).
+            try:
+                shutil.copy2(resolved_config_path, resolved_config_path + ".bak")
+            except OSError as exc:
+                logger.warning("Could not back up config before policy v2 migration: %s", exc)
         try:
             atomic_write_text(
-                _resolve_path(config_path), yaml.safe_dump(config, default_flow_style=False, allow_unicode=True),
+                resolved_config_path, yaml.safe_dump(config, default_flow_style=False, allow_unicode=True),
             )
             if migration_summary:
                 logger.info(
@@ -1748,6 +1774,12 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
                 logger.info(
                     "Auto-accept config migrated: telegram.search_messages rules "
                     "moved onto telegram.read_chat_messages"
+                )
+            if policy_v2_migrated:
+                rule_count = len(config.get(policy_store.AUTO_ACCEPT_CONFIG_KEY, {}).get("rules", []))
+                logger.info(
+                    "Auto-accept config migrated to the policy v2 on-disk format (%d rule(s)); "
+                    "original backed up to %s.bak", rule_count, resolved_config_path,
                 )
         except OSError as exc:
             logger.warning("Could not persist auto-accept config migration: %s", exc)

@@ -139,6 +139,29 @@ class TestSettingsPage:
         after = c.get("/settings")
         assert 'NOTIFICATIONS_DETAIL = "detailed"' in after.text
 
+    def test_policy_v2_migration_notice_renders_as_a_dismissible_notice(self, controller, client, sessions):
+        # P4 of the policy v2 redesign: settings_page wires
+        # controller.policy_v2_migration_notice_html() into web_shell.wrap's
+        # dismissible_notice_html, not the persistent banner_html strip --
+        # see settings_controller.py's own docstring on why. pf-shell-notice
+        # is that mechanism's own container id/class (web_shell.py); a
+        # config with no v2 migration marker at all must render neither.
+        _authed(client, sessions)
+        assert 'id="pf-shell-notice"' not in client.get("/settings").text
+
+        cfg = controller._load_config()
+        cfg["migrated_to_policy_v2"] = True
+        cfg["auto_accept"] = {
+            "version": 2,
+            "rules": [{"id": "r-delete", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]}],
+        }
+        controller._save_config(cfg)
+
+        r = client.get("/settings")
+        assert 'id="pf-shell-notice"' in r.text
+        assert "r-delete" in r.text
+        assert 'data-dismiss-key="pf_policy_v2_migration_dismissed"' in r.text
+
 
 class TestConnectorsPage:
     """GET /settings/connectors -- issue #396 Part C's first-run

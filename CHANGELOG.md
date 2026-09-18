@@ -408,6 +408,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A new `policy.engine: v1 | v2` key in `config/settings.yaml` (default `v1`) is the switch for
   when the new evaluator becomes authoritative instead; flipping it back to `v1` is the documented
   rollback, no release needed.
+- Policy v2 redesign, P4: `config/settings.yaml` gains an on-disk `auto_accept:` v2 rule format
+  (`policy/store.py`). On first startup under this version, every existing `auto_accept_rules`/
+  `auto_accept_grants` entry is compiled and merged into it once (`policy.compat.migrate_to_policy_v2`)
+  — the original file is backed up to `settings.yaml.bak` first, and the migration is provably
+  behavior-preserving: the v2 rules it writes are exactly what P3's shadow-mode compiler already
+  produces from the same v1 config. `auto_accept_rules`/`auto_accept_grants` themselves are left on
+  disk untouched and still fully readable/editable by hand — nothing about which engine decides
+  changes here (`policy.engine` still governs that, per P3). If any migrated rule's expansion now
+  names a destructive (`delete`) or send (`send`/`draft`/`share`) verb — e.g. a sandbox-folder
+  "Write" grant, which already silently includes deleting spreadsheet rows/columns — the Settings
+  page shows a one-time dismissible notice listing exactly which rules, so a user finds out in
+  those terms rather than discovering it later.
 - Gmail draft bodies (`body_markdown` on all 6 draft tools) now support `# Heading 1`/`## Heading 2`
   syntax, rendered as Gmail's own "Large"/"Huge" font-size compose presets (not raw `<h1>`/`<h2>`
   tags, which render inconsistently across mail clients). See issue #414.

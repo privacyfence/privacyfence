@@ -32,6 +32,7 @@ from privacyfence import daemon_main, org_mode
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.connectors.telegram import TelegramConnector
 from privacyfence.paths import data_dir
+from privacyfence.policy import store as policy_store
 from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE
 
 
@@ -2669,6 +2670,128 @@ class TestRunApp:
         # reload_rules() ran against the post-migration config, not the
         # pre-migration one Claude/the caller originally passed in.
         assert len(reloaded) == 1
+        # P4 of the policy v2 redesign: the same real config also carries a
+        # grant-eligible drive rule, so this run's policy-v2 migration
+        # should have fired alongside the two above and written a v2
+        # section too.
+        assert on_disk[policy_store.MIGRATED_TO_POLICY_V2_MARKER] is True
+        assert on_disk[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"]
+        assert "policy v2 on-disk format" in caplog.text
+
+    def test_policy_v2_migration_backs_up_the_original_file_first(self, monkeypatch, tmp_path, caplog):
+        # Real migrate_to_policy_v2 (not mocked): the on-disk file exists
+        # before run_app() touches it (unlike
+        # test_migrations_run_persist_and_log_then_reload_sees_new_keys,
+        # which never writes config_path ahead of time), so this covers the
+        # actual shutil.copy2 branch and asserts the .bak this migration's
+        # own P4 scope specifically calls for holds the pre-migration bytes.
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(daemon_main, "reload_rules", lambda rules: None)
+
+        config_path = tmp_path / "settings.yaml"
+        config = {
+            "auto_accept_rules": {
+                "gmail.read_message": [{"rule": "shared_drive_exclusion", "value": None}],
+            }
+        }
+        original_text = yaml.safe_dump(config, default_flow_style=False, allow_unicode=True)
+        config_path.write_text(original_text, encoding="utf-8")
+
+        with caplog.at_level(logging.INFO):
+            result = daemon_main.run_app(config, str(config_path))
+
+        assert result == 0
+        backup_path = tmp_path / "settings.yaml.bak"
+        assert backup_path.exists()
+        assert yaml.safe_load(backup_path.read_text(encoding="utf-8")) == config
+        on_disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert on_disk[policy_store.MIGRATED_TO_POLICY_V2_MARKER] is True
+        assert on_disk["auto_accept_rules"] == config["auto_accept_rules"]
+        assert f"backed up to {config_path}.bak" in caplog.text
+
+    def test_policy_v2_migration_is_skipped_once_marker_is_already_set(self, monkeypatch, tmp_path, caplog):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(daemon_main, "reload_rules", lambda rules: None)
+
+        config_path = tmp_path / "settings.yaml"
+        config = {policy_store.MIGRATED_TO_POLICY_V2_MARKER: True}
+        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+        with caplog.at_level(logging.INFO):
+            result = daemon_main.run_app(dict(config), str(config_path))
+
+        assert result == 0
+        assert not (tmp_path / "settings.yaml.bak").exists()
+        assert "policy v2 on-disk format" not in caplog.text
+
+    def test_grants_migration_persists_even_when_policy_v2_is_already_migrated(self, monkeypatch, tmp_path, caplog):
+        # The config is already on the v2 on-disk schema (marker set) but
+        # still carries a grant-eligible auto_accept_rules block -- e.g. a
+        # hand edit made after this install's one-time policy-v2 migration
+        # already ran. migrate_rules_to_grants must still persist on its
+        # own, without policy_v2_migrated being true, and without touching
+        # (or requiring) a .bak -- that backup is specific to the policy v2
+        # migration itself, not every migration that happens to run
+        # alongside an install that's already past it.
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(daemon_main, "reload_rules", lambda rules: None)
+
+        config_path = tmp_path / "settings.yaml"
+        config = {
+            policy_store.MIGRATED_TO_POLICY_V2_MARKER: True,
+            "auto_accept_rules": {
+                "drive.read_file_contents": [{"rule": "approved_folder", "value": ["F1"]}],
+                "drive.download_file": [{"rule": "approved_folder", "value": ["F1"]}],
+                "sheets.read_values": [{"rule": "approved_folder", "value": ["F1"]}],
+            },
+        }
+        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+        with caplog.at_level(logging.INFO):
+            result = daemon_main.run_app(config, str(config_path))
+
+        assert result == 0
+        assert not (tmp_path / "settings.yaml.bak").exists()
+        on_disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert on_disk["auto_accept_grants"]["drive"]["folders"] == [{"id": "F1", "read": True}]
+        assert "migrated to connector-scoped grants" in caplog.text
+        assert "policy v2 on-disk format" not in caplog.text
+
+    def test_persist_failure_after_migrations_is_logged_not_raised(self, monkeypatch, tmp_path, caplog):
+        # Real migrations (grants + policy v2 both fire), but the actual
+        # write fails -- must be logged and swallowed, exactly like the
+        # pre-P4 single-migration persist failure this mirrors, never
+        # propagated to crash startup.
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(daemon_main, "reload_rules", lambda rules: None)
+        monkeypatch.setattr(
+            daemon_main, "atomic_write_text",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")),
+        )
+
+        config_path = tmp_path / "settings.yaml"
+        config = {
+            "auto_accept_rules": {
+                "drive.read_file_contents": [{"rule": "approved_folder", "value": ["F1"]}],
+                "drive.download_file": [{"rule": "approved_folder", "value": ["F1"]}],
+                "sheets.read_values": [{"rule": "approved_folder", "value": ["F1"]}],
+            },
+        }
+        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING):
+            result = daemon_main.run_app(config, str(config_path))
+
+        assert result == 0
+        assert "Could not persist auto-accept config migration" in caplog.text
 
     def test_stale_rule_suggestion_priority_key_is_silently_ignored(self, monkeypatch, tmp_path, caplog):
         # Issue #151 retired the settings.yaml-configurable
