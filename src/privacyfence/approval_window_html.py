@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import re
 import secrets
+from collections.abc import Callable
 from html import escape as _html_escape
 from pathlib import Path
 
@@ -237,8 +238,11 @@ def _field_block_html(label: str, value: str) -> str:
     )
 
 
-def _text_block_html(text: str) -> str:
-    return f'<div class="pf-preview-paragraph">{_html_escape(text)}</div>'
+def _text_block_html(text: str, spans: list[tuple[int, int]] | None = None) -> str:
+    return (
+        '<div class="pf-preview-paragraph">'
+        f'{_escape_with_highlights(text, spans or [])}</div>'
+    )
 
 
 def _markdown_block_html(markdown: str) -> str:
@@ -262,10 +266,11 @@ def _heading_block_html(label: str) -> str:
     return f'<div class="pf-preview-label" style="margin-bottom:6px">{_html_escape(label)}</div>'
 
 
-def _render_block(block: dict) -> str:
+def _render_block(block: dict, highlight: Callable[[str], list[tuple[int, int]]] | None = None) -> str:
     kind = block.get("type")
     if kind == "text":
-        return _text_block_html(block.get("text", ""))
+        text = block.get("text", "")
+        return _text_block_html(text, highlight(text) if highlight else None)
     if kind == "field":
         return _field_block_html(block.get("label", ""), block.get("value", ""))
     if kind == "heading":
@@ -283,6 +288,7 @@ def build_preview_body_html(
     pdf_data_uri: str = "",
     tables: list[dict] | None = None,
     blocks: list[dict] | None = None,
+    highlight: Callable[[str], list[tuple[int, int]]] | None = None,
 ) -> str:
     """The inner-HTML fragment for ``WIDE`` layout's right-hand preview pane
     (``NARROW`` has no preview at all -- callers never need this for a
@@ -329,6 +335,25 @@ def build_preview_body_html(
     and To as a §3 row, so
     repeating them a second time atop the body would just be duplication --
     the right pane is plain body text for every WIDE tool, email included.
+
+    ``highlight``, when given, is called with each plain-text run about to
+    be rendered and returns ``(start, end)`` ranges within *that string* to
+    mark as a PII hit. Taking a callable rather than precomputed offsets is
+    what keeps this honest: the ranges are always computed against the
+    exact string being escaped, so no offset has to survive being sliced
+    out of a larger body, reflowed, or escaped.
+
+    It discloses nothing new. The text is already on the card -- that is
+    what the pane is -- and a mark only points at part of it. Without this
+    the PII card names categories ("IBAN · National ID") and leaves the
+    reviewer to find them by eye in a multi-message thread, which is the
+    work the card exists to have already done; with it, those tags become
+    a legend.
+
+    Markdown blocks and table cells are deliberately not highlighted:
+    markdown has already become HTML by the time it is rendered, and
+    offsets into its source do not survive that. Plain body text and text
+    blocks -- where free-text PII actually lands -- are covered.
     """
     if pdf_data_uri:
         return (
@@ -338,16 +363,61 @@ def build_preview_body_html(
     if image_data_uri:
         return f'<img src="{image_data_uri}" style="max-width:100%;display:block">'
     if blocks:
-        return "".join(_render_block(b) for b in blocks)
+        return "".join(_render_block(b, highlight) for b in blocks)
     tables_html = "".join(_table_html(t) for t in (tables or []))
     if not details_text and not tables_html:
         return _escaped_text_fragment(details_text)  # "(no details)" placeholder
-    text_html = _escaped_text_fragment(details_text) if details_text else ""
+    text_html = (
+        _escaped_text_fragment(details_text, highlight(details_text) if highlight else None)
+        if details_text else ""
+    )
     return text_html + tables_html
 
 
-def _escaped_text_fragment(text: str) -> str:
-    escaped = _html_escape(text or "(no details)")
+def _merge_spans(spans: list[tuple[int, int]], length: int) -> list[tuple[int, int]]:
+    """Clamp to ``length``, drop empties, and merge overlaps into disjoint
+    ranges in order -- two patterns matching the same text (an IBAN that is
+    also a long digit run) would otherwise nest their own markup."""
+    clean = []
+    for start, end in spans:
+        start, end = max(0, min(start, length)), max(0, min(end, length))
+        if start < end:
+            clean.append((start, end))
+    clean.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in clean:
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _escape_with_highlights(text: str, spans: list[tuple[int, int]]) -> str:
+    """HTML-escape ``text``, wrapping each span in a ``<mark>``.
+
+    Every segment is escaped on its own and the markup goes *between*
+    escaped segments, so the offsets never have to survive escaping -- an
+    ``&`` before a match would otherwise shift every position after it by
+    four characters.
+    """
+    merged = _merge_spans(spans, len(text))
+    if not merged:
+        return _html_escape(text)
+    out = []
+    cursor = 0
+    for start, end in merged:
+        out.append(_html_escape(text[cursor:start]))
+        out.append(f'<mark class="pf-pii-hit">{_html_escape(text[start:end])}</mark>')
+        cursor = end
+    out.append(_html_escape(text[cursor:]))
+    return "".join(out)
+
+
+def _escaped_text_fragment(text: str, spans: list[tuple[int, int]] | None = None) -> str:
+    escaped = (
+        _escape_with_highlights(text, spans or []) if text else _html_escape("(no details)")
+    )
     return f'<div style="white-space:pre-wrap;word-wrap:break-word;font-size:13px;line-height:1.6">{escaped}</div>'
 
 

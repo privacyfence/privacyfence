@@ -60,6 +60,20 @@ sentence, so a card that cannot say what it does is not a state that reaches a r
 
 When the PII detector flags content relevant to a gated release, the approval surface identifies the detected category information and highlights/warns the user according to the current card builder/privacy-filter behavior.
 
+Matches are also marked **where they sit in the preview text**, in the same accent-2 tints as the
+risk card's category tags, so those tags read as a legend rather than as a search task — naming
+"IBAN · National ID" and leaving the reviewer to find them by eye in a multi-message thread is the
+work the card exists to have already done.
+
+This discloses nothing additional. The text is already the contents of the preview pane; a mark only
+points at part of it, and `pii_detector.scan_text` returns positions only, never the matched
+substring. Marking is scoped to the categories the card already names — a mark the legend above it
+cannot explain would be worse than none — and a card with no risk section does no scanning and gets
+no marks. Ranges are computed against each plain-text run as it is rendered rather than as offsets
+into a larger body, so no position has to survive slicing, reflow or escaping. Markdown blocks and
+table cells are not marked: markdown has already become HTML by then and source offsets do not
+survive the conversion.
+
 A PII confirmation is a separate authorization decision from merely displaying the card. Cancel/deny must not release the flagged protected content.
 
 ## Always-allow choices

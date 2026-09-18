@@ -852,3 +852,71 @@ class TestCspNonce:
 
     def test_extract_csp_nonce_returns_none_for_html_with_no_nonce(self):
         assert extract_csp_nonce("<html><body>hi</body></html>") is None
+
+
+class TestPiiHighlighting:
+    """The PII card names categories; this marks where they actually are.
+    ``highlight`` is a callable applied to each plain-text run rather than
+    precomputed offsets, so the ranges are always relative to the exact
+    string being escaped."""
+
+    def _spans_for(self, needle):
+        def spans(text):
+            out, start = [], text.find(needle)
+            while start != -1:
+                out.append((start, start + len(needle)))
+                start = text.find(needle, start + len(needle))
+            return out
+        return spans
+
+    def test_marks_the_matched_range_in_plain_body_text(self):
+        html = build_preview_body_html("call 5550001 now", highlight=self._spans_for("5550001"))
+        assert '<mark class="pf-pii-hit">5550001</mark>' in html
+
+    def test_marks_inside_a_text_block(self):
+        html = build_preview_body_html(
+            blocks=[{"type": "text", "text": "acct 5550001 ok"}],
+            highlight=self._spans_for("5550001"),
+        )
+        assert '<mark class="pf-pii-hit">5550001</mark>' in html
+
+    def test_nothing_is_marked_without_a_highlighter(self):
+        html = build_preview_body_html("call 5550001 now")
+        assert "pf-pii-hit" not in html
+
+    def test_escaping_still_holds_around_a_match(self):
+        # The reason the ranges are applied before escaping, segment by
+        # segment: an "&" earlier in the text would otherwise shift every
+        # offset after it by four characters.
+        html = build_preview_body_html(
+            "a & b <tag> 5550001 </tag>", highlight=self._spans_for("5550001"),
+        )
+        assert '<mark class="pf-pii-hit">5550001</mark>' in html
+        assert "&amp;" in html
+        assert "&lt;tag&gt;" in html
+        assert "<tag>" not in html
+
+    def test_a_match_containing_markup_characters_is_still_escaped(self):
+        html = build_preview_body_html("x <b>y</b> z", highlight=self._spans_for("<b>y</b>"))
+        assert '<mark class="pf-pii-hit">&lt;b&gt;y&lt;/b&gt;</mark>' in html
+
+    def test_overlapping_matches_do_not_nest_markup(self):
+        # Two patterns can match the same text -- an IBAN that is also a
+        # long digit run. One mark, not one inside another.
+        html = build_preview_body_html("ref 12345678 end", highlight=lambda t: [(4, 12), (4, 9), (6, 12)])
+        assert html.count('<mark class="pf-pii-hit">') == 1
+        assert '<mark class="pf-pii-hit">12345678</mark>' in html
+
+    def test_out_of_range_and_empty_spans_are_ignored(self):
+        html = build_preview_body_html("short", highlight=lambda t: [(99, 120), (2, 2), (-5, 0)])
+        assert "pf-pii-hit" not in html
+        assert "short" in html
+
+    def test_a_span_running_past_the_end_is_clamped(self):
+        html = build_preview_body_html("abc", highlight=lambda t: [(1, 99)])
+        assert '<mark class="pf-pii-hit">bc</mark>' in html
+
+    def test_the_no_details_placeholder_is_never_highlighted(self):
+        html = build_preview_body_html("", highlight=lambda t: [(0, 3)])
+        assert "pf-pii-hit" not in html
+        assert "(no details)" in html

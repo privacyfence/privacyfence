@@ -260,6 +260,15 @@ img { display: block; max-width: 100%; }
   margin: 0 0 14px;
 }
 .pf-preview-paragraph:last-child { margin-bottom: 0; }
+/* A PII match, marked where it actually sits in the text. Deliberately the
+   same accent-2 tints as the risk card's own category tags, so those tags
+   read as a legend for these marks rather than as a separate homework
+   assignment ("IBAN · National ID -- now go find them"). Overrides the
+   browser's default yellow <mark>, which belongs to no palette here. */
+.pf-pii-hit {
+  background: var(--color-accent-2-200); color: var(--color-accent-2-800);
+  border-radius: calc(var(--radius-md) * 0.75); padding: 0 2px;
+}
 .pf-preview-field {
   display: flex; gap: 6px; font-size: 13px; margin-bottom: 4px;
 }

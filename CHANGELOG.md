@@ -491,6 +491,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   become two equal 48px targets with always-allow a quiet link below them rather than a third
   control in the thumb zone. Nothing changes above the breakpoint, or in the native window, whose
   frame already sized itself to the document.
+- **Detected PII is marked where it actually appears.** The card named the matched categories
+  ("IBAN · National ID · Financial figures") and left the reviewer to find them by eye in a
+  multi-message thread — the work the card exists to have already done. Matches are now highlighted
+  in the preview pane itself, in the same tints as the category tags, so the tags read as a legend.
+  Nothing extra is disclosed: the text is already the contents of the pane, the detector returns
+  positions rather than matched substrings, marking is scoped to the categories the card already
+  names, and a card with no PII section does no scanning at all.
 - **Write cards say what approving them actually does.** A read card ends with "What will be
   provided to Claude"; a write card showed the payload and Claude's stated reason and nothing that
   named the consequence — the difference between approving a payload and approving an outcome, and

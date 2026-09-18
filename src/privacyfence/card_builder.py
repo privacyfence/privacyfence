@@ -15,8 +15,9 @@ translation logic changes.
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 
-from . import approval_icons, approval_window_html, write_effects
+from . import approval_icons, approval_window_html, pii_detector, write_effects
 
 # Shown above the button row for operations
 # auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS lists -- same copy as
@@ -56,6 +57,39 @@ def _seen_count_text(seen_count: int) -> str:
     if seen_count <= 0:
         return "First time this week"
     return f"Seen {seen_count} time{'s' if seen_count != 1 else ''} this week"
+
+
+def _pii_highlighter(
+    pii_categories: list[str] | None,
+) -> Callable[[str], list[tuple[int, int]]] | None:
+    """Marks each PII match where it actually sits in the preview text, so
+    the risk card's category tags read as a legend rather than as a search
+    task -- "IBAN · National ID" otherwise tells a reviewer that something
+    matched and leaves them to find it in a multi-message thread by eye.
+
+    ``None`` unless this card is already declaring a PII match, so a card
+    with no risk section does no scanning and gains no marks.
+
+    Scoped to the categories the card names. Highlighting a category the
+    card doesn't declare would put a mark on screen that the legend above
+    it cannot explain -- and the two are derived from different scans (the
+    gate's, over the raw payload; this one, over the rendered preview), so
+    they are not guaranteed to agree on their own.
+
+    Nothing new is disclosed by any of this: the text is already the
+    contents of the pane, and ``scan_text`` returns positions only, never
+    the matched substring (see its own docstring).
+    """
+    declared = set(pii_categories or [])
+    if not declared:
+        return None
+
+    def spans(text: str) -> list[tuple[int, int]]:
+        return [
+            (m.start, m.end) for m in pii_detector.scan_text(text) if m.category in declared
+        ]
+
+    return spans
 
 
 def _disclosure_rows(
@@ -123,6 +157,7 @@ def build_card_html(
     preview_body_html = approval_window_html.build_preview_body_html(
         body_text, image_data_uri=image_data_uri, pdf_data_uri=pdf_data_uri,
         tables=preview_tables, blocks=preview_blocks,
+        highlight=_pii_highlighter(pii_categories),
     )
 
     accept_all_labels = [
