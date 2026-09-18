@@ -22,9 +22,9 @@ notification-detail preference. Those never get an org-mode route, under any
 of the allowlists below, ever.
 
 These frozensets are that split. `web/routes_org_settings.py` is what
-consumes it: a read+remove surface for the per-principal half, and, since
-#400 C3e, a real editor for the privacy/PII members of the admin-only half
-(`web/org_install_policy.py`'s `SUPPORTED_ACTIONS`, a strict subset of
+consumes it: a read+add+remove surface for the per-principal half, and,
+since #400 C3e, a real editor for the privacy/PII members of the admin-only
+half (`web/org_install_policy.py`'s `SUPPORTED_ACTIONS`, a strict subset of
 `ADMIN_ONLY_ACTIONS` -- `set_log_level` and `toggle_calendar_free_busy` are
 install-wide too but aren't privacy policy, and each needs a reload path of
 its own). This module's own test checks the split against
@@ -34,10 +34,10 @@ silently go unclassified.
 `PER_PRINCIPAL_ACTIONS` is deliberately narrower than "every action this
 desktop-app-shaped controller exposes that is meaningful per-principal" --
 it's exactly the subset `routes_org_settings.py` has an actual route for
-(today: removing a rule row, removing a grant row). A rule/grant *add* or
-*update*, a connector toggle, a connector refresh, or a connector
-authentication flow is just as meaningful per-principal in org mode in
-principle, but no route wires any of them yet, so they live in
+(today: adding a rule row, removing a rule row, removing a grant row). A
+rule/grant *update*, a grant *add*, a connector toggle, a connector refresh,
+or a connector authentication flow is just as meaningful per-principal in
+org mode in principle, but no route wires any of them yet, so they live in
 `PER_PRINCIPAL_ACTIONS_UNROUTED` instead: still not `NOT_APPLICABLE_ACTIONS`
 (they're not meaningless or wrong the way `enable_step_up` is -- an org-mode
 route for them is exactly the kind of thing a later PR adds), but
@@ -45,10 +45,12 @@ route for them is exactly the kind of thing a later PR adds), but
 into `PER_PRINCIPAL_ACTIONS` alongside it. Letting this allow-list claim an
 action no route consumes was the bug (#B20 in the 4.1 security review): the
 allow-list had run ahead of the routes, so `is_action_permitted` would
-happily say yes to `add_rule_row` for a signed-in principal with nothing on
-the other end to say no -- exactly the kind of gap a route added later,
-in good faith, could have trusted without noticing it was never actually
-wired for.
+happily say yes to an action for a signed-in principal with nothing on the
+other end to say no -- exactly the kind of gap a route added later, in good
+faith, could have trusted without noticing it was never actually wired for.
+`add_rule_row` itself lived in `PER_PRINCIPAL_ACTIONS_UNROUTED` for exactly
+that reason until the org-settings page grew its own "Add a rule" form and
+`/api/settings/rules/add` route -- see that route's own docstring.
 
 `is_action_permitted` is the other half: `Principal.is_admin` is already
 resolved from the IdP and carried end to end (`org_identity.
@@ -64,7 +66,7 @@ from __future__ import annotations
 from ..principal import Principal
 
 PER_PRINCIPAL_ACTIONS: frozenset[str] = frozenset({
-    "remove_rule_row", "remove_grant_row",
+    "add_rule_row", "remove_rule_row", "remove_grant_row",
 })
 
 # Per-principal in concept (see module docstring), but routes_org_settings.py
@@ -74,7 +76,7 @@ PER_PRINCIPAL_ACTIONS: frozenset[str] = frozenset({
 # it.
 PER_PRINCIPAL_ACTIONS_UNROUTED: frozenset[str] = frozenset({
     "toggle_connector", "refresh_connectors", "authenticate_connector",
-    "update_rule_row", "add_rule_row",
+    "update_rule_row",
     "toggle_grant_capability", "add_grant_row", "update_grant_row",
 })
 

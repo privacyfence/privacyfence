@@ -73,6 +73,13 @@ class TestAuthRequired:
         assert r.status_code == 302
         assert r.headers["location"] == "/login?next=/settings/privacy"
 
+    def test_add_rule_redirects_to_login_when_signed_out(self):
+        app, _sessions = _app()
+        r = _client(app).post(
+            "/api/settings/rules/add", data={"rule_choice": "contacts.edit|no_contact_info_change"},
+        )
+        assert r.status_code == 302
+
     def test_remove_rule_redirects_to_login_when_signed_out(self):
         app, _sessions = _app()
         r = _client(app).post("/api/settings/rules/remove", data={"op_key": "x", "rule": "y"})
@@ -150,7 +157,13 @@ class TestPrincipalScopedRulesAndGrants:
         _signed_in(client, sessions, BOB)
         r = client.get("/settings")
         assert r.status_code == 200
-        assert "always_allow" not in r.text
+        # "always_allow" alone isn't a safe marker any more -- it's also a
+        # real rule type the static "Add a rule" picker below always lists
+        # for e.g. gmail.create_draft, regardless of whose rules are shown.
+        # "gmail.send" is not a real operation key (RULES_BY_OPERATION has
+        # no such entry), so it can only appear here as Alice's own
+        # configured rule row, never as one of the picker's own options.
+        assert "gmail.send" not in r.text
         assert "No auto-accept rules configured." in r.text
 
     def test_shows_the_signed_in_principals_own_rule(self, tmp_path, monkeypatch):
@@ -189,6 +202,130 @@ class TestPrincipalScopedRulesAndGrants:
         _signed_in(client2, sessions, ADMIN)
         r2 = client2.get("/settings")
         assert "/settings/privacy" in r2.text
+
+
+class TestAddRule:
+    def test_adds_the_rule_and_redirects(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "contacts.edit|no_contact_info_change", "value": "", "csrf": csrf},
+        )
+        assert r.status_code == 303
+
+        with principal_scope(ALICE):
+            assert auto_accept.get_current_config()["auto_accept_rules"] == {
+                "contacts.edit": [{"rule": "no_contact_info_change"}],
+            }
+
+    def test_adds_a_list_value_rule_from_comma_separated_text(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            data={
+                "rule_choice": "gmail.read_message|trusted_sender_domain",
+                "value": "example.com, example.org",
+                "csrf": csrf,
+            },
+        )
+        assert r.status_code == 303
+
+        with principal_scope(ALICE):
+            cfg = auto_accept.get_current_config()["auto_accept_rules"]
+        assert cfg["gmail.read_message"] == [
+            {"rule": "trusted_sender_domain", "value": ["example.com", "example.org"]},
+        ]
+
+    def test_unknown_rule_name_is_400(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "contacts.edit|not_a_real_rule", "csrf": csrf},
+        )
+        assert r.status_code == 400
+        assert _on_disk_rules(tmp_path, "alice") == {}
+
+    def test_a_rule_type_not_valid_for_the_chosen_operation_is_400(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            # always_allow is a real rule name, just not one RULES_BY_OPERATION
+            # lists for contacts.edit -- must be rejected the same way an
+            # outright-unknown rule name is.
+            data={"rule_choice": "contacts.edit|always_allow", "csrf": csrf},
+        )
+        assert r.status_code == 400
+        assert _on_disk_rules(tmp_path, "alice") == {}
+
+    def test_wrong_csrf_is_rejected(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "contacts.edit|no_contact_info_change", "csrf": "not-the-real-token"},
+        )
+        assert r.status_code == 401
+        assert _on_disk_rules(tmp_path, "alice") == {}
+
+    def test_mismatched_origin_is_rejected(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "contacts.edit|no_contact_info_change", "csrf": csrf},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert r.status_code == 403
+
+    def test_a_second_principal_cannot_add_to_the_first_principals_rules(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        _seed(tmp_path, monkeypatch, "bob")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, BOB)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "contacts.edit|no_contact_info_change", "csrf": csrf},
+        )
+        assert r.status_code == 303
+        assert _on_disk_rules(tmp_path, "alice") == {}
+        with principal_scope(BOB):
+            assert auto_accept.get_current_config()["auto_accept_rules"] == {
+                "contacts.edit": [{"rule": "no_contact_info_change"}],
+            }
+
+    def test_the_page_renders_an_add_rule_form(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+
+        r = client.get("/settings")
+        assert "/api/settings/rules/add" in r.text
+        assert "rule_choice" in r.text
 
 
 class TestRemoveRule:
