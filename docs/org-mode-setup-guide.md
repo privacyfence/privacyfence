@@ -2,8 +2,6 @@
 
 Org mode runs PrivacyFence as a centralized Linux service for multiple authenticated users. The daemon serves the MCP endpoint and browser approval/settings surfaces, while identity comes from the organization's configured OIDC provider.
 
-**Unverified on a real install.** This guide is exercised in CI against a real daemon subprocess and a mocked IdP (`org-mode-smoke`, see `testing-policy.md`), but a real end-to-end run of the steps below — a live Ubuntu server, a real OIDC identity provider, a real connector authorized through it — has not been done yet (see `platform-support.md`'s "Known open items"). Treat this guide as ready to try, not yet a battle-tested path.
-
 ## 1. Deployment model
 
 A typical deployment contains:
@@ -178,4 +176,4 @@ Validate the deployment through the public HTTPS origin:
 - audit entries contain the correct principal;
 - restart preserves intended persistent state.
 
-Automated org-mode coverage is described in [`testing-policy.md`](testing-policy.md); the one org-mode check that deliberately stays manual — a real end-to-end run against a live Ubuntu server with a real identity provider and a real connector — is listed in [`platform-support.md`](platform-support.md)'s "Known open items".
+Automated org-mode coverage is described in [`testing-policy.md`](testing-policy.md); see [`platform-support.md`](platform-support.md) for this deployment path's real-install verification status.

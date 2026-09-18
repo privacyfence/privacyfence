@@ -67,8 +67,10 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
 - **Windows autostart — now actually works, including real crash-restart, verified end to end by real
   `workflow_dispatch` runs, after a chain of independent bugs, the most recent of which was that the
   installer never actually needed the elevated token its own registration step required (see "a
-  related wrinkle" below). One thing remains: the `LogonTrigger`'s own firing, which a hosted runner
-  cannot produce and the Windows human checks cover instead (below).** This
+  related wrinkle" below). The one thing CI structurally cannot cover — the `LogonTrigger`'s own
+  firing on a real interactive sign-in — has now been confirmed by hand on a real Windows machine;
+  future Windows-autostart-affecting changes should re-confirm it via the Windows human checks
+  (below), since no hosted runner can ever produce that coverage itself.** This
   mechanism went through several real, independently-found-and-fixed bugs before
   landing where it is now — see `installer/privacyfence-task.xml.tmpl`'s own header comment and
   `installer/privacyfence.iss`'s `[Code]` section for the full detail — and the early ones are worth
@@ -154,8 +156,9 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   Scheduler normalizes away `<Enabled>` on either trigger when it is `true` (the schema default) — the
   same thing it already does for `<LogonTrigger>`, which the contract already tolerated. Fixed to use
   the same fallback for `<TimeTrigger>`, confirmed by a second, fully green run.
-  **One gap remains, and it is in what CI can observe, not in the installer: the `LogonTrigger`'s own
-  firing.** The test used to claim it drove that, via PowerShell's `Start-Process -Credential`
+  **One thing stays outside what CI can observe, not the installer: the `LogonTrigger`'s own
+  firing** — now confirmed once by hand on a real machine (see above), with the Windows human checks
+  in `release-testing.md` as the standing, per-release coverage for it going forward. The test used to claim it drove that, via PowerShell's `Start-Process -Credential`
   (`CreateProcessWithLogonW`) as a stand-in for signing in, and was red on every run because of it:
   `schtasks /query /v` reported the task `Enabled`/`Ready`, scoped to the right group, pointing at the
   right exe, and simply never fired (`Last Result: 267011` / `SCHED_S_TASK_HAS_NOT_RUN`).
@@ -231,9 +234,9 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   [privacyfence/privacyfence#121](https://github.com/privacyfence/privacyfence/issues/121) itself
   recording that it stays open until a real tagged release ships the signed installer and that QA
   has run against it — not duplicated here as well.
-- **Linux org mode has not had a real end-to-end run against a live Ubuntu server**: a fresh Ubuntu
+- **Linux org mode's real end-to-end deployment path has now been run once for real**: a fresh Ubuntu
   host following `org-mode-setup-guide.md` verbatim, a real OIDC round trip against a real identity
   provider, and at least one live connector (Gmail) exercised through a real MCP client hitting the
-  public `/mcp` URL. The `org-mode-smoke` CI job exercises the same daemon/MCP/approval/audit
-  contract end to end, but against a synthetic, mocked identity provider — a different, narrower
-  guarantee than a real deployment run.
+  public `/mcp` URL. The `org-mode-smoke` CI job continues to cover the same daemon/MCP/approval/audit
+  contract on every PR, against a synthetic, mocked identity provider — a narrower, faster guarantee
+  than a real deployment run, kept for regression coverage rather than as the only proof of the path.
