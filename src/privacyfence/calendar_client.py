@@ -589,13 +589,23 @@ class CalendarClient:
         Empty (the default) creates a non-recurring event, unchanged from
         this method's behavior before recurrence support existed.
         """
+        recurrence_lines = [line.strip() for line in recurrence.splitlines() if line.strip()]
         start_entry: dict[str, str] = {"dateTime": start_time}
         end_entry: dict[str, str] = {"dateTime": end_time}
-        # Only inject a UTC fallback when the ISO string has no embedded offset.
-        # If the caller already includes one (e.g. "+02:00"), preserve it.
-        if not _has_timezone(start_time):
+        # Only inject a UTC fallback when the ISO string has no embedded
+        # offset -- if the caller already includes one (e.g. "+02:00"),
+        # preserve it. A recurring event is the one exception: the Calendar
+        # API requires an explicit IANA timeZone on start/end regardless of
+        # whether dateTime already carries an offset -- expanding a
+        # recurrence across DST needs a named zone, not just a fixed
+        # instant's offset -- and rejects a recurring event that omits it
+        # with "Missing time zone definition for start time" (confirmed
+        # against the real API by qa_fixture_recorder.py's --lifecycle
+        # check). "UTC" is the same fallback used everywhere else in this
+        # client; there's no IANA zone name to recover from a bare offset.
+        if not _has_timezone(start_time) or recurrence_lines:
             start_entry["timeZone"] = "UTC"
-        if not _has_timezone(end_time):
+        if not _has_timezone(end_time) or recurrence_lines:
             end_entry["timeZone"] = "UTC"
         body: dict[str, Any] = {
             "summary": title,
@@ -608,7 +618,6 @@ class CalendarClient:
             body["location"] = location
         if color:
             body["colorId"] = normalize_event_color(color)
-        recurrence_lines = [line.strip() for line in recurrence.splitlines() if line.strip()]
         if recurrence_lines:
             body["recurrence"] = recurrence_lines
         all_attendees = list(attendees or [])

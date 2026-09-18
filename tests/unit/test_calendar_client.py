@@ -940,6 +940,39 @@ class TestCreateEvent:
         body = service.events.return_value.insert.call_args.kwargs["body"]
         assert body["recurrence"] == ["RRULE:FREQ=DAILY"]
 
+    def test_recurring_event_gets_explicit_timezone_even_with_an_offset_already_in_datetime(self):
+        # Regression: qa_fixture_recorder.py's --lifecycle check hit a real
+        # 400 ("Missing time zone definition for start time") creating a
+        # recurring event whose start/end already carried a "+00:00"
+        # offset -- the Calendar API requires an explicit IANA timeZone on
+        # a recurring event regardless, since RRULE expansion across DST
+        # needs a named zone, not just a fixed instant's offset. A
+        # non-recurring event with the same offset-bearing input (see
+        # test_preserves_existing_offset_without_injecting_utc above) is
+        # unaffected -- this only applies once recurrence is given.
+        service = MagicMock()
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.create_event(
+            "primary", "M", "2024-01-01T10:00:00+00:00", "2024-01-01T11:00:00+00:00",
+            recurrence="RRULE:FREQ=DAILY;COUNT=2",
+        )
+        body = service.events.return_value.insert.call_args.kwargs["body"]
+        assert body["start"] == {"dateTime": "2024-01-01T10:00:00+00:00", "timeZone": "UTC"}
+        assert body["end"] == {"dateTime": "2024-01-01T11:00:00+00:00", "timeZone": "UTC"}
+
+    def test_recurring_event_with_no_offset_still_gets_utc_timezone(self):
+        service = MagicMock()
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.create_event(
+            "primary", "M", "2024-01-01T10:00:00", "2024-01-01T11:00:00",
+            recurrence="RRULE:FREQ=DAILY;COUNT=2",
+        )
+        body = service.events.return_value.insert.call_args.kwargs["body"]
+        assert body["start"] == {"dateTime": "2024-01-01T10:00:00", "timeZone": "UTC"}
+        assert body["end"] == {"dateTime": "2024-01-01T11:00:00", "timeZone": "UTC"}
+
 
 # ---------------------------------------------------------------------------- #
 # update_event: partial field updates + room replacement + conferencing

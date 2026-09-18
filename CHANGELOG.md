@@ -425,7 +425,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the series by ending the old one with an RRULE `UNTIL` and (for updates) inserting a new series
   from that point — Google Calendar's own documented approach, there being no single API call for
   it. `calendar_delete_event` shares `calendar_create_event`/`calendar_update_event`'s auto-accept
-  rule set (`i_am_organizer`, `no_external_attendees`, `personal_calendar`). See issue #415.
+  rule set (`i_am_organizer`, `no_external_attendees`, `personal_calendar`). `calendar_create_event`
+  always sends an explicit time zone for a recurring event even when `start_time`/`end_time` already
+  carry their own UTC offset — the Calendar API rejects a recurring event that omits one ("Missing
+  time zone definition for start time"), caught by `qa_fixture_recorder.py --lifecycle` against the
+  real API before this shipped. See issue #415.
 - Approval binder, Phase 1: `/approvals` now groups pending, batchable approvals by
   `(connector, operation)` with a per-group and page-level select-all, and **Deny selected**
   clears a whole group of unwanted requests in one action (client-side over the existing per-id
