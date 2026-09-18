@@ -437,6 +437,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scopes has no v1 equivalent to be shadowed against. Org mode's own, separate per-principal settings
   page (`web/routes_org_settings.py`) is unaffected — it still edits `auto_accept_rules`/
   `auto_accept_grants` directly and keeps working exactly as before.
+- Policy v2 redesign, P7: the MCP bridge gets the same one-shape write path the Auto-accept Settings
+  page (P6) already has. Two new tools, `privacyfence_list_policy`/`privacyfence_propose_policy_change`,
+  read and write straight against the on-disk v2 `auto_accept:` section by scope (`group`, e.g.
+  `drive.folder`) and verb, rather than choosing between a `target: "rule"` and a `target: "grant"`
+  half of two older config sections; each rule carries a stable id a follow-up `update`/`remove`
+  call can target. `privacyfence_check_policy` gains `matched_rule_id` alongside its existing
+  verdict, checked against the same rules the real gated call would use, so a planning agent can say
+  *why* a call will pass. A verb a named scope type cannot govern is rejected before any
+  confirmation dialog is shown, closing the write-time half of what this redesign's F5 found:
+  `apps_script.*`/`gmail.create_filter`/`gmail.update_filter`/`slack.create_group_chat` previously had
+  no configurable rule *and* nothing stopping one from being written anyway.
+  `privacyfence_list_auto_accept_rules`/`privacyfence_propose_auto_accept_rule_change` are kept,
+  unchanged, as deprecated aliases for one minor release — an old-shape write still lands the same
+  rule the new engine recognizes.
 - Gmail draft bodies (`body_markdown` on all 6 draft tools) now support `# Heading 1`/`## Heading 2`
   syntax, rendered as Gmail's own "Large"/"Huge" font-size compose presets (not raw `<h1>`/`<h2>`
   tags, which render inconsistently across mail clients). See issue #414.

@@ -319,7 +319,7 @@ class TestCheckPolicy:
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail")})
         result = dispatcher.check_policy("gmail", "gmail_list_messages", {})
         assert result == {
-            "gate": "auto", "verdict": "auto_accept", "matched_rule": None,
+            "gate": "auto", "verdict": "auto_accept", "matched_rule": None, "matched_rule_id": None,
             "reason": "Unconditionally auto-accepted -- never reaches the review gate.",
             "pii_gate_may_apply": False,
         }
@@ -339,6 +339,15 @@ class TestCheckPolicy:
         assert result["gate"] == "popup"
         assert result["verdict"] == "auto_accept"
         assert result["matched_rule"] == "to_is_myself"
+        # P7: the v2 engine agrees on the same match, so the id it compiles to comes back too --
+        # policy.compat.compile_rule_entry mints a compiled rule's id from the v1 rule name itself.
+        assert result["matched_rule_id"] == "to_is_myself"
+
+    def test_matched_rule_id_is_none_when_no_rule_configured_at_all(self):
+        dispatcher = _dispatcher({"gmail": FakeConnector("gmail")})
+        result = dispatcher.check_policy("gmail", "gmail_get_message", {})
+        assert result["verdict"] == "requires_review"
+        assert result["matched_rule_id"] is None
 
     def test_unknown_tool_raises(self):
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail")})
@@ -394,6 +403,84 @@ class TestListRules:
         entries = self._read_entries()
         assert entries[0]["decision"] == "rules_listed"
         assert entries[0]["claude_reason"] == "checking before a scheduled run"
+
+
+# --------------------------------------------------------------------------- #
+# list_policy / propose_policy_change -- P7 of the policy v2 redesign. New
+# tools, so no ported bridge-era equivalent, but the same "list before you
+# propose" contract list_rules/propose_rule_change above already have.
+# --------------------------------------------------------------------------- #
+
+class TestListPolicy:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path):
+        from privacyfence import auto_accept
+        init_audit_logger(str(tmp_path / "audit"))
+        self._audit_dir = tmp_path / "audit"
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        auto_accept.init_config_path(str(config_path))
+
+    def _read_entries(self):
+        week_file = self._audit_dir / f"{current_week()}.jsonl"
+        if not week_file.exists():
+            return []
+        return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
+
+    def test_empty_store_lists_no_rules_but_a_real_scope_catalogue(self):
+        result = _dispatcher({}).list_policy()
+        assert result["rules"] == []
+        assert any(group["id"] == "drive.folder" for group in result["scope_groups"])
+
+    async def test_a_v2_rule_is_listed_with_its_id_sentence_and_covered_tools(self, monkeypatch):
+        from privacyfence import gate
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+
+        result = _dispatcher({}).list_policy()
+        assert len(result["rules"]) == 1
+        row = result["rules"][0]
+        assert row["id"]
+        assert "folder1" in row["sentence"]
+        assert "drive_get_file_content" in row["covered_tools"]
+
+    def test_records_a_policy_listed_audit_entry(self):
+        _dispatcher({}).list_policy("checking before a scheduled run")
+        entries = self._read_entries()
+        assert entries[0]["decision"] == "policy_listed"
+        assert entries[0]["claude_reason"] == "checking before a scheduled run"
+
+
+class TestProposePolicyChangeDispatch:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept, gate
+        init_audit_logger(str(tmp_path / "audit"))
+        self._config_path = tmp_path / "settings.yaml"
+        self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        auto_accept.init_config_path(str(self._config_path))
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+
+    async def test_confirmed_add_is_persisted_to_disk(self):
+        dispatcher = _dispatcher({})
+        result = await dispatcher.propose_policy_change("s1", {
+            "operation": "add", "reason": "Trusting the sandbox folder.",
+            "group": "drive.folder", "value": ["folder1"], "verbs": ["read"],
+        })
+        assert result["confirmed"] is True
+        assert "approved_folder" in self._config_path.read_text(encoding="utf-8")
+
+    async def test_denied_immediately_when_this_sessions_unattended_flag_is_set(self):
+        dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
+        dispatcher.begin_unattended_session("s1", "scheduled run")
+
+        with pytest.raises(RuntimeError, match="unattended session"):
+            await dispatcher.propose_policy_change("s1", {
+                "operation": "add", "reason": "x", "group": "drive.folder",
+                "value": ["folder1"], "verbs": ["read"],
+            })
 
 
 # --------------------------------------------------------------------------- #
@@ -657,6 +744,67 @@ class TestProposeRuleChange:
         })
 
         assert result["confirmed"] is True
+
+
+# --------------------------------------------------------------------------- #
+# P7's exit criterion: "alias tests prove old-shape calls still land the
+# equivalent rule." privacyfence_propose_auto_accept_rule_change/
+# privacyfence_list_auto_accept_rules are kept as deprecated aliases writing
+# the same v1 auto_accept_rules section they always did -- this proves that
+# an old-shape write is still recognized, correctly and by id, by the new
+# engine privacyfence_check_policy's matched_rule_id now exposes.
+# --------------------------------------------------------------------------- #
+
+class TestOldShapeAliasLandsTheEquivalentV2Rule:
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence import auto_accept, gate
+        init_audit_logger(str(tmp_path / "audit"))
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        auto_accept.init_config_path(str(config_path))
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+
+    async def test_old_shape_rule_add_is_recognized_by_check_policy_matched_rule_id(self):
+        dispatcher = _dispatcher({"gmail": FakeConnector("gmail", my_email="me@corp.com")})
+
+        propose_result = await dispatcher.propose_rule_change("s1", {
+            "target": "rule", "operation": "add", "reason": "Drafting to myself only.",
+            "operation_key": "gmail.create_draft", "rule_name": "to_is_myself",
+        })
+        assert propose_result["confirmed"] is True
+
+        check_result = dispatcher.check_policy(
+            "gmail", "gmail_create_draft", {"to": "me@corp.com", "subject": "x", "body": "y"},
+        )
+
+        assert check_result["verdict"] == "auto_accept"
+        assert check_result["matched_rule"] == "to_is_myself"
+        # The old-shape write (target="rule") never touched the v2 auto_accept: section on disk --
+        # it persisted into v1's auto_accept_rules exactly as it always has. matched_rule_id still
+        # names the same rule, because policy.compat.compile_rule_entry compiles a scope predicate's
+        # v2 id as the v1 rule name itself: the old call's effect and the new engine's own
+        # understanding of it are provably the same thing, not two different rules that happen to
+        # agree today.
+        assert check_result["matched_rule_id"] == "to_is_myself"
+
+    async def test_old_shape_rule_remove_is_no_longer_recognized_afterward(self):
+        dispatcher = _dispatcher({"gmail": FakeConnector("gmail", my_email="me@corp.com")})
+        await dispatcher.propose_rule_change("s1", {
+            "target": "rule", "operation": "add", "reason": "x",
+            "operation_key": "gmail.create_draft", "rule_name": "to_is_myself",
+        })
+        args = {"to": "me@corp.com", "subject": "x", "body": "y"}
+        assert dispatcher.check_policy("gmail", "gmail_create_draft", args)["verdict"] == "auto_accept"
+
+        await dispatcher.propose_rule_change("s1", {
+            "target": "rule", "operation": "remove", "reason": "x",
+            "operation_key": "gmail.create_draft", "rule_name": "to_is_myself",
+        })
+
+        result = dispatcher.check_policy("gmail", "gmail_create_draft", args)
+        assert result["verdict"] == "requires_review"
+        assert result["matched_rule_id"] is None
 
 
 # --------------------------------------------------------------------------- #

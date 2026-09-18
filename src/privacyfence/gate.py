@@ -169,21 +169,26 @@ from .auto_accept import (
     AutoAcceptEvaluator,
     ReviewContext,
     add_auto_accept_rule,
+    add_policy_v2_rules,
     add_rules_changed_listener,
     describe_rule,
     describe_rule_change,
     describe_rule_short,
     get_auto_accept_evaluator,
     get_policy_engine_version,
+    get_policy_v2_rules,
     get_policy_v2_store_rules,
     known_rule_names,
     mutate_grants,
     remove_auto_accept_rule,
+    remove_policy_v2_rule,
     suggest_rule_choices,
     suggest_write_rule,
     temp_accept_key,
 )
+from .policy import catalogue as policy_catalogue
 from .policy import compat as policy_compat
+from .policy import describe as policy_describe
 from .policy import engine as policy_engine
 from .pii_detector import (
     PIIAuditMatch,
@@ -660,6 +665,77 @@ def _evaluate_auto_accept(
     if store_ok:
         return store_ok, store_rule
     return primary_ok, primary_rule
+
+
+def preflight_auto_accept(
+    evaluator: AutoAcceptEvaluator, operation_key: str, args: dict, my_email: str = "",
+) -> tuple[str, str, str, str]:
+    """Preflight counterpart of ``_evaluate_auto_accept`` above, backing
+    ``privacyfence_check_policy``'s own prediction (P7 of the policy v2 redesign). Returns
+    ``(verdict, matched_rule, matched_rule_id, reason)``.
+
+    Checked against the same two-layer view the real call's own ``_evaluate_auto_accept`` consults,
+    in the same order, so this never predicts something the live call wouldn't actually do:
+
+    1. The always-on v2-store layer (P6) first -- unconditionally, the same way the real call
+       checks it regardless of ``policy.engine``. This is the only layer that can predict
+       auto-accept at all for a rule with no v1 counterpart (one of the three F5 predicates, e.g.
+       ``apps_script.project`` -- ``AutoAcceptEvaluator.preflight_from_args`` alone would report
+       ``requires_review`` for these forever, since it has no v1 rule to have found in the first
+       place). When this layer already says ``auto_accept``, its own rule id is both
+       ``matched_rule`` and ``matched_rule_id`` -- there is no v1 name to report separately, the
+       same "the v2 id is what gets audited" the real call's own store-matched branch already
+       does (see ``_evaluate_auto_accept``'s ``return store_ok, store_rule`` above).
+    2. Otherwise, ``AutoAcceptEvaluator.preflight_from_args`` -- v1, unchanged by this function --
+       exactly as check_policy answered before P7. If the store layer above came back ``unknown``
+       (a store-only rule needs the fetched object) while v1 has no rule configured at all
+       (``requires_review``), the merged verdict is ``unknown``: the real call might still
+       auto-accept once fetched, which "no rule configured" alone would wrongly rule out.
+    3. Only once v1 says ``auto_accept`` is a *third* pass worth paying for: compiling this
+       evaluator's own v1 config into v2 rules (``policy.compat.compile_rules``) to find the v2 id
+       for the same prediction, so a planning agent gets something it can feed back into
+       ``privacyfence_propose_policy_change``'s ``rule_id``.
+
+    ``matched_rule_id`` comes back empty if no v2 rule agrees even though v1 predicted
+    auto-accept -- a real, F6-shaped disagreement between the two engines, logged at ``WARNING`` the
+    same way ``_evaluate_auto_accept``'s own shadow comparison is, never raised into the tool result:
+    check_policy's verdict must never depend on which engine happens to agree with itself.
+    """
+    try:
+        store_verdict, store_rule_id, store_reason = policy_engine.preflight(
+            get_policy_v2_store_rules(), operation_key, args, my_email=my_email,
+            is_temp_accepted=evaluator.is_temp_accepted,
+        )
+    except Exception:
+        logger.warning("Policy v2 store preflight raised for op=%r", operation_key, exc_info=True)
+        store_verdict, store_rule_id, store_reason = "requires_review", "", ""
+
+    if store_verdict == "auto_accept":
+        return "auto_accept", store_rule_id, store_rule_id, store_reason
+
+    verdict, matched_rule, reason = evaluator.preflight_from_args(operation_key, args, my_email)
+    if verdict != "auto_accept":
+        if verdict == "requires_review" and store_verdict == "unknown":
+            return "unknown", matched_rule, "", store_reason
+        return verdict, matched_rule, "", reason
+
+    matched_rule_id = ""
+    try:
+        v2_rules = policy_compat.compile_rules(evaluator.effective_rules)
+        v2_verdict, v2_rule_id, _reason = policy_engine.preflight(
+            v2_rules, operation_key, args, my_email=my_email, is_temp_accepted=evaluator.is_temp_accepted,
+        )
+        if v2_verdict == "auto_accept":
+            matched_rule_id = v2_rule_id
+    except Exception:
+        logger.warning("Policy v2 shadow preflight raised for op=%r", operation_key, exc_info=True)
+
+    if not matched_rule_id:
+        logger.warning(
+            "Policy engine disagreement in preflight: op=%r v1 predicted auto_accept (rule=%r) but "
+            "no v2 rule agrees", operation_key, matched_rule,
+        )
+    return verdict, matched_rule, matched_rule_id, reason
 
 
 # Set by web/mcp_dispatch.py's McpDispatcher.call() around a single
@@ -1397,6 +1473,119 @@ async def propose_rule_change(
         operation, target, " and applied" if changed else " but was a no-op", description,
     )
     return {"confirmed": True, "changed": changed, "description": description}
+
+
+async def propose_policy_change(
+    *,
+    operation: str,        # "add" | "update" | "remove"
+    reason: str,
+    rule_id: str = "",
+    group: str = "",
+    value: Any = None,
+    verbs: list[str] | None = None,
+) -> dict[str, Any]:
+    """The one-shape bridge writer P7 of the policy v2 redesign adds -- ``propose_rule_change``
+    above stays exactly as it was and is kept as a deprecated alias, but every new write goes
+    through here instead, straight into the on-disk v2 ``auto_accept:`` section
+    (``auto_accept.add_policy_v2_rules``/``remove_policy_v2_rule``), never through v1's
+    ``auto_accept_rules``. Same confirmation contract as ``propose_rule_change``: blocks on
+    ``show_rule_confirmation_popup()``, and is refused outright (``GateDeniedError``) in an
+    unattended session, since a config change always needs a human present.
+
+    ``group`` is one of ``policy.catalogue.scope_catalogue()``'s own ids -- also what
+    ``privacyfence_list_policy``'s own ``scope_groups`` lists, so a model can discover which groups
+    exist and which verbs each one governs before proposing anything. ``rule_id`` is one of
+    ``privacyfence_list_policy``'s own rule ids: required for ``remove``, and for ``update`` names
+    the existing rule being replaced (removed, then re-added under the new ``group``/``value``/
+    ``verbs`` -- the same "narrowing is always remove-and-re-add-narrower" posture
+    ``SettingsController.remove_policy_rule``'s own docstring gives the Auto-accept Settings page,
+    since v2 rules are additive-only by construction).
+
+    Raises ``ValueError`` -- before any popup is shown -- for an unknown ``rule_id``, or for a
+    ``group``/``verbs`` combination that derives no operation key at all: a verb the scope type
+    named by ``group`` cannot govern, or a value-needing group given none. This is P7's write-time
+    validation (the redesign proposal's own exit criterion): a rule the UI cannot render or remove
+    is refused here rather than silently persisted the way F5/P0·3 found ``propose_rule_change``
+    would let one through for ``always_allow`` under an ungoverned operation key.
+    """
+    if operation not in ("add", "update", "remove"):
+        raise ValueError(f"Unknown operation: {operation!r}")
+
+    existing_by_id = {rule.id: rule for rule in get_policy_v2_rules()}
+
+    new_rules: list[policy_engine.PolicyRule] = []
+    if operation == "remove":
+        if rule_id not in existing_by_id:
+            raise ValueError(f"Unknown rule id: {rule_id!r}. Call privacyfence_list_policy first.")
+        description = f"Remove auto-accept rule: {policy_describe.rule_sentence(existing_by_id[rule_id])}"
+    else:
+        if operation == "update" and rule_id not in existing_by_id:
+            raise ValueError(f"Unknown rule id: {rule_id!r}. Call privacyfence_list_policy first.")
+        verb_enums = policy_catalogue.parse_verbs(verbs or [])
+        if not verb_enums:
+            raise ValueError(f"verbs must include at least one real verb name, got {verbs!r}")
+        new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
+        if not new_rules:
+            raise ValueError(
+                f"group {group!r} cannot govern verb(s) {[v.value for v in verb_enums]!r} -- see "
+                "privacyfence_list_policy's scope_groups for which verbs each group governs, or "
+                "which ones need a value."
+            )
+        verb = "Update" if operation == "update" else "Add"
+        description = f"{verb} auto-accept rule: " + "; ".join(
+            policy_describe.rule_sentence(rule) for rule in new_rules
+        )
+
+    created_at = time.time()
+    request_id = uuid.uuid4().hex[:12]
+    summary = f"Proposed {operation} (policy): {description}"
+
+    if is_unattended():
+        _audit(
+            created_at=created_at, request_id=request_id, connector="policy", tool="",
+            tool_name="", summary=summary, sender="", decision="denied_unattended",
+            auto_accept_rule="", pii_detected=False, claude_reason=reason,
+        )
+        raise GateDeniedError(
+            "Request denied: this connection is in an unattended session, so a config change "
+            "can't be confirmed without a human present."
+        )
+
+    confirmed = await _run_in_popup_executor(show_rule_confirmation_popup, description)
+
+    if not confirmed:
+        _audit(
+            created_at=created_at, request_id=request_id, connector="policy", tool="",
+            tool_name="", summary=summary, sender="", decision="rejected",
+            auto_accept_rule="", pii_detected=False, claude_reason=reason,
+        )
+        raise GateDeniedError("Request denied by user")
+
+    if operation == "remove":
+        changed = remove_policy_v2_rule(rule_id)
+        affected_ids = [rule_id]
+    else:
+        removed = remove_policy_v2_rule(rule_id) if operation == "update" else False
+        added = add_policy_v2_rules(new_rules)
+        changed = removed or added
+        affected_ids = sorted({rule.id for rule in new_rules})
+
+    applied_decision = (
+        "policy_rule_removed_via_bridge_proposal" if operation == "remove"
+        else "policy_rule_changed_via_bridge_proposal"
+    )
+    decision = applied_decision if changed else "policy_bridge_proposal_no_op"
+
+    _audit(
+        created_at=created_at, request_id=request_id, connector="policy", tool="",
+        tool_name="", summary=summary, sender="", decision=decision,
+        auto_accept_rule=",".join(affected_ids), pii_detected=False, claude_reason=reason,
+    )
+    logger.info(
+        "Bridge-proposed policy %s confirmed%s: %s",
+        operation, " and applied" if changed else " but was a no-op", description,
+    )
+    return {"confirmed": True, "changed": changed, "description": description, "rule_ids": affected_ids}
 
 
 def _deny_unattended(audit, connector: str, tool: str, *, pii_categories: list[str]) -> None:

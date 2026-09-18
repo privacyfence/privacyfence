@@ -40,11 +40,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from privacyfence import approval_ui, gate
+from privacyfence import approval_ui, auto_accept, gate
 from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.auto_accept import AutoAcceptEvaluator, init_policy_engine_version
 from privacyfence.pii_detector import init_pii_detection
+from privacyfence.policy.engine import PolicyRule
 from privacyfence.web_approval_ui import WebApprovalUI
 
 
@@ -1115,6 +1116,221 @@ class TestProposeRuleChange:
         assert added == []
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "denied_unattended"
+
+
+class TestPreflightAutoAccept:
+    """gate.preflight_auto_accept() -- backs privacyfence_check_policy's matched_rule_id (P7)."""
+
+    def setup_method(self):
+        auto_accept.set_policy_v2_store_rules([])
+
+    def teardown_method(self):
+        auto_accept.set_policy_v2_store_rules([])
+
+    def test_no_configured_rule_is_requires_review_with_no_ids(self):
+        evaluator = AutoAcceptEvaluator({})
+        verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+            evaluator, "gmail.read_message", {},
+        )
+        assert (verdict, matched_rule, matched_rule_id) == ("requires_review", "", "")
+
+    def test_v1_args_only_match_reports_the_same_name_as_its_v2_id(self):
+        evaluator = AutoAcceptEvaluator({"gmail.create_draft": [{"rule": "to_is_myself"}]})
+        verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+            evaluator, "gmail.create_draft", {"to": "me@example.com"}, "me@example.com",
+        )
+        assert verdict == "auto_accept"
+        assert matched_rule == "to_is_myself"
+        # policy.compat.compile_rule_entry mints a compiled rule's id from the v1 rule name itself,
+        # so a scope predicate's v2 id is provably the same string check_policy already returned as
+        # matched_rule before P7.
+        assert matched_rule_id == "to_is_myself"
+
+    def test_data_dependent_v1_rule_is_unknown_with_no_ids(self):
+        # approved_folder needs the fetched file's parent_ids -- DATA_DEPENDENT, so preflight can
+        # never resolve it from args alone, v1 or v2 alike.
+        evaluator = AutoAcceptEvaluator({"drive.read_file_contents": [{"rule": "approved_folder", "value": ["f1"]}]})
+        verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+            evaluator, "drive.read_file_contents", {},
+        )
+        assert (verdict, matched_rule, matched_rule_id) == ("unknown", "", "")
+
+    def test_store_only_rule_with_no_v1_counterpart_still_predicts_auto_accept(self):
+        # apps_script.project (F5) has no v1 rule shape at all -- AutoAcceptEvaluator.
+        # preflight_from_args alone would report requires_review for this operation key forever.
+        # The always-on v2-store layer (P6) is what makes it predictable at all.
+        auto_accept.set_policy_v2_store_rules([
+            PolicyRule(
+                id="r-apps-script", predicate="apps_script.project", value=["script1"],
+                operations=frozenset({"apps_script.read_content"}),
+            ),
+        ])
+        evaluator = AutoAcceptEvaluator({})
+        verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+            evaluator, "apps_script.read_content", {"script_id": "script1"},
+        )
+        assert verdict == "auto_accept"
+        assert matched_rule == "r-apps-script"
+        assert matched_rule_id == "r-apps-script"
+
+    def test_store_layer_upgrades_requires_review_to_unknown_when_data_dependent(self):
+        # A store-only rule that needs fetched data (not args-resolvable) means the real call
+        # might still auto-accept once fetched -- "no v1 rule configured" alone must not claim
+        # requires_review when the always-on store layer says otherwise.
+        auto_accept.set_policy_v2_store_rules([
+            PolicyRule(
+                id="r-folder", predicate="approved_folder", value=["f1"],
+                operations=frozenset({"apps_script.read_content"}),
+            ),
+        ])
+        evaluator = AutoAcceptEvaluator({})
+        verdict, _matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+            evaluator, "apps_script.read_content", {},
+        )
+        assert verdict == "unknown"
+        assert matched_rule_id == ""
+
+    def test_disagreement_between_engines_reports_no_id_but_keeps_the_v1_verdict(self, monkeypatch):
+        # Force a v1/v2 disagreement: v1's own evaluation says a match, but the v2 preflight this
+        # function also runs is stubbed to find nothing. check_policy's verdict must still be
+        # whatever v1 said -- only matched_rule_id is allowed to come back empty.
+        evaluator = AutoAcceptEvaluator({"gmail.create_draft": [{"rule": "to_is_myself"}]})
+        from privacyfence.policy import engine as policy_engine
+        monkeypatch.setattr(policy_engine, "preflight", lambda *a, **k: ("requires_review", "", "no match"))
+
+        verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
+            evaluator, "gmail.create_draft", {"to": "me@example.com"}, "me@example.com",
+        )
+        assert verdict == "auto_accept"
+        assert matched_rule == "to_is_myself"
+        assert matched_rule_id == ""
+
+
+class TestProposePolicyChange:
+    """gate.propose_policy_change() -- the P7 bridge writer for the v2 auto_accept: section,
+    kept distinct from propose_rule_change() (v1, kept as a deprecated alias) rather than folded
+    into it: the two persist into different config sections."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        self._config_path = tmp_path / "settings.yaml"
+        self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        auto_accept.init_config_path(str(self._config_path))
+        auto_accept.set_policy_v2_store_rules([])
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+
+    def teardown_method(self):
+        auto_accept.set_policy_v2_store_rules([])
+
+    async def test_confirmed_add_persists_to_the_v2_section_not_v1(self, audit_dir):
+        result = await gate.propose_policy_change(
+            operation="add", reason="Trusting the sandbox folder.",
+            group="drive.folder", value=["folder1"], verbs=["read", "download"],
+        )
+        assert result["confirmed"] is True
+        assert result["changed"] is True
+        text = self._config_path.read_text(encoding="utf-8")
+        assert "auto_accept:" in text
+        assert "approved_folder" in text
+        assert "auto_accept_rules: {}" in text  # v1 section left untouched
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "policy_rule_changed_via_bridge_proposal"
+
+    async def test_confirmed_add_is_visible_to_get_policy_v2_rules(self, audit_dir):
+        await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        rules = auto_accept.get_policy_v2_rules()
+        assert any(r.predicate == "approved_folder" and r.value == ["folder1"] for r in rules)
+
+    async def test_add_with_an_ungoverned_verb_raises_before_any_popup(self):
+        popup_calls = []
+        with pytest.raises(ValueError, match="cannot govern"):
+            await gate.propose_policy_change(
+                operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["send"],
+            )
+        assert popup_calls == []
+
+    async def test_add_with_no_real_verbs_raises(self):
+        with pytest.raises(ValueError, match="verbs must include"):
+            await gate.propose_policy_change(
+                operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["not_a_verb"],
+            )
+
+    async def test_remove_of_an_unknown_rule_id_raises(self):
+        with pytest.raises(ValueError, match="Unknown rule id"):
+            await gate.propose_policy_change(operation="remove", reason="x", rule_id="r-does-not-exist")
+
+    async def test_confirmed_remove_deletes_the_rule_and_audits(self, audit_dir):
+        add_result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        rule_id = add_result["rule_ids"][0]
+
+        result = await gate.propose_policy_change(operation="remove", reason="Cleaning up.", rule_id=rule_id)
+
+        assert result["confirmed"] is True
+        assert result["changed"] is True
+        assert auto_accept.get_policy_v2_rules() == []
+        entries = read_audit_entries(audit_dir)
+        assert entries[-1]["decision"] == "policy_rule_removed_via_bridge_proposal"
+
+    async def test_update_removes_the_old_rule_and_adds_the_new_one(self, audit_dir):
+        add_result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        old_id = add_result["rule_ids"][0]
+
+        update_result = await gate.propose_policy_change(
+            operation="update", reason="Narrowing to a different folder.", rule_id=old_id,
+            group="drive.folder", value=["folder2"], verbs=["read"],
+        )
+
+        assert update_result["confirmed"] is True
+        rules = auto_accept.get_policy_v2_rules()
+        assert [r.value for r in rules] == [["folder2"]]
+
+    async def test_update_with_an_unknown_rule_id_raises_before_any_popup(self, monkeypatch):
+        popup_calls = []
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: popup_calls.append(1) or True)
+        with pytest.raises(ValueError, match="Unknown rule id"):
+            await gate.propose_policy_change(
+                operation="update", reason="x", rule_id="r-does-not-exist",
+                group="drive.folder", value=["folder1"], verbs=["read"],
+            )
+        assert popup_calls == []
+
+    async def test_declined_confirmation_raises_and_persists_nothing(self, monkeypatch, audit_dir):
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: False)
+        with pytest.raises(RuntimeError, match="denied by user"):
+            await gate.propose_policy_change(
+                operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+            )
+        assert auto_accept.get_policy_v2_rules() == []
+
+    async def test_unattended_connection_denies_without_showing_a_popup(self, monkeypatch, audit_dir):
+        popup_calls = []
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: popup_calls.append(1) or True)
+        with gate.unattended_scope(True):
+            with pytest.raises(RuntimeError, match="unattended session"):
+                await gate.propose_policy_change(
+                    operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+                )
+        assert popup_calls == []
+        assert auto_accept.get_policy_v2_rules() == []
+
+    async def test_unknown_operation_raises(self):
+        with pytest.raises(ValueError, match="Unknown operation"):
+            await gate.propose_policy_change(operation="destroy", reason="x")
+
+    async def test_re_adding_the_same_rule_audits_as_no_op(self, audit_dir):
+        await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        result = await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        assert result["changed"] is False
 
 
 class TestPopupGateWrites:

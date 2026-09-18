@@ -378,6 +378,10 @@ async def _dispatch_meta_tool(
         return dispatcher.list_rules(reason)
     if name == mcp_tools.PROPOSE_RULE_CHANGE_TOOL.name:
         return await dispatcher.propose_rule_change(session_key, arguments)
+    if name == mcp_tools.LIST_POLICY_TOOL.name:
+        return dispatcher.list_policy(reason)
+    if name == mcp_tools.PROPOSE_POLICY_CHANGE_TOOL.name:
+        return await dispatcher.propose_policy_change(session_key, arguments)
     if name == mcp_tools.BEGIN_UNATTENDED_SESSION_TOOL.name:
         return dispatcher.begin_unattended_session(session_key, reason)
     if name == mcp_tools.END_UNATTENDED_SESSION_TOOL.name:

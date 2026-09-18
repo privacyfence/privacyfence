@@ -101,11 +101,14 @@ class AuditEntry:
     sender: str
     decision: str           # "approved" | "rejected" | "auto_accepted" | "accepted_via_accept_all" |
                             # "accepted_via_temp_session" | "denied_unattended" | "policy_check" |
-                            # "rules_listed" | "cancelled" | "org_config_startup" |
+                            # "rules_listed" | "policy_listed" | "cancelled" | "org_config_startup" |
                             # "unattended_session_started" | "unattended_session_ended" |
                             # "rule_changed_via_bridge_proposal" | "rule_removed_via_bridge_proposal" |
                             # "grant_changed_via_bridge_proposal" | "grant_removed_via_bridge_proposal" |
-                            # "bridge_proposal_no_op" | "error" |
+                            # "bridge_proposal_no_op" |
+                            # "policy_rule_changed_via_bridge_proposal" |
+                            # "policy_rule_removed_via_bridge_proposal" |
+                            # "policy_bridge_proposal_no_op" | "error" |
                             # "approval_pending" | "expired" |
                             # "webauthn_credential_enrolled" | "webauthn_credential_removed" |
                             # "webauthn_recovery_code_used" |
@@ -203,6 +206,23 @@ class AuditEntry:
                             #  proposed removing a rule/grant value that was already gone. Distinct
                             #  from "rejected" (the human said no) and from the four decisions above
                             #  (a real change happened) -- confirmed and yet a no-op is its own case)
+                            # ("policy_listed": web/mcp_dispatch.py's McpDispatcher.list_policy (P7
+                            #  of the policy v2 redesign) -- privacyfence_list_policy's own
+                            #  disclosure of the current v2 auto_accept: rule set, kept distinct from
+                            #  "rules_listed" (privacyfence_list_auto_accept_rules' older v1
+                            #  auto_accept_rules/auto_accept_grants disclosure) since they list two
+                            #  different config sections, not two names for the same event)
+                            # ("policy_rule_changed_via_bridge_proposal"/
+                            #  "policy_rule_removed_via_bridge_proposal"/"policy_bridge_proposal_no_op":
+                            #  gate.py's propose_policy_change() (P7) -- the v2-store counterpart of
+                            #  "rule_changed_via_bridge_proposal"/"rule_removed_via_bridge_proposal"/
+                            #  "bridge_proposal_no_op" above, kept as distinct decision strings
+                            #  (rather than reused) because they persist into a different config
+                            #  section (the on-disk v2 auto_accept: section, never v1's
+                            #  auto_accept_rules) -- same reasoning as "policy_listed" above, and the
+                            #  same "don't rename what's already written into someone's audit
+                            #  history" principle the note on "rule_changed_via_bridge_proposal" above
+                            #  already gives for keeping its own legacy "bridge_proposal" vocabulary)
     auto_accept_rule: str   # rule name if auto_accepted, else ""
     latency_seconds: float
     pii_detected: bool = False  # True if pii_detector.py flagged the content before this decision
@@ -620,12 +640,16 @@ class AuditLogger:
             "denied_unattended":     PatternFill("solid", fgColor="FFD8A8"),
             "policy_check":          PatternFill("solid", fgColor="F1F3F5"),
             "rules_listed":          PatternFill("solid", fgColor="F1F3F5"),
+            "policy_listed":         PatternFill("solid", fgColor="F1F3F5"),
             "org_config_startup":    PatternFill("solid", fgColor="F1F3F5"),
             "rule_changed_via_bridge_proposal":   PatternFill("solid", fgColor="FFF3CD"),
             "rule_removed_via_bridge_proposal":   PatternFill("solid", fgColor="FFF3CD"),
             "grant_changed_via_bridge_proposal":  PatternFill("solid", fgColor="FFF3CD"),
             "grant_removed_via_bridge_proposal":  PatternFill("solid", fgColor="FFF3CD"),
             "bridge_proposal_no_op": PatternFill("solid", fgColor="F1F3F5"),
+            "policy_rule_changed_via_bridge_proposal": PatternFill("solid", fgColor="FFF3CD"),
+            "policy_rule_removed_via_bridge_proposal": PatternFill("solid", fgColor="FFF3CD"),
+            "policy_bridge_proposal_no_op": PatternFill("solid", fgColor="F1F3F5"),
             "error":                 PatternFill("solid", fgColor="FF6B6B"),
             "cancelled":             PatternFill("solid", fgColor="E9ECEF"),
             "approval_pending":      PatternFill("solid", fgColor="E7F0FF"),
