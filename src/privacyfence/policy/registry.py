@@ -185,6 +185,7 @@ TOOL_TO_VERB: dict[str, Verb] = {
     # changes one attribute of an existing event, same shape as calendar.working_location, so it
     # gets the same verb pending an explicit decision in a later phase.
     "calendar_set_event_color": Verb.UPDATE,
+    "calendar_delete_event": Verb.DELETE,
     "salesforce_get_record": Verb.READ,
     "salesforce_run_report": Verb.READ,
     "salesforce_search": Verb.SEARCH,

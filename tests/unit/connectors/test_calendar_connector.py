@@ -482,7 +482,7 @@ class TestCreateEvent:
         assert gated_call_spy[0]["preview"]["Color"] == "Tomato"
         assert gated_call_spy[0]["raw_data"]["color"] == "11"
         client.create_event.assert_called_once_with(
-            "primary", "Sync", "t0", "t1", "", None, "", False, None, "11",
+            "primary", "Sync", "t0", "t1", "", None, "", False, None, "11", "",
         )
 
     async def test_no_color_omits_preview_row(self, gated_call_spy):
@@ -506,6 +506,31 @@ class TestCreateEvent:
 
         assert gated_call_spy == []
         client.create_event.assert_not_called()
+
+    async def test_recurrence_shown_in_preview_and_passed_to_the_client(self, gated_call_spy):
+        connector, client = make_connector()
+        client.create_event.return_value = make_event(id="new1")
+
+        await connector.call("calendar_create_event", {
+            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+            "recurrence": "RRULE:FREQ=WEEKLY;COUNT=10",
+        })
+
+        assert gated_call_spy[0]["preview"]["Recurrence"] == "RRULE:FREQ=WEEKLY;COUNT=10"
+        assert gated_call_spy[0]["raw_data"]["recurrence"] == "RRULE:FREQ=WEEKLY;COUNT=10"
+        client.create_event.assert_called_once_with(
+            "primary", "Sync", "t0", "t1", "", None, "", False, None, "", "RRULE:FREQ=WEEKLY;COUNT=10",
+        )
+
+    async def test_no_recurrence_omits_preview_row(self, gated_call_spy):
+        connector, client = make_connector()
+        client.create_event.return_value = make_event(id="new1")
+
+        await connector.call("calendar_create_event", {
+            "calendar_id": "primary", "title": "Sync", "start_time": "t0", "end_time": "t1",
+        })
+
+        assert "Recurrence" not in gated_call_spy[0]["preview"]
 
 
 class TestUpdateEvent:
@@ -620,7 +645,7 @@ class TestUpdateEvent:
         assert gated_call_spy[0]["preview"]["Color"] == "Banana → Tomato"
         assert gated_call_spy[0]["raw_data"]["color"] == "11"
         client.update_event.assert_called_once_with(
-            "primary", "e1", None, None, None, None, None, False, None, "11",
+            "primary", "e1", None, None, None, None, None, False, None, "11", "this", "",
         )
 
     async def test_color_unset_on_current_event_shows_default(self, gated_call_spy):
@@ -665,6 +690,202 @@ class TestUpdateEvent:
         assert gated_call_spy == []
         client.get_event.assert_not_called()
         client.update_event.assert_not_called()
+
+    async def test_applies_to_row_omitted_for_a_non_recurring_event(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event()  # recurrence=[], recurring_event_id=""
+        client.update_event.return_value = make_event()
+
+        await connector.call("calendar_update_event", {
+            "calendar_id": "primary", "event_id": "e1", "title": "New Title",
+        })
+
+        assert "Applies to" not in gated_call_spy[0]["preview"]
+
+    async def test_applies_to_row_shown_for_a_recurring_instance_default_scope(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(recurring_event_id="master1")
+        client.update_event.return_value = make_event()
+
+        await connector.call("calendar_update_event", {
+            "calendar_id": "primary", "event_id": "e1", "title": "New Title",
+        })
+
+        assert gated_call_spy[0]["preview"]["Applies to"] == "This event"
+
+    async def test_applies_to_row_shown_for_the_master_event_too(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(recurrence=["RRULE:FREQ=WEEKLY"])
+        client.update_event.return_value = make_event()
+
+        await connector.call("calendar_update_event", {
+            "calendar_id": "primary", "event_id": "master1", "title": "New Title",
+        })
+
+        assert gated_call_spy[0]["preview"]["Applies to"] == "This event"
+
+    async def test_applies_to_row_reflects_the_requested_scope(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(recurring_event_id="master1")
+        client.update_event.return_value = make_event()
+
+        await connector.call("calendar_update_event", {
+            "calendar_id": "primary", "event_id": "e1", "title": "New Title", "scope": "all",
+        })
+
+        assert gated_call_spy[0]["preview"]["Applies to"] == "All events in the series"
+        client.update_event.assert_called_once_with(
+            "primary", "e1", "New Title", None, None, None, None, False, None, None, "all", "",
+        )
+
+    async def test_following_scope_shown_and_passed_through(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(recurring_event_id="master1")
+        client.update_event.return_value = make_event()
+
+        await connector.call("calendar_update_event", {
+            "calendar_id": "primary", "event_id": "e1", "scope": "following",
+        })
+
+        assert gated_call_spy[0]["preview"]["Applies to"] == "This and following events"
+        client.update_event.assert_called_once_with(
+            "primary", "e1", None, None, None, None, None, False, None, None, "following", "",
+        )
+
+    async def test_send_updates_passed_through_to_the_client(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event()
+        client.update_event.return_value = make_event()
+
+        await connector.call("calendar_update_event", {
+            "calendar_id": "primary", "event_id": "e1", "send_updates": "all",
+        })
+
+        client.update_event.assert_called_once_with(
+            "primary", "e1", None, None, None, None, None, False, None, None, "this", "all",
+        )
+
+    async def test_invalid_scope_rejected_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="scope must be one of"):
+            await connector.call("calendar_update_event", {
+                "calendar_id": "primary", "event_id": "e1", "scope": "bogus",
+            })
+
+        assert gated_call_spy == []
+        client.get_event.assert_not_called()
+        client.update_event.assert_not_called()
+
+    async def test_invalid_send_updates_rejected_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="send_updates must be one of"):
+            await connector.call("calendar_update_event", {
+                "calendar_id": "primary", "event_id": "e1", "send_updates": "everyone",
+            })
+
+        assert gated_call_spy == []
+        client.get_event.assert_not_called()
+        client.update_event.assert_not_called()
+
+
+class TestDeleteEvent:
+    async def test_preview_shows_title_time_and_calendar(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event()
+
+        await connector.call("calendar_delete_event", {"calendar_id": "primary", "event_id": "e1"})
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["gate"] == "popup"
+        assert kwargs["preview"]["Event"] == "Q3 Planning"
+        assert kwargs["preview"]["Time"] == "2026-07-08T10:00:00+00:00 – 2026-07-08T11:00:00+00:00"
+
+    async def test_applies_to_row_omitted_for_a_non_recurring_event(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event()
+
+        await connector.call("calendar_delete_event", {"calendar_id": "primary", "event_id": "e1"})
+
+        assert "Applies to" not in gated_call_spy[0]["preview"]
+
+    async def test_applies_to_row_shown_for_a_recurring_instance(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(recurring_event_id="master1")
+
+        await connector.call(
+            "calendar_delete_event", {"calendar_id": "primary", "event_id": "e1", "scope": "all"},
+        )
+
+        assert gated_call_spy[0]["preview"]["Applies to"] == "All events in the series"
+
+    async def test_default_scope_is_this(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event()
+
+        await connector.call("calendar_delete_event", {"calendar_id": "primary", "event_id": "e1"})
+
+        client.delete_event.assert_called_once_with("primary", "e1", "this", "")
+
+    async def test_scope_and_send_updates_passed_through(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(recurring_event_id="master1")
+
+        await connector.call("calendar_delete_event", {
+            "calendar_id": "primary", "event_id": "e1", "scope": "following", "send_updates": "all",
+        })
+
+        client.delete_event.assert_called_once_with("primary", "e1", "following", "all")
+
+    async def test_result_shape(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event()
+
+        result = await connector.call(
+            "calendar_delete_event", {"calendar_id": "primary", "event_id": "e1", "scope": "all"},
+        )
+
+        assert result == {"id": "e1", "deleted": True, "scope": "all"}
+
+    async def test_invalid_scope_rejected_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="scope must be one of"):
+            await connector.call(
+                "calendar_delete_event", {"calendar_id": "primary", "event_id": "e1", "scope": "bogus"},
+            )
+
+        assert gated_call_spy == []
+        client.get_event.assert_not_called()
+        client.delete_event.assert_not_called()
+
+    async def test_invalid_send_updates_rejected_before_gate(self, gated_call_spy):
+        connector, client = make_connector()
+
+        with pytest.raises(ValueError, match="send_updates must be one of"):
+            await connector.call("calendar_delete_event", {
+                "calendar_id": "primary", "event_id": "e1", "send_updates": "everyone",
+            })
+
+        assert gated_call_spy == []
+        client.get_event.assert_not_called()
+        client.delete_event.assert_not_called()
+
+    async def test_raw_data_carries_organizer_and_attendees_for_auto_accept_rules(self, gated_call_spy):
+        connector, client = make_connector()
+        client.get_event.return_value = make_event(
+            organizer_email="alice@example.com",
+            attendees=[CalendarAttendee(email="bob@example.com", display_name="Bob", response_status="accepted")],
+        )
+
+        await connector.call("calendar_delete_event", {"calendar_id": "primary", "event_id": "e1"})
+
+        assert gated_call_spy[0]["raw_data"]["organizer_email"] == "alice@example.com"
+        assert gated_call_spy[0]["raw_data"]["attendees"] == ["bob@example.com"]
+        assert gated_call_spy[0]["args"] == {
+            "calendar_id": "primary", "event_id": "e1", "scope": "this",
+        }
 
 
 class TestCreateOutOfOffice:
