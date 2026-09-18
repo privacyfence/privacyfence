@@ -531,457 +531,223 @@ A few things worth calling out explicitly about this tier as a whole, rather tha
 
 ---
 
-## Auto-accept grants
+## Auto-accept
 
-Trusting a specific resource — a Drive folder, a Google Tasks list, a Slack channel, a Jira
-project, ... — is configured **once per resource**, under `auto_accept_grants` in
-`config/settings.yaml`, rather than by adding the same ID to every operation key that resource
-happens to touch (see [Auto-accept rules](#auto-accept-rules) below for the older, still-supported
-per-operation form). Equivalent trust can also be added from PrivacyFence Settings' **Auto-accept**
-page (see [Settings page UX](#settings-page-ux)) — as of P6 that page writes the newer v2
-`auto_accept:` schema rather than this section directly, but a scope covering the same resource and
-verbs ends up auto-accepting the same calls either way.
+Routine, low-risk requests can be approved automatically, skipping the human review gate. Every
+auto-accept rule is a **scope** (which resources it trusts) plus a set of **verbs** (what may be
+done to them), optionally narrowed by **conditions** (a property of the request that must also
+hold) — one grammar, one config section (`auto_accept:` in `config/settings.yaml`), written
+identically by all three surfaces that can create a rule: the approval popup's own **Always
+allow** button, PrivacyFence Settings' **Auto-accept** page, and the MCP bridge's
+`privacyfence_propose_policy_change`.
+
+Through 4.1, trusting a resource meant two different, overlapping config models — a
+per-operation `auto_accept_rules` section and a resource-scoped `auto_accept_grants` section, each
+writable from different surfaces with different width. Both are gone as anything live writes or
+evaluates: every rule, however it was created, now lives in one place, described the same way
+everywhere it's shown. See [Migration from v1](#migration-from-v1) below for what happens to an
+existing hand-edited config.
+
+### The `auto_accept:` schema
 
 ```yaml
-auto_accept_grants:
-  drive:
-    sandbox_folders:
-      - id: "1CdeFghIJKLmnoPQRstuVWxyz0123456789AbCdEfGh"
-        name: "Claude scratch space"   # cosmetic — see below
-        write: true
-    folders:
-      - id: "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
-        name: "Shared Reports"
-        read: true
-  tasks:
-    task_lists:
-      - id: "MDAwMDAwMDAwMDAwMDAwMDAwMDA6MDow"
-        name: "Personal"
-        create: true
-        edit: true
-        complete: true
-        move: true
+auto_accept:
+  version: 2
+  rules:
+    - id: r-3f9a1c2b8e                # stable; content-derived, never reused
+      predicate: approved_sandbox_folder
+      value: ["1CdeFghIJKLmnoPQRstuVWxyz0123456789AbCdEfGh"]
+      operations: [drive.write_file, sheets.write_range, docs.edit_content]
+      conditions: [[shared_drive_exclusion, null]]
 ```
 
-Each grant entry is keyed by `id` (or `key` for Jira/Confluence, which already address resources
-that way) plus a small set of capability booleans. A freshly added grant starts with every
-capability `false` — adding a resource does nothing until a capability is explicitly turned on,
-from PrivacyFence Settings or by hand. `name` is a cosmetic cache of the resource's last-resolved
-display name; the evaluator never reads it, only `id`/`key` and the capability booleans decide what
-auto-accepts.
+`id` is derived from `(predicate, value, conditions)` — the same triple always mints the same id
+regardless of which operations carry it or how many times a config is (re-)migrated, so a rule's
+identity in the audit log and in Settings doesn't churn on every restart. `predicate` is the scope
+selector (see [Scope catalogue](#scope-catalogue) below); `operations` is the engine's own internal
+address space — the set of connector operation keys this rule governs — never shown to a user
+directly, since [Verb catalogue](#verb-catalogue) is what every surface renders instead.
 
-### What each resource type covers
+A rule set is always a **union**: a call auto-accepts if any rule's scope matches, one of its
+`operations` is the operation being gated, and every one of its `conditions` holds. More rows
+always means more allowed, never less — there is no rule that narrows what another rule already
+allows. `effect` is reserved for a future `deny` value; only `allow` exists today.
 
-| Connector | Resource type (`config_key`) | Capabilities → what they auto-accept |
+The loader fails closed on anything it doesn't recognize: an unknown `predicate`, an operation key
+no scope type can govern, or a malformed `conditions` entry never matches — it's dropped from
+evaluation and surfaced in Settings as a rule PrivacyFence doesn't understand, never treated as
+"matches everything." A missing or empty `auto_accept:` section means no auto-accept at all, not
+universal auto-accept.
+
+### Scope catalogue
+
+Twenty-five scope types. **Identity** scopes name a specific resource (a folder id, a project
+key); **attribute** scopes name a property that selects a set of resources (a sender's domain, "I
+own it").
+
+| Scope type | Kind | Value | Predicate(s) |
+|---|---|---|---|
+| `drive.folder` | identity | folder id | `approved_folder`, `approved_sandbox_folder`, `parent_folder_allowlist`, `move_within_approved_folders` |
+| `drive.file_type` | attribute | MIME types | `file_type_allowlist` |
+| `drive.owned_by_me` | attribute | — | `i_am_owner`, `created_by_me` |
+| `drive.created_this_session` | attribute | — | `created_this_session` |
+| `gmail.sender` | identity | addresses | `i_am_sender` |
+| `gmail.sender_domain` | attribute | domains (+ subdomains) | `trusted_sender_domain` |
+| `gmail.recipient` | identity | addresses | `to_is_myself`, `i_am_sole_recipient` |
+| `gmail.recipient_domain` | attribute | domains | `approved_recipient_domain` |
+| `gmail.label` | identity | label names | `label_match`, `label_name_allowlist` |
+| `gmail.anything` | attribute | — | `always_allow` (drafting only — D4: an unconditional grant that reads as unconditional) |
+| `slack.channel` | identity | channel/user ids | `approved_channel`, `approved_channel_all_results`, `approved_recipient`, `send_to_myself` |
+| `slack.channel_kind` | attribute | `self_dm` · `group_dm` · `public` | `dm_with_myself`, `group_dm`, `public_channels_only` |
+| `telegram.chat` | identity | chat ids | `approved_chats`, `approved_chats_all_results` |
+| `calendar.calendar` | identity | calendar ids | `personal_calendar` |
+| `calendar.organized_by_me` | attribute | — | `i_am_organizer` |
+| `tasks.list` | identity | task list ids | `approved_task_list` |
+| `jira.project` | identity | project keys | `approved_project_keys` |
+| `jira.my_issues` | attribute | reporter · assignee | `i_am_reporter`, `i_am_assignee` |
+| `confluence.space` | identity | space keys | `approved_space_keys` |
+| `confluence.authored_by_me` | attribute | — | `i_am_author` |
+| `salesforce.object_type` | attribute | object names | `approved_object_types` |
+| `salesforce.report` | identity | report ids | `approved_report_ids` |
+| `contacts.label` | identity | label names | `label_name_allowlist` |
+| `apps_script.project` | identity | script ids | — (Settings/bridge only; see [note](#three-f5-operation-groups) below) |
+
+`drive.folder` matches on a file's **direct** parent only — a file one level down in a trusted
+folder does not match (not recursive).
+
+### Conditions
+
+Ten predicates that narrow a scope further, never widen one — attached under a rule's `when:`
+key. Every one of them is `data_dependent` (needs the fetched item, never just the call's
+arguments), which is what makes `privacyfence_check_policy`'s three-way verdict
+(`auto_accept`/`requires_review`/`unknown`) correct without a hand-maintained classification list.
+
+| Condition | Holds when… |
+|---|---|
+| `older_than_days: N` | message is at least N days old |
+| `within_days: N` | event starts within N days |
+| `past_only` | event has already ended |
+| `no_attachments` | no files or media attached |
+| `no_external_attendees` | every attendee shares your domain |
+| `no_conferencing_link` | event carries no meeting link |
+| `not_private` | event visibility is not private |
+| `not_shared_drive` | file is not in a shared drive |
+| `no_contact_info_change` | edit touches no phone/email field |
+| `in_existing_thread` | message is a reply, not a new post |
+
+### Verb catalogue
+
+Eighteen verbs in four risk families. A verb is what a surface actually renders and lets a user
+choose — the operation key it compiles to internally never appears on screen.
+
+| Verb | Family | Scope measured against |
 |---|---|---|
-| `drive` | `folders` | `read` → reading file contents/downloads in that folder, and `sheets.read_values` for spreadsheets in it |
-| `drive` | `sandbox_folders` | `write` → writing files/Docs in that folder (including `docs.edit_content`/`docs.format_content`), every `sheets.*` write operation for spreadsheets in it, commenting on a file already there, uploading into it, and moving a file out of it |
-| `tasks` | `task_lists` | `create`, `edit`, `complete` (covers complete + uncomplete), `move` — one per Tasks write tool |
-| `slack` | `channels` | `read` → reading channel/thread history and search results in that channel; `send` → sending messages there |
-| `telegram` | `chats` | `read` → reading/searching that chat; `send` → sending messages there |
-| `jira` | `projects` (by `key`) | `read`, `create`, `comment`, `update`, `transition` — one per Jira tool |
-| `confluence` | `spaces` (by `key`) | `read` → reading a page or downloading its attachments in that space, `create`, `update` |
-| `calendar` | `calendars` | `read` → reading event details on that calendar; `write` → creating/updating events there |
-| `salesforce` | `reports` | `run` → running that specific report |
+| `read` | read | the item |
+| `download` | read | the item |
+| `search` | read | **every** result |
+| `create` | write | the container |
+| `update` | write | the item |
+| `format` | write | the item |
+| `restructure` | write | the item |
+| `comment` | write | the item |
+| `label` | write | the label being applied |
+| `move` | write | **both** source and destination |
+| `archive` | write | the item |
+| `complete` | write | the list |
+| `transition` | write | the project |
+| `configure` | write | the account |
+| `send` | send | the destination |
+| `draft` | send | **every** recipient |
+| `share` | send | the audience |
+| `delete` | destructive | the item |
 
-`drive.upload_file`'s destination-folder allowlist (`parent_folder_allowlist`) and
-`drive.move_file`'s move-approval (`move_within_approved_folders`) are targets of the
-`sandbox_folders` grant's `write` capability too, alongside the rest — one trusted sandbox folder
-now covers writing into it, uploading into it, and moving a file out of it, not only writing to a
-file already there. They use their own rule names rather than `approved_sandbox_folder` since their
-underlying checks differ (a destination-folder arg for uploads; the file's current parent folder,
-not the move's destination, for moves — see [Auto-accept rules](#auto-accept-rules) below), but take
-the same plain folder-id-list value the grant already compiles.
+A rule always stores its verbs expanded, never as "every verb in this family" — a future verb
+added to a family is never retroactively granted by a rule written before it existed. A
+multi-result operation (`search`) is checked against **every** item a call actually returned, not
+a single argument; a `move` is checked against **both** the source and the destination, so a
+trusted-folder rule can never be used to move a file *out* of the folder it trusts.
 
-### Settings page UX
+<a id="three-f5-operation-groups"></a>Three operation groups have no resource identity a popup
+could derive a proposal from, so Settings and the bridge are the only way to configure them: Apps
+Script's tools (scoped by `apps_script.project`, a real identity scope — just not one any call's
+own arguments suggest a value for), Gmail's two filter tools (`gmail.anything`, since a filter's
+criteria/action combination is too open-ended for identity scoping and an unconditional rule here
+is exactly the risk worth surfacing rather than hiding), and Slack's group-chat creation (no scope
+type measures "the audience", so it stays ungated by resource identity, gated only by verb).
 
-As of the policy v2 redesign's P6, the settings page's per-connector **Auto-accept Rules** sidebar
-(one page per connector, each with its own **Trusted \<Resource\>** grant sections and `rule_type`/
-`value` rows, plus read-only **Governed by Drive** pointer pages for Sheets and Docs) is gone,
-replaced by a single **Auto-accept** page: one filterable list across every connector, backed
-directly by the on-disk v2 `auto_accept:` schema (see `policy/store.py`'s own module docstring for
-that format, and `policy/__init__.py`'s package docstring for the redesign this is P6 of) rather
-than `auto_accept_rules`/`auto_accept_grants` below. Each rule renders as a plain-language sentence
-(`policy/describe.py`) with color-coded verb chips (read/write/send/destructive) and an "Unblocks N
-tools" disclosure listing exactly which tools it covers before you decide whether to keep or remove
-it. A connector/verb-family filter bar and a free-text search narrow the list; an **Add a rule** form
-at the bottom picks a scope (grouped by connector, `policy/propose.py`'s own catalogue), an optional
-value, and which verbs to allow, and writes straight to the v2 section (`SettingsController.
-add_policy_rule`). **✕ Remove** deletes a rule entirely — narrowing an existing rule is always
-remove-and-re-add-narrower, not an in-place edit, matching the model's own additive-only design.
+### The three surfaces
 
-The rest of this section (`auto_accept_rules`/`auto_accept_grants`, their YAML shape, migration, and
-name resolution) still describes what actually gets evaluated and, for a hand-edited or not-yet-
-migrated install, is still true on disk — the Settings page above is now a v2-native *view* onto (and
-writer of) that same underlying trust, not a description of its own storage format.
+**The approval popup** — clicking **Always allow** proposes the narrowest rule that covers the
+item just reviewed: one scope, the single verb just gated, nothing wider. The confirmation dialog
+then offers further verbs as named widening chips (e.g. "also allow format · comment ·
+restructure (4 tools)") before anything is written — the width is shown and chosen, never implied
+by a boolean. Where more than one scope plausibly contains the same item (a file you own that's
+also in an approved folder, say), the popup renders one button per candidate instead of picking
+one for you.
 
-### Web surfaces (`/approvals`, `/settings`)
+**PrivacyFence Settings' Auto-accept page** — one filterable list across every connector, each
+rule rendered as the sentence it is (*"Drive · folder 'Claude scratch space' — allow read,
+update, format, comment · not in a shared drive"*), with an **Unblocks N tools** disclosure
+listing exactly which tools it covers, verb chips colour-coded by family so a rule carrying
+`delete` or a send-family verb is visible without reading closely, and a connector/scope-type/verb
+filter bar. An **Add a rule** form picks a scope, an optional value, and which verbs to allow.
+**✕ Remove** deletes a rule entirely — narrowing an existing rule is always remove-and-re-add-
+narrower, matching the model's own additive-only design, never an in-place edit. Once a rule has
+matched at least once, the page also shows a match count and last-matched date, and offers to
+remove a rule that's never matched.
 
-Every approval card and the settings page above are served over the embedded web server
-(`web/server.py`) — this used to run
-alongside a native macOS menu bar/approval dialogs/settings window; that native UI
-layer was later deleted entirely ("two approval surfaces means two places for a security fix to
-land"), so the web surface is now the only one, on every platform this daemon runs on. Two config
-keys under `web:` in `settings.yaml`:
+**The MCP bridge** — `privacyfence_list_policy` lists every configured rule (with its stable id,
+sentence, and covered tools) plus the scope catalogue `privacyfence_propose_policy_change`
+validates a submission against; `privacyfence_propose_policy_change` adds, updates, or removes a
+rule, blocking on the same confirmation dialog the popup's Always-allow uses. A verb a scope type
+cannot govern, or a value-needing scope submitted with none, is rejected before any popup is shown
+— a rule that could never be rendered or removed by any surface is refused at write time rather
+than silently persisted. `privacyfence_check_policy` predicts a call's verdict ahead of time and
+returns `matched_rule_id`, so a planning agent can say *why* something will auto-accept.
 
-- `web.mcp.enabled: true` (default) — turns on the `/mcp` Streamable HTTP endpoint Claude talks to.
-- `web.settings.enabled: true` (default) — turns on `GET /settings` and its
-  `POST /api/settings/{action}` dispatcher. `web.settings.allow_quit` (default `true`) gates whether
-  the About page's Quit button works from a browser at all — always behind an in-page confirmation
-  either way. The approval surface itself (`/approvals`) has no such switch — P10 is the phase with
-  no rollback, since it deleted the fallback.
+The two pre-redesign bridge tools (`privacyfence_list_auto_accept_rules`,
+`privacyfence_propose_auto_accept_rule_change`) are kept as deprecated aliases: the list tool now
+returns the identical v2 listing `privacyfence_list_policy` does, and the propose tool translates
+its older `target: "rule" | "grant"` shape into the same v2 rule the new tool would create.
 
-  `GET /settings/connectors` (issue #396 Part C) serves the identical document with its Connectors
-  section pre-selected server-side, instead of the client-side JS's own `general` default — the
-  one deliberate exception to that page's nav state otherwise being purely client-side (see
-  `settings_window_html.py`'s own module docstring). It's what `privacyfence_status` and
-  `privacyfence_get_sign_in_link(page="connectors")` mint a bootstrap link to, so following that
-  link lands on the screen that actually unblocks an un-onboarded install rather than `/settings`'s
-  own General page. That page also renders a short, dismissible welcome banner (client-side,
-  `renderWelcomeBanner` in `settings_window_html.py`) whenever no connector is authenticated yet.
+Org mode's own per-principal settings page (`web/routes_org_settings.py`) writes the identical
+schema through the identical primitives (`auto_accept.add_policy_v2_rules`/`remove_policy_v2_rule`)
+— a signed-in principal manages their own rules from `/settings` the same way local mode's Auto-
+accept page does, scoped to `current_principal()` throughout so an admin has no more mutation
+power over another principal's rules than that principal does.
 
-Both pages share one origin, one session (the same local `pf_session` cookie §10 of the refactor plan
-already describes), and one shared chrome (`web_shell.py`): a header with Approvals/Settings
-navigation and a live-connection indicator bound to `GET /api/state/stream` — one SSE channel
-carrying both a `settings` event (`SettingsController.snapshot()`, pushed the moment something
-changes it from anywhere — a rule edited over MCP, a background OAuth flow finishing) and an
-`approvals` event (the pending-approval list), so an open tab never needs a manual refresh.
+### Related but distinct mechanisms
 
-`/settings`'s own action dispatcher is an **explicit allowlist** — an unlisted or misspelled action
-name is a 404 before any lookup happens at all, and every argument is validated against the
-controller method's own type annotations (a bad `idx` is a 400, not a 500). Four actions that don't
-fit "POST an action, get a snapshot back" get their own routes instead: uploading an organization
-config bundle (multipart, JSON/`version`-validated, written `0600`), downloading the current week's
-audit log export (`Content-Disposition: attachment`), an in-page "update available" banner
-(Download/Remind Me Later/Skip), and the repo link (a plain `<a href>`, opened client-side — never a
-`subprocess.run(["open", ...])` reachable from an HTTP request, which nothing under `web/` does at
-all, by design).
+**Temp-accept grace window** — an in-memory, non-persisted acceptance for six `popup`-gate writes
+expected to fire repeatedly against the same file in a burst (`drive_sheets_write_range`,
+`drive_sheets_format_range`, `drive_sheets_insert_dimensions`, `drive_add_comment`,
+`drive_docs_edit_content`, `drive_docs_format_content` —
+`auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS`), scoped to one file/spreadsheet for 5 minutes and
+gone on daemon restart. There's no separate button for it: these six popups show only Deny / Allow
+once, with a plain disclosure caption explaining that Allow once also arms the grace window.
+Deliberately *not* offered on `drive_sheets_delete_dimensions` (no undo path) or on
+`drive_sheets_add_sheet`/`drive_sheets_rename_sheet` (one-shot per file, not called in a burst) —
+those get a plain Deny/Allow once with no caption at all.
 
-The `/approvals` list (`docs/approval-list-ui-ux.md`) shows every currently-pending card as its own
-row — connector icon, title, a relative timestamp, a **Deny** button right on the row, and a
-**Review →** link to the full card at `/approvals/{id}`. There is deliberately no **Allow** on the
-row: denying without reading the card can't leak anything, and putting an "Allow" button on a
-one-line summary is exactly the habituation failure the full card exists to prevent. Deciding a card
-navigates back to the list (not a dead "close this tab" page) with a toast saying what happened,
-including the 409 case where a rule created elsewhere already resolved it first.
+### Migration from v1
 
-Desktop notifications (`web.notifications.enabled`, default `true`) are tier 0/1 only — a title-bar
-`(N)` badge and an `aria-live` announcement need no permission at all; `registration.showNotification
-()` (via `resources/sw.js`, a service worker with no `push` handler and no cache) fires while a tab
-is open but unfocused, after the browser's own permission prompt, itself only ever offered once,
-right after a person's first decision (never on page load). The notification body is always the bare
-pending count — never a connector, tool, or row title, several of which can carry real gated content
-(an event title, a contact name) — until a real per-field allowlist for the richer `standard`/
-`detailed` levels ships. Push notifications for a closed tab (tier 2) are `org`-mode work, not built
-yet.
+A not-yet-migrated, hand-edited `settings.yaml`'s `auto_accept_rules`/`auto_accept_grants`
+sections are folded into the v2 `auto_accept:` section once, automatically, the next time the
+daemon starts (`policy.compat.migrate_to_policy_v2`, run from `daemon_main.run_app` for the local
+principal and from `daemon_main._load_principal_settings` for every org principal). Migration is
+provably behaviour-preserving: it can only ever produce the *exact* rule set the old two-model
+config would have evaluated, backed by an equivalence harness that checks every predicate and
+every fixture against the pre-redesign implementation. A migration that actually changed anything
+backs up the pre-migration file to `settings.yaml.bak` first and logs a summary naming every rule
+whose expansion carries a destructive or send-family verb — surfacing what a grant's boolean used
+to hide rather than silently dropping it.
 
-### Name resolution
-
-Grant rows show the resource's real name, resolved via the same connector API calls used
-elsewhere in the daemon (e.g. `drive_get_file_metadata`, `tasks_list_task_lists`), cached
-in-memory (short TTL) and on disk (`resource_name_cache.json` next to the rest of PrivacyFence's
-data) so a name is available immediately even before a connector has reconnected this session.
-Resolution never blocks or changes an auto-accept decision — a row falls back to the ID itself,
-annotated "(resolving…)" or "(connect \<Connector\> to see its name)", if a name isn't available
-yet or the connector isn't currently authenticated.
-
-### Relationship to `auto_accept_rules`
-
-`auto_accept_grants` and `auto_accept_rules` are both read every time rules are (re)loaded — a
-grant's enabled capabilities compile into the exact same `{rule, value}` shape a hand-written entry
-under `auto_accept_rules` already used, so the evaluator itself has no separate code path for
-grants. Existing hand-written `auto_accept_rules` entries keep working unmodified.
-
-On first startup after upgrading to a version with this feature, PrivacyFence looks for
-`auto_accept_rules` entries that exactly match what a grant's capability would already produce —
-i.e. the same rule value repeated identically across *every* operation key that capability covers
-— and folds those into `auto_accept_grants` automatically, removing the now-redundant
-`auto_accept_rules` entries. This runs once (tracked by a `migrated_to_grants_v1` marker) and is
-logged at `INFO` level. A **partial** match (the value present on some but not all of a
-capability's operation keys) is deliberately left alone rather than migrated, since folding it in
-would silently widen auto-accept to operation keys never explicitly configured — those stay under
-`auto_accept_rules`, visible and removable from the connector's page in PrivacyFence Settings, but no
-longer offered as something "+ Add rule…" creates fresh (steering new configuration toward the
-grants model without breaking what's already there).
+`auto_accept_rules`/`auto_accept_grants` are never deleted or written to again after migration —
+they stay on disk, readable, for reference on a hand-edited install. Nothing evaluates them
+directly anymore; the migrated v2 section is the only thing any surface reads or writes going
+forward.
 
 ---
-
-## Auto-accept rules
-
-Beyond the connector/resource-scoped [grants](#auto-accept-grants) above, routine, low-risk
-requests can also be approved automatically based on an *attribute* of the request rather than a
-specific resource's identity — sender domain, label, file type, and similar, where there's no
-single resource ID to grant trust to once. These stay configured per operation in
-`config/settings.yaml` under `auto_accept_rules`. When a rule matches, the gate is bypassed and the
-request is logged as `auto_accepted`.
-
-### Available rules
-
-**Gmail**
-
-| Rule | Matches when… |
-|------|--------------|
-| `i_am_sender` | The authenticated account is the sender |
-| `i_am_sole_recipient` | The only recipient is the authenticated account |
-| `trusted_sender_domain` | Sender's domain is in the allowlist, including subdomains (e.g. `mail.trusted.com` matches an allowlisted `trusted.com`) |
-| `label_match` | Message carries one of the specified labels |
-| `age_threshold_days` | Message is older than N days |
-| `no_attachments` | Message has no attachments |
-
-These apply to Gmail's read tools. Gmail's write tools (`gmail_create_draft`, `gmail_reply_draft`,
-`gmail_reply_all_draft` and their `_with_attachments` counterparts, `gmail_add_label`,
-`gmail_remove_label`, `gmail_create_label`) have their own rules:
-
-| Rule | Matches when… |
-|------|--------------|
-| `to_is_myself` | Every recipient of the draft/reply is the authenticated account itself |
-| `approved_recipient_domain` | Every recipient's domain is in the allowlist |
-| `label_name_allowlist` | The label being added/removed/created is in the allowlist |
-| `always_allow` | Unconditional — matches every call, regardless of recipient |
-
-`always_allow` (`gmail.create_draft` only, of these three) is deliberately broader than
-`to_is_myself`/`approved_recipient_domain`: a draft never sends itself, so "always auto-accept
-drafting, I review before it sends anyway" is a coherent policy independent of who the draft is
-addressed to. It's the same value-less rule shape as `i_am_owner`/`dm_with_myself` — presence under
-an operation key is the whole condition — see [Google Calendar](#google-calendar) below for its
-other two uses.
-
-`gmail_create_filter` and `gmail_update_filter` have no built-in rule and always prompt — a
-filter's criteria/action combination is too open-ended for a simple allowlist match.
-
-**Google Drive**
-
-| Rule | Matches when… |
-|------|--------------|
-| `i_am_owner` / `created_by_me` | Authenticated account owns the file |
-| `approved_folder` | File is in an approved folder (by Drive folder ID) |
-| `approved_sandbox_folder` | File is in an approved sandbox folder |
-| `move_within_approved_folders` | Move operation stays within approved folders |
-| `file_type_allowlist` | File MIME type is in the allowlist |
-| `created_this_session` | File was created by Claude in the current session |
-| `shared_drive_exclusion` | File is NOT on a shared drive |
-
-`drive_upload_file` additionally supports `parent_folder_allowlist` (matches when the upload's
-destination folder ID is in the allowlist).
-
-> **`approved_folder`, `approved_sandbox_folder`, `parent_folder_allowlist`, and
-> `move_within_approved_folders` are all grant-managed** — see
-> [Auto-accept grants](#auto-accept-grants) → `drive.folders` / `drive.sandbox_folders`. Add the
-> folder there once (from PrivacyFence Settings' **Auto-accept** page's "Drive — folder" scope, or by
-> hand under `auto_accept_grants`) and it applies across
-> every operation key below automatically, instead of needing the same folder ID added to each one
-> separately — including
-> `drive_upload_file`'s destination-folder check and `drive_move_file`'s move-approval, which use
-> their own rule names (different underlying check — see below) but the same sandbox-folder grant.
-
-The same rules apply to the `drive_sheets_*` tools, under their own operation keys so they can be
-configured independently of plain-file Drive operations: `sheets.read_values` (`i_am_owner`,
-`created_by_me`, `approved_folder`, `created_this_session`, `shared_drive_exclusion`) and
-`sheets.write_range` / `sheets.add_sheet` / `sheets.rename_sheet` / `sheets.format_range` /
-`sheets.insert_dimensions` / `sheets.delete_dimensions`
-(`i_am_owner`, `approved_sandbox_folder`, `created_this_session`). A spreadsheet is a Drive file,
-so e.g. `created_this_session` fires for a spreadsheet `drive_sheets_create` made earlier in the
-same conversation. `approved_folder`/`approved_sandbox_folder` on these seven operation keys
-(`sheets.read_values` plus the six `sheets.*` writes) are the same grant-managed rules as above —
-one `drive.folders`/`drive.sandbox_folders` grant covers all of plain Drive reads/writes and every
-one of these `sheets.*` operations at once, instead of needing the same folder ID added to each one
-separately (the old, still-fully-supported way — configure each rule independently under
-`auto_accept_rules`, as before grants existed).
-
-Clicking **Always allow** on a "Read Sheet Values" prompt proposes the same `i_am_owner`/
-`approved_folder` candidate(s) as `drive.read_file_contents`/`download_file` — see
-[Multiple matching candidates](always-allow-rules-reference.md#multiple-matching-candidates) for how
-the popup renders one button per candidate when both apply.
-
-`drive.comment_file` (`drive_add_comment` — also used for comments on Docs and Sheets, since those
-ride the Drive connector's OAuth grant) supports `i_am_owner`, `approved_sandbox_folder`, and
-`created_this_session` the same way plain Drive files do. `docs.edit_content` and
-`docs.format_content` (`drive_docs_edit_content`/`drive_docs_format_content`) support the same rules
-`drive.write_doc` does — `i_am_owner`, `approved_sandbox_folder`, `created_this_session` — under
-their own operation keys. `approved_sandbox_folder` here is the same `drive.sandbox_folders` grant
-covered above — enabling its `write` capability auto-accepts `drive.comment_file`,
-`docs.edit_content`/`docs.format_content`, `drive.upload_file`, and `drive.move_file` too, alongside
-`drive.write_file`/`drive.write_doc` and every `sheets.*` write.
-
-**Every one of Drive's write ops offers Always allow** — see
-[Write tools](always-allow-rules-reference.md#write-tools) for the full table; most propose
-`approved_sandbox_folder` from the file's current parent folder(s), `drive.upload_file` proposes
-`parent_folder_allowlist` from the upload's destination folder, and `drive.move_file` proposes
-`move_within_approved_folders` from the file's folder *before* the move. Some also still get a
-temp-accept grace window on top (see
-[Related but distinct mechanisms](always-allow-rules-reference.md#related-but-distinct-mechanisms)).
-`sheets.write_range`, `sheets.format_range`,
-`sheets.insert_dimensions`, `drive.comment_file`, `docs.edit_content`, and `docs.format_content`
-are the exception: clicking Allow once on one of these also arms an in-memory, non-persisted
-acceptance scoped to one spreadsheet/file for 5 minutes — disclosed in the popup with a plain
-caption, not a separate button — see
-[Related but distinct mechanisms](always-allow-rules-reference.md#related-but-distinct-mechanisms).
-`sheets.add_sheet` and `sheets.rename_sheet`
-get neither; they're one-shot per file rather than something called repeatedly in a burst, so a
-standing rule (configured as above) is the only way to skip their popup. `sheets.delete_dimensions`
-also deliberately gets neither, despite being called in the same kind of burst
-`sheets.insert_dimensions` is: unlike insert/format, deleting rows or columns removes cell content
-with no undo path through PrivacyFence, so it only ever gets the standing-rule treatment — see
-[Related but distinct mechanisms](always-allow-rules-reference.md#related-but-distinct-mechanisms)
-for the reasoning.
-
-**Slack**
-
-| Rule | Matches when… |
-|------|--------------|
-| `dm_with_myself` / `send_to_myself` | Target channel is a self-DM |
-| `group_dm` | Target channel is a group DM (Slack's "mpim" type — a private multi-person conversation, distinct from a 1:1 DM and from a private channel) |
-| `approved_channel` / `approved_recipient` | Channel ID is in the allowlist |
-| `approved_channel_all_results` | **Every** message returned is from a channel in the allowlist |
-| `public_channels_only` | All messages are from public channels |
-| `no_file_attachments` | Messages have no file attachments |
-| `reply_in_existing_thread` | Message is a reply (has `thread_ts`) |
-
-`group_dm` recognizes the group-DM *shape* itself as a trustable category, rather than requiring
-each group's channel ID to be individually allowlisted under `approved_channel` the way a regular
-channel is. Channel type isn't derivable from the ID alone (a private channel can share the same
-`G`-prefixed shape a group DM uses), so `slack_get_channel_history`/
-`slack_get_thread_replies` resolve it via `SlackClient.resolve_is_group_dm()` (a cached
-`conversations.info` lookup) before the call reaches the gate, alongside the channel-name lookup
-`slack.py`'s preview text already does.
-
-> **`approved_channel`/`approved_recipient` are grant-managed** — see
-> [Auto-accept grants](#auto-accept-grants) → `slack.channels`. One channel grant's `read`/`send`
-> capabilities cover both rules above.
-
-`approved_channel` reads a single `channel_id` out of the call's own arguments, which
-`slack_get_channel_history`/`slack_get_thread_replies` always provide but `slack_search_messages`
-never does — a search can match messages across any number of channels, so there's no one channel
-to check against the allowlist. `approved_channel_all_results` is the counterpart for that case: it
-reads every message actually returned and only matches when **all** of them are on the allowlist,
-gating the whole search if even one result isn't. Configuring it (or `approved_channel`, since both
-share `slack.read_messages`) once covers reads, thread reads, *and* searches of the approved
-channel(s) alike.
-
-**Google Calendar**
-
-| Rule | Matches when… |
-|------|--------------|
-| `i_am_organizer` | Authenticated account is the event organizer |
-| `no_external_attendees` | All attendees share the same email domain |
-| `personal_calendar` | Event is from a specified calendar ID |
-| `past_event` | Event end time is in the past |
-| `time_window_days` | Event starts within the next N days |
-| `no_conferencing_link` | Event has no video conferencing link |
-| `non_private_event` | The event's visibility is not `private` |
-| `always_allow` | Unconditional — `calendar.out_of_office`/`calendar.working_location` only (see below) |
-
-> **`personal_calendar` is grant-managed** — see [Auto-accept grants](#auto-accept-grants) →
-> `calendar.calendars`. One calendar grant's `read`/`write` capabilities cover
-> `calendar.read_event_details`, `calendar.create_modify_event`, `calendar.set_visibility`,
-> `calendar.set_color`, and `calendar.delete_event`.
-
-`calendar_create_out_of_office` (`calendar.out_of_office`) and `calendar_set_working_location`
-(`calendar.working_location`) each have their own operation key, but none of the rules above apply
-to either — both always act on your own primary calendar with no organizer/attendee/other-calendar
-concept for these rules to check. Like `gmail.create_draft` above, their only configurable
-auto-accept is the unconditional `always_allow` — there's no narrower resource identity to scope a
-rule to, so it's a plain yes/no rather than the organizer/calendar-scoped rules
-`calendar_create_event`/`calendar_update_event` support.
-
-`calendar_set_event_visibility` (`calendar.set_visibility`), `calendar_set_event_color`
-(`calendar.set_color`), and `calendar_delete_event` (`calendar.delete_event`) are writes like
-`calendar_create_event`/`calendar_update_event`, so all three share `calendar.create_modify_event`'s
-rule set (`i_am_organizer`, `no_external_attendees`, `personal_calendar`) rather than getting a rule
-of their own — `non_private_event` only applies to `calendar.read_event_details`. Clicking
-**Always allow** on a "Read Calendar Event" prompt proposes `non_private_event` when the event isn't
-private and neither `i_am_organizer` nor `no_external_attendees` apply. None of these rules consider
-`calendar_update_event`/`calendar_delete_event`'s own `scope` parameter — an auto-accept rule that
-matches the event still auto-accepts regardless of whether the call is scoped to this instance, the
-rest of the series, or all of it.
-
-**Salesforce**
-
-| Rule | Matches when… |
-|------|--------------|
-| `approved_object_types` | Object type (Account, Contact, …) is in the allowlist — for `salesforce_search` (`salesforce.search`), every object type in its comma-separated `object_types` must be on the allowlist, not just one |
-| `approved_report_ids` | Report ID is in the approved list |
-
-> **`approved_report_ids` is grant-managed** — see [Auto-accept grants](#auto-accept-grants) →
-> `salesforce.reports`. `approved_object_types` is a small fixed vocabulary (not a resource
-> identity) and stays a plain rule.
-
-`salesforce_search` with no `object_types` given reaches Salesforce's whole default set of
-globally-searchable objects — too broad for `approved_object_types` to ever match, so an unscoped
-search always prompts (or needs a differently-shaped rule, none of which exist yet).
-
-**Google Contacts**
-
-| Rule | Matches when… |
-|------|--------------|
-| `no_contact_info_change` | The update doesn't touch `emails` or `phones` (name/organization/notes-only edits) |
-
-**Jira**
-
-| Rule | Matches when… |
-|------|--------------|
-| `i_am_reporter` | Authenticated account is the issue's reporter |
-| `i_am_assignee` | Authenticated account is the issue's assignee |
-| `approved_project_keys` | Issue's project key is in the allowlist |
-
-`jira_transition_issue` (`jira.transition_issue`) also accepts `approved_project_keys` — it derives
-the project from `issue_key` the same way `jira_get_issue`/`jira_update_issue` do. `i_am_reporter` /
-`i_am_assignee` don't apply to it, since a transition call doesn't carry the issue's reporter/assignee.
-
-> **`approved_project_keys` is grant-managed** — see [Auto-accept grants](#auto-accept-grants) →
-> `jira.projects`. One project grant's `read`/`create`/`comment`/`update`/`transition`
-> capabilities cover all five rules above at once, instead of adding the same project key
-> separately to `jira.read_issue`, `jira.create_issue`, `jira.add_comment`, `jira.update_issue`,
-> and `jira.transition_issue`.
-
-**Confluence**
-
-| Rule | Matches when… |
-|------|--------------|
-| `i_am_author` | Authenticated account is the page's author |
-| `approved_space_keys` | Page's space key is in the allowlist |
-
-> **`approved_space_keys` is grant-managed** — see [Auto-accept grants](#auto-accept-grants) →
-> `confluence.spaces`. One space grant's `read`/`create`/`update` capabilities cover
-> `confluence.read_page`/`confluence.download_attachment`, `confluence.create_page`, and
-> `confluence.update_page` at once.
-
-**Telegram**
-
-| Rule | Matches when… |
-|------|--------------|
-| `approved_chats` | Chat ID is in the allowlist |
-| `approved_chats_all_results` | **Every** message returned is from a chat in the allowlist |
-| `no_media_attachments` | Messages have no media attachments |
-
-> **`approved_chats` is grant-managed** — see [Auto-accept grants](#auto-accept-grants) →
-> `telegram.chats`. One chat grant's `read`/`send` capabilities cover both
-> `telegram.read_chat_messages` and `telegram.send_message`.
-
-`telegram_search_messages` shares the `telegram.read_chat_messages` operation key with
-`telegram_get_messages` (an upgrade from an older release with a separate `telegram.search_messages`
-key migrates any existing rules onto the shared key automatically, see
-`auto_accept.migrate_telegram_search_operation_key()`), the same way `slack_search_messages`
-already shares `slack.read_messages`. `approved_chats` reads a single `chat_id` out of the call's
-arguments, which a search never provides (it can match across any number of chats); configuring it
-also covers `approved_chats_all_results`, the counterpart evaluated against every result a search
-actually returns, matching only when **all** of them are on the allowlist.
-
-**Google Tasks**
-
-| Rule | Matches when… |
-|------|--------------|
-| `approved_task_list` | Task list is in the allowlist — for `tasks_move_task`, both the source and destination list must be |
-
-`approved_task_list` applies independently to each of `tasks.create_task`, `tasks.update_task`,
-`tasks.complete_task`, `tasks.uncomplete_task`, and `tasks.move_task`, so you can e.g. auto-accept
-edits within a personal list while still requiring review for creates.
-
-> **`approved_task_list` is grant-managed** — see [Auto-accept grants](#auto-accept-grants) →
-> `tasks.task_lists`. One task-list grant's `create`/`edit`/`complete`/`move` capabilities cover
-> all five task-write operations at once (`complete` covers both complete and uncomplete).
-
-> **Google Contacts**: `contacts_list`, `contacts_search`, and `contacts_get` are unconditionally auto-accepted. `contacts_update`, `contacts_create`, `contacts_add_label`, and `contacts_remove_label` are all `popup`-gated; `no_contact_info_change` above is the only configurable auto-accept rule, and it applies only to `contacts_update`. Contact deletion is not supported. **Google Tasks**: all three read tools plus `tasks_list_task_lists` are unconditionally auto-accepted; the five write tools (`tasks_create_task`, `tasks_update_task`, `tasks_complete_task`, `tasks_uncomplete_task`, `tasks_move_task`) are `popup`-gated, each independently configurable via `approved_task_list` above. **Telegram**: `telegram_list_chats` is unconditionally auto-accepted; `telegram_get_messages` and `telegram_search_messages` are `review`-gated by default but configurable via the rules above (sharing one operation key, `telegram.read_chat_messages`); `telegram_send_message` is `popup`-gated with no configurable rule. **Jira and Confluence** read tools (`jira_get_issue`, `confluence_get_page`, `confluence_get_page_by_title`, `confluence_download_attachment`) are `review`-gated by default but configurable via the rules above; their write tools remain `popup`-gated with no configurable rule, except `jira_transition_issue`, which accepts `approved_project_keys` as noted above. **Apps Script**: `apps_script_list_projects` is unconditionally auto-accepted; `apps_script_get_content` and `apps_script_get_execution_log` are `review`-gated with no configurable rule; `apps_script_write_content` is `popup`-gated with no configurable rule (Allow-once-only at first cut — see issue #154 open question 2).
 
 ## Privacy filtering and PII
 

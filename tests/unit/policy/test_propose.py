@@ -1,18 +1,20 @@
 """Tests for privacyfence.policy.propose (P5 of the policy v2 redesign).
 
-Three things are being proved here, in the order the redesign proposal's P5 asks for them:
+Two things are being proved here, in the order the redesign proposal's P5 asks for them:
 
 1. **The catalogue is a faithful join, not a sixth hand-kept table.** Every one of the 21 grant
-   capabilities in `resource_grants.GRANT_RESOURCE_TYPES` is reproduced exactly by deriving
+   capabilities in `resource_registry.GRANT_RESOURCE_TYPES` is reproduced exactly by deriving
    `(operation_key, rule_name)` pairs from the catalogue's declared verbs plus P1's registry --
    including the Drive sandbox folder's thirteen, which is the width F2 is about.
-2. **Nothing the v1 suggestion tables offered is lost.** The five tables stay the oracle: for a
-   corpus of real gated calls, every rule `auto_accept.suggest_rule_choices`/`suggest_write_rule`
-   proposes is still proposed here. The handful of proposals v2 *adds* is enumerated explicitly
-   rather than waved through -- see `EXTRA_PROPOSALS`.
-3. **One writer.** The popup's intent and Settings' intent, for the same scope and the same verbs,
-   produce byte-identical rules; and those rules round-trip back through
-   `policy.compat.compile_rules`, so what the writer persists is exactly what the compiler reads.
+2. **One writer.** The popup's intent and Settings' intent, for the same scope and the same verbs,
+   produce byte-identical rules.
+
+(P9 removed the v1-persistence path this file used to also check here -- `propose.v1_rule_name`,
+`ProposableScope.v1_rule`, `propose.apply_rules`, `propose.v1_entries`, and the v1 suggestion
+tables (`auto_accept.suggest_rule_choices`/`suggest_write_rule`/`known_rule_names`) this file used
+to cross-check against are all gone; every rule now lives in the v2 `auto_accept:` store instead,
+and `rules_for_proposal`/`rules_for_scope_group`/`proposals_for` -- what's left under test here --
+are unchanged.)
 """
 from __future__ import annotations
 
@@ -20,9 +22,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from privacyfence import auto_accept, resource_grants
-from privacyfence.policy import compat, propose, registry, scopes, store
-from privacyfence.policy.engine import PolicyRule
+from privacyfence.policy import propose, registry, resource_registry, scopes, store
 from privacyfence.policy.registry import TOOL_REGISTRY, Verb, VerbFamily
 
 from ...helpers import make_ctx
@@ -134,47 +134,8 @@ CORPUS: tuple[tuple[str, object], ...] = (
     ("contacts_add_label", make_ctx(connector="contacts", args={"label_name": "Friends", "resource_name": "c1"})),
 )
 
-# The only proposals v2 makes that v1's five tables did not, keyed by (tool, sorted v1 suggestions).
-# Every one is a case where v1's own *derivation* was narrower than the rule it could already
-# evaluate, not a case where v2 trusts something new -- accepting any of these still writes exactly
-# one operation key, the same width v1's "Always allow" writes.
-EXTRA_PROPOSALS: dict[tuple[str, tuple[str, ...]], tuple[str, ...]] = {
-    # v1's Gmail branch is an if/else: my own message proposes `i_am_sender` and stops, so the
-    # sender-domain rule it could equally have offered is unreachable from that popup.
-    ("gmail_get_message", ("i_am_sender",)): ("trusted_sender_domain",),
-    # Same shape on Slack: a DM or group DM short-circuits before the channel-id branch, so the
-    # narrower "this one channel" rule is never offered for a channel that is also a DM.
-    ("slack_get_channel_history", ("dm_with_myself",)): ("approved_channel",),
-    ("slack_get_channel_history", ("group_dm",)): ("approved_channel",),
-    # The calendar read grant already scopes `calendar.read_event_details` to a calendar id; only
-    # the popup's own family (i_am_organizer + two conditions) didn't know about it. F2 exactly.
-    ("calendar_get_event_details", ("i_am_organizer", "no_external_attendees", "non_private_event")):
-        ("personal_calendar",),
-    # Contacts labels are gated and have a perfectly good scope, but appear in no suggestion table
-    # and no grant -- reachable today only by hand-editing settings.yaml.
-    ("contacts_add_label", ()): ("label_name_allowlist",),
-    # Sending is grant-expressible on both connectors ("Send auto-accept" on a trusted channel or
-    # chat) and offered by no popup at all: `WRITE_RULE_SUGGESTIONS` has no entry for either send
-    # operation, so today Settings or the bridge is the only way to stop being asked. F2's other
-    # half -- and the reason these proposals stay one operation key wide and render under a
-    # send-family verb.
-    ("slack_send_message", ()): ("approved_recipient",),
-    ("telegram_send_message", ()): ("approved_chats",),
-}
-
-
 def _sorted_dicts(rules) -> list[dict]:
     return sorted((store.rule_to_dict(rule) for rule in rules), key=lambda d: d["predicate"])
-
-
-def _v1_suggestions(operation: str, ctx) -> list[str]:
-    """Every rule name v1's own tables would offer for this call -- the read-side family/choices
-    path and the write-side table both, since a tool is only ever on one of them."""
-    names = [rule for rule, _value in auto_accept.suggest_rule_choices(operation, ctx)]
-    write = auto_accept.suggest_write_rule(operation, ctx)
-    if write is not None:
-        names.append(write[0])
-    return names
 
 
 class TestCatalogueIsDerived:
@@ -185,7 +146,7 @@ class TestCatalogueIsDerived:
         "resource_type,capability",
         [
             (rt, cap)
-            for rt in resource_grants.GRANT_RESOURCE_TYPES
+            for rt in resource_registry.GRANT_RESOURCE_TYPES
             for cap in rt.capabilities
         ],
         ids=lambda arg: arg if isinstance(arg, str) else f"{arg.connector}.{arg.config_key}",
@@ -222,14 +183,6 @@ class TestCatalogueIsDerived:
     def test_every_catalogue_predicate_is_a_real_selector(self):
         for entry in propose.PROPOSABLE_SCOPES:
             assert entry.predicate in scopes.SCOPE_SELECTORS, entry.id
-
-    def test_every_catalogue_scope_is_persistable_by_v1(self):
-        """P5's writer still persists into `auto_accept_rules`, so every proposable scope has to
-        have a v1 rule name the evaluator can actually evaluate. A scope without one would produce
-        P0·3's hole from the other direction: a rule on disk that never matches."""
-        known = auto_accept.known_rule_names()
-        for entry in propose.PROPOSABLE_SCOPES:
-            assert entry.v1_rule in known, entry.id
 
     def test_operations_stay_inside_the_scopes_connector(self):
         for entry in propose.PROPOSABLE_SCOPES:
@@ -282,21 +235,6 @@ class TestCatalogueIsDerived:
 class TestProposalsAgainstTheV1Tables:
     """The five v1 suggestion tables remain the oracle (the redesign proposal's own posture: "the
     old functions are the oracle, not the spec")."""
-
-    @pytest.mark.parametrize("tool,ctx", CORPUS, ids=[f"{t}-{i}" for i, (t, _c) in enumerate(CORPUS)])
-    def test_no_v1_suggestion_is_lost(self, tool, ctx):
-        operation = TOOL_REGISTRY[tool].operation
-        proposed = {p.scope.v1_rule for p in propose.proposals_for(tool, ctx)}
-        assert set(_v1_suggestions(operation, ctx)) <= proposed
-
-    @pytest.mark.parametrize("tool,ctx", CORPUS, ids=[f"{t}-{i}" for i, (t, _c) in enumerate(CORPUS)])
-    def test_extra_proposals_are_the_enumerated_ones(self, tool, ctx):
-        operation = TOOL_REGISTRY[tool].operation
-        v1 = tuple(sorted(_v1_suggestions(operation, ctx)))
-        extra = tuple(sorted(
-            {p.scope.v1_rule for p in propose.proposals_for(tool, ctx)} - set(v1)
-        ))
-        assert extra == tuple(sorted(EXTRA_PROPOSALS.get((tool, v1), ())))
 
     @pytest.mark.parametrize("tool,ctx", CORPUS, ids=[f"{t}-{i}" for i, (t, _c) in enumerate(CORPUS)])
     def test_every_proposal_would_have_accepted_the_item_it_came_from(self, tool, ctx):
@@ -442,18 +380,6 @@ class TestOneWriter:
         settings = propose.rules_for_scope_group("drive.folder", ["FOLDER1"], self.SANDBOX_WRITE_VERBS)
         assert [store.rule_to_dict(r) for r in popup] == [store.rule_to_dict(r) for r in settings]
 
-    def test_taking_every_write_widening_reproduces_the_sandbox_grant(self):
-        """F2 stated as an equality: the width the "Write auto-accept" toggle always had is now
-        something the popup can offer explicitly, and it is the same width."""
-        rules = propose.rules_for_scope_group("drive.folder", ["FOLDER1"], self.SANDBOX_WRITE_VERBS)
-        written = {(operation, rule_name) for operation, rule_name, _value in propose.v1_entries(rules)}
-        assert written == set(resource_grants.DRIVE_SANDBOX_WRITE_TARGETS)
-
-    def test_read_verbs_reproduce_the_folder_read_grant(self):
-        rules = propose.rules_for_scope_group("drive.folder", ["FOLDER1"], (Verb.READ, Verb.DOWNLOAD))
-        written = {(operation, rule_name) for operation, rule_name, _value in propose.v1_entries(rules)}
-        assert written == set(resource_grants.DRIVE_FOLDER_READ_TARGETS)
-
     def test_rules_are_merged_under_stable_content_derived_ids(self):
         rules = propose.rules_for_scope_group("drive.folder", ["FOLDER1"], self.SANDBOX_WRITE_VERBS)
         # One row per predicate, not one per operation key -- and the id is the one `policy.store`
@@ -471,72 +397,3 @@ class TestOneWriter:
 
     def test_an_unknown_scope_group_yields_no_rules(self):
         assert propose.rules_for_scope_group("nope.nothing", ["x"], (Verb.READ,)) == []
-
-    @pytest.mark.parametrize("tool,ctx", CORPUS, ids=[f"{t}-{i}" for i, (t, _c) in enumerate(CORPUS)])
-    def test_every_proposal_round_trips_through_the_v1_compiler(self, tool, ctx):
-        """`v1_entries` is the exact inverse of `policy.compat.compile_rule_entry`: what the writer
-        persists is what the compiler reads back, including a condition scope's own v1 rule name."""
-        for proposal in propose.proposals_for(tool, ctx):
-            rules = propose.rules_for_proposal(proposal, proposal.widenings)
-            config: dict[str, list[dict]] = {}
-            for operation, rule_name, value in propose.v1_entries(rules):
-                entry: dict = {"rule": rule_name}
-                if value is not None:
-                    entry["value"] = value
-                config.setdefault(operation, []).append(entry)
-            recompiled = store.merge_rules(compat.compile_rules(config))
-            assert _sorted_dicts(recompiled) == _sorted_dicts(rules)
-
-    def test_v1_entries_refuses_a_predicate_v1_cannot_evaluate(self):
-        rule = PolicyRule(id="x", predicate="apps_script.project", value=["s1"],
-                          operations=frozenset({"apps_script.read_content"}))
-        with pytest.raises(ValueError, match="cannot"):
-            propose.v1_entries([rule])
-
-    def test_v1_entries_refuses_a_condition_with_no_v1_name(self, monkeypatch):
-        from privacyfence.policy import conditions
-
-        selector = conditions.CONDITION_SELECTORS["not_private"]
-        monkeypatch.setitem(
-            conditions.CONDITION_SELECTORS, "not_private",
-            conditions.ConditionSelector(
-                name=selector.name, resolves_from=selector.resolves_from, holds=selector.holds, replaces=(),
-            ),
-        )
-        rule = PolicyRule(id="x", predicate="always_allow", value=None,
-                          operations=frozenset({"calendar.read_event_details"}),
-                          conditions=(("not_private", None),))
-        with pytest.raises(ValueError, match="cannot"):
-            propose.v1_entries([rule])
-
-    def test_v1_rule_name_passes_through_a_plain_scope_and_an_unknown_condition(self):
-        assert propose.v1_rule_name("approved_folder", ()) == "approved_folder"
-        assert propose.v1_rule_name("always_allow", ()) == "always_allow"
-        assert propose.v1_rule_name("always_allow", (("nope", None),)) == ""
-
-    def test_apply_rules_writes_every_entry_and_returns_them(self, monkeypatch):
-        written: list[tuple[str, str, object]] = []
-        monkeypatch.setattr(
-            propose, "add_auto_accept_rule",
-            lambda operation, rule_name, value: written.append((operation, rule_name, value)),
-        )
-        rules = propose.rules_for_scope_group("drive.folder", ["FOLDER1"], (Verb.READ, Verb.DOWNLOAD))
-        returned = propose.apply_rules(rules)
-        assert written == returned == sorted(
-            [(op, "approved_folder", ["FOLDER1"]) for op, _rule in resource_grants.DRIVE_FOLDER_READ_TARGETS]
-        )
-
-    def test_apply_rules_writes_nothing_when_any_rule_is_unpersistable(self, monkeypatch):
-        """Resolved in full before the first write, so a bad rule set leaves the config untouched
-        rather than half-applied."""
-        written: list[tuple[str, str, object]] = []
-        monkeypatch.setattr(
-            propose, "add_auto_accept_rule",
-            lambda operation, rule_name, value: written.append((operation, rule_name, value)),
-        )
-        rules = propose.rules_for_scope_group("drive.folder", ["FOLDER1"], (Verb.READ,)) + [
-            PolicyRule(id="x", predicate="drive.file", value=["f1"], operations=frozenset({"drive.read_file_contents"}))
-        ]
-        with pytest.raises(ValueError):
-            propose.apply_rules(rules)
-        assert written == []

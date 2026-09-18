@@ -1,11 +1,10 @@
-"""Name resolution for auto-accept grants (see resource_grants.py).
+"""Name resolution for auto-accept rule values (see policy/resource_registry.py).
 
-The menu bar stores grants by ID (the ground truth the evaluator matches
-on) but should *display* the resource's real name — a folder name, a task
-list name, a channel name — not the opaque ID. This module resolves an ID to
-a name via the relevant connector's own read API (each ``GrantResourceType``
-in resource_grants.py declares its own ``resolver``), and caches the result
-so the menu doesn't hit the network on every rebuild and still has something
+The Auto-accept Settings page shows a rule's value by ID (the ground truth the engine matches on)
+but should *display* the resource's real name — a folder name, a task list name, a channel name —
+not the opaque ID. This module resolves an ID to a name via the relevant connector's own read API
+(each ``GrantResourceType`` in policy/resource_registry.py declares its own ``resolver``), and
+caches the result so the page doesn't hit the network on every rebuild and still has something
 to show immediately after a cold start, before any connector has
 reconnected this session.
 
@@ -34,7 +33,7 @@ from typing import Any
 
 from .paths import user_dir
 from .principal import PrincipalRegistry
-from .resource_grants import GrantResourceType
+from .policy.resource_registry import GrantResourceType
 from .secure_files import atomic_write_json
 
 logger = logging.getLogger(__name__)

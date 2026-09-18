@@ -21,7 +21,6 @@ import pytest
 
 from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.audit_log import current_week, init_audit_logger
-from privacyfence.auto_accept import init_auto_accept_evaluator
 from privacyfence.connector import Connector, ToolSpec
 from privacyfence.gate import is_unattended
 from privacyfence.principal import Principal, principal_scope
@@ -331,7 +330,12 @@ class TestCheckPolicy:
         assert connector.calls == []
 
     def test_popup_tool_matching_args_only_rule_is_auto_accept(self):
-        init_auto_accept_evaluator({"gmail.create_draft": [{"rule": "to_is_myself"}]})
+        from privacyfence import auto_accept
+        from privacyfence.policy import compat
+
+        auto_accept.set_policy_v2_store_rules(
+            compat.compile_rules({"gmail.create_draft": [{"rule": "to_is_myself"}]})
+        )
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail", my_email="me@example.com")})
         result = dispatcher.check_policy(
             "gmail", "gmail_create_draft", {"to": "me@example.com", "subject": "x", "body": "y"},
@@ -375,12 +379,29 @@ class TestCheckPolicy:
 class TestListRules:
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
+        import yaml as _yaml
+
         from privacyfence import auto_accept
+        from privacyfence.policy import compat, store as policy_store
+
         init_audit_logger(str(tmp_path / "audit"))
         self._audit_dir = tmp_path / "audit"
         config_path = tmp_path / "settings.yaml"
-        config_path.write_text("auto_accept_rules: {gmail.read_message: [{rule: i_am_sender}]}\n", encoding="utf-8")
+        # list_rules()/list_policy() now read the on-disk v2 `auto_accept:` section exclusively
+        # (P9) -- write it directly, through the same compiler the real v1 -> v2 migration uses,
+        # rather than the now-gone v1 `auto_accept_rules:` shape.
+        compiled = policy_store.merge_rules(compat.compile_rules({"gmail.read_message": [{"rule": "i_am_sender"}]}))
+        config_path.write_text(
+            _yaml.safe_dump({policy_store.AUTO_ACCEPT_CONFIG_KEY: policy_store.rules_to_config(compiled)}),
+            encoding="utf-8",
+        )
         auto_accept.init_config_path(str(config_path))
+        # merge_rules mints the on-disk row's canonical, content-derived id
+        # (policy.store.rule_id_for) rather than keeping "i_am_sender" as the id --
+        # that human-readable id only survives for a rule compiled straight off v1's
+        # auto_accept_rules on the fly (policy.compat.compile_rule_entry), not one
+        # that's been through the v2 store once.
+        self._expected_id = compiled[0].id
 
     def _read_entries(self):
         week_file = self._audit_dir / f"{current_week()}.jsonl"
@@ -395,13 +416,22 @@ class TestListRules:
         # auto_accept config path initialized instead of raising -- an
         # empty connector set here is enough to exercise that, same as
         # _dispatcher()'s other callers above.
+        #
+        # list_rules() is now a deprecated alias of list_policy() (P9) -- it returns the same
+        # {"rules": [...], "scope_groups": [...]} shape, not a raw v1 auto_accept_rules dict.
         result = _dispatcher({}).list_rules()
-        assert result["auto_accept_rules"]["gmail.read_message"] == [{"rule": "i_am_sender"}]
+        assert len(result["rules"]) == 1
+        row = result["rules"][0]
+        assert row["id"] == self._expected_id
+        assert "gmail.read_message" in row["operations"]
+        assert "gmail_get_message" in row["covered_tools"]
 
     def test_records_a_rules_listed_audit_entry(self):
+        # list_rules() is a deprecated alias of list_policy() (P9) and records the same audit
+        # decision list_policy itself does -- there is no separate "rules_listed" decision anymore.
         _dispatcher({}).list_rules("checking before a scheduled run")
         entries = self._read_entries()
-        assert entries[0]["decision"] == "rules_listed"
+        assert entries[0]["decision"] == "policy_listed"
         assert entries[0]["claude_reason"] == "checking before a scheduled run"
 
 
@@ -749,9 +779,11 @@ class TestProposeRuleChange:
 # --------------------------------------------------------------------------- #
 # P7's exit criterion: "alias tests prove old-shape calls still land the
 # equivalent rule." privacyfence_propose_auto_accept_rule_change/
-# privacyfence_list_auto_accept_rules are kept as deprecated aliases writing
-# the same v1 auto_accept_rules section they always did -- this proves that
-# an old-shape write is still recognized, correctly and by id, by the new
+# privacyfence_list_auto_accept_rules are kept as deprecated aliases for their
+# old v1-shaped request/response shape -- but as of P9 the write itself lands
+# in the same v2 `auto_accept:` section every other surface writes to (there is
+# no more v1 `auto_accept_rules` section being written at all); this proves an
+# old-shape write is still recognized, correctly and by id, by the same v2
 # engine privacyfence_check_policy's matched_rule_id now exposes.
 # --------------------------------------------------------------------------- #
 
@@ -766,6 +798,8 @@ class TestOldShapeAliasLandsTheEquivalentV2Rule:
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
 
     async def test_old_shape_rule_add_is_recognized_by_check_policy_matched_rule_id(self):
+        from privacyfence.policy import store as policy_store
+
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail", my_email="me@corp.com")})
 
         propose_result = await dispatcher.propose_rule_change("s1", {
@@ -779,14 +813,16 @@ class TestOldShapeAliasLandsTheEquivalentV2Rule:
         )
 
         assert check_result["verdict"] == "auto_accept"
-        assert check_result["matched_rule"] == "to_is_myself"
-        # The old-shape write (target="rule") never touched the v2 auto_accept: section on disk --
-        # it persisted into v1's auto_accept_rules exactly as it always has. matched_rule_id still
-        # names the same rule, because policy.compat.compile_rule_entry compiles a scope predicate's
-        # v2 id as the v1 rule name itself: the old call's effect and the new engine's own
-        # understanding of it are provably the same thing, not two different rules that happen to
-        # agree today.
-        assert check_result["matched_rule_id"] == "to_is_myself"
+        # The old-shape write (target="rule") lands in the v2 auto_accept: section (P9): gate.
+        # propose_rule_change compiles it with policy.compat.compile_rule_entry (which mints the
+        # v1 rule name itself as the id) and then persists it the same way every other surface
+        # does, through add_policy_v2_rules -- whose store.merge_rules re-mints that id as the
+        # canonical, content-derived one (policy.store.rule_id_for) any v2 row gets. matched_rule
+        # and matched_rule_id are now always the same value (gate._evaluate_auto_accept's own
+        # docstring), so both come back as that canonical id, not the v1 rule name.
+        expected_id = policy_store.rule_id_for("to_is_myself", None, ())
+        assert check_result["matched_rule"] == expected_id
+        assert check_result["matched_rule_id"] == expected_id
 
     async def test_old_shape_rule_remove_is_no_longer_recognized_afterward(self):
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail", my_email="me@corp.com")})

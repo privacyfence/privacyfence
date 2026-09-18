@@ -15,12 +15,12 @@ from types import SimpleNamespace
 import pytest
 from freezegun import freeze_time
 
-from privacyfence.auto_accept import ARGS_ONLY_RULES, DATA_DEPENDENT_RULES, AutoAcceptEvaluator
 from privacyfence.policy.conditions import CONDITION_SELECTORS, ResolvesFrom, condition_for_predicate
 
 from ...helpers import make_ctx
+from ._v1_reference import ARGS_ONLY_RULES, DATA_DEPENDENT_RULES, V1Reference
 
-_EV = AutoAcceptEvaluator({})
+_EV = V1Reference()
 
 
 def _old(predicate: str):

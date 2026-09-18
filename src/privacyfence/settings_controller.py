@@ -6,7 +6,7 @@ web settings page (when ``web.settings.enabled`` is set) as the only way to
 drive this controller interactively -- editing ``config/settings.yaml`` by
 hand remains the headless path either way. This module itself was already
 headless-first before that (see docs/coding-and-testing-guidelines.md's
-"stay dependency-light" pattern also used by resource_grants.py/
+"stay dependency-light" pattern also used by policy/resource_registry.py/
 privacy_filter.py) and needed no AppKit/PyObjC imports of its own to begin
 with -- ``rumps``/``dialog_window``/``PyObjCTools.AppHelper`` were the
 native host's own dependencies, imported here only to marshal callbacks onto
@@ -43,7 +43,7 @@ from .app_credentials import telegram_app_credentials
 from .approval_ui import get_approval_ui
 from .audit_log import AuditEntry, AuditLogger, compute_security_config_hash, current_week, get_audit_logger
 from .auto_accept import (
-    reload_rules,
+    notify_rules_changed,
     set_policy_v2_store_rules,
     set_rules_changed_listener,
 )
@@ -64,13 +64,10 @@ from .privacy_filter import _parse_group as _parse_privacy_group
 from .privacy_filter import _VALID_POLICIES as PRIVACY_POLICIES
 from .privacy_filter import init_privacy_filter
 from .privacy_filter import PrivacyFilterConfigError
-from .resource_grants import (
+from .policy.resource_registry import (
     GRANT_RESOURCE_TYPES,
     GrantResourceType,
-    build_effective_rules,
-    get_grant_entries,
     resource_type as grant_resource_type,
-    set_grant_entries,
 )
 from .resource_names import get_resolver
 from .secure_files import atomic_write_json, atomic_write_text
@@ -705,7 +702,7 @@ class SettingsController:
     # ------------------------------------------------------------------ #
 
     def _on_rules_changed(self) -> None:
-        """Fired by auto_accept.reload_rules(), possibly from the web
+        """Fired by auto_accept.notify_rules_changed(), possibly from the web
         server's own asyncio thread -- marshal the state push onto the
         main thread."""
         call_on_main(self._push_snapshot)
@@ -770,9 +767,8 @@ class SettingsController:
     def _save_and_reload(self, cfg: dict) -> None:
         self._save_config(cfg)
         try:
-            # Triggers _on_rules_changed() -> a snapshot push, so callers
-            # don't need a separate explicit push after this.
-            reload_rules(build_effective_rules(cfg))
+            # Triggers a snapshot push, so callers don't need a separate explicit push after this.
+            notify_rules_changed()
         except Exception as exc:
             logger.warning("Rule hot-reload failed: %s", exc)
 
@@ -1462,71 +1458,15 @@ class SettingsController:
         return self.snapshot()
 
     def _save_and_reload_policy_v2(self, cfg: dict[str, Any]) -> None:
-        """Persist ``cfg`` and hot-reload the Auto-accept page's own v2-only rule layer (P6) -- plus,
-        via ``_save_and_reload``, the ordinary v1-side hot-reload/snapshot-push machinery every other
-        mutating method here already goes through. A v2-only edit doesn't change what
-        ``build_effective_rules`` computes, but that call's own listener notifications are what push
-        a fresh snapshot to every open tab and re-check any pending approval -- see
-        ``_save_and_reload``'s own docstring."""
+        """Persist ``cfg`` and hot-reload the v2 rule cache (``set_policy_v2_store_rules``) plus
+        fire the rules-changed listener broadcast (``notify_rules_changed``, via
+        ``_save_and_reload``) that pushes a fresh snapshot to every open tab and re-checks any
+        pending approval."""
         self._save_and_reload(cfg)
         try:
             set_policy_v2_store_rules(policy_store.compile_rules_from_config(cfg))
         except Exception as exc:
             logger.warning("Policy v2 store hot-reload failed: %s", exc)
-
-    # ------------------------------------------------------------------ #
-    # v1 rule/grant actions -- kept for org mode only (P6). The local Auto-
-    # accept page above (add_policy_rule/remove_policy_rule) is this
-    # controller's only rule/grant writer that any local-mode route still
-    # reaches; these three survive solely because web/routes_org_settings.py
-    # -- a separate, per-principal settings surface for org mode, entirely
-    # unaffected by the policy v2 redesign (it isn't among the surfaces the
-    # redesign proposal's §08 names, and rebuilding it is out of P6's own
-    # scope) -- still offers "add a rule"/"remove a rule"/"remove a grant"
-    # against v1's auto_accept_rules/auto_accept_grants, and web/
-    # org_settings_scope.py's own bucket-classification test requires every
-    # routes_settings._ALLOWED_ACTIONS member to be both a real, callable
-    # SettingsController method and classified there. routes_org_settings.py
-    # itself never calls these methods directly (it mutates auto_accept_
-    # rules/auto_accept_grants straight through auto_accept.py/
-    # resource_grants.py, scoped to current_principal()) -- their only
-    # remaining caller is web/routes_settings.py's generic action dispatcher,
-    # for exactly the org-mode-compatibility reason above.
-    # ------------------------------------------------------------------ #
-
-    def add_rule_row(self, op_key: str) -> dict[str, Any]:
-        cfg = self._load_config()
-        rules = cfg.setdefault("auto_accept_rules", {}).setdefault(op_key, [])
-        rules.append({"rule": ""})
-        self._save_and_reload(cfg)
-        return self.snapshot()
-
-    def remove_rule_row(self, op_key: str, idx: int) -> dict[str, Any]:
-        cfg = self._load_config()
-        rules = cfg.get("auto_accept_rules", {}).get(op_key, [])
-        if idx >= len(rules):
-            return self.snapshot()
-        rules.pop(idx)
-        if rules:
-            cfg["auto_accept_rules"][op_key] = rules
-        else:
-            cfg.get("auto_accept_rules", {}).pop(op_key, None)
-        self._save_and_reload(cfg)
-        return self.snapshot()
-
-    def remove_grant_row(self, connector: str, config_key: str, idx: int) -> dict[str, Any]:
-        rt = grant_resource_type(connector, config_key)
-        if rt is None:
-            return self.snapshot()
-        cfg = self._load_config()
-        grants_cfg = cfg.setdefault("auto_accept_grants", {})
-        entries = get_grant_entries(grants_cfg, rt)
-        if idx >= len(entries):
-            return self.snapshot()
-        entries.pop(idx)
-        set_grant_entries(grants_cfg, rt, entries)
-        self._save_and_reload(cfg)
-        return self.snapshot()
 
     def _resolve_names_async(
         self, rt: GrantResourceType, resource_ids: list[str], client: Any | None

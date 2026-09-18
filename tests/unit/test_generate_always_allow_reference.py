@@ -1,0 +1,44 @@
+"""Drift guard for docs/always-allow-rules-reference.md.
+
+The doc is generated (scripts/generate_always_allow_reference.py's own module docstring explains
+why -- P9 of the policy v2 redesign). This test is what actually enforces "don't hand-edit it": a
+change to policy/registry.py's TOOL_TO_VERB/VERB_SCOPE_SUBJECT or policy/propose.py's
+PROPOSABLE_SCOPES that isn't followed by re-running the generator fails CI here, the same drift
+guard scripts/changelog_section.py's own callers get from a different angle (a stable tag with no
+matching section fails loudly rather than shipping stale notes).
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import generate_always_allow_reference as gen  # noqa: E402
+
+
+def test_checked_in_doc_matches_a_fresh_generation():
+    checked_in = gen.DOC_PATH.read_text(encoding="utf-8")
+    fresh = gen.render()
+    assert checked_in == fresh, (
+        "docs/always-allow-rules-reference.md is stale -- run "
+        "`python scripts/generate_always_allow_reference.py` and commit the result."
+    )
+
+
+def test_a_tool_with_no_proposable_scope_renders_an_empty_cell():
+    # apps_script_get_content is `review`-gated (TOOL_TO_GATE) but Apps Script's scope
+    # (apps_script.project) lives only in policy.catalogue.EXTRA_SCOPES, not
+    # policy.propose.PROPOSABLE_SCOPES -- Settings/the bridge can govern it, the popup can't (F5).
+    assert gen._candidates_cell("apps_script_get_content") == ""
+
+
+def test_a_tool_with_one_proposable_scope_renders_it():
+    assert "this report" in gen._candidates_cell("salesforce_run_report")
+
+
+def test_render_produces_both_top_level_sections():
+    doc = gen.render()
+    assert "## Read tools" in doc
+    assert "## Write tools" in doc

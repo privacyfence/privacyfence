@@ -20,7 +20,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from privacyfence.auto_accept import ARGS_ONLY_RULES, DATA_DEPENDENT_RULES, AutoAcceptEvaluator
 from privacyfence.policy.conditions import CONDITION_SELECTORS
 from privacyfence.policy.scopes import (
     NEW_SCOPE_SELECTORS,
@@ -31,8 +30,9 @@ from privacyfence.policy.scopes import (
 )
 
 from ...helpers import make_ctx
+from ._v1_reference import ARGS_ONLY_RULES, DATA_DEPENDENT_RULES, V1Reference
 
-_EV = AutoAcceptEvaluator({})
+_EV = V1Reference()
 
 
 def _old(predicate: str):

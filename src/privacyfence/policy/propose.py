@@ -61,17 +61,17 @@ where deriving over a shared verb would over-reach: ``calendar.out_of_office`` a
 naming them could never match, and the redesign proposal's §07 is explicit that such a rule is
 rejected rather than stored.
 
-Nothing outside ``tests/`` consumes this module yet: ``gate.py``'s two "Always allow" call sites
-still read the five v1 tables, and switch to this one when P6 reworks the surfaces that can render
-a widening chip. What P5 lands is the writer both of them will share, and the proof -- against those
-same v1 tables, which remain the oracle -- that it proposes nothing they would not have.
+``gate.py``'s two "Always allow" call sites (P9) build their button/confirmation-dialog choices from
+``proposals_for``/``rules_for_proposal`` directly and write the result through
+``auto_accept.add_policy_v2_rules`` -- the same one-shape write path Settings (P6) and the MCP
+bridge (P7) already share.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
-from ..auto_accept import ReviewContext, _domain_of, _file_from, add_auto_accept_rule, known_rule_names
+from ..auto_accept import ReviewContext, _domain_of, _file_from
 from . import conditions, registry, scopes, store
 from .engine import PolicyRule
 from .registry import TOOL_REGISTRY, VERB_FAMILY, Verb, VerbFamily
@@ -210,23 +210,6 @@ def _task_list_ids(ctx: ReviewContext) -> Any:
 # ── The scope catalogue ─────────────────────────────────────────────────────────────────────────
 
 
-def v1_rule_name(predicate: str, rule_conditions: tuple[tuple[str, Any], ...]) -> str:
-    """The v1 ``auto_accept_rules`` name a v2 rule persists under -- the exact inverse of
-    ``policy.compat.compile_rule_entry``.
-
-    A scope rule keeps its own predicate name. A rule whose scope is the unconditional
-    ``always_allow`` and which carries one condition is what ``compile_rule_entry`` produces from a
-    *bare v1 condition rule* (``non_private_event`` on its own, say), so it persists back under that
-    condition's own v1 name -- ``ConditionSelector.replaces``' first entry, which is the canonical
-    one (the rest are the connector-specific spellings ``no_attachments`` absorbed). ``""`` when
-    there is no such name, which ``v1_entries`` rejects rather than writing.
-    """
-    if predicate != "always_allow" or not rule_conditions:
-        return predicate
-    condition = conditions.CONDITION_SELECTORS.get(rule_conditions[0][0])
-    return condition.replaces[0] if condition is not None and condition.replaces else ""
-
-
 @dataclass(frozen=True)
 class ProposableScope:
     """One scope a surface may offer, and everything either surface needs to know about it.
@@ -257,13 +240,6 @@ class ProposableScope:
     excludes: frozenset[str] = frozenset()
     condition: tuple[str, Any] | None = None
     widenable: bool = True
-
-    @property
-    def v1_rule(self) -> str:
-        """The v1 ``auto_accept_rules`` name this scope's rules persist under -- see
-        ``v1_rule_name``, which is where the resolution lives so the writer and the catalogue can
-        never disagree about it."""
-        return v1_rule_name(self.predicate, (self.condition,) if self.condition is not None else ())
 
 
 def _scope(
@@ -661,49 +637,6 @@ def rules_for_scope_group(group: str, value: Any, verbs: Iterable[Verb]) -> list
     return _rules_from_pairs(pairs, value, conditions_of)
 
 
-def v1_entries(rules: Iterable[PolicyRule]) -> list[tuple[str, str, Any]]:
-    """The ``(operation_key, rule_name, value)`` triples that persist ``rules`` into today's
-    ``auto_accept_rules``, sorted so the write order is deterministic.
-
-    v1 remains the authoritative store until a later phase makes the on-disk ``auto_accept:``
-    section the write target, so the one writer's output has to be expressible there. This is the
-    exact inverse of ``policy.compat.compile_rule_entry``: a scope rule persists under its own
-    predicate name, and a rule whose scope is ``always_allow`` carrying one condition persists under
-    that condition's v1 rule name -- which is what ``compile_rule_entry`` turns back into this rule.
-
-    Raises ``ValueError`` for a predicate the v1 evaluator cannot evaluate. There is no such
-    predicate in ``PROPOSABLE_SCOPES`` today, deliberately (see the module docstring on F5): the
-    point is that adding one cannot silently produce a live rule no surface can render or remove,
-    which is P0·3's hole.
-    """
-    known = known_rule_names()
-    entries: list[tuple[str, str, Any]] = []
-    for rule in rules:
-        rule_name = v1_rule_name(rule.predicate, rule.conditions)
-        if rule_name not in known:
-            raise ValueError(
-                f"rule {rule.id!r} uses predicate {rule.predicate!r}, which the v1 evaluator cannot "
-                "evaluate -- refusing to write a rule no surface could render or remove"
-            )
-        for operation in sorted(rule.operations):
-            entries.append((operation, rule_name, rule.value))
-    return entries
-
-
-def apply_rules(rules: Iterable[PolicyRule]) -> list[tuple[str, str, Any]]:
-    """Persist ``rules`` and hot-reload the evaluator, returning what was written.
-
-    Every entry goes through ``auto_accept.add_auto_accept_rule``, which is idempotent per entry, so
-    re-confirming the same proposal adds nothing. ``v1_entries`` is resolved in full *before* the
-    first write, so a rule set containing something unpersistable writes none of it rather than half
-    of it.
-    """
-    entries = v1_entries(rules)
-    for operation, rule_name, value in entries:
-        add_auto_accept_rule(operation, rule_name, value)
-    return entries
-
-
 __all__ = [
     "ALL_OPERATIONS",
     "NO_VALUE",
@@ -712,7 +645,6 @@ __all__ = [
     "ProposableScope",
     "RuleProposal",
     "Widening",
-    "apply_rules",
     "connector_of_operation",
     "verb_sort_key",
     "operations_for",
@@ -720,6 +652,4 @@ __all__ = [
     "rules_for_proposal",
     "rules_for_scope_group",
     "scope_needs_value",
-    "v1_entries",
-    "v1_rule_name",
 ]

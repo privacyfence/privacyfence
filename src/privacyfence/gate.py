@@ -45,14 +45,14 @@ plus the rules-changed re-evaluation broadcast
 anything that's already moved into the pending/registry state.
 
   gate="review"  (read tools)
-    Popup offers Deny / Allow once / and — for every plausible auto-accept
-    rule that can be derived from the item's attributes — an Always allow
-    button, one per candidate (auto_accept.suggest_rule_choices()). Most
-    operations only ever have one candidate, so this is a single button; the
-    four operations in auto_accept.SUGGESTION_FAMILIES can match 2+ rules on
-    the same item and render one button each. Clicking any of them proposes
-    (with a second confirmation dialog) a standing rule for similar future
-    reads.
+    Popup offers Deny / Allow once / and — for every v2 scope that plausibly contains the item
+    under review — an Always allow button, one per candidate (policy.propose.proposals_for()).
+    Most operations only ever have one candidate, so this is a single button; a handful of
+    connectors (Drive, Calendar, Jira, Confluence) can have 2+ scopes match the same item at once
+    (a file you own that's also in an approved folder, say) and render one button each. Clicking
+    any of them proposes (with a second confirmation dialog, policy.describe.confirmation_text())
+    a standing rule for similar future reads, written straight to the v2 auto_accept: section
+    (auto_accept.add_policy_v2_rules) -- the same one writer Settings and the MCP bridge use.
 
   gate="popup"   (write tools)
     Popup offers Deny / Allow once by default. Auto-accepting writes
@@ -70,14 +70,12 @@ anything that's already moved into the pending/registry state.
       Allow once on one of these operations arms this grace window
       automatically -- the popup discloses it with a plain caption
       (approval_window_html.py's temp_accept_eligible), not a separate control.
-    - A separate, small set of operations that already have a
-      resource-identity-scoped auto-accept rule (see
-      auto_accept.WRITE_RULE_SUGGESTIONS -- one Gmail label, one calendar,
-      one Jira project, one Confluence space, one Tasks list; never a bare
-      "accept every future write of this type" toggle) get an actual
-      Always allow button, proposing that rule scoped to the item just
-      acted on -- the same second-confirmation-dialog flow the review
-      branch already uses, reused here rather than reinvented.
+    - A separate, small set of operations with a resource-identity-scoped v2 proposal of their own
+      (policy.propose.proposals_for() again -- one Gmail label, one calendar, one Jira project, one
+      Confluence space, one Tasks list; never a bare "accept every future write of this type"
+      toggle) get an actual Always allow button, proposing that rule scoped to the item just acted
+      on -- the same second-confirmation-dialog flow the review branch already uses, reused here
+      rather than reinvented.
 
     See the popup-gate branch below for where both actually get armed.
 
@@ -152,7 +150,6 @@ import asyncio
 import contextvars
 import functools
 import json
-import hashlib
 import logging
 import time
 import uuid
@@ -166,30 +163,22 @@ from .approvals import DEFAULT_MAX_PENDING, PendingApproval, PendingApprovalRegi
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger
 from .auto_accept import (
     TOOL_TO_OPERATION,
-    AutoAcceptEvaluator,
     ReviewContext,
-    add_auto_accept_rule,
     add_policy_v2_rules,
     add_rules_changed_listener,
-    describe_rule,
-    describe_rule_change,
-    describe_rule_short,
-    get_auto_accept_evaluator,
-    get_policy_engine_version,
     get_policy_v2_rules,
     get_policy_v2_store_rules,
-    known_rule_names,
-    mutate_grants,
-    remove_auto_accept_rule,
+    is_temp_accepted,
+    register_temp_accept,
     remove_policy_v2_rule,
-    suggest_rule_choices,
-    suggest_write_rule,
     temp_accept_key,
 )
 from .policy import catalogue as policy_catalogue
 from .policy import compat as policy_compat
 from .policy import describe as policy_describe
 from .policy import engine as policy_engine
+from .policy import resource_registry as policy_resource_registry
+from .policy import propose as policy_propose
 from .policy import store as policy_store
 from .pii_detector import (
     PIIAuditMatch,
@@ -198,7 +187,6 @@ from .pii_detector import (
     is_pii_audit_match_details_enabled,
     scan_pii_for_audit,
 )
-from .resource_grants import apply_grant_removal, apply_grant_upsert, describe_grant_change, resource_type
 
 logger = logging.getLogger(__name__)
 
@@ -590,184 +578,59 @@ def _on_rules_changed() -> None:
     registry = _deferred_registry()
     if registry is None:
         return
-    for approval in registry.reevaluate_all(get_auto_accept_evaluator().should_auto_accept):
+    for approval in registry.reevaluate_all(_should_auto_accept):
         logger.info(
             "Pending approval %s auto-accepted after a rule changed: %s/%s rule=%r",
             approval.id, approval.connector, approval.tool, approval.final_rule_name,
         )
 
 
-def _context_fingerprint(ctx: ReviewContext) -> str:
-    """A redacted stand-in for ``ctx`` in a shadow-mode disagreement log (P3): connector, tool
-    and the *set* of argument names -- never an argument value, and never ``ctx.raw_data``, which
-    is exactly the content (a message, a file, an event) auto-accept decisions exist to keep out
-    of logs. Stable across identical calls, so repeated disagreements on the same shape of call
-    are recognisable without a real correlation id."""
-    arg_names = ",".join(sorted(ctx.args.keys()))
-    fingerprint = hashlib.sha256(f"{ctx.connector}|{ctx.tool}|{arg_names}".encode()).hexdigest()[:12]
-    return f"{ctx.connector}.{ctx.tool}#{fingerprint}"
+def _should_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool, str]:
+    """The ``(bool, matched_rule)`` shape ``approvals.PendingApprovalRegistry.reevaluate_all``
+    expects -- a thin wrapper around ``_evaluate_auto_accept`` that drops its third (rule id)
+    element, which reevaluate_all has no use for."""
+    ok, rule, _rule_id = _evaluate_auto_accept(operation_key, ctx)
+    return ok, rule
 
 
-def _evaluate_auto_accept(
-    evaluator: AutoAcceptEvaluator, operation_key: str, ctx: ReviewContext,
-) -> tuple[bool, str, str]:
-    """Decide whether ``operation_key`` auto-accepts, per P3 of the policy v2 redesign. Returns
-    ``(auto_ok, matched_rule, matched_rule_id)`` -- P8 adds the third element: the canonical,
-    content-derived id (``policy.store.rule_id_for_rule``) of the on-disk v2 rule row this
-    decision resolves to, or ``""`` when it can't be attributed to exactly one row (F9). Never
-    guessed: an ``"auto_accepted"`` audit entry with an empty ``rule_id`` means exactly that,
-    rather than pointing at a row that might not be the real one.
-
-    Both evaluators run on every call. By default (``policy.engine`` unset or ``"v1"``) the
-    existing ``AutoAcceptEvaluator`` -- unchanged by this function -- keeps deciding, and the new
-    ``policy.engine``/``policy.compat`` evaluator runs alongside it purely to compare; setting
-    ``policy.engine: v2`` flips which one is authoritative, with the other now the one shadowed
-    (see ``policy_engine_config.PolicyEngineConfig`` and ``auto_accept.get_policy_engine_version``
-    for the switch itself, and the redesign proposal's Safety net for why the default keeps v1
-    load-bearing for one release).
-
-    A disagreement -- either engine's boolean differs, or both matched but under different rule
-    identities -- is logged once at ``WARNING`` with the operation key, each side's matched rule,
-    and a redacted context fingerprint (``_context_fingerprint``) -- never ``ctx.args`` or
-    ``ctx.raw_data`` themselves. A v2 evaluation error is swallowed the same way an unrecognised
-    predicate already fails closed in ``policy.engine.evaluate`` -- shadow mode must never be able
-    to affect, or crash, the real (v1, by default) decision. ``matched_rule_id`` is only ever
-    taken from a v2 match that *agrees* with whichever side is primary -- a disagreement already
-    means the audit trail can't be sure which row actually applies, so it gets no id either,
-    exactly like the case where v2 raised outright.
+def _evaluate_auto_accept(operation_key: str, ctx: ReviewContext) -> tuple[bool, str, str]:
+    """Decide whether ``operation_key`` auto-accepts. Returns ``(auto_ok, matched_rule,
+    matched_rule_id)`` -- ``matched_rule``/``matched_rule_id`` are always the same value here
+    (P9): every rule, wherever it originated -- authored through Settings, the MCP bridge, the
+    popup's own "Always allow" flow, or migrated from a hand-edited v1 config at startup -- lives
+    in the on-disk v2 ``auto_accept:`` section, so there is exactly one rule list to check and its
+    own ``.id`` (content-derived, ``policy.store.rule_id_for_rule``) is already the canonical id
+    F9 asked for. An empty ``matched_rule_id`` on an ``"auto_accepted"`` audit entry still means
+    exactly what it always has: the temp-accept grace window matched, not a rule row.
     """
-    v1_ok, v1_rule = evaluator.should_auto_accept(operation_key, ctx)
-
-    v2_ok, v2_rule, v2_rule_id = False, "", ""
+    rules = get_policy_v2_store_rules()
     try:
-        v2_rules = policy_compat.compile_rules(evaluator.effective_rules)
-        v2_matched = policy_engine.find_matching_rule(v2_rules, operation_key, ctx)
-        if v2_matched is not None:
-            v2_ok, v2_rule = True, v2_matched.id
-            v2_rule_id = policy_store.rule_id_for_rule(v2_matched)
-        elif evaluator.is_temp_accepted(operation_key, temp_accept_key(operation_key, ctx)):
-            # Same fallback `policy.engine.evaluate` itself would take -- reproduced explicitly
-            # here (rather than delegated to `evaluate()`) only so this function keeps the actual
-            # matched `PolicyRule` object in hand for `rule_id_for_rule` above; looking a rule back
-            # up by the *name* `evaluate()` returns would be exactly the F9 ambiguity this phase
-            # exists to close, since v1-compiled rules from `policy.compat.compile_rule_entry`
-            # reuse the raw predicate name as `.id` and several rows can share one.
-            v2_ok, v2_rule = True, "session_temp_accept"
+        matched = policy_engine.find_matching_rule(rules, operation_key, ctx)
     except Exception:
-        logger.warning("Policy v2 shadow evaluation raised for op=%r", operation_key, exc_info=True)
-    else:
-        if v1_ok != v2_ok or (v1_ok and v2_ok and v1_rule != v2_rule):
-            logger.warning(
-                "Policy engine disagreement: op=%r v1=(%r, %r) v2=(%r, %r) ctx=%s",
-                operation_key, v1_ok, v1_rule, v2_ok, v2_rule, _context_fingerprint(ctx),
-            )
-
-    agree = v1_ok and v2_ok and v1_rule == v2_rule
-    if get_policy_engine_version() == "v2":
-        primary_ok, primary_rule, primary_rule_id = v2_ok, v2_rule, v2_rule_id
-    else:
-        primary_ok, primary_rule = v1_ok, v1_rule
-        primary_rule_id = v2_rule_id if agree else ""
-    if primary_ok:
-        return primary_ok, primary_rule, primary_rule_id
-
-    # P6: a rule that exists only in the on-disk v2 `auto_accept:` section -- authored directly
-    # through the redesigned Auto-accept Settings page, or governing an operation v1 has no
-    # predicate for at all (Apps Script's `apps_script.project` scope, in particular, F5) -- has no
-    # v1 counterpart to be shadowed against, so it is checked here unconditionally rather than only
-    # when `policy.engine: v2`. See `auto_accept._AutoAcceptState.policy_v2_store_rules`'s own
-    # comment for why this is a separate, always-on layer instead of folded into the comparison
-    # above. Its own rows' `.id` IS the canonical id already -- minted by `merge_rules`/
-    # `rule_id_for` at migration or add-rule time, the exact same value settings_controller.
-    # _auto_accept_state lists and remove_policy_rule looks up by -- so this trusts `.id` directly
-    # rather than recomputing it via `rule_id_for_rule` (which the v1/shadow branch above needs,
-    # since *its* rules carry the ambiguous v1 predicate name as `.id` instead). Recomputing here
-    # would still agree in the ordinary case, but would silently diverge from what Settings
-    # actually keys on for a hand-edited settings.yaml whose v2 rule entry was given an `id` that
-    # isn't its own content hash -- and diverging from Settings is exactly the failure mode this
-    # phase exists to close, not one to reintroduce for a case Settings itself never rejects.
-    try:
-        store_rules = get_policy_v2_store_rules()
-        store_matched = policy_engine.find_matching_rule(store_rules, operation_key, ctx)
-    except Exception:
-        logger.warning("Policy v2 store evaluation raised for op=%r", operation_key, exc_info=True)
-        return primary_ok, primary_rule, primary_rule_id
-    if store_matched is not None:
-        return True, store_matched.id, store_matched.id
-    if evaluator.is_temp_accepted(operation_key, temp_accept_key(operation_key, ctx)):
+        logger.warning("Policy evaluation raised for op=%r", operation_key, exc_info=True)
+        matched = None
+    if matched is not None:
+        return True, matched.id, matched.id
+    if is_temp_accepted(operation_key, temp_accept_key(operation_key, ctx)):
         return True, "session_temp_accept", ""
-    return primary_ok, primary_rule, primary_rule_id
+    return False, "", ""
 
 
-def preflight_auto_accept(
-    evaluator: AutoAcceptEvaluator, operation_key: str, args: dict, my_email: str = "",
-) -> tuple[str, str, str, str]:
+def preflight_auto_accept(operation_key: str, args: dict, my_email: str = "") -> tuple[str, str, str, str]:
     """Preflight counterpart of ``_evaluate_auto_accept`` above, backing
-    ``privacyfence_check_policy``'s own prediction (P7 of the policy v2 redesign). Returns
-    ``(verdict, matched_rule, matched_rule_id, reason)``.
-
-    Checked against the same two-layer view the real call's own ``_evaluate_auto_accept`` consults,
-    in the same order, so this never predicts something the live call wouldn't actually do:
-
-    1. The always-on v2-store layer (P6) first -- unconditionally, the same way the real call
-       checks it regardless of ``policy.engine``. This is the only layer that can predict
-       auto-accept at all for a rule with no v1 counterpart (one of the three F5 predicates, e.g.
-       ``apps_script.project`` -- ``AutoAcceptEvaluator.preflight_from_args`` alone would report
-       ``requires_review`` for these forever, since it has no v1 rule to have found in the first
-       place). When this layer already says ``auto_accept``, its own rule id is both
-       ``matched_rule`` and ``matched_rule_id`` -- there is no v1 name to report separately, the
-       same "the v2 id is what gets audited" the real call's own store-matched branch already
-       does (see ``_evaluate_auto_accept``'s ``return store_ok, store_rule`` above).
-    2. Otherwise, ``AutoAcceptEvaluator.preflight_from_args`` -- v1, unchanged by this function --
-       exactly as check_policy answered before P7. If the store layer above came back ``unknown``
-       (a store-only rule needs the fetched object) while v1 has no rule configured at all
-       (``requires_review``), the merged verdict is ``unknown``: the real call might still
-       auto-accept once fetched, which "no rule configured" alone would wrongly rule out.
-    3. Only once v1 says ``auto_accept`` is a *third* pass worth paying for: compiling this
-       evaluator's own v1 config into v2 rules (``policy.compat.compile_rules``) to find the v2 id
-       for the same prediction, so a planning agent gets something it can feed back into
-       ``privacyfence_propose_policy_change``'s ``rule_id``.
-
-    ``matched_rule_id`` comes back empty if no v2 rule agrees even though v1 predicted
-    auto-accept -- a real, F6-shaped disagreement between the two engines, logged at ``WARNING`` the
-    same way ``_evaluate_auto_accept``'s own shadow comparison is, never raised into the tool result:
-    check_policy's verdict must never depend on which engine happens to agree with itself.
+    ``privacyfence_check_policy``'s own prediction. Returns ``(verdict, matched_rule,
+    matched_rule_id, reason)`` -- ``matched_rule``/``matched_rule_id`` are the same value here for
+    the same reason ``_evaluate_auto_accept`` above returns them equal.
     """
     try:
-        store_verdict, store_rule_id, store_reason = policy_engine.preflight(
+        verdict, rule_id, reason = policy_engine.preflight(
             get_policy_v2_store_rules(), operation_key, args, my_email=my_email,
-            is_temp_accepted=evaluator.is_temp_accepted,
+            is_temp_accepted=is_temp_accepted,
         )
     except Exception:
-        logger.warning("Policy v2 store preflight raised for op=%r", operation_key, exc_info=True)
-        store_verdict, store_rule_id, store_reason = "requires_review", "", ""
-
-    if store_verdict == "auto_accept":
-        return "auto_accept", store_rule_id, store_rule_id, store_reason
-
-    verdict, matched_rule, reason = evaluator.preflight_from_args(operation_key, args, my_email)
-    if verdict != "auto_accept":
-        if verdict == "requires_review" and store_verdict == "unknown":
-            return "unknown", matched_rule, "", store_reason
-        return verdict, matched_rule, "", reason
-
-    matched_rule_id = ""
-    try:
-        v2_rules = policy_compat.compile_rules(evaluator.effective_rules)
-        v2_verdict, v2_rule_id, _reason = policy_engine.preflight(
-            v2_rules, operation_key, args, my_email=my_email, is_temp_accepted=evaluator.is_temp_accepted,
-        )
-        if v2_verdict == "auto_accept":
-            matched_rule_id = v2_rule_id
-    except Exception:
-        logger.warning("Policy v2 shadow preflight raised for op=%r", operation_key, exc_info=True)
-
-    if not matched_rule_id:
-        logger.warning(
-            "Policy engine disagreement in preflight: op=%r v1 predicted auto_accept (rule=%r) but "
-            "no v2 rule agrees", operation_key, matched_rule,
-        )
-    return verdict, matched_rule, matched_rule_id, reason
+        logger.warning("Policy preflight raised for op=%r", operation_key, exc_info=True)
+        return "requires_review", "", "", ""
+    return verdict, rule_id, rule_id, reason
 
 
 # Set by web/mcp_dispatch.py's McpDispatcher.call() around a single
@@ -1091,8 +954,7 @@ async def gated_call(
         )
 
     try:
-        evaluator = get_auto_accept_evaluator()
-        auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(evaluator, operation_key, ctx)
+        auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(operation_key, ctx)
 
         if auto_ok and not pii_forces_confirmation and not upload_pii_categories:
             audit(
@@ -1103,15 +965,16 @@ async def gated_call(
             return filtered_data
 
         if gate == "review":
-            # Every auto-accept rule that plausibly matches this item, up
-            # front -- not just a single top-priority hint with the "which
-            # one?" question deferred to a second dialog after the click.
-            # Each becomes its own "Always allow" button in the popup (see
-            # approval_window_html.py's _button_row_html); only ever 2+
-            # entries for the four families in auto_accept.SUGGESTION_
-            # FAMILIES, at most 1 for every other operation.
-            choices = suggest_rule_choices(operation_key, ctx)
-            accept_all_choices = [(rule_name, describe_rule_short(rule_name)) for rule_name, _value in choices]
+            # Every scope that plausibly contains this item, up front -- not just a single
+            # top-priority hint with the "which one?" question deferred to a second dialog after
+            # the click. Each becomes its own "Always allow" button in the popup (see
+            # approval_window_html.py's _button_row_html); only ever 2+ entries for the connectors
+            # whose read scopes overlap (a Drive file you own that's also in an approved folder,
+            # say), at most 1 for every other operation.
+            proposals = policy_propose.proposals_for(tool, ctx)
+            accept_all_choices = [
+                (str(i), policy_describe.button_label(p)) for i, p in enumerate(proposals)
+            ]
 
             # Re-check up front: by the time we actually get here, a rule may
             # already cover this item -- created by another concurrently-
@@ -1121,7 +984,7 @@ async def gated_call(
             # pii_forces_confirmation, not pii_categories itself, since
             # pii_already_reviewed's own carve-out (see module docstring) is
             # unaffected by anything decided in the meantime.
-            auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(evaluator, operation_key, ctx)
+            auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(operation_key, ctx)
             if auto_ok and not pii_forces_confirmation:
                 audit(
                     decision="auto_accepted", auto_accept_rule=matched_rule, rule_id=matched_rule_id,
@@ -1170,14 +1033,13 @@ async def gated_call(
                     # the real button row, but not a contract this module
                     # needs to trust blindly) degrades to a plain accept
                     # rather than raising.
-                    chosen = choices[ci] if ci is not None and 0 <= ci < len(choices) else None
+                    chosen = proposals[ci] if ci is not None and 0 <= ci < len(proposals) else None
                     if chosen is not None:
-                        description = describe_rule(*chosen)
+                        description = policy_describe.confirmation_text(chosen)
                         confirmed = await _run_in_popup_executor(show_rule_confirmation_popup, description)
-                        rn, value = chosen
                         if confirmed:
-                            add_auto_accept_rule(operation_key, rn, value)
-                            return "accept_all", rn
+                            add_policy_v2_rules(policy_propose.rules_for_proposal(chosen))
+                            return "accept_all", chosen.scope.predicate
                     # Cancelled rule creation — this item is still accepted, just once.
                     d = "accept"
                 return d, ""
@@ -1235,18 +1097,17 @@ async def gated_call(
             # upload_pii_categories (computed above) is the one narrow
             # exception, drive_upload_file only.
             file_key = temp_accept_key(operation_key, ctx)
-            suggestion = suggest_write_rule(operation_key, ctx)
-            # At most one entry -- no write operation is a
-            # SUGGESTION_FAMILIES multi-candidate case (see gate.py's own
-            # module docstring); kept as a list for the same shape as the
-            # review branch's `choices` above, so the accept_all handling
-            # below reads identically to it.
-            choices = [suggestion] if suggestion is not None else []
-            accept_all_choices = [(suggestion[0], describe_rule_short(suggestion[0]))] if suggestion else []
+            # At most one entry -- no write operation has more than one scope proposal (see the
+            # review branch's own comment above); kept as a list of the same shape so the
+            # accept_all handling below reads identically to it.
+            proposals = policy_propose.proposals_for(tool, ctx)
+            accept_all_choices = [
+                (str(i), policy_describe.button_label(p)) for i, p in enumerate(proposals)
+            ]
 
             # Same race as the review branch above: a rule may already cover
             # this by the time we get here.
-            auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(evaluator, operation_key, ctx)
+            auto_ok, matched_rule, matched_rule_id = _evaluate_auto_accept(operation_key, ctx)
             if auto_ok and not upload_pii_categories:
                 audit(
                     decision="auto_accepted", auto_accept_rule=matched_rule, rule_id=matched_rule_id,
@@ -1284,24 +1145,15 @@ async def gated_call(
                     # accept_all_choices was non-empty), but degrades to a
                     # plain accept rather than falling through to "denied"
                     # below if it somehow does.
-                    chosen = choices[ci] if ci is not None and 0 <= ci < len(choices) else None
+                    chosen = proposals[ci] if ci is not None and 0 <= ci < len(proposals) else None
                     if chosen is None:
                         d = "accept"
                     else:
-                        rn, value = chosen
-                        # describe_rule_change(), not describe_rule() -- these
-                        # five rule names are shared with a read operation key
-                        # too (e.g. jira.read_issue), and describe_rule()'s
-                        # canned templates are read-direction-only English
-                        # ("Jira issue reads in project(s): ..."), which would
-                        # mislabel a write's own confirmation.
-                        # describe_rule_change() names operation_key explicitly
-                        # and reads correctly regardless of direction.
-                        description = describe_rule_change("add", operation_key, rn, value)
+                        description = policy_describe.confirmation_text(chosen)
                         confirmed = await _run_in_popup_executor(show_rule_confirmation_popup, description)
                         if confirmed:
-                            add_auto_accept_rule(operation_key, rn, value)
-                            return "accept_all", rn
+                            add_policy_v2_rules(policy_propose.rules_for_proposal(chosen))
+                            return "accept_all", chosen.scope.predicate
                         # Cancelled rule creation — this item is still accepted, just once.
                         d = "accept"
                 return d, ""
@@ -1341,7 +1193,7 @@ async def gated_call(
                     # operations arms it, so Claude's follow-up calls
                     # against this same file don't reprompt for the next
                     # 5 minutes.
-                    evaluator.register_temp_accept(operation_key, file_key)
+                    register_temp_accept(operation_key, file_key)
                     audit(
                         decision="accepted_via_temp_session", auto_accept_rule="session_temp_accept",
                         pii_detected=bool(upload_pii_categories), decided_at=decided_at,
@@ -1389,6 +1241,63 @@ async def gated_call(
             audit(decision="error", auto_accept_rule="", pii_detected=bool(pii_categories or upload_pii_categories))
 
 
+def _rules_for_grant(
+    rt: "policy_resource_registry.GrantResourceType", resource_id: str, enabled_capabilities: list[str],
+) -> list["policy_engine.PolicyRule"]:
+    """The v2 rules a legacy grant's enabled capabilities compile to for one resource id -- built
+    from the same ``targets`` table migration reads (``policy.resource_registry``), scoped to a single
+    ``value=[resource_id]`` rather than the merged multi-resource list a real grant's capability
+    would have carried, since ``propose_rule_change``'s deprecated ``target="grant"`` shape only
+    ever names one resource per call."""
+    by_rule_name: dict[str, set[str]] = {}
+    for capability_key in enabled_capabilities:
+        capability = rt.capabilities.get(capability_key)
+        if capability is None:
+            continue
+        for op_key, rule_name in capability.targets:
+            by_rule_name.setdefault(rule_name, set()).add(op_key)
+    return [
+        policy_engine.PolicyRule(id=rule_name, predicate=rule_name, value=[resource_id], operations=frozenset(ops))
+        for rule_name, ops in sorted(by_rule_name.items())
+    ]
+
+
+def _narrow_or_remove_v2_rule(compiled: "policy_engine.PolicyRule | None", operation_key: str) -> bool:
+    """Remove ``operation_key`` from whichever existing v2 rule shares ``compiled``'s
+    ``(predicate, value, conditions)`` -- the whole rule if that was its only operation, otherwise
+    the rule minus ``operation_key``, re-added. v2 rules are additive-only and keyed by content, not
+    by a single operation, so "remove this one operation's worth of an old v1 rule" (this deprecated
+    alias's own contract) is always a narrowing edit, never a delete of anything wider than what the
+    caller actually asked to remove."""
+    if compiled is None:
+        return False
+    rule_id = policy_store.rule_id_for_rule(compiled)
+    existing = next((r for r in get_policy_v2_rules() if r.id == rule_id), None)
+    if existing is None or operation_key not in existing.operations:
+        return False
+    removed = remove_policy_v2_rule(rule_id)
+    remaining_ops = existing.operations - {operation_key}
+    if remaining_ops:
+        add_policy_v2_rules([policy_engine.PolicyRule(
+            id=existing.id, predicate=existing.predicate, value=existing.value,
+            operations=remaining_ops, conditions=existing.conditions,
+        )])
+    return removed
+
+
+def _remove_v2_grant(rt: "policy_resource_registry.GrantResourceType", resource_id: str) -> bool:
+    """Remove every v2 rule a legacy grant's resource id could have produced under any of its
+    capabilities -- the whole-entry removal ``target="grant"``'s own ``operation="remove"`` always
+    meant under v1, regardless of which capabilities happened to be enabled."""
+    rule_names = {rule_name for capability in rt.capabilities.values() for _op, rule_name in capability.targets}
+    changed = False
+    for rule_name in sorted(rule_names):
+        rule_id = policy_store.rule_id_for(rule_name, [resource_id], ())
+        if remove_policy_v2_rule(rule_id):
+            changed = True
+    return changed
+
+
 async def propose_rule_change(
     *,
     target: str,          # "rule" | "grant"
@@ -1405,17 +1314,21 @@ async def propose_rule_change(
     tab: str | None = None,
     capabilities: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
-    """Bridge-facing counterpart to the popup's own "Always allow" flow:
-    propose an add/update/remove to auto_accept_rules or auto_accept_grants,
-    but never apply it without a human confirming via the same
-    show_rule_confirmation_popup() dialog gated_call() uses for "Always
-    allow" -- this is a "gate only" write path: config changes go through
-    the approval gate without a real tool call behind them. Unlike
-    gated_call(), there's no underlying tool call or auto-accept
-    short-circuit here: every proposal reaches a human (or is denied
-    outright in an unattended session, same as gated_call), even if an
-    identical rule/grant already exists -- confirming again is cheap,
-    silently no-op'ing a request Claude explicitly made is more surprising.
+    """Bridge-facing counterpart to the popup's own "Always allow" flow -- kept as a deprecated
+    alias of ``propose_policy_change`` below (P7), translating its v1-shaped ``target``/
+    ``operation_key``/``rule_name`` (or ``connector``/``config_key``/``resource_id``/
+    ``capabilities``) request into the on-disk v2 ``auto_accept:`` section (P9). Never applies a
+    change without a human confirming via the same show_rule_confirmation_popup() dialog
+    gated_call() uses for "Always allow" -- this is a "gate only" write path: config changes go
+    through the approval gate without a real tool call behind them. Unlike gated_call(), there's no
+    underlying tool call or auto-accept short-circuit here: every proposal reaches a human (or is
+    denied outright in an unattended session, same as gated_call), even if an identical rule
+    already exists -- confirming again is cheap, silently no-op'ing a request Claude explicitly
+    made is more surprising.
+
+    ``target="grant"``'s ``tab`` parameter (a secondary key some multi-workspace Slack/Telegram
+    configs used to disambiguate a resource id) has no v2 equivalent and is ignored -- v2 rules are
+    additive by ``(predicate, value, conditions)`` alone, not by any secondary key.
 
     Raises GateDeniedError if the user declines, or if called on an unattended
     connection (see is_unattended()) -- mirroring gated_call's own "deny ==
@@ -1423,18 +1336,28 @@ async def propose_rule_change(
     tool error rather than a result it has to remember to check.
     """
     if target == "rule":
-        if rule_name not in known_rule_names():
+        compiled = policy_compat.compile_rule_entry(operation_key, rule_name, value)
+        if compiled is None:
             raise ValueError(
-                f"Unknown auto-accept rule: {rule_name!r}. See privacyfence_list_auto_accept_rules "
-                "or docs/TECHNICAL_REFERENCE.md's Auto-accept rules tables for valid rule names."
+                f"Unknown auto-accept rule: {rule_name!r}. See privacyfence_list_policy "
+                "or docs/TECHNICAL_REFERENCE.md's Auto-accept section for valid rule names."
             )
-        description = describe_rule_change(operation, operation_key, rule_name, value, old_value)
+        verb = "Remove" if operation == "remove" else ("Replace" if operation == "update" else "Add")
+        description = f"{verb} auto-accept rule: {policy_describe.rule_sentence(compiled)}"
     elif target == "grant":
-        rt = resource_type(connector, config_key)
+        rt = policy_resource_registry.resource_type(connector, config_key)
         if rt is None:
             raise ValueError(f"Unknown grant resource type: {connector}.{config_key}")
-        description = describe_grant_change(
-            operation, rt, resource_id, name=name, tab=tab, capabilities=capabilities
+        if operation == "remove":
+            grant_rules: list[policy_engine.PolicyRule] = []
+        else:
+            enabled = [key for key, on in (capabilities or {}).items() if on]
+            grant_rules = _rules_for_grant(rt, resource_id, enabled)
+        verb = "Remove" if operation == "remove" else ("Update" if operation == "update" else "Add")
+        target_desc = f"{connector}.{config_key} {resource_id!r}"
+        description = (
+            f"{verb} {target_desc}" if operation == "remove" else
+            f"{verb} {target_desc}: " + "; ".join(policy_describe.rule_sentence(r) for r in grant_rules)
         )
     else:
         raise ValueError(f"Unknown target: {target!r}")
@@ -1468,12 +1391,13 @@ async def propose_rule_change(
 
     if target == "rule":
         if operation == "remove":
-            changed = remove_auto_accept_rule(operation_key, rule_name, value)
+            changed = _narrow_or_remove_v2_rule(compiled, operation_key)
         else:
             if operation == "update" and old_value is not None:
-                remove_auto_accept_rule(operation_key, rule_name, old_value)
-            add_auto_accept_rule(operation_key, rule_name, value)
-            changed = True
+                _narrow_or_remove_v2_rule(
+                    policy_compat.compile_rule_entry(operation_key, rule_name, old_value), operation_key,
+                )
+            changed = add_policy_v2_rules([compiled])
         # "..._via_bridge_proposal" is legacy vocabulary kept for audit-log
         # continuity, not a live bridge -- see audit_log.py's AuditEntry.decision
         # field comment.
@@ -1481,13 +1405,9 @@ async def propose_rule_change(
         applied_rule_name = rule_name
     else:
         if operation == "remove":
-            changed = mutate_grants(lambda cfg: apply_grant_removal(cfg, rt, resource_id, tab))
+            changed = _remove_v2_grant(rt, resource_id)
         else:
-            changed = mutate_grants(
-                lambda cfg: apply_grant_upsert(
-                    cfg, rt, resource_id, name=name, tab=tab, capabilities=capabilities
-                )
-            )
+            changed = add_policy_v2_rules(grant_rules)
         applied_decision = "grant_removed_via_bridge_proposal" if operation == "remove" else "grant_changed_via_bridge_proposal"
         applied_rule_name = resource_id
 
