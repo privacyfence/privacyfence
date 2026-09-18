@@ -507,7 +507,9 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     assert result.structured_content is not None
     assert result.structured_content["confirmed"] is True
     assert result.structured_content["changed"] is True
-    assert "trusted_sender_domain" in result.structured_content["description"]
+    # P9 of the policy v2 redesign: the confirmed-response description is the v2 rule's own
+    # human-readable sentence now, not an echo of the v1 rule_name string.
+    assert "Gmail - sender domain example.com: allow read" in result.structured_content["description"]
 
     # Confirms the round trip actually reached persisted state, not just a
     # confirmed-but-inert in-memory result.

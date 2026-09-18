@@ -510,7 +510,9 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         assert allow_result.is_error is not True, getattr(allow_result, "content", allow_result)
         assert allow_result.structured_content["confirmed"] is True
         assert allow_result.structured_content["changed"] is True
-        assert "trusted_sender_domain" in allow_result.structured_content["description"]
+        # P9 of the policy v2 redesign: the confirmed-response description is the v2 rule's own
+        # human-readable sentence now, not an echo of the v1 rule_name string.
+        assert "Gmail - sender domain allowed.example.com: allow read" in allow_result.structured_content["description"]
 
         # -- Deny round trip ----------------------------------------------------
         deny_task = asyncio.create_task(
