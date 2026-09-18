@@ -9,10 +9,10 @@ a route that actually consumes both.
 
 ``GET /settings`` -- every signed-in principal's own auto-accept rules and
 resource grants (``auto_accept.py``/``resource_grants.py``), read-only except
-for removing a row: an admin has no more mutation power here over another
-principal's rules than that principal does over their own, since removal is
-always scoped to ``current_principal()``, never a path parameter naming
-someone else's id.
+for adding or removing a rule row and removing a grant row: an admin has no
+more mutation power here over another principal's rules than that principal
+does over their own, since every mutation is always scoped to
+``current_principal()``, never a path parameter naming someone else's id.
 
 ``GET /settings/privacy`` -- admin-only (``Principal.is_admin``, #400 C3c),
 the install-wide PII/privacy policy: which ``privacy``/``drive_privacy``/...
@@ -57,7 +57,14 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..principal import Principal, principal_scope
 from ..privacy_filter import VALID_POLICIES, PrivacyFilterConfigError
 from ..privacy_filter import _parse_group as _parse_privacy_group
-from ..settings_controller import OPERATION_LABELS, PRIVACY_CATEGORY_LABELS, PRIVACY_GROUP_LABELS
+from ..settings_controller import (
+    OPERATION_LABELS,
+    PRIVACY_CATEGORY_LABELS,
+    PRIVACY_GROUP_LABELS,
+    RULES_BY_OPERATION,
+    RULES_INT_VALUE,
+    RULES_LIST_VALUE,
+)
 from . import org_install_policy, org_session
 from .csp import nonce_for as _csp_nonce_for
 from .org_session import OrgSessionStore
@@ -162,6 +169,70 @@ def _grant_rows(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _rule_type_label(rule_name: str) -> str:
+    # Same "replace underscores, capitalize the first letter" shape
+    # settings_window_html.py's own client-side ruleTypeLabel() uses for the
+    # local-mode picker -- kept in sync by eye rather than shared code since
+    # one is Python building a <select> server-side and the other is JS
+    # building one in the browser, but a reviewer should see the same label
+    # for the same rule name on either surface.
+    s = rule_name.replace("_", " ")
+    return s[:1].upper() + s[1:]
+
+
+def _parse_rule_value_field(rule_name: str, raw_text: str) -> Any:
+    # settings_controller._parse_rule_value's own logic, against the same
+    # RULES_LIST_VALUE/RULES_INT_VALUE registry -- duplicated rather than
+    # imported since that function is private to settings_controller.py and
+    # this is a handful of lines, not a shared algorithm worth coupling two
+    # modules over. Empty text means "boolean rule, no value", matching that
+    # function's own docstring.
+    raw_text = (raw_text or "").strip()
+    if not raw_text:
+        return None
+    if rule_name in RULES_LIST_VALUE:
+        return [v.strip() for v in raw_text.split(",") if v.strip()]
+    if rule_name in RULES_INT_VALUE:
+        try:
+            return int(raw_text)
+        except ValueError:
+            return raw_text
+    return raw_text
+
+
+def _add_rule_form_html(csrf_esc: str) -> str:
+    # One <select> with an <optgroup> per operation rather than a
+    # connector-nav sidebar like settings_window_html.py's local-mode
+    # picker -- this page is plain server-rendered forms with no JS (see
+    # module docstring: "reuse routes_org_approvals.py's minimal
+    # doctype+tokens.css shell"), so there is no client-side way to filter a
+    # second <select>'s options by a first one's choice. Grouping by
+    # operation keeps the ~135 (operation, rule type) pairs navigable
+    # without needing one.
+    optgroups = []
+    for op_key, rule_names in RULES_BY_OPERATION.items():
+        op_label = html.escape(OPERATION_LABELS.get(op_key, op_key), quote=True)
+        options = "".join(
+            f"<option value=\"{html.escape(op_key, quote=True)}|{html.escape(rule_name, quote=True)}\">"
+            f"{html.escape(_rule_type_label(rule_name))}</option>"
+            for rule_name in rule_names
+        )
+        optgroups.append(f"<optgroup label=\"{op_label}\">{options}</optgroup>")
+    return (
+        "<form class=\"pf-set\" method=\"post\" action=\"/api/settings/rules/add\">"
+        f"<input type=\"hidden\" name=\"csrf\" value=\"{csrf_esc}\">"
+        "<select name=\"rule_choice\" required aria-label=\"Operation and rule type\">"
+        "<option value=\"\">Select an operation and rule type…</option>"
+        + "".join(optgroups) +
+        "</select> "
+        "<input type=\"text\" name=\"value\" "
+        "placeholder=\"Value -- comma-separated list, a number, or leave blank\" "
+        "aria-label=\"Rule value\"> "
+        "<button type=\"submit\">Add rule</button>"
+        "</form>"
+    )
+
+
 def _render_settings_page(cfg: dict[str, Any], *, principal: Principal, csrf: str) -> str:
     rule_rows = _rules_rows(cfg)
     grant_rows = _grant_rows(cfg)
@@ -213,7 +284,7 @@ def _render_settings_page(cfg: dict[str, Any], *, principal: Principal, csrf: st
         f"<h1>Settings</h1>"
         f"<p>Signed in as {html.escape(principal.email or principal.id)}.</p>"
         f"{admin_link}"
-        f"<h2>Auto-accept rules</h2>{rules_html}"
+        f"<h2>Auto-accept rules</h2>{rules_html}{_add_rule_form_html(csrf_esc)}"
         f"<h2>Trusted resources</h2>{grants_html}"
     )
 
@@ -480,6 +551,42 @@ def build_routes(
             headers={"Cache-Control": "no-store"},
         )
 
+    async def add_rule(request: Request) -> Response:
+        """The counterpart of ``remove_rule`` below, wiring up
+        ``add_rule_row`` -- previously stuck in ``org_settings_scope.
+        PER_PRINCIPAL_ACTIONS_UNROUTED`` because nothing on this end
+        consumed it (see that module's docstring). Same shape as
+        ``remove_rule``: authenticate, CSRF, origin, ``is_action_permitted``,
+        act scoped to ``current_principal()``, audit. ``rule_choice`` (an
+        ``"{op_key}|{rule_name}"`` pair, the ``_add_rule_form_html`` select's
+        own option values) is validated against ``RULES_BY_OPERATION`` --
+        the same fixed menu local mode's own picker constrains its dropdown
+        to -- so this route can never hand ``auto_accept.add_auto_accept_
+        rule`` a rule name the evaluator wouldn't recognize for that
+        operation.
+        """
+        principal = _current_principal(request)
+        if principal is None:
+            return RedirectResponse("/login?next=/settings", status_code=302, headers={"Cache-Control": "no-store"})
+        form = await request.form()
+        if not org_session.check_csrf(request, form.get("csrf")):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not org_session.check_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        if not is_action_permitted("add_rule_row", principal):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        op_key, _, rule_name = str(form.get("rule_choice", "")).partition("|")
+        if rule_name not in RULES_BY_OPERATION.get(op_key, ()):
+            return JSONResponse({"error": "unknown operation/rule type"}, status_code=400)
+        value = _parse_rule_value_field(rule_name, str(form.get("value", "")))
+        with principal_scope(principal):
+            _ensure_principal_settings_loaded()
+            auto_accept.add_auto_accept_rule(op_key, rule_name, value)
+            _record_settings_audit(
+                principal, f"Added auto-accept rule {rule_name!r} for {op_key!r} (principal={principal.id})",
+            )
+        return RedirectResponse("/settings", status_code=303, headers={"Cache-Control": "no-store"})
+
     async def remove_rule(request: Request) -> Response:
         principal = _current_principal(request)
         if principal is None:
@@ -600,6 +707,7 @@ def build_routes(
     return [
         Route("/settings", settings_page),
         Route("/settings/privacy", privacy_page),
+        Route("/api/settings/rules/add", add_rule, methods=["POST"]),
         Route("/api/settings/rules/remove", remove_rule, methods=["POST"]),
         Route("/api/settings/grants/remove", remove_grant, methods=["POST"]),
         Route("/api/settings/privacy/policy", set_privacy_policy, methods=["POST"]),

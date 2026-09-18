@@ -648,6 +648,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   challenge this server began; every other path — no step-up required for the batch, or the
   no-credential-enrolled/`require_passkey`-off fall-through — mints a fresh one instead of trusting
   the request body.
+- Org mode's `/settings` page had no way to add an auto-accept rule at all — #400's first cut
+  (`web/routes_org_settings.py`) only ever wired up viewing and *removing* a rule row, even though
+  `auto_accept.add_auto_accept_rule()` and local mode's own desktop picker already supported it.
+  A principal could see their configured rules and delete them, but the only way to add a new one
+  was a hand-edited `settings.yaml`. A new "Add a rule" form on the page (one `<select>`, grouped
+  by operation, listing every `(operation, rule type)` pair `RULES_BY_OPERATION` allows, plus a
+  value field) posts to a new `POST /api/settings/rules/add` route, scoped to
+  `current_principal()` exactly like the existing remove routes. `add_rule_row` moves from
+  `org_settings_scope.PER_PRINCIPAL_ACTIONS_UNROUTED` to `PER_PRINCIPAL_ACTIONS` now that a route
+  actually consumes it (see that module's docstring on why the two are kept apart).
 - Org mode: `/connect` ("Connect your accounts") had no way back to the rest of the web UI —
   `/approvals`, `/security`, and `/settings` all link to it, and `/settings`/`/approvals` link back
   to each other, but `/connect` itself only offered a sign-out button. It now carries the same
