@@ -277,12 +277,17 @@ signing/notarization credential availability at build time. Full installation de
    your own user profile — registers a Task Scheduler task so the daemon starts at login, and
    starts the daemon immediately — no separate "install the mcpb first" step is needed to get it
    running (unlike macOS, above), though you still need it installed to talk to Claude Desktop.
-3. Install **PrivacyFence.mcpb** into Claude Desktop: on the installer's last page, leave
-   "Install PrivacyFence into Claude Desktop" checked (it's on by default) and click Finish —
-   Claude Desktop opens on its own and offers to install it. If you unchecked that box, or need to
-   do it again later, open File Explorer, paste the install path from step 2 into the address bar
-   (`%ProgramFiles%\PrivacyFence\` or `%LOCALAPPDATA%\Programs\PrivacyFence\`, whichever applies to
-   you) and press Enter, then double-click the `.mcpb` file there.
+3. Install **PrivacyFence.mcpb** into Claude Desktop: on the installer's last page, leave the
+   checked box for it checked and click Finish. If Claude Desktop is already installed on this
+   machine, that box reads "Install PrivacyFence into Claude Desktop" and Claude Desktop opens on
+   its own and offers to install it. If Claude Desktop isn't installed yet (or Windows doesn't yet
+   know it handles `.mcpb` files), there's nothing to hand the file to, so the box instead reads
+   "Show the PrivacyFence Claude Desktop extension in File Explorer" and does exactly that —
+   install Claude Desktop, then double-click the pre-selected `.mcpb` file. Either way, if you
+   unchecked that box, or need to do it again later, open File Explorer, paste the install path
+   from step 2 into the address bar (`%ProgramFiles%\PrivacyFence\` or
+   `%LOCALAPPDATA%\Programs\PrivacyFence\`, whichever applies to you) and press Enter, then
+   double-click the `.mcpb` file there.
 4. Ask Claude to set up PrivacyFence. PrivacyFence's `initialize` response already tells Claude to
    check `privacyfence_status` before its first governed action, so you often don't even need to
    ask explicitly — either way, Claude calls it and hands you a sign-in link. Open it, or open

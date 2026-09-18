@@ -106,6 +106,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   current-user-only install) and how to get there in File Explorer, instead of just saying to
   install it with no path given, for the case where the new automatic prompt above was declined.
   See issue #407.
+- The Windows installer's "open the `.mcpb` after Finish" checkbox (see #407, above) no longer
+  attempts to `ShellExecute` the `.mcpb` when nothing on the machine is registered to open one —
+  previously, that left Windows presenting its own "how do you want to open this file?" picker,
+  since PrivacyFence gets installed before Claude Desktop for most first-time users. The installer
+  now checks the registry for a real `.mcpb` file association first: if Claude Desktop has already
+  claimed it, Finish opens it exactly as before; otherwise the same checkbox opens File Explorer
+  with the `.mcpb` pre-selected instead, so the user always lands somewhere they can act on rather
+  than at a dead-end system dialog.
 - `privacyfence_get_sign_in_link`'s result text is now a single markdown link (naming the
   10-minute expiry in the link text itself, e.g. "Sign in to PrivacyFence — one-time link, expires
   in 10 minutes") instead of a raw `{"url": ...}` JSON blob, so a client that renders tool text as
