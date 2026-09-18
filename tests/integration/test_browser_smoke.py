@@ -331,6 +331,48 @@ def _register_card(web_ui: WebApprovalUI, **kwargs) -> tuple[threading.Thread, o
     return t, card
 
 
+def _register_gated_card(
+    web_ui: WebApprovalUI, *, gate_kind: str, dedupe_key: str, summary: str,
+    tool: str, tool_name: str, connector: str = "gmail",
+) -> tuple[threading.Thread, object]:
+    """Like ``_register_card`` above, but pre-registers a real
+    ``PendingApproval`` and hands it to the blocking call the way gate.py's
+    own deferred protocol does -- so the row carries a genuine
+    ``gate_kind``/``summary``/``tool_name``, which is what the list row
+    actually renders from. ``_register_card``'s direct call has no gated
+    context to attach any of that to and registers confirm-shaped (see
+    web_approval_ui._run_card), which is fine for the decision-flow tests
+    but renders a row with no direction and no object."""
+    approval, _created = web_ui.deferred_registry.register_or_coalesce(
+        dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind=gate_kind,
+        request_id=f"req-{dedupe_key}", summary=summary, tool_name=tool_name,
+        operation_key=f"{connector}.{tool}",
+    )
+    box: dict = {}
+
+    def run():
+        if gate_kind == "review":
+            box["result"] = web_ui.show_read_popup(
+                tool_name, {"From": "a@b.com"}, "body text", None, approval=approval,
+            )
+        else:
+            box["result"] = web_ui.show_popup(
+                tool_name, {"To": "a@b.com"}, "body text", approval=approval,
+            )
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    # The card's own HTML is written by the blocking call, so it is also
+    # the readiness signal that the call has actually parked on this
+    # approval and a resolve() will reach it.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not approval.html:
+        time.sleep(0.01)
+    assert approval.html, "gated card never parked on its approval"
+    t.result_box = box
+    return t, approval
+
+
 def _register_confirm(web_ui: WebApprovalUI, categories: list[str]) -> tuple[threading.Thread, object]:
     """Same pattern as ``_register_card`` above, but for the PII/rule
     confirmation dialog shape (``show_pii_confirmation_popup``) -- a bare
@@ -705,6 +747,109 @@ class TestApprovalListBehavior:
                     web_ui.resolve(card.id, "deny")
                     thread.join(timeout=5)
 
+    def test_row_survives_an_sse_rerender_unchanged(self, page, local_server):
+        """``_row_html`` (first paint) and ``rowHtml`` (live re-render) are
+        hand-kept mirrors of each other, and every SSE tick replaces the
+        list's markup wholesale -- so anything the two disagree about shows
+        up as a row that silently changes shape a poll interval after the
+        page loads. This pins the fields that carry the decision: the
+        object as the title, the direction pill, and the tool name on the
+        meta line.
+
+        Driven by resolving a *second* card, which forces a re-render of
+        the row under test without touching it."""
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread_a, card_a = _register_gated_card(
+            web_ui, gate_kind="review", dedupe_key="ka", tool="gmail_get_thread",
+            tool_name="Read Email Thread", summary='Read "Q3 forecast — legal review"',
+        )
+        thread_b, card_b = _register_gated_card(
+            web_ui, gate_kind="popup", dedupe_key="kb", tool="gmail_add_label",
+            tool_name="Add Gmail Label", summary="Label as Work/Forecast",
+        )
+        assert card_a.id != card_b.id
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            row = page.locator(f'[data-approval-id="{card_a.id}"]')
+            page.wait_for_selector(f'[data-approval-id="{card_a.id}"]')
+            before = {
+                "title": row.locator(".pf-approval-title").text_content(),
+                "kicker": row.locator(".pf-approval-kicker").text_content(),
+                "pill": row.locator(".pf-approval-pill").text_content(),
+                "icon": row.locator(".pf-approval-icon").get_attribute("class"),
+            }
+            # The object is the headline and the tool name has moved to the
+            # meta line -- the raw tool id appears on neither.
+            assert before["pill"] == "Read"
+            assert before["title"] == 'Read "Q3 forecast — legal review"'
+            assert "Read Email Thread" in before["kicker"]
+            assert "gmail_get_thread" not in before["kicker"]
+            # The real brand mark, not the letter-badge fallback -- this is
+            # the one that used to survive first paint and then degrade.
+            assert "pf-approval-icon-gmail" in before["icon"]
+            assert "pf-approval-icon-fallback" not in before["icon"]
+
+            web_ui.resolve(card_b.id, "deny")
+            thread_b.join(timeout=5)
+            page.wait_for_selector(f'[data-approval-id="{card_b.id}"]', state="detached", timeout=5000)
+
+            after = {
+                "title": row.locator(".pf-approval-title").text_content(),
+                "kicker": row.locator(".pf-approval-kicker").text_content(),
+                "pill": row.locator(".pf-approval-pill").text_content(),
+                "icon": row.locator(".pf-approval-icon").get_attribute("class"),
+            }
+            assert after == before
+            # And the rule behind that class actually resolved to an image,
+            # rather than the class merely being present.
+            assert "url(\"data:image/png;base64," in page.evaluate(
+                "el => getComputedStyle(el).backgroundImage",
+                arg=row.locator(".pf-approval-icon").element_handle(),
+            )
+        finally:
+            for thread, card in ((thread_a, card_a), (thread_b, card_b)):
+                if thread.is_alive():
+                    web_ui.resolve(card.id, "deny")
+                    thread.join(timeout=5)
+
+    def test_heading_count_follows_the_live_list(self, page, local_server):
+        """The heading sits outside ``#pf-approvals-list``, so render()'s
+        own innerHTML write does not touch it -- without an explicit
+        update it keeps whatever count the first paint had, forever."""
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread_a, card_a = _register_gated_card(
+            web_ui, gate_kind="review", dedupe_key="ka", tool="gmail_get_thread",
+            tool_name="Read Email Thread", summary="Q3 forecast",
+        )
+        thread_b, card_b = _register_gated_card(
+            web_ui, gate_kind="popup", dedupe_key="kb", tool="gmail_add_label",
+            tool_name="Add Gmail Label", summary="Label as Work/Forecast",
+        )
+        assert card_a.id != card_b.id
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(f'[data-approval-id="{card_b.id}"]')
+            heading_text = page.locator("#pf-approvals-heading").text_content()
+            assert "2 approvals pending" in heading_text
+            assert "1 read · 1 write" in heading_text
+
+            web_ui.resolve(card_b.id, "deny")
+            thread_b.join(timeout=5)
+            page.wait_for_selector(f'[data-approval-id="{card_b.id}"]', state="detached", timeout=5000)
+            heading = page.locator("#pf-approvals-heading")
+            page.wait_for_function(
+                "el => el.textContent.indexOf('1 approval pending') !== -1",
+                arg=heading.element_handle(),
+                timeout=5000,
+            )
+        finally:
+            for thread, card in ((thread_a, card_a), (thread_b, card_b)):
+                if thread.is_alive():
+                    web_ui.resolve(card.id, "deny")
+                    thread.join(timeout=5)
+
     def test_double_submitting_the_same_decision_is_idempotent(self, page, context, local_server):
         """A slow-network retry (or an over-eager double click) posting the
         exact same decision twice must resolve the pending call exactly
@@ -1012,6 +1157,158 @@ def _assert_no_horizontal_overflow(page) -> None:
     scroll_width = page.evaluate("document.documentElement.scrollWidth")
     client_width = page.evaluate("document.documentElement.clientWidth")
     assert scroll_width <= client_width, f"page scrolls horizontally: {scroll_width} > {client_width}"
+
+
+# A real phone, not just a narrow window. ``is_mobile`` is what makes
+# Chromium apply the ~980px *fallback layout viewport* a phone uses for any
+# document that declares no ``<meta name="viewport">`` -- and then scale the
+# result down to fit the screen. The ``_VIEWPORTS`` contexts above are
+# ordinary desktop contexts, which lay every document out at exactly the
+# width they are given whether or not it asks for that. That difference is
+# not academic: it is why every responsive test in this file passed for as
+# long as the card and dialog documents shipped no viewport meta at all,
+# while on an actual phone 13px body text rendered near 5px and the
+# ``@media (max-width: 700px)`` rules written to prevent exactly that never
+# matched once.
+_MOBILE_EMULATION = {
+    "viewport": {"width": 393, "height": 852},
+    "screen": {"width": 393, "height": 852},
+    "device_scale_factor": 3,
+    "is_mobile": True,
+    "has_touch": True,
+}
+
+
+@pytest.fixture
+def mobile_page(browser):
+    ctx = browser.new_context(ignore_https_errors=True, **_MOBILE_EMULATION)
+    pg = ctx.new_page()
+    pg.pf_console_log: list[str] = []  # type: ignore[attr-defined]
+    pg.on("console", lambda msg: pg.pf_console_log.append(f"[console:{msg.type}] {msg.text}"))
+    pg.on("pageerror", lambda exc: pg.pf_console_log.append(f"[pageerror] {exc}"))
+    yield pg
+    pg.close()
+    ctx.close()
+
+
+class TestMobileLayoutViewport:
+    """The layout viewport a real phone actually gives these documents.
+
+    Every assertion here is on ``window.innerWidth`` rather than on rendered
+    geometry, because that single number is what the whole failure mode
+    turns on: 980 means the document is being laid out for a desktop and
+    scaled down, and every phone-width rule in it is dead code; 393 means
+    the breakpoints are live."""
+
+    _DEVICE_WIDTH = _MOBILE_EMULATION["viewport"]["width"]
+
+    def test_approval_list_lays_out_at_device_width(self, mobile_page, local_server):
+        # web_shell.wrap has always declared a viewport meta -- this is the
+        # control that proves the assertion below can distinguish the two
+        # states at all, rather than passing for some unrelated reason.
+        server, _web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        mobile_page.goto(f"{server.base_url}/approvals")
+        mobile_page.wait_for_load_state("load")
+        assert mobile_page.evaluate("window.innerWidth") == self._DEVICE_WIDTH
+
+    @pytest.mark.parametrize("layout", ["narrow", "wide"])
+    def test_approval_card_lays_out_at_device_width(self, mobile_page, local_server, layout):
+        server, web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        thread, card = _register_card(web_ui, read=(layout == "wide"), layout=layout)
+        try:
+            mobile_page.goto(f"{server.base_url}/approvals/{card.id}")
+            mobile_page.wait_for_load_state("load")
+            assert mobile_page.evaluate("window.innerWidth") == self._DEVICE_WIDTH
+            _assert_no_horizontal_overflow(mobile_page)
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    def test_pii_confirmation_dialog_lays_out_at_device_width(self, mobile_page, local_server):
+        server, web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        thread, card = _register_confirm(web_ui, ["Email address"])
+        try:
+            mobile_page.goto(f"{server.base_url}/approvals/{card.id}")
+            mobile_page.wait_for_load_state("load")
+            assert mobile_page.evaluate("window.innerWidth") == self._DEVICE_WIDTH
+            _assert_no_horizontal_overflow(mobile_page)
+        finally:
+            web_ui.resolve(card.id, "cancel")
+            thread.join(timeout=5)
+
+    def test_phone_breakpoint_rules_actually_engage_on_the_card(self, mobile_page, local_server):
+        """The point of the meta tag, stated as the thing it buys: the
+        ``@media (max-width: 700px)`` block is live, so the heading can
+        wrap and the decision controls are a real touch target."""
+        server, web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        thread, card = _register_card(web_ui, read=False, layout="narrow")
+        try:
+            mobile_page.goto(f"{server.base_url}/approvals/{card.id}")
+            mobile_page.wait_for_load_state("load")
+            assert mobile_page.evaluate(
+                "getComputedStyle(document.querySelector('.pf-head h2')).whiteSpace"
+            ) == "normal"
+            deny_box = mobile_page.locator('[data-pf-action="deny"]').bounding_box()
+            accept_box = mobile_page.locator('[data-pf-action="accept"]').bounding_box()
+            assert deny_box["height"] >= 44, deny_box
+            assert accept_box["height"] >= 44, accept_box
+            # Side by side on one row, not the desktop band's
+            # left-pill/right-pill split across the full width.
+            assert abs(deny_box["y"] - accept_box["y"]) < 1
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    def test_list_row_keeps_a_readable_title_column(self, mobile_page, local_server):
+        """F2, as it actually reaches a phone: ``.pf-approval-actions`` is
+        ``flex-shrink:0`` around ~220px of buttons while
+        ``.pf-approval-main`` is ``flex:1;min-width:0``, so the row's own
+        ``flex-wrap`` never fires -- the text column shrinks to roughly
+        25px instead, and the title truncates after two or three
+        characters. The number is the assertion: a title column narrower
+        than the icon beside it is not a row anyone can decide from."""
+        server, web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        thread, card = _register_card(web_ui)
+        try:
+            mobile_page.goto(f"{server.base_url}/approvals")
+            mobile_page.wait_for_load_state("load")
+            main = mobile_page.locator(".pf-approval-main").first.bounding_box()
+            assert main["width"] > 200, main
+            _assert_no_horizontal_overflow(mobile_page)
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    def test_list_row_controls_are_a_real_touch_target_and_deny_is_not_beside_review(
+        self, mobile_page, local_server,
+    ):
+        server, web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        thread, card = _register_card(web_ui)
+        try:
+            mobile_page.goto(f"{server.base_url}/approvals")
+            mobile_page.wait_for_load_state("load")
+            review = mobile_page.locator(".pf-btn-review").first.bounding_box()
+            deny = mobile_page.locator(".pf-btn-deny").first.bounding_box()
+            details = mobile_page.locator(".pf-btn-details").first.bounding_box()
+            for box in (review, deny, details):
+                assert box["height"] >= 44, box
+            # Deny sits at the far end of the strip, not one 8px gap from
+            # the safe action -- denial is irreversible and has no undo
+            # path anywhere in the flow.
+            assert details["x"] < review["x"] < deny["x"]
+            # And the strip is its own band under the identity block, not
+            # squeezed onto the same line as the title.
+            main = mobile_page.locator(".pf-approval-main").first.bounding_box()
+            assert review["y"] >= main["y"] + main["height"]
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
 
 
 class TestResponsiveLayout:

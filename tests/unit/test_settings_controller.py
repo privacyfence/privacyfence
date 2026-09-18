@@ -2005,11 +2005,21 @@ class TestStatusConnectors:
 
 
 class TestRuleUiCompleteness:
-    """Structural checks tying the settings window's rule UI to auto_accept's
-    rule engine -- see test_menu_bar.py's pre-#120 version of this class for
+    """Structural checks tying org mode's per-principal rule UI to auto_accept's
+    v1 rule engine -- see test_menu_bar.py's pre-#120 version of this class for
     the original regressions these caught (calendar.set_visibility/
     non_private_event never reachable from the UI, "docs" missing from
-    RULES_MENU_GROUPS)."""
+    RULES_MENU_GROUPS).
+
+    P6 replaced the local settings window's per-connector Rules page with one
+    filterable Auto-accept page driven by the v2 catalogue, so the nav-group
+    reachability check that used to live here (every OPERATION_LABELS prefix
+    present in RULES_MENU_GROUPS) went with the table it guarded. The v2
+    equivalents are tests/unit/policy/test_catalogue.py's
+    test_covers_every_propose_group_and_every_extra and test_registry.py's
+    coverage of the six formerly-ungovernable operation keys. RULES_BY_OPERATION
+    and OPERATION_LABELS themselves survive for web/routes_org_settings.py,
+    which still renders v1 rules, so these checks still have a subject."""
 
     @staticmethod
     def _all_rule_names() -> set[str]:
@@ -2045,3 +2055,21 @@ class TestRuleUiCompleteness:
     def test_every_rules_by_operation_key_has_a_label(self):
         unlabeled = set(sc.RULES_BY_OPERATION) - set(sc.OPERATION_LABELS)
         assert unlabeled == set()
+
+
+class TestAnyConnectorAuthenticated:
+    """The one boolean web/routes_approvals.py's list route needs to pick
+    between the approvals page's two empty states -- the same fact
+    _connectors_state's per-row ``authed`` is built from."""
+
+    def test_false_with_nothing_authenticated(self, controller):
+        assert controller.any_connector_authenticated() is False
+
+    def test_true_once_a_connector_is(self, controller):
+        controller._connectors = ["gmail"]
+        assert controller.any_connector_authenticated() is True
+
+    def test_agrees_with_the_per_connector_snapshot_rows(self, controller):
+        controller._connectors = ["gmail"]
+        rows = controller.snapshot()["connectors"]
+        assert any(r["authed"] for r in rows) is controller.any_connector_authenticated()

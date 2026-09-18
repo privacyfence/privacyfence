@@ -624,15 +624,18 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     # AppId is what makes this an upgrade rather than a side-by-side
     # install) ─────────────────────────────────────────────────────────────
     setup_exe_n1, new_version = _synthetic_next_version_installer(setup_exe_n, tmp_path / "upgrade-build")
+    upgrade_log_path = tmp_path / "install-n1.log"
     upgrade_result = _run_installer(
         str(setup_exe_n1),
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
         f"/DIR={install_dir}",
-        f"/LOG={tmp_path / 'install-n1.log'}",
+        f"/LOG={upgrade_log_path}",
     )
     assert upgrade_result.returncode == 0, (
         f"upgrade install (version {new_version}) failed (exit {upgrade_result.returncode}):\n"
-        f"{upgrade_result.stdout}{upgrade_result.stderr}"
+        f"{upgrade_result.stdout}{upgrade_result.stderr}\n"
+        f"---- install log ----\n"
+        f"{upgrade_log_path.read_text(errors='replace') if upgrade_log_path.exists() else '(missing)'}"
     )
     assert alias_exe.is_file(), f"{alias_exe} missing after upgrade install"
 

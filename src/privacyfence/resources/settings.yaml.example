@@ -312,9 +312,17 @@ step_up:
   # this file directly still works too, and is the only way back to
   # `false` -- there's no UI control that turns step-up back off.
   enabled: false
-  # Which approvals require step-up: "writes" (every approval popup) or
-  # "writes_and_pii_reads" (also a read PrivacyFence flagged as containing
-  # personal data).
+  # Which approvals require step-up, narrowest first:
+  #   writes                 every approval popup for a write
+  #   writes_and_pii_reads   also a read PrivacyFence flagged as containing
+  #                          personal data
+  #   writes_and_reads       also every other read that reaches an approval
+  #                          -- pick this if you'd rather not depend on PII
+  #                          detection having flagged what matters
+  # A read that an auto-accept rule already covers never becomes an approval
+  # at all, so no scope here asks for a passkey on one. Changing this value
+  # needs a daemon restart (the Settings page's "Turn on" button writes
+  # `enabled`/`require_passkey` only).
   scope: writes
   # WebAuthn's Relying Party ID. Leave unset -- "localhost" is always
   # correct for this daemon's own embedded server and needs no TLS.

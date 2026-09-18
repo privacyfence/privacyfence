@@ -1133,7 +1133,12 @@ async def gated_call(
                     # show_popup's own docstring) -- upload_pii_categories is only
                     # ever non-empty for drive_upload_file's real PII match, the one write
                     # call that forces the same second confirmation the read side gets.
-                    upload_forced=bool(upload_pii_categories), **extra,
+                    upload_forced=bool(upload_pii_categories),
+                    # Selects the card's own "Effect" row -- the sentence naming what
+                    # this write changes and whether it can be taken back. See
+                    # write_effects.py.
+                    tool=tool,
+                    **extra,
                 )
                 if d in ("accept", "accept_all") and upload_pii_categories:
                     d = await _confirm_pii_or_deny(d, upload_pii_categories)

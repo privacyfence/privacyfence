@@ -1580,6 +1580,16 @@ class SettingsController:
     # Snapshot
     # ------------------------------------------------------------------ #
 
+    def any_connector_authenticated(self) -> bool:
+        """Whether anything is governed at all yet.
+
+        The same fact ``_connectors_state``'s per-row ``authed`` is built
+        from, as one boolean, for callers that only need "is this install
+        set up" and shouldn't have to build (or depend on the shape of) a
+        full snapshot to find out -- web/routes_approvals.py's list route
+        uses it to pick the approvals page's empty state."""
+        return bool(self._connectors)
+
     def snapshot(self) -> dict[str, Any]:
         cfg = self._load_config()
         org_config = self._org_config_or_empty()

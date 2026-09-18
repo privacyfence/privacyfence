@@ -159,6 +159,49 @@ class TestPrincipalScopedList:
         assert r.status_code == 200
         assert "a message" in r.text or "Get message" in r.text  # her own row rendered
 
+    def test_the_list_is_served_in_the_shared_shell(self):
+        # F9: this page used to be a bare document -- no header, no brand,
+        # no nav, no favicon -- while local mode's identical list got the
+        # full shell. It is also the surface a paying org actually uses.
+        app, sessions, web_ui = _app()
+        _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/approvals")
+        assert "pf-shell-header" in r.text
+        assert 'class="pf-shell-nav-item active" href="/approvals"' in r.text
+        for href in ("/connect", "/security", "/settings"):
+            assert f'class="pf-shell-nav-item" href="{href}"' in r.text
+
+    def test_the_list_names_whose_queue_it_is(self):
+        # Every read and write here is authorized against one principal,
+        # and the page never said which.
+        app, sessions, web_ui = _app()
+        _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        assert ALICE.email in client.get("/approvals").text
+
+    def test_the_list_claims_no_liveness_it_cannot_deliver(self):
+        # Org mode's app mounts no GET /api/state/stream at all, so a live
+        # indicator here would either lie or sit permanently on an error.
+        app, sessions, web_ui = _app()
+        _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/approvals")
+        assert 'id="pf-shell-live-dot"' not in r.text
+        assert "/api/state/stream" not in r.text
+
+    def test_the_old_unstyled_footer_links_are_gone(self):
+        # A centred <p> of three links nothing styled, so they rendered
+        # browser-default blue against a warm grey palette. The nav carries
+        # them now.
+        app, sessions, web_ui = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        assert '<p style="text-align:center">' not in client.get("/approvals").text
+
     def test_show_approval_404s_a_foreign_principals_card(self):
         app, sessions, web_ui = _app()
         approval = _register(web_ui, ALICE, dedupe_key="a1")
@@ -456,6 +499,30 @@ class TestStepUpScoping:
         approval = _register(web_ui, ALICE, gate_kind="review", pii_detected=True)
         client = _client(app)
         session_id = _signed_in(client, sessions, ALICE)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+
+    def test_unflagged_read_needs_step_up_only_in_the_widest_scope(self):
+        """``writes_and_reads`` means here exactly what it means in local
+        mode (tests/unit/web/test_routes_approvals.py's own counterpart):
+        one ``is_step_up_required`` serves both surfaces, so the only
+        difference this pair should ever show is what a ``428`` offers --
+        never whether one is due."""
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", scope="writes_and_pii_reads"),
+        )
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        approval = _register(web_ui, ALICE, gate_kind="review", pii_detected=False)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 200
+
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", scope="writes_and_reads"),
+        )
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        approval = _register(web_ui, ALICE, gate_kind="review", pii_detected=False)
         r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
         assert r.status_code == 428
 

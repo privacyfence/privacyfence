@@ -27,6 +27,7 @@ import pytest
 pytest.importorskip("cryptography")
 
 from privacyfence import org_bundle_signing
+from privacyfence.step_up_config import STEP_UP_SCOPES, StepUpConfig
 
 _SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "build_org_bundle.py"
 _spec = importlib.util.spec_from_file_location("build_org_bundle", _SCRIPT_PATH)
@@ -278,6 +279,36 @@ class TestMainSigningIntegration:
         bundle = json.loads(out_path.read_text())
         assert bundle["step_up"]["require_passkey"] is False
         assert bundle["step_up"]["enabled"] is True  # untouched by this merge
+
+    def test_step_up_scope_writes_the_widest_value_through(self, tmp_path):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+
+        rc = build_org_bundle.main([
+            "-o", str(out_path), "--mode", "org",
+            "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com",
+            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--step-up-enabled", "--step-up-scope", "writes_and_reads",
+            "--sign-key", str(key_path),
+        ])
+
+        assert rc == 0
+        bundle = json.loads(out_path.read_text())
+        assert bundle["step_up"]["scope"] == "writes_and_reads"
+        # The bundle this script writes has to survive the daemon's own
+        # parser, which is the half that actually enforces the value.
+        assert StepUpConfig.from_org_config(bundle).scope == "writes_and_reads"
+
+    def test_step_up_scope_choices_match_the_daemons_own_accepted_scopes(self):
+        """build_org_bundle.py is stdlib-only by design, so it repeats
+        step_up_config.STEP_UP_SCOPES instead of importing it -- this is
+        what catches the two drifting apart."""
+        action = next(
+            a for a in build_org_bundle.build_parser()._actions if a.dest == "step_up_scope"
+        )
+        assert tuple(action.choices) == STEP_UP_SCOPES
 
     def test_step_up_require_passkey_requires_mode_org(self, tmp_path):
         out_path = tmp_path / "org_config.json"
