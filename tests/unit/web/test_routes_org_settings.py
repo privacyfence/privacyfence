@@ -327,6 +327,56 @@ class TestAddRule:
         assert "/api/settings/rules/add" in r.text
         assert "rule_choice" in r.text
 
+    def test_adds_an_int_value_rule_from_numeric_text(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "gmail.read_message|age_threshold_days", "value": "30", "csrf": csrf},
+        )
+        assert r.status_code == 303
+
+        with principal_scope(ALICE):
+            cfg = auto_accept.get_current_config()["auto_accept_rules"]
+        assert cfg["gmail.read_message"] == [{"rule": "age_threshold_days", "value": 30}]
+
+    def test_a_non_numeric_value_for_an_int_rule_is_kept_as_typed(self, tmp_path, monkeypatch):
+        # _parse_rule_value_field's own fallback: a non-numeric value for an
+        # int-value rule is stored as-typed rather than rejected -- the
+        # evaluator simply won't match it, a softer failure than blocking
+        # the submission outright.
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "gmail.read_message|age_threshold_days", "value": "soon", "csrf": csrf},
+        )
+        assert r.status_code == 303
+
+        with principal_scope(ALICE):
+            cfg = auto_accept.get_current_config()["auto_accept_rules"]
+        assert cfg["gmail.read_message"] == [{"rule": "age_threshold_days", "value": "soon"}]
+
+    def test_forbidden_when_is_action_permitted_denies_it(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        monkeypatch.setattr(ros, "is_action_permitted", lambda action, principal: False)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "contacts.edit|no_contact_info_change", "csrf": csrf},
+        )
+        assert r.status_code == 403
+        assert _on_disk_rules(tmp_path, "alice") == {}
+
 
 class TestRemoveRule:
     def test_removes_the_matching_rule_and_redirects(self, tmp_path, monkeypatch):
@@ -398,6 +448,20 @@ class TestRemoveRule:
         )
         assert r.status_code == 303
         assert _on_disk_rules(tmp_path, "alice")["gmail.send"] == [{"rule": "always_allow"}]
+
+    def test_forbidden_when_is_action_permitted_denies_it(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice", rules={"gmail.send": [{"rule": "always_allow"}]})
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        monkeypatch.setattr(ros, "is_action_permitted", lambda action, principal: False)
+
+        r = client.post(
+            "/api/settings/rules/remove",
+            data={"op_key": "gmail.send", "rule": "always_allow", "value": "null", "csrf": csrf},
+        )
+        assert r.status_code == 403
+        assert _on_disk_rules(tmp_path, "alice") == {"gmail.send": [{"rule": "always_allow"}]}
 
 
 class TestRemoveGrant:
@@ -481,6 +545,22 @@ class TestRemoveGrant:
             data={"connector": "not_a_real_connector", "config_key": "nope", "resource_id": "x", "csrf": csrf},
         )
         assert r.status_code == 404
+
+    def test_forbidden_when_is_action_permitted_denies_it(self, tmp_path, monkeypatch):
+        _seed(
+            tmp_path, monkeypatch, "alice",
+            grants={"drive": {"folders": [{"id": "folder-1", "name": "Sandbox", "read": True}]}},
+        )
+        app, sessions = _app()
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        monkeypatch.setattr(ros, "is_action_permitted", lambda action, principal: False)
+
+        r = client.post(
+            "/api/settings/grants/remove",
+            data={"connector": "drive", "config_key": "folders", "resource_id": "folder-1", "csrf": csrf},
+        )
+        assert r.status_code == 403
 
 
 class TestInstallWidePolicyEditing:
