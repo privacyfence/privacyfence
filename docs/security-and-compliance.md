@@ -48,8 +48,9 @@ Linux and Windows)](#privilege-separation-macos-linux-and-windows) below, which 
 [#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4 builds. macOS and Linux move
 it **by default** as of D1 (4.1); Windows remains opt-in, per that subsection. Everything in the
 rest of this section describes the un-separated install — still what a Windows install is unless
-`enable` is run by hand, still reachable on any platform via `... disable`, and still what a macOS
-install is until its one admin-password prompt is answered or a Linux install is until `enable
+`enable` is run by hand, still reachable on any platform via `... disable`, and still what a macOS DMG install is until its
+one admin-password prompt is answered (a macOS `.pkg` install, #428 D2, answers this at install
+time instead — see that subsection) or a Linux install is until `enable
 --auto` can resolve who owns it (see that subsection for when it can't); that subsection says
 exactly which of these statements a separated install changes and which it leaves standing.
 
@@ -105,11 +106,31 @@ Phase 1 (config plus a `/security` enrollment page, mirroring org mode's) and Ph
 decide-time check itself) have both landed for local mode now that Phase 4 above has, since the
 credential store the assertion is checked against is exactly the one Phase 4 makes service-owned.
 With `step_up.enabled` set, local mode's own `/api/approvals/{id}/decide` demands a fresh WebAuthn
-assertion before releasing an approving decision on a write (or a PII-flagged read, in the wider
-scope) -- mirroring org mode's own gate, minus the IdP re-authentication fallback local mode has no
+assertion before releasing an approving decision on a write (or on a read too, in a wider
+`scope` -- see below) -- mirroring org mode's own gate, minus the IdP re-authentication fallback local mode has no
 equivalent of. With `step_up.enabled` alone, and no passkey enrolled, there is no ceremony left to
 demand and the decision goes through unguarded rather than deadlocking behind one nobody could
 complete -- so with only `enabled` set, simply never enrolling a passkey dodges the check entirely.
+
+**What step-up covers is `step_up.scope`, and it means the same thing in both modes** -- one
+`StepUpConfig` (`step_up_config.py`) and one predicate (`webauthn_stepup.is_step_up_required`)
+serve local and org mode alike; only where the value is configured differs
+(`config/settings.yaml`'s `step_up:` section vs `org_config.json`'s, the latter written by
+`scripts/build_org_bundle.py --step-up-scope`). Narrowest first:
+
+| `scope` | write | read flagged by `pii_detector.py` | any other read |
+| --- | --- | --- | --- |
+| `writes` (default) | passkey | — | — |
+| `writes_and_pii_reads` | passkey | passkey | — |
+| `writes_and_reads` | passkey | passkey | passkey |
+
+Denying never needs step-up under any scope (denying discloses nothing), and neither does a bare
+confirm dialog, which is a second step inside a decision the card it belongs to already gated. A
+read an auto-accept rule covers never becomes an approval in the first place, so no scope asks for
+a passkey on one -- `writes_and_reads` widens what a *pending* approval costs to release, not what
+gets gated. Pick it over `writes_and_pii_reads` when the install would rather not depend on PII
+detection having flagged everything worth a second factor; the cost is a passkey prompt on every
+read a rule doesn't already cover.
 
 **`step_up.require_passkey` (Phase 3) is what makes it a guarantee rather than an opt-in check.**
 With it on: an approving decision with nothing enrolled is hard-failed (`403`, naming `/security`)
@@ -236,15 +257,18 @@ All three still ship the manual `enable`/`disable`/`status` subcommands above; t
 live connector OAuth tokens, so take a backup first if running one by hand. `... disable` reverses
 it on any platform. **macOS and Linux now turn this on by default as of #428 D1 (4.1)**, rather than
 waiting out the originally-planned soak period: the `.deb`'s `postinst` runs `enable --auto` itself,
-root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)); macOS
-has no equivalent package-manager hook, so the daemon's own startup asks once, via the standard
-admin-password dialog, the first time it finds itself unseparated
-(`privilege_separation.maybe_auto_enable_macos()`). `--auto` (used by both triggers, never by a
-human directly) is the same `enable`, made safe to run unattended: anywhere it can't safely tell who
-owns the install or find the daemon's executables, it logs why and leaves the install opt-in rather
-than guessing or failing a package install. **Windows stays opt-in** — D1 does not extend to it, on
-top of the install-tier and mandatory-companion requirements below, which raise the bar for an
-unattended default beyond what the two POSIX platforms needed.
+root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)); a DMG
+install has no equivalent package-manager hook, so the daemon's own startup asks once, via the
+standard admin-password dialog, the first time it finds itself unseparated
+(`privilege_separation.maybe_auto_enable_macos()`). #428 D2 (4.1) gives macOS a second artifact that
+*does* get a root-context install-time hook of its own — `scripts/build_pkg.sh`'s signed `.pkg`,
+whose own `installer/macos/pkg/postinstall` script runs `enable --auto` itself while the package
+install is still running, the same shape as the `.deb`'s `postinst`. `--auto` (used by all three
+triggers now, never by a human directly) is the same `enable`, made safe to run unattended: anywhere
+it can't safely tell who owns the install or find the daemon's executables, it logs why and leaves
+the install opt-in rather than guessing or failing a package install. **Windows stays opt-in** — D1
+does not extend to it, on top of the install-tier and mandatory-companion requirements below, which
+raise the bar for an unattended default beyond what the two POSIX platforms needed.
 
 **Windows expresses the same layout in a different primitive, and adds one requirement the others
 do not have.** There are no permission bits there, so the modes below are NTFS ACLs

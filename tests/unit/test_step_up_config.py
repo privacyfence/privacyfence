@@ -44,6 +44,16 @@ class TestStepUpConfigFromOrgConfig:
         with pytest.raises(org_mode.ConfigurationError):
             step_up_config.StepUpConfig.from_org_config({"step_up": {"scope": "everything"}})
 
+    def test_the_widest_scope_is_accepted(self):
+        config = step_up_config.StepUpConfig.from_org_config({"step_up": {"scope": "writes_and_reads"}})
+        assert config.scope == "writes_and_reads"
+
+    def test_the_rejection_message_names_every_accepted_scope(self):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            step_up_config.StepUpConfig.from_org_config({"step_up": {"scope": "everything"}})
+        for name in step_up_config.STEP_UP_SCOPES:
+            assert f'"{name}"' in str(exc.value)
+
     def test_require_passkey_defaults_false_and_reads_true(self):
         assert step_up_config.StepUpConfig.from_org_config(
             {"step_up": {"enabled": True}},
@@ -94,6 +104,16 @@ class TestStepUpConfigFromLocalConfig:
     def test_invalid_scope_raises(self):
         with pytest.raises(org_mode.ConfigurationError):
             step_up_config.StepUpConfig.from_local_config({"step_up": {"scope": "everything"}})
+
+    def test_the_widest_scope_is_accepted(self):
+        config = step_up_config.StepUpConfig.from_local_config({"step_up": {"scope": "writes_and_reads"}})
+        assert config.scope == "writes_and_reads"
+
+    def test_the_rejection_message_names_every_accepted_scope(self):
+        with pytest.raises(org_mode.ConfigurationError) as exc:
+            step_up_config.StepUpConfig.from_local_config({"step_up": {"scope": "everything"}})
+        for name in step_up_config.STEP_UP_SCOPES:
+            assert f'"{name}"' in str(exc.value)
 
     def test_batch_defaults_to_single_assertion_and_reads_per_item(self):
         assert step_up_config.StepUpConfig.from_local_config({}).batch == "single_assertion"

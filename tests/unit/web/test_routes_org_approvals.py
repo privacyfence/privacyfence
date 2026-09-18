@@ -502,6 +502,30 @@ class TestStepUpScoping:
         r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
         assert r.status_code == 428
 
+    def test_unflagged_read_needs_step_up_only_in_the_widest_scope(self):
+        """``writes_and_reads`` means here exactly what it means in local
+        mode (tests/unit/web/test_routes_approvals.py's own counterpart):
+        one ``is_step_up_required`` serves both surfaces, so the only
+        difference this pair should ever show is what a ``428`` offers --
+        never whether one is due."""
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", scope="writes_and_pii_reads"),
+        )
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        approval = _register(web_ui, ALICE, gate_kind="review", pii_detected=False)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 200
+
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", scope="writes_and_reads"),
+        )
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        approval = _register(web_ui, ALICE, gate_kind="review", pii_detected=False)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+
 
 class TestStepUpWebAuthnFlow:
     @pytest.fixture(autouse=True)

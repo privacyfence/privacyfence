@@ -27,11 +27,13 @@ on:
     paths:
       - 'installer/macos/**'
       - 'scripts/build_dmg.sh'
+      - 'scripts/build_pkg.sh'
       - 'scripts/macos_privilege_separation.sh'
       - 'scripts/pyinstaller_common.py'
       - 'PrivacyFenceApp.spec'
       - 'src/privacyfence/privilege_separation.py'
       - 'tests/integration/test_macos_graphical_session_autostart.py'
+      - 'tests/integration/test_macos_pkg_install.py'
       - '.github/workflows/macos-graphical-session.yml'
   schedule:
     - cron: '0 9 * * 1'   # weekly, Monday 09:00 UTC -- an hour after
@@ -84,6 +86,21 @@ jobs:
 
       - name: Run macOS graphical-session/autostart test (B19)
         run: pytest tests/integration/test_macos_graphical_session_autostart.py -v
+
+      # Same "deliberately unsigned" reasoning as the DMG build above -- this
+      # only ever installs on this same machine via `sudo installer`, never
+      # through Gatekeeper.
+      - name: Build .pkg
+        run: bash scripts/build_pkg.sh
+
+      # test_macos_pkg_install.py's own real proof: `sudo installer -pkg
+      # ... -target /` alone -- no separate `enable` call -- ends up
+      # privilege-separated, because installer/macos/pkg/postinstall ran
+      # `enable --auto` itself while `installer` was still running. See that
+      # module's own docstring for how this complements (and deliberately
+      # does not repeat) the test above.
+      - name: Run macOS pkg install test
+        run: pytest tests/integration/test_macos_pkg_install.py -v
 
       # The now-removed automated-test-strategy-plan.md Phase 10: same tests/
       # diagnostics.py capture as linux-graphical-session.yml/windows-graphical-

@@ -37,6 +37,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- `step_up.scope` takes a third value, `writes_and_reads`, which requires a passkey assertion before
+  releasing *any* approving decision — a write, a read PII detection flagged, and a read it did not.
+  The two scopes that existed before (`writes`, the default, and `writes_and_pii_reads`) both leave
+  an unflagged read releasable by a session on its own, which is the right trade only for an install
+  that trusts `pii_detector.py` to have flagged everything worth a second factor; this value is for
+  the installs that would rather not depend on that. It behaves identically in both deployment
+  modes — one `StepUpConfig` and one `webauthn_stepup.is_step_up_required` serve both — and is
+  configured the same way every other step-up setting already is: `config/settings.yaml`'s
+  `step_up:` section in local mode, `scripts/build_org_bundle.py --step-up-scope writes_and_reads`
+  (or the `step_up` section of `org_config.json` directly) in org mode. Denying still needs no
+  step-up under any scope, and a read an auto-accept rule already covers never becomes an approval
+  in the first place, so no scope asks for a passkey on one. `/security` now states which of the
+  three is in force rather than assuming one of the first two.
 - ADR 0002 (`docs/adr/0002-local-mode-trust-boundary-and-companion-app.md`) records the architecture
   decision that follows from the statement above: local mode's trust boundary is the OS user
   account, and a minimal companion app (tray/menu-bar item — Open Approvals, Open Settings, Quit)
@@ -191,6 +204,70 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   install opt-in, the same fallback `--auto` already takes for every other unresolvable case. A
   source checkout can never satisfy the ownership check, which is deliberate: this prompt now only
   ever runs a script the installer itself shipped.
+- Issue #428 D2: a signed `PrivacyFence-<version>.pkg` installer (`scripts/build_pkg.sh`), built
+  alongside the DMG in `build.yml`'s release job, is a second macOS distributable that answers the
+  D1 entry above's own remaining gap — a DMG install has no root-context step to run `enable
+  --auto` from, so D1 could only ask the daemon's own first start to pop an admin-password dialog,
+  a real end-to-end path `docs/platform-support.md`'s "Known open items" still records as not yet
+  manually verified against a release build. A `.pkg` install already runs as root and already asks
+  for an administrator password as the ordinary "Install PrivacyFence" step, so its own
+  `postinstall` script (`installer/macos/pkg/postinstall`) runs `macos_privilege_separation.sh
+  enable --auto` there instead, resolving the human to provision it for from the logged-in console
+  user (`stat -f '%Su' /dev/console`, since a package script has no `$SUDO_USER` the way `sudo`
+  does) rather than waiting on a later, unexplained runtime prompt — and the installer's own
+  welcome/conclusion pages (`installer/macos/pkg/resources/`) say what that means and how to
+  reverse it, instead of a bare OS password dialog with no PrivacyFence-specific text at all. Never
+  fails the package install over a privilege-separation hiccup — every failure path in the
+  postinstall script logs and exits 0, same posture `enable --auto` already takes for itself. The
+  DMG remains the primary distributable and is unaffected; the `.pkg` is an additional,
+  fully-automated-install option, covered the same two-tier way the DMG already is
+  (`test_macos_pkg_smoke.py`, structural, in `build.yml`'s release path; `test_macos_pkg_install.py`,
+  a real `sudo installer -pkg ... -target /` with no separate `enable` call, in the weekly
+  `macos-graphical-session.yml`). See issue #428.
+- Issue #428 D2 follow-up (B1): `test_macos_pkg_install.py` — the real install above ran for the
+  first time against a real `/Applications` path and found `enable` always refused to separate
+  anything installed there. `require_trusted_image()` walks every ancestor directory up to `/`, and
+  `/Applications` itself is `root:admin drwxrwxr-x` on every real Mac — group-writable by the same
+  `admin` account the agent runs as on a typical single-user machine — so the walk always failed at
+  `/Applications` itself, regardless of how the `.app` inside it was owned. This wasn't specific to
+  the `.pkg`: the same `require_trusted_image()` call is what D1's own daemon-triggered runtime
+  prompt and a human running `enable` by hand against a real drag-installed copy both go through
+  too, so a real `/Applications` install could never actually have separated under any of the three
+  paths — the gap `docs/platform-support.md`'s "Known open items" already flagged as unverified
+  against a release build turned out to hide a real dead end, not just missing coverage.
+  `macos_privilege_separation.sh`'s `enable` now copies the image — as root, immediately, while it
+  already has the administrator authentication this command required to run at all — into a fresh
+  root:wheel-owned `TRUSTED_IMAGE_DIR` (`/Library/PrivacyFence/image`) before trusting anything, and
+  points the LaunchDaemon/LaunchAgent at the copy; `require_trusted_image()` now runs against that
+  copy, not wherever `--app`/`--daemon-exec`/`--companion-exec` originally pointed.
+  `test_macos_graphical_session_autostart.py` no longer needs its own pre-staging workaround
+  (`_stage_as_root`) to get past this check — it now hands `enable` a plain, `/tmp`-extracted,
+  user-owned copy directly, the real DMG-drag-install shape, and asserts the running daemon/companion
+  actually execute from the staged copy. One real consequence: once separated, replacing
+  `/Applications/PrivacyFenceApp.app` in place (a fresh DMG drag) no longer takes effect on its own —
+  a separated install keeps running the staged copy until `enable` is run again, which is the correct
+  cost of closing this rather than a regression to work around (auto-refreshing from an
+  already-elevated process would mean trusting `/Applications` again, silently). See issue #428.
+- Issue #428 D2 follow-up (download surface): the `.pkg` built above was uploading to R2 correctly
+  but was invisible everywhere a person would actually go looking for it — `scripts/
+  r2_release.py`'s `_INSTALLERS` (what `finalize` reads to decide a release's `manifest.json`, the
+  one thing the download page, `/api/releases`, and the Worker's own `/download/<channel>/<id>`
+  route all resolve through) recognized only the DMG/`.exe`/`.deb`, so a `.pkg` sat in the bucket
+  with no id, no listing, and no route to it — the first alpha built with #428 D2 (`v4.1.0a3`)
+  shipped exactly that way. `.pkg` is now a fourth recognized pattern there, given its own artifact
+  id (`macos-arm64-pkg`) distinct from the DMG's `macos-arm64` — deliberately *not* added to
+  `REQUIRED_ARTIFACT_IDS`, so a pkg-signing-cert gap or a pkg-specific smoke-test failure can never
+  block the DMG/`.exe`/`.deb` from reaching "latest" the way a missing *mandatory* installer does;
+  `finalize` already worked this way for every optional (non-manifest) upload, this just adds a
+  manifest-visible middle tier between "counted and required" and "never counted at all".
+  `website/download/download.js` needed no logic change to pick this up — its own "nothing about a
+  release is hardcoded here" design (each manifest artifact renders its own card) already covered
+  it, so this only adds `cloudflare/downloads/src/artifacts.ts`'s `.pkg` `Content-Type` mapping and
+  a `PLATFORMS` display-name entry for the new id, both purely additive. `README`s aside, this
+  release-side fix does not retroactively fix `v4.1.0a3`'s own manifest — a manifest is written
+  once by `finalize` and the bucket's contents for that version are otherwise immutable — the `.pkg`
+  becomes visible starting with the next tag `finalize` runs against with this fix in place. See
+  issue #428.
 - Issue #428 B4: the control channel's `QUIT` command is now refused unconditionally on a
   privilege-separated install, regardless of `allow_quit`. The control socket is `0660`
   group-shared after separation so the companion can still reach it, which puts the agent in the
