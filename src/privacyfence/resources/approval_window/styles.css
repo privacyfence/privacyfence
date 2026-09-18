@@ -182,6 +182,8 @@ img { display: block; max-width: 100%; }
 /* — approval-window-specific — */
 .pf-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 22px; }
 .pf-head h2 { margin: 0; font-size: 25px; white-space: nowrap; }
+.pf-head-title { display: flex; align-items: center; gap: 10px; }
+.pf-head-shield { width: 51px; height: 51px; object-fit: contain; opacity: .9; }
 /* Read/Write pill, paired with the same-colored rail on <body> (see
    approval_window_html.py's build_card_stack_html). Background/color set
    inline per call (accent vs accent-2 tokens), only the shape/type is
@@ -444,4 +446,69 @@ img { display: block; max-width: 100%; }
   min-width: 0; padding: 0; border: none; background: none;
   font: 400 11px var(--font-body); color: var(--color-neutral-700);
   text-decoration: underline; text-underline-offset: 2px;
+}
+
+/* — phone widths — everything above this point assumes a viewport wide
+   enough for a 610px (NARROW) or 980px (WIDE) document. Until
+   build_card_stack_html grew its viewport meta these rules could not run
+   at all: a phone reported a ~980px viewport and scaled the whole
+   document down instead, so the breakpoint never matched.
+
+   Placed at the end of the file because several of these override the
+   .pf-btn-* and .pf-kv rules above at equal specificity, where later
+   source order is what decides. */
+@media (max-width: 700px) {
+  /* Nothing in the header may be nowrap once the viewport is real:
+     "Create Gmail Reply-All Draft" at 25px overflows a 360px screen
+     horizontally, and a horizontally scrolled decision surface is the one
+     thing approval-list-ui-ux.md's "Responsive behavior" rules out. */
+  .pf-head h2 { white-space: normal; font-size: 21px; line-height: 1.15; }
+  .pf-head-title { flex-wrap: wrap; gap: 8px; }
+  .pf-head { gap: 12px; margin-bottom: 16px; }
+  .pf-head-shield { width: 36px; height: 36px; flex-shrink: 0; }
+  .pf-kicker { white-space: normal; }
+
+  /* A label and its value stop competing for one line -- at this width
+     "Participants" plus three addresses cannot share a row without one of
+     them winning. Stacking also retires the 2-line clamp here: the clamp
+     buys deterministic window height for a fixed native frame, which is
+     exactly what this breakpoint means the document is no longer in. */
+  .pf-kv { flex-direction: column; gap: 2px; }
+  .pf-kv span:last-child {
+    text-align: left; -webkit-line-clamp: none; display: block;
+    overflow: visible; word-break: break-word;
+  }
+
+  /* Deny and Allow once become two equal full-width targets on one row,
+     with Always-allow a quiet centred link on the row below -- never a
+     third button in the thumb zone (see .pf-btn-link's own note above).
+     90px-wide pills 8px apart are a mis-tap, and a mis-tap here is
+     irreversible.
+
+     `display: contents` flattens .pf-btn-row-left so its Deny and its
+     optional Always-allow link become direct grid children here; in the
+     2+-candidate layout that wrapper holds Deny alone and the links are
+     already their own .pf-btn-row-candidates row, which needs nothing
+     extra. Explicit placement rather than auto-flow because the link sits
+     between Deny and Allow once in source order and has to end up below
+     both. That is a deliberate source-vs-visual order difference, and the
+     one case where it is the right trade: the alternative is a
+     destructive control and the primary control adjacent again. Allow
+     once stays last in tab order either way, which is the ordering that
+     matters on this surface. */
+  .pf-btn-row {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: var(--space-2); align-items: stretch;
+  }
+  .pf-btn-row-left { display: contents; }
+  .pf-btn-row .pf-btn-deny { grid-row: 1; grid-column: 1; }
+  .pf-btn-row .pf-btn-primary { grid-row: 1; grid-column: 2; }
+  .pf-btn-row .pf-btn-link { grid-row: 2; grid-column: 1 / -1; }
+  .pf-btn-row .pf-btn { min-height: 48px; font-size: 14px; }
+  .pf-btn-row .pf-btn-link {
+    min-height: 0; text-align: center; padding: 4px 0; font-size: 12px;
+  }
+  /* The 2+-candidate row wraps its links to full width too, rather than
+     leaving them at desktop's left-aligned inline flow. */
+  .pf-btn-row-candidates { gap: var(--space-2); }
 }

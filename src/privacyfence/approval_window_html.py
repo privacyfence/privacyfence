@@ -834,6 +834,12 @@ def build_card_stack_html(
 <html>
 <head>
 <meta charset="utf-8">
+<!-- Without this, a phone lays the document out in its default ~980px
+     viewport and scales to fit: 13px body text renders near 5px, and the
+     `@media (max-width: 700px)` rules below (and styles.css's own) never
+     match, because the viewport reports 980 no matter the device. A no-op
+     in the native WKWebView, whose frame is already sized to `width`. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <style nonce="{nonce}">
 {_STYLES_CSS}
@@ -888,8 +894,12 @@ def _header_html(
         f'<img src="{connector_icon_data_uri}" style="width:20px;height:20px;object-fit:contain">'
         if connector_icon_data_uri else ""
     )
+    # Classes rather than inline styles on these two (same reasoning
+    # styles.css's own .pf-wide-row/.pf-wide-left block gives): an inline
+    # style can't carry a @media query, and both the shield's size and the
+    # title/pill row's wrapping have to change below the phone breakpoint.
     shield_img = (
-        f'<img src="{shield_icon_data_uri}" style="width:51px;height:51px;object-fit:contain;opacity:.9">'
+        f'<img class="pf-head-shield" src="{shield_icon_data_uri}">'
         if shield_icon_data_uri else ""
     )
     seen_html = (
@@ -911,7 +921,7 @@ def _header_html(
         '<div style="min-width:0">'
         f'<div class="pf-kicker">{connector_img}<span>PrivacyFence</span></div>'
         f'{seen_html}'
-        f'<div style="display:flex;align-items:center;gap:10px">'
+        f'<div class="pf-head-title">'
         f'<h2>{_html_escape(title)}</h2>{pill_html}</div>'
         '</div>'
         f'{shield_img}'

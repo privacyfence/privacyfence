@@ -379,6 +379,46 @@ class TestResponsiveBreakpoint:
         assert 'style="flex:0 0 420px' not in html
         assert 'style="flex:1;min-width:0;border-left' not in html
 
+    def test_declares_a_device_width_viewport(self):
+        # Without this, every rule in the block above is dead code on a real
+        # phone: the viewport reports ~980px and the document is scaled to
+        # fit instead, so `@media (max-width: 700px)` never matches and
+        # 13px body text lands near 5px.
+        for layout in (NARROW, WIDE):
+            html = build_card_stack_html(**_minimal_kwargs(layout=layout))
+            assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
+
+    def test_header_title_and_shield_use_classes_not_inline_style(self):
+        # Same reason as the wide-row panes above: the heading has to wrap
+        # and drop its font size, and the shield has to shrink, below the
+        # breakpoint -- none of which an inline style can express.
+        html = build_card_stack_html(
+            **_minimal_kwargs(shield_icon_data_uri="data:image/png;base64,AAA"),
+        )
+        assert 'class="pf-head-title"' in html
+        assert 'class="pf-head-shield"' in html
+        assert 'style="width:51px;height:51px' not in html
+
+    def test_heading_stops_being_nowrap_below_the_breakpoint(self):
+        # .pf-head h2 is nowrap at 25px unconditionally, which overflows a
+        # 360px screen horizontally the moment a real viewport arrives --
+        # the regression the viewport meta above would otherwise expose.
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert ".pf-head h2 { white-space: normal; font-size: 21px; line-height: 1.15; }" in html
+
+    def test_decision_controls_get_a_real_touch_target_below_the_breakpoint(self):
+        # 90px-wide pills one var(--space-2) apart, on the one surface
+        # where a mis-tap is irreversible.
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert ".pf-btn-row .pf-btn { min-height: 48px; font-size: 14px; }" in html
+
+    def test_key_value_rows_stop_sharing_a_line_below_the_breakpoint(self):
+        # "Participants" plus three addresses cannot share a 360px row
+        # without one of them winning -- and the 2-line clamp that buys
+        # deterministic height for a native frame has nothing to buy here.
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert ".pf-kv { flex-direction: column; gap: 2px; }" in html
+
 
 class TestTempAcceptDisclosure:
     def test_present_when_text_given(self):

@@ -1014,6 +1014,111 @@ def _assert_no_horizontal_overflow(page) -> None:
     assert scroll_width <= client_width, f"page scrolls horizontally: {scroll_width} > {client_width}"
 
 
+# A real phone, not just a narrow window. ``is_mobile`` is what makes
+# Chromium apply the ~980px *fallback layout viewport* a phone uses for any
+# document that declares no ``<meta name="viewport">`` -- and then scale the
+# result down to fit the screen. The ``_VIEWPORTS`` contexts above are
+# ordinary desktop contexts, which lay every document out at exactly the
+# width they are given whether or not it asks for that. That difference is
+# not academic: it is why every responsive test in this file passed for as
+# long as the card and dialog documents shipped no viewport meta at all,
+# while on an actual phone 13px body text rendered near 5px and the
+# ``@media (max-width: 700px)`` rules written to prevent exactly that never
+# matched once.
+_MOBILE_EMULATION = {
+    "viewport": {"width": 393, "height": 852},
+    "screen": {"width": 393, "height": 852},
+    "device_scale_factor": 3,
+    "is_mobile": True,
+    "has_touch": True,
+}
+
+
+@pytest.fixture
+def mobile_page(browser):
+    ctx = browser.new_context(ignore_https_errors=True, **_MOBILE_EMULATION)
+    pg = ctx.new_page()
+    pg.pf_console_log: list[str] = []  # type: ignore[attr-defined]
+    pg.on("console", lambda msg: pg.pf_console_log.append(f"[console:{msg.type}] {msg.text}"))
+    pg.on("pageerror", lambda exc: pg.pf_console_log.append(f"[pageerror] {exc}"))
+    yield pg
+    pg.close()
+    ctx.close()
+
+
+class TestMobileLayoutViewport:
+    """The layout viewport a real phone actually gives these documents.
+
+    Every assertion here is on ``window.innerWidth`` rather than on rendered
+    geometry, because that single number is what the whole failure mode
+    turns on: 980 means the document is being laid out for a desktop and
+    scaled down, and every phone-width rule in it is dead code; 393 means
+    the breakpoints are live."""
+
+    _DEVICE_WIDTH = _MOBILE_EMULATION["viewport"]["width"]
+
+    def test_approval_list_lays_out_at_device_width(self, mobile_page, local_server):
+        # web_shell.wrap has always declared a viewport meta -- this is the
+        # control that proves the assertion below can distinguish the two
+        # states at all, rather than passing for some unrelated reason.
+        server, _web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        mobile_page.goto(f"{server.base_url}/approvals")
+        mobile_page.wait_for_load_state("load")
+        assert mobile_page.evaluate("window.innerWidth") == self._DEVICE_WIDTH
+
+    @pytest.mark.parametrize("layout", ["narrow", "wide"])
+    def test_approval_card_lays_out_at_device_width(self, mobile_page, local_server, layout):
+        server, web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        thread, card = _register_card(web_ui, read=(layout == "wide"), layout=layout)
+        try:
+            mobile_page.goto(f"{server.base_url}/approvals/{card.id}")
+            mobile_page.wait_for_load_state("load")
+            assert mobile_page.evaluate("window.innerWidth") == self._DEVICE_WIDTH
+            _assert_no_horizontal_overflow(mobile_page)
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    def test_pii_confirmation_dialog_lays_out_at_device_width(self, mobile_page, local_server):
+        server, web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        thread, card = _register_confirm(web_ui, ["Email address"])
+        try:
+            mobile_page.goto(f"{server.base_url}/approvals/{card.id}")
+            mobile_page.wait_for_load_state("load")
+            assert mobile_page.evaluate("window.innerWidth") == self._DEVICE_WIDTH
+            _assert_no_horizontal_overflow(mobile_page)
+        finally:
+            web_ui.resolve(card.id, "cancel")
+            thread.join(timeout=5)
+
+    def test_phone_breakpoint_rules_actually_engage_on_the_card(self, mobile_page, local_server):
+        """The point of the meta tag, stated as the thing it buys: the
+        ``@media (max-width: 700px)`` block is live, so the heading can
+        wrap and the decision controls are a real touch target."""
+        server, web_ui = local_server
+        _sign_in_local(mobile_page, server)
+        thread, card = _register_card(web_ui, read=False, layout="narrow")
+        try:
+            mobile_page.goto(f"{server.base_url}/approvals/{card.id}")
+            mobile_page.wait_for_load_state("load")
+            assert mobile_page.evaluate(
+                "getComputedStyle(document.querySelector('.pf-head h2')).whiteSpace"
+            ) == "normal"
+            deny_box = mobile_page.locator('[data-pf-action="deny"]').bounding_box()
+            accept_box = mobile_page.locator('[data-pf-action="accept"]').bounding_box()
+            assert deny_box["height"] >= 44, deny_box
+            assert accept_box["height"] >= 44, accept_box
+            # Side by side on one row, not the desktop band's
+            # left-pill/right-pill split across the full width.
+            assert abs(deny_box["y"] - accept_box["y"]) < 1
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+
 class TestResponsiveLayout:
     @pytest.mark.parametrize("viewport_name", sorted(_VIEWPORTS))
     def test_approval_list_has_no_horizontal_overflow(self, page, local_server, viewport_name):

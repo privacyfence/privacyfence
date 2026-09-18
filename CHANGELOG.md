@@ -480,6 +480,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Approval cards and confirmation dialogs are readable on a phone.** Neither document declared a
+  `<meta name="viewport">`, so iOS and Android laid it out in their default ~980px viewport and
+  scaled the result down to fit: 13px body text rendered near 5px, Deny and Allow once were roughly
+  36×13 device pixels side by side, and the `@media (max-width: 700px)` rules written to prevent
+  exactly that never matched, because the viewport reported 980 regardless of the device. Both
+  documents now declare a device-width viewport, and the phone-width rules they already carried are
+  joined by the ones that layout needs to hold up: the heading wraps instead of overflowing
+  horizontally at 25px, key/value rows stack rather than competing for one line, and Deny/Allow once
+  become two equal 48px targets with always-allow a quiet link below them rather than a third
+  control in the thumb zone. Nothing changes above the breakpoint, or in the native window, whose
+  frame already sized itself to the document.
 - **Quitting from the settings page no longer truncates its own response.** `/api/settings/quit_app`
   signalled the daemon's shutdown *before* returning, so the process could be torn down while its
   21-byte confirmation was still being written and the client saw `peer closed connection without
