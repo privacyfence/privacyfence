@@ -58,6 +58,11 @@ class TestLineClamp:
     def test_attendees_gets_a_taller_clamp(self):
         assert line_clamp_for("Attendees") == 3
 
+    def test_participants_gets_the_same_allowance_as_attendees(self):
+        # The field most likely to decide a read gate, with only a title
+        # tooltip behind the clamp -- unreachable on touch entirely.
+        assert line_clamp_for("Participants") == 3
+
     def test_description_gets_the_tallest_clamp(self):
         assert line_clamp_for("Description") == 4
 
@@ -137,33 +142,43 @@ class TestDisclosureRowsFromVisibility:
         assert disclosure_rows_from_visibility(visibility) == disclosure_rows_from_visibility(visibility)
 
 
-class TestSectionNumbering:
-    """Every section is numbered dynamically -- the risk card renders (and
-    is numbered) right after §2, *before* §3 -- pinned, never one scroll
-    away from being missed -- so §3 lands on "04" instead of "03" whenever
-    a risk card is also present. Absent a risk card, §3 (or nothing at
-    all) simply takes the next number, matching the design canvas's own
-    numbering."""
+class TestSectionPresenceAndOrder:
+    """Sections carry a label and no number. Which ones render varies by
+    tool and by direction, so a number could only ever count what happened
+    to be on *this* card -- "03" was the PII gate on one and the disclosure
+    list on the next, which is the one thing a reviewer seeing dozens of
+    these cannot learn. Order is still load-bearing and still asserted: the
+    risk card renders right after §2 and *before* §3, pinned, never one
+    scroll away from being missed."""
 
-    def test_read_call_with_disclosure_and_pii_numbers_pii_before_disclosure(self):
+    def test_sections_carry_labels_and_no_numbers(self):
         html = build_card_stack_html(**_minimal_kwargs(
             disclosure_rows=[("Cell values", "Full cell values")],
             pii_categories=["Phone number"],
         ))
-        assert "01 · What Claude already knows" in html
-        assert "02 · Why Claude needs more data" in html
-        assert "03 · Possible PII detected" in html
-        assert "04 · What will be provided to Claude" in html
-        # Pinned before §3 in the actual rendered order too, not just numbered
-        # first -- see build_card_stack_html's docstring.
+        for label in (
+            "What Claude already knows",
+            "Why Claude needs more data",
+            "Possible PII detected",
+            "What will be provided to Claude",
+        ):
+            assert label in html
+        for number in ("01 ·", "02 ·", "03 ·", "04 ·"):
+            assert number not in html
+
+    def test_risk_card_renders_before_the_disclosure_list(self):
+        html = build_card_stack_html(**_minimal_kwargs(
+            disclosure_rows=[("Cell values", "Full cell values")],
+            pii_categories=["Phone number"],
+        ))
         assert html.index("Possible PII detected") < html.index("What will be provided to Claude")
 
-    def test_read_call_without_disclosure_but_with_pii_numbers_03(self):
-        # A tool with nothing to disclose in §3 (empty disclosure_rows) whose
-        # content still matched the PII detector.
+    def test_a_read_call_with_no_disclosure_still_gets_its_risk_card(self):
+        # A tool with nothing to disclose in §3 (empty disclosure_rows)
+        # whose content still matched the PII detector.
         html = build_card_stack_html(**_minimal_kwargs(pii_categories=["Phone number"]))
-        assert "03 · Possible PII detected" in html
-        assert "04 ·" not in html
+        assert "Possible PII detected" in html
+        assert "What will be provided to Claude" not in html
 
     def test_write_call_never_gets_section_3_even_with_a_visibility_like_dict(self):
         # disclosure_rows is only ever consulted when is_read=True -- a
@@ -176,7 +191,7 @@ class TestSectionNumbering:
             write_content_flags=["Email address"],
         ))
         assert "What will be provided to Claude" not in html
-        assert "03 · Possible PII detected" in html
+        assert "Possible PII detected" in html
 
     def test_no_risk_card_when_neither_pii_list_is_populated(self):
         html = build_card_stack_html(**_minimal_kwargs())
@@ -185,8 +200,7 @@ class TestSectionNumbering:
     def test_section_1_is_skipped_entirely_when_preview_is_empty(self):
         html = build_card_stack_html(**_minimal_kwargs(preview={}))
         assert "What Claude already knows" not in html
-        # §2 still gets "01", not "02" -- the counter never advanced for §1.
-        assert "01 · Why Claude needs more data" in html
+        assert "Why Claude needs more data" in html
 
     def test_section_2_is_skipped_entirely_when_claude_reason_is_empty(self):
         html = build_card_stack_html(**_minimal_kwargs(claude_reason=""))
@@ -196,7 +210,7 @@ class TestSectionNumbering:
         # Defense in depth: build_card_stack_html() never calls this with an
         # empty list (it checks first), but the function's own guard is
         # still real behavior worth pinning directly.
-        assert _risk_section_html(3, [], variant="read") == ""
+        assert _risk_section_html([], variant="read") == ""
 
 
 class TestRiskCardVariants:
@@ -378,6 +392,66 @@ class TestResponsiveBreakpoint:
         assert 'style="display:flex;gap:28px' not in html
         assert 'style="flex:0 0 420px' not in html
         assert 'style="flex:1;min-width:0;border-left' not in html
+
+    def test_declares_a_device_width_viewport(self):
+        # Without this, every rule in the block above is dead code on a real
+        # phone: the viewport reports ~980px and the document is scaled to
+        # fit instead, so `@media (max-width: 700px)` never matches and
+        # 13px body text lands near 5px.
+        for layout in (NARROW, WIDE):
+            html = build_card_stack_html(**_minimal_kwargs(layout=layout))
+            assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
+
+    def test_header_title_and_shield_use_classes_not_inline_style(self):
+        # Same reason as the wide-row panes above: the heading has to wrap
+        # and drop its font size, and the shield has to shrink, below the
+        # breakpoint -- none of which an inline style can express.
+        html = build_card_stack_html(
+            **_minimal_kwargs(shield_icon_data_uri="data:image/png;base64,AAA"),
+        )
+        assert 'class="pf-head-title"' in html
+        assert 'class="pf-head-shield"' in html
+        assert 'style="width:51px;height:51px' not in html
+
+    def test_heading_stops_being_nowrap_below_the_breakpoint(self):
+        # .pf-head h2 is nowrap at 25px unconditionally, which overflows a
+        # 360px screen horizontally the moment a real viewport arrives --
+        # the regression the viewport meta above would otherwise expose.
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert ".pf-head h2 { white-space: normal; font-size: 21px; line-height: 1.15; }" in html
+
+    def test_decision_controls_get_a_real_touch_target_below_the_breakpoint(self):
+        # 90px-wide pills one var(--space-2) apart, on the one surface
+        # where a mis-tap is irreversible.
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert ".pf-btn-row .pf-btn { min-height: 48px; font-size: 14px; }" in html
+
+    def test_key_value_rows_stop_sharing_a_line_below_the_breakpoint(self):
+        # "Participants" plus three addresses cannot share a 360px row
+        # without one of them winning -- and the 2-line clamp that buys
+        # deterministic height for a native frame has nothing to buy here.
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert ".pf-kv { flex-direction: column; gap: 2px; }" in html
+
+
+class TestPrimaryButtonIsTokenized:
+    def test_allow_once_uses_the_accent_token_not_a_hard_coded_blue(self):
+        # #5ba4ff/#4a8fe6 was the one colour in this document that wasn't a
+        # token, didn't invert for dark mode, and appeared nowhere else in
+        # the design -- on the single most consequential control.
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert ".pf-btn-primary { background: var(--color-accent); color: #fff; }" in html
+        assert ".pf-btn-primary:hover { background: var(--color-accent-600); }" in html
+        # The declarations, not the bare hex: the comment above the rule
+        # names the old pair to explain why it went.
+        assert "background: #5ba4ff" not in html
+        assert "background: #4a8fe6" not in html
+
+    def test_a_write_card_does_not_recolour_it_to_the_risk_family(self):
+        # --color-accent-2 is both "write" and the PII/risk tint family
+        # here, so a magenta primary would read as destructive.
+        html = build_card_stack_html(**_minimal_kwargs(is_read=False))
+        assert ".pf-btn-primary { background: var(--color-accent); color: #fff; }" in html
 
 
 class TestTempAcceptDisclosure:
@@ -778,3 +852,71 @@ class TestCspNonce:
 
     def test_extract_csp_nonce_returns_none_for_html_with_no_nonce(self):
         assert extract_csp_nonce("<html><body>hi</body></html>") is None
+
+
+class TestPiiHighlighting:
+    """The PII card names categories; this marks where they actually are.
+    ``highlight`` is a callable applied to each plain-text run rather than
+    precomputed offsets, so the ranges are always relative to the exact
+    string being escaped."""
+
+    def _spans_for(self, needle):
+        def spans(text):
+            out, start = [], text.find(needle)
+            while start != -1:
+                out.append((start, start + len(needle)))
+                start = text.find(needle, start + len(needle))
+            return out
+        return spans
+
+    def test_marks_the_matched_range_in_plain_body_text(self):
+        html = build_preview_body_html("call 5550001 now", highlight=self._spans_for("5550001"))
+        assert '<mark class="pf-pii-hit">5550001</mark>' in html
+
+    def test_marks_inside_a_text_block(self):
+        html = build_preview_body_html(
+            blocks=[{"type": "text", "text": "acct 5550001 ok"}],
+            highlight=self._spans_for("5550001"),
+        )
+        assert '<mark class="pf-pii-hit">5550001</mark>' in html
+
+    def test_nothing_is_marked_without_a_highlighter(self):
+        html = build_preview_body_html("call 5550001 now")
+        assert "pf-pii-hit" not in html
+
+    def test_escaping_still_holds_around_a_match(self):
+        # The reason the ranges are applied before escaping, segment by
+        # segment: an "&" earlier in the text would otherwise shift every
+        # offset after it by four characters.
+        html = build_preview_body_html(
+            "a & b <tag> 5550001 </tag>", highlight=self._spans_for("5550001"),
+        )
+        assert '<mark class="pf-pii-hit">5550001</mark>' in html
+        assert "&amp;" in html
+        assert "&lt;tag&gt;" in html
+        assert "<tag>" not in html
+
+    def test_a_match_containing_markup_characters_is_still_escaped(self):
+        html = build_preview_body_html("x <b>y</b> z", highlight=self._spans_for("<b>y</b>"))
+        assert '<mark class="pf-pii-hit">&lt;b&gt;y&lt;/b&gt;</mark>' in html
+
+    def test_overlapping_matches_do_not_nest_markup(self):
+        # Two patterns can match the same text -- an IBAN that is also a
+        # long digit run. One mark, not one inside another.
+        html = build_preview_body_html("ref 12345678 end", highlight=lambda t: [(4, 12), (4, 9), (6, 12)])
+        assert html.count('<mark class="pf-pii-hit">') == 1
+        assert '<mark class="pf-pii-hit">12345678</mark>' in html
+
+    def test_out_of_range_and_empty_spans_are_ignored(self):
+        html = build_preview_body_html("short", highlight=lambda t: [(99, 120), (2, 2), (-5, 0)])
+        assert "pf-pii-hit" not in html
+        assert "short" in html
+
+    def test_a_span_running_past_the_end_is_clamped(self):
+        html = build_preview_body_html("abc", highlight=lambda t: [(1, 99)])
+        assert '<mark class="pf-pii-hit">bc</mark>' in html
+
+    def test_the_no_details_placeholder_is_never_highlighted(self):
+        html = build_preview_body_html("", highlight=lambda t: [(0, 3)])
+        assert "pf-pii-hit" not in html
+        assert "(no details)" in html

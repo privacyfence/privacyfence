@@ -247,3 +247,72 @@ class TestTokensCssStaysInSyncWithTheApprovalCard:
                 continue
             value = line.split(":", 1)[1].strip().rstrip(";")
             assert value in _STYLES_CSS, f"tokens.css value {value!r} ({line!r}) not found in approval styles.css"
+
+
+class TestNavItems:
+    def test_local_mode_nav_is_unchanged_by_default(self):
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert 'href="/approvals"' in html
+        assert 'href="/settings"' in html
+        assert 'href="/connect"' not in html
+        assert 'href="/security"' not in html
+
+    def test_org_nav_items_render_and_mark_the_active_one(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals", nav_items=web_shell.ORG_NAV_ITEMS,
+        )
+        assert 'class="pf-shell-nav-item active" href="/approvals"' in html
+        for href in ("/connect", "/security", "/settings"):
+            assert f'class="pf-shell-nav-item" href="{href}"' in html
+
+
+class TestPrincipalLabel:
+    def test_absent_by_default(self):
+        # Local mode has exactly one principal; naming it would be noise.
+        # Asserted on the rendered element rather than the bare class name,
+        # since the stylesheet always carries the rule either way.
+        assert 'class="pf-shell-principal"' not in web_shell.wrap("", title="t", active="approvals")
+
+    def test_rendered_and_escaped_when_given(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals", principal_label="<b>m@acme.example</b>",
+        )
+        assert 'class="pf-shell-principal"' in html
+        assert "<b>m@acme.example</b>" not in html
+        assert "&lt;b&gt;m@acme.example&lt;/b&gt;" in html
+
+
+class TestLiveUpdatesCanBeTurnedOff:
+    """The live indicator tells a reviewer whether the queue in front of
+    them is current. A mode with no state stream behind it (org mode --
+    web/server.py's _build_org_app mounts no GET /api/state/stream) must
+    render no indicator rather than one that lies in either direction."""
+
+    def test_indicator_and_stream_script_are_both_dropped(self):
+        html = web_shell.wrap("", title="t", active="approvals", live_updates=False)
+        assert 'id="pf-shell-live-dot"' not in html
+        assert 'id="pf-shell-live-label"' not in html
+        assert "EventSource" not in html
+        assert "/api/state/stream" not in html
+
+    def test_both_are_present_by_default(self):
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert 'id="pf-shell-live-dot"' in html
+        assert "new EventSource('/api/state/stream')" in html
+
+    def test_the_page_is_still_a_complete_document(self):
+        # Everything the list page itself depends on has to survive: the
+        # toast target its own script writes into, and <main>.
+        html = web_shell.wrap("<p>body</p>", title="t", active="approvals", live_updates=False)
+        assert html.startswith("<!DOCTYPE html>")
+        assert 'id="pf-shell-toast"' in html
+        assert "<p>body</p>" in html
+
+
+class TestBareLinksAreStyled:
+    def test_main_content_links_are_not_browser_default_blue(self):
+        # Nothing else in this stylesheet styles a bare <a>, so any link a
+        # page renders outside the nav/banner/notice classes fell through
+        # to #0000ee against a warm grey palette.
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert ".pf-shell-main a { color: var(--color-accent-700); }" in html

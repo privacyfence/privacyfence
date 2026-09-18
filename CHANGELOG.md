@@ -557,6 +557,94 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Approval cards and confirmation dialogs are readable on a phone.** Neither document declared a
+  `<meta name="viewport">`, so iOS and Android laid it out in their default ~980px viewport and
+  scaled the result down to fit: 13px body text rendered near 5px, Deny and Allow once were roughly
+  36×13 device pixels side by side, and the `@media (max-width: 700px)` rules written to prevent
+  exactly that never matched, because the viewport reported 980 regardless of the device. Both
+  documents now declare a device-width viewport, and the phone-width rules they already carried are
+  joined by the ones that layout needs to hold up: the heading wraps instead of overflowing
+  horizontally at 25px, key/value rows stack rather than competing for one line, and Deny/Allow once
+  become two equal 48px targets with always-allow a quiet link below them rather than a third
+  control in the thumb zone. Nothing changes above the breakpoint, or in the native window, whose
+  frame already sized itself to the document.
+- **Detected PII is marked where it actually appears.** The card named the matched categories
+  ("IBAN · National ID · Financial figures") and left the reviewer to find them by eye in a
+  multi-message thread — the work the card exists to have already done. Matches are now highlighted
+  in the preview pane itself, in the same tints as the category tags, so the tags read as a legend.
+  Nothing extra is disclosed: the text is already the contents of the pane, the detector returns
+  positions rather than matched substrings, marking is scoped to the categories the card already
+  names, and a card with no PII section does no scanning at all.
+- **Write cards say what approving them actually does.** A read card ends with "What will be
+  provided to Claude"; a write card showed the payload and Claude's stated reason and nothing that
+  named the consequence — the difference between approving a payload and approving an outcome, and
+  it matters most where the payload looks harmless. "Add Gmail Label" and "Send Slack Message"
+  present almost identically and only one of them is irreversible. Every write card now ends its
+  action section with one plain sentence: "A label is added. Nothing is sent, moved or deleted." /
+  "The message is posted and cannot be unsent." A new test fails the build if a tool reaches the
+  write gate without one.
+- **The card's section numbers are gone; the labels stay.** Which sections render varies by tool and
+  direction, so the numbers only ever counted what happened to be on that one card — "03" was the
+  PII gate on one and the disclosure list on the next, which is exactly what a reviewer seeing many
+  of them cannot learn. Ordering is unchanged and still deliberate: the risk card renders before the
+  disclosure list, never one scroll away from being missed.
+- **Org mode's approvals page has a shell.** It was a bare document — design tokens, one body font
+  rule, the list, and a centred footer of three links that nothing styled, so they rendered
+  browser-default blue against a warm grey palette. No header, no brand, no nav, no favicon, and on
+  a phone no navigation at all; local mode's identical list had all of it. Both modes now render
+  through the same shell, with the nav set (Approvals / Connections / Passkeys / Settings) and the
+  signed-in principal passed in per mode — org mode's whole authorization model is per-principal and
+  the page never said whose queue was on screen. The shell also gained a link colour for ordinary
+  `<a>` elements in page content, which nothing had styled before.
+  Org mode deliberately renders **no** live indicator: its app mounts no `GET /api/state/stream`, so
+  an indicator there would either claim a liveness that doesn't exist or sit permanently on a
+  connection error. Tier-0/1 notifications, which ride the same stream, are off with it.
+- **The approvals page explains a first run instead of claiming it is watching.** First run and
+  steady state shared one empty state, written for steady state: "Nothing is waiting. / PrivacyFence
+  is watching." On an install where no connector is authenticated that is misleading in both halves
+  — nothing is waiting because nothing *can* wait, and nothing is being watched. That case now gets
+  its own copy ("Nothing is governed yet."), explaining what PrivacyFence does and linking to
+  `/settings/connectors`, reusing the wording of the settings page's own welcome banner. The
+  steady-state copy is unchanged, and is what still shows whenever the answer can't be determined.
+- **Connector icons no longer disappear after the first live update.** The server-rendered first
+  paint drew each row's real brand icon, while the SSE re-render had no icon in its payload and
+  always drew the letter-badge fallback — so within one poll interval every row silently degraded,
+  on the page that most needs to look trustworthy. Each connector's icon is now a single CSS rule in
+  the page's own stylesheet, which both render paths reach by class name, so a live-updated row
+  draws exactly what the first paint did. Because the image data now appears once per *connector*
+  rather than once per *row*, this also makes the page substantially smaller: a ten-row list over
+  two connectors went from ~449KB to ~195KB. A connector with nothing pending when the page loaded
+  has no rule and still falls back to the letter badge until the next full load.
+- **An approvals row names what the request is about.** The row's title was `tool_name` and its
+  second line was connector + the raw MCP tool id + age, so the row said `Read Gmail message` /
+  `Gmail · gmail_get_thread · 2m ago` and never named the thread, document, event or contact being
+  touched. `summary` — the field that does name it — was only a *fallback* title, and `tool_name` is
+  always populated, so a normal row never reached it. The summary is now the title, the tool name
+  moves to the meta line above it, and the raw tool id moves into the **Details** disclosure with
+  the rest of the metadata preview. Rows with no summary (a bare confirm/choice dialog) still fall
+  back to the tool name.
+- **Read and write are visible on the row.** The card commits hard to the distinction — a pill in
+  its header and a coloured rail down the window edge — while the row showed neither, though
+  `gate_kind` was already in the row payload and already drove the **Approve selected** button's
+  reads/writes count. Rows now carry the same pill, in the same token pairs as the card, and the
+  page heading names the queue's composition ("4 approvals pending · 3 reads · 1 write"). That
+  heading also now follows the live list: it sits outside the re-rendered region, so it previously
+  kept whatever count the first paint had for as long as the page stayed open.
+- **Approve selected is no longer styled as loudly as Review.** Both were filled
+  `var(--color-accent)`, which made select-all-plus-one-click — the least-informed action available,
+  taken off one-line summaries — as prominent as the control that opens disclosure. It is now an
+  outline; Review keeps the fill. The composition label on it is unchanged, since that part is the
+  guard rather than the problem.
+- **The approvals list is usable on a phone.** `.pf-approval-actions` is `flex-shrink: 0` around
+  three buttons while `.pf-approval-main` is `flex: 1; min-width: 0`, so the row's own `flex-wrap`
+  never engaged — the text column shrank to roughly 25px at 393px instead, truncating the title
+  after two or three characters and taking the connector/age line with it. Below 560px the row now
+  stacks into identity on top and a full-width action strip underneath, row controls and selection
+  checkboxes are a 44px target rather than ~30px and ~13px, and the toolbar's select-all and two
+  batch actions stop competing for one line. **Deny** also moves to the far end of the action
+  cluster, after **Review**, rather than sitting one 8px gap from it: denying resolves an approval
+  outright and there is no undo path anywhere in the flow. That reorder is source order in both the
+  server-rendered and the live-re-rendered row, so focus order and visual order still agree.
 - **Quitting from the settings page no longer truncates its own response.** `/api/settings/quit_app`
   signalled the daemon's shutdown *before* returning, so the process could be torn down while its
   21-byte confirmation was still being written and the client saw `peer closed connection without

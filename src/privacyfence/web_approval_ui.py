@@ -96,6 +96,7 @@ class WebApprovalUI(ApprovalUI):
         upload_forced: bool = False,
         layout: str = "narrow",
         approval: PendingApproval | None = None,
+        tool: str = "",
     ) -> tuple[str, int | None]:
         html = build_card_html(
             title=title, preview=preview, details_text=details_text, is_read=False, layout=layout,
@@ -104,6 +105,10 @@ class WebApprovalUI(ApprovalUI):
             preview_bytes=preview_bytes, preview_mime_type=preview_mime_type,
             preview_tables=preview_tables, preview_blocks=preview_blocks, table_only=table_only,
             upload_forced=upload_forced, temp_accept_eligible=temp_accept_eligible,
+            # Selects this card's own consequence row -- see
+            # write_effects.py. Write gate only: a read card's §3 already
+            # states what approving releases.
+            tool=tool,
         )
         return self._run_card(html, approval)
 
