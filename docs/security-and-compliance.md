@@ -106,11 +106,31 @@ Phase 1 (config plus a `/security` enrollment page, mirroring org mode's) and Ph
 decide-time check itself) have both landed for local mode now that Phase 4 above has, since the
 credential store the assertion is checked against is exactly the one Phase 4 makes service-owned.
 With `step_up.enabled` set, local mode's own `/api/approvals/{id}/decide` demands a fresh WebAuthn
-assertion before releasing an approving decision on a write (or a PII-flagged read, in the wider
-scope) -- mirroring org mode's own gate, minus the IdP re-authentication fallback local mode has no
+assertion before releasing an approving decision on a write (or on a read too, in a wider
+`scope` -- see below) -- mirroring org mode's own gate, minus the IdP re-authentication fallback local mode has no
 equivalent of. With `step_up.enabled` alone, and no passkey enrolled, there is no ceremony left to
 demand and the decision goes through unguarded rather than deadlocking behind one nobody could
 complete -- so with only `enabled` set, simply never enrolling a passkey dodges the check entirely.
+
+**What step-up covers is `step_up.scope`, and it means the same thing in both modes** -- one
+`StepUpConfig` (`step_up_config.py`) and one predicate (`webauthn_stepup.is_step_up_required`)
+serve local and org mode alike; only where the value is configured differs
+(`config/settings.yaml`'s `step_up:` section vs `org_config.json`'s, the latter written by
+`scripts/build_org_bundle.py --step-up-scope`). Narrowest first:
+
+| `scope` | write | read flagged by `pii_detector.py` | any other read |
+| --- | --- | --- | --- |
+| `writes` (default) | passkey | — | — |
+| `writes_and_pii_reads` | passkey | passkey | — |
+| `writes_and_reads` | passkey | passkey | passkey |
+
+Denying never needs step-up under any scope (denying discloses nothing), and neither does a bare
+confirm dialog, which is a second step inside a decision the card it belongs to already gated. A
+read an auto-accept rule covers never becomes an approval in the first place, so no scope asks for
+a passkey on one -- `writes_and_reads` widens what a *pending* approval costs to release, not what
+gets gated. Pick it over `writes_and_pii_reads` when the install would rather not depend on PII
+detection having flagged everything worth a second factor; the cost is a passkey prompt on every
+read a rule doesn't already cover.
 
 **`step_up.require_passkey` (Phase 3) is what makes it a guarantee rather than an opt-in check.**
 With it on: an approving decision with nothing enrolled is hard-failed (`403`, naming `/security`)
