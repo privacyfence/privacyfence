@@ -78,7 +78,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
 
-from .. import approval_list_html, approval_window_html, org_identity, webauthn_stepup
+from .. import approval_list_html, approval_window_html, org_identity, web_shell, webauthn_stepup
 from ..approvals import BATCH_RESULTS
 from ..org_identity import IdpConfig
 from ..principal import Principal
@@ -232,33 +232,40 @@ def _org_bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, non
     )
 
 
-_TOKENS_CSS = None  # lazily loaded -- see _tokens_css()
+def _render_list_page(rows: list, *, csrf: str, nonce: str, principal_label: str = "") -> str:
+    """The org-mode ``/approvals`` page, in the same shell local mode uses.
 
+    This used to be a bare document: tokens, one body font rule, the list,
+    and a centred footer of three links that nothing styled -- so they
+    rendered browser-default blue against a warm grey palette. No header,
+    no brand, no nav, no favicon, and on a phone no navigation at all. It
+    is also the surface a paying organization actually looks at.
 
-def _tokens_css() -> str:
-    global _TOKENS_CSS
-    if _TOKENS_CSS is None:
-        from pathlib import Path
-
-        _TOKENS_CSS = (Path(__file__).parent.parent / "resources" / "tokens.css").read_text(encoding="utf-8")
-    return _TOKENS_CSS
-
-
-def _render_list_page(rows: list, *, csrf: str, nonce: str) -> str:
+    ``live_updates=False`` is not a simplification. Org mode's app mounts
+    no ``GET /api/state/stream`` at all (web/server.py's
+    ``_build_org_app``), so there is nothing behind the shell's live
+    indicator here; rendering it anyway would either claim a liveness that
+    doesn't exist or sit permanently on a connection error, on the one
+    surface whose whole job is to be trusted. The list is still correct on
+    load -- it just no longer claims to be self-updating. Tier-0/1
+    notifications ride the same stream, so they go with it.
+    """
     body = approval_list_html.build_list_html(rows, csrf=csrf, nonce=nonce)
     # PF_WEBAUTHN_JS (approval binder Phase 3): needed here whenever
     # Approve-selected's own 428 branch (approval_list_html.py's own JS)
     # has to run a ceremony -- always injected, same reasoning
     # show_approval's own shim below gives.
     body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PrivacyFence -- Approvals</title>
-<style nonce="{nonce}">{_tokens_css()}body{{background:var(--color-bg);color:var(--color-text);margin:0;
-font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}</style></head>
-<body>{body}
-<p style="text-align:center"><a href="/connect">Connections</a> &middot; <a href="/security">Passkeys</a> &middot; <a href="/settings">Settings</a></p>
-</body></html>"""
+    return web_shell.wrap(
+        body,
+        title="PrivacyFence — Approvals",
+        active="approvals",
+        nonce=nonce,
+        nav_items=web_shell.ORG_NAV_ITEMS,
+        principal_label=principal_label,
+        live_updates=False,
+        notifications_enabled=False,
+    )
 
 
 def build_routes(
@@ -281,7 +288,14 @@ def build_routes(
             return RedirectResponse("/login?next=/approvals", status_code=302, headers={"Cache-Control": "no-store"})
         session_id = request.cookies.get(org_session.SESSION_COOKIE, "")
         rows = [approval_list_html.row_from_approval(card) for card in registry.list_pending(principal.id)]
-        html = _render_list_page(rows, csrf=session_id, nonce=_csp_nonce_for(request))
+        html = _render_list_page(
+            rows, csrf=session_id, nonce=_csp_nonce_for(request),
+            # Every read and write on this page is authorized against this
+            # principal, and the page never said whose queue it was. The
+            # cosmetic fields first (see principal.py), falling back to the
+            # opaque id rather than rendering an unlabelled header.
+            principal_label=principal.email or principal.display_name or principal.id,
+        )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     async def show_approval(request: Request) -> Response:

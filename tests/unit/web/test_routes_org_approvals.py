@@ -159,6 +159,49 @@ class TestPrincipalScopedList:
         assert r.status_code == 200
         assert "a message" in r.text or "Get message" in r.text  # her own row rendered
 
+    def test_the_list_is_served_in_the_shared_shell(self):
+        # F9: this page used to be a bare document -- no header, no brand,
+        # no nav, no favicon -- while local mode's identical list got the
+        # full shell. It is also the surface a paying org actually uses.
+        app, sessions, web_ui = _app()
+        _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/approvals")
+        assert "pf-shell-header" in r.text
+        assert 'class="pf-shell-nav-item active" href="/approvals"' in r.text
+        for href in ("/connect", "/security", "/settings"):
+            assert f'class="pf-shell-nav-item" href="{href}"' in r.text
+
+    def test_the_list_names_whose_queue_it_is(self):
+        # Every read and write here is authorized against one principal,
+        # and the page never said which.
+        app, sessions, web_ui = _app()
+        _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        assert ALICE.email in client.get("/approvals").text
+
+    def test_the_list_claims_no_liveness_it_cannot_deliver(self):
+        # Org mode's app mounts no GET /api/state/stream at all, so a live
+        # indicator here would either lie or sit permanently on an error.
+        app, sessions, web_ui = _app()
+        _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/approvals")
+        assert 'id="pf-shell-live-dot"' not in r.text
+        assert "/api/state/stream" not in r.text
+
+    def test_the_old_unstyled_footer_links_are_gone(self):
+        # A centred <p> of three links nothing styled, so they rendered
+        # browser-default blue against a warm grey palette. The nav carries
+        # them now.
+        app, sessions, web_ui = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        assert '<p style="text-align:center">' not in client.get("/approvals").text
+
     def test_show_approval_404s_a_foreign_principals_card(self):
         app, sessions, web_ui = _app()
         approval = _register(web_ui, ALICE, dedupe_key="a1")

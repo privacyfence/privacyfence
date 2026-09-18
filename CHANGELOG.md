@@ -491,6 +491,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   become two equal 48px targets with always-allow a quiet link below them rather than a third
   control in the thumb zone. Nothing changes above the breakpoint, or in the native window, whose
   frame already sized itself to the document.
+- **Org mode's approvals page has a shell.** It was a bare document — design tokens, one body font
+  rule, the list, and a centred footer of three links that nothing styled, so they rendered
+  browser-default blue against a warm grey palette. No header, no brand, no nav, no favicon, and on
+  a phone no navigation at all; local mode's identical list had all of it. Both modes now render
+  through the same shell, with the nav set (Approvals / Connections / Passkeys / Settings) and the
+  signed-in principal passed in per mode — org mode's whole authorization model is per-principal and
+  the page never said whose queue was on screen. The shell also gained a link colour for ordinary
+  `<a>` elements in page content, which nothing had styled before.
+  Org mode deliberately renders **no** live indicator: its app mounts no `GET /api/state/stream`, so
+  an indicator there would either claim a liveness that doesn't exist or sit permanently on a
+  connection error. Tier-0/1 notifications, which ride the same stream, are off with it.
 - **The approvals page explains a first run instead of claiming it is watching.** First run and
   steady state shared one empty state, written for steady state: "Nothing is waiting. / PrivacyFence
   is watching." On an install where no connector is authenticated that is misleading in both halves
