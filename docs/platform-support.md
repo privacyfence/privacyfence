@@ -251,17 +251,21 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
 ## Known open items
 
 - **Windows autostart — now actually works, including real crash-restart, verified end to end by real
-  `workflow_dispatch` runs, after a chain of independent bugs of which the last was in the daemon
-  rather than the installer. One thing remains: the `LogonTrigger`'s own firing, which a hosted runner
-  cannot produce and the Windows human checks cover instead (below).** This
+  `workflow_dispatch` runs, after a chain of independent bugs, the most recent of which was that the
+  installer never actually needed the elevated token its own registration step required (see "a
+  related wrinkle" below). The one thing CI structurally cannot cover — the `LogonTrigger`'s own
+  firing on a real interactive sign-in — has now been confirmed by hand on a real Windows machine;
+  future Windows-autostart-affecting changes should re-confirm it via the Windows human checks
+  (below), since no hosted runner can ever produce that coverage itself.** This
   mechanism went through several real, independently-found-and-fixed bugs before
   landing where it is now — see `installer/privacyfence-task.xml.tmpl`'s own header comment and
   `installer/privacyfence.iss`'s `[Code]` section for the full detail — and the early ones are worth
   naming here only because this bullet itself carried wrong theories about them at the time:
-  `PrivilegesRequired=lowest`/non-elevation was never the cause; nor, in the end, was the `/ri`/`/du`
-  and `/RU`-scoping pair of `schtasks /create` CLI-flag bugs this bullet previously described as the
-  fix — those flags were superseded entirely once the mechanism moved to a real Task Scheduler XML
-  task definition (`schtasks /create /xml`), which is what actually ships today.
+  non-elevation was never the cause of *this specific* early chain of bugs (it turned out, much
+  later, to be the cause of a different one — see "a related wrinkle" below); nor, in the end, was
+  the `/ri`/`/du` and `/RU`-scoping pair of `schtasks /create` CLI-flag bugs this bullet previously
+  described as the fix — those flags were superseded entirely once the mechanism moved to a real Task
+  Scheduler XML task definition (`schtasks /create /xml`), which is what actually ships today.
   **The real, final blocker in that XML approach** was an `encoding="UTF-8"` declaration in the XML
   prolog: `schtasks.exe` hands the file to MSXML as a Unicode stream already, so a declaration
   claiming UTF-8 contradicted the stream the parser was already on and MSXML rejected the whole
@@ -338,8 +342,9 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   Scheduler normalizes away `<Enabled>` on either trigger when it is `true` (the schema default) — the
   same thing it already does for `<LogonTrigger>`, which the contract already tolerated. Fixed to use
   the same fallback for `<TimeTrigger>`, confirmed by a second, fully green run.
-  **One gap remains, and it is in what CI can observe, not in the installer: the `LogonTrigger`'s own
-  firing.** The test used to claim it drove that, via PowerShell's `Start-Process -Credential`
+  **One thing stays outside what CI can observe, not the installer: the `LogonTrigger`'s own
+  firing** — now confirmed once by hand on a real machine (see above), with the Windows human checks
+  in `release-testing.md` as the standing, per-release coverage for it going forward. The test used to claim it drove that, via PowerShell's `Start-Process -Credential`
   (`CreateProcessWithLogonW`) as a stand-in for signing in, and was red on every run because of it:
   `schtasks /query /v` reported the task `Enabled`/`Ready`, scoped to the right group, pointing at the
   right exe, and simply never fired (`Last Result: 267011` / `SCHED_S_TASK_HAS_NOT_RUN`).
@@ -367,23 +372,46 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   Windows-only workflow to notice. Check `windows-graphical-session.yml`'s own run history for the
   current result rather than trusting this note alone — as of this writing it is green for the first
   time since it was written, with the autostart path exercised end to end.
-  **A related wrinkle worth knowing, not currently a defect**: `installer/privacyfence.iss` is
-  `PrivilegesRequired=lowest`, so a silent install resolves `{autopf}` to `{userpf}` —
-  `%LOCALAPPDATA%\Programs\PrivacyFence`, inside the installing account's own profile, which no other
-  account can read. The task's `Builtin\Users` group principal therefore only composes with a
-  per-machine install; on the single-user desktop this product targets, installing and signing-in
-  accounts are the same one and nothing is wrong. The CI test installs to a machine-wide directory
-  for exactly this reason.
-  This wrinkle stopped being harmless the day a real non-admin user hit two more bugs stacked on top
-  of it (privacyfence/privacyfence#410): `RegisterAutostartTask()`'s own failure was logged to the
-  Inno Setup install log only, with the install still reporting success, so a schtasks failure at
+  **A related wrinkle, previously written up here as "not currently a defect," was in fact a
+  defect, and the installer no longer allows it to occur.** `installer/privacyfence.iss` used to be
+  `PrivilegesRequired=lowest`, so a silent install with no explicit "Run as administrator" resolved
+  `{autopf}` to `{userpf}` — `%LOCALAPPDATA%\Programs\PrivacyFence`, inside the installing account's
+  own profile — and launched Setup with an ordinary, non-elevated token. This note used to reason
+  that the task's `Builtin\Users` group principal "only composes with a per-machine install" and that
+  nothing was wrong on the single-user desktop this product targets, because the installing and
+  signing-in accounts are the same one. That reasoning addressed the wrong question: it is about
+  which account the `LogonTrigger` fires *for* once the task exists, not about whether registering a
+  `LogonTrigger` task at all requires an elevated token in the first place — it does, unconditionally.
+  `schtasks /create /xml` registering a task with a `LogonTrigger` needs the `SeCreateGlobalPrivilege`
+  user right, which Windows grants by default only to Administrators, `SERVICE`, `LOCAL SERVICE` and
+  `NETWORK SERVICE`; a UAC-filtered admin token — the ordinary, non-elevated token an admin account's
+  own processes run with by default, exactly what a non-elevated `lowest` install launches Setup
+  with — does not carry it, regardless of whether the task's `Principal` names a `GroupId` or the
+  calling user's own `UserId`. So `RegisterAutostartTask()` failed with "Access is denied" on every
+  non-elevated install, deterministically, not occasionally, and the CI test installing to a
+  machine-wide directory (see above) never exercised the failing path at all: `windows-graphical-
+  session.yml`'s own module requires `_is_admin()` before it will even run, and `build.yml`'s
+  packaged-artifact smoke test happens to run on a hosted runner whose account already carries a full
+  admin token with no UAC filtering, so neither ever saw the "Access is denied" a real client-Windows
+  non-admin install gets every time.
+  This wrinkle first stopped being harmless the day a real non-admin user hit two more bugs stacked
+  on top of it (privacyfence/privacyfence#410): `RegisterAutostartTask()`'s own failure was logged to
+  the Inno Setup install log only, with the install still reporting success, so a schtasks failure at
   install time was invisible until the next reboot silently left no daemon running; and separately,
   the mcpb shim's own `findDaemonCmd()` self-heal fallback (`daemon.ts`) hardcoded the *admin*
   `%ProgramFiles%\PrivacyFence\` path only, so on the common non-admin install it couldn't find the
-  daemon at `%LOCALAPPDATA%\Programs\PrivacyFence\` either, whatever autostart did. Both are now
-  fixed: a failed `RegisterAutostartTask()` also raises a dialog (guarded by `WizardSilent` so a
-  scripted/silent install never blocks on it), and `findDaemonCmd()` checks both Windows install
-  locations, preferring `%ProgramFiles%` but falling back to `%LOCALAPPDATA%\Programs`.
+  daemon at `%LOCALAPPDATA%\Programs\PrivacyFence\` either, whatever autostart did. Those two were
+  fixed at the time: a failed `RegisterAutostartTask()` also raises a dialog (guarded by
+  `WizardSilent` so a scripted/silent install never blocks on it), and `findDaemonCmd()` checks both
+  Windows install locations, preferring `%ProgramFiles%` but falling back to
+  `%LOCALAPPDATA%\Programs`. Neither fix touched the registration failure itself, so the dialog kept
+  firing on every non-admin install — including, later, a second real user hitting exactly the same
+  dialog, screenshots and all. **The actual fix is `PrivilegesRequired=admin`**: Setup's own manifest
+  now requires an elevated token before it runs at all, so `RegisterAutostartTask()` never runs
+  without the privilege `schtasks /create /xml` needs for a `LogonTrigger` task, on any account.
+  This has not yet been measured on a real non-admin client-Windows machine the way the rest of this
+  bullet's history has — check `windows-graphical-session.yml` and `release-testing.md`'s Windows
+  human checks for whether that measurement has happened by the time this is read.
   None of this needed a dedicated bullet on its own here for the manual-QA/issue-closure part of it:
   that content now lives in [`release-testing.md`](release-testing.md)'s human-checks list
   (Windows-specific bullets — a real installer run on a clean Windows VM, OAuth loopback, the
@@ -392,12 +420,12 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   [privacyfence/privacyfence#121](https://github.com/privacyfence/privacyfence/issues/121) itself
   recording that it stays open until a real tagged release ships the signed installer and that QA
   has run against it — not duplicated here as well.
-- **Linux org mode has not had a real end-to-end run against a live Ubuntu server**: a fresh Ubuntu
+- **Linux org mode's real end-to-end deployment path has now been run once for real**: a fresh Ubuntu
   host following `org-mode-setup-guide.md` verbatim, a real OIDC round trip against a real identity
   provider, and at least one live connector (Gmail) exercised through a real MCP client hitting the
-  public `/mcp` URL. The `org-mode-smoke` CI job exercises the same daemon/MCP/approval/audit
-  contract end to end, but against a synthetic, mocked identity provider — a different, narrower
-  guarantee than a real deployment run.
+  public `/mcp` URL. The `org-mode-smoke` CI job continues to cover the same daemon/MCP/approval/audit
+  contract on every PR, against a synthetic, mocked identity provider — a narrower, faster guarantee
+  than a real deployment run, kept for regression coverage rather than as the only proof of the path.
 - **Privilege separation, on any of the three platforms, has no automated end-to-end coverage, and
   cannot have any from this repo's CI**: provisioning it needs root (or Administrator), creates a
   real system account, and the property it buys only exists once two real OS accounts are involved —
