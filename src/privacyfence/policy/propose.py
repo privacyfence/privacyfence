@@ -423,6 +423,11 @@ def _by_group(entries: tuple[ProposableScope, ...]) -> dict[str, tuple[Proposabl
 
 _SCOPES_BY_GROUP: dict[str, tuple[ProposableScope, ...]] = _by_group(PROPOSABLE_SCOPES)
 
+# Public alias -- P6's Settings page builds its "add a rule" scope picker directly off this (one
+# entry per widening group, the same grouping `rules_for_scope_group` itself keys on), rather than
+# re-deriving the grouping from `PROPOSABLE_SCOPES` a second time.
+SCOPES_BY_GROUP: dict[str, tuple[ProposableScope, ...]] = _SCOPES_BY_GROUP
+
 # Risk order, so a widening list reads narrowest-first and a destructive or send widening is never
 # the one a hurried click lands on.
 _FAMILY_ORDER: tuple[VerbFamily, ...] = (
@@ -434,6 +439,15 @@ _VERB_ORDER: tuple[Verb, ...] = tuple(Verb)
 def verb_sort_key(verb: Verb) -> tuple[int, int]:
     """Risk order for a verb: read family first, destructive last, stable within a family."""
     return _FAMILY_ORDER.index(VERB_FAMILY[verb]), _VERB_ORDER.index(verb)
+
+
+def scope_needs_value(scope: ProposableScope) -> bool:
+    """Whether ``scope`` has a resource identity to type in, or is a value-less attribute/condition
+    scope ("if I own it", "no external attendees") that only ever needs a verb selection. P6's
+    Settings page uses this to decide whether its "add a rule" form shows a value field for a given
+    scope group -- a group is homogeneous on this (every member of one widening group shares a
+    value shape), so checking the group's first entry is enough."""
+    return scope.value_of is not _no_value_needed
 
 
 def operations_for(scope: ProposableScope, verb: Verb) -> frozenset[str]:
@@ -694,6 +708,7 @@ __all__ = [
     "ALL_OPERATIONS",
     "NO_VALUE",
     "PROPOSABLE_SCOPES",
+    "SCOPES_BY_GROUP",
     "ProposableScope",
     "RuleProposal",
     "Widening",
@@ -704,6 +719,7 @@ __all__ = [
     "proposals_for",
     "rules_for_proposal",
     "rules_for_scope_group",
+    "scope_needs_value",
     "v1_entries",
     "v1_rule_name",
 ]

@@ -263,6 +263,99 @@ class TestPolicyEngineShadowMode:
         assert any("Policy v2 shadow evaluation raised" in r.message for r in caplog.records)
 
 
+class TestPolicyV2StoreOnlyRules:
+    """P6 of the policy v2 redesign: a rule that lives only in the on-disk v2 auto_accept: section
+    (auto_accept.get_policy_v2_store_rules(), refreshed by settings_controller.add_policy_rule and
+    at daemon startup) is checked unconditionally by gate._evaluate_auto_accept, regardless of
+    which engine policy.engine names authoritative -- see auto_accept._AutoAcceptState.
+    policy_v2_store_rules' own docstring for why: a rule using one of P6's own new predicates
+    (apps_script.project, gmail.anything, slack.anything) has no v1 shadow to be compared against
+    at all."""
+
+    def _install(self, monkeypatch, rules):
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", lambda: rules)
+
+    async def test_matching_v2_store_rule_auto_accepts_when_v1_and_shadow_both_say_no(
+        self, monkeypatch, audit_dir,
+    ):
+        from privacyfence.policy.engine import PolicyRule
+
+        # FakeEvaluator's own effective_rules is {}, so both v1's canned (False, "") and the v2
+        # shadow comparison agree "no" -- the only thing that can still say "yes" is the v2-store
+        # layer this class installs.
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator((False, "")))
+        # gmail.anything (P6) is unconditional (like always_allow), so it needs no matching args --
+        # what's under test here is that the v2-store layer is consulted at all, not any one
+        # predicate's own matching logic (that's scopes.py's own test suite's job).
+        self._install(monkeypatch, [PolicyRule(
+            id="r-gmail-configure", predicate="gmail.anything", value=None,
+            operations=frozenset({"gmail.read_message"}),
+        )])
+
+        result = await gate.gated_call(**base_kwargs())
+
+        assert result is FILTERED
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["decision"] == "auto_accepted"
+        assert entries[0]["auto_accept_rule"] == "r-gmail-configure"
+
+    async def test_checked_even_when_policy_engine_is_v2(self, monkeypatch, audit_dir):
+        from privacyfence.policy.engine import PolicyRule
+
+        init_policy_engine_version("v2")
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator((False, "")))
+        self._install(monkeypatch, [PolicyRule(
+            id="r-gmail-anything", predicate="gmail.anything", value=None,
+            operations=frozenset({"gmail.read_message"}),
+        )])
+
+        result = await gate.gated_call(**base_kwargs())
+
+        assert result is FILTERED
+        entries = read_audit_entries(audit_dir)
+        assert entries[0]["auto_accept_rule"] == "r-gmail-anything"
+
+    async def test_non_matching_v2_store_rule_falls_through_to_the_primary_result(
+        self, monkeypatch, audit_dir,
+    ):
+        from privacyfence.policy.engine import PolicyRule
+
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator((False, "")))
+        self._install(monkeypatch, [PolicyRule(
+            id="r-other-op", predicate="always_allow", value=None,
+            operations=frozenset({"drive.read_file_contents"}),  # not this call's own operation key
+        )])
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+        popup_calls = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popup_calls.append(1) or "accept", None))
+
+        result = await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert result is FILTERED
+        assert popup_calls == [1]  # fell through to the popup -- the v2-store rule never matched
+
+    async def test_v2_store_evaluation_error_is_swallowed_not_propagated(self, caplog, monkeypatch, audit_dir):
+        # The primary (v1, by default) result must be False here -- a True primary result returns
+        # before the v2-store layer is even consulted (see _evaluate_auto_accept), so this would
+        # never reach the raise otherwise.
+        monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator((False, "")))
+
+        def _raise():
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(gate, "get_policy_v2_store_rules", _raise)
+        monkeypatch.setattr(gate, "suggest_rule_choices", lambda *a, **k: [])
+        popup_calls = []
+        monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: (popup_calls.append(1) or "accept", None))
+
+        with caplog.at_level("WARNING", logger="privacyfence.gate"):
+            result = await gate.gated_call(**base_kwargs(gate="review"))
+
+        assert result is FILTERED  # fell through to the popup -- the raise never reached gated_call
+        assert popup_calls == [1]
+        assert any("Policy v2 store evaluation raised" in r.message for r in caplog.records)
+
+
 class TestReviewGateDecisions:
     async def test_deny_raises_and_audits_rejected(self, monkeypatch, audit_dir):
         monkeypatch.setattr(gate, "get_auto_accept_evaluator", lambda: FakeEvaluator())

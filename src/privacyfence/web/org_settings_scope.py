@@ -74,10 +74,21 @@ PER_PRINCIPAL_ACTIONS: frozenset[str] = frozenset({
 # them, not permits them, until one does. Move an action to
 # `PER_PRINCIPAL_ACTIONS` in the same PR that adds its route, never ahead of
 # it.
+#
+# P6 of the policy v2 redesign retired update_rule_row/toggle_grant_capability/
+# add_grant_row/update_grant_row from routes_settings._ALLOWED_ACTIONS
+# entirely (SettingsController.add_policy_rule/remove_policy_rule are the
+# local Auto-accept page's own replacements) -- they had no route here
+# either, so nothing moved, nothing broke, and there is simply nothing left
+# to unblock for them.
 PER_PRINCIPAL_ACTIONS_UNROUTED: frozenset[str] = frozenset({
     "toggle_connector", "refresh_connectors", "authenticate_connector",
-    "update_rule_row",
-    "toggle_grant_capability", "add_grant_row", "update_grant_row",
+    # P6 of the policy v2 redesign: the local Auto-accept page's own rule
+    # writer, meaningful per-principal in concept the same way add_rule_row
+    # always was, but routes_org_settings.py has no v2-aware route for org
+    # mode yet -- rebuilding that page on the v2 schema is its own follow-up,
+    # not something P6 (a local-mode-only phase) does.
+    "add_policy_rule", "remove_policy_rule",
 })
 
 ADMIN_ONLY_ACTIONS: frozenset[str] = frozenset({

@@ -175,6 +175,7 @@ from .auto_accept import (
     describe_rule_short,
     get_auto_accept_evaluator,
     get_policy_engine_version,
+    get_policy_v2_store_rules,
     known_rule_names,
     mutate_grants,
     remove_auto_accept_rule,
@@ -638,9 +639,27 @@ def _evaluate_auto_accept(
                 operation_key, v1_ok, v1_rule, v2_ok, v2_rule, _context_fingerprint(ctx),
             )
 
-    if get_policy_engine_version() == "v2":
-        return v2_ok, v2_rule
-    return v1_ok, v1_rule
+    primary_ok, primary_rule = (v2_ok, v2_rule) if get_policy_engine_version() == "v2" else (v1_ok, v1_rule)
+    if primary_ok:
+        return primary_ok, primary_rule
+
+    # P6: a rule that exists only in the on-disk v2 `auto_accept:` section -- authored directly
+    # through the redesigned Auto-accept Settings page, or governing an operation v1 has no
+    # predicate for at all (Apps Script's `apps_script.project` scope, in particular, F5) -- has no
+    # v1 counterpart to be shadowed against, so it is checked here unconditionally rather than only
+    # when `policy.engine: v2`. See `auto_accept._AutoAcceptState.policy_v2_store_rules`'s own
+    # comment for why this is a separate, always-on layer instead of folded into the comparison
+    # above.
+    try:
+        store_ok, store_rule = policy_engine.evaluate(
+            get_policy_v2_store_rules(), operation_key, ctx, is_temp_accepted=evaluator.is_temp_accepted,
+        )
+    except Exception:
+        logger.warning("Policy v2 store evaluation raised for op=%r", operation_key, exc_info=True)
+        return primary_ok, primary_rule
+    if store_ok:
+        return store_ok, store_rule
+    return primary_ok, primary_rule
 
 
 # Set by web/mcp_dispatch.py's McpDispatcher.call() around a single
