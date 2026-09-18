@@ -731,8 +731,8 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
         )
         await _resolve_pending_card(web_client, session_id, decision="confirm")
         allow_result = await allow_task
-        assert allow_result.isError is not True, getattr(allow_result, "content", allow_result)
-        assert allow_result.structuredContent["changed"] is True
+        assert allow_result.is_error is not True, getattr(allow_result, "content", allow_result)
+        assert allow_result.structured_content["changed"] is True
 
         await _quit(web_client, session_id)
 

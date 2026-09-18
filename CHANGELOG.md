@@ -492,6 +492,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   collected into a single `privacyfence_await_approval` call rather than relayed and awaited one
   at a time — `privacyfence_await_approval`'s own tool description now says the same thing.
 
+### Changed
+
+- **The MCP server now runs on the official Python SDK's 2.x API** (`mcp>=2.2,<3.0`, up from
+  `mcp>=1.28,<2.0`). A deliberate migration rather than a widened range: mcp 2.0 rewrote the
+  low-level server surface `/mcp` is built on, so the old pin could not simply be raised.
+  Handlers are registered as constructor arguments instead of decorators and receive a
+  per-request context, the per-session `lifespan` this daemon keyed its unattended-session and
+  deduplication state by is now entered once per session *manager*, and result/tool models
+  renamed their fields to snake_case. `/mcp` behaves the same on the wire — the same tools, the
+  same `initialize` instructions, the same `tools/list_changed` notification when connectors
+  change, the same tool-level error result (rather than a protocol error) for a failed call,
+  which 2.0 would otherwise have replaced with a generic "Error executing tool" message. Each
+  Streamable HTTP session is now identified by the transport's own `Mcp-Session-Id` rather than
+  an id minted by the server's lifespan, and its unattended-session state is released when the
+  session ends, exactly as before. The organization-mode authorization server explicitly refuses
+  SEP-990 identity assertions (the RFC 7523 `jwt-bearer` grant) that 2.x added to its provider
+  interface: in org mode a human authenticates at the identity provider through PrivacyFence's
+  own `/authorize`, which is what every downstream gate, audit entry and approval is scoped to.
+  `requirements/*.lock.txt` are regenerated accordingly, including mcp 2.x's new transitive
+  dependencies (`mcp-types`, `httpx2`, `httpcore2`, `truststore`), all hash-pinned. See
+  issue #250.
+
 ### Fixed
 
 - **Quitting from the settings page no longer truncates its own response.** `/api/settings/quit_app`
