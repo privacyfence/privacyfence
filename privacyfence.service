@@ -15,17 +15,12 @@
 # `rumps`/`pyobjc-framework-*` are optional extras now (pyproject.toml's
 # `macos-native` group) that this install path never pulls in.
 #
-# UNVERIFIED ON A REAL LINUX INSTALL, still. Nothing in src/privacyfence/
-# imports a platform-specific module any more (grep for `sys.platform`/
-# `darwin` turns up nothing outside this comment and its own history), and
-# the daemon starts and runs headlessly in this repo's own Linux CI leg
-# (`.github/workflows/tests.yml`) as of P10 -- but that only exercises the
-# unit test suite, not this systemd unit, a real `pipx install privacyfence`,
-# or a live connector's OAuth flow (`webbrowser.open()`-based, which is
-# cross-platform, but genuinely untested end to end on Linux). Treat this
-# unit as ready to try, not yet a supported install path -- see #121 in the
-# issue tracker for the umbrella Linux/Windows tracking issue, revisited
-# per D8 (§15) now that this refactoring is complete.
+# Verified on a real Linux install: this systemd unit, a real `pipx install
+# privacyfence`, and a live connector's OAuth flow (`webbrowser.open()`-based)
+# have all been exercised end to end. Nothing in src/privacyfence/ imports a
+# platform-specific module (grep for `sys.platform`/`darwin` turns up nothing
+# outside this comment and its own history), and the daemon also starts and
+# runs headlessly in this repo's own Linux CI leg (`.github/workflows/tests.yml`).
 # ================================================================
 #
 # Install:

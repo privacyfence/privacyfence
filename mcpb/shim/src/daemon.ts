@@ -37,18 +37,23 @@ const DEFAULT_APP_PATH_BY_PLATFORM: Partial<Record<NodeJS.Platform, string>> = {
 const DEFAULT_APP_PATH = DEFAULT_APP_PATH_BY_PLATFORM.darwin as string;
 
 // Windows install locations for privacyfence-app.exe, checked in this
-// order. installer/privacyfence.iss defaults to a non-admin, per-user
-// install (`PrivilegesRequired=lowest`), which Inno Setup's {autopf}
-// resolves to %LOCALAPPDATA%\Programs\PrivacyFence\ rather than
-// %ProgramFiles%\PrivacyFence\ -- only an elevated ("for all users") install
-// lands in the latter. A single hardcoded Program-Files-only path here used
-// to leave the shim's own self-heal spawn unable to find the daemon on the
-// common non-admin install whenever the Task Scheduler autostart task
-// didn't fire for any reason, producing a silent hang instead of a clear
-// error (privacyfence/privacyfence#410). ProgramFiles and LOCALAPPDATA are
-// real env vars Windows always sets; both are still parameterized here
-// (rather than read via process.env directly) so tests can exercise this on
-// non-Windows CI hosts.
+// order. installer/privacyfence.iss is now PrivilegesRequired=admin, so a
+// fresh install always lands in %ProgramFiles%\PrivacyFence\ -- but it used
+// to default to a non-admin, per-user install (`PrivilegesRequired=lowest`),
+// which Inno Setup's {autopf} resolved to %LOCALAPPDATA%\Programs\
+// PrivacyFence\ instead. A single hardcoded Program-Files-only path here
+// used to leave the shim's own self-heal spawn unable to find the daemon on
+// that non-admin install whenever the Task Scheduler autostart task didn't
+// fire for any reason, producing a silent hang instead of a clear error
+// (privacyfence/privacyfence#410) -- which, as it turned out, was every
+// time on a non-elevated install, since registering a LogonTrigger task at
+// all needs an elevated token (see docs/platform-support.md's "Known open
+// items"), not just an occasional flake. The LOCALAPPDATA fallback stays
+// here regardless, for whatever install an older, lowest-privilege release
+// already made on a machine before it upgrades to one that only offers an
+// admin install. ProgramFiles and LOCALAPPDATA are real env vars Windows
+// always sets; both are still parameterized here (rather than read via
+// process.env directly) so tests can exercise this on non-Windows CI hosts.
 function windowsDefaultAppPaths(env: NodeJS.ProcessEnv): string[] {
   const candidates: string[] = [];
   if (env.ProgramFiles) {

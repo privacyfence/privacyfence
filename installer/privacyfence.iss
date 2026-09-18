@@ -71,14 +71,33 @@ OutputBaseFilename={#SetupBaseName}
 SetupIconFile={#IconPath}
 Compression=lzma2
 SolidCompression=yes
-; A single-user desktop daemon has no reason to demand an admin elevation
-; prompt just to install under Program Files -- lowestprivilege still lets
-; per-machine Program Files installs proceed under a standard account's own
-; write access where the OS allows it, and falls back to the standard UAC
-; prompt otherwise, same tradeoff the DMG's drag-install has no equivalent
-; decision for at all.
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
+; This used to be `lowest`, on the theory that a single-user desktop daemon
+; has no reason to demand an admin elevation prompt just to install under
+; Program Files. That theory was wrong, and not in a way any amount of
+; reasoning from documentation would have caught -- a real non-admin user
+; hit it, the same failure first reported as privacyfence/privacyfence#410:
+; a `lowest` install with no explicit "Run as administrator" resolves
+; {autopf} to {userpf} and launches Setup with an ordinary, non-elevated
+; token, and RegisterAutostartTask() below then fails outright on that
+; token, every time, not occasionally. #410 was fixed by making that
+; failure visible (a warning dialog instead of only a log line) and by
+; widening the mcpb shim's own daemon lookup to also check the non-admin
+; install location -- not by fixing the registration failure itself, which
+; kept happening on every non-elevated install afterward. The reason is
+; `schtasks /create /xml` registering a LogonTrigger task at all --
+; regardless of whether its Principal is a GroupId or the calling user's
+; own UserId -- needs the SeCreateGlobalPrivilege user right, which Windows
+; grants by default only to Administrators, SERVICE, LOCAL SERVICE and
+; NETWORK SERVICE. A UAC-filtered admin token (the ordinary, non-elevated
+; token an admin account's own processes run with, same as a plain
+; standard-user token for this purpose) does not carry it, so "Access is
+; denied" is the deterministic outcome, not a flake -- the installer's own
+; dialog asking the user to "report it if it keeps happening" was asking
+; for reports of something that happens every time. `admin` makes Setup's
+; own manifest require an elevated token before RegisterAutostartTask()
+; ever runs, closing the gap at its actual cause rather than adding another
+; fallback path around it.
+PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 
 [Files]
@@ -154,22 +173,43 @@ Filename: "{app}\{#AliasExeName}"; Description: "Launch {#AppName} now"; \
     Flags: nowait postinstall skipifsilent
 ; Offer to open the bundled .mcpb right after install (privacyfence/
 ; privacyfence#407) -- without this, a user has to already know the .mcpb
-; ships alongside the daemon rather than being downloaded separately, *and*
-; which of two different install directories it landed in ({autopf} vs.
-; {userpf}, depending on PrivilegesRequired=lowest's elevation outcome
-; above), before they can even start looking for it in File Explorer. Its
+; ships alongside the daemon rather than being downloaded separately, before
+; they can even start looking for it in File Explorer. Its
 ; installed name matches the [Files] entry above, which copies {#McpbPath}
 ; into {app} keeping the source filename -- scripts/build_installer.ps1
 ; builds it as "{#AppName}-{#AppVersion}.mcpb" (ProductName-Version.mcpb),
 ; so that's reconstructed here rather than threaded through as its own /D
 ; value.
-; "shellexec" (not a bare Filename/CreateProcess launch) is required: a
-; .mcpb isn't something Windows can exec directly, so this needs
-; ShellExecute to dispatch it to whatever's registered to open it --
-; Claude Desktop, once it's installed and has claimed the extension.
+;
+; Two mutually exclusive entries, gated by IsMcpbAssociated() below (see
+; [Code]), because "shellexec" only actually does something useful once
+; Windows has a real, working .mcpb file association to dispatch to. That
+; is *not* the same thing as "Claude Desktop is installed": per Anthropic's
+; own docs, Claude Desktop's own installer does not always register the
+; .mcpb association cleanly on Windows on the first try, so a machine that
+; already has Claude Desktop can still have nothing at HKCR\.mcpb -- this
+; was reported against the single-entry shellexec-always version of this
+; section, on a machine with Claude Desktop already installed. So this
+; can't be "does Claude Desktop's installer exist somewhere" logic; it has
+; to be a direct read of the registry state ShellExecute will actually use.
+; Whatever the specific reason -- Claude Desktop not installed at all, or
+; installed but the association didn't take -- ShellExecuteEx has nothing
+; to hand the file to, and Windows answers with its own "how do you want
+; to open this file?" picker instead of anything PrivacyFence-specific.
+; That's a dead end for the user, not a helpful prompt, so in that case
+; this shows File Explorer with the .mcpb pre-selected instead -- always
+; succeeds, since explorer.exe needs no file association, and leaves the
+; user able to either double-click it (if Claude Desktop is installed and
+; they fix the association via Open With, see the README) or drag it onto
+; Claude Desktop's own Settings > Extensions page, which accepts a drop
+; regardless of file association.
 Filename: "{app}\{#AppName}-{#AppVersion}.mcpb"; \
     Description: "Install {#AppName} into Claude Desktop"; \
-    Flags: postinstall shellexec skipifsilent
+    Flags: postinstall shellexec skipifsilent; Check: IsMcpbAssociated
+Filename: "{win}\explorer.exe"; \
+    Parameters: "/select,""{app}\{#AppName}-{#AppVersion}.mcpb"""; \
+    Description: "Show the {#AppName} Claude Desktop extension in File Explorer"; \
+    Flags: postinstall skipifsilent; Check: not IsMcpbAssociated
 
 [UninstallRun]
 ; Must remove the scheduled task -- wired into the uninstaller here, not
@@ -221,6 +261,27 @@ Filename: "{sys}\sc.exe"; Parameters: "delete ""{#ServiceName}"""; \
 ; still recover the directory afterwards by taking ownership of it.
 
 [Code]
+(* Backs the [Run] section's Check: on the two mutually-exclusive
+   "open the .mcpb" entries above. HKCR is the merged classes-root view --
+   HKCU\Software\Classes overlaid on HKLM\Software\Classes -- so this sees a
+   per-user Claude Desktop install (matching this installer's own
+   PrivilegesRequired=lowest, which can land per-user too) exactly as
+   readily as a per-machine one; no separate HKCU fallback needed.
+
+   Deliberately checks for a real command line under the ProgId, not just
+   that HKCR\.mcpb has *a* ProgId value: a stale or partially-removed
+   association (ProgId key present, shell\open\command missing) would
+   otherwise still be reported as "associated" and ShellExecute would fail
+   at Finish-click time exactly as if this check didn't exist. *)
+function IsMcpbAssociated(): Boolean;
+var
+  ProgId: String;
+begin
+  Result := False;
+  if RegQueryStringValue(HKCR, '.mcpb', '', ProgId) and (ProgId <> '') then
+    Result := RegKeyExists(HKCR, ProgId + '\shell\open\command');
+end;
+
 (* Copies whatever schtasks.exe wrote on stdout/stderr into Setup's own log
    file, one line per log entry.
 

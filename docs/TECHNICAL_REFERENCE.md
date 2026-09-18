@@ -1028,10 +1028,13 @@ Current packaging paths are documented in [`platform-support.md`](platform-suppo
 ### Windows
 
 `installer/privacyfence.iss` (built by `scripts/build_installer.ps1`) installs the PyInstaller
-onedir output under `%ProgramFiles%\PrivacyFence\` (or a per-user-writable location instead, when
-the installer runs without admin elevation — `PrivilegesRequired=lowest`), the bundled `.mcpb`
-alongside it, and a Start Menu entry pointing at the embedded web settings UI rather than at the
-daemon executable directly.
+onedir output under `%ProgramFiles%\PrivacyFence\`, the bundled `.mcpb` alongside it, and a Start
+Menu entry pointing at the embedded web settings UI rather than at the daemon executable directly.
+The installer requires admin elevation (`PrivilegesRequired=admin`) — it used to allow a
+per-user-writable install without elevation (`PrivilegesRequired=lowest`), but that path could
+never register the Task Scheduler autostart task below at all: `schtasks /create /xml` registering
+a task with a `LogonTrigger` needs the `SeCreateGlobalPrivilege` user right, which a non-elevated
+token lacks regardless of the task's principal (see `platform-support.md`'s "Known open items").
 
 Autostart is a Task Scheduler task (`PrivacyFence`), not a Startup-folder shortcut, registered from
 `installer/privacyfence.iss`'s `[Code]` section (`CurStepChanged(ssPostInstall)` calling
@@ -1131,13 +1134,11 @@ comparison:
   `privacyfence.service` below), or the repo-root `privacyfence.service` — a systemd **`--user`** unit
   for a single-user Linux desktop install via the same `pip`/`pipx` path, requiring
   `loginctl enable-linger` or a graphical session to autostart at login the way the `.deb`'s XDG entry
-  does. **Unverified on a real install, both paths**: nothing in `src/privacyfence/` imports a
-  platform-specific module any more, and the full suite runs headlessly on Linux CI on every PR
-  (`org-mode-smoke` exercises the daemon's own startup/authz/audit contract against a real subprocess
-  and a mocked IdP) — but neither a real `pip`/`pipx install privacyfence` nor a live third-party
-  IdP's actual OIDC round-trip has been run against a real server or desktop install yet. See
-  [`platform-support.md`](platform-support.md)'s "Known open items" and `privacyfence.service`'s own
-  header comment — the one place this status has stayed accurate throughout.
+  does. Nothing in `src/privacyfence/` imports a platform-specific module any more, and the full suite
+  runs headlessly on Linux CI on every PR (`org-mode-smoke` exercises the daemon's own
+  startup/authz/audit contract against a real subprocess and a mocked IdP); both paths have also now
+  been run end to end against a real install, including a live third-party IdP's actual OIDC
+  round-trip. See [`platform-support.md`](platform-support.md) for current status.
 
 ## Testing
 

@@ -137,10 +137,13 @@ describe("findDaemonCmd", () => {
   });
 
   it("falls back to the non-admin LOCALAPPDATA install location when Program Files doesn't have it", () => {
-    // The installer's default (PrivilegesRequired=lowest, no elevation)
-    // install location -- this is the case that regressed before
-    // privacyfence/privacyfence#410 was fixed, since the shim's old fallback
-    // only ever checked Program Files.
+    // installer/privacyfence.iss is PrivilegesRequired=admin now, so a fresh
+    // install always lands in Program Files -- but this was the installer's
+    // default (PrivilegesRequired=lowest, no elevation) location until that
+    // was fixed, and this is the case that regressed before
+    // privacyfence/privacyfence#410's own fixes, since the shim's old
+    // fallback only ever checked Program Files. Kept so an existing install
+    // made by an older, lowest-privilege release still self-heals.
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-lad-"));
     const localAppData = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-lad-root-"));
     const appDir = path.join(localAppData, "Programs", "PrivacyFence");
