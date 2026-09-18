@@ -45,7 +45,7 @@ def scope_type_label(scope_type: str) -> str:
     return rest.replace("_", " ")
 
 
-def _scope_type_of(rule: PolicyRule) -> str:
+def scope_type_of(rule: PolicyRule) -> str:
     """The v2 scope type a compiled rule's predicate lands under.
 
     ``label_name_allowlist`` genuinely serves two scope types (``gmail.label`` and
@@ -53,6 +53,9 @@ def _scope_type_of(rule: PolicyRule) -> str:
     ``ScopeSelector.scope_type`` is a tuple for it -- resolve that against the rule's own
     operations rather than picking one arbitrarily. An unrecognised predicate has no scope type at
     all; callers render it as the predicate name, never as something that looks configured.
+
+    Public (P6): the Auto-accept Settings page's own connector/scope-type filter facets are built
+    off this, the same resolution ``rule_sentence`` below already needed internally.
     """
     selector = scopes.SCOPE_SELECTORS.get(rule.predicate) or scopes.NEW_SCOPE_SELECTORS.get(rule.predicate)
     if selector is None:
@@ -121,7 +124,7 @@ def rule_sentence(rule: PolicyRule) -> str:
     An unconditional scope says so rather than hiding behind a rule name (D4), and a rule's
     conditions are appended as the narrowing they are.
     """
-    scope_type = _scope_type_of(rule)
+    scope_type = scope_type_of(rule)
     connectors = sorted({propose.connector_of_operation(operation) for operation in rule.operations})
     connector = connector_label(connectors[0]) if connectors else ""
     if scope_type:
@@ -180,5 +183,6 @@ __all__ = [
     "rule_sentence",
     "rule_verbs",
     "scope_type_label",
+    "scope_type_of",
     "widening_label",
 ]

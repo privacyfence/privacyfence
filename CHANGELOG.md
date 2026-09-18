@@ -420,6 +420,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   "Write" grant, which already silently includes deleting spreadsheet rows/columns — the Settings
   page shows a one-time dismissible notice listing exactly which rules, so a user finds out in
   those terms rather than discovering it later.
+- Policy v2 redesign, P6: the settings page's per-connector **Auto-accept Rules** sidebar (one page
+  per connector, its own **Trusted `<Resource>`** grant sections, `rule_type`/`value` rows, and
+  read-only "Governed by Drive" pointer pages for Sheets/Docs) is replaced by a single **Auto-accept**
+  page — one filterable list across every connector, each rule rendered as a plain-language sentence
+  with color-coded verb chips and an "Unblocks N tools" disclosure naming exactly which tools it
+  covers before you decide to keep or remove it. Rules are added and removed straight against the
+  on-disk v2 `auto_accept:` schema (`policy/store.py`, `policy/propose.py`) rather than
+  `auto_accept_rules`/`auto_accept_grants` — the first surface this redesign actually writes through.
+  This also makes three previously-ungovernable operation groups configurable for the first time —
+  Apps Script's three tools (by script id, a new `apps_script.project` scope) and Gmail's filter
+  tools/Slack's group-chat tool (two new honestly-unconditional scopes,
+  `gmail.anything`/`slack.anything`) — none of which any surface, including a hand-edited
+  `config/settings.yaml`, could configure auto-accept for before. `gate.py` now checks a rule written
+  here unconditionally, regardless of `policy.engine`, since a rule using one of these three new
+  scopes has no v1 equivalent to be shadowed against. Org mode's own, separate per-principal settings
+  page (`web/routes_org_settings.py`) is unaffected — it still edits `auto_accept_rules`/
+  `auto_accept_grants` directly and keeps working exactly as before.
 - Gmail draft bodies (`body_markdown` on all 6 draft tools) now support `# Heading 1`/`## Heading 2`
   syntax, rendered as Gmail's own "Large"/"Huge" font-size compose presets (not raw `<h1>`/`<h2>`
   tags, which render inconsistently across mail clients). See issue #414.

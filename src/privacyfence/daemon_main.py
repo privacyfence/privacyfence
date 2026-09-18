@@ -118,6 +118,7 @@ from .auto_accept import (
     init_policy_engine_version,
     migrate_telegram_search_operation_key,
     reload_rules,
+    set_policy_v2_store_rules,
 )
 from .pii_detector import init_pii_detection
 from .privacy_filter import check_consistency_warnings, init_privacy_filter
@@ -916,6 +917,13 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
       (``"v1"``) regardless of what that principal's own ``settings.yaml`` said under
       ``policy.engine``, the same class of silent-inert bug the ``reload_rules`` fix above
       already covers for the rules themselves.
+    - ``set_policy_v2_store_rules()`` (P6 of the policy v2 redesign) -- without it, every org
+      principal's ``_AutoAcceptState.policy_v2_store_rules`` stayed at its dataclass default
+      (``[]``), so any rule that only exists in that principal's own on-disk v2 ``auto_accept:``
+      section -- one with no v1 counterpart at all, e.g. an Apps Script ``apps_script.project``
+      rule -- would silently never auto-accept anything for that principal, the same class of bug
+      the ``reload_rules``/``init_policy_engine_version`` fixes above already cover for their own
+      pieces of a principal's policy.
     - ``init_privacy_filter()`` (#400 Phase 0) -- without it, ``privacy_
       filter._REGISTRY`` (also a ``PrincipalRegistry``, see that module's
       docstring) kept its default empty-dict entry for every principal but
@@ -960,6 +968,7 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     init_config_path(_resolve_authority_path("config/settings.yaml"))
     reload_rules(build_effective_rules(cfg))
     init_policy_engine_version(policy_engine_config.PolicyEngineConfig.from_local_config(cfg).engine)
+    set_policy_v2_store_rules(policy_store.compile_rules_from_config(cfg))
     install_wide = install_wide_config if install_wide_config is not None else cfg
     init_privacy_filter(install_wide, org_managed=True)
     pii_config = install_wide.get("pii_detection", {}) or {}
@@ -1786,6 +1795,7 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
     reload_rules(build_effective_rules(config))
     init_policy_engine_version(policy_engine_config.PolicyEngineConfig.from_local_config(config).engine)
+    set_policy_v2_store_rules(policy_store.compile_rules_from_config(config))
     # Issue #151 retired the settings.yaml-configurable rule_suggestion_priority
     # (every matching auto-accept rule now gets its own "Always allow" button, so
     # there's nothing left to prioritize or exclude) and this function logged an

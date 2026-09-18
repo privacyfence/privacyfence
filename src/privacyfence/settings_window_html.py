@@ -28,18 +28,21 @@ side): the page's own ``post(action, payload)`` posts
 ``window.webkit.messageHandlers.pf.postMessage({action, ...payload})``;
 Python answers by calling ``window.__pfRender(newState)`` after handling a
 message or finishing a background op. Ephemeral, client-only UI state (which
-nav section is active, which rules-connector/privacy-group is selected, the
-rules search box's live text) lives in the JS-side ``ui`` object below and is
-merged with the Python-pushed state on every render, using the same field
-names the design's own ``Component.state`` used (``section``,
-``rulesConnector``, ``privacyGroup``, ``rulesSearch``) -- never sent to
-Python. Text inputs (rule value, grant name/id, rules search) commit on
-blur/Enter, not per keystroke, so a bridge round-trip mid-typing can't steal
-focus/cursor position; toggles/segmented controls/buttons act immediately on
-click since they're discrete, not free text -- same reasoning covers the rule
-type field, a ``<select>`` (options are the operation's RULES_BY_OPERATION
-list, see settings_controller.py) rather than a text input, so it commits on
-``change``, not blur.
+nav section is active, which privacy group is selected, the Auto-accept
+page's own search/filter/add-rule-form state) lives in the JS-side ``ui``
+object below and is merged with the Python-pushed state on every render,
+using the same field-naming convention the design's own ``Component.state``
+established (``section``, ``privacyGroup``, ...) -- never sent to Python.
+Text inputs (grant name/id -- through P5; the Auto-accept page's own value
+field, since P6) commit on blur/Enter, not per keystroke, so a bridge
+round-trip mid-typing can't steal focus/cursor position; toggles/segmented
+controls/buttons act immediately on click since they're discrete, not free
+text. The Auto-accept page's own search/filter inputs are the one exception
+(P6, following the same pattern this module's pre-P6 rules search already
+used): every keystroke re-renders, since filtering that list is itself the
+whole point of typing into it, and ``onInput`` below restores focus/cursor
+position across that re-render the same way it already did for the old
+search box.
 """
 from __future__ import annotations
 
@@ -220,7 +223,8 @@ select.pf-input { cursor: pointer; }
 .pf-auth-link { font-size: 12.5px; color: var(--pf-accent); cursor: pointer; white-space: nowrap; }
 .pf-auth-link.disabled { color: var(--pf-text-dim); cursor: default; pointer-events: none; }
 
-/* ---- Rules / Privacy shared 2-pane layout ---- */
+/* ---- Privacy's 2-pane layout -- Auto-accept (below) is a single flat page, no subnav, since P6
+   replaced its old per-connector subnav with one filterable list ---- */
 .pf-subnav {
   width: 170px; flex-shrink: 0; background: var(--pf-surface); border-right: 1px solid var(--pf-border);
   padding: 12px 10px; display: flex; flex-direction: column; overflow-y: auto;
@@ -236,26 +240,40 @@ select.pf-input { cursor: pointer; }
 .pf-detail-title { font-size: 18px; font-weight: 700; color: var(--pf-text); margin-bottom: 2px; }
 .pf-detail-subtitle { font-size: 12px; color: var(--pf-text-muted); margin-bottom: 20px; max-width: 520px; line-height: 1.5; }
 
-/* ---- Grants ---- */
+/* ---- Recent-decisions group heading (Audit page) / verb-selection chips (Auto-accept's own
+   "add a rule" form, below) ---- */
 .pf-group-title { font-size: 13px; font-weight: 600; color: var(--pf-text-muted); margin-bottom: 8px; }
-.pf-grant-section { margin-bottom: 22px; }
-.pf-grant-row { background: var(--pf-surface); border: 1px solid var(--pf-border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
-.pf-grant-row-fields { display: flex; align-items: center; gap: 10px; }
-.pf-grant-row-fields .pf-input { flex: 1; }
 .pf-caps-row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .pf-cap-chip { padding: 4px 10px; border-radius: 5px; font-size: 11px; cursor: pointer; font-weight: 500; background: var(--pf-surface-2); color: var(--pf-text-muted); }
 .pf-cap-chip.on { background: var(--pf-accent); color: #fff; }
 
-/* ---- Rules ---- */
-.pf-rule-section { margin-bottom: 20px; }
-.pf-rule-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.pf-rule-row .pf-input-type { width: 190px; flex-shrink: 0; }
-.pf-rule-row .pf-input-value { flex: 1; }
+/* ---- Auto-accept (policy v2) -- P6 ---- */
 .pf-rules-empty { font-size: 13px; color: var(--pf-text-dim); }
-.pf-grant-hint {
-  font-size: 11.5px; color: var(--pf-text-dim); margin-top: 18px; padding-top: 14px;
-  border-top: 1px solid var(--pf-border); max-width: 560px; line-height: 1.5;
+.pf-aa-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 18px; max-width: 720px; }
+.pf-aa-search { flex: 1 1 220px; min-width: 180px; }
+.pf-fchip {
+  font-size: 11.5px; font-weight: 500; padding: 4px 10px; border-radius: 12px; cursor: pointer;
+  background: var(--pf-surface-2); color: var(--pf-text-muted); white-space: nowrap;
 }
+.pf-fchip.active { background: var(--pf-accent); color: #fff; }
+.pf-verb-chip {
+  display: inline-block; font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 4px;
+  margin: 0 4px 4px 0;
+}
+.pf-verb-chip-read { background: rgba(0,113,227,.12); color: var(--pf-accent); }
+.pf-verb-chip-write { background: var(--pf-surface-2); color: var(--pf-text-muted); }
+.pf-verb-chip-send { background: var(--pf-warn-tint); color: var(--pf-warn); }
+.pf-verb-chip-destructive { background: var(--pf-danger-tint); color: var(--pf-danger); }
+.pf-aa-row {
+  background: var(--pf-surface); border: 1px solid var(--pf-border); border-radius: 8px;
+  padding: 12px 14px; margin-bottom: 8px; max-width: 720px;
+}
+.pf-aa-row-main { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pf-aa-sentence { font-size: 13.5px; color: var(--pf-text); flex: 1 1 300px; }
+.pf-aa-verbs { flex-shrink: 0; }
+.pf-aa-tools { font-size: 12px; color: var(--pf-text-muted); margin-top: 8px; line-height: 1.5; }
+.pf-aa-add { max-width: 620px; }
+.pf-aa-add .pf-input { margin-top: 10px; width: 100%; }
 
 /* ---- Copy-ID toast (right-click a grant row -- see data-copy-id) ---- */
 .pf-copy-toast {
@@ -351,7 +369,10 @@ _JS = r"""
     // own docstring on `ui`). Every other route omits the script that sets
     // it, so this falls back to 'general' exactly as before.
     section: (window.__pfInitialSection || 'general'),
-    rulesConnector: null, privacyGroup: null, rulesSearch: '',
+    privacyGroup: null,
+    // Auto-accept page (P6) -- see renderAutoAccept below for how each is used.
+    aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {},
+    aaGroup: null, aaValue: '', aaCheckedVerbs: {},
     // Dismissible client-side only (never sent to Python, same reasoning
     // as every other `ui.*` field) -- see renderWelcomeBanner below.
     welcomeBannerDismissed: false,
@@ -445,7 +466,7 @@ _JS = r"""
   // -------------------------------------------------------------------- //
 
   var NAV_ITEMS = [
-    ['general', 'General'], ['connectors', 'Connectors'], ['rules', 'Auto-accept Rules'],
+    ['general', 'General'], ['connectors', 'Connectors'], ['auto_accept', 'Auto-accept'],
     ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['about', 'About'],
   ];
 
@@ -728,148 +749,110 @@ _JS = r"""
   }
 
   // -------------------------------------------------------------------- //
-  // Rules
+  // Auto-accept (policy v2) -- P6 of the policy v2 redesign. One filterable
+  // rule list, sentence-rendered server-side (policy.describe), replacing
+  // the old per-connector Trusted-*/parallel-rule-row/Sheets-Docs-pointer-
+  // page surface this file used to carry (see git history for renderRules'
+  // pre-P6 shape). Every "Add rule" submission writes straight to the v2
+  // auto_accept: section (settings_controller.add_policy_rule) -- there is
+  // no rule_type dropdown here the way the old per-operation rows had one,
+  // because a scope's own verb checkboxes (aa.scope_groups[].verbs) are
+  // what a v2 rule is actually keyed on, not a v1 rule name.
   // -------------------------------------------------------------------- //
 
-  // Rule-name -> dropdown label: "i_am_sender" -> "I am sender". Purely
-  // mechanical (underscores to spaces, sentence-case) rather than a second
-  // hand-maintained label table alongside RULES_BY_OPERATION/RULE_HINTS --
-  // one that could quietly drift out of sync the way OPERATION_LABELS
-  // already has dedicated regression tests to catch (see
-  // TestRuleUiCompleteness in test_settings_controller.py).
-  function ruleTypeLabel(ruleType) {
-    var s = String(ruleType || '').replace(/_/g, ' ');
-    return s.charAt(0).toUpperCase() + s.slice(1);
+  function verbChipsHtml(verbs) {
+    return verbs.map(function (v) {
+      return '<span class="pf-verb-chip pf-verb-chip-' + esc(v.family) + '">' + esc(v.verb) + '</span>';
+    }).join('');
   }
 
-  function renderRules(state) {
-    var rules = state.rules;
-    if (!ui.rulesConnector && rules.connectors.length) ui.rulesConnector = rules.connectors[0].key;
-    var search = (ui.rulesSearch || '').trim().toLowerCase();
+  function renderAutoAccept(state) {
+    var aa = state.auto_accept;
+    var search = (ui.aaSearch || '').trim().toLowerCase();
+    var connFilter = ui.aaConnectorFilter || [];
+    var famFilter = ui.aaFamilyFilter || [];
+    var expanded = ui.aaExpanded || {};
 
-    var html = '<div class="pf-subnav">';
-    html += '<input type="text" class="pf-input pf-subnav-search" placeholder="Search rules…" aria-label="Search rules" value="' +
-      esc(ui.rulesSearch) + '" data-rules-search="1"/>';
-    html += '<div role="tablist" aria-label="Connector">';
-    rules.connectors.forEach(function (rc) {
-      var active = ui.rulesConnector === rc.key;
-      html += '<div class="pf-subnav-item' + (active ? ' active' : '') + '" role="tab" aria-selected="' +
-        (active ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(rc.label) +
-        '" data-rules-nav="' + esc(rc.key) + '"><span>' + esc(rc.label) + '</span>';
-      if (rc.count) html += '<span class="pf-subnav-count">' + rc.count + '</span>';
-      html += '</div>';
+    var html = '<div class="pf-page">';
+    html += '<div class="pf-page-title">Auto-accept</div>';
+    html += '<div class="pf-page-subtitle">Every standing rule that lets Claude act without asking first, across every connector -- what a rule actually unblocks is shown before you add it, and again on its own row below.</div>';
+
+    html += '<div class="pf-aa-filterbar">';
+    html += '<input type="text" class="pf-input pf-aa-search" placeholder="Filter by connector, tool, or value…" aria-label="Filter rules" value="' +
+      esc(ui.aaSearch) + '" data-aa-search="1"/>';
+    aa.connectors.forEach(function (cname) {
+      var active = connFilter.indexOf(cname) !== -1;
+      html += '<div class="pf-fchip' + (active ? ' active' : '') + '" role="button" tabindex="0" aria-pressed="' +
+        (active ? 'true' : 'false') + '" aria-label="Filter to ' + esc(cname) + '" data-aa-connector-filter="' +
+        esc(cname) + '">' + esc(cname) + '</div>';
     });
-    html += '</div></div>';
+    ['read', 'write', 'send', 'destructive'].forEach(function (fam) {
+      var active = famFilter.indexOf(fam) !== -1;
+      html += '<div class="pf-fchip pf-verb-chip-' + fam + (active ? ' active' : '') + '" role="button" tabindex="0" aria-pressed="' +
+        (active ? 'true' : 'false') + '" aria-label="Filter to ' + esc(fam) + ' rules" data-aa-family-filter="' +
+        fam + '">' + esc(fam) + '</div>';
+    });
+    html += '</div>';
 
-    var curKey = ui.rulesConnector;
-    var curLabel = '';
-    rules.connectors.forEach(function (rc) { if (rc.key === curKey) curLabel = rc.label; });
-    var grantSections = (rules.grants_by_connector[curKey] || []);
-    var ruleSections = (rules.sections_by_connector[curKey] || []);
+    var rows = aa.rules.filter(function (r) {
+      if (connFilter.length && connFilter.indexOf(r.connector) === -1) return false;
+      if (famFilter.length && !r.verbs.some(function (v) { return famFilter.indexOf(v.family) !== -1; })) return false;
+      if (!search) return true;
+      var haystack = (r.sentence + ' ' + r.connector + ' ' + r.covered_tools.join(' ')).toLowerCase();
+      return haystack.indexOf(search) !== -1;
+    });
 
-    html += '<div class="pf-detail-page">';
-    html += '<div class="pf-detail-title">' + esc(curLabel) + '</div>';
-    html += '<div class="pf-detail-subtitle">Auto-accept rules and trusted resources for ' + esc(curLabel) + '.</div>';
-
-    var driveSummary = (rules.drive_grant_summary_by_connector || {})[curKey];
-    if (driveSummary && !search) {
-      html += '<div class="pf-grant-section"><div class="pf-group-title">' + esc(driveSummary.title) + '</div>';
-      driveSummary.rows.forEach(function (row) {
-        html += '<div class="pf-rule-row"><div class="pf-input-value" style="border:none;background:transparent;padding:5px 0;">' +
-          '<strong>' + esc(row.label) + ':</strong> ' + esc(row.value) + '</div></div>';
-      });
-      html += '<div class="pf-link" role="button" tabindex="0" aria-label="' + esc(driveSummary.link_label) + '" ' +
-        'data-rules-nav="drive">' + esc(driveSummary.link_label) + '</div>';
-      html += '</div>';
+    if (rows.length === 0) {
+      html += '<div class="pf-rules-empty">' +
+        (aa.rules.length ? 'No rules match this filter.' : 'No auto-accept rules configured yet -- add one below.') +
+        '</div>';
     }
-
-    grantSections.forEach(function (gs) {
-      var matchingRows = gs.rows.map(function (row, idx) { return { row: row, idx: idx }; }).filter(function (r) {
-        if (!search) return true;
-        return (r.row.name + ' ' + r.row.id).toLowerCase().indexOf(search) !== -1 || gs.title.toLowerCase().indexOf(search) !== -1;
-      });
-      if (search && matchingRows.length === 0 && gs.title.toLowerCase().indexOf(search) === -1) return;
-      html += '<div class="pf-grant-section"><div class="pf-group-title">' + esc(gs.title) + '</div>';
-      matchingRows.forEach(function (r) {
-        var row = r.row, idx = r.idx;
-        // data-copy-id: right-click anywhere in the row copies its resource
-        // ID -- the "Name" field only ever shows a resolved/hand-typed
-        // display name (resource_names.py), so this is the fast path for
-        // reusing the same folder/channel/chat's ID in another grant row
-        // without re-selecting text out of the ID input by hand.
-        var copyAttr = row.id ? ' data-copy-id="' + esc(row.id) + '" title="Right-click to copy ID"' : '';
-        html += '<div class="pf-grant-row"' + copyAttr + '><div class="pf-grant-row-fields">';
-        html += '<input type="text" class="pf-input" placeholder="Name" aria-label="' + esc(gs.title) + ' name" value="' + esc(row.name) + '" ' +
-          'data-grant-field="name" data-connector="' + esc(curKey) + '" data-config-key="' + esc(gs.config_key) + '" data-idx="' + idx + '"/>';
-        html += '<input type="text" class="pf-input pf-input-mono" placeholder="Resource ID" aria-label="' + esc(gs.title) + ' resource ID" value="' + esc(row.id) + '" ' +
-          'data-grant-field="id" data-connector="' + esc(curKey) + '" data-config-key="' + esc(gs.config_key) + '" data-idx="' + idx + '"/>';
-        html += '<div class="pf-link-danger" role="button" tabindex="0" aria-label="Remove ' + esc(row.name || row.id || gs.title) + '" ' +
-          dataAttr('remove_grant_row', { connector: curKey, config_key: gs.config_key, idx: idx }) + '>✕ Remove</div>';
-        html += '</div><div class="pf-caps-row">';
-        gs.cap_keys.forEach(function (capKey) {
-          var on = !!row.caps[capKey];
-          var capLabel = gs.cap_labels[capKey] || capKey;
-          html += '<div class="pf-cap-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
-            '" tabindex="0" aria-label="' + esc(capLabel) + '" ' +
-            dataAttr('toggle_grant_capability', { connector: curKey, config_key: gs.config_key, idx: idx, cap: capKey }) + '>' +
-            esc(capLabel) + '</div>';
-        });
-        html += '</div></div>';
-      });
-      html += '<div class="pf-link" role="button" tabindex="0" aria-label="' + esc(gs.add_label) + '" ' +
-        dataAttr('add_grant_row', { connector: curKey, config_key: gs.config_key }) + '>+ ' + esc(gs.add_label) + '</div>';
+    rows.forEach(function (r) {
+      var isExpanded = !!expanded[r.id];
+      var copyAttr = r.value_ids.length ? ' data-copy-id="' + esc(r.value_ids.join(', ')) + '" title="Right-click to copy"' : '';
+      html += '<div class="pf-aa-row"' + copyAttr + '>';
+      html += '<div class="pf-aa-row-main"><div class="pf-aa-sentence">' + esc(r.sentence) + '</div>';
+      html += '<div class="pf-aa-verbs">' + verbChipsHtml(r.verbs) + '</div></div>';
+      html += '<div style="display:flex;align-items:center;gap:14px;margin-top:6px;">';
+      html += '<div class="pf-link" role="button" tabindex="0" aria-expanded="' + (isExpanded ? 'true' : 'false') +
+        '" aria-label="What this unblocks" data-aa-expand="' + esc(r.id) + '">' + (isExpanded ? '▾' : '▸') +
+        ' Unblocks ' + r.covered_tools.length + ' tool' + (r.covered_tools.length === 1 ? '' : 's') + '</div>';
+      html += '<div class="pf-link-danger" role="button" tabindex="0" aria-label="Remove rule" ' +
+        dataAttr('remove_policy_rule', { rule_id: r.id }) + '>✕ Remove</div>';
+      html += '</div>';
+      if (isExpanded) {
+        html += '<div class="pf-aa-tools">' + esc(r.covered_tools.join(', ')) + '</div>';
+      }
       html += '</div>';
     });
 
-    var totalRows = 0;
-    ruleSections.forEach(function (sec) {
-      var matches = !search || sec.title.toLowerCase().indexOf(search) !== -1 ||
-        sec.rows.some(function (r) { return (r.rule_type + ' ' + r.value).toLowerCase().indexOf(search) !== -1; });
-      if (!matches) return;
-      totalRows += sec.rows.length;
-      html += '<div class="pf-rule-section"><div class="pf-group-title">' + esc(sec.title) + '</div>';
-      sec.rows.forEach(function (row, idx) {
-        html += '<div class="pf-rule-row">';
-        // Rule type is picked from the fixed list of rule names this operation
-        // actually supports (sec.rule_type_options, from RULES_BY_OPERATION) --
-        // a dropdown instead of a text field the user had to already know a
-        // value like "i_am_sender" to type correctly. row.rule_type is kept as
-        // an option even if it's fallen out of rule_type_options (a legacy/
-        // stale rule name) so selecting it doesn't silently blank the row.
-        var typeOptions = (sec.rule_type_options || []).slice();
-        if (row.rule_type && typeOptions.indexOf(row.rule_type) === -1) typeOptions.unshift(row.rule_type);
-        html += '<select class="pf-input pf-input-type" aria-label="' +
-          esc(sec.title) + ' rule type, row ' + (idx + 1) + '" ' +
-          'data-rule-field="rule_type" data-op-key="' + esc(sec.op_key) + '" data-idx="' + idx + '">';
-        html += '<option value=""' + (row.rule_type ? '' : ' selected') + '>Select rule type…</option>';
-        typeOptions.forEach(function (opt) {
-          html += '<option value="' + esc(opt) + '"' + (row.rule_type === opt ? ' selected' : '') + '>' +
-            esc(ruleTypeLabel(opt)) + '</option>';
-        });
-        html += '</select>';
-        html += '<input type="text" class="pf-input pf-input-value" placeholder="value" aria-label="' +
-          esc(sec.title) + ' value, row ' + (idx + 1) + '" value="' + esc(row.value) + '" ' +
-          'data-rule-field="value" data-op-key="' + esc(sec.op_key) + '" data-idx="' + idx + '"/>';
-        html += '<div class="pf-link-danger" role="button" tabindex="0" aria-label="Remove ' + esc(sec.title) + ' row ' + (idx + 1) + '" ' +
-          dataAttr('remove_rule_row', { op_key: sec.op_key, idx: idx }) + '>✕ Remove</div>';
-        html += '</div>';
-      });
-      html += '<div class="pf-link" role="button" tabindex="0" aria-label="Add rule to ' + esc(sec.title) + '" ' +
-        dataAttr('add_rule_row', { op_key: sec.op_key }) + '>+ Add rule…</div>';
-      html += '</div>';
+    if (!ui.aaGroup && aa.scope_groups.length) ui.aaGroup = aa.scope_groups[0].id;
+    var group = null;
+    aa.scope_groups.forEach(function (g) { if (g.id === ui.aaGroup) group = g; });
+    var checkedVerbs = ui.aaCheckedVerbs || {};
+
+    html += '<div class="pf-card pf-aa-add"><div class="pf-card-title">Add a rule</div>';
+    html += '<select class="pf-input" aria-label="Scope" data-aa-group-select="1">';
+    aa.scope_groups.forEach(function (g) {
+      html += '<option value="' + esc(g.id) + '"' + (g.id === ui.aaGroup ? ' selected' : '') + '>' + esc(g.label) + '</option>';
     });
-
-    var anyGrantRows = grantSections.some(function (gs) { return gs.rows.length > 0; });
-    if (search && totalRows === 0 && !anyGrantRows) {
-      html += '<div class="pf-rules-empty">' + (search ? 'No matches.' : 'Nothing here.') + '</div>';
-    } else if (!search && ruleSections.length === 0 && grantSections.length === 0 && !driveSummary) {
-      html += '<div class="pf-rules-empty">All operations always auto-approved — no rules needed.</div>';
+    html += '</select>';
+    if (group && group.needs_value) {
+      html += '<input type="text" class="pf-input pf-input-mono" placeholder="' + esc(group.value_hint) +
+        '" aria-label="Value (comma-separated for more than one)" value="' + esc(ui.aaValue) + '" data-aa-value="1"/>';
     }
-
-    var grantHint = (rules.grant_hint_by_connector || {})[curKey];
-    if (grantHint && !search) {
-      html += '<div class="pf-grant-hint">' + esc(grantHint) + '</div>';
+    if (group) {
+      html += '<div class="pf-caps-row">';
+      group.verbs.forEach(function (verb) {
+        var on = !!checkedVerbs[verb];
+        html += '<div class="pf-cap-chip' + (on ? ' on' : '') + '" role="checkbox" aria-checked="' + (on ? 'true' : 'false') +
+          '" tabindex="0" aria-label="' + esc(verb) + '" data-aa-verb-toggle="' + esc(verb) + '">' + esc(verb) + '</div>';
+      });
+      html += '</div>';
     }
+    html += '<div class="pf-btn-primary" role="button" tabindex="0" aria-label="Add rule" data-aa-add="1" ' +
+      'style="margin-top:12px;display:inline-block;">Add rule</div>';
+    html += '</div>';
 
     html += '</div>';
     return html;
@@ -1008,7 +991,7 @@ _JS = r"""
   function renderSection(state) {
     switch (ui.section) {
       case 'connectors': return renderConnectors(state);
-      case 'rules': return renderRules(state);
+      case 'auto_accept': return renderAutoAccept(state);
       case 'privacy': return renderPrivacy(state);
       case 'audit': return renderAudit(state);
       case 'about': return renderAbout(state);
@@ -1102,8 +1085,42 @@ _JS = r"""
     var navEl = e.target.closest('[data-nav]');
     if (navEl) { ui.section = navEl.getAttribute('data-nav'); render(pyState); return; }
 
-    var rulesNavEl = e.target.closest('[data-rules-nav]');
-    if (rulesNavEl) { ui.rulesConnector = rulesNavEl.getAttribute('data-rules-nav'); render(pyState); return; }
+    var aaConnFilterEl = e.target.closest('[data-aa-connector-filter]');
+    if (aaConnFilterEl) {
+      var cname = aaConnFilterEl.getAttribute('data-aa-connector-filter');
+      var idx = ui.aaConnectorFilter.indexOf(cname);
+      if (idx === -1) { ui.aaConnectorFilter.push(cname); } else { ui.aaConnectorFilter.splice(idx, 1); }
+      render(pyState);
+      return;
+    }
+
+    var aaFamFilterEl = e.target.closest('[data-aa-family-filter]');
+    if (aaFamFilterEl) {
+      var fam = aaFamFilterEl.getAttribute('data-aa-family-filter');
+      var famIdx = ui.aaFamilyFilter.indexOf(fam);
+      if (famIdx === -1) { ui.aaFamilyFilter.push(fam); } else { ui.aaFamilyFilter.splice(famIdx, 1); }
+      render(pyState);
+      return;
+    }
+
+    var aaExpandEl = e.target.closest('[data-aa-expand]');
+    if (aaExpandEl) {
+      var ruleId = aaExpandEl.getAttribute('data-aa-expand');
+      ui.aaExpanded[ruleId] = !ui.aaExpanded[ruleId];
+      render(pyState);
+      return;
+    }
+
+    var aaVerbEl = e.target.closest('[data-aa-verb-toggle]');
+    if (aaVerbEl) {
+      var verb = aaVerbEl.getAttribute('data-aa-verb-toggle');
+      ui.aaCheckedVerbs[verb] = !ui.aaCheckedVerbs[verb];
+      render(pyState);
+      return;
+    }
+
+    var aaAddEl = e.target.closest('[data-aa-add]');
+    if (aaAddEl) { submitAddPolicyRule(); return; }
 
     var privacyNavEl = e.target.closest('[data-privacy-nav]');
     if (privacyNavEl) { ui.privacyGroup = privacyNavEl.getAttribute('data-privacy-nav'); render(pyState); return; }
@@ -1164,39 +1181,37 @@ _JS = r"""
   }
 
 
-  function commitRuleField(el) {
-    post('update_rule_row', {
-      op_key: el.getAttribute('data-op-key'),
-      idx: parseInt(el.getAttribute('data-idx'), 10),
-      field: el.getAttribute('data-rule-field'),
-      value: el.value,
-    });
+  // The Auto-accept page's own "Add rule" submit (P6) -- reads the current form state straight off
+  // the DOM (the value field, whichever verb chips are checked) rather than from `ui`, since only
+  // the selected group id is actually tracked there (see renderAutoAccept). Client-side no-ops
+  // (rather than posting nothing useful) when no verb is checked -- add_policy_rule itself would
+  // also just no-op, but skipping the round trip is cheap and avoids a pointless snapshot re-push.
+  function submitAddPolicyRule() {
+    var checked = Object.keys(ui.aaCheckedVerbs || {}).filter(function (v) { return ui.aaCheckedVerbs[v]; });
+    if (!ui.aaGroup || checked.length === 0) return;
+    var valueInput = document.querySelector('[data-aa-value]');
+    post('add_policy_rule', { group: ui.aaGroup, value: valueInput ? valueInput.value : '', verbs: checked });
+    ui.aaCheckedVerbs = {};
+    ui.aaValue = '';
   }
 
-  function commitGrantField(el) {
-    post('update_grant_row', {
-      connector: el.getAttribute('data-connector'),
-      config_key: el.getAttribute('data-config-key'),
-      idx: parseInt(el.getAttribute('data-idx'), 10),
-      field: el.getAttribute('data-grant-field'),
-      value: el.value,
-    });
-  }
-
-  function onBlur(e) {
-    var el = e.target;
-    if (!el.tagName || el.tagName !== 'INPUT') return;
-    if (el.hasAttribute('data-rule-field')) { commitRuleField(el); return; }
-    if (el.hasAttribute('data-grant-field')) { commitGrantField(el); return; }
-  }
+  // No blur-commit fields left as of P6 (the Auto-accept page's own value field commits live via
+  // onInput instead -- see its own comment) -- kept wired (a no-op) rather than unregistered, so a
+  // future blur-commit field doesn't also need to re-add the listener itself.
+  function onBlur(e) {}
 
   function onChange(e) {
     var el = e.target;
-    // Rule-type dropdown -- a discrete choice, not free text, so it commits
-    // immediately on selection like the toggles/segmented controls do (see
-    // this module's docstring), rather than waiting for blur/Enter the way
-    // the rule-value/grant text inputs do.
-    if (el.tagName === 'SELECT' && el.hasAttribute('data-rule-field')) { commitRuleField(el); return; }
+    // A scope change resets the value/verb selections below it -- a different scope's value has a
+    // different shape (a Drive folder id isn't a Jira project key) and its own, generally different,
+    // set of governable verbs, so carrying either over would at best be meaningless and at worst
+    // silently submit the wrong thing.
+    if (el.tagName === 'SELECT' && el.hasAttribute('data-aa-group-select')) {
+      ui.aaGroup = el.value;
+      ui.aaValue = '';
+      ui.aaCheckedVerbs = {};
+      render(pyState);
+    }
   }
 
   function onContextMenu(e) {
@@ -1211,12 +1226,23 @@ _JS = r"""
 
   function onInput(e) {
     var el = e.target;
-    if (el.hasAttribute('data-rules-search')) {
-      ui.rulesSearch = el.value;
+    if (el.hasAttribute('data-aa-search')) {
+      ui.aaSearch = el.value;
       var pos = el.selectionStart;
       render(pyState);
-      var fresh = document.querySelector('[data-rules-search]');
+      var fresh = document.querySelector('[data-aa-search]');
       if (fresh) { fresh.focus(); try { fresh.setSelectionRange(pos, pos); } catch (err) {} }
+      return;
+    }
+    // The value field commits live (not on blur/Enter, unlike a v1-era text field -- see this
+    // module's own docstring) so it survives a verb-chip toggle's own re-render without losing
+    // what was typed; there's no server round trip until "Add rule" is actually clicked.
+    if (el.hasAttribute('data-aa-value')) {
+      ui.aaValue = el.value;
+      var vpos = el.selectionStart;
+      render(pyState);
+      var freshValue = document.querySelector('[data-aa-value]');
+      if (freshValue) { freshValue.focus(); try { freshValue.setSelectionRange(vpos, vpos); } catch (err) {} }
     }
   }
 
@@ -1243,8 +1269,8 @@ _JS = r"""
     if (e.key !== 'Enter') return;
     var el = e.target;
     if (!el.tagName || el.tagName !== 'INPUT') return;
-    if (el.hasAttribute('data-rule-field') || el.hasAttribute('data-grant-field')) {
-      el.blur();
+    if (el.hasAttribute('data-aa-value')) {
+      submitAddPolicyRule();
       return;
     }
     if (el.hasAttribute('data-telegram-field')) {

@@ -462,8 +462,13 @@ PrivacyFence (via the Processes API's `listScriptProcesses`) — status/duration
 not a live `console.log` transcript; see `apps_script_client.py`'s module docstring for why.
 `apps_script_write_content` always replaces a project's entire file set (there is no
 single-file/partial update in the underlying API), the same "show full resulting content, not a
-diff" precedent `drive_write_doc_content` set. `apps_script_write_content` has no configurable
-auto-accept rule yet — Allow-once-only, like most new write tools at first cut.
+diff" precedent `drive_write_doc_content` set. All three Apps Script tools above (`apps_script_
+get_content`/`write_content`/`get_execution_log`) were previously ungovernable — no auto-accept rule
+could be configured for them at all, on any surface (the redesign proposal's F5). The policy v2
+redesign's P6 makes them configurable, by script id, from PrivacyFence Settings' **Auto-accept**
+page's "Apps Script — project" scope (`policy.scopes.NEW_SCOPE_SELECTORS["apps_script.project"]`) —
+there is still no `auto_accept_rules`/`auto_accept_grants` (v1) equivalent, since v1 never had a
+predicate for this at all.
 
 ### The `auto` tier, across all connectors
 
@@ -532,9 +537,10 @@ Trusting a specific resource — a Drive folder, a Google Tasks list, a Slack ch
 project, ... — is configured **once per resource**, under `auto_accept_grants` in
 `config/settings.yaml`, rather than by adding the same ID to every operation key that resource
 happens to touch (see [Auto-accept rules](#auto-accept-rules) below for the older, still-supported
-per-operation form). This is also what PrivacyFence Settings' **Auto-accept Rules → \<Connector\> →
-Trusted \<Resource\>** sections read and write — editing the YAML directly and editing from that
-window are equivalent.
+per-operation form). Equivalent trust can also be added from PrivacyFence Settings' **Auto-accept**
+page (see [Settings page UX](#settings-page-ux)) — as of P6 that page writes the newer v2
+`auto_accept:` schema rather than this section directly, but a scope covering the same resource and
+verbs ends up auto-accepting the same calls either way.
 
 ```yaml
 auto_accept_grants:
@@ -589,35 +595,25 @@ the same plain folder-id-list value the grant already compiles.
 
 ### Settings page UX
 
-On the settings page's **Auto-accept Rules** page, selecting a connector shows each resource type
-above as its own **Trusted \<Resource\>** section: every currently-granted resource is its own row,
-with a **Name** field and a **Resource ID** field (plain text inputs, committed on blur/Enter —
-pasting a Drive/Sheets URL into a Drive folder's ID field extracts the ID automatically; every other
-connector's ID field takes the raw ID/key as typed), one toggle (rendered as a chip) per capability,
-and its own **✕ Remove**. Once an ID is entered and the connector is authenticated, its display name
-is resolved in the background and shown in the Name field (see [Name resolution](#name-resolution)
-below). Adding one is a single **+ Add \<resource\>…** action that appends a blank row to fill in by
-hand — an earlier, pre-#120 native menu-bar version of this page had a native "pick from a list of
-everything visible to this connector" picker for connectors with a cheap listing call; that pass
-dropped it in favor of the same manual Name/Resource-ID entry for every connector, and it stayed
-dropped through the move to the web (P4/P10).
+As of the policy v2 redesign's P6, the settings page's per-connector **Auto-accept Rules** sidebar
+(one page per connector, each with its own **Trusted \<Resource\>** grant sections and `rule_type`/
+`value` rows, plus read-only **Governed by Drive** pointer pages for Sheets and Docs) is gone,
+replaced by a single **Auto-accept** page: one filterable list across every connector, backed
+directly by the on-disk v2 `auto_accept:` schema (see `policy/store.py`'s own module docstring for
+that format, and `policy/__init__.py`'s package docstring for the redesign this is P6 of) rather
+than `auto_accept_rules`/`auto_accept_grants` below. Each rule renders as a plain-language sentence
+(`policy/describe.py`) with color-coded verb chips (read/write/send/destructive) and an "Unblocks N
+tools" disclosure listing exactly which tools it covers before you decide whether to keep or remove
+it. A connector/verb-family filter bar and a free-text search narrow the list; an **Add a rule** form
+at the bottom picks a scope (grouped by connector, `policy/propose.py`'s own catalogue), an optional
+value, and which verbs to allow, and writes straight to the v2 section (`SettingsController.
+add_policy_rule`). **✕ Remove** deletes a rule entirely — narrowing an existing rule is always
+remove-and-re-add-narrower, not an in-place edit, matching the model's own additive-only design.
 
-Every existing rule under `auto_accept_rules` that isn't a resource grant (domain trust, label
-matching, file-type allowlists, and similar — see [Auto-accept rules](#auto-accept-rules)) lives on
-that same connector's page as a `rule_type` / `value` row. `rule_type` is a dropdown listing only
-the rule names that operation actually supports (`RULES_BY_OPERATION` in settings_controller.py),
-committed immediately on selection rather than requiring the rule name to be typed by hand; `value`
-stays a plain text field, committed on blur/Enter. A list-valued rule's `value` field takes a
-comma-separated list directly (e.g. `domain1.com, domain2.com`) in one field, rather than an earlier
-native menu-bar version's one-value-at-a-time **+ Add value…** / **✕ Remove** treatment.
-
-**Sheets** and **Docs** get their own top-level sidebar pages (neither is a real connector — both
-ride on Drive's OAuth grant, see [Auto-accept rules](#auto-accept-rules)'s Drive section), but the
-`folders`/`sandbox_folders` grants above are Drive-page-only sections — a folder trusted there
-silently also covers `sheets.read_values` and every `sheets.*`/`docs.*` write. So each of those two
-pages opens with a read-only **Governed by Drive** section summarizing the currently-granted
-folder(s) for read/write and a **Manage in Drive →** link that jumps the sidebar selection there —
-no checkboxes of its own; the one editable copy of these grants stays on the Drive page.
+The rest of this section (`auto_accept_rules`/`auto_accept_grants`, their YAML shape, migration, and
+name resolution) still describes what actually gets evaluated and, for a hand-edited or not-yet-
+migrated install, is still true on disk — the Settings page above is now a v2-native *view* onto (and
+writer of) that same underlying trust, not a description of its own storage format.
 
 ### Web surfaces (`/approvals`, `/settings`)
 
@@ -771,8 +767,8 @@ destination folder ID is in the allowlist).
 > **`approved_folder`, `approved_sandbox_folder`, `parent_folder_allowlist`, and
 > `move_within_approved_folders` are all grant-managed** — see
 > [Auto-accept grants](#auto-accept-grants) → `drive.folders` / `drive.sandbox_folders`. Add the
-> folder there once (from PrivacyFence Settings' **Trusted Folders** / **Sandbox Folders** sections
-> under **Auto-accept Rules → Drive**, or by hand under `auto_accept_grants`) and it applies across
+> folder there once (from PrivacyFence Settings' **Auto-accept** page's "Drive — folder" scope, or by
+> hand under `auto_accept_grants`) and it applies across
 > every operation key below automatically, instead of needing the same folder ID added to each one
 > separately — including
 > `drive_upload_file`'s destination-folder check and `drive_move_file`'s move-approval, which use

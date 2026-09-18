@@ -181,12 +181,11 @@ def _rule_type_label(rule_name: str) -> str:
 
 
 def _parse_rule_value_field(rule_name: str, raw_text: str) -> Any:
-    # settings_controller._parse_rule_value's own logic, against the same
-    # RULES_LIST_VALUE/RULES_INT_VALUE registry -- duplicated rather than
-    # imported since that function is private to settings_controller.py and
-    # this is a handful of lines, not a shared algorithm worth coupling two
-    # modules over. Empty text means "boolean rule, no value", matching that
-    # function's own docstring.
+    # The same v1 text-input-value -> stored-config-value logic settings_controller.py's own
+    # (P6-retired) _parse_rule_value used, against the same RULES_LIST_VALUE/RULES_INT_VALUE
+    # registry -- duplicated here rather than shared, since this is a handful of lines, not an
+    # algorithm worth coupling two otherwise-independent modules over. Empty text means "boolean
+    # rule, no value".
     raw_text = (raw_text or "").strip()
     if not raw_text:
         return None

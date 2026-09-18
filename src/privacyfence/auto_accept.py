@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parseaddr
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import yaml
 
@@ -18,6 +18,12 @@ from .resource_grants import (
     build_effective_rules,
 )
 from .secure_files import atomic_write_text
+
+if TYPE_CHECKING:
+    # Only for the type hint on `_AutoAcceptState.policy_v2_store_rules`/`set_policy_v2_store_rules`
+    # below (P6) -- a real (non-TYPE_CHECKING) import would be circular: `policy.engine` itself
+    # imports `ReviewContext`/`temp_accept_key` from this module.
+    from .policy.engine import PolicyRule
 
 logger = logging.getLogger(__name__)
 
@@ -1567,6 +1573,17 @@ class _AutoAcceptState:
         # principal -- "v1" (default) or "v2". See policy_engine_config.PolicyEngineConfig and
         # init_policy_engine_version()/get_policy_engine_version() below.
         self.policy_engine_version: str = "v1"
+        # P6 (policy v2 redesign): rules that exist *only* in the on-disk v2 `auto_accept:`
+        # section -- added directly through the redesigned Settings page (policy.store,
+        # policy.propose), or migrated there -- refreshed alongside the fields above by
+        # set_policy_v2_store_rules() below. Unlike the v1/v2 shadow comparison in gate.py's
+        # _evaluate_auto_accept (which recompiles v2 rules from this principal's *v1* effective
+        # rules every call), these are read straight off the persisted v2 schema, which is the
+        # only place a rule with no v1 predicate at all -- e.g. Apps Script's `apps_script.
+        # project` scope, previously ungovernable (F5) -- can be expressed. gate.py checks them
+        # unconditionally, regardless of which engine `policy.engine` names authoritative, since
+        # there is no v1 rule for them to be shadowed against.
+        self.policy_v2_store_rules: list["PolicyRule"] = []
 
 
 _REGISTRY: PrincipalRegistry[_AutoAcceptState] = PrincipalRegistry(_AutoAcceptState)
@@ -1590,6 +1607,20 @@ def get_policy_engine_version() -> str:
     (default) or ``"v2"``. Both always run; this only decides which answer is acted on and which
     is shadowed (see ``policy.engine`` and the redesign proposal's Safety net)."""
     return _REGISTRY.get().policy_engine_version
+
+
+def set_policy_v2_store_rules(rules: "list[PolicyRule]") -> None:
+    """P6: hot-reload the current principal's v2-only rule set -- called by settings_controller.py
+    after any Auto-accept Settings page mutation (alongside the v1-side ``reload_rules`` above,
+    which a v2-only edit leaves unchanged) and by daemon_main.py at startup, right after the v1 ->
+    v2 migration/``init_policy_engine_version`` calls it already makes for this same principal.
+    See ``_AutoAcceptState.policy_v2_store_rules``'s own comment for why ``gate.py`` checks these
+    unconditionally rather than only when ``policy.engine: v2``."""
+    _REGISTRY.get().policy_v2_store_rules = list(rules)
+
+
+def get_policy_v2_store_rules() -> "list[PolicyRule]":
+    return _REGISTRY.get().policy_v2_store_rules
 
 
 def add_auto_accept_rule(operation_key: str, rule_name: str, value: Any) -> None:
