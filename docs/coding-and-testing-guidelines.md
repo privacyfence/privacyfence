@@ -138,12 +138,17 @@ Run Ruff on changed Python code:
 
 ```bash
 ruff check .
+python3 scripts/mypy_strict_modules.py
 ```
 
 `pyproject.toml` is authoritative for Ruff, mypy, Bandit, pytest, and coverage configuration. Ruff
-and Bandit are blocking CI checks; mypy is still a visible informational check in the current
-test workflow, promoted per module as modules get cleaned up (see `[tool.mypy]`'s
-`[[tool.mypy.overrides]]` entries).
+and Bandit are blocking CI checks. mypy runs twice in the same job: `mypy src/privacyfence` over
+the whole tree is a visible informational check (`continue-on-error`), and
+`scripts/mypy_strict_modules.py` re-runs it, blocking, over just the modules the ratchet has
+promoted (`[tool.mypy]`'s `[[tool.mypy.overrides]]` entries — the script reads that list out of
+`pyproject.toml`, so promoting a module needs no workflow change). Promoting the next module means
+adding an overrides block once the module is clean; from then on a regression in it fails the
+merge.
 
 For Node/TypeScript changes under `mcpb/shim/`, run:
 
@@ -260,12 +265,13 @@ A new connector's test module should include, at minimum:
 - [ ] `pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing
       --cov-report=json:coverage.json` passes at 100%, and `python scripts/check_coverage_floor.py
       coverage.json` passes (the coverage ratchet — see `testing-policy.md`).
-- [ ] `ruff check .` and `bandit -c pyproject.toml -r src` both pass (CI's `static-analysis` job
-      blocks on both; `mypy` runs in the same job but is informational only for now, except for
-      the modules with a `[[tool.mypy.overrides]]` entry — see `[tool.ruff.lint]`/`[tool.mypy]`/
-      `[tool.bandit]` in `pyproject.toml`). A new Bandit finding that's a genuine false positive
-      gets a `# nosec BXXX  # <reason>` comment at its call site, not a suppression in
-      `pyproject.toml`.
+- [ ] `ruff check .`, `bandit -c pyproject.toml -r src` and `python3 scripts/mypy_strict_modules.py`
+      all pass (CI's `static-analysis` job blocks on all three; the whole-tree `mypy` run in that
+      same job is informational only for now, while the modules with a `[[tool.mypy.overrides]]`
+      entry are what the third command checks and CI blocks on — see `[tool.ruff.lint]`/
+      `[tool.mypy]`/`[tool.bandit]` in `pyproject.toml`). A new Bandit finding that's a genuine
+      false positive gets a `# nosec BXXX  # <reason>` comment at its call site, not a suppression
+      in `pyproject.toml`.
 - [ ] A user-visible change has a line under `CHANGELOG.md`'s `## [Unreleased]` heading (not under
       a concrete version heading — see this repo's CLAUDE.md, "Release notes come from
       CHANGELOG.md"). Internal-only changes don't need one.
@@ -342,7 +348,7 @@ Do not use a source checkout as proof that a packaged artifact works.
 
 ## System/packaged-artifact test diagnostics
 
-New `pytest.mark.system`/`pytest.mark.packaged` tests get CI-diagnostics capture (`tests/diagnostics.py`, the now-removed `automated-test-strategy-plan.md` Phase 10) for free, without any per-test code, as long as the test's own daemon home/install directory lives under its `tmp_path` (directly or via a fixture it depends on — see `test_windows_packaged_smoke.py`'s `home = tmp_path / "home"`) and any subprocess log is named `daemon.log`, `install*.log`, or `uninstall*.log`, or is a `*.jsonl` audit log. A test that instead drives a real system-wide install (`dpkg -i`, not a `tmp_path`-scoped one) needs its own small capture call into `tests.diagnostics.failure_dir()`/`suite_name_for()` — see `test_deb_packaged_lifecycle.py`'s `_capture_installed_file_manifest` for the pattern.
+New `pytest.mark.system`/`pytest.mark.packaged` tests get CI-diagnostics capture (`tests/diagnostics.py`) for free, without any per-test code, as long as the test's own daemon home/install directory lives under its `tmp_path` (directly or via a fixture it depends on — see `test_windows_packaged_smoke.py`'s `home = tmp_path / "home"`) and any subprocess log is named `daemon.log`, `install*.log`, or `uninstall*.log`, or is a `*.jsonl` audit log. A test that instead drives a real system-wide install (`dpkg -i`, not a `tmp_path`-scoped one) needs its own small capture call into `tests.diagnostics.failure_dir()`/`suite_name_for()` — see `test_deb_packaged_lifecycle.py`'s `_capture_installed_file_manifest` for the pattern.
 
 ## Documentation
 

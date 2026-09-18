@@ -82,6 +82,23 @@ body {
 .pf-shell-live-dot.live { background: #2fa84f; }
 .pf-shell-live-dot.reconnecting { background: #d9a520; }
 .pf-shell-live-dot.down { background: var(--color-danger); }
+.pf-shell-banner {
+  padding: 8px 20px; font-size: 13px; font-weight: 600; text-align: center;
+  background: var(--color-danger); color: #fff; flex-shrink: 0;
+}
+.pf-shell-banner a { color: #fff; text-decoration: underline; }
+.pf-shell-notice {
+  padding: 8px 20px; font-size: 13px; text-align: center; flex-shrink: 0;
+  background: var(--color-accent-100); color: var(--color-accent-800);
+  border-bottom: 1px solid var(--color-divider);
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+}
+.pf-shell-notice a { color: inherit; font-weight: 600; }
+.pf-shell-notice-close {
+  background: none; border: none; cursor: pointer; font-size: 15px; line-height: 1;
+  color: inherit; opacity: .6; padding: 0 2px; flex-shrink: 0;
+}
+.pf-shell-notice-close:hover { opacity: 1; }
 .pf-shell-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .pf-shell-toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
@@ -274,6 +291,30 @@ _STREAM_JS = """
     setTimeout(function () { if (bar.parentNode) { bar.remove(); } }, 10000);
   };
 
+  // B23 of the 4.1.0 action plan: the dismissible notice strip is
+  // rendered fresh on every request just like the banner above it, but
+  // unlike the banner it's an invitation, not a live state indicator --
+  // once a viewer dismisses it in a given browser, it stays gone there
+  // (localStorage, guarded the same way pf_notif_prompted already is
+  // below, for the same private-browsing/storage-disabled reason) even
+  // though the server keeps rendering it on the next request until the
+  // underlying config actually changes.
+  (function () {
+    var notice = document.getElementById('pf-shell-notice');
+    if (!notice) { return; }
+    var key = notice.getAttribute('data-dismiss-key');
+    var dismissed;
+    try { dismissed = key ? localStorage.getItem(key) : null; } catch (e) { dismissed = null; }
+    if (dismissed) { notice.remove(); return; }
+    var closeBtn = notice.querySelector('[data-dismiss-notice]');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', function () {
+        try { if (key) { localStorage.setItem(key, '1'); } } catch (e) {}
+        notice.remove();
+      });
+    }
+  })();
+
   setState('reconnecting', 'connecting…');
   if (typeof EventSource === 'undefined') {
     setState('down', "can't reach PrivacyFence");
@@ -321,6 +362,8 @@ def _nav_html(active: str) -> str:
 def wrap(
     body_html: str, *, title: str, active: str, nonce: str | None = None,
     notifications_enabled: bool = True, notifications_detail: str = "minimal",
+    banner_html: str | None = None,
+    dismissible_notice_html: str | None = None, dismissible_notice_key: str = "",
 ) -> str:
     """Full ``<!DOCTYPE html>`` document: tokens.css + the shell's own CSS,
     the header (brand, nav between Approvals/Settings, live indicator), and
@@ -348,12 +391,55 @@ def wrap(
     ``nonce`` parameter) -- one document, one Content-Security-Policy
     header, one nonce. Defaults to a fresh one when omitted (every real
     caller passes the actual per-request value explicitly).
+
+    ``banner_html`` (#426 Phase 3): an already-escaped fragment shown as a
+    full-width, non-dismissable strip between the header and ``<main>`` --
+    ``None`` (the default) renders nothing. The one real caller today is
+    web/routes_approvals.py's/web/routes_settings.py's own
+    ``step_up.require_passkey`` check: with that flag on and no passkey
+    enrolled, the daemon starts and keeps serving (step_up_config.py's own
+    "closed for releases, open for repair" -- refusing to boot would remove
+    the only path to ``/security``, the one page that can fix this), but
+    every approving decision and every sensitive settings action hard-fails
+    (webauthn_stepup.has_credentials() is False, so decide()/settings_
+    action() both 403 rather than release anything) -- this banner is what
+    makes that state visible on every page rather than only discoverable by
+    triggering the 403 itself. Rendered on every request fresh, so it
+    reflects the current enrollment state, not a dismissed-once flag: it
+    disappears the moment a passkey is enrolled, with no separate
+    acknowledgement step.
+
+    ``dismissible_notice_html`` (B23 of the 4.1.0 action plan): a second,
+    lower-priority strip below ``banner_html`` for a fact that's worth
+    surfacing once but isn't itself a live problem -- today, step_up_
+    config.py's own ``off_notice()``: an install that has simply never
+    turned step-up on. Unlike ``banner_html`` this *is* a dismissed-once
+    flag: a viewer who closes it won't see it again in that browser
+    (localStorage, client-side -- see this module's own ``_STREAM_JS``),
+    even on a later request where the server would render it again,
+    because the underlying condition (step-up still off) hasn't itself
+    changed. ``dismissible_notice_key`` is the localStorage key that
+    dismissal is recorded under, and must be a real, distinguishing string
+    whenever ``dismissible_notice_html`` is given -- distinct notices need
+    distinct keys or dismissing one silently dismisses the other too.
     """
+    if dismissible_notice_html and not dismissible_notice_key:
+        raise ValueError("wrap(): dismissible_notice_html needs a dismissible_notice_key")
     nonce = nonce or secrets.token_urlsafe(18)
     stream_js = _STREAM_JS % {
         "notifications_enabled": "true" if notifications_enabled else "false",
         "notifications_detail": json.dumps(notifications_detail),
     }
+    banner = f'<div class="pf-shell-banner" role="alert">{banner_html}</div>' if banner_html else ""
+    notice = ""
+    if dismissible_notice_html:
+        notice = (
+            f'<div class="pf-shell-notice" id="pf-shell-notice" '
+            f'data-dismiss-key="{_html_escape(dismissible_notice_key)}">'
+            f'<span>{dismissible_notice_html}</span>'
+            '<button type="button" class="pf-shell-notice-close" data-dismiss-notice '
+            'aria-label="Dismiss">&times;</button></div>'
+        )
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -373,6 +459,8 @@ def wrap(
 <span id="pf-shell-live-label">connecting…</span>
 </div>
 </header>
+{banner}
+{notice}
 <main class="pf-shell-main">{body_html}</main>
 <div class="pf-shell-toast" id="pf-shell-toast" role="status"></div>
 <div class="pf-sr-only" id="pf-shell-announcer" aria-live="polite"></div>

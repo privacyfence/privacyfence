@@ -8,20 +8,33 @@ _is_installed_package(). On POSIX that's ``~/.privacyfence``; on Windows
 it's ``%LOCALAPPDATA%\\PrivacyFence`` -- see windows_data_dir() for why
 that's a different convention rather than the same dotfile name reused
 under ``%USERPROFILE%``.
+
+#428 Phase 4 adds a third answer on top of those two: an install that has
+opted into privilege separation (all three desktop platforms) keeps
+everything under a system root owned by a dedicated service account instead
+-- ``%ProgramData%\\PrivacyFence`` on Windows, where a service account cannot
+sensibly own something inside a user profile -- with a small
+``handoff_dir()`` the logged-in user's own session can still reach. See
+privilege_separation.py for the layout and for what that boundary does and
+does not claim.
 """
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import privilege_separation
 from .secure_files import secure_mkdir
 
 if TYPE_CHECKING:
     from .principal import Principal
+
+logger = logging.getLogger(__name__)
 
 # Deliberately strict -- principal ids reach here from an OAuth 2.1/OIDC
 # `sub` claim once P7 lands (today it's always "local"), and this is the one
@@ -121,12 +134,79 @@ def data_dir() -> Path:
     section for what this closes. (``secure_mkdir``'s ``chmod`` is a no-op
     best-effort on Windows, which has no POSIX permission bits to set --
     see that function's own docstring.)
+
+    #428 Phase 4: on an install that has opted into privilege separation
+    (``scripts/{macos,linux}_privilege_separation.sh``,
+    ``scripts/windows_privilege_separation.ps1``), every branch below is
+    bypassed for the service-owned system root instead. A
+    service account cannot sensibly own a directory inside a human's home,
+    so the whole data directory moves rather than just the authority subtree
+    -- which is also what makes the migration carry live connector OAuth
+    tokens, and why it ships opt-in for a release before defaulting on. The
+    root is ``0711`` there, not ``0700``: the logged-in user has to be able
+    to traverse it to reach ``handoff_dir()``, and must not be able to list
+    anything else. (Windows has no mode to set -- ``secure_mkdir``'s ``chmod``
+    is the documented no-op there -- so the same intent is an NTFS ACL the
+    installer writes and ``windows_acl.py`` audits; the mode passed here is
+    simply inert on that platform, exactly as it was before this phase.) See
+    privilege_separation.py's own module docstring for
+    the full layout, and ``handoff_dir()`` below for the files that stay
+    reachable from the user's own session.
     """
+    override = privilege_separation.data_dir_override()
+    if override is not None:
+        return secure_mkdir(override, mode=privilege_separation.SYSTEM_ROOT_MODE, foreign_owner_ok=True)
     if is_bundled() or _is_installed_package():
         d = windows_data_dir() if is_windows() else Path.home() / ".privacyfence"
     else:
         d = Path(__file__).parent.parent.parent
     return secure_mkdir(d)
+
+
+def handoff_dir() -> Path:
+    """Where the files the *user's own desktop session* has to reach live:
+    the agent's ``mcp_token`` and the ``mcp_url`` the MCPB shim discovers it
+    by, the ``web_base_url``/``*_url`` discovery files a human reads, and
+    both ends of the Phase 2/3 control channels (``control.sock``,
+    ``companion.sock``).
+
+    ``data_dir()`` itself on an ordinary install -- so nothing moves, and no
+    caller behaves differently, until privilege separation is opted into.
+    On a separated install it's ``data_dir()/handoff``, group-owned by the
+    service account with the setgid bit (``2770``) and the installing human
+    added to that group, which is what lets the daemon (one account) and the
+    companion and agent (another) still hand each other a token and a socket
+    while everything else under ``data_dir()`` stays ``0700`` and unreadable
+    to them.
+
+    This directory is deliberately *not* a security boundary: ADR 0002
+    decision 6 chose to make a minted session insufficient (via #426's
+    passkey) rather than to make minting uncallable, precisely because the
+    companion and the agent share a uid and no permission bit can separate
+    them. What Phase 4 takes away from the agent is ``authority_dir()`` --
+    policy, enrolled passkeys, the audit log and its HMAC key -- and that is
+    the whole of what it claims.
+    """
+    if not privilege_separation.is_enabled():
+        return data_dir()
+    return secure_mkdir(
+        data_dir() / privilege_separation.HANDOFF_DIR_NAME,
+        mode=privilege_separation.HANDOFF_DIR_MODE,
+        foreign_owner_ok=True,
+    )
+
+
+def control_socket_dir() -> Path:
+    """Which directory ``web/control_channel.py`` binds ``control.sock`` in.
+
+    ``authority_dir()`` on an ordinary install, unchanged from Phase 2, where
+    it sits alongside the ``web_token`` file it replaced. ``handoff_dir()``
+    on a separated one, because Phase 4 makes ``authority_dir()`` ``0700``
+    under the service account and the companion -- running as the human --
+    has to be able to connect. That is not a downgrade of anything Phase 4
+    claims: see ``handoff_dir()`` above and ADR 0002 decision 6.
+    """
+    return handoff_dir() if privilege_separation.is_enabled() else authority_dir()
 
 
 def org_dir() -> Path:
@@ -160,6 +240,151 @@ def user_dir(principal: "Principal | None" = None) -> Path:
     if not _is_safe_principal_id(principal.id):
         raise ValueError(f"Unsafe principal id for filesystem storage: {principal.id!r}")
     return secure_mkdir(data_dir() / "users" / principal.id)
+
+
+# Relative to a principal's user_dir() -- the pre-#428 location of each of
+# these, for both the local principal (whose user_dir() is data_dir() itself)
+# and any other one (users/<id>/), which is what makes a single migration
+# table below correct for either branch. The audit log is deliberately NOT
+# here: unlike the other three, org mode's audit logger never reads it back
+# from authority_dir() (audit_log.py's _fallback_log_dir() keeps every
+# non-local principal's audit trail at user_dir(principal)/logs/audit,
+# unchanged by #428 -- see that function's own docstring). Migrating it
+# unconditionally here once broke exactly that: any call to authority_dir()
+# for an unrelated reason (e.g. resolving an org principal's settings.yaml)
+# silently relocated a directory a *different*, non-redirected code path was
+# still actively writing to, losing whatever audit history hadn't been read
+# back yet. See _migrate_legacy_audit_log_dir() below for the one caller
+# that both migrates and reads audit logs from the new location: the local
+# principal's own, in daemon_main.py.
+_LEGACY_AUTHORITY_PATHS: tuple[Path, ...] = (
+    Path("config") / "settings.yaml",
+    Path("webauthn_credentials.json"),
+    Path("web_token"),
+    Path("web_token_version"),
+)
+
+_LEGACY_AUDIT_LOG_RELATIVE = Path("logs") / "audit"
+
+# Per-process memo of which authority_dir() roots have already had their
+# migration attempted, so a hot path that calls authority_dir() often (e.g.
+# a webauthn check on every step-up) doesn't re-stat these legacy paths on
+# every call -- migrating is a one-time, first-startup-after-upgrade thing,
+# not a steady-state one. Keyed on the *target* directory rather than a
+# bool, since tests exercise more than one principal/data_dir() within a
+# single process. Audit-log migration is tracked separately since it's
+# opt-in per authority_root() call rather than automatic.
+_authority_migration_attempted: set[Path] = set()
+_audit_log_migration_attempted: set[Path] = set()
+
+
+def _migrate_path(legacy: Path, destination: Path) -> None:
+    """Move ``legacy`` to ``destination`` if the former exists and the
+    latter doesn't -- shared by both the authority-files migration and the
+    audit-log one, so the same idempotent, log-and-continue-on-failure
+    behavior applies to each: a path that doesn't exist, or a destination
+    that already does (including from a previous call), is left alone
+    rather than overwritten.
+
+    This is a pure file/directory move, not yet a permissions or ownership
+    change -- #428 Phase 4 is what makes ``destination``'s parent
+    service-owned. Until then it sits at the same uid as everything else
+    under ``legacy``'s own parent.
+    """
+    if destination.exists() or not legacy.exists():
+        return
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        legacy.rename(destination)
+    except OSError as exc:
+        logger.warning("Could not migrate %s to %s: %s", legacy, destination, exc)
+
+
+def _migrate_legacy_authority_files(root: Path, target: Path) -> None:
+    """#428 Phase 1: move a pre-4.1 install's human-authority files -- the
+    privacy policy, enrolled WebAuthn credentials, and the web-session
+    bootstrap secret -- out of ``root`` and into ``target`` the first time
+    ``target`` is asked for, so upgrading doesn't silently reset a
+    configured policy or drop enrolled passkeys.
+    """
+    for relative in _LEGACY_AUTHORITY_PATHS:
+        _migrate_path(root / relative, target / relative)
+
+
+def _migrate_legacy_audit_log_dir(root: Path, target: Path) -> None:
+    """Companion to ``_migrate_legacy_authority_files()`` for the one path
+    that isn't safe to migrate unconditionally: the audit log. Only ever
+    called from ``authority_root(..., migrate_audit_log=True)``, which only
+    the local principal's own audit-directory resolution
+    (``daemon_main.py``) passes -- the one place that also reads the audit
+    log back from ``target`` afterwards. See ``_LEGACY_AUTHORITY_PATHS``'s
+    own comment for what goes wrong if this runs for a principal whose
+    audit logger doesn't also move.
+    """
+    _migrate_path(root / _LEGACY_AUDIT_LOG_RELATIVE, target / _LEGACY_AUDIT_LOG_RELATIVE)
+
+
+def authority_dir(principal: "Principal | None" = None) -> Path:
+    """Directory root for the files that back the *human's* authority in
+    local mode -- the #428 Phase 2 control channel's socket (macOS/Linux;
+    Windows' named pipe lives outside the filesystem, see web/
+    control_channel.py -- which is also why Phase 4's Windows layout can keep
+    ``handoff_dir()`` read-only to the shared group where POSIX has to make
+    it writable), the privacy policy (``config/settings.yaml``), and
+    enrolled WebAuthn credentials (P426) -- as distinct from ``user_dir()``,
+    which stays reachable by the agent for its own ``mcp_token`` and
+    connector caches/credentials.
+
+    Local mode's audit log (plus its HMAC key) is also human-authority state
+    and also ends up under this same directory, but it isn't migrated by
+    this function -- see ``authority_root()``'s ``migrate_audit_log``
+    parameter and ``_LEGACY_AUTHORITY_PATHS``'s own comment for why.
+
+    #428 Phase 1: a pure refactor. This directory lives at the same uid as
+    everything else under ``user_dir()`` until #428 Phase 4 moves the
+    daemon to its own account and re-owns this subtree to it -- splitting
+    the path out now means that later change is a permissions/ownership
+    change at one root, not a hunt through every call site that used to
+    build one of these paths against ``data_dir()``/``user_dir()`` directly.
+
+    A subdirectory of ``user_dir(principal)``, not a sibling of it: the
+    local principal's authority root is ``data_dir()/authority`` (since
+    ``user_dir(LOCAL_PRINCIPAL_ID)`` *is* ``data_dir()``), and any other
+    principal's is ``user_dir(principal)/authority``. Org mode is out of
+    scope for #428 (its daemon already runs where the agent has no access),
+    but the non-local branch costs nothing extra to keep correct.
+    """
+    return authority_root(user_dir(principal))
+
+
+def authority_root(root: Path, *, migrate_audit_log: bool = False) -> Path:
+    """The ``authority`` subdirectory of an arbitrary ``root``, created and
+    migrated into exactly like ``authority_dir()`` -- which is
+    ``authority_root(user_dir(principal))``, and the function most callers
+    actually want.
+
+    Exists as its own function for daemon_main.py's local-principal path
+    resolution (``_resolve_authority_path()``, the audit-log directory),
+    which anchors on its own ``PROJECT_ROOT``/``data_dir()`` module-level
+    references rather than calling ``user_dir()`` -- exactly like the
+    pre-#428 ``_resolve_path()`` already did -- so that the tests that
+    monkeypatch those two names to sandbox a run keep doing so correctly.
+    Both need the identical mkdir-plus-migrate behavior for whatever root
+    they resolve to; only which root they start from differs.
+
+    ``migrate_audit_log`` defaults to False: the audit log only migrates
+    where it's also read back from the new location afterwards, which today
+    is exactly one call site (daemon_main.py's local-principal
+    ``init_audit_logger()`` wiring) -- pass True only from there.
+    """
+    target = root / "authority"
+    if target not in _authority_migration_attempted:
+        _migrate_legacy_authority_files(root, target)
+        _authority_migration_attempted.add(target)
+    if migrate_audit_log and target not in _audit_log_migration_attempted:
+        _migrate_legacy_audit_log_dir(root, target)
+        _audit_log_migration_attempted.add(target)
+    return secure_mkdir(target)
 
 
 def downloads_dir(principal: "Principal | None" = None) -> Path:

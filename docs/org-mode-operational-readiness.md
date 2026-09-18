@@ -58,7 +58,20 @@ Do not restore only selected token/database/config files unless the implementati
 
 A service restart invalidates in-memory state such as currently pending approvals, connector-host caches, and active browser/SSE connections. Durable configuration/credentials/audit state remains on disk according to its own storage rules.
 
-Clients and browsers should reconnect to the restarted daemon. Requests that depended on an in-memory pending approval should be retried as a new request rather than assuming the old in-memory approval still exists.
+Requests that depended on an in-memory pending approval should be retried as a new request rather than assuming the old in-memory approval still exists.
+
+What survives a restart, and what does not:
+
+| State | Survives? | What a client sees |
+|---|---|---|
+| OAuth refresh tokens (`/mcp` clients) | **Yes** — persisted, sealed to the token itself (`web/sealed_refresh_store.py`) | The ordinary silent refresh; no human needed |
+| OAuth access tokens | No — one-hour lifetime, re-minted by the refresh above | One `401` with `WWW-Authenticate`, then a silent refresh |
+| Browser sessions (`pf_org_session`) | No — by design; a human is present to sign in again | A redirect to `/login` |
+| Streamable HTTP session ids | No | An `initialize` carrying the old id opens a fresh session rather than being refused |
+
+Refresh-token persistence is what makes a restart survivable for *unattended* callers: a scheduled or background tool call has nobody present to complete an IdP redirect, so before it, a restart ended that call rather than delaying it. Browser sessions are deliberately still in-memory, because the cost there is one sign-in by someone who is already sitting there.
+
+An operator can tell the two situations apart from the daemon's own startup log, which reports how many refresh-token records it restored. Zero on a daemon that had live clients means everyone is re-authenticating through the IdP, not reconnecting silently.
 
 ## Connector cache and principal capacity
 
@@ -105,4 +118,4 @@ A recovery exercise should prove the deployment can restore configuration/state,
 - **an approval is exercised end to end and audited under the correct principal**: a real MCP-triggered approval can only be decided by the principal it belongs to (a different principal's decide attempt is rejected), and the resulting audit entry lands in that principal's own per-principal audit log directory, not a shared or wrong one -- the disaster-recovery exercise's "complete an approval" and "produce ... a valid audit record" claims, automated;
 - **persisted state -- a confirmed auto-accept rule and its audit trail -- survives a clean stop/restart** (`SIGTERM`, the same signal `systemctl stop` sends), the same continuity a real `systemctl restart privacyfence` needs.
 
-This is CI-enforced, not just locally runnable: `.github/workflows/tests.yml`'s `org-mode-smoke` job runs it on every PR (promoted from a release-tag-only job per the now-removed `automated-test-strategy-plan.md` Phase 8 item 2), and `.github/workflows/build.yml`'s `build-deb` job runs it again at release time. What it deliberately does not cover -- a real systemd unit, a real Caddy reverse proxy, a real external IdP, connector-specific behavior once authenticated (that's the rest of this repo's connector test suites) -- is unchanged manual/operational surface; see the module's own docstring for the full boundary. See [`testing-policy.md`](testing-policy.md) for how this fits the seven-layer taxonomy. Remaining system/release automation gaps are tracked only in the now-removed `automated-test-strategy-plan.md`.
+This is CI-enforced, not just locally runnable: `.github/workflows/tests.yml`'s `org-mode-smoke` job runs it on every PR (promoted from a release-tag-only job), and `.github/workflows/build.yml`'s `build-deb` job runs it again at release time. What it deliberately does not cover -- a real systemd unit, a real Caddy reverse proxy, a real external IdP, connector-specific behavior once authenticated (that's the rest of this repo's connector test suites) -- is unchanged manual/operational surface; see the module's own docstring for the full boundary. See [`testing-policy.md`](testing-policy.md) for how this fits the seven-layer taxonomy. The remaining gap -- a real end-to-end run against a live Ubuntu server with a real identity provider, distinct from this job's synthetic, mocked-IdP coverage -- is tracked in [`platform-support.md`](platform-support.md)'s "Known open items" section.

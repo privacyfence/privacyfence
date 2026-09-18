@@ -592,6 +592,42 @@ _JS = r"""
     html += toggleHtml(g.pii_financial, 'toggle_pii_category', { category_key: 'detect_financial_figures' }, !g.pii_enabled, 'Detect financial figures');
     html += '</div></div>';
 
+    // #426 Phase 1: a plain same-origin <a>, not a data-action AJAX call --
+    // /security is its own standalone page (web/routes_security.py), not
+    // part of this SPA's own render() dispatch.
+    html += '<div class="pf-card"><div class="pf-card-row"><div><div class="pf-card-title">Security</div>';
+    html += '<div class="pf-card-desc">Manage passkeys (Face ID, Touch ID, Windows Hello) enrolled against this install.</div></div>';
+    html += '<a class="pf-btn-secondary" style="text-decoration:none;display:inline-block" href="/security">Manage passkeys</a>';
+    html += '</div>';
+    // B9: the "turn step-up on" control -- one-directional (see
+    // SettingsController.enable_step_up's own docstring for why turning
+    // it back off stays a config.yaml-plus-restart operation with no
+    // control here). Three states, mirroring what enable_step_up itself
+    // will and won't accept: already on (nothing left to do -- a hand
+    // edit is the only way back to any other state), on but no passkey
+    // yet (the control would just 400/self.error -- hidden, with a hint
+    // pointing at the button above instead of a control guaranteed to
+    // fail), or ready (the actual button).
+    if (g.step_up_available && g.step_up_on) {
+      html += '<div class="pf-divider"></div><div class="pf-card-row"><div>';
+      html += '<div class="pf-card-title">Step-up for approvals</div>';
+      html += '<div class="pf-card-desc">On -- a write approval or a sensitive settings change demands your passkey. ' +
+        'To turn this off, edit <code>step_up.require_passkey</code> in <code>config/settings.yaml</code> and restart PrivacyFence.</div>';
+      html += '</div></div>';
+    } else if (g.step_up_available && !g.step_up_has_passkey) {
+      html += '<div class="pf-divider"></div><div class="pf-card-row"><div>';
+      html += '<div class="pf-card-title">Step-up for approvals</div>';
+      html += '<div class="pf-card-desc">Off. Add a passkey above first, then come back here to require it for every write approval.</div>';
+      html += '</div></div>';
+    } else if (g.step_up_available) {
+      html += '<div class="pf-divider"></div><div class="pf-card-row"><div>';
+      html += '<div class="pf-card-title">Step-up for approvals</div>';
+      html += '<div class="pf-card-desc">Off. Require your passkey for every write approval and every sensitive settings change.</div>';
+      html += '</div><div class="pf-btn-primary" role="button" tabindex="0" aria-label="Turn on step-up for approvals" ' +
+        dataAttr('enable_step_up', {}) + '>Turn on</div></div>';
+    }
+    html += '</div>';
+
     html += '<div class="pf-card"><div class="pf-card-row"><div><div class="pf-card-title">Check for Updates</div>';
     html += '<div class="pf-card-desc">Once-a-day check against GitHub Releases. Never installs anything automatically.</div></div>';
     html += toggleHtml(g.update_check_enabled, 'toggle_update_check', {}, false, 'Check for Updates');

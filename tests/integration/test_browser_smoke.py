@@ -170,12 +170,6 @@ def page(context):
     pg.close()
 
 
-# Phase 4 item 4.5 (the now-removed automated-test-strategy-plan.md): "systematic
-# failure-artifact capture (screenshot/console/DOM/daemon log)" -- checked
-# against what this module and .github/workflows/tests.yml's own Playwright
-# step already had before this landed (neither did anything beyond pytest's
-# own default traceback/stdout capture), so this is new, not a duplicate of
-# an existing mechanism.
 _ARTIFACTS_DIR = Path(__file__).resolve().parents[2] / "test-results" / "browser-smoke"
 
 
@@ -251,6 +245,9 @@ def local_server(pf_home):
 def org_server(pf_home, tmp_path, monkeypatch):
     monkeypatch.setattr(
         "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "oauth_clients.json"),
+    )
+    monkeypatch.setattr(
+        "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"),
     )
     port = _free_port()
     issuer_url = f"http://localhost:{port}"
@@ -572,13 +569,11 @@ class TestApprovalDecisionFlow:
 
 
 # --------------------------------------------------------------------- #
-# Approval-list behaviors beyond one Allow/Deny round trip (Phase 4 item
-# 4.1, the now-removed automated-test-strategy-plan.md) -- everything that section's
-# own "Already in this repo" bullet lists as still missing from
-# TestApprovalDecisionFlow above: the empty state on its own, "Always
-# allow"'s (result, choice) round trip, the post-decision toast surviving
-# more than one decision, live SSE refresh with several cards pending at
-# once, and double-submit idempotency.
+# Approval-list behaviors beyond one Allow/Deny round trip -- everything
+# TestApprovalDecisionFlow above doesn't already cover: the empty state on
+# its own, "Always allow"'s (result, choice) round trip, the post-decision
+# toast surviving more than one decision, live SSE refresh with several
+# cards pending at once, and double-submit idempotency.
 # --------------------------------------------------------------------- #
 
 
@@ -748,7 +743,166 @@ class TestApprovalListBehavior:
 
 
 # --------------------------------------------------------------------- #
-# PII behavior (Phase 4 item 4.2, the now-removed automated-test-strategy-plan.md):
+# The approval binder (Phase 1 of the batch-decide plan): selection state
+# survives approval_list_html.py's own wholesale innerHTML replace on every
+# SSE tick, checkboxes are real, keyboard-operable form controls, and the
+# added toolbar/group-header markup doesn't reintroduce horizontal overflow.
+# --------------------------------------------------------------------- #
+
+
+class TestApprovalBinder:
+    def test_selection_survives_an_sse_rerender(self, page, local_server):
+        """A checked row must stay checked across ``__pfRenderApprovals``'s
+        own full re-render -- approval_list_html.py's own module docstring:
+        selection lives in a JS ``Set`` keyed by approval id, reconciled
+        after every render, not in the DOM node itself (which gets thrown
+        away and rebuilt on every SSE tick)."""
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread_a, card_a = _register_card(web_ui)
+        thread_b, card_b = None, None
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(f'[data-select="{card_a.id}"]')
+            page.locator(f'[data-select="{card_a.id}"]').check()
+            assert page.locator(f'[data-select="{card_a.id}"]').is_checked()
+
+            # A second, unrelated approval registering forces a fresh
+            # "approvals" SSE payload and therefore a fresh render() call --
+            # the thing under test here, not the second card itself.
+            thread_b, card_b = _register_card(web_ui)
+            page.wait_for_selector(f'[data-approval-id="{card_b.id}"]', timeout=5000)
+
+            assert page.locator(f'[data-select="{card_a.id}"]').is_checked()
+            assert "1 selected" in page.locator("#pf-selected-count").text_content()
+        finally:
+            for thread, card in ((thread_a, card_a), (thread_b, card_b)):
+                if thread is not None and thread.is_alive():
+                    web_ui.resolve(card.id, "deny")
+                    thread.join(timeout=5)
+
+    def test_deny_selected_resolves_every_checked_approval(self, page, local_server):
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread_a, card_a = _register_card(web_ui)
+        thread_b, card_b = _register_card(web_ui)
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(f'[data-select="{card_a.id}"]')
+            page.wait_for_selector(f'[data-select="{card_b.id}"]')
+            page.locator(f'[data-select="{card_a.id}"]').check()
+            page.locator(f'[data-select="{card_b.id}"]').check()
+            page.locator("#pf-deny-selected").click()
+
+            page.wait_for_selector(f'[data-approval-id="{card_a.id}"]', state="detached", timeout=5000)
+            page.wait_for_selector(f'[data-approval-id="{card_b.id}"]', state="detached", timeout=5000)
+            thread_a.join(timeout=5)
+            thread_b.join(timeout=5)
+            assert not thread_a.is_alive()
+            assert not thread_b.is_alive()
+        finally:
+            for thread, card in ((thread_a, card_a), (thread_b, card_b)):
+                if thread.is_alive():
+                    web_ui.resolve(card.id, "deny")
+                    thread.join(timeout=5)
+
+    def test_checkbox_is_keyboard_operable_via_tab_and_space(self, page, local_server):
+        """A real ``<input type="checkbox">`` must be reachable by Tab and
+        toggle via Space once focused -- proven with real keypresses, not a
+        programmatic ``.check()`` call, since that's the actual
+        keyboard-accessibility contract Playwright's own ``.check()``
+        deliberately bypasses. (Initial page-load focus -- §3 point 4 --
+        is unchanged by this phase and pre-dates it; not re-asserted here.)"""
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread, card = _register_card(web_ui)
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(f'[data-select="{card.id}"]')
+
+            checkbox = page.locator(f'[data-select="{card.id}"]')
+            checkbox.focus()
+            assert page.evaluate("document.activeElement.hasAttribute('data-select')") is True
+            assert not checkbox.is_checked()
+            page.keyboard.press("Space")
+            assert checkbox.is_checked()
+            assert "1 selected" in page.locator("#pf-selected-count").text_content()
+
+            # Tab away and back with Shift+Tab -- a real focus-order round
+            # trip, not just "focus() can target it".
+            page.keyboard.press("Tab")
+            assert not page.evaluate("document.activeElement.hasAttribute('data-select')")
+            page.keyboard.press("Shift+Tab")
+            assert page.evaluate("document.activeElement.hasAttribute('data-select')") is True
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    def test_details_toggle_shows_the_stamped_preview_via_fetch(self, page, local_server):
+        """The inline-disclosure fragment (``GET /api/approvals/{id}/
+        preview``) rendered with ``textContent`` -- not an ``<iframe>`` onto
+        the real card (see approval_list_html.py's own module docstring).
+
+        ``_register_card`` (used by every other test in this class) calls
+        ``show_popup`` directly, bypassing gate.py's own deferred-protocol
+        pre-registration -- so, per ``web_prompt.block_on_card``'s own
+        docstring, the resulting approval never gets a real
+        ``dedupe_key``/``preview`` stamped onto it (there's no gated-call
+        context to attach one to). This test needs a genuinely stamped
+        preview, so it registers the approval itself first (mirroring what
+        gate.py's own call sites do) and hands it to ``show_popup`` via its
+        ``approval=`` kwarg, same as production code does."""
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        registry = web_ui.deferred_registry
+        approval, _created = registry.register_or_coalesce(
+            dedupe_key="k1", connector="gmail", tool="gmail_create_draft", gate_kind="popup",
+            request_id="r1", preview={"To": "a@b.com", "Subject": "hi"},
+        )
+
+        def run():
+            web_ui.show_popup("Send email", {"To": "a@b.com"}, "body text", approval=approval)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        card = approval
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(f'[data-details="{card.id}"]')
+            page.locator(f'[data-details="{card.id}"]').click()
+            details = page.locator(f"#pf-details-{card.id}")
+            page.wait_for_function(
+                "(id) => { var el = document.getElementById('pf-details-' + id); "
+                "return !!el && !el.hasAttribute('hidden') && el.textContent.trim().length > 0; }",
+                arg=card.id,
+            )
+            assert "To" in details.text_content()
+            assert "a@b.com" in details.text_content()
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+    def test_no_horizontal_overflow_at_400px_with_a_pending_approval(self, page, local_server):
+        """TST-06's own "no horizontal page scroll" requirement, at the
+        narrowest width this phase's own binder toolbar/checkbox/group-header
+        markup could plausibly overflow at -- 400px, not merely the
+        375px/768px/1280px named viewports TestResponsiveLayout already
+        covers for the pre-binder page shape."""
+        server, web_ui = local_server
+        page.set_viewport_size({"width": 400, "height": 800})
+        _sign_in_local(page, server)
+        thread, card = _register_card(web_ui)
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(f'[data-approval-id="{card.id}"]')
+            _assert_no_horizontal_overflow(page)
+        finally:
+            web_ui.resolve(card.id, "deny")
+            thread.join(timeout=5)
+
+
+# --------------------------------------------------------------------- #
+# PII behavior:
 # deterministic synthetic PII triggers the banner/tint on a review-gate
 # card, an unrelated operation never gets it, and the separate PII/rule
 # confirmation dialog (show_pii_confirmation_popup, dialog_window_html.py's
@@ -839,7 +993,7 @@ class TestPiiApprovalUi:
 
 
 # --------------------------------------------------------------------- #
-# Responsive layout (Phase 4 item 4.3, the now-removed automated-test-strategy-plan.md):
+# Responsive layout:
 # named viewports (phone/tablet/desktop) -- no horizontal page scroll, the
 # WIDE layout's two-column split actually stacks below approval_window_
 # html.py's own 700px breakpoint, primary actions stay reachable, and the
@@ -946,7 +1100,7 @@ class TestResponsiveLayout:
 
 
 # --------------------------------------------------------------------- #
-# Light/dark mode (Phase 4 item 4.4, the now-removed automated-test-strategy-plan.md):
+# Light/dark mode:
 # structural assertions only (element presence, and that the dark-mode
 # design tokens actually took effect on a real computed style) -- not pixel
 # comparison, per that item's own text; subjective visual quality

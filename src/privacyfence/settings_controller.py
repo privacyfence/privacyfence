@@ -30,6 +30,7 @@ import json
 import logging
 import re
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -39,7 +40,7 @@ import yaml
 from . import __version__, dialog_window_html, org_bundle_signing, org_mode, web_prompt
 from .app_credentials import telegram_app_credentials
 from .approval_ui import get_approval_ui
-from .audit_log import AuditLogger, compute_security_config_hash, current_week, get_audit_logger
+from .audit_log import AuditEntry, AuditLogger, compute_security_config_hash, current_week, get_audit_logger
 from .auto_accept import (
     reload_rules,
     set_rules_changed_listener,
@@ -48,8 +49,9 @@ from .calendar_client import CalendarClient
 from .contacts_client import ContactsClient
 from .drive_client import DriveClient
 from .gmail_client import GmailClient
-from .paths import data_dir, org_dir
+from .paths import authority_root, data_dir, org_dir
 from .pii_detector import set_pii_category_enabled, set_pii_detection_enabled
+from .principal import LOCAL_PRINCIPAL
 from .privacy_filter import _parse_group as _parse_privacy_group
 from .privacy_filter import _VALID_POLICIES as PRIVACY_POLICIES
 from .privacy_filter import init_privacy_filter
@@ -65,6 +67,7 @@ from .resource_grants import (
 )
 from .resource_names import get_resolver
 from .secure_files import atomic_write_json, atomic_write_text
+from .step_up_config import LiveStepUpConfig, StepUpConfig
 from . import telegram_auth
 from .tasks_client import TasksClient
 from .update_checker import (
@@ -73,6 +76,8 @@ from .update_checker import (
     mark_remind_later,
     mark_skipped,
 )
+from .webauthn_stepup import has_credentials as _has_webauthn_credentials
+from .webauthn_stepup import observe_step_up_requirement
 from .atlassian_oauth import authorize_interactive as atlassian_authorize_interactive
 from .salesforce_client import authorize_interactive as salesforce_authorize_interactive
 from .slack_client import authorize_interactive as slack_authorize_interactive
@@ -116,6 +121,7 @@ OPERATION_LABELS: dict[str, str] = {
     "calendar.read_event_details": "Calendar – Read event",
     "calendar.create_modify_event":"Calendar – Create/modify event",
     "calendar.set_visibility":     "Calendar – Set event visibility",
+    "calendar.set_color":          "Calendar – Set event color",
     "calendar.out_of_office":      "Calendar – Create out-of-office",
     "calendar.working_location":   "Calendar – Set working location",
     "salesforce.read_record":      "Salesforce – Read record",
@@ -176,6 +182,7 @@ RULES_BY_OPERATION: dict[str, list[str]] = {
     "calendar.read_event_details":  ["i_am_organizer", "no_external_attendees", "personal_calendar", "past_event", "time_window_days", "no_conferencing_link", "non_private_event"],
     "calendar.create_modify_event": ["i_am_organizer", "no_external_attendees", "personal_calendar"],
     "calendar.set_visibility":      ["i_am_organizer", "no_external_attendees", "personal_calendar"],
+    "calendar.set_color":           ["i_am_organizer", "no_external_attendees", "personal_calendar"],
     "calendar.out_of_office":       ["always_allow"],
     "calendar.working_location":    ["always_allow"],
     "salesforce.read_record":       ["approved_object_types"],
@@ -687,6 +694,11 @@ class SettingsController:
         # own docstring), so an open MCP client learns about newly (or no
         # longer) authenticated connectors without needing to reconnect.
         self._connectors_changed_listener: Callable[[], None] | None = None
+        # B9: wired in by wire_step_up (see that method's own docstring for
+        # why not a constructor argument) -- None until then, which makes
+        # enable_step_up a safe no-op in every test/caller that never wires
+        # step-up at all.
+        self._step_up: LiveStepUpConfig | None = None
 
         set_rules_changed_listener(self._on_rules_changed)
 
@@ -698,6 +710,19 @@ class SettingsController:
         used to do itself, unconditionally, with ipc_server.py's IPCServer
         before P5 retired it."""
         dispatcher.set_unattended_changed_listener(self._on_unattended_changed)
+
+    def wire_step_up(self, step_up: LiveStepUpConfig) -> None:
+        """B9: registers the same ``LiveStepUpConfig`` daemon_main.py's
+        local-mode boot path hands to web/server.py's ``WebServer`` (and,
+        through it, to every route that gates on step-up) -- called from
+        ``_maybe_start_web_server`` once that object exists, the same
+        after-the-fact wiring ``wire_unattended_listener`` above already
+        uses for a dependency this constructor has no way to see yet.
+        ``enable_step_up`` below writes through this same object so a
+        change it makes to ``config/settings.yaml`` is visible to every
+        other consumer on their very next request, with no daemon restart
+        -- see step_up_config.py's own ``LiveStepUpConfig`` docstring."""
+        self._step_up = step_up
 
     def set_connectors_changed_listener(self, callback: Callable[[], None] | None) -> None:
         """``callback`` is ``McpDispatcher.notify_tools_changed`` in
@@ -829,6 +854,92 @@ class SettingsController:
         self._save_config(cfg)
         set_pii_category_enabled(category_key, enabled)
         return self.snapshot()
+
+    # ------------------------------------------------------------------ #
+    # Step-up (WebAuthn) enforcement -- B9 of the 4.1.0 action plan
+    # ------------------------------------------------------------------ #
+
+    def enable_step_up(self) -> dict[str, Any]:
+        """The browser-reachable counterpart to hand-editing ``config/
+        settings.yaml``'s own ``step_up:`` section, which #426 shipped
+        enrollment and enforcement for and then left with no way to turn on
+        short of a shell (B9's own problem statement -- see step_up_
+        config.py's ``LiveStepUpConfig`` docstring for the mechanism this
+        method writes through). Always sets *both* ``enabled`` and
+        ``require_passkey`` together, never one alone: local mode has no
+        IdP fallback, so an ``enabled=True, require_passkey=False`` install
+        enforces nothing beyond what ``enabled=False`` already didn't (see
+        ``StepUpConfig.from_local_config``'s own docstring) -- "turn
+        step-up on, and make it mandatory" (B9's "done when" wording) is
+        one action here, not two.
+
+        Refuses -- config untouched, ``self.error`` set, same failure
+        surfacing every other guarded action in this class uses -- unless a
+        passkey is already enrolled: flipping ``require_passkey`` on with
+        nothing enrolled would immediately lock every write approval and
+        every sensitive settings action behind a passkey ceremony nobody
+        can complete, exactly the state ``local_enrollment_banner`` exists
+        to warn about. settings_window_html.py's own Security card never
+        renders this action's control before ``self.snapshot()['general']
+        ['step_up_has_passkey']`` is true -- this is the same check run
+        again server-side, for a stray POST past that client-side gate,
+        not the only place it happens.
+
+        Turning step-up back *off* has no counterpart here, deliberately:
+        it stays a ``config/settings.yaml`` edit plus a restart, the one
+        signal webauthn_stepup.observe_step_up_requirement's "treat this
+        install as compromised" banner watches for (see that module's own
+        docstring) -- a UI path that could also produce a disable would
+        make that banner impossible to trust.
+        """
+        if self._step_up is None or not _has_webauthn_credentials(LOCAL_PRINCIPAL):
+            self.error = "Add a passkey at /security before turning step-up on."
+            return self.snapshot()
+        cfg = self._load_config()
+        step_up_cfg = cfg.setdefault("step_up", {})
+        step_up_cfg["enabled"] = True
+        step_up_cfg["require_passkey"] = True
+        self._save_config(cfg)
+        self._step_up.update(StepUpConfig.from_local_config(cfg))
+        self.error = ""
+        # #426 Phase 4's own tracking -- called here, not just left for the
+        # next daemon startup to notice, so this transition is audited the
+        # moment it happens (see webauthn_stepup.py's own module docstring
+        # on why an *enable* observed outside startup is expected now,
+        # unlike a disable).
+        if observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=True) is not None:
+            self._audit_step_up_enabled()
+        return self.snapshot()
+
+    def _audit_step_up_enabled(self) -> None:
+        """Same shape as daemon_main.py's own module-level
+        ``_audit_step_up_requirement_change`` (that function's own
+        docstring covers why this transition needs its own audit entry
+        rather than reusing ``_save_config``'s security-config-hash bump
+        above, which records *that* config changed, not *what* changed) --
+        duplicated rather than imported because daemon_main.py already
+        imports this module to build SettingsController, and this module
+        importing back would be circular. Simpler than that function: this
+        is only ever reached right after ``enable_step_up`` set both flags
+        to ``True``, so there is only the one outcome to record, not a
+        general enabled/disabled branch."""
+        try:
+            get_audit_logger().record(AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                week=current_week(),
+                request_id=uuid.uuid4().hex[:12],
+                connector="",
+                tool="",
+                tool_name="",
+                summary="local mode's step_up.require_passkey is now enforced",
+                sender="",
+                decision="step_up_requirement_enabled",
+                auto_accept_rule="",
+                latency_seconds=0.0,
+                pii_detected=False,
+            ))
+        except Exception as exc:
+            logger.warning("Audit log write failed for step_up_requirement_enabled: %s", exc)
 
     # ------------------------------------------------------------------ #
     # Approval notifications (web.notifications -- see web_shell.py's
@@ -1552,7 +1663,7 @@ class SettingsController:
         here rather than a silent open-the-folder fallback. Sets self.error
         (and returns None) on either miss; clears it on success.
         """
-        log_dir = Path(data_dir()) / "logs" / "audit"
+        log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
         week = current_week()
         if not log_dir.exists() or not (log_dir / f"{week}.jsonl").exists():
             self.error = "No audit log for this week yet."
@@ -1644,6 +1755,19 @@ class SettingsController:
                 "Install/Update Organization Config…" if org_installed else "Install Organization Config…"
             ),
             "version": __version__,
+            # B9: the General page's Security card reads these three to
+            # decide whether to show "Turn on step-up", a disabled hint
+            # ("add a passkey first"), or nothing (already on) -- see
+            # enable_step_up's own docstring and settings_window_html.py's
+            # renderGeneral. step_up_on is deliberately "both flags true",
+            # not just "enabled": that's the only state this action ever
+            # produces, and the only one that enforces anything in local
+            # mode (StepUpConfig.from_local_config's own docstring).
+            "step_up_available": self._step_up is not None,
+            "step_up_on": bool(
+                self._step_up is not None and self._step_up.enabled and self._step_up.require_passkey
+            ),
+            "step_up_has_passkey": _has_webauthn_credentials(LOCAL_PRINCIPAL),
         }
 
     def _connectors_state(self, cfg: dict[str, Any], org_config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1865,7 +1989,7 @@ class SettingsController:
         level = str(log_cfg.get("level", "INFO")).upper()
         log_file = log_cfg.get("file", "logs/privacyfence.log")
         week = current_week()
-        log_dir = Path(data_dir()) / "logs" / "audit"
+        log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
 
         recent: list[dict[str, Any]] = []
         if log_dir.exists():

@@ -116,15 +116,61 @@ DEFAULT_MAX_PENDING = 50
 # at once, which is harmless since it's the only principal there is.
 DEFAULT_MAX_PENDING_PER_PRINCIPAL = 20
 
+# Approval binder, Phase 4: on by default. A sequential agent that issues
+# gated calls one at a time never fills the binder -- it stalls the full
+# hold_window on call #1, gets a pending result, and only issues call #2
+# after relaying that and waiting on a human. Once this principal already
+# has one unfinalized approval outstanding, holding a second (or third, or
+# twelfth) one for hold_window too buys nothing -- the human demonstrably
+# isn't answering within a hold window, or the first would already be
+# decided -- so gate.py's _resolve_decision() collapses that later call's
+# own wait to zero instead, returning "approval_pending" immediately so
+# Claude can move on to the next independently-ready call. See
+# PendingApprovalRegistry.has_other_live() and gate.py's own docstring.
+DEFAULT_ADAPTIVE_HOLD = True
+
 # Every UI-step decision a card/confirmation can resolve to -- the same
 # vocabulary approval_popup.py's native bridge and approval_window_html.py's
 # own JS already use. "auto_accepted" is never produced by a UI step (no
 # button says that); it's finalize()'s own sentinel for "a rule appeared
 # that already covers this, so no human ever needed to answer" -- gate.py's
 # interaction driver returns it directly to finalize() without going through
-# answer() at all. See gate.py's module docstring.
+# answer() at all. See gate.py's own module docstring.
 CARD_RESULTS = ("accept", "deny", "accept_all")
 CONFIRM_RESULTS = ("confirm", "cancel")
+
+# The approval binder's own batch decide endpoint (Phase 2 of the binder
+# plan): a deliberately narrower vocabulary than CARD_RESULTS above --
+# "accept_all" needs its own scoped rule-creation confirmation (a second UI
+# step that only exists per-item), and is never offered from the list, so a
+# batch item is decided as a plain accept or a deny only. See
+# PendingApprovalRegistry.answer_batch's own docstring.
+BATCH_RESULTS = ("accept", "deny")
+
+# Approval binder (Phase 1 of docs/approval-list-ui-ux.md's future batching
+# work): every value PendingApproval.kind can take -- "card" (web_prompt.
+# block_on_card), "confirm" (block_on_confirm), "choice" (block_on_choice).
+# PendingApproval.is_batchable()/blocked_reason() below classify by explicit
+# membership in _BATCHABLE_KINDS/_NON_BATCHABLE_KINDS, never by complement
+# (kind not in _BATCHABLE_KINDS) -- the same reasoning web/routes_settings.py's
+# own _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS pair gives for staying
+# explicit rather than derived: TestBatchableKindsCoverAllApprovalKinds
+# (test_approvals.py) fails the moment a new kind lands in ALL_APPROVAL_KINDS
+# without a matching entry in both sets, so it can never silently default to
+# either "batchable" or "not batchable" by accident.
+ALL_APPROVAL_KINDS: frozenset[str] = frozenset({"card", "confirm", "choice"})
+
+# A "card" approval (accept/deny/accept_all) is the one shape the binder can
+# safely decide in bulk. "confirm"/"choice" resolve a different, mid-flight
+# result vocabulary (web_prompt.py's block_on_confirm/block_on_choice) --
+# batching those has no meaning, since there's no "accept"/"deny" to apply.
+_BATCHABLE_KINDS: frozenset[str] = frozenset({"card"})
+_NON_BATCHABLE_KINDS: frozenset[str] = frozenset({"confirm", "choice"})
+
+_NON_BATCHABLE_KIND_REASON: dict[str, str] = {
+    "confirm": "This is a confirmation dialog, not an approval — it can't be decided from the list.",
+    "choice": "This is a selection dialog, not an approval — it can't be decided from the list.",
+}
 
 
 class TooManyPendingApprovalsError(RuntimeError):
@@ -191,6 +237,16 @@ class PendingApproval:
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0.0        # pending-TTL deadline
     html: str = ""
+    # Stamped at registration by gate.py, from the exact ``preview`` dict it
+    # hands to show_popup()/show_read_popup() -- metadata only, per
+    # docs/coding-and-testing-guidelines.md §1.5 ("preview dicts carry
+    # metadata only... never body/content"), the same contract that already
+    # governs every preview a card renders. Known the moment this approval
+    # is registered, unlike ``html`` above, which stays "" until a
+    # _popup_executor worker frees up to run build_card_html -- a consumer
+    # that wants to disclose what's pending (a fragment endpoint, a future
+    # binder row) can read this without waiting on that worker at all.
+    preview: dict[str, Any] = field(default_factory=dict)
     # Re-evaluation context for the rules-changed broadcast (§6, Job 2).
     operation_key: str | None = None
     review_ctx: Any = None
@@ -218,8 +274,19 @@ class PendingApproval:
     decided_at: float | None = None
     ledger_expires_at: float | None = None
     ledger_consumed: bool = False
+    # Audit provenance for the approval binder's batch decide endpoint
+    # (Phase 2) -- "" for every ordinary single-decide answer, unchanged
+    # from before these fields existed. Stamped by answer() itself (not a
+    # separate setter) so it can never be set without also resolving the
+    # UI step it describes. Carried forward into LedgerHit by
+    # consume_ledger() below, and from there into the audit entry that
+    # actually releases the call -- see gate.py's own module docstring.
+    decided_via: str = ""
+    batch_id: str = ""
 
-    def answer(self, result: str, chosen_index: int | None = None) -> bool:
+    def answer(
+        self, result: str, chosen_index: int | None = None, *, decided_via: str = "", batch_id: str = "",
+    ) -> bool:
         """Resolve this UI step. Idempotent: the first answer wins (mirrors
         WebApprovalUI's pre-P3 ``resolve()``/§7.1's "first accepted decision
         wins")."""
@@ -227,11 +294,43 @@ class PendingApproval:
             return False
         self.result = result
         self.chosen_index_result = chosen_index
+        self.decided_via = decided_via
+        self.batch_id = batch_id
         self.event.set()
         return True
 
     def is_finalized(self) -> bool:
         return self.finalize_event.is_set()
+
+    def is_batchable(self) -> bool:
+        """The approval binder's own gate (Phase 1): a ``kind == "card"``
+        approval that isn't itself PII-forced. Excluded, each for a
+        different reason (see this module's own ``_NON_BATCHABLE_KINDS``/
+        ``pii_forces_confirmation`` field docstrings): "confirm"/"choice"
+        dialogs resolve a different, mid-flight result vocabulary, and a
+        PII-forced card demands a second confirmation that only exists
+        *after* this card is answered -- batching those would spray a fresh
+        confirm dialog into the list for every batched item instead of
+        resolving anything. Classified by explicit membership in
+        ``_BATCHABLE_KINDS``, never by complement -- see that set's own
+        comment."""
+        return self.kind in _BATCHABLE_KINDS and not self.pii_forces_confirmation
+
+    def blocked_reason(self) -> str:
+        """Why this approval can't be selected in the binder -- "" exactly
+        when ``is_batchable()`` is True. Surfaced on the row so a human sees
+        *why* there's no checkbox, not just its absence. Falls back to a
+        generic reason for a kind ``_NON_BATCHABLE_KIND_REASON`` has no
+        specific entry for (fail-closed: still not batchable, just with a
+        less specific explanation) -- TestBatchableKindsCoverAllApprovalKinds
+        is what actually keeps that fallback from ever firing in practice."""
+        if self.is_batchable():
+            return ""
+        if self.pii_forces_confirmation:
+            return "This request needs its own PII confirmation — it can't be decided from the list."
+        return _NON_BATCHABLE_KIND_REASON.get(
+            self.kind, "This request can't be decided from the list.",
+        )
 
     def to_summary_dict(self) -> dict[str, Any]:
         return {
@@ -248,6 +347,25 @@ class PendingApproval:
             # ``summary``, which is the one field that can carry real gated
             # content (see that field's own docstring below).
             "gate_kind": self.gate_kind,
+            # A settings.yaml rule-scoped key (e.g. "drive.read_file_contents"),
+            # never gated content -- the approval binder's own grouping key
+            # (Phase 1: groups by (connector, operation_key)). "" for a bare
+            # confirm/choice dialog, which has none.
+            "operation_key": self.operation_key or "",
+            # Category-level fact already shown on the card itself (a tinted
+            # banner naming the matched categories) -- never the categories
+            # themselves, which is what pii_categories carries; this is only
+            # "was anything flagged at all", which the binder needs to
+            # explain a PII-forced row's own blocked_reason.
+            "pii_detected": self.pii_detected,
+            # Whether the approval binder (Phase 1) may offer this approval
+            # for selection at all -- see is_batchable()'s own docstring.
+            "batchable": self.is_batchable(),
+            # Human-readable reason there's no checkbox on this row -- ""
+            # when batchable is True. Never gated content (see
+            # blocked_reason()'s own docstring): it names a category of
+            # approval, not anything about this particular one's data.
+            "blocked_reason": self.blocked_reason(),
             # The row's own title/content line -- can carry real gated data
             # (an event title, a contact name, a document title -- see
             # gate.py's call sites). Only ever shown by a consumer that's
@@ -258,6 +376,24 @@ class PendingApproval:
             "expires_at": _iso(self.expires_at),
             "decided": self.is_finalized(),
         }
+
+
+@dataclass(frozen=True)
+class LedgerHit:
+    """consume_ledger()'s return value -- replaces a bare
+    ``(decision, rule_name, decided_at)`` 3-tuple so a fourth field could
+    be added (Phase 2 of the approval binder plan: ``decided_via``/
+    ``batch_id``, audit provenance for a decision released through the
+    binder's batch decide endpoint) without every existing positional
+    consumer silently misreading a field. ``decided_via``/``batch_id``
+    default to "" -- the ordinary decided-inline-or-via-single-decide
+    case's own shape, unchanged from before these two fields existed."""
+
+    decision: str
+    rule_name: str
+    decided_at: float
+    decided_via: str = ""
+    batch_id: str = ""
 
 
 class PendingApprovalRegistry:
@@ -274,6 +410,7 @@ class PendingApprovalRegistry:
         max_pending: int = DEFAULT_MAX_PENDING,
         max_pending_per_principal: int = DEFAULT_MAX_PENDING_PER_PRINCIPAL,
         base_url: str | None = None,
+        adaptive_hold: bool = DEFAULT_ADAPTIVE_HOLD,
     ) -> None:
         self.hold_window = hold_window
         self.pending_ttl = pending_ttl
@@ -281,6 +418,7 @@ class PendingApprovalRegistry:
         self.max_pending = max_pending
         self.max_pending_per_principal = max_pending_per_principal
         self.base_url = base_url
+        self.adaptive_hold = adaptive_hold
         self._lock = threading.Lock()
         self._pending: dict[str, PendingApproval] = {}
         # (principal_id, dedupe_key) -> approval id -- see module docstring's
@@ -296,6 +434,15 @@ class PendingApprovalRegistry:
             return None
         return f"{self.base_url}/approvals/{approval_id}"
 
+    def binder_url(self) -> str | None:
+        """The list page itself (Approval binder, Phase 4) -- what gate.py's
+        _pending_result() points Claude at instead of N separate approval_
+        url()s once more than one of this principal's approvals is waiting
+        at once."""
+        if not self.base_url:
+            return None
+        return f"{self.base_url}/approvals"
+
     # ------------------------------------------------------------------ #
     # Registration
     # ------------------------------------------------------------------ #
@@ -310,6 +457,7 @@ class PendingApprovalRegistry:
         request_id: str,
         summary: str = "",
         tool_name: str = "",
+        preview: dict[str, Any] | None = None,
         operation_key: str | None = None,
         review_ctx: Any = None,
         pii_forces_confirmation: bool = False,
@@ -362,6 +510,7 @@ class PendingApprovalRegistry:
                 connector=connector, tool=tool, gate_kind=gate_kind,
                 request_id=request_id, summary=summary, tool_name=tool_name, dedupe_key=dedupe_key,
                 created_at=now, expires_at=now + self.pending_ttl,
+                preview=dict(preview or {}),
                 operation_key=operation_key, review_ctx=review_ctx,
                 pii_forces_confirmation=pii_forces_confirmation, pii_detected=pii_detected,
                 pii_categories=list(pii_categories or []), claude_reason=claude_reason,
@@ -393,7 +542,8 @@ class PendingApprovalRegistry:
     # ------------------------------------------------------------------ #
 
     def answer(
-        self, approval_id: str, result: str, chosen_index: int | None = None, *, principal_id: str | None = None,
+        self, approval_id: str, result: str, chosen_index: int | None = None, *,
+        principal_id: str | None = None, decided_via: str = "", batch_id: str = "",
     ) -> bool:
         """Resolve one UI step -- called by web/routes_approvals.py's/
         web/routes_org_approvals.py's decide endpoint when a human clicks a
@@ -404,14 +554,64 @@ class PendingApprovalRegistry:
         approval belonging to a *different* principal exactly as if it
         didn't exist -- §10.5's "every ... decision ... is authorized
         against current_principal()", defense in depth on top of the
-        approval id's own 128 bits of entropy."""
+        approval id's own 128 bits of entropy.
+
+        ``decided_via``/``batch_id`` (Phase 2 of the approval binder plan)
+        are "" for every ordinary single-decide caller, unchanged from
+        before these parameters existed -- only answer_batch() below
+        passes real values."""
         with self._lock:
             approval = self._pending.get(approval_id)
         if approval is None:
             return False
         if principal_id is not None and approval.principal_id != principal_id:
             return False
-        return approval.answer(result, chosen_index)
+        return approval.answer(result, chosen_index, decided_via=decided_via, batch_id=batch_id)
+
+    def answer_batch(
+        self, items: list[tuple[str, str]], *, principal_id: str | None = None,
+        decided_via: str = "", batch_id: str = "",
+    ) -> list[dict[str, str]]:
+        """The approval binder's own batch decide endpoint (Phase 2),
+        shared between web/routes_approvals.py and web/
+        routes_org_approvals.py so neither reimplements this classify-then-
+        answer sequence. ``items`` is ``(approval_id, result)`` pairs, each
+        ``result`` already validated by the caller to be one of
+        BATCH_RESULTS.
+
+        Returns one outcome per item, in submitted order, each
+        ``{"id": ..., "outcome": ...}`` where outcome is one of:
+
+        - ``"applied"`` -- this decision was just recorded.
+        - ``"already_decided"`` -- the UI step was already answered
+          (a rule resolved it, a duplicate id in the same batch, or a
+          genuine race with another decide) -- not an error.
+        - ``"unknown"`` -- no such approval, *or* it belongs to a
+          different principal (``principal_id`` given and mismatched) --
+          the two are indistinguishable, per every other read/write here
+          (module docstring, §10.5).
+        - ``"not_batchable"`` -- exists, belongs to this principal, but
+          isn't a plain batchable card (PendingApproval.is_batchable()) --
+          a confirm/choice dialog or a PII-forced card. Never silently
+          coerced into "applied" or "unknown".
+
+        Never raises for a bad item -- a batch partially applying is the
+        normal case (module docstring's own note), not a failure worth
+        aborting the rest of the batch over."""
+        reports: list[dict[str, str]] = []
+        for approval_id, result in items:
+            approval = self.get(approval_id, principal_id=principal_id)
+            if approval is None:
+                reports.append({"id": approval_id, "outcome": "unknown"})
+            elif not approval.is_batchable():
+                reports.append({"id": approval_id, "outcome": "not_batchable"})
+            elif self.answer(
+                approval_id, result, principal_id=principal_id, decided_via=decided_via, batch_id=batch_id,
+            ):
+                reports.append({"id": approval_id, "outcome": "applied"})
+            else:
+                reports.append({"id": approval_id, "outcome": "already_decided"})
+        return reports
 
     def finalize(self, approval_id: str, decision: str, rule_name: str = "") -> bool:
         """Resolve the whole approval -- called once, by gate.py's own
@@ -431,13 +631,25 @@ class PendingApprovalRegistry:
             if approval.dedupe_key is not None:
                 approval.ledger_expires_at = approval.decided_at + self.ledger_ttl
             approval.finalize_event.set()
+            # Also wake the UI step: a finalize that didn't go through
+            # answer() (pop_expired_events()'s own TTL sweep, or
+            # reevaluate_all() below finding a rule that now covers this)
+            # otherwise leaves any thread blocked in web_prompt.block_on_card
+            # -- gate.py's _run_in_popup_executor worker showing this exact
+            # card -- waiting on card.event.wait() forever, since only
+            # PendingApproval.answer() ever set that event before this fix.
+            # block_on_card already maps a result outside CARD_RESULTS to
+            # "deny", and finalize() is idempotent, so the woken worker's own
+            # eventual finalize() call is a harmless no-op: this call's real
+            # final_decision (e.g. "expired"/"auto_accepted") stands.
+            approval.event.set()
             return True
 
-    def consume_ledger(self, dedupe_key: str) -> tuple[str, str, float] | None:
+    def consume_ledger(self, dedupe_key: str) -> LedgerHit | None:
         """A re-issued (or coalesced-and-since-finalized) identical call's
         first stop: is there already a decision on file for this exact
-        ``(connector, tool, args)``, *for the calling principal*? Returns
-        ``(decision, rule_name, decided_at)`` or None. Single-use entries
+        ``(connector, tool, args)``, *for the calling principal*? Returns a
+        LedgerHit or None. Single-use entries
         (writes) are removed on the read that consumes them; read-gate
         entries stay reusable until ``ledger_ttl`` (§5.4: "Read decisions...
         stay TTL-bounded and reusable... unchanged").
@@ -465,7 +677,12 @@ class PendingApprovalRegistry:
                 approval.ledger_consumed = True
                 del self._by_key[key]
                 self._pending.pop(approval_id, None)
-            return approval.final_decision, approval.final_rule_name, approval.decided_at
+            assert approval.final_decision is not None  # nosec B101  # is_finalized() already proved this
+            assert approval.decided_at is not None  # nosec B101  # set alongside final_decision, always together
+            return LedgerHit(
+                decision=approval.final_decision, rule_name=approval.final_rule_name,
+                decided_at=approval.decided_at, decided_via=approval.decided_via, batch_id=approval.batch_id,
+            )
 
     # ------------------------------------------------------------------ #
     # Waiting (gate.py's hold window)
@@ -477,6 +694,21 @@ class PendingApprovalRegistry:
         import asyncio
 
         return await asyncio.to_thread(approval.finalize_event.wait, timeout)
+
+    def has_other_live(self, principal_id: str, exclude_id: str) -> bool:
+        """True if some *other* not-yet-finalized approval already exists
+        for ``principal_id`` -- gate.py's adaptive hold window (Phase 4):
+        when this is true for a call that just registered, waiting the full
+        ``hold_window`` on it buys nothing, since this principal already has
+        something else waiting on a decision. Same "not finalized" test
+        register_or_coalesce() already uses for the per-principal pending
+        cap, just without the exclusion for ``exclude_id`` itself that cap
+        check doesn't need (it runs before the new approval exists)."""
+        with self._lock:
+            return any(
+                a.id != exclude_id and not a.is_finalized() and a.principal_id == principal_id
+                for a in self._pending.values()
+            )
 
     # ------------------------------------------------------------------ #
     # Read side -- web/routes_approvals.py, privacyfence_await_approval
@@ -618,6 +850,12 @@ class PendingApprovalRegistry:
                 approval.final_decision = "expired"
                 approval.decided_at = now
                 approval.finalize_event.set()
+                # See finalize()'s own comment: this sweep resolves the whole
+                # approval directly rather than through finalize(), so it has
+                # to wake the UI-step event itself too, or a worker thread
+                # blocked showing this exact card (web_prompt.block_on_card)
+                # never returns.
+                approval.event.set()
                 if approval.dedupe_key is not None:
                     self._by_key.pop((approval.principal_id, approval.dedupe_key), None)
                 expired.append(approval)

@@ -178,6 +178,27 @@ class PrincipalRegistry(Generic[T]):
         with self._lock:
             self._instances.pop(principal_id or current_principal().id, None)
 
+    def principal_ids(self) -> list[str]:
+        """A snapshot of every principal id this registry has built an
+        instance for. For an *install-wide* setting -- one with no
+        per-principal dimension at all, like org mode's privacy/PII policy
+        (see docs/org-mode-setup-guide.md: "there is no per-user
+        override") -- changing it has to reach every principal already
+        holding a copy, not just whoever happened to make the change.
+        ``set()``/``get()`` both resolve against ``current_principal()``
+        alone, so there was no way to ask that question before.
+
+        A snapshot, not a live view: the caller re-enters a
+        ``principal_scope`` per id and calls the module's own ``init_xxx()``
+        while other requests keep running, and holding this lock across all
+        of that would deadlock the first ``get()`` that arrives meanwhile. A
+        principal added *during* such a sweep is not a gap -- a registry
+        entry built after the config on disk already changed is built from
+        the new config.
+        """
+        with self._lock:
+            return list(self._instances)
+
 
 __all__ = [
     "ANONYMOUS_PRINCIPAL",

@@ -85,8 +85,7 @@ describe("findDaemonCmd", () => {
     assert.deepEqual(cmd, ["python3", "-m", "privacyfence.daemon_main"]);
   });
 
-  // Windows branch (the now-removed docs/windows-support-plan.md Phase 7 / B6 in the now-removed docs/
-  // windows-linux-support-plan.md) -- `platform` is injectable specifically
+  // Windows branch -- `platform` is injectable specifically
   // so these can run on any CI host, not just a real Windows one.
   it("falls back to python -m privacyfence.daemon_main (not python3) on win32", () => {
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-"));
@@ -426,6 +425,94 @@ describe("describeTarget", () => {
       const described = describeTarget(mcpUrlFile);
       assert.match(described, /not accepting connections/);
       assert.match(described, new RegExp(String(port)));
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe("ensureDaemonRunning on a privilege-separated install (#428 Phase 4)", () => {
+  it("never spawns the daemon -- the service manager owns it, and this process is the wrong account", async () => {
+    // Spawning here would start the daemon as the logged-in user, where
+    // privilege_separation.check_runtime_identity() refuses to run rather
+    // than seed a default policy over the real one. So the spawn cannot
+    // succeed; attempting it once per shim launch would only bury the real
+    // reason under a second failure.
+    const { mcpUrlFile, writeUrl, cleanup } = makeTempMcpFiles();
+    const port = await getFreePort();
+    const server = net.createServer();
+    setTimeout(() => {
+      server.listen(port, "127.0.0.1", () => writeUrl(`http://127.0.0.1:${port}/mcp`));
+    }, 150);
+    let findCmdCalled = false;
+    try {
+      await ensureDaemonRunning({
+        mcpUrlFile,
+        separationRoot: () => "/Library/Application Support/PrivacyFence",
+        findCmd: () => {
+          findCmdCalled = true;
+          return ["should-not-run"];
+        },
+        connectTimeoutMs: 3000,
+        connectIntervalMs: 50,
+      });
+      assert.equal(findCmdCalled, false);
+    } finally {
+      server.close();
+      cleanup();
+    }
+  });
+
+  it("names each platform's own service manager in the wait message (#428 P4 B5c)", async () => {
+    // Diagnostics, but load-bearing diagnostics: this message is the only
+    // thing a user sees when a separated daemon has not come up, and it is
+    // what sends them to `sc.exe query` rather than to launchctl on a
+    // machine that has no launchd. B5c is what made the previous
+    // two-way branch (linux, else macOS) wrong rather than merely
+    // incomplete -- before it, win32 could never reach this code at all.
+    const original = Object.getOwnPropertyDescriptor(process, "platform")!;
+    const originalError = console.error;
+    const lines: string[] = [];
+    console.error = (...args: unknown[]) => {
+      lines.push(args.join(" "));
+    };
+    const { mcpUrlFile, cleanup } = makeTempMcpFiles();
+    try {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      await assert.rejects(
+        ensureDaemonRunning({
+          mcpUrlFile,
+          separationRoot: () => "C:\\ProgramData\\PrivacyFence",
+          findCmd: () => ["should-not-run"],
+          connectTimeoutMs: 120,
+          connectIntervalMs: 20,
+        }),
+        ShimExitError,
+      );
+    } finally {
+      Object.defineProperty(process, "platform", original);
+      console.error = originalError;
+      cleanup();
+    }
+    const waiting = lines.find((line) => line.includes("#428 Phase 4"));
+    assert.ok(waiting, `no wait message was logged; got ${JSON.stringify(lines)}`);
+    assert.match(waiting, /a Windows service/);
+    assert.match(waiting, /sc\.exe query PrivacyFence/);
+  });
+
+  it("still gives up after the connect window, so waitForDaemonPatiently keeps retrying", async () => {
+    const { mcpUrlFile, cleanup } = makeTempMcpFiles();
+    try {
+      await assert.rejects(
+        ensureDaemonRunning({
+          mcpUrlFile,
+          separationRoot: () => "/Library/Application Support/PrivacyFence",
+          findCmd: () => ["should-not-run"],
+          connectTimeoutMs: 120,
+          connectIntervalMs: 20,
+        }),
+        ShimExitError,
+      );
     } finally {
       cleanup();
     }

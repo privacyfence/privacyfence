@@ -288,3 +288,75 @@ web:
     #             mirror; never the default (docs/approval-list-ui-ux.md
     #             §4.3)
     detail: standard # minimal | standard | detailed
+
+# WebAuthn passkey step-up (#426 Phase 1/2) -- enrolling a passkey here
+# mounts /security (linked from the Settings page) and lets you register a
+# Face ID/Touch ID/Windows Hello credential against this install. Absent
+# entirely, this behaves exactly like `enabled: false` below.
+# Enrolled credentials live under a service-owned subdirectory of the data
+# directory, not here.
+step_up:
+  # Turns on step-up at decide time: releasing an approving decision
+  # (accept/accept_all) on a gated write -- or, with the wider scope below,
+  # a PII-flagged read -- needs a fresh passkey assertion. `deny` never
+  # needs one. This is still opt-in machinery, not a guarantee you can rely
+  # on by itself: with nothing enrolled, there's no ceremony to demand and
+  # the decision goes through unguarded -- so this only does something once
+  # you've actually added a passkey at /security. Making enrollment
+  # mandatory is `require_passkey` below.
+  #
+  # You don't have to hand-edit this file to turn it on: once a passkey is
+  # enrolled at /security, the Settings page's Security card has a "Turn
+  # on" button that sets `enabled` and `require_passkey` together (B9 of
+  # the 4.1.0 action plan) and takes effect immediately, no restart. Editing
+  # this file directly still works too, and is the only way back to
+  # `false` -- there's no UI control that turns step-up back off.
+  enabled: false
+  # Which approvals require step-up: "writes" (every approval popup) or
+  # "writes_and_pii_reads" (also a read PrivacyFence flagged as containing
+  # personal data).
+  scope: writes
+  # WebAuthn's Relying Party ID. Leave unset -- "localhost" is always
+  # correct for this daemon's own embedded server and needs no TLS.
+  rp_id: localhost
+  # Shown to your platform authenticator's own passkey picker/prompt.
+  rp_name: PrivacyFence
+  # Whether a passkey assertion is *mandatory*, not merely offered when one
+  # happens to be enrolled (#426 Phase 3). With this on: an approving
+  # decision with nothing enrolled is refused outright (a 403 naming
+  # /security), not silently released; the same is true for a sensitive
+  # subset of the settings actions (rule/grant/policy/PII changes -- see
+  # web/routes_settings.py's own _SENSITIVE_ACTIONS); and removing your
+  # last enrolled credential always needs a fresh assertion first,
+  # regardless of this flag. If nothing is enrolled when the daemon starts
+  # with this on, it still starts -- refusing to boot would remove the one
+  # path (/security) that fixes it -- but every page carries a persistent
+  # banner until a passkey is added, and no approving decision is released
+  # in the meantime. Before #428 (privilege separation) lands for your
+  # platform, this flag and the enrolled-credential store are both files an
+  # agent with shell access on this machine can edit -- see issue #426's
+  # own "What this guarantees, and what it depends on" for what that means
+  # in practice.
+  require_passkey: false
+  # The approval binder's own batch decide endpoint (/approvals, Phase 3):
+  # "single_assertion" -- the default -- lets one passkey prompt release a
+  # whole selected batch of approvals at once, bound to the exact set you
+  # selected (adding, dropping, or flipping any one item invalidates it).
+  # "per_item" is the stricter alternative for an install that never wants
+  # one prompt to cover more than one decision: with it set, the batch
+  # endpoint refuses outright to release anything in the batch that needs
+  # step-up (nothing in the batch is applied), so those have to be decided
+  # one at a time from their own card instead. A deny-only batch is
+  # unaffected either way -- denying never needs step-up.
+  batch: single_assertion
+
+# P3 of the auto-accept policy redesign: which evaluator decides an auto-accept call. Both the
+# existing evaluator and the new policy/engine.py one run on every call regardless of this
+# setting -- this only decides which answer is acted on, and which is shadowed (logged at
+# WARNING on a disagreement, never at the content level). Leave unset, or "v1", to keep today's
+# evaluator load-bearing; this is the default for a reason -- nothing on disk changes yet, and no
+# auto-accept rule you've configured needs touching for this release. Setting "v2" makes the new
+# evaluator authoritative instead; switching back to "v1" is the documented rollback if that
+# regresses something, no release needed.
+policy:
+  engine: v1

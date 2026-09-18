@@ -21,11 +21,12 @@ left and nothing to compare.
 Run from the repo root (with `mcpb/shim/` node_modules already installed via
 `npm install`), the same as CI. Exits non-zero if any check fails.
 
-`ruff check .` and `bandit` are included below because they're CI's *blocking*
-static-analysis steps (`.github/workflows/tests.yml`'s `static-analysis` job -- see
-`[tool.ruff.lint]`/`[tool.bandit]` in pyproject.toml); mypy stays out of this gate for the
-same reason it's still `continue-on-error` in that job -- see `[tool.mypy]` in pyproject.toml,
-including the per-module overrides that are promoted to blocking as modules get cleaned up.
+`ruff check .`, `bandit` and `scripts/mypy_strict_modules.py` are included below because they're
+CI's *blocking* static-analysis steps (`.github/workflows/tests.yml`'s `static-analysis` job -- see
+`[tool.ruff.lint]`/`[tool.bandit]`/`[[tool.mypy.overrides]]` in pyproject.toml). The whole-tree
+`mypy src/privacyfence` run stays out of this gate for the same reason it's still
+`continue-on-error` in that job -- see `[tool.mypy]` in pyproject.toml; only the modules the
+per-module ratchet has promoted are checked here, which is exactly what CI blocks on.
 """
 from __future__ import annotations
 
@@ -79,6 +80,11 @@ def main() -> int:
         "shim typecheck", ["npm", "run", "typecheck"], cwd=REPO_ROOT / "mcpb" / "shim"
     )
     results["ruff"] = run("ruff", ["ruff", "check", "."], cwd=REPO_ROOT)
+    results["mypy (promoted modules)"] = run(
+        "mypy (promoted modules)",
+        ["python3", "scripts/mypy_strict_modules.py"],
+        cwd=REPO_ROOT,
+    )
     results["bandit"] = run(
         "bandit", ["bandit", "-c", "pyproject.toml", "-r", "src"], cwd=REPO_ROOT
     )

@@ -11,8 +11,12 @@ import time
 import pytest
 
 from privacyfence.approvals import (
+    ALL_APPROVAL_KINDS,
+    LedgerHit,
     PendingApprovalRegistry,
     TooManyPendingApprovalsError,
+    _BATCHABLE_KINDS,
+    _NON_BATCHABLE_KINDS,
     canonical_key,
 )
 from privacyfence.principal import Principal, principal_scope
@@ -111,6 +115,40 @@ class TestRegisterOrCoalesce:
         )
         assert created is False
 
+    def test_preview_is_stamped_onto_the_approval(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+            preview={"from": "alice@example.com", "size": "12 KB"},
+        )
+        assert approval.preview == {"from": "alice@example.com", "size": "12 KB"}
+        # Known at registration -- html is only ever set later, by
+        # WebApprovalUI's own _run_card (gate.py's _popup_executor), which
+        # nothing here ever triggers. A consumer that wants to disclose what
+        # this approval is about doesn't have to wait for that worker.
+        assert approval.html == ""
+
+    def test_no_preview_given_defaults_to_an_empty_dict(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        assert approval.preview == {}
+
+    def test_preview_is_copied_not_aliased(self):
+        # Mutating the caller's own dict after registration must not reach
+        # back into the stored approval -- the same defensive-copy contract
+        # pii_categories already gets a few lines below (list(pii_categories
+        # or [])).
+        registry = make_registry()
+        caller_dict = {"from": "alice@example.com"}
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+            preview=caller_dict,
+        )
+        caller_dict["from"] = "mallory@example.com"
+        assert approval.preview == {"from": "alice@example.com"}
+
 
 class TestAnswerVsFinalize:
     def test_answer_resolves_the_ui_step_only_not_the_whole_approval(self):
@@ -130,7 +168,7 @@ class TestAnswerVsFinalize:
         assert registry.finalize(approval.id, "accept", "some_rule") is True
         assert approval.is_finalized()
         hit = registry.consume_ledger("k1")
-        assert hit == ("accept", "some_rule", approval.decided_at)
+        assert hit == LedgerHit(decision="accept", rule_name="some_rule", decided_at=approval.decided_at)
 
     def test_answer_is_idempotent_first_wins(self):
         registry = make_registry()
@@ -154,6 +192,27 @@ class TestAnswerVsFinalize:
         registry = make_registry()
         assert registry.answer("nope", "accept") is False
         assert registry.finalize("nope", "accept") is False
+
+    def test_finalize_without_a_prior_answer_still_wakes_the_ui_step(self):
+        # Regression: finalize() used to set only finalize_event, never
+        # event. A thread blocked in web_prompt.block_on_card
+        # (card.event.wait(), no timeout) waits on `event`, not
+        # `finalize_event` -- so a finalize that never went through
+        # answer() first (reevaluate_all() finding a matching rule; see
+        # pop_expired_events() below for the other such path) left that
+        # thread, and its gate.py popup-executor worker, blocked forever.
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        assert not approval.event.is_set()
+        registry.finalize(approval.id, "auto_accepted", "some_rule")
+        assert approval.event.is_set()
+        # web_prompt.block_on_card maps a result outside CARD_RESULTS to
+        # "deny" -- finalize() must not overwrite the UI-step result with
+        # the final decision, since the real outcome ("auto_accepted")
+        # already lives in final_decision.
+        assert approval.result not in ("accept", "deny", "accept_all")
 
 
 class TestLedgerSingleUse:
@@ -357,6 +416,66 @@ class TestApprovalUrl:
         assert registry.approval_url("abc123") == "http://localhost:8765/approvals/abc123"
 
 
+class TestBinderUrl:
+    """Approval binder, Phase 4: the list page itself, distinct from any one
+    approval's own approval_url()."""
+
+    def test_no_base_url_configured_returns_none(self):
+        registry = make_registry()
+        assert registry.binder_url() is None
+
+    def test_base_url_is_used_once_set(self):
+        registry = make_registry()
+        registry.set_base_url("http://localhost:8765")
+        assert registry.binder_url() == "http://localhost:8765/approvals"
+
+
+class TestHasOtherLive:
+    """Approval binder, Phase 4: gate.py's adaptive hold window collapses to
+    zero exactly when this returns True for a call that just registered."""
+
+    def test_false_when_nothing_else_is_pending(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        assert registry.has_other_live(approval.principal_id, approval.id) is False
+
+    def test_true_when_another_approval_is_still_unfinalized(self):
+        registry = make_registry()
+        first, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t1", gate_kind="review", request_id="r1",
+        )
+        second, _ = registry.register_or_coalesce(
+            dedupe_key="k2", connector="c", tool="t2", gate_kind="review", request_id="r2",
+        )
+        assert registry.has_other_live(second.principal_id, second.id) is True
+        assert registry.has_other_live(first.principal_id, first.id) is True
+
+    def test_false_once_the_other_approval_is_finalized(self):
+        registry = make_registry()
+        first, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t1", gate_kind="review", request_id="r1",
+        )
+        second, _ = registry.register_or_coalesce(
+            dedupe_key="k2", connector="c", tool="t2", gate_kind="review", request_id="r2",
+        )
+        registry.finalize(first.id, "accept")
+        assert registry.has_other_live(second.principal_id, second.id) is False
+
+    def test_another_principals_pending_approval_does_not_count(self):
+        registry = make_registry()
+        with principal_scope(Principal(id="alice")):
+            registry.register_or_coalesce(
+                dedupe_key="k1", connector="c", tool="t1", gate_kind="review", request_id="r1",
+            )
+        with principal_scope(Principal(id="bob")):
+            bobs, _ = registry.register_or_coalesce(
+                dedupe_key="k2", connector="c", tool="t2", gate_kind="review", request_id="r2",
+            )
+        assert registry.has_other_live("bob", bobs.id) is False
+
+
 class TestAwaitStatus:
     def test_unknown_id_is_unknown(self):
         registry = make_registry()
@@ -512,7 +631,7 @@ class TestPrincipalDimension:
                 dedupe_key="same-key", connector="c", tool="t", gate_kind="popup", request_id="r1",
             )
             registry.finalize(approval.id, "accept")
-            assert registry.consume_ledger("same-key") == ("accept", "", approval.decided_at)
+            assert registry.consume_ledger("same-key") == LedgerHit(decision="accept", rule_name="", decided_at=approval.decided_at)
         with principal_scope(Principal(id="bob")):
             # Bob issuing the identical call must not see Alice's decision.
             assert registry.consume_ledger("same-key") is None
@@ -669,3 +788,64 @@ class TestPerPrincipalApprovalCap:
         from privacyfence.approvals import DEFAULT_MAX_PENDING, DEFAULT_MAX_PENDING_PER_PRINCIPAL
 
         assert DEFAULT_MAX_PENDING_PER_PRINCIPAL < DEFAULT_MAX_PENDING
+
+
+class TestBatchableKindsCoverAllApprovalKinds:
+    """Mirrors web/routes_settings.py's own TestSensitiveActionsCoverAllAllowedActions:
+    _BATCHABLE_KINDS/_NON_BATCHABLE_KINDS are both explicit sets, not one
+    derived from the other, so a future PendingApproval.kind value that
+    lands in ALL_APPROVAL_KINDS with no matching entry in either fails here
+    instead of silently defaulting to either "batchable" or "not batchable"."""
+
+    def test_the_two_sets_are_disjoint_and_cover_every_known_kind(self):
+        assert _BATCHABLE_KINDS & _NON_BATCHABLE_KINDS == frozenset()
+        assert _BATCHABLE_KINDS | _NON_BATCHABLE_KINDS == ALL_APPROVAL_KINDS
+
+
+class TestIsBatchableAndBlockedReason:
+    def test_a_plain_card_is_batchable_with_no_blocked_reason(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+        )
+        assert approval.is_batchable() is True
+        assert approval.blocked_reason() == ""
+
+    def test_a_pii_forced_card_is_not_batchable(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+            pii_forces_confirmation=True,
+        )
+        assert approval.is_batchable() is False
+        assert "PII confirmation" in approval.blocked_reason()
+
+    def test_a_confirm_dialog_is_not_batchable(self):
+        registry = make_registry()
+        approval = registry.register_confirm()
+        assert approval.is_batchable() is False
+        assert approval.blocked_reason() != ""
+
+    def test_a_choice_dialog_is_not_batchable(self):
+        registry = make_registry()
+        approval = registry.register_confirm()
+        approval.kind = "choice"
+        assert approval.is_batchable() is False
+        assert approval.blocked_reason() != ""
+
+    def test_to_summary_dict_carries_the_batching_fields(self):
+        registry = make_registry()
+        approval, _ = registry.register_or_coalesce(
+            dedupe_key="k1", connector="c", tool="t", gate_kind="review", request_id="r1",
+            operation_key="gmail.read_message", pii_detected=True,
+        )
+        summary = approval.to_summary_dict()
+        assert summary["operation_key"] == "gmail.read_message"
+        assert summary["pii_detected"] is True
+        assert summary["batchable"] is True
+        assert summary["blocked_reason"] == ""
+
+    def test_to_summary_dict_defaults_operation_key_to_empty_string(self):
+        registry = make_registry()
+        approval = registry.register_confirm()
+        assert approval.to_summary_dict()["operation_key"] == ""

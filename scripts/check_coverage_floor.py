@@ -51,7 +51,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Combined (line + branch) percentage, matching coverage.json's
 # totals.percent_covered / pytest-cov's own summary "Cover" column.
-OVERALL_FLOOR = 94.0
+#
+# One decimal place, not the whole-percent rounding MODULE_FLOORS uses below:
+# the "harmless float jitter" that rounding protects against is the
+# percentage computation's own floating-point noise, which is negligible at
+# this scale (17,000+ statements) -- a real regression big enough to matter
+# moves this number by far more than 0.1%. Whole-percent headroom here would
+# just let a real, module-sized regression hide inside the aggregate, which
+# is the exact failure mode MODULE_FLOORS exists to close for the modules
+# listed below; it shouldn't reopen for everything else.
+OVERALL_FLOOR = 94.9
 
 # Security-critical modules get a floor of their own, on top of the overall
 # one above -- see the module docstring for why. Paths are repository-
@@ -87,10 +96,38 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/web/oauth_provider.py": 99.0,
     "src/privacyfence/web/org_session.py": 100.0,
     "src/privacyfence/web/session_auth.py": 100.0,
+    # #402: the only place org-mode bearer material is written to disk. Every
+    # branch here is either a credential going out or a damaged-file path that
+    # has to fail closed, so this one earns a full floor rather than a high
+    # one.
+    "src/privacyfence/web/sealed_refresh_store.py": 100.0,
     # SEC-07: privacy-filter fail-closed load path.
     "src/privacyfence/privacy_filter.py": 100.0,
     # SEC-09: atomic, permission-safe credential/config writes.
     "src/privacyfence/secure_files.py": 100.0,
+    # #428 Phase 4: the module every process consults to decide where the
+    # human-authority files live and which account is supposed to own them.
+    # A gap here doesn't fail loudly -- it resolves the *un*separated layout
+    # on an install that thinks it is separated, which reads as "the policy
+    # reset itself" rather than as a permissions bug. 99.0 rather than a flat
+    # 100 only because of the platform branches this repo's Linux CI cannot
+    # execute (the pwd lookups a Windows build skips entirely).
+    "src/privacyfence/privilege_separation.py": 99.0,
+    # #428 Phase 4 (B5c): the Windows half of the same decision. NTFS ACLs
+    # are the only thing standing between the agent and the policy/passkey/
+    # audit-key files there -- POSIX modes do not exist on that platform --
+    # so a gap in the mask arithmetic below means the audit stops reporting a
+    # data directory every account on the machine can enumerate.
+    #
+    # 83.0 rather than a number in the nineties, and deliberately not raised
+    # by adding pragmas: this module is half pure logic (every audit
+    # function, all of it covered) and half four pywin32 calls that cannot
+    # execute on this repo's Linux CI at all. The floor protects the half
+    # that can; tests/platform/test_windows_acls.py covers the other half on
+    # the platform-windows job, against real ACLs icacls wrote. (Raised from
+    # its initial 81.0 by the owner/OWNER RIGHTS resolution that first real
+    # Windows run made necessary -- all of it pure, all of it tested.)
+    "src/privacyfence/windows_acl.py": 83.0,
     # SEC-11: OIDC discovery trust validation.
     "src/privacyfence/org_identity.py": 100.0,
     "src/privacyfence/web/routes_org_identity.py": 99.0,
@@ -100,6 +137,34 @@ MODULE_FLOORS: dict[str, float] = {
     # CSRF/Origin/step-up auth for write approvals.
     "src/privacyfence/web/routes_security.py": 96.0,
     "src/privacyfence/webauthn_stepup.py": 98.0,
+    # #400: org mode's settings surface. It authorizes on Principal.is_admin
+    # and, since C3e, rewrites the install-wide privacy/PII policy for every
+    # principal -- the same class of thing as the fail-closed load path
+    # privacy_filter.py above is pinned at 100 for, just on the write side.
+    "src/privacyfence/web/org_install_policy.py": 100.0,
+    "src/privacyfence/web/routes_org_settings.py": 98.0,
+    # #428 B10: the daemon's own session-minting interface (MINT/QUIT) and
+    # the companion's OPEN channel share this module's accept-loop plumbing,
+    # including the peer-uid gate B10 added. 61.0, not a number in the
+    # nineties like the rest of this file's IPC-adjacent modules, because
+    # most of what's uncovered here is the Windows named-pipe half of
+    # _LineProtocolServer -- exercised for real by the platform-windows job
+    # (tests/platform/), not by this Linux-only run, the same split
+    # windows_acl.py's own floor documents above. Without a floor at all, a
+    # regression in the POSIX half this CI run *does* exercise -- the
+    # peer-uid check included -- was invisible to the gate.
+    "src/privacyfence/web/control_channel.py": 61.0,
+    # _run_tray() (macOS/Windows only, guarded on sys.platform) is nearly
+    # all of what's uncovered -- the tray icon this Linux-only run has
+    # nothing to drive. 81.0 reflects that split honestly rather than
+    # padding it with a pragma.
+    "src/privacyfence/companion.py": 81.0,
+    # The SSE stream's own generator body (approvals_stream's event_source,
+    # a poll loop no test here consumes to exhaustion) plus a couple of
+    # decide()'s edge branches (the bare-index "choice" coercion, the plain
+    # "/" redirect) account for the gap. decide() itself -- the module's
+    # actual authorization surface -- is otherwise well covered.
+    "src/privacyfence/web/routes_approvals.py": 88.0,
 }
 
 

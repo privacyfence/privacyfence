@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Build privacyfence_<version>_<arch>.deb — a `dpkg -i`-able Linux package wrapping a
 # self-contained PyInstaller build of the daemon, the Linux equivalent of scripts/build_dmg.sh's
-# macOS DMG. See the now-removed docs/linux-local-deb-packaging-plan.md for the full design (why PyInstaller
-# instead of a "proper" python3-* dependency package, why /opt + a /usr/bin wrapper, why XDG
-# autostart instead of the repo-root --user systemd unit).
+# macOS DMG. Key design decisions (not otherwise written up in a standing doc): PyInstaller instead
+# of a "proper" python3-* dependency package, because several runtime dependencies aren't reliably
+# available as compatible Debian archive packages and this project doesn't want to maintain a
+# private APT repo just to have one; /opt/privacyfence + a thin /usr/bin/privacyfence-app wrapper,
+# per Debian policy §9.1.2 for packages that don't integrate with the system package management
+# for their internals; and an XDG autostart .desktop entry rather than the repo-root --user systemd
+# unit (that unit stays the documented path for a bare pip/pipx install), because it works the same
+# way across desktop environments and needs no per-user enablement step from a root-run postinst.
 #
 # Prerequisites (needed only on your build machine, not end-user machines):
 #   pip install -e .        # PrivacyFence itself, so VERSION below can read its installed
@@ -129,6 +134,7 @@ mkdir -p \
   "${STAGE}/opt/privacyfence" \
   "${STAGE}/usr/bin" \
   "${STAGE}/etc/xdg/autostart" \
+  "${STAGE}/usr/share/applications" \
   "${STAGE}/usr/share/icons/hicolor/512x512/apps" \
   "${STAGE}/usr/share/icons/hicolor/64x64/apps" \
   "${STAGE}/usr/share/icons/hicolor/32x32/apps" \
@@ -184,6 +190,25 @@ find "${STAGE}/opt/privacyfence" \( -name '*.so' -o -name '*.so.*' \) -type f -e
 
 install -m 0755 resources/linux/privacyfence-app-wrapper "${STAGE}/usr/bin/privacyfence-app"
 install -m 0644 resources/linux/privacyfence.desktop "${STAGE}/etc/xdg/autostart/privacyfence.desktop"
+# #428 Phase 3 (ADR 0002): the companion app's own wrapper/launcher entry -- see
+# resources/linux/privacyfence.desktop's own comment for why this is a second, separate .desktop
+# file rather than a change to the autostart one above.
+install -m 0755 resources/linux/privacyfence-companion-wrapper "${STAGE}/usr/bin/privacyfence-companion"
+install -m 0644 resources/linux/privacyfence-companion.desktop \
+  "${STAGE}/usr/share/applications/privacyfence-companion.desktop"
+# #428 Phase 4 (B5b): the opt-in privilege-separation tool and the two templates it renders.
+# /usr/sbin, not /usr/bin -- it refuses to run without root, and /usr/sbin is on root's PATH
+# rather than an ordinary user's. Named without the .sh suffix for the same reason every other
+# command here is: what a person types is a command, not a file. The templates travel with it
+# because the script needs them at `enable` time and there is no source checkout on a packaged
+# install (the script tries the checkout layout first, then this one -- see its own comment).
+mkdir -p "${STAGE}/usr/sbin" "${STAGE}/usr/share/privacyfence/installer/linux"
+install -m 0755 scripts/linux_privilege_separation.sh \
+  "${STAGE}/usr/sbin/privacyfence-privilege-separation"
+install -m 0644 installer/linux/privacyfence-daemon.service.tmpl \
+  "${STAGE}/usr/share/privacyfence/installer/linux/privacyfence-daemon.service.tmpl"
+install -m 0644 installer/linux/privacyfence-companion.desktop.tmpl \
+  "${STAGE}/usr/share/privacyfence/installer/linux/privacyfence-companion.desktop.tmpl"
 install -m 0644 src/privacyfence/resources/icon_512.png "${STAGE}/usr/share/icons/hicolor/512x512/apps/privacyfence.png"
 install -m 0644 src/privacyfence/resources/icon_64.png "${STAGE}/usr/share/icons/hicolor/64x64/apps/privacyfence.png"
 install -m 0644 src/privacyfence/resources/icon_32.png "${STAGE}/usr/share/icons/hicolor/32x32/apps/privacyfence.png"
@@ -225,8 +250,8 @@ CHANGELOG_DATE="$(date -Ru)"
 # from its Package: stanza here: drop comment lines (not valid in a binary control file, only in
 # the source-package one dpkg-source parses) and dh substvar placeholders (nothing computes
 # ${misc:Depends} outside a real dh build -- an empty/absent Depends is exactly the "no python3-*
-# dependency requirements" property the key decision in the now-removed docs/linux-local-deb-packaging-plan.md is
-# built around), then fill in this build's Architecture/Version/Installed-Size.
+# dependency requirements" property the key design decision above (PyInstaller over a
+# python3-*-dependent package) is built around), then fill in this build's Architecture/Version/Installed-Size.
 INSTALLED_SIZE_KB=$(find "$STAGE" -mindepth 1 -maxdepth 1 ! -name DEBIAN -exec du -sk {} + | awk '{sum+=$1} END {print sum+0}')
 
 "$PYTHON" - "$ARCH" "$DEB_VERSION" "$INSTALLED_SIZE_KB" "${STAGE}/DEBIAN/control" <<'PYEOF'

@@ -1,9 +1,13 @@
-"""WebAuthn step-up (P9, D7): platform-authenticator proof (Face ID / Touch ID / Android fingerprint
+"""WebAuthn step-up (P9, D7; #426): platform-authenticator proof (Face ID / Touch ID / Android fingerprint
 / Windows Hello) that a human -- not merely a possessed, stolen session
-cookie -- is the one approving a gated *write*, in org mode. §10.6's own
-framing: "a borrowed or stolen unlocked phone with a live session becomes a
-remote approval instrument for live write actions ... the control that
-actually closes it is a step-up check on the approval itself."
+cookie -- is the one approving a gated *write*, in org mode, and (#426
+Phase 1) enrollable in local mode too, though nothing there consults it
+yet -- see step_up_config.py's own module docstring for why local mode
+gets this at all and what still has to land (#428 Phase 4) before it means
+anything there. §10.6's own framing: "a borrowed or stolen unlocked phone
+with a live session becomes a remote approval instrument for live write
+actions ... the control that actually closes it is a step-up check on the
+approval itself."
 
 Built on the ``webauthn`` package (py_webauthn), not hand-rolled -- the same
 D2 reasoning §8.2 already gives for the MCP SDK and PyJWT applies here:
@@ -13,7 +17,7 @@ already available; owning that by hand buys nothing.
 
 Two ceremonies, both delegated straight to the library after this module
 resolves *who* (``Principal``) and *what RP*
-(``org_mode.StepUpConfig.rp_id``/``rp_name``) the call is for:
+(``step_up_config.StepUpConfig.rp_id``/``rp_name``) the call is for:
 
 - **Registration** (``begin_registration``/``finish_registration``) --
   enrolling a new passkey, from web/routes_security.py's own ``/security``
@@ -50,12 +54,47 @@ path:
 - **Sign-count regression is logged, not silently ignored** -- see
   ``verify_assertion``'s own note on why it's a warning, not a hard
   failure, for this authenticator class.
+
+#426 Phase 4 adds two more concerns, both still scoped to *this*
+principal's own credential-store directory and, like everything else
+here, free of any dependency on audit_log.py -- callers (web/
+routes_security.py, daemon_main.py) record the actual audit entries,
+this module only tracks the state an entry needs to be written from:
+
+- **A one-time recovery code** (``generate_recovery_code``/
+  ``consume_recovery_code``) -- issue #426's own Phase 4 text: "with no
+  IdP there is no remote reset" in local mode, so once #428 Phase 4 takes
+  ``config/settings.yaml`` off the agent's uid, losing the only enrolled
+  authenticator (a new machine, a wiped TPM) needs a sanctioned way back
+  in that isn't "edit the config file from a shell" -- the very door the
+  agent this feature defends against would also use. Generated once,
+  shown once (the caller must hand it to the browser in the same response
+  that generates it -- it is never recoverable again), stored only as a
+  salted hash.
+- **Requirement enable/disable tracking**
+  (``observe_step_up_requirement``/``step_up_disabled_notice``) -- through
+  #426 Phase 4 there was no UI to flip ``step_up.require_passkey`` at all
+  (a config file edit plus a restart), so the only place a *change* could
+  be observed was daemon startup, comparing the freshly loaded value
+  against what was last seen. B9 of the 4.1.0 action plan added a one-
+  directional UI path (settings_controller.py's ``enable_step_up``, see
+  step_up_config.py's own ``LiveStepUpConfig`` docstring) that turns this
+  *on*, and that path calls this same function itself right away rather
+  than waiting for the next startup, so an enable is observed -- and
+  audited -- the moment it happens. Turning it back *off* is still a
+  config-file-plus-restart operation with no UI of its own, deliberately:
+  that asymmetry is what keeps ``step_up_disabled_notice``'s "treat this
+  install as compromised" banner trustworthy -- a disable this module ever
+  observes did not come from a human clicking a button in their own
+  browser.
 """
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
+import secrets
 import threading
 import time
 from dataclasses import dataclass, field
@@ -138,11 +177,15 @@ class WebAuthnCredential:
 # --------------------------------------------------------------------- #
 # Credential storage -- one 0600 JSON file per principal, same posture as
 # every OAuth token file in this codebase (see slack_client.
-# save_token_record's own comment).
+# save_token_record's own comment). Lives under paths.authority_dir(), not
+# paths.user_dir() directly (#428 Phase 1): #428's whole point is that the
+# agent must not be able to write the credential store a passkey (#426)
+# would be checked against, and authority_dir() is the root that becomes
+# service-owned in Phase 4.
 # --------------------------------------------------------------------- #
 
 def _credentials_path(principal: Principal) -> Path:
-    return paths.user_dir(principal) / CREDENTIALS_FILE_NAME
+    return paths.authority_dir(principal) / CREDENTIALS_FILE_NAME
 
 
 def list_credentials(principal: Principal) -> list[WebAuthnCredential]:
@@ -353,6 +396,22 @@ def decision_fingerprint(*, approval_id: str, principal_id: str, result: str, ch
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def batch_decision_fingerprint(*, principal_id: str, items: list[tuple[str, str]]) -> str:
+    """The approval binder's own binding (Phase 3 of the binder plan): the
+    role ``decision_fingerprint`` plays for one decision, over a whole
+    submitted *set*. ``items`` is ``(approval_id, result)`` pairs -- sorted
+    here before hashing, so resubmitting the identical set in a different
+    order (a batch has no meaningful order) fingerprints identically, while
+    adding, dropping, or flipping the result of any single item does not.
+    Binds the whole submitted set, deny items included, not just the ones
+    that actually needed step-up -- so an assertion obtained for {A, B}
+    cannot be replayed to authorize {A, B, C}, nor to flip B's own result,
+    even though only A needed a passkey at all."""
+    canonical = "|".join(f"{approval_id}:{result}" for approval_id, result in sorted(items))
+    payload = f"{principal_id}|{canonical}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 @dataclass
 class _PendingStepUp:
     challenge: bytes
@@ -375,6 +434,7 @@ class StepUpChallengeStore:
 
     def put(self, principal_id: str, approval_id: str, *, challenge: bytes, fingerprint: str) -> None:
         with self._lock:
+            self._sweep_expired_locked()
             self._pending[(principal_id, approval_id)] = _PendingStepUp(challenge=challenge, fingerprint=fingerprint)
 
     def pop(self, principal_id: str, approval_id: str) -> _PendingStepUp | None:
@@ -384,13 +444,26 @@ class StepUpChallengeStore:
             return None
         return entry
 
+    def _sweep_expired_locked(self) -> None:
+        """Evict entries past ``self._ttl`` -- called with ``self._lock``
+        already held. ``pop()`` only ever discards the one key it was asked
+        for, on read; the second half of the store's own key space
+        (``batch:<batch_id>``, B26) is chosen by the request body rather
+        than bounded by ``max_pending`` the way ``approval_id`` is, so
+        without a sweep here nothing ever evicts an entry nobody comes back
+        to pop."""
+        now = time.time()
+        expired = [key for key, entry in self._pending.items() if (now - entry.created_at) > self._ttl]
+        for key in expired:
+            del self._pending[key]
+
 
 def is_step_up_required(*, gate_kind: str, pii_detected: bool, scope: str) -> bool:
     """§10.6: "scope it to writes, or to writes plus PII-flagged reads."
-    ``scope`` is ``org_mode.StepUpConfig.scope`` -- kept as a bare string
-    parameter here (rather than importing ``org_mode.StepUpScope``) so this
-    module has no dependency on org_mode.py at all; the two string literals
-    are the whole of that type."""
+    ``scope`` is ``step_up_config.StepUpConfig.scope`` -- kept as a bare
+    string parameter here (rather than importing ``step_up_config.
+    StepUpScope``) so this module has no dependency on step_up_config.py at
+    all; the two string literals are the whole of that type."""
     if gate_kind == "popup":
         return True
     if scope == "writes_and_pii_reads" and gate_kind == "review" and pii_detected:
@@ -398,20 +471,197 @@ def is_step_up_required(*, gate_kind: str, pii_detected: bool, scope: str) -> bo
     return False
 
 
+# --------------------------------------------------------------------- #
+# Recovery code (#426 Phase 4) -- one per principal, salted-hash storage
+# alongside the credential file itself under authority_dir(), same 0600
+# posture. Exactly one *unused* code exists for a principal at a time:
+# generating a new one (web/routes_security.py's register_verify, whenever
+# none is currently unused) overwrites any previous one outright, and
+# consuming the current one marks it spent rather than deleting it, so the
+# "audited when spent" record survives the code's own consumption --
+# has_recovery_code() (an *unused* one exists) is what actually decides
+# whether the next enrollment generates a fresh one.
+# --------------------------------------------------------------------- #
+
+RECOVERY_CODE_FILE_NAME = "webauthn_recovery_code.json"
+
+# Four groups of 4 uppercase hex characters ("A1B2-C3D4-E5F6-1789") -- long
+# enough (64 bits of entropy) to make guessing infeasible while still
+# something a human can type back in by hand if they ever have to, unlike
+# a raw token_urlsafe blob.
+_RECOVERY_CODE_GROUPS = 4
+_RECOVERY_CODE_GROUP_CHARS = 4
+
+
+def _recovery_code_path(principal: Principal) -> Path:
+    return paths.authority_dir(principal) / RECOVERY_CODE_FILE_NAME
+
+
+def _load_recovery_code(principal: Principal) -> dict[str, Any]:
+    path = _recovery_code_path(principal)
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("Could not read recovery code state for %s -- treating as none set", principal.id)
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def has_recovery_code(principal: Principal) -> bool:
+    """True iff an *unused* recovery code currently exists for this
+    principal -- a spent one (``used_at`` set) doesn't count, so the next
+    successful enrollment generates a fresh one."""
+    raw = _load_recovery_code(principal)
+    return bool(raw) and not raw.get("used_at")
+
+
+def generate_recovery_code(principal: Principal) -> str:
+    """Generates and stores a fresh recovery code, returning the plaintext
+    once -- the caller must surface it to the human in this same response;
+    it is never retrievable again, only its salted SHA-256 hash is kept.
+    Overwrites (invalidates) any code already on file for this principal,
+    used or not -- there is only ever one live code per principal."""
+    raw_code = "-".join(
+        secrets.token_hex(_RECOVERY_CODE_GROUP_CHARS // 2).upper() for _ in range(_RECOVERY_CODE_GROUPS)
+    )
+    salt = secrets.token_bytes(16)
+    digest = hashlib.sha256(salt + raw_code.encode("utf-8")).hexdigest()
+    atomic_write_json(_recovery_code_path(principal), {
+        "salt": salt.hex(), "digest": digest, "created_at": time.time(), "used_at": None,
+    })
+    return raw_code
+
+
+def consume_recovery_code(principal: Principal, code: str) -> bool:
+    """Verifies ``code`` (whitespace-insensitive, case-insensitive -- a
+    human retyping it may not match the on-screen formatting exactly)
+    against the stored salted hash. On success, marks the code used
+    (single-use: the file is kept, not deleted, so a spent code still
+    proves it once existed and was spent -- ``has_recovery_code`` is what
+    treats it as gone) and returns True; any failure (no code on file,
+    already used, mismatch) returns False without revealing which."""
+    raw = _load_recovery_code(principal)
+    if not raw or raw.get("used_at"):
+        return False
+    try:
+        salt = bytes.fromhex(str(raw.get("salt", "")))
+    except ValueError:
+        return False
+    expected = str(raw.get("digest", ""))
+    candidate = hashlib.sha256(salt + code.strip().upper().encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(candidate, expected):
+        return False
+    raw["used_at"] = time.time()
+    atomic_write_json(_recovery_code_path(principal), raw)
+    return True
+
+
+# --------------------------------------------------------------------- #
+# Requirement enable/disable tracking (#426 Phase 4) -- see module
+# docstring. One small state file per principal, alongside the credential
+# and recovery-code files.
+# --------------------------------------------------------------------- #
+
+STEP_UP_STATE_FILE_NAME = "step_up_state.json"
+
+
+@dataclass(frozen=True)
+class StepUpRequirementChange:
+    """Returned by ``observe_step_up_requirement`` when this startup's
+    ``(enabled, require_passkey)`` pair differs from what was last
+    observed for this principal -- the caller (daemon_main.py) turns this
+    into the actual audit entry."""
+
+    was_required: bool
+    is_required: bool
+
+
+def _step_up_state_path(principal: Principal) -> Path:
+    return paths.authority_dir(principal) / STEP_UP_STATE_FILE_NAME
+
+
+def _load_step_up_state(principal: Principal) -> dict[str, Any]:
+    path = _step_up_state_path(principal)
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("Could not read step-up requirement state for %s -- treating as unset", principal.id)
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def observe_step_up_requirement(
+    principal: Principal, *, enabled: bool, require_passkey: bool,
+) -> StepUpRequirementChange | None:
+    """Called once per daemon startup with the just-loaded ``step_up.
+    enabled``/``require_passkey`` pair. "Required" is ``enabled and
+    require_passkey`` together, not either flag alone: with ``enabled``
+    False the whole step-up check is skipped regardless of
+    ``require_passkey`` (web/routes_approvals.py's decide(), web/
+    routes_settings.py's ``_needs_step_up``), so that pairing is the only
+    one that actually changes what gets enforced.
+
+    Returns ``None`` on an ordinary startup where nothing changed since
+    the last one (the common case) -- otherwise a ``StepUpRequirementChange``
+    for the caller to audit-log. A transition into *not* required also
+    latches a persistent notice (see ``step_up_disabled_notice``) that
+    outlives this one startup; a transition back into required clears it.
+    """
+    state = _load_step_up_state(principal)
+    was_required = bool(state.get("required", False))
+    is_required = bool(enabled and require_passkey)
+    changed = was_required != is_required
+    state["required"] = is_required
+    if is_required:
+        state["disabled_notice"] = False
+    elif changed:
+        state["disabled_notice"] = True
+    atomic_write_json(_step_up_state_path(principal), state)
+    if not changed:
+        return None
+    return StepUpRequirementChange(was_required=was_required, is_required=is_required)
+
+
+def step_up_disabled_notice(principal: Principal) -> str | None:
+    """An already-safe-to-embed HTML fragment (no user input, nothing to
+    escape) for web_shell.wrap()'s persistent banner, or ``None`` when no
+    disable transition is currently latched -- see
+    ``observe_step_up_requirement``'s own docstring for when that's set
+    and cleared."""
+    if not _load_step_up_state(principal).get("disabled_notice", False):
+        return None
+    return (
+        "Passkey requirement was turned off. If you didn't do this, treat this install as "
+        "compromised. To restore it, set <code>step_up.require_passkey: true</code> in "
+        "<code>config/settings.yaml</code> and restart PrivacyFence."
+    )
+
+
 __all__ = [
     "STEP_UP_CHALLENGE_TTL_SECONDS",
     "RegistrationChallengeStore",
     "StepUpChallengeStore",
+    "StepUpRequirementChange",
     "WebAuthnCredential",
     "WebAuthnError",
     "add_credential",
+    "batch_decision_fingerprint",
     "begin_assertion",
     "begin_registration",
+    "consume_recovery_code",
     "decision_fingerprint",
     "finish_registration",
+    "generate_recovery_code",
     "has_credentials",
+    "has_recovery_code",
     "is_step_up_required",
     "list_credentials",
+    "observe_step_up_requirement",
     "remove_credential",
+    "step_up_disabled_notice",
     "verify_assertion",
 ]

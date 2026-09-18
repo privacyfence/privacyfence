@@ -13,8 +13,8 @@ from starlette.testclient import TestClient
 
 from privacyfence import org_identity as oi, paths, webauthn_stepup as wa
 from privacyfence.approvals import PendingApprovalRegistry
-from privacyfence.org_mode import StepUpConfig
 from privacyfence.principal import Principal, principal_scope
+from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session, routes_org_approvals as roa
 from privacyfence.web_approval_ui import WebApprovalUI
 
@@ -99,6 +99,54 @@ class TestAuthRequired:
         r = _client(app).get("/api/approvals/stream")
         assert r.status_code == 401
 
+    def test_preview_is_401_when_signed_out(self):
+        app, _sessions, _web_ui = _app()
+        r = _client(app).get("/api/approvals/abc123/preview")
+        assert r.status_code == 401
+
+
+class TestApprovalPreview:
+    """GET /api/approvals/{id}/preview -- the org-mode counterpart of
+    web/routes_approvals.py's own preview fragment (Phase 1), scoped to
+    current_principal() the same way every other read here is (§10.5)."""
+
+    def test_returns_the_owning_principals_preview(self):
+        app, sessions, web_ui = _app()
+        with principal_scope(ALICE):
+            approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key="a1", connector="gmail", tool="gmail_get_message", gate_kind="review",
+                request_id="r1", preview={"From": "alice@example.com"},
+            )
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get(f"/api/approvals/{approval.id}/preview")
+        assert r.status_code == 200
+        assert r.json() == {"id": approval.id, "preview": {"From": "alice@example.com"}}
+
+    def test_a_foreign_principals_approval_reads_as_a_plain_404(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, BOB)
+        r = client.get(f"/api/approvals/{approval.id}/preview")
+        assert r.status_code == 404
+
+    def test_unknown_id_is_404(self):
+        app, sessions, _web_ui = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/api/approvals/nope/preview")
+        assert r.status_code == 404
+
+    def test_never_carries_details_text_or_html(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get(f"/api/approvals/{approval.id}/preview")
+        body = r.json()
+        assert set(body.keys()) == {"id", "preview"}
+
 
 class TestPrincipalScopedList:
     def test_only_shows_the_signed_in_principals_own_approvals(self):
@@ -128,6 +176,24 @@ class TestPrincipalScopedList:
         r = client.get(f"/approvals/{approval.id}")
         assert r.status_code == 200
         assert "CARD" in r.text
+
+    def test_show_approval_of_an_unrendered_card_is_a_placeholder_not_a_500(self):
+        # Regression: same defect as web/routes_approvals.py's own
+        # show_approval -- card HTML is only built on gate.py's
+        # _popup_executor, so a card whose worker hasn't run yet has
+        # card.html == "". _inject_shim's html.index("</head>") raised
+        # ValueError on that empty string; this must never 500.
+        app, sessions, web_ui = _app()
+        with principal_scope(ALICE):
+            approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key="a1", connector="gmail", tool="gmail_get_message", gate_kind="review", request_id="r1",
+            )
+        assert approval.html == ""
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get(f"/approvals/{approval.id}")
+        assert r.status_code == 200
+        assert "Preparing this request" in r.text
 
     def test_show_approval_wraps_the_webauthn_helper_js_in_a_script_tag(self):
         """Regression: _org_bridge_shim used to concatenate PF_WEBAUTHN_JS
@@ -221,6 +287,137 @@ class TestDecideWithoutStepUp:
         r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": 1, "csrf": session_id})
         assert r.status_code == 200
         assert web_ui.deferred_registry.get(approval.id).result == "1"
+
+
+class TestBatchDecide:
+    """Phase 2 of the approval binder plan: the org-mode counterpart of
+    test_routes_approvals.py's own TestBatchDecide -- same mechanics, with
+    every read/write additionally scoped to current_principal() (module
+    docstring, §10.5). No step-up yet -- that's Phase 3."""
+
+    def test_a_mixed_batch_applies_each_item_and_reports_its_own_outcome(self):
+        app, sessions, web_ui = _app()
+        accept_me = _register(web_ui, ALICE, gate_kind="review", dedupe_key="k1")
+        deny_me = _register(web_ui, ALICE, gate_kind="review", dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id,
+            "items": [
+                {"id": accept_me.id, "result": "accept"},
+                {"id": deny_me.id, "result": "deny"},
+            ],
+        })
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["results"] == [
+            {"id": accept_me.id, "outcome": "applied"},
+            {"id": deny_me.id, "outcome": "applied"},
+        ]
+        assert accept_me.decided_via == "binder"
+        assert accept_me.batch_id == deny_me.batch_id == body["batch_id"]
+
+    def test_a_client_supplied_batch_id_is_never_recorded_verbatim(self):
+        # B27: batch_id is documented (audit_log.py) as server-minted. With
+        # no step-up in play there is never a live challenge to prove a
+        # submitted batch_id against, so a forged one must be replaced
+        # rather than trusted straight into the audit trail.
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "accept"}],
+            "batch_id": "attacker-forged-batch-id",
+        })
+
+        assert r.status_code == 200
+        assert r.json()["batch_id"] != "attacker-forged-batch-id"
+        assert approval.batch_id == r.json()["batch_id"]
+        assert approval.batch_id != "attacker-forged-batch-id"
+
+    def test_another_principals_id_reads_as_unknown_not_forbidden(self):
+        # §10.5: indistinguishable from a nonexistent id -- never "exists
+        # but you can't touch it".
+        app, sessions, web_ui = _app()
+        alices = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, BOB)
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": alices.id, "result": "accept"}],
+        })
+
+        assert r.status_code == 200
+        assert r.json()["results"] == [{"id": alices.id, "outcome": "unknown"}]
+        assert not alices.event.is_set()
+
+    def test_unauthenticated_request_is_rejected(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": "whatever", "items": [{"id": approval.id, "result": "accept"}],
+        })
+        assert r.status_code == 401
+
+    def test_wrong_csrf_is_rejected(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": "wrong", "items": [{"id": approval.id, "result": "accept"}],
+        })
+        assert r.status_code == 401
+        assert not approval.event.is_set()
+
+    def test_mismatched_origin_is_rejected(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post(
+            "/api/approvals/batch/decide",
+            json={"csrf": session_id, "items": [{"id": approval.id, "result": "accept"}]},
+            headers={"Origin": "https://evil.example.com"},
+        )
+        assert r.status_code == 403
+        assert not approval.event.is_set()
+
+    def test_oversize_batch_is_rejected_with_nothing_applied(self):
+        registry = PendingApprovalRegistry(max_pending=3, max_pending_per_principal=3)
+        app, sessions, web_ui = _app(web_ui=WebApprovalUI(registry=registry))
+        approvals = [_register(web_ui, ALICE, gate_kind="review", dedupe_key=f"k{i}") for i in range(3)]
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        items = [{"id": a.id, "result": "accept"} for a in approvals] + [{"id": "extra", "result": "accept"}]
+
+        r = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": items})
+
+        assert r.status_code == 400
+        assert all(not a.event.is_set() for a in approvals)
+
+    def test_missing_items_is_rejected(self):
+        app, sessions, web_ui = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": []})
+        assert r.status_code == 400
+
+    def test_an_invalid_item_result_is_rejected(self):
+        app, sessions, web_ui = _app()
+        approval = _register(web_ui, ALICE, gate_kind="review")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "accept_all"}],
+        })
+        assert r.status_code == 400
+        assert not approval.event.is_set()
 
 
 class TestStepUpScoping:
@@ -346,6 +543,77 @@ class TestStepUpWebAuthnFlow:
         stored = web_ui.deferred_registry.get(approval.id)
         assert stored is not None
         assert not stored.event.is_set()  # decision was never released
+
+
+class TestStepUpRequirePasskey:
+    """#406: an org can close the IdP-reauth fallback entirely."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def test_no_credential_hard_fails_with_no_idp_fallback(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 403
+        body = r.json()
+        assert body["error"] == "passkey_enrollment_required"
+        assert body["enroll_url"] == "/security"
+        stored = web_ui.deferred_registry.get(approval.id)
+        assert stored is not None
+        assert not stored.event.is_set()
+
+    def test_with_a_credential_offers_webauthn_options_but_no_idp_url(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert r.status_code == 428
+        body = r.json()
+        assert "webauthn_options" in body
+        assert "idp_stepup_url" not in body
+
+    def test_a_valid_assertion_still_completes_the_decision(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        first = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "accept", "csrf": session_id})
+        assert first.status_code == 428
+
+        fake_verified = type("V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False})()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post(f"/api/approvals/{approval.id}/decide", json={
+                "result": "accept", "csrf": session_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert second.status_code == 200
+
+    def test_idp_stepup_start_is_refused_even_hit_directly(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
+        assert r.status_code == 403
 
 
 class TestIdpStepUp:
@@ -479,3 +747,192 @@ class TestIdpStepUp:
         r = cb_client.get(f"/oauth/stepup/callback?code=abc&state={qs['state']}")
         assert r.headers["location"] == f"/approvals/{approval.id}?stepup=error"
         assert not web_ui.deferred_registry.get(approval.id).event.is_set()
+
+
+class TestBatchStepUp:
+    """Phase 3 of the approval binder plan: the org-mode counterpart of
+    test_routes_approvals.py's own TestBatchStepUp -- same mechanics,
+    scoped to current_principal() the same way every other read/write
+    here is, and deliberately with no IdP-reauth fallback even here (see
+    ``_batch_step_up_response``'s own docstring)."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _verified_assertion(self):
+        return type("V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False})()
+
+    def test_deny_only_batch_never_steps_up(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "deny"}],
+            "batch_id": "attacker-forged-batch-id",
+        })
+        assert r.status_code == 200
+        # B27: _batch_needs_step_up() never runs verify_step_up() here, so a
+        # client-supplied batch_id must not survive into the audit trail.
+        assert r.json()["batch_id"] != "attacker-forged-batch-id"
+        assert approval.batch_id == r.json()["batch_id"]
+
+    def test_no_assertion_offers_a_428_with_no_idp_url(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "accept"}],
+        })
+        assert r.status_code == 428
+        body = r.json()
+        assert "webauthn_options" in body
+        assert "idp_stepup_url" not in body
+        assert body["batch_id"]
+        assert not approval.event.is_set()
+
+    def test_valid_assertion_applies_the_whole_batch(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        accept_me = _register(web_ui, ALICE, gate_kind="popup", dedupe_key="k1")
+        deny_me = _register(web_ui, ALICE, dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        items = [{"id": accept_me.id, "result": "accept"}, {"id": deny_me.id, "result": "deny"}]
+        first = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": items})
+        assert first.status_code == 428
+        batch_id = first.json()["batch_id"]
+
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=self._verified_assertion()):
+            second = client.post("/api/approvals/batch/decide", json={
+                "csrf": session_id, "items": items, "batch_id": batch_id,
+                "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert second.status_code == 200
+        assert second.json()["results"] == [
+            {"id": accept_me.id, "outcome": "applied"}, {"id": deny_me.id, "outcome": "applied"},
+        ]
+
+    def test_a_failed_assertion_does_not_release_the_batch(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        items = [{"id": approval.id, "result": "accept"}]
+        first = client.post("/api/approvals/batch/decide", json={"csrf": session_id, "items": items})
+        batch_id = first.json()["batch_id"]
+
+        with patch.object(wa.webauthn, "verify_authentication_response", side_effect=ValueError("bad sig")):
+            r = client.post("/api/approvals/batch/decide", json={
+                "csrf": session_id, "batch_id": batch_id, "webauthn_assertion": {"id": "Y3JlZC0x"}, "items": items,
+            })
+        assert r.status_code == 401
+        assert not approval.event.is_set()
+
+    def test_an_assertion_for_a_smaller_set_is_rejected(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        accept_me = _register(web_ui, ALICE, gate_kind="popup", dedupe_key="k1")
+        extra = _register(web_ui, ALICE, dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        first = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": accept_me.id, "result": "accept"}],
+        })
+        batch_id = first.json()["batch_id"]
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "batch_id": batch_id, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            "items": [{"id": accept_me.id, "result": "accept"}, {"id": extra.id, "result": "deny"}],
+        })
+        assert r.status_code == 400
+        assert not accept_me.event.is_set()
+        assert not extra.event.is_set()
+
+    def test_another_principals_id_never_contributes_to_the_step_up_check(self):
+        # §10.5: BOB's own accept doesn't need step-up (ALICE registered
+        # it) and can't be applied by ALICE's batch either -- it must read
+        # as plain "unknown", not somehow trigger or ride along with
+        # ALICE's own ceremony.
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        bobs = _register(web_ui, BOB, gate_kind="popup", dedupe_key="k1")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": bobs.id, "result": "accept"}],
+        })
+        assert r.status_code == 200
+        assert r.json()["results"] == [{"id": bobs.id, "outcome": "unknown"}]
+        assert not bobs.event.is_set()
+
+    def test_require_passkey_with_nothing_enrolled_hard_fails_the_whole_batch(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        accept_me = _register(web_ui, ALICE, gate_kind="popup", dedupe_key="k1")
+        deny_me = _register(web_ui, ALICE, dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id,
+            "items": [{"id": accept_me.id, "result": "accept"}, {"id": deny_me.id, "result": "deny"}],
+        })
+        assert r.status_code == 403
+        body = r.json()
+        assert body["error"] == "passkey_enrollment_required"
+        assert body["enroll_url"] == "/security"
+        assert not accept_me.event.is_set()
+        assert not deny_me.event.is_set()
+
+    def test_require_passkey_off_with_nothing_enrolled_lets_it_through_with_no_idp_link(self):
+        # Deliberately different from this module's own single-decision
+        # behavior (which would offer idp_stepup_url here instead) -- see
+        # module docstring's own note on why the batch endpoint has no IdP
+        # fallback at all.
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        approval = _register(web_ui, ALICE, gate_kind="popup")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": approval.id, "result": "accept"}],
+            "batch_id": "attacker-forged-batch-id",
+        })
+        assert r.status_code == 200
+        assert r.json()["results"] == [{"id": approval.id, "outcome": "applied"}]
+        # B27: this fallthrough (no enrolled credential, require_passkey off)
+        # never verified the assertion, so the client-supplied batch_id must
+        # not reach the audit trail either.
+        assert r.json()["batch_id"] != "attacker-forged-batch-id"
+        assert approval.batch_id == r.json()["batch_id"]
+
+    def test_per_item_mode_refuses_the_batch_with_nothing_applied(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", batch="per_item"),
+        )
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        accept_me = _register(web_ui, ALICE, gate_kind="popup", dedupe_key="k1")
+        deny_me = _register(web_ui, ALICE, dedupe_key="k2")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id,
+            "items": [{"id": accept_me.id, "result": "accept"}, {"id": deny_me.id, "result": "deny"}],
+        })
+        assert r.status_code == 400
+        assert not accept_me.event.is_set()
+        assert not deny_me.event.is_set()

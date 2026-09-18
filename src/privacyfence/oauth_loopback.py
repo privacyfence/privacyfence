@@ -10,9 +10,13 @@ Slack/Salesforce/Atlassian all require an exact-match redirect URI in their app'
 allow-list, so callers must pass a fixed port (unlike Google's "Desktop app" OAuth
 clients, which accept any loopback port).
 
-``run_browser_oauth()`` calls
-``webbrowser.open()`` on **the machine running the PrivacyFence daemon**, not on
-whatever device the person clicking "Authenticate…" is holding. In ``local`` mode
+``run_browser_oauth()`` opens a browser
+on **the machine running the PrivacyFence daemon**, not on
+whatever device the person clicking "Authenticate…" is holding -- by default
+(``open_browser=None``) via ``_default_open_browser()``, which asks a running
+companion app (#428 Phase 3, ADR 0002 decision 5) to do it and falls back to
+calling ``webbrowser.open()`` directly when none is running, still the normal
+case today. In ``local`` mode
 that's the same machine by construction (this is the whole assumption `local`
 mode makes), so it works as-is;
 it stops being true the moment a browser tab reaches a `local`-mode daemon from
@@ -67,7 +71,24 @@ class _LoopbackHTTPServer(HTTPServer):
     user even sees a browser window. We never read server_name (log_message
     is overridden to a no-op below), so skip HTTPServer's override entirely
     and fall back to TCPServer's plain bind.
+
+    Also turns off ``HTTPServer.allow_reuse_address`` (on by default, purely
+    for the usual "restart the dev server without waiting out TIME_WAIT"
+    convenience, which a one-shot loopback listener never needs). On a
+    privilege-separated install the agent runs as a different, less-trusted
+    process than the daemon (ADR 0002) and could bind this fixed port first
+    to intercept the Slack/Salesforce/Atlassian callback. On POSIX that
+    squat already makes the daemon's own bind() fail loudly with the
+    actionable ``OAuthLoopbackError`` below. On Windows, ``SO_REUSEADDR`` on
+    the *new* socket lets it silently steal a port an existing socket is
+    still actively listening on -- regardless of what the first socket set
+    -- so leaving reuse enabled here would let the daemon's bind() succeed
+    over a squatted port instead of detecting it, and which of the two
+    processes then receives the provider's redirect becomes undefined. No
+    reuse means bind() always fails cleanly when the port is already held.
     """
+
+    allow_reuse_address = False
 
     def server_bind(self) -> None:
         socketserver.TCPServer.server_bind(self)
@@ -89,6 +110,28 @@ _ERROR_HTML = b"""<!doctype html><html><head><title>PrivacyFence</title></head>
 
 class OAuthLoopbackError(Exception):
     """Raised when the loopback OAuth flow fails (timeout, state mismatch, provider error)."""
+
+
+def _default_open_browser(url: str) -> bool:
+    """The default ``open_browser`` behind ``run_browser_oauth()`` below --
+    ADR 0002 decision 5: try asking a running companion app to open ``url``
+    first (what #428 Phase 4 makes mandatory on Windows, where a
+    service-hosted daemon can't reach the user's desktop session to open a
+    browser itself), and fall back to opening it directly when no companion
+    is running -- still the normal case pre-Phase-4 (the companion isn't
+    autostarted until then), and always the case on Linux, which has no
+    persistent companion process to ask (see companion.py's own module
+    docstring). Both imports are deferred: this module is imported broadly
+    (every local-mode connector's ``authorize_interactive``), so it
+    shouldn't pull in web/control_channel.py's own import graph at module
+    load time for installs that never authorize a connector at all."""
+    from .web.control_channel import request_open_url
+
+    if request_open_url(url):
+        return True
+    import webbrowser
+
+    return webbrowser.open(url)
 
 
 @dataclass
@@ -184,9 +227,7 @@ def run_browser_oauth(
         logger.info("Opening browser for OAuth authorization (redirect_uri=%s)", redirect_uri)
         opener = open_browser
         if opener is None:
-            import webbrowser as _webbrowser
-
-            opener = _webbrowser.open
+            opener = _default_open_browser
         if not opener(authorize_url):
             raise OAuthLoopbackError(f"Could not open a browser. Visit manually: {authorize_url}")
 

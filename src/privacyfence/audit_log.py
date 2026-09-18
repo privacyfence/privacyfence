@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import paths
-from .principal import LOCAL_PRINCIPAL_ID, PrincipalRegistry, current_principal
+from .principal import LOCAL_PRINCIPAL_ID, Principal, PrincipalRegistry, current_principal, principal_scope
 from .secure_files import atomic_write_bytes, atomic_write_json, secure_mkdir
 
 if TYPE_CHECKING:
@@ -61,7 +61,8 @@ logger = logging.getLogger(__name__)
 #   1 -- implicit, undocumented shape (every entry before SEC-23)
 #   2 -- SEC-23: + schema_version, event_id, deployment_id,
 #        security_config_hash, prev_hash, entry_hash
-CURRENT_SCHEMA_VERSION = 2
+#   3 -- approval binder Phase 2: + decided_via, batch_id
+CURRENT_SCHEMA_VERSION = 3
 
 # The hash chain's own root -- what the very first entry this install ever
 # records (or the first one after a chain-state file goes missing, e.g. a
@@ -105,7 +106,32 @@ class AuditEntry:
                             # "rule_changed_via_bridge_proposal" | "rule_removed_via_bridge_proposal" |
                             # "grant_changed_via_bridge_proposal" | "grant_removed_via_bridge_proposal" |
                             # "bridge_proposal_no_op" | "error" |
-                            # "approval_pending" | "expired"
+                            # "approval_pending" | "expired" |
+                            # "webauthn_credential_enrolled" | "webauthn_credential_removed" |
+                            # "webauthn_recovery_code_used" |
+                            # "step_up_requirement_enabled" | "step_up_requirement_disabled"
+                            # ("webauthn_credential_enrolled"/"webauthn_credential_removed": #426
+                            #  Phase 4 -- web/routes_security.py's register_verify/delete_credential,
+                            #  recorded for either mode's own passkey enrollment surface. Tamper-
+                            #  evidence for the credential store itself: enrolling or removing a
+                            #  passkey changes what a future step-up check can be satisfied with, so
+                            #  it's worth its own trail even though neither event is itself a gated
+                            #  decision.)
+                            # ("webauthn_recovery_code_used": #426 Phase 4 -- web/routes_security.py's
+                            #  recover_credential, local mode's sanctioned way back in when the only
+                            #  enrolled authenticator is lost with no IdP to fall back on: trading in
+                            #  the one-time recovery code from enrollment removes every credential on
+                            #  file for that principal. Always recorded on a successful trade-in --
+                            #  see webauthn_stepup.py's own module docstring for why the code itself
+                            #  is single-use.)
+                            # ("step_up_requirement_enabled"/"step_up_requirement_disabled": #426
+                            #  Phase 4 -- daemon_main.py, recorded once per daemon startup that finds
+                            #  local mode's effective ``step_up.enabled and step_up.require_passkey``
+                            #  differs from what the previous startup observed. There is no UI path to
+                            #  flip this (it's a config file edit plus a restart, deliberately -- see
+                            #  step_up_config.py's own docstring), so a startup-time comparison is the
+                            #  only place a change can be caught at all; see webauthn_stepup.py's
+                            #  observe_step_up_requirement for the persisted state this diffs against.)
                             # ("approval_pending": gate.py's deferred-approval protocol (P3)
                             #  -- a human didn't decide within the registry's hold window,
                             #  so gated_call() returned a
@@ -232,6 +258,22 @@ class AuditEntry:
                               # decision, and was previously only recoverable by cross-referencing
                               # tool-call args, which isn't what the audit log is for. Set by gate.py's
                               # gated_call() (its own ``delivery`` kwarg) -- never inferred here.
+    decided_via: str = ""    # "binder" when this decision was released through the approval binder's
+                              # batch decide endpoint (Phase 2 of the binder plan) -- "" for every
+                              # ordinary single-decide entry, and for every entry recorded before
+                              # this field existed. See approvals.PendingApproval.decided_via's own
+                              # docstring for how a decision gets stamped with it.
+    batch_id: str = ""       # The server-minted id of the batch this decision was submitted as part
+                              # of, when decided_via == "binder" -- "" otherwise. Lets a reviewer (or
+                              # a compliance report) group every audit entry a single passkey
+                              # assertion released (Phase 3 of the binder plan) back into the one
+                              # human action that authorized them. Genuinely server-minted, not just
+                              # documented as such: routes_approvals.py's and
+                              # routes_org_approvals.py's own batch_decide only keep a
+                              # client-supplied value here when the WebAuthn challenge-store lookup
+                              # inside verify_step_up() proves it names a live challenge this server
+                              # began; every other path mints a fresh uuid4 instead of trusting the
+                              # request body.
 
     # ---- SEC-23 fields ----
     # All six below default to a value meaning "not yet stamped" and are
@@ -559,8 +601,11 @@ class AuditLogger:
             # tooling/tests already rely on (Decision at 8, PII Detected at
             # 11, ...) stay stable.
             "Event ID", "Deployment ID", "Security Config Hash", "Integrity Hash",
+            # Appended for the same reason as the SEC-23 block above: existing
+            # column indices stay stable.
+            "Decided Via", "Batch ID",
         ]
-        COL_WIDTHS = [22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22]
+        COL_WIDTHS = [22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22, 14, 30]
 
         hdr_font  = Font(bold=True, color="FFFFFF")
         hdr_fill  = PatternFill("solid", fgColor="2D4A6B")
@@ -605,6 +650,7 @@ class AuditLogger:
                 _excel_literal(entry.claude_reason or ""), entry.delivery or "",
                 entry.event_id or "", entry.deployment_id or "",
                 entry.security_config_hash or "", entry.entry_hash or "",
+                entry.decided_via or "", _excel_literal(entry.batch_id or ""),
             ])
             fill = decision_fills.get(entry.decision, PatternFill())
             for col in range(1, len(HEADERS) + 1):
@@ -840,6 +886,27 @@ _REGISTRY: PrincipalRegistry[AuditLogger] = PrincipalRegistry(lambda: AuditLogge
 
 def get_audit_logger() -> AuditLogger:
     return _REGISTRY.get()
+
+
+def set_security_config_hash_for_all_principals(value: str) -> list[str]:
+    """Push a new ``security_config_hash`` onto every principal's logger,
+    returning the ids updated (#400 C3e).
+
+    ``AuditLogger.set_security_config_hash`` covers local mode, where
+    settings_controller.py's ``_save_config`` is writing the one principal's
+    own settings.yaml. Org mode's install-wide policy edit is a change to
+    the policy governing *every* principal's decisions, so every
+    principal's logger has to start stamping the new fingerprint -- a
+    reviewer diffing a decision against the policy in force when it was
+    recorded (this field's whole purpose, SEC-23) gets a stale answer
+    otherwise.
+    """
+    updated: list[str] = []
+    for principal_id in _REGISTRY.principal_ids():
+        with principal_scope(Principal(id=principal_id)):
+            _REGISTRY.get().set_security_config_hash(value)
+        updated.append(principal_id)
+    return updated
 
 
 def init_audit_logger(

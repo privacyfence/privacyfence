@@ -5,9 +5,8 @@ into.
 ``StaticTokenVerifier`` below is a ``TokenVerifier`` (the official SDK's
 protocol, ``mcp.server.auth.provider.TokenVerifier``) checking a single
 shared secret -- the same "possession of this file is the authority"
-posture ``web_token`` has for the approval surface (see server.py's module
-docstring), and the same one ``~/.privacyfence/ipc_token`` had for the
-bridge before P5 retired both. Not real OAuth 2.1 -- that's org mode
+posture ``~/.privacyfence/ipc_token`` had for the bridge, before P5 retired
+it. Not real OAuth 2.1 -- that's org mode
 (landed at P7 as ``OrgOAuthProvider``, which satisfies the exact same ``TokenVerifier``
 protocol via its own ``verify_token``). Using the SDK's own
 ``TokenVerifier``/``BearerAuthBackend``/``RequireAuthMiddleware`` here
@@ -16,8 +15,8 @@ routes_mcp.py's own wiring didn't change (see that module's
 ``build_mcp_asgi_app``, which takes a ``verifier: TokenVerifier`` --
 either this module's or ``OrgOAuthProvider``'s).
 
-This token is deliberately a **separate secret from web_token**
-(server.py's approval-surface token): §10.3's audience separation --
+This token is deliberately a **separate secret from the approval surface's
+own session/CSRF cookie**: §10.3's audience separation --
 "the MCP access token must never be accepted on approval-decision
 endpoints, and the browser session cookie must never be accepted on
 /mcp" -- has to hold even if someone reuses one file's contents by hand, so
@@ -32,23 +31,36 @@ import secrets
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
-from .. import paths
+from .. import paths, privilege_separation
 from ..principal import LOCAL_PRINCIPAL, Principal
-from ..secure_files import atomic_write_text
 
 MCP_TOKEN_FILE_NAME = "mcp_token"  # nosec B105  # a filename, not a credential value
 
 
 def load_or_create_mcp_token() -> str:
-    """Reused across daemon restarts (same file), same posture as
-    web/server.py's ``load_or_create_token``."""
-    path = paths.data_dir() / MCP_TOKEN_FILE_NAME
+    """Reused across daemon restarts (same file) -- the agent's own
+    long-lived credential, unlike the approval surface's session cookie."""
+    # handoff_dir(), not data_dir(): this is the one credential #428 keeps
+    # deliberately reachable by the agent ("mcp_token stays reachable by the
+    # agent. It is the agent's own credential and the product doesn't work
+    # without it"), so on a privilege-separated install it lives in the
+    # directory the user's own session can still read rather than in the
+    # service-account-owned root. Identical path on every other install --
+    # handoff_dir() *is* data_dir() there.
+    path = paths.handoff_dir() / MCP_TOKEN_FILE_NAME
     if path.exists():
         token = path.read_text(encoding="utf-8").strip()
         if token:
+            # The one handoff file that isn't rewritten on every start, so
+            # the only one whose mode has to be re-asserted on the way past:
+            # a token carried over from a pre-#428-Phase-4 install arrives
+            # still 0600 and owned by the service account, which would leave
+            # the agent unable to read its own credential. No-op everywhere
+            # else.
+            privilege_separation.ensure_handoff_file_mode(path)
             return token
     token = secrets.token_hex(32)
-    atomic_write_text(path, token)
+    privilege_separation.write_handoff_file(path, token)
     return token
 
 

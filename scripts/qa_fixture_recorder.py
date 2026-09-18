@@ -481,11 +481,9 @@ class CheckResult:
         self.fixture_relpath = fixture_relpath
 
 
-# 1.9 (the now-removed automated-test-strategy-plan.md Phase 1 residual work): thresholds
-# a maintainer glancing at the printed/pasted report can act on without doing
-# the day-count arithmetic themselves. Deliberately just these two cutoffs,
-# matching the plan's own wording -- a third "critically stale" tier would be
-# more to tune for no reader benefit until one is actually needed.
+# Thresholds a maintainer glancing at the printed/pasted report can act on without doing
+# the day-count arithmetic themselves. Deliberately just these two cutoffs -- a third
+# "critically stale" tier would be more to tune for no reader benefit until one is actually needed.
 _FRESHNESS_WARNING_DAYS = 60
 _FRESHNESS_STALE_DAYS = 90
 
@@ -1542,8 +1540,7 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 
 
 # ---------------------------------------------------------------------------- #
-# Bounded lifecycle tests (1.8, the now-removed automated-test-strategy-plan.md Phase 1
-# residual work) -- create a fresh, uniquely-tagged QA object, read it back,
+# Bounded lifecycle tests -- create a fresh, uniquely-tagged QA object, read it back,
 # update it, read it back again, then (calendar/jira/tasks only -- see
 # lifecycle_confluence's own docstring for why Confluence is the exception)
 # delete it and confirm the deletion actually took. Unlike CONNECTOR_CHECKS
@@ -1588,8 +1585,7 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 # None of calendar_client.py/confluence_client.py/jira_client.py/
 # tasks_client.py expose a delete_*() method at all, and no connectors/*.py
 # registers a delete tool for any provider -- a deliberate product-safety
-# choice that nothing MCP-reachable ever deletes a user's real data (see
-# The now-removed automated-test-strategy-plan.md's own note on this). Cleanup here
+# choice that nothing MCP-reachable ever deletes a user's real data. Cleanup here
 # reaches past that boundary on purpose for calendar/jira/tasks, the same
 # way RawCapture/RawCaptureExecute above reach into each client's internal
 # request/service choke point: this script already runs with real QA-account

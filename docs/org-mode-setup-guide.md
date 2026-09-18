@@ -150,21 +150,34 @@ Run a single active daemon per state directory: PrivacyFence takes a `portalocke
 2. On the `/connect` page, click **Connect** next to each connector you've registered (§4.2 and each connector's own setup guide). Each redirects to that service's own consent screen and lands you back on `/connect` showing it connected — nothing to install or restart, since `ConnectorRegistry` builds and caches that principal's connector set lazily and rebuilds it as soon as credentials change.
 3. Point Claude (Desktop, Cowork, or any Streamable HTTP MCP client) at `https://pf.acme.example.com/mcp`. The client's own OAuth 2.1 dynamic client registration and sign-in against this daemon triggers the same IdP redirect as step 1 — there's no bearer token to copy anywhere, unlike local mode's `~/.privacyfence/mcp_token`.
 
-## 9. Approvals
+## 9. Where PII policy and auto-accept rules live
 
-Org-mode approval routes are principal-aware: a signed-in user can act only on approvals authorized for that principal. Sensitive write approvals can require WebAuthn step-up when configured (`--step-up-enabled` in §5).
+`/settings` in org mode (#400) is scoped very differently from local mode's combined settings page — it does **not** mount that page's ~30-action editor (connector management, the update banner, Telegram's interactive auth stay local-mode-only, see `web/org_settings_scope.py`'s `NOT_APPLICABLE_ACTIONS`). What it does give every signed-in principal, linked from `/approvals`'s own footer:
+
+- **`GET /settings`** — that principal's own auto-accept rules and trusted-resource grants, with a Remove button per row (each removal goes through the same `org_session` CSRF/origin checks as `/approvals`, and is written to the audit log). No principal can see or remove another's rules from here.
+- **`GET /settings/privacy`** — admin-only (`Principal.is_admin`, see [§4.1](#41-the-oidc-sign-in-client-required) for how that's resolved from IdP group claims), the effective install-wide PII/privacy policy described below, including which groups are relying on the fail-safe default versus explicitly configured. An admin can change it here: each group's default policy, each category's policy, the PII-detection master switch and its two individually-toggleable categories. Every change rewrites the server's own `settings.yaml`, takes effect for every principal immediately (no daemon restart — see below), and is written to the audit log under the admin who made it. A signed-in principal who is not an admin gets a 403 from the page *and* from the write endpoints, which re-check `is_admin` themselves rather than trusting that the page was reachable.
+
+Beyond removing a row, editing `/settings`'s per-principal rules and grants from the browser is still out of scope; `/settings/privacy`'s policy fields, described above, can be edited directly. Each of the two settings below is configured, and takes effect, differently.
+
+**PII/privacy policy is install-wide.** The `privacy`/`drive_privacy`/`slack_privacy`/`contacts_privacy`/`tasks_privacy`/`confluence_privacy` sections of the *server's own* `~/.privacyfence/config/settings.yaml` (`privacy_filter.py`, see `resources/settings.yaml.example`) apply to every principal on this install — there is no per-user override, and `/settings/privacy` above reads this exact file. Editing that file **by hand** on the server requires restarting the daemon (`systemctl restart privacyfence-org`, [§7](#7-start-the-daemon)) before the change takes effect, because it's read once at startup. Editing it **from `/settings/privacy`** does not: that path writes the same file and then reloads the privacy filter and PII gate for every principal in the running process, so the change applies to everyone's next request. Both routes end up at the same file, but don't mix them: `/settings/privacy`'s write rewrites the whole file from its own in-memory copy (`web/org_install_policy.py`'s `apply_change`), so any hand edit made since the daemon last loaded it — including comments and formatting — is silently discarded the next time an admin saves from the browser, restarted or not. Pick one editing path for a given change and see it through: hand-edit and restart, or use `/settings/privacy` and leave the file alone in between. A category genuinely absent from that file falls back to a group's `default_policy`, and a group section absent altogether falls back to a **default of `block`** in org mode specifically (`allow` in local mode) — an organization's centrally deployed `settings.yaml` is expected to state its own privacy policy explicitly, not silently inherit the permissive default a single-user desktop install gets. Check the deployed file for any group you expect to be restrictive; leaving it out entirely still fails closed (`/settings/privacy` flags it as falling back to that default so an admin doesn't have to hand-read the file to find out), but naming it explicitly is what documents the intended policy to the next administrator who reads it.
+
+**Auto-accept rules and resource grants are per-principal.** Each signed-in user's "Always allow" decisions (`gate.py`'s `propose_rule_change`, offered from the approval popup — [§10](#10-approvals) below) persist to that principal's own `~/.privacyfence/users/<principal>/config/settings.yaml`, under `auto_accept_rules`/`auto_accept_grants` — the same file layout local mode uses for its one local principal, just rooted under that user's own directory instead of the top-level one. One principal's rules are invisible to and cannot be edited by another, including an admin — `/settings` above only ever acts on `current_principal()`'s own file, never a path parameter naming someone else's id; an administrator who genuinely needs to review or revoke *another* principal's rules still needs server filesystem access to hand-edit that file directly — unlike the install-wide policy above, which an admin can now edit from the browser.
+
+## 10. Approvals
+
+Org-mode approval routes are principal-aware: a signed-in user can act only on approvals authorized for that principal. Sensitive write approvals can require WebAuthn step-up when configured (`--step-up-enabled` in §5), and that step-up ordinarily accepts either an enrolled passkey or a fresh IdP re-authentication. `--step-up-require-passkey` closes the IdP-reauth path entirely for organizations that want hardware-bound WebAuthn as a hard requirement (e.g. to defend against a compromised or phished IdP session satisfying step-up on its own): a principal with no enrolled passkey gets a hard failure directing them to `/security` to enroll one instead of a silent fallback to re-authentication.
 
 The UI behavior itself is the same embedded browser approval surface documented in [`approval-list-ui-ux.md`](approval-list-ui-ux.md).
 
-## 10. Downloads
+## 11. Downloads
 
 Centralized deployments cannot write directly to a user's local filesystem. Org-mode file delivery therefore uses inline content (up to `download_delivery.inline_max_bytes`, default 8MB, `--downloads-inline-max-bytes` in §5) or encrypted short-lived staged links (`download_delivery.link_ttl_seconds`, default 300s, `--downloads-link-ttl-seconds`) as documented in [`org-mode-download-delivery.md`](org-mode-download-delivery.md).
 
-## 11. Operations
+## 12. Operations
 
 Before production use, define backup/restore, upgrades/rollback, monitoring, audit retention/forwarding (`--audit-forwarding-*` in §5), and service restart procedures. See [`org-mode-operational-readiness.md`](org-mode-operational-readiness.md).
 
-## 12. Validation
+## 13. Validation
 
 Validate the deployment through the public HTTPS origin:
 

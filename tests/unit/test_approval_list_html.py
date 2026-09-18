@@ -17,6 +17,22 @@ def _card(**overrides):
     return SimpleNamespace(**defaults)
 
 
+def _real_card(*, dedupe_key="k1", **overrides):
+    """A real approvals.PendingApproval (unlike ``_card()``'s duck-typed
+    stand-in above) -- used where a test needs is_batchable()/
+    blocked_reason() to be the genuine, non-fallback computation."""
+    from privacyfence.approvals import PendingApprovalRegistry
+
+    registry = PendingApprovalRegistry()
+    kwargs = dict(
+        dedupe_key=dedupe_key, connector="gmail", tool="gmail_get_message",
+        gate_kind="review", request_id="r1", tool_name="Read Gmail message",
+    )
+    kwargs.update(overrides)
+    approval, _ = registry.register_or_coalesce(**kwargs)
+    return approval
+
+
 class TestRowFromApproval:
     def test_carries_the_display_fields(self):
         row = approval_list_html.row_from_approval(_card())
@@ -76,3 +92,158 @@ class TestBuildListHtml:
         card = _card(kind="confirm", tool_name="", summary="")
         html = approval_list_html.build_list_html([approval_list_html.row_from_approval(card)], csrf="t")
         assert "Confirmation" in html
+
+
+class TestRowFromApprovalBatching:
+    def test_a_plain_card_is_batchable(self):
+        row = approval_list_html.row_from_approval(_real_card())
+        assert row["batchable"] is True
+        assert row["blocked_reason"] == ""
+
+    def test_a_pii_forced_card_is_not_batchable(self):
+        row = approval_list_html.row_from_approval(_real_card(pii_forces_confirmation=True))
+        assert row["batchable"] is False
+        assert row["blocked_reason"] != ""
+
+    def test_a_confirm_dialog_is_not_batchable(self):
+        from privacyfence.approvals import PendingApprovalRegistry
+
+        registry = PendingApprovalRegistry()
+        approval = registry.register_confirm()
+        row = approval_list_html.row_from_approval(approval)
+        assert row["batchable"] is False
+
+    def test_duck_typed_stand_in_without_is_batchable_falls_back_correctly(self):
+        # _card() (the plain SimpleNamespace used throughout this file) has
+        # no is_batchable()/blocked_reason() of its own -- row_from_approval
+        # must still classify it correctly from kind/pii_forces_confirmation.
+        row = approval_list_html.row_from_approval(_card())
+        assert row["batchable"] is True
+        row_confirm = approval_list_html.row_from_approval(_card(kind="confirm"))
+        assert row_confirm["batchable"] is False
+
+    def test_operation_key_defaults_to_empty_string(self):
+        row = approval_list_html.row_from_approval(_card())
+        assert row["operation_key"] == ""
+
+
+class TestGroupRows:
+    def test_batchable_rows_sharing_operation_key_collapse_into_one_group(self):
+        rows = [
+            approval_list_html.row_from_approval(
+                _real_card(dedupe_key="k1", operation_key="drive.read_file_contents"),
+            ),
+            approval_list_html.row_from_approval(
+                _real_card(dedupe_key="k2", operation_key="drive.read_file_contents"),
+            ),
+        ]
+        groups = approval_list_html._group_rows(rows)
+        assert len(groups) == 1
+        assert len(groups[0]["rows"]) == 2
+
+    def test_different_operation_keys_get_separate_groups(self):
+        rows = [
+            approval_list_html.row_from_approval(
+                _real_card(dedupe_key="k1", operation_key="drive.read_file_contents"),
+            ),
+            approval_list_html.row_from_approval(
+                _real_card(dedupe_key="k2", operation_key="drive.write_file"),
+            ),
+        ]
+        groups = approval_list_html._group_rows(rows)
+        assert len(groups) == 2
+
+    def test_non_batchable_rows_never_group_with_anything(self):
+        from privacyfence.approvals import PendingApprovalRegistry
+
+        registry = PendingApprovalRegistry()
+        confirm_a = registry.register_confirm()
+        confirm_b = registry.register_confirm()
+        rows = [
+            approval_list_html.row_from_approval(confirm_a),
+            approval_list_html.row_from_approval(confirm_b),
+        ]
+        groups = approval_list_html._group_rows(rows)
+        assert len(groups) == 2
+        assert all(g["key"] is None for g in groups)
+
+    def test_group_header_names_count_and_a_humanized_operation_label(self):
+        rows = [
+            approval_list_html.row_from_approval(
+                _real_card(dedupe_key=f"k{i}", connector="drive", operation_key="drive.read_file_contents"),
+            )
+            for i in range(3)
+        ]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert "Drive" in html
+        assert "read file contents" in html
+        assert "3" in html
+
+    def test_a_single_row_group_gets_no_group_select_all_header(self):
+        rows = [
+            approval_list_html.row_from_approval(
+                _real_card(dedupe_key="k1", operation_key="drive.read_file_contents"),
+            ),
+        ]
+        # Checked against the group HTML directly, not the whole page: the
+        # embedded JS (live re-render) legitimately contains the literal
+        # substring 'data-group-select=' as part of *building* that
+        # attribute -- see routes_approvals.py's own TestInjectShim for the
+        # same "don't grep the whole document" lesson.
+        group_html = approval_list_html._group_html(approval_list_html._group_rows(rows)[0])
+        assert "data-group-select=" not in group_html
+
+
+class TestBinderMarkup:
+    def test_batchable_rows_get_a_selection_checkbox(self):
+        rows = [approval_list_html.row_from_approval(_real_card())]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert "data-select=" in html
+
+    def test_non_batchable_rows_get_no_checkbox_but_show_the_reason(self):
+        rows = [approval_list_html.row_from_approval(_real_card(pii_forces_confirmation=True))]
+        # Checked against the row HTML directly -- the embedded JS legitimately
+        # contains the literal substring 'data-select=' while building that
+        # attribute for the live re-render path (see the group-header test
+        # above for the same reasoning).
+        row_html = approval_list_html._row_html(rows[0])
+        assert "data-select=" not in row_html
+        assert "PII confirmation" in row_html
+
+    def test_toolbar_present_when_rows_exist(self):
+        rows = [approval_list_html.row_from_approval(_real_card())]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert 'id="pf-approvals-toolbar"' in html
+        assert 'id="pf-deny-selected"' in html
+        assert 'id="pf-approve-selected"' in html
+
+    def test_approve_selected_starts_disabled(self):
+        # Phase 3 of the binder plan: like Deny selected, nothing is
+        # selected on first paint, so there is nothing to approve yet.
+        rows = [approval_list_html.row_from_approval(_real_card())]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert 'id="pf-approve-selected" disabled' in html
+
+    def test_toolbar_absent_on_the_empty_state(self):
+        html = approval_list_html.build_list_html([], csrf="t")
+        assert 'id="pf-approvals-toolbar"' not in html
+
+    def test_select_all_is_disabled_when_nothing_is_batchable(self):
+        from privacyfence.approvals import PendingApprovalRegistry
+
+        registry = PendingApprovalRegistry()
+        confirm = registry.register_confirm()
+        rows = [approval_list_html.row_from_approval(confirm)]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert 'id="pf-select-all-cb" aria-label="Select all batchable approvals" disabled' in html
+
+    def test_select_all_is_enabled_when_something_is_batchable(self):
+        rows = [approval_list_html.row_from_approval(_real_card())]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert 'id="pf-select-all-cb" aria-label="Select all batchable approvals">' in html
+
+    def test_details_toggle_and_container_are_present_per_row(self):
+        rows = [approval_list_html.row_from_approval(_real_card())]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert 'data-details="' in html
+        assert 'id="pf-details-' in html

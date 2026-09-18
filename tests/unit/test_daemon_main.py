@@ -118,13 +118,13 @@ def _no_ambient_google_clients(monkeypatch):
 
 class TestResolvePath:
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
+        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
     )
     def test_absolute_path_is_returned_unchanged(self):
         assert daemon_main._resolve_path("/etc/hosts") == "/etc/hosts"
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
+        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
     )
     def test_relative_path_is_joined_with_project_root(self, monkeypatch):
         monkeypatch.setattr(daemon_main, "PROJECT_ROOT", "/tmp/pf-root")
@@ -141,6 +141,34 @@ class TestResolvePath:
         with principal_scope(Principal(id="alice")):
             result = daemon_main._resolve_path("credentials/x.json")
         assert result == str(tmp_path / "users" / "alice" / "credentials" / "x.json")
+
+
+# ---------------------------------------------------------------------------- #
+# _resolve_authority_path (#428 Phase 1)
+# ---------------------------------------------------------------------------- #
+
+class TestResolveAuthorityPath:
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
+    )
+    def test_absolute_path_is_returned_unchanged(self):
+        assert daemon_main._resolve_authority_path("/etc/hosts") == "/etc/hosts"
+
+    def test_relative_path_is_joined_with_project_roots_authority_subdirectory(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))
+
+        result = daemon_main._resolve_authority_path("config/settings.yaml")
+
+        assert result == str(tmp_path / "authority" / "config" / "settings.yaml")
+
+    def test_relative_path_for_a_non_local_principal_uses_its_own_authority_subdirectory(self, monkeypatch, tmp_path):
+        from privacyfence import paths
+        from privacyfence.principal import Principal, principal_scope
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        with principal_scope(Principal(id="alice")):
+            result = daemon_main._resolve_authority_path("config/settings.yaml")
+        assert result == str(tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml")
 
 
 class TestGoogleClientConfig:
@@ -405,6 +433,40 @@ class TestLogOrgConfigBundleHash:
         assert "signed=True" in entries[0]["summary"]
 
 
+class TestAuditStepUpRequirementChange:
+    """#426 Phase 4: the audit half of webauthn_stepup.observe_step_up_
+    requirement -- see that function's own tests in
+    tests/unit/test_webauthn_stepup.py for the state-transition logic
+    itself; this only proves daemon_main.py turns a reported change into
+    the right audit entry."""
+
+    def test_enabling_writes_the_enabled_decision(self, tmp_path):
+        from privacyfence.audit_log import init_audit_logger
+        from privacyfence.webauthn_stepup import StepUpRequirementChange
+
+        init_audit_logger(str(tmp_path / "audit"))
+        daemon_main._audit_step_up_requirement_change(
+            StepUpRequirementChange(was_required=False, is_required=True),
+        )
+        jsonl_files = list((tmp_path / "audit").glob("*.jsonl"))
+        assert len(jsonl_files) == 1
+        entries = [json.loads(line) for line in jsonl_files[0].read_text().splitlines()]
+        assert len(entries) == 1
+        assert entries[0]["decision"] == "step_up_requirement_enabled"
+
+    def test_disabling_writes_the_disabled_decision(self, tmp_path):
+        from privacyfence.audit_log import init_audit_logger
+        from privacyfence.webauthn_stepup import StepUpRequirementChange
+
+        init_audit_logger(str(tmp_path / "audit"))
+        daemon_main._audit_step_up_requirement_change(
+            StepUpRequirementChange(was_required=True, is_required=False),
+        )
+        jsonl_files = list((tmp_path / "audit").glob("*.jsonl"))
+        entries = [json.loads(line) for line in jsonl_files[0].read_text().splitlines()]
+        assert entries[0]["decision"] == "step_up_requirement_disabled"
+
+
 class TestGetOrCreateDeploymentId:
     """SEC-23: a stable, opaque per-install id persisted once at
     data_dir()/deployment_id and reused across restarts."""
@@ -472,7 +534,7 @@ class TestCheckStoragePermissions:
         monkeypatch.setattr(daemon_main, "user_dir", lambda: tmp_path)
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py (the now-removed windows-linux-support-plan.md's Track B3), just surfacing through the org-mode startup check instead of a direct stat() assertion",
+        sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py, just surfacing through the org-mode startup check instead of a direct stat() assertion",
     )
     def test_no_warning_when_directory_is_already_0700(self, tmp_path, monkeypatch, caplog):
         self._patch_dirs(monkeypatch, tmp_path)
@@ -503,7 +565,7 @@ class TestCheckStoragePermissions:
             daemon_main.check_storage_permissions(org_mode_active=True)
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py (the now-removed windows-linux-support-plan.md's Track B3), just surfacing through the org-mode startup check instead of a direct stat() assertion",
+        sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py, just surfacing through the org-mode startup check instead of a direct stat() assertion",
     )
     def test_org_mode_with_correct_permissions_does_not_raise(self, tmp_path, monkeypatch):
         self._patch_dirs(monkeypatch, tmp_path)
@@ -522,6 +584,47 @@ class TestCheckStoragePermissions:
             daemon_main.check_storage_permissions(org_mode_active=False)
 
         assert caplog.text.count("SEC-09") == 1
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="POSIX permission bits only -- Windows' half of #428 Phase 4 is NTFS ACLs, audited by windows_acl.py instead",
+    )
+    def test_separated_layout_is_not_audited_against_the_flat_0700_rule(self, tmp_path, monkeypatch, caplog):
+        # #428 Phase 4 makes two of these directories deliberately looser than
+        # 0700 -- the system root 0711 so the logged-in user can traverse to
+        # the handoff directory, and the handoff directory 2770 so two
+        # accounts can hand each other a socket. Reporting the design as a
+        # defect on every startup would be noise; in org mode it would refuse
+        # to start over it.
+        handoff = tmp_path / "handoff"
+        handoff.mkdir()
+        tmp_path.chmod(0o711)
+        handoff.chmod(0o2770)
+        self._patch_dirs(monkeypatch, tmp_path)
+        monkeypatch.setattr(daemon_main, "handoff_dir", lambda: handoff)
+        monkeypatch.setattr(daemon_main.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(daemon_main.privilege_separation, "audit_layout", list)
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.check_storage_permissions(org_mode_active=True)  # must not raise
+
+        assert "SEC-09" not in caplog.text
+
+    def test_separated_layout_problems_are_reported_under_sec_09(self, tmp_path, monkeypatch, caplog):
+        # The separated layout gets its own audit instead -- including the one
+        # a mode check can't see: authority/ still owned by the human.
+        self._patch_dirs(monkeypatch, tmp_path)
+        tmp_path.chmod(0o700)
+        monkeypatch.setattr(daemon_main, "handoff_dir", lambda: tmp_path / "handoff")
+        monkeypatch.setattr(daemon_main.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(
+            daemon_main.privilege_separation, "audit_layout", lambda: ["authority is owned by 'alice'"],
+        )
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.check_storage_permissions(org_mode_active=False)
+
+        assert "SEC-09" in caplog.text
+        assert "owned by 'alice'" in caplog.text
 
 
 # ---------------------------------------------------------------------------- #
@@ -878,7 +981,7 @@ class TestBuildConnectorsTelegram:
             (tmp_path / "credentials" / "telegram.session").write_bytes(b"")
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
+        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI, not otherwise tracked",
     )
     def test_built_when_creds_and_session_present(self, monkeypatch, tmp_path):
         self._make_session(tmp_path, monkeypatch, exists=True)
@@ -1180,9 +1283,9 @@ class TestMaybeStartWebServer:
         # Never actually binds a real socket -- this suite proves the
         # wiring (which ApprovalUI gets installed, whether a server object
         # comes back, whether /mcp is mounted), not uvicorn's own serve
-        # loop. web_token/mcp_token also have to land under an isolated
-        # tmp_path, not paths.data_dir()'s real value (the repo root itself
-        # in dev mode) -- see web/server.py's load_or_create_token().
+        # loop. mcp_token also has to land under an isolated tmp_path, not
+        # paths.data_dir()'s real value (the repo root itself in dev mode)
+        # -- see web/mcp_auth.py's load_or_create_mcp_token().
         from privacyfence import paths
         from privacyfence.web.server import WebServer
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
@@ -1309,6 +1412,71 @@ class TestMaybeStartWebServer:
         registry = get_web_approval_ui().deferred_registry
         assert registry.max_pending_per_principal == DEFAULT_MAX_PENDING_PER_PRINCIPAL
 
+    def test_adaptive_hold_defaults_on_when_not_configured(self, monkeypatch, tmp_path):
+        from privacyfence.web_approval_ui import get_web_approval_ui
+        self._no_bind(monkeypatch, tmp_path)
+
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, self._connector_host(),
+            unattended_sessions_enabled=False,
+        )
+
+        registry = get_web_approval_ui().deferred_registry
+        assert registry.adaptive_hold is True
+
+    def test_adaptive_hold_can_be_configured_off(self, monkeypatch, tmp_path):
+        from privacyfence.web_approval_ui import get_web_approval_ui
+        self._no_bind(monkeypatch, tmp_path)
+
+        daemon_main._maybe_start_web_server(
+            {"web": {"approvals": {"adaptive_hold": False}}}, self._connector_host(),
+            unattended_sessions_enabled=False,
+        )
+
+        registry = get_web_approval_ui().deferred_registry
+        assert registry.adaptive_hold is False
+
+    def test_require_passkey_with_nothing_enrolled_logs_a_warning_but_still_starts(
+        self, monkeypatch, tmp_path, caplog,
+    ):
+        # #426 Phase 3: "start, release nothing, and show a loud persistent
+        # banner -- rather than refusing to boot." This is the "loud" half
+        # aimed at the daemon's own log; web_shell.py's TestBanner/
+        # test_routes_approvals.py's TestRequirePasskeyBanner cover the
+        # human-facing half.
+        self._no_bind(monkeypatch, tmp_path)
+        with caplog.at_level(logging.WARNING):
+            result = daemon_main._maybe_start_web_server(
+                {"step_up": {"enabled": True, "require_passkey": True}},
+                self._connector_host(), unattended_sessions_enabled=False,
+            )
+        assert result is not None  # never refuses to boot over this
+        assert "require_passkey" in caplog.text
+        assert "/security" in caplog.text
+
+    def test_require_passkey_with_a_credential_enrolled_logs_nothing(self, monkeypatch, tmp_path, caplog):
+        from privacyfence import webauthn_stepup as wa
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        self._no_bind(monkeypatch, tmp_path)
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        with caplog.at_level(logging.WARNING):
+            daemon_main._maybe_start_web_server(
+                {"step_up": {"enabled": True, "require_passkey": True}},
+                self._connector_host(), unattended_sessions_enabled=False,
+            )
+        assert "require_passkey" not in caplog.text
+
+    def test_require_passkey_off_logs_nothing(self, monkeypatch, tmp_path, caplog):
+        self._no_bind(monkeypatch, tmp_path)
+        with caplog.at_level(logging.WARNING):
+            daemon_main._maybe_start_web_server(
+                {"step_up": {"enabled": True, "require_passkey": False}},
+                self._connector_host(), unattended_sessions_enabled=False,
+            )
+        assert "require_passkey" not in caplog.text
+
     def test_mcp_dispatcher_sees_the_connector_hosts_live_connector_set(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
         connector_host = self._connector_host()
@@ -1412,6 +1580,41 @@ class TestMaybeStartWebServer:
 
         assert result is not None
         assert result.controller is controller
+
+    def test_wires_a_live_step_up_config_into_the_controller(self, monkeypatch, tmp_path):
+        # B9: SettingsController.enable_step_up is a no-op without this --
+        # _maybe_start_web_server must hand the controller the same
+        # LiveStepUpConfig it hands the server itself (see that method's
+        # own docstring on why it needs to be the *same* object).
+        from privacyfence.step_up_config import LiveStepUpConfig
+        self._no_bind(monkeypatch, tmp_path)
+        controller = self._controller(tmp_path, monkeypatch)
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"settings": {"enabled": True}}, "step_up": {"require_passkey": True}},
+            self._connector_host(), unattended_sessions_enabled=False, controller=controller,
+        )
+
+        assert result is not None
+        assert isinstance(controller._step_up, LiveStepUpConfig)
+        # The config this daemon actually booted with, not a fresh default.
+        assert controller._step_up.require_passkey is True
+
+    def test_settings_not_enabled_still_wires_step_up_into_the_controller(self, monkeypatch, tmp_path):
+        # Unlike controller wiring into the server itself (result.controller
+        # above), this is unconditional on web.settings.enabled -- wiring an
+        # attribute costs nothing, and nothing about /settings being
+        # unmounted should make a later enable_step_up() call silently
+        # look wired but do nothing.
+        from privacyfence.step_up_config import LiveStepUpConfig
+        self._no_bind(monkeypatch, tmp_path)
+        controller = self._controller(tmp_path, monkeypatch)
+
+        daemon_main._maybe_start_web_server(
+            {}, self._connector_host(), unattended_sessions_enabled=False, controller=controller,
+        )
+
+        assert isinstance(controller._step_up, LiveStepUpConfig)
 
     def test_mcp_dispatcher_gets_the_controllers_connector_status_provider(self, monkeypatch, tmp_path):
         # privacyfence_status's own connector view (issue #396 Phase 2) --
@@ -1594,6 +1797,17 @@ class TestMaybeStartWebServerOrgMode:
         registry = get_web_approval_ui().deferred_registry
         assert registry.max_pending_per_principal == 7
 
+    def test_org_mode_registry_gets_adaptive_hold_too(self, monkeypatch, tmp_path):
+        from privacyfence.web_approval_ui import get_web_approval_ui
+
+        self._no_bind(monkeypatch, tmp_path)
+        daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}, "approvals": {"adaptive_hold": False}}},
+            self._connector_host(), unattended_sessions_enabled=False, org_config=self._org_config(),
+        )
+        registry = get_web_approval_ui().deferred_registry
+        assert registry.adaptive_hold is False
+
     def test_org_mode_without_idp_section_raises(self, monkeypatch, tmp_path):
         # SEC-04's "org-mode-incomplete-IdP-or-server" case.
         self._no_bind(monkeypatch, tmp_path)
@@ -1698,7 +1912,8 @@ class TestOrgModeConnectorRegistry:
         host = result.org.connector_registry.get(alice)
 
         assert "slack" in host.connectors
-        assert (alice_dir / "config" / "settings.yaml").exists()  # bootstrapped on first use, per-principal
+        # bootstrapped on first use, per-principal -- under authority/ (#428 Phase 1)
+        assert (alice_dir / "authority" / "config" / "settings.yaml").exists()
 
     def test_two_principals_get_independent_connector_sets(self, monkeypatch, tmp_path):
         self._no_bind(monkeypatch, tmp_path)
@@ -2353,7 +2568,7 @@ class TestRunApp:
             daemon_main.run_app(config, "config.yaml")
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py (the now-removed windows-linux-support-plan.md's Track B3), just surfacing through the org-mode startup check instead of a direct stat() assertion",
+        sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py, just surfacing through the org-mode startup check instead of a direct stat() assertion",
     )
     def test_org_mode_passes_org_managed_through_to_privacy_filter(self, monkeypatch):
         # SEC-07: an org-managed install's genuinely-absent privacy groups
@@ -2576,7 +2791,7 @@ class TestAuditForwardingWiring:
         assert captured["forwarder"] is None
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py (the now-removed windows-linux-support-plan.md's Track B3), just surfacing through the org-mode startup check instead of a direct stat() assertion",
+        sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py, just surfacing through the org-mode startup check instead of a direct stat() assertion",
     )
     def test_enabled_org_mode_builds_a_forwarder(self, monkeypatch, tmp_path):
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
@@ -2605,7 +2820,7 @@ class TestAuditForwardingWiring:
         assert captured["forwarder"] is not None
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py (the now-removed windows-linux-support-plan.md's Track B3), just surfacing through the org-mode startup check instead of a direct stat() assertion",
+        sys.platform == "win32", reason="secure_files.audit_directory_permissions() flags every directory as insecure here because chmod does not restrict access on Windows -- same known, accepted permission-bits gap as test_secure_files.py, just surfacing through the org-mode startup check instead of a direct stat() assertion",
     )
     def test_enabled_org_mode_with_invalid_forwarding_config_does_not_crash_startup(self, monkeypatch, caplog, tmp_path):
         # kind="syslog" with no host at all -- audit_forwarding.build_sender()
@@ -2696,6 +2911,40 @@ class TestMain:
         assert result == 0
         assert len(calls) == 1
 
+    def test_no_oauth_flag_triggers_the_macos_auto_enable_check(self, monkeypatch):
+        # #428 D1 (4.1): fired only on the path that actually starts the
+        # persistent daemon -- see the next test for why the one-shot CLI
+        # flags below must not trigger it.
+        self._patch_config(monkeypatch)
+        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
+        calls = []
+        monkeypatch.setattr(
+            daemon_main.privilege_separation, "maybe_auto_enable_macos", lambda: calls.append(1)
+        )
+
+        result = daemon_main.main([])
+
+        assert result == 0
+        assert calls == [1]
+
+    @pytest.mark.parametrize("flag", ["--gmail-oauth", "--telegram-setup"])
+    def test_oauth_and_telegram_flags_do_not_trigger_the_macos_auto_enable_check(self, monkeypatch, flag):
+        # A password-prompting admin dialog popping up during a scripted,
+        # headless `--gmail-oauth` invocation would be a surprising side
+        # effect of an unrelated flag.
+        self._patch_config(monkeypatch)
+        monkeypatch.setattr(daemon_main, "run_gmail_oauth", lambda org_config: 0)
+        monkeypatch.setattr(daemon_main, "run_telegram_setup", lambda: 0)
+        calls = []
+        monkeypatch.setattr(
+            daemon_main.privilege_separation, "maybe_auto_enable_macos", lambda: calls.append(1)
+        )
+
+        result = daemon_main.main([flag])
+
+        assert result == 0
+        assert calls == []
+
     def test_fatal_exception_is_caught_prints_error_and_returns_1(self, monkeypatch, capsys):
         self._patch_config(monkeypatch)
         def raiser(config, path):
@@ -2706,6 +2955,28 @@ class TestMain:
 
         assert result == 1
         assert "Fatal error" in capsys.readouterr().err
+
+    def test_refuses_to_start_as_the_wrong_account_on_a_separated_install(self, monkeypatch, capsys):
+        # #428 Phase 4. This runs before load_config(), and has to: on a
+        # separated install started as the logged-in user, settings.yaml is
+        # unreadable under the service-owned authority directory and
+        # load_config()'s own first-run path would seed a fresh default over
+        # it -- a silent policy reset rather than a visible failure.
+        self._patch_config(monkeypatch)
+        loaded = []
+        monkeypatch.setattr(daemon_main, "load_config", lambda path: loaded.append(path) or {})
+        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
+
+        def refuse() -> None:
+            raise daemon_main.privilege_separation.PrivilegeSeparationError("wrong account")
+
+        monkeypatch.setattr(daemon_main.privilege_separation, "check_runtime_identity", refuse)
+
+        result = daemon_main.main([])
+
+        assert result == 1
+        assert "wrong account" in capsys.readouterr().err
+        assert loaded == []
 
 
 # ---------------------------------------------------------------------------- #
@@ -2802,3 +3073,107 @@ class TestLoadPrincipalSettings:
 
         assert alice_verdict == "auto_accept"
         assert bob_verdict == "requires_review"
+
+    def test_registers_the_principals_own_policy_engine_version(self, tmp_path, monkeypatch):
+        """P3 of the policy v2 redesign: the same class of silent-inert bug the two tests above
+        cover for auto-accept rules -- without init_policy_engine_version() here, every org
+        principal's policy.engine setting would stay at its dataclass default ("v1") regardless
+        of what that principal's own settings.yaml said."""
+        from privacyfence import auto_accept, paths
+        from privacyfence.principal import Principal, principal_scope
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        config_dir = tmp_path / "users" / "alice" / "config"
+        config_dir.mkdir(parents=True)
+        (config_dir / "settings.yaml").write_text(
+            yaml.safe_dump({"policy": {"engine": "v2"}}), encoding="utf-8",
+        )
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings()
+            assert auto_accept.get_policy_engine_version() == "v2"
+
+    def test_populates_the_privacy_filter_registry_for_the_principal(self, tmp_path, monkeypatch):
+        """#400 Phase 0: before this fix, privacy_filter._REGISTRY kept its
+        default empty-dict entry for every principal but whichever one a
+        local-mode run_app() happened to call init_privacy_filter() for --
+        category_policy()'s own "group absent from the registry" fallback is
+        a hardcoded "allow", the opposite of org mode's intended fail-closed
+        "block" default. Every org principal must get a real registry entry,
+        the same way _load_principal_settings() already makes auto-accept
+        rules live for them."""
+        from privacyfence import privacy_filter
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings()
+            # No "privacy" section anywhere -- absent-group fail-safe default
+            # must be "block" (org_managed=True), never "allow".
+            assert privacy_filter.category_policy("privacy", "body") == "block"
+
+    def test_uses_the_install_wide_config_when_given_not_the_principals_own_file(self, tmp_path, monkeypatch):
+        """The install-wide PII/privacy policy is meant to be one server-
+        controlled file, not each principal's own unconfigured per-user
+        settings.yaml (docs/org-mode-setup-guide.md §9: "there is no
+        per-user override") -- an admin's explicit override in the real
+        server config must reach every principal, not just whichever one's
+        own file happens to (never) carry a privacy section."""
+        from privacyfence import privacy_filter
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+        install_wide = {"privacy": {"default_policy": "allow"}}
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings(install_wide_config=install_wide)
+            assert privacy_filter.category_policy("privacy", "body") == "allow"
+
+    def test_two_principals_get_independent_privacy_filter_entries(self, tmp_path, monkeypatch):
+        from privacyfence import privacy_filter
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+        self._seed(tmp_path, monkeypatch, "bob", {})
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings(install_wide_config={"privacy": {"default_policy": "allow"}})
+            alice_policy = privacy_filter.category_policy("privacy", "body")
+
+        with principal_scope(Principal(id="bob")):
+            daemon_main._load_principal_settings(install_wide_config={"privacy": {"default_policy": "block"}})
+            bob_policy = privacy_filter.category_policy("privacy", "body")
+
+        assert alice_policy == "allow"
+        assert bob_policy == "block"
+
+    def test_seeds_the_pii_gate_from_the_install_wide_config(self, tmp_path, monkeypatch):
+        """#400 C3e: the same omission as the privacy-filter one above, in
+        pii_detector. Its _REGISTRY is a PrincipalRegistry too and run_app()
+        is the only caller of init_pii_detection() there has ever been, so
+        an org principal got a default-constructed _PiiState -- detection
+        on, both optional categories on -- regardless of what the install's
+        settings.yaml said. Harmless on its own (that default detects more,
+        not less), but not something a page that now *edits* this value can
+        ship on top of."""
+        from privacyfence import pii_detector
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+        install_wide = {"pii_detection": {"enabled": False}}
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings(install_wide_config=install_wide)
+            assert pii_detector.is_pii_detection_enabled() is False
+
+    def test_an_optional_pii_category_disabled_install_wide_reaches_a_principal(self, tmp_path, monkeypatch):
+        from privacyfence import pii_detector
+        from privacyfence.principal import Principal, principal_scope
+
+        self._seed(tmp_path, monkeypatch, "alice", {})
+        install_wide = {"pii_detection": {"enabled": True, "detect_ip_addresses": False}}
+
+        with principal_scope(Principal(id="alice")):
+            daemon_main._load_principal_settings(install_wide_config=install_wide)
+            assert "IP address" not in pii_detector.detect_pii_categories("ping 10.1.2.3 please")

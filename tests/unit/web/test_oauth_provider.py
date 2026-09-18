@@ -9,8 +9,10 @@ IdP-callback -> issued-code dance, and code/token/refresh/revoke lifecycle.
 """
 from __future__ import annotations
 
+import time
+
 import pytest
-from mcp.server.auth.provider import AuthorizationParams, RefreshToken, TokenError
+from mcp.server.auth.provider import AccessToken, AuthorizationParams, RefreshToken, TokenError
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
@@ -45,6 +47,7 @@ def _params(*, state="orig-state", redirect_uri="https://claude.example.com/call
 
 def _provider(tmp_path, monkeypatch, *, policy: AuthzPolicyConfig | None = None) -> op.OrgOAuthProvider:
     monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
+    monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
     return op.OrgOAuthProvider(_idp(), idp_callback_url=IDP_CALLBACK_URL, policy=policy)
 
 
@@ -268,6 +271,7 @@ class TestAuthorizationCodeExchange:
             admin_group_claim="groups", admin_group_values=("admins",),
         )
         monkeypatch.setattr(op, "_clients_file_path", lambda: str(tmp_path / "oauth_clients.json"))
+        monkeypatch.setattr(op, "_refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"))
         provider = op.OrgOAuthProvider(idp, idp_callback_url=IDP_CALLBACK_URL)
         client = _client_info()
         _qs, _auth_code, tokens = await _drive_full_flow(
@@ -415,6 +419,13 @@ class TestRevokeToken:
         provider = _provider(tmp_path, monkeypatch)
         await provider.revoke_token(RefreshToken(token="never-issued", client_id="c", scopes=[]))  # must not raise
 
+    async def test_revoking_an_unknown_access_token_is_a_no_op(self, tmp_path, monkeypatch):
+        # The other half of "unknown token": an access token this provider
+        # never issued has no refresh token to cascade to either, so the
+        # cascade has to tolerate finding neither half.
+        provider = _provider(tmp_path, monkeypatch)
+        await provider.revoke_token(AccessToken(token="never-issued", client_id="c", scopes=[]))  # must not raise
+
 
 class TestDcrResourceControls:
     """SEC-16: unauthenticated ``/register`` gets a total-client cap, a
@@ -528,3 +539,131 @@ class TestDcrResourceControls:
         with pytest.raises(op.AuthorizeError) as exc_info:
             await provider.authorize(client, _params(state="s3"))
         assert exc_info.value.error == "temporarily_unavailable"
+
+
+class TestRefreshTokenSurvivesARestart:
+    """#402: the refresh chain is the one piece of org-mode auth state that
+    outlives the process, because it is the one whose loss needs a human who
+    may not be there -- a scheduled tool call has nobody to complete an IdP
+    redirect. Everything else here still dies with the daemon, deliberately.
+    """
+
+    async def test_a_refresh_token_still_works_after_a_restart(self, tmp_path, monkeypatch):
+        before = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _qs, _auth_code, tokens = await _drive_full_flow(
+            before, monkeypatch, client, claims={"sub": "alice", "email": "alice@example.com"},
+        )
+
+        after = _provider(tmp_path, monkeypatch)
+        loaded = await after.load_refresh_token(client, tokens.refresh_token)
+        assert loaded is not None
+        new_tokens = await after.exchange_refresh_token(client, loaded, [])
+
+        # The whole point: a new access token, for the same principal, with no
+        # IdP round trip and nobody present to click anything.
+        verified = await after.verify_token(new_tokens.access_token)
+        assert verified.subject == "alice"
+        assert verified.claims["email"] == "alice@example.com"
+
+    async def test_the_access_token_itself_does_not_survive(self, tmp_path, monkeypatch):
+        before = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _qs, _auth_code, tokens = await _drive_full_flow(before, monkeypatch, client, claims={"sub": "alice"})
+
+        after = _provider(tmp_path, monkeypatch)
+        assert await after.verify_token(tokens.access_token) is None
+
+    async def test_a_rehydrated_token_is_still_bound_to_its_own_client(self, tmp_path, monkeypatch):
+        before = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _qs, _auth_code, tokens = await _drive_full_flow(before, monkeypatch, client, claims={"sub": "alice"})
+
+        after = _provider(tmp_path, monkeypatch)
+        other_client = _client_info(client_id="someone-else")
+        assert await after.load_refresh_token(other_client, tokens.refresh_token) is None
+
+    async def test_a_revoked_refresh_token_does_not_come_back(self, tmp_path, monkeypatch):
+        before = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _qs, _auth_code, tokens = await _drive_full_flow(before, monkeypatch, client, claims={"sub": "alice"})
+        loaded = await before.load_refresh_token(client, tokens.refresh_token)
+        await before.revoke_token(loaded)
+
+        after = _provider(tmp_path, monkeypatch)
+        assert await after.load_refresh_token(client, tokens.refresh_token) is None
+
+    async def test_a_rotated_refresh_token_does_not_come_back(self, tmp_path, monkeypatch):
+        before = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _qs, _auth_code, tokens = await _drive_full_flow(before, monkeypatch, client, claims={"sub": "alice"})
+        loaded = await before.load_refresh_token(client, tokens.refresh_token)
+        rotated = await before.exchange_refresh_token(client, loaded, [])
+
+        after = _provider(tmp_path, monkeypatch)
+        assert await after.load_refresh_token(client, tokens.refresh_token) is None
+        assert await after.load_refresh_token(client, rotated.refresh_token) is not None
+
+    async def test_the_chain_absolute_lifetime_still_applies_to_a_rehydrated_token(
+        self, tmp_path, monkeypatch,
+    ):
+        """SEC-12's cap is checked against the chain's original issuance, which
+        travels inside the sealed record -- so a record that outlived its
+        ceiling cannot launder itself back in by surviving a restart. The
+        provider's own check is the authority here, not the store's coarser
+        chain_expires_at, so this hands it a record the store is still
+        perfectly happy to return.
+        """
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await provider.register_client(client)
+        provider._sealed.put(
+            "smuggled-refresh-token", principal_id="alice",
+            chain_expires_at=time.time() + 3600,
+            record=op.SealedRefreshRecord(
+                client_id=client.client_id, scopes=["mcp"], subject="alice",
+                email="alice@example.com", display_name="Alice", is_admin=False,
+                issued_at=1,  # long past the absolute cap
+            ),
+        )
+
+        assert await provider.load_refresh_token(client, "smuggled-refresh-token") is None
+        # Rejected outright, not merely refused once.
+        assert provider._sealed.get("smuggled-refresh-token") is None
+
+    async def test_revoke_all_for_principal_clears_memory_and_disk(self, tmp_path, monkeypatch):
+        provider = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _qs, _auth_code, alice = await _drive_full_flow(provider, monkeypatch, client, claims={"sub": "alice"})
+        _qs, _auth_code, bob = await _drive_full_flow(
+            provider, monkeypatch, client, claims={"sub": "bob"}, params=_params(state="bob-state"),
+        )
+
+        assert provider.revoke_all_for_principal("alice") == 1
+        assert await provider.load_refresh_token(client, alice.refresh_token) is None
+        assert await provider.load_refresh_token(client, bob.refresh_token) is not None
+        assert await provider.verify_token(alice.access_token) is None
+        assert _provider(tmp_path, monkeypatch)._sealed.record_count == 1
+
+    async def test_revoke_all_for_principal_reaches_records_this_process_never_loaded(
+        self, tmp_path, monkeypatch,
+    ):
+        """The in-memory map is empty right after a restart, so "sign out
+        everywhere" has to ask the store directly or it would silently miss
+        every chain the daemon hasn't served yet."""
+        before = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        _qs, _auth_code, tokens = await _drive_full_flow(before, monkeypatch, client, claims={"sub": "alice"})
+
+        after = _provider(tmp_path, monkeypatch)
+        assert after.revoke_all_for_principal("alice") == 1
+        assert await after.load_refresh_token(client, tokens.refresh_token) is None
+
+    async def test_startup_says_how_many_records_it_restored(self, tmp_path, monkeypatch, caplog):
+        before = _provider(tmp_path, monkeypatch)
+        client = _client_info()
+        await _drive_full_flow(before, monkeypatch, client, claims={"sub": "alice"})
+
+        with caplog.at_level("INFO"):
+            _provider(tmp_path, monkeypatch)
+        assert "restored 1 persisted refresh-token record(s)" in caplog.text

@@ -54,6 +54,7 @@ CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tes
 ## Architecture decisions and assets
 
 - [`adr/0001-remove-macos-native-extra.md`](adr/0001-remove-macos-native-extra.md) — current decision that PrivacyFence has no AppKit/PyObjC runtime dependency.
+- [`adr/0002-local-mode-trust-boundary-and-companion-app.md`](adr/0002-local-mode-trust-boundary-and-companion-app.md) — local mode's trust boundary is the OS user account, and the companion app that replaces the agent as the sign-in channel.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — screenshot generation and maintenance.
 - `images/` — diagrams and screenshots referenced by documentation.
 

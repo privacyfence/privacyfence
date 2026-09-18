@@ -8,7 +8,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..audit_log import AuditEntry, current_week, get_audit_logger
-from ..calendar_client import VALID_VISIBILITIES, CalendarClient, CalendarClientError
+from ..calendar_client import (
+    EVENT_COLOR_NAMES,
+    VALID_VISIBILITIES,
+    CalendarClient,
+    CalendarClientError,
+    normalize_event_color,
+)
 from ..connector import Connector, ToolParam, ToolSpec
 from ..gate import current_reason, gated_call
 
@@ -46,6 +52,24 @@ def _merged_attendees_display(event) -> str:
         label = f"{a.display_name} <{a.email}>" if a.display_name else a.email
         parts.append(f"{label} (organizer)" if a.organizer else label)
     return ", ".join(parts)
+
+
+def _normalize_color_arg(color: str) -> str:
+    """Validate a tool's ``color`` argument before gating, not after -- same
+    reasoning as calendar_set_event_visibility's own early visibility check:
+    a doomed call shouldn't cost the user an unnecessary approval decision.
+    Reuses calendar_client.normalize_event_color's palette validation but
+    re-raises as ValueError, matching every other connector-level "reject
+    this bad argument before gating" check (CalendarClientError is reserved
+    for failures from an actual API call). Returns "" unchanged -- no color
+    given is valid, meaning "don't change it".
+    """
+    if not color:
+        return ""
+    try:
+        return normalize_event_color(color)
+    except CalendarClientError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def _downgrade_to_busy_only(entry: dict) -> dict:
@@ -200,6 +224,17 @@ class CalendarConnector(Connector):
                 read_only=True,
             ),
             ToolSpec(
+                name="calendar_list_colors",
+                description=(
+                    "List Calendar's fixed event color palette: each color's id, name (e.g. "
+                    "\"Tomato\", \"Sage\"), and hex background/foreground. Use a color's id or "
+                    "name as the color argument to calendar_create_event, calendar_update_event, "
+                    "or calendar_set_event_color instead of guessing a numeric id. Auto-approved."
+                ),
+                params=[ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?")],
+                read_only=True,
+            ),
+            ToolSpec(
                 name="calendar_create_event",
                 description="Create a new calendar event. Requires user approval.",
                 params=[
@@ -215,6 +250,9 @@ class CalendarConnector(Connector):
                               description="Set to true to add a Google Meet video conference link"),
                     ToolParam("rooms", "str", required=False, default="",
                               description="Comma-separated room resource email addresses to book"),
+                    ToolParam("color", "str", required=False, default="",
+                              description="Event color id (1-11) or name, e.g. \"Tomato\" -- see "
+                                          "calendar_list_colors"),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -233,6 +271,23 @@ class CalendarConnector(Connector):
                               description="Set to true to add a Google Meet link (skipped if one already exists)"),
                     ToolParam("rooms", "str", required=False, default="",
                               description="Comma-separated room resource email addresses to book"),
+                    ToolParam("color", "str", required=False, default="",
+                              description="Event color id (1-11) or name, e.g. \"Tomato\" -- see "
+                                          "calendar_list_colors"),
+                    ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
+                ],
+            ),
+            ToolSpec(
+                name="calendar_set_event_color",
+                description=(
+                    "Set a calendar event's color. Only the color changes — no other fields are "
+                    "affected. Accepts a color id (1-11) or name, e.g. \"Tomato\" -- see "
+                    "calendar_list_colors. Requires user approval."
+                ),
+                params=[
+                    ToolParam("calendar_id", "str"),
+                    ToolParam("event_id", "str"),
+                    ToolParam("color", "str", description="Event color id (1-11) or name, e.g. \"Tomato\""),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -284,8 +339,12 @@ class CalendarConnector(Connector):
             return await self._get_event_visibility(**args)
         if tool == "calendar_set_event_visibility":
             return await self._set_event_visibility(**args)
+        if tool == "calendar_set_event_color":
+            return await self._set_event_color(**args)
         if tool == "calendar_list_rooms":
             return await self._list_rooms(**args)
+        if tool == "calendar_list_colors":
+            return await self._list_colors(**args)
         if tool == "calendar_create_event":
             return await self._create_event(**args)
         if tool == "calendar_update_event":
@@ -384,6 +443,17 @@ class CalendarConnector(Connector):
                          f"List rooms{': ' + query if query else ''}", f"{len(result)} room(s)", t0)
         return result
 
+    async def _list_colors(self) -> Any:
+        t0 = time.time()
+        colors = await self._fetch(self._calendar.list_event_colors)
+        result = [
+            {"id": c.id, "name": c.name, "background": c.background, "foreground": c.foreground}
+            for c in colors
+        ]
+        self._auto_audit("calendar_list_colors", "List Event Colors",
+                         "List event colors", f"{len(result)} color(s)", t0)
+        return result
+
     # ------------------------------------------------------------------ #
     # Review gate (reads)
     # ------------------------------------------------------------------ #
@@ -473,7 +543,9 @@ class CalendarConnector(Connector):
         location: str = "",
         add_google_meet: bool = False,
         rooms: str = "",
+        color: str = "",
     ) -> Any:
+        color_id = _normalize_color_arg(color)
         attendee_list = [e.strip() for e in attendees.split(",") if e.strip()] if attendees else []
         room_list = [r.strip() for r in rooms.split(",") if r.strip()] if rooms else []
         preview = {
@@ -489,11 +561,14 @@ class CalendarConnector(Connector):
             preview["Rooms"] = ", ".join(room_list)
         if attendee_list:
             preview["Attendees"] = ", ".join(attendee_list)
+        if color_id:
+            preview["Color"] = EVENT_COLOR_NAMES.get(color_id, color_id)
         raw_data = {
             "calendar_id": calendar_id, "title": title,
             "start_time": start_time, "end_time": end_time,
             "description": description, "attendees": attendee_list,
             "location": location, "add_google_meet": add_google_meet, "rooms": room_list,
+            "color": color_id,
         }
         await gated_call(
             connector=self.name,
@@ -512,7 +587,7 @@ class CalendarConnector(Connector):
         event = await self._fetch(
             self._calendar.create_event,
             calendar_id, title, start_time, end_time, description,
-            attendee_list or None, location, add_google_meet, room_list or None,
+            attendee_list or None, location, add_google_meet, room_list or None, color_id,
         )
         result = {"id": event.id, "title": event.title, "start_time": event.start_time,
                   "end_time": event.end_time, "html_link": event.html_link}
@@ -531,7 +606,9 @@ class CalendarConnector(Connector):
         location: str = "",
         add_google_meet: bool = False,
         rooms: str = "",
+        color: str = "",
     ) -> Any:
+        color_id = _normalize_color_arg(color)
         event = await self._fetch(self._calendar.get_event, calendar_id, event_id)
         room_list = [r.strip() for r in rooms.split(",") if r.strip()] if rooms else []
         # Event/Start/End always appear (unlike Description/Location/
@@ -559,6 +636,10 @@ class CalendarConnector(Connector):
             changes["Conferencing"] = "Add Google Meet"
         if room_list:
             changes["Rooms"] = f"Book: {', '.join(room_list)}"
+        if color_id and color_id != event.color_id:
+            old_color = EVENT_COLOR_NAMES.get(event.color_id, event.color_id) if event.color_id else "(default)"
+            new_color = EVENT_COLOR_NAMES.get(color_id, color_id)
+            changes["Color"] = f"{old_color} → {new_color}"
         changed_field_names.extend(changes.keys())
         preview = {
             "Event": _diff_or_value(title, event.title),
@@ -576,6 +657,7 @@ class CalendarConnector(Connector):
             "start_time": start_time, "end_time": end_time,
             "description": description, "location": location,
             "add_google_meet": add_google_meet, "rooms": room_list,
+            "color": color_id,
             "organizer_email": event.organizer_email,
             "attendees": [a.email for a in (event.attendees or [])],
         }
@@ -602,7 +684,7 @@ class CalendarConnector(Connector):
             self._calendar.update_event,
             calendar_id, event_id, title or None, start_time or None,
             end_time or None, description or None, location or None,
-            add_google_meet, room_list or None,
+            add_google_meet, room_list or None, color_id or None,
         )
         result = {"id": updated.id, "title": updated.title, "start_time": updated.start_time,
                   "end_time": updated.end_time, "html_link": updated.html_link}
@@ -717,6 +799,40 @@ class CalendarConnector(Connector):
         )
         updated = await self._fetch(self._calendar.set_event_visibility, calendar_id, event_id, visibility)
         return {"id": updated.id, "title": updated.title, "visibility": updated.visibility}
+
+    async def _set_event_color(self, calendar_id: str, event_id: str, color: str) -> Any:
+        color_id = _normalize_color_arg(color)
+        if not color_id:
+            raise ValueError("calendar_set_event_color: color is required")
+        event = await self._fetch(self._calendar.get_event, calendar_id, event_id)
+        old_color = EVENT_COLOR_NAMES.get(event.color_id, event.color_id) if event.color_id else "(default)"
+        new_color = EVENT_COLOR_NAMES.get(color_id, color_id)
+        preview = {
+            "Event": event.title or "(untitled)",
+            "Calendar": await self._calendar_name_for(calendar_id),
+            "Color": f"{old_color} → {new_color}",
+        }
+        raw_data = {
+            "calendar_id": calendar_id, "event_id": event_id, "color": color_id,
+            "organizer_email": event.organizer_email,
+            "attendees": [a.email for a in (event.attendees or [])],
+        }
+        await gated_call(
+            connector=self.name,
+            tool="calendar_set_event_color",
+            tool_name="Set Event Color",
+            summary=f"Set color of \"{event.title}\" to {new_color}",
+            sender=event.organizer_email or calendar_id,
+            raw_data=raw_data,
+            filtered_data=None,
+            gate="popup",
+            preview=preview,
+            details_text="Only the event's color will change; no other fields are affected.",
+            my_email=self.my_email,
+            args={"calendar_id": calendar_id, "event_id": event_id, "color": color_id},
+        )
+        updated = await self._fetch(self._calendar.set_event_color, calendar_id, event_id, color_id)
+        return {"id": updated.id, "title": updated.title, "color_id": updated.color_id}
 
     # ------------------------------------------------------------------ #
     # Helpers

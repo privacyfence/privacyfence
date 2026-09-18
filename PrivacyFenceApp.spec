@@ -89,12 +89,55 @@ daemon_exe = EXE(
     icon=ICON,
 )
 
+# ── companion (#428 Phase 3, ADR 0002) ────────────────────────────────────────
+# A second entry point *inside this same .app bundle* -- Contents/MacOS/PrivacyFenceCompanion,
+# alongside Contents/MacOS/PrivacyFenceApp -- not a second .app, second signature, or second
+# notarization path (ADR 0002 decision 4). The extra hidden imports below are pystray's macOS
+# (AppKit/NSStatusItem) backend and PyObjC's own dynamic-lookup surface, neither of which the
+# daemon's own Analysis above needs or declares -- best-effort, since this spec can only run (and
+# only be verified) on an actual macOS build host, never in this repo's own Linux-hosted CI.
+
+companion_a = Analysis(
+    ["src/_companion_entry.py"],
+    pathex=[SRC],
+    binaries=[],
+    datas=datas,
+    hiddenimports=hidden_imports + ["pystray._darwin", "PIL.Image", "objc", "Foundation", "AppKit"],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+)
+
+companion_pyz = PYZ(companion_a.pure)
+
+companion_exe = EXE(
+    companion_pyz,
+    companion_a.scripts,
+    [],
+    exclude_binaries=True,
+    name="PrivacyFenceCompanion",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
 # ── bundle into .app ──────────────────────────────────────────────────────────
 
 coll = COLLECT(
     daemon_exe,
     daemon_a.binaries,
     daemon_a.datas,
+    companion_exe,
+    companion_a.binaries,
+    companion_a.datas,
     strip=False,
     upx=True,
     upx_exclude=[],

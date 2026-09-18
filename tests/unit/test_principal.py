@@ -209,3 +209,25 @@ class TestPrincipalRegistry:
 
         assert build_count == 1
         assert len({id(r) for r in results}) == 1
+
+    def test_principal_ids_lists_every_principal_seen(self):
+        """#400 C3e: an install-wide setting (org mode's privacy/PII policy)
+        has to be pushed to every principal already holding a copy, and
+        get()/set() both resolve against current_principal() alone."""
+        registry = PrincipalRegistry(dict)
+        assert registry.principal_ids() == []
+
+        for principal_id in ("alice", "bob"):
+            with principal_scope(Principal(id=principal_id)):
+                registry.get()
+
+        assert sorted(registry.principal_ids()) == ["alice", "bob"]
+
+    def test_principal_ids_is_a_snapshot_not_a_live_view(self):
+        registry = PrincipalRegistry(dict)
+        with principal_scope(Principal(id="alice")):
+            registry.get()
+        ids = registry.principal_ids()
+        with principal_scope(Principal(id="bob")):
+            registry.get()
+        assert ids == ["alice"]

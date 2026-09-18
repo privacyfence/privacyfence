@@ -533,8 +533,7 @@ class TestDownloadAttachment:
         reason="'Will save to' preview text embeds this test's '/tmp' destination_dir "
         "verbatim via os.path.join(), which keeps the given POSIX-style root but appends "
         "with a native (backslash) separator on Windows -- a genuine finding from "
-        "promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md "
-        "Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
+        "promoting this suite to Windows CI, not otherwise tracked",
     )
     async def test_preview_and_gate(self, gated_call_spy):
         # application/octet-stream -- a type _worth_prefetching() doesn't

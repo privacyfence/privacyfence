@@ -1,14 +1,12 @@
-"""Real graphical-session autostart verification for the Linux ``.deb``
-(the now-removed automated-test-strategy-plan.md Phase 7 item 1; the now-removed linux-local-deb-
-packaging-plan.md P7.2).
+"""Real graphical-session autostart verification for the Linux ``.deb``.
 
 ``test_deb_packaged_lifecycle.py`` (Phase 6.3) already proves the install/
 validate/remove/purge/upgrade lifecycle, including that ``desktop-file-
 validate`` accepts the installed ``/etc/xdg/autostart/privacyfence.desktop``.
 What it deliberately does *not* prove -- see that module's own docstring,
-which only starts the daemon directly -- is P7.2's actual open question:
-does a real graphical login *itself* start the daemon via that autostart
-entry, with nothing else telling it to?
+which only starts the daemon directly -- is this module's own open
+question: does a real graphical login *itself* start the daemon via that
+autostart entry, with nothing else telling it to?
 
 There is no real display manager (gdm/lightdm/sddm) available on a CI
 runner to log into, so this module makes one deliberate substitution
@@ -24,7 +22,7 @@ in this module parses or interprets ``privacyfence.desktop`` itself; it
 only brings up a real ``systemd --user`` manager for the account (the same
 ``user@<uid>.service`` unit ``pam_systemd`` starts at a real login) and
 starts that one real target -- standing in for the missing physical
-login, exactly as P7.2's own text anticipates ("real or VM ... desktop").
+login, standing in for a real or VM desktop session.
 Everything downstream -- the generated unit's shape, whether it actually
 gets pulled in, whether starting it actually launches the packaged binary,
 whether the daemon then serves a real MCP/approval/audit round trip, and
@@ -39,9 +37,35 @@ PrivacyFence state under ``$HOME``, and always removes whatever it creates
 there afterwards -- see ``_real_home_state``. Only ever run this against a
 disposable CI account.
 
-A second, independent test in this module closes the other half of P7.2's
-"where practical" ask -- the OAuth loopback browser-opening flow -- in the
-one way a real graphical session uniquely enables:
+#428 D1 (4.1): a plain ``dpkg -i``/``sudo apt install`` of this ``.deb`` no
+longer leaves the daemon's own XDG autostart entry in place -- ``debian/
+postinst`` now runs ``privacyfence-privilege-separation enable --auto`` on
+every install, which separates the daemon into its own system account and
+system unit whenever ``$SUDO_USER`` resolves to a real, non-root account (as
+it does for this workflow's own ``sudo``-invoking ``runner`` CI account, and
+for a real human's ``sudo apt install``). This module now has two autostart
+scenarios instead of one, because that changed *what* is supposed to
+autostart in the login session, not just whether it does:
+
+- **Separated (the new default)**: the daemon is already up under
+  ``privacyfence-daemon.service`` (a system unit) *before* any login at
+  all -- ``enable --auto`` starts it synchronously from ``postinst``. What
+  the login session's own XDG autostart now activates is the *companion*
+  app's own control channel (``privacyfence-companion --serve``, ADR 0002
+  decision 5b), not the daemon -- the daemon has no desktop session of its
+  own to autostart into any more.
+- **Unseparated**: still what a bare ``pip``/``pipx`` install gets today
+  (nothing there ever runs ``enable --auto`` -- that hook is ``debian/
+  postinst``'s alone), and still reachable from a ``.deb`` install by
+  running ``disable``. This is the pre-D1 mechanism this module always
+  tested: the daemon's own XDG autostart entry starts the daemon directly
+  in the login session.
+
+Both are exercised below as separate tests.
+
+A third, independent test in this module covers the OAuth loopback
+browser-opening flow, where practical, in the one way a real graphical
+session uniquely enables:
 ``tests/platform/test_browser_launch_default.py`` (Phase 2.3) already
 proves ``oauth_loopback.run_browser_oauth()``'s default path reaches the
 real ``webbrowser.open`` function object, but it does so by *monkeypatching
@@ -49,26 +73,26 @@ that function itself*, headless, with no ``$DISPLAY`` -- by its own
 docstring's admission, the stdlib ``webbrowser`` module's own real
 browser-detection-and-subprocess-launch logic (the part that differs
 between "no GUI available" and "a real X session is up") is never actually
-exercised end to end anywhere in this repo. This module's second test
-runs that unmocked, under a real Xvfb ``$DISPLAY``, pointed (via the
-stdlib's own supported ``$BROWSER`` override) at a tiny real executable
-that performs the actual loopback HTTP round trip itself, as a real
-subprocess -- proving the genuine OS launch chain, not an injected
-stand-in.
+exercised end to end anywhere in this repo. This module's third test runs
+that unmocked, under a real Xvfb ``$DISPLAY``, pointed (via the stdlib's own
+supported ``$BROWSER`` override) at a tiny real executable that performs the
+actual loopback HTTP round trip itself, as a real subprocess -- proving the
+genuine OS launch chain, not an injected stand-in.
 
-Both tests are skipped entirely unless running on real Linux, booted with
-systemd as PID 1 (``/run/systemd/system`` -- a container typically fails
-this, a GitHub-hosted ``ubuntu-latest`` runner, a real VM, passes it), with
-whatever else each specific test additionally needs (a just-built ``.deb``
-and passwordless root for the autostart test; ``Xvfb`` for the browser
-test). This is the flakiest, most expensive tier in
-`the now-removed `automated-test-strategy-plan.md``'s whole taxonomy by design (see
-Phase 7's own objective) -- scheduled on packaging-related ``main`` changes,
-nightly/periodic runs, and release-candidate tags via its own
+All three tests are skipped entirely unless running on real Linux, booted
+with systemd as PID 1
+(``/run/systemd/system`` -- a container typically fails this, a
+GitHub-hosted ``ubuntu-latest`` runner, a real VM, passes it), with whatever
+else each specific test additionally needs (a just-built ``.deb`` and
+passwordless root for the autostart tests; ``Xvfb`` for the browser test).
+This is the most expensive tier in docs/testing-policy.md's
+test taxonomy (layer 6, packaged-artifact) by design -- scheduled on
+packaging-related ``main`` changes, nightly/periodic runs, and
+release-candidate tags via its own
 ``.github/workflows/linux-graphical-session.yml``, deliberately kept out of
 both the per-PR ``tests.yml`` jobs and ``build.yml``'s tag-triggered release
-pipeline (a flaky run here must never block an actual release the way a
-failure in ``test_deb_packaged_lifecycle.py`` correctly does).
+pipeline: unlike ``test_deb_packaged_lifecycle.py``, whose failure correctly
+does block a release, this tier is too heavy to gate every PR or release on.
 """
 from __future__ import annotations
 
@@ -77,16 +101,25 @@ import contextlib
 import getpass
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import Callable
 
 import httpx
 import pytest
 
 pytest.importorskip("mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'")
 
+from privacyfence.privilege_separation import (  # noqa: E402
+    HANDOFF_DIR_NAME,
+    LINUX_SYSTEM_ROOT,
+    MARKER_FILE_NAME,
+)
+from privacyfence.web.control_channel import companion_socket_path_under, socket_path_under  # noqa: E402
+from tests.control_channel_client import resolve_posix_socket_path  # noqa: E402
 from tests.diagnostics import (  # noqa: E402
     capture_directory_manifest,
     failure_dir,
@@ -96,7 +129,6 @@ from tests.diagnostics import (  # noqa: E402
 from tests.integration.test_deb_packaged_lifecycle import (  # noqa: E402
     MCP_TOKEN_FILE_NAME,
     OPT_DIR,
-    WEB_TOKEN_FILE_NAME,
     AUTOSTART_DESKTOP_FILE,
     _bootstrap_session,
     _built_debs,
@@ -111,14 +143,78 @@ from tests.integration.test_deb_packaged_lifecycle import (  # noqa: E402
     _wait_until_connectable,
 )
 
+# #428 D1 -- the separated layout's own root and marker, on this platform.
+# Imported rather than re-declared so this test can never drift from
+# scripts/linux_privilege_separation.sh's own constants (the same reasoning
+# AUTOSTART_UNIT_NAME below already applies to the legacy autostart entry).
+SYSTEM_ROOT = LINUX_SYSTEM_ROOT
+HANDOFF_DIR = SYSTEM_ROOT / HANDOFF_DIR_NAME
+PRIVILEGE_SEPARATION_MARKER = SYSTEM_ROOT / MARKER_FILE_NAME
+
+# systemd reserves a bare "-" as the unit-name hierarchy separator, so
+# systemd-xdg-autostart-generator escapes any "-" inside the desktop file's
+# own stem (systemd.unit(5)'s unit-name string escaping) before splicing it
+# into the generated unit name. Confirmed against the real systemd-escape
+# binary shipped in this environment (systemd 255, Ubuntu -- same lineage as
+# GitHub's ubuntu-latest runner image): `systemd-escape privacyfence-companion`
+# -> `privacyfence\x2dcompanion`, while `systemd-escape privacyfence` (no
+# dash) is unchanged -- which is why AUTOSTART_UNIT_NAME below always worked
+# (the daemon's stem has no dash) while COMPANION_AUTOSTART_UNIT_NAME didn't
+# (the companion's does).
+_UNIT_NAME_SAFE_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:_."
+)
+
+
+def _systemd_escape_unit_name_component(text: str) -> str:
+    """Mirrors systemd-escape(1)'s unit-name string escaping: every byte
+    outside the safe set above -- "-" included, since systemd reserves a
+    bare "-" as the unit-name hierarchy separator -- becomes a C-style
+    \\xAB hex escape."""
+    return "".join(c if c in _UNIT_NAME_SAFE_CHARS else f"\\x{ord(c):02x}" for c in text)
+
+
+def _systemd_unit_list(value: str) -> list[str]:
+    """Splits a ``systemctl show -p <property> --value`` unit list into the
+    unit names it actually names.
+
+    Not a plain space-separated list: systemd prints each element as a
+    *quoted word*, so any unit name holding a character it considers
+    special -- the ``\\xAB`` escapes
+    ``_systemd_escape_unit_name_component`` above produces among them --
+    comes back wrapped in double quotes with every backslash doubled::
+
+        "app-privacyfence\\\\x2dcompanion@autostart.service" app-foo@autostart.service
+
+    A bare ``.split()`` therefore never matches the real unit name for any
+    entry whose desktop-file stem contains a dash -- which is exactly the
+    companion's -- even when the unit is plainly listed.
+    ``shlex.split`` applies the same two unquoting rules systemd's own
+    quoting used here (drop the surrounding quotes, collapse ``\\\\`` back
+    to ``\\``) and leaves the ``\\xAB`` escapes themselves alone, which is
+    what the generated unit is genuinely called."""
+    return shlex.split(value)
+
+
 # Empirically confirmed against the real systemd-xdg-autostart-generator
-# binary shipped in this environment (systemd 255, Ubuntu -- same lineage
-# as GitHub's ubuntu-latest runner image): a source .desktop file named
-# "<stem>.desktop" becomes unit "app-<stem>@autostart.service", listed
-# under xdg-desktop-autostart.target.wants/. Derived from
+# binary shipped in this environment: a source .desktop file named
+# "<stem>.desktop" becomes unit "app-<escaped-stem>@autostart.service",
+# listed under xdg-desktop-autostart.target.wants/. Derived from
 # AUTOSTART_DESKTOP_FILE rather than hardcoded so it can never silently
 # drift from the actual installed filename.
-AUTOSTART_UNIT_NAME = f"app-{AUTOSTART_DESKTOP_FILE.stem}@autostart.service"
+AUTOSTART_UNIT_NAME = f"app-{_systemd_escape_unit_name_component(AUTOSTART_DESKTOP_FILE.stem)}@autostart.service"
+
+# #428 D1/Phase 4 (B5b): the companion's own autostart entry -- what a
+# separated install's login session activates instead of the daemon's now-
+# disabled entry above. Same generator-derivation reasoning as
+# AUTOSTART_UNIT_NAME, and the system unit `enable --auto` starts the daemon
+# under once separated (installer/linux/privacyfence-daemon.service.tmpl).
+COMPANION_AUTOSTART_DESKTOP_FILE = Path("/etc/xdg/autostart/privacyfence-companion.desktop")
+COMPANION_AUTOSTART_UNIT_NAME = (
+    f"app-{_systemd_escape_unit_name_component(COMPANION_AUTOSTART_DESKTOP_FILE.stem)}@autostart.service"
+)
+COMPANION_BIN = OPT_DIR / "PrivacyFenceCompanion"
+DAEMON_SYSTEM_UNIT = "privacyfence-daemon.service"
 
 _XDG_AUTOSTART_GENERATOR_PATHS = (
     Path("/usr/lib/systemd/user-generators/systemd-xdg-autostart-generator"),
@@ -139,11 +235,43 @@ def _systemd_is_init() -> bool:
     return Path("/run/systemd/system").exists()
 
 
+def _sudo_path_exists(path: Path) -> bool:
+    """Existence check for a path under a privilege-separated install's
+    ``handoff/`` dir (2770, group ``privacyfence``): `enable` adds this
+    test's own account to that group, but group membership only takes
+    effect for a *new* session (see linux_privilege_separation.sh's own "log
+    out and back in" note), and this already-running test process is not
+    one. `sudo -n` sidesteps the permission check entirely instead, the same
+    way `_dpkg` already does for `dpkg -i`/`-r`/`-P`."""
+    return subprocess.run(
+        ["sudo", "-n", "test", "-e", str(path)], capture_output=True, timeout=10,
+    ).returncode == 0
+
+
+def _wait_for_path_as_root(path: Path, *, timeout: float, what: str) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _sudo_path_exists(path):
+            return
+        time.sleep(0.1)
+    raise AssertionError(f"{what} ({path}) never appeared within {timeout}s")
+
+
+def _sudo_readlink(path: str) -> str:
+    """``os.readlink()``, elevated -- needed for the separated daemon's own
+    ``/proc/<pid>/exe``, which runs as the ``privacyfence`` service account,
+    not this test's own uid."""
+    result = subprocess.run(
+        ["sudo", "-n", "readlink", path], capture_output=True, text=True, timeout=10, check=True,
+    )
+    return result.stdout.strip()
+
+
 pytestmark = [
     pytest.mark.packaged,
     pytest.mark.skipif(
         platform.system() != "Linux",
-        reason="only meaningful on real Linux -- see the now-removed linux-local-deb-packaging-plan.md P7.2",
+        reason="only meaningful on real Linux",
     ),
     # Same heavy-setup timeout reasoning as test_deb_packaged_lifecycle.py:
     # a real dpkg install, a real systemd --user manager brought up from
@@ -204,8 +332,7 @@ def _current_user() -> str:
 # --------------------------------------------------------------------------- #
 
 def _capture_real_home_diagnostics(request, real_home: Path, state_dir: Path) -> None:
-    """The now-removed automated-test-strategy-plan.md Phase 10: this module's own
-    tests/diagnostics.py capture call, since ``_real_home_state`` (unlike
+    """This module's own tests/diagnostics.py capture call, since ``_real_home_state`` (unlike
     every other packaged/system fixture in this repo) deliberately isolates
     nothing under ``tmp_path`` -- see this fixture's own docstring for why.
     Its own daemon never even logs to a file (`systemd --user` captures its
@@ -219,14 +346,22 @@ def _capture_real_home_diagnostics(request, real_home: Path, state_dir: Path) ->
     dest = failure_dir(request.node.nodeid, suite=suite_name_for(__file__))
     write_environment_info(dest / "environment.txt")
     capture_directory_manifest(state_dir, dest / "manifest.txt")
-    journal = subprocess.run(
-        ["journalctl", "--user", "-u", AUTOSTART_UNIT_NAME, "--no-pager"],
-        capture_output=True, text=True,
-    )
     (dest / "logs").mkdir(parents=True, exist_ok=True)
-    (dest / "logs" / f"journalctl-{AUTOSTART_UNIT_NAME}.log").write_text(
-        journal.stdout + journal.stderr, encoding="utf-8",
-    )
+    # Best-effort, all three units this module can start: whichever test
+    # failed, only the units it actually touched will have anything in
+    # them. The system daemon unit's journal needs root to read.
+    for unit, cmd in (
+        (AUTOSTART_UNIT_NAME, ["journalctl", "--user", "-u", AUTOSTART_UNIT_NAME, "--no-pager"]),
+        (
+            COMPANION_AUTOSTART_UNIT_NAME,
+            ["journalctl", "--user", "-u", COMPANION_AUTOSTART_UNIT_NAME, "--no-pager"],
+        ),
+        (DAEMON_SYSTEM_UNIT, ["sudo", "-n", "journalctl", "-u", DAEMON_SYSTEM_UNIT, "--no-pager"]),
+    ):
+        journal = subprocess.run(cmd, capture_output=True, text=True)
+        (dest / "logs" / f"journalctl-{unit}.log").write_text(
+            journal.stdout + journal.stderr, encoding="utf-8",
+        )
 
 
 @pytest.fixture
@@ -248,70 +383,70 @@ def _real_home_state(request):
         shutil.rmtree(state_dir, ignore_errors=True)
 
 
-# --------------------------------------------------------------------------- #
-# Test 1 -- P7.2: real login-equivalent XDG autostart actually starts the
-# packaged daemon, which then serves a real daemon/MCP/approval/audit round
-# trip (Phase 3's own contract shape), and "Quit PrivacyFence" stops the
-# real systemd unit, not just the process.
-# --------------------------------------------------------------------------- #
-
-@pytest.mark.skipif(
-    not _built_debs(),
-    reason=(
-        "no dist/privacyfence_*.deb built yet -- run scripts/build_deb.sh first, same as "
-        "test_deb_packaged_lifecycle.py's own identical skip"
-    ),
-)
-@pytest.mark.skipif(
-    shutil.which("dpkg") is None or shutil.which("dpkg-deb") is None,
-    reason="dpkg/dpkg-deb not on PATH (apt-get install dpkg-dev)",
-)
-@pytest.mark.skipif(
-    not _can_install_packages(),
-    reason="installing a .deb needs root -- run as root or with passwordless sudo",
-)
-@pytest.mark.skipif(not _systemd_is_init(), reason="not booted with systemd as PID 1 -- needs a real VM, not a container")
-@pytest.mark.skipif(
-    not _has_xdg_autostart_generator(),
-    reason="systemd-xdg-autostart-generator not present -- needs systemd >= 247 on a desktop-capable Ubuntu/Debian",
-)
-@pytest.mark.skipif(
-    shutil.which("loginctl") is None or shutil.which("systemctl") is None or shutil.which("systemd-run") is None,
-    reason="loginctl/systemctl/systemd-run not on PATH",
-)
-async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_state):
-    home = _real_home_state
-    user = _current_user()
-    uid = os.getuid()
-
-    deb_path = _built_debs()[-1]
-    port = _free_port()
-
-    # Pre-seed the real $HOME's settings.yaml the same way _prepare_home
-    # does for every other packaged/system test -- a real free port, update
-    # checks off (this tier makes no real outbound network calls) -- but
-    # against the *real* $HOME, before the daemon's own first boot, exactly
-    # what a real first login would find already in place from an earlier
-    # "Authenticate..." session.
-    _prepare_home(home, port=port)
-
-    # ── Install; confirm the postinst's own contract (P3.3): a fresh
-    # install must never itself start the daemon -- only the *next*
-    # graphical login's XDG autostart should ─────────────────────────────
-    _dpkg("-i", str(deb_path))
-    time.sleep(1.0)
-    assert not (home / ".privacyfence" / WEB_TOKEN_FILE_NAME).exists(), (
-        "installing the .deb must never itself start the daemon -- only the next login should"
+# Shared skip stack for every test below that installs the real .deb and
+# drives a real login-equivalent systemd --user session -- factored out so
+# the separated and unseparated cases below can't drift apart on when
+# either is even meaningful to run.
+def _needs_deb_login_session(fn):
+    marks = (
+        pytest.mark.skipif(
+            not _built_debs(),
+            reason=(
+                "no dist/privacyfence_*.deb built yet -- run scripts/build_deb.sh first, same as "
+                "test_deb_packaged_lifecycle.py's own identical skip"
+            ),
+        ),
+        pytest.mark.skipif(
+            shutil.which("dpkg") is None or shutil.which("dpkg-deb") is None,
+            reason="dpkg/dpkg-deb not on PATH (apt-get install dpkg-dev)",
+        ),
+        pytest.mark.skipif(
+            not _can_install_packages(),
+            reason="installing a .deb needs root -- run as root or with passwordless sudo",
+        ),
+        pytest.mark.skipif(
+            not _systemd_is_init(), reason="not booted with systemd as PID 1 -- needs a real VM, not a container",
+        ),
+        pytest.mark.skipif(
+            not _has_xdg_autostart_generator(),
+            reason="systemd-xdg-autostart-generator not present -- needs systemd >= 247 on a desktop-capable Ubuntu/Debian",
+        ),
+        pytest.mark.skipif(
+            shutil.which("loginctl") is None or shutil.which("systemctl") is None or shutil.which("systemd-run") is None,
+            reason="loginctl/systemctl/systemd-run not on PATH",
+        ),
     )
+    for mark in reversed(marks):
+        fn = mark(fn)
+    return fn
 
-    # ── "Log in": bring up a real systemd --user manager for this account,
-    # exactly the unit pam_systemd starts at a real login, then trigger the
-    # same target a real desktop session's own compositor/session manager
-    # pulls in once it's up. See module docstring for why this is the one
-    # deliberate substitution here -- everything else below is the real OS
-    # mechanism. ───────────────────────────────────────────────────────────
+
+def _start_real_login_session(user: str, uid: int) -> tuple[dict, Callable[..., subprocess.CompletedProcess]]:
+    """Brings up a real ``systemd --user`` manager for this account, exactly
+    the unit ``pam_systemd`` starts at a real login, then triggers the same
+    target a real desktop session's own compositor/session manager pulls in
+    once it's up. See module docstring for why this is the one deliberate
+    substitution both autostart tests below make -- everything else is the
+    real OS mechanism. Returns the environment a ``systemctl --user`` call
+    needs, and a ``systemctl_user()`` helper bound to it."""
     subprocess.run(
         ["sudo", "-n", "loginctl", "enable-linger", user], check=True, capture_output=True, text=True, timeout=15,
+    )
+    # `systemctl start` is a no-op against a manager that is already running,
+    # and on a CI runner this account's manager generally is -- which would
+    # make this a *continued* session, not a new one. That distinction is not
+    # cosmetic here: `enable --auto` adds the installing human to the
+    # `privacyfence` group during this very test's `dpkg -i`, and a process's
+    # supplementary groups are fixed when its session is created. A manager
+    # that predates the install hands every unit it starts -- the companion
+    # among them -- a group set without `privacyfence`, so the companion
+    # cannot create its socket in the 2770 group-owned handoff dir and fails
+    # exactly the way linux_privilege_separation.sh's own "log out and back
+    # in" note describes. Stopping first is what makes the start below a real
+    # login rather than a reused one.
+    subprocess.run(
+        ["sudo", "-n", "systemctl", "stop", f"user@{uid}.service"],
+        check=False, capture_output=True, text=True, timeout=30,
     )
     subprocess.run(
         ["sudo", "-n", "systemctl", "start", f"user@{uid}.service"],
@@ -332,40 +467,29 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
         )
 
     # A real login's user manager always (re-)runs its generators
-    # (systemd-xdg-autostart-generator among them) on its own startup;
-    # daemon-reload makes that moment explicit and repeatable here, since
-    # the .deb's postinst just dropped a new autostart entry after this
-    # manager may already have been running for other CI reasons.
+    # (systemd-xdg-autostart-generator among them) on its own startup, which
+    # the restart above already guarantees; daemon-reload keeps that moment
+    # explicit and repeatable even if the stop above was refused.
     systemctl_user("daemon-reload")
+    return user_env, systemctl_user
 
-    unit = AUTOSTART_UNIT_NAME
-    unit_def = systemctl_user("cat", unit)
-    assert "/usr/bin/privacyfence-app" in unit_def.stdout, (
-        f"{unit} wasn't generated correctly from the installed autostart entry:\n{unit_def.stdout}"
-    )
-    assert "PartOf=graphical-session.target" in unit_def.stdout
 
-    wants = systemctl_user("show", "xdg-desktop-autostart.target", "-p", "Wants", "--value")
-    assert unit in wants.stdout.split(), (
-        f"{unit} is not pulled in by xdg-desktop-autostart.target -- a real desktop session "
-        f"would never start it at login:\n{wants.stdout}"
-    )
+def _trigger_graphical_session_target(user_env: dict) -> None:
+    """The actual "login" moment -- the same target a real GNOME/KDE/Sway
+    session starts once its compositor/session manager comes up.
 
-    # The actual "login" moment -- the same target a real GNOME/KDE/Sway
-    # session starts once its compositor/session manager comes up.
-    #
-    # xdg-desktop-autostart.target ships from systemd itself with
-    # RefuseManualStart=yes (see units/user/xdg-desktop-autostart.target in
-    # the systemd source): a plain `systemctl --user start` against it is
-    # refused outright -- exit 4 (EXIT_NOPERMISSION) -- on *any* real
-    # systemd, not just in CI. That's by design: it exists to be pulled in
-    # as a *dependency* of a real desktop session's own session-tracking
-    # unit, never started directly -- and RefuseManualStart explicitly still
-    # permits dependency-triggered starts. A transient oneshot unit that
-    # simply Wants= it, started via systemd-run, is exactly that dependency
-    # trigger -- the same mechanism a real compositor/session-manager unit's
-    # own static Wants= achieves, just assembled on the fly here instead of
-    # shipped on disk.
+    ``xdg-desktop-autostart.target`` ships from systemd itself with
+    ``RefuseManualStart=yes`` (see ``units/user/xdg-desktop-autostart.target``
+    in the systemd source): a plain ``systemctl --user start`` against it is
+    refused outright -- exit 4 (``EXIT_NOPERMISSION``) -- on *any* real
+    systemd, not just in CI. That's by design: it exists to be pulled in as
+    a *dependency* of a real desktop session's own session-tracking unit,
+    never started directly -- and ``RefuseManualStart`` explicitly still
+    permits dependency-triggered starts. A transient oneshot unit that
+    simply ``Wants=`` it, started via ``systemd-run``, is exactly that
+    dependency trigger -- the same mechanism a real compositor/session-
+    manager unit's own static ``Wants=`` achieves, just assembled on the fly
+    here instead of shipped on disk."""
     subprocess.run(
         [
             "systemd-run", "--user", "--collect", "--quiet",
@@ -377,6 +501,231 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
         env=user_env, check=True, capture_output=True, text=True, timeout=15,
     )
 
+
+# --------------------------------------------------------------------------- #
+# Test 1 -- #428 D1's new default: a separated install's daemon comes up
+# under its own *system* unit (no login involved at all), and what the
+# login session's XDG autostart activates instead is the companion's own
+# control channel (ADR 0002 decision 5b) -- not the daemon.
+# --------------------------------------------------------------------------- #
+
+@_needs_deb_login_session
+async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_unit(_real_home_state):
+    home = _real_home_state
+    user = _current_user()
+    uid = os.getuid()
+
+    deb_path = _built_debs()[-1]
+    port = _free_port()
+    _prepare_home(home, port=port)
+
+    # ── Install. #428 D1: postinst's `enable --auto` now separates the
+    # install synchronously, inside `dpkg -i` itself, whenever $SUDO_USER
+    # resolves to a real, non-root account -- true of this job's own
+    # `sudo`-invoking `runner` CI account, same as a real human's `sudo apt
+    # install`. ─────────────────────────────────────────────────────────
+    _dpkg("-i", str(deb_path))
+
+    assert PRIVILEGE_SEPARATION_MARKER.is_file(), (
+        f"{PRIVILEGE_SEPARATION_MARKER} missing after dpkg -i -- this test assumes `enable --auto` "
+        "separated the install the same way a real `sudo apt install`/`sudo dpkg -i` would; if "
+        "$SUDO_USER isn't resolving to a real account here, see debian/postinst's own --auto gating"
+    )
+
+    # ── The legacy, single-account mechanism is gone: stop_legacy_autostart()
+    # moved the daemon's own autostart entry aside, and the companion's own
+    # entry -- which validates the same way the legacy one always has --
+    # takes its place. ───────────────────────────────────────────────────
+    assert not AUTOSTART_DESKTOP_FILE.exists(), f"{AUTOSTART_DESKTOP_FILE} should be disabled once separated"
+    assert Path(f"{AUTOSTART_DESKTOP_FILE}.disabled").is_file()
+
+    assert COMPANION_AUTOSTART_DESKTOP_FILE.is_file()
+    validate = subprocess.run(
+        ["desktop-file-validate", str(COMPANION_AUTOSTART_DESKTOP_FILE)], capture_output=True, text=True,
+    )
+    assert validate.returncode == 0, (
+        f"{COMPANION_AUTOSTART_DESKTOP_FILE} failed validation:\n{validate.stdout}{validate.stderr}"
+    )
+
+    # ── The daemon is already up under its own system unit -- no login
+    # needed at all, unlike the unseparated path (this module's other
+    # autostart test). ───────────────────────────────────────────────────
+    daemon_state = subprocess.run(
+        ["systemctl", "is-active", DAEMON_SYSTEM_UNIT], capture_output=True, text=True,
+    ).stdout.strip()
+    assert daemon_state == "active", f"{DAEMON_SYSTEM_UNIT} is not active right after install: {daemon_state!r}"
+
+    daemon_pid = subprocess.run(
+        ["systemctl", "show", DAEMON_SYSTEM_UNIT, "-p", "MainPID", "--value"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert daemon_pid and daemon_pid != "0", f"{DAEMON_SYSTEM_UNIT} is active but reports no MainPID"
+    daemon_exe = _sudo_readlink(f"/proc/{daemon_pid}/exe")
+    expected_daemon_exe = str(OPT_DIR / "PrivacyFenceApp")
+    assert daemon_exe == expected_daemon_exe, f"{DAEMON_SYSTEM_UNIT} runs {daemon_exe!r}, not {expected_daemon_exe!r}"
+    daemon_owner = subprocess.run(
+        ["ps", "-o", "user=", "-p", daemon_pid], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert daemon_owner == "privacyfence", f"the daemon should run as the service account, not {daemon_owner!r}"
+
+    # Not just "systemd thinks it's active" -- the daemon's own control
+    # channel and mcp_token genuinely came up, moved to handoff/ exactly as
+    # privilege_separation.py's own module docstring lays out.
+    _wait_for_path_as_root(socket_path_under(HANDOFF_DIR), timeout=20, what="the separated daemon's control channel socket")
+    _wait_for_path_as_root(HANDOFF_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token")
+
+    # ── "Log in": same real systemd --user manager + xdg-desktop-autostart
+    # .target dance as the unseparated test -- what differs here is which
+    # unit it's supposed to pull in. ────────────────────────────────────
+    user_env, systemctl_user = _start_real_login_session(user, uid)
+
+    unit = COMPANION_AUTOSTART_UNIT_NAME
+    unit_def = systemctl_user("cat", unit)
+    assert "/usr/bin/privacyfence-companion --serve" in unit_def.stdout, (
+        f"{unit} wasn't generated correctly from the companion's autostart entry:\n{unit_def.stdout}"
+    )
+    assert "PartOf=graphical-session.target" in unit_def.stdout
+
+    wants = systemctl_user("show", "xdg-desktop-autostart.target", "-p", "Wants", "--value")
+    assert unit in _systemd_unit_list(wants.stdout), (
+        f"{unit} is not pulled in by xdg-desktop-autostart.target -- a real desktop session "
+        f"would never start it at login:\n{wants.stdout}"
+    )
+
+    # B24: the earlier `assert not AUTOSTART_DESKTOP_FILE.exists()` above only
+    # proves stop_legacy_autostart() renamed the file -- it does not prove
+    # systemd actually stopped autostarting it. systemd-xdg-autostart-
+    # generator does not filter the autostart directories by filename, so
+    # the *renamed* file was still turned into AUTOSTART_UNIT_NAME and pulled
+    # into this same target -- a second daemon, started as this logged-in
+    # user, that check_runtime_identity then refused to run as the wrong
+    # account. This is the one assertion in this module that would actually
+    # have caught that: not the file move, but whether the generator honours
+    # it.
+    assert AUTOSTART_UNIT_NAME not in wants.stdout.split(), (
+        f"{AUTOSTART_UNIT_NAME} is still pulled in by xdg-desktop-autostart.target -- "
+        f"stop_legacy_autostart()'s rename of {AUTOSTART_DESKTOP_FILE} did not stop systemd's "
+        f"generator from autostarting the daemon's old entry under its renamed name:\n{wants.stdout}"
+    )
+
+    _trigger_graphical_session_target(user_env)
+
+    _wait_for_unit_property(systemctl_user, unit, "ActiveState", "active", timeout=20)
+    companion_pid = systemctl_user("show", unit, "-p", "MainPID", "--value").stdout.strip()
+    assert companion_pid and companion_pid != "0", (
+        f"{unit} is active but reports no MainPID:\n{systemctl_user('status', unit, check=False).stdout}"
+    )
+    exe_link = os.readlink(f"/proc/{companion_pid}/exe")
+    assert exe_link == str(COMPANION_BIN), f"systemd started {exe_link!r}, not the packaged companion at {COMPANION_BIN!r}"
+    companion_owner = subprocess.run(
+        ["ps", "-o", "user=", "-p", companion_pid], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert companion_owner == user, f"the companion should run as {user!r} (the logged-in human), not {companion_owner!r}"
+
+    # Functional proof, not just "systemd thinks it's active": the
+    # companion's own CompanionChannelServer actually bound its socket --
+    # the same rigor the unseparated test applies to the daemon's own
+    # control.sock.
+    try:
+        _wait_for_path_as_root(
+            companion_socket_path_under(HANDOFF_DIR), timeout=20, what="the companion's own control channel socket",
+        )
+    except AssertionError as exc:
+        # The one failure mode worth naming rather than re-deriving from a
+        # bare "never appeared": handoff/ is 2770 and group-owned, so a
+        # companion whose session predates `enable --auto`'s `usermod -aG`
+        # simply cannot create a socket in it. Print what the process
+        # actually got, so this never costs a second workflow round.
+        try:
+            status = Path(f"/proc/{companion_pid}/status").read_text()
+        except OSError:  # the companion exited between the check above and here
+            credentials = f"<pid {companion_pid} is gone>"
+        else:
+            credentials = "\n".join(
+                ln for ln in status.splitlines() if ln.startswith(("Uid:", "Gid:", "Groups:"))
+            )
+        journal = systemctl_user("status", unit, "--no-pager", check=False).stdout
+        raise AssertionError(
+            f"{exc}\n\ncompanion process credentials:\n{credentials}\n\n{unit}:\n{journal}"
+        ) from exc
+
+    # ── Cleanup: unlike the daemon, the companion's --serve mode has no
+    # in-product "quit" of its own (companion.py only ever asks the *daemon*
+    # to quit) -- it only ever exits on SIGTERM, which is what a real
+    # session teardown sends it. `systemctl --user stop` is the direct
+    # equivalent, so this test's own generated unit doesn't outlive it into
+    # the next test in this module. ──────────────────────────────────────
+    systemctl_user("stop", unit, check=False)
+
+
+# --------------------------------------------------------------------------- #
+# Test 2 -- the unseparated path: still what a bare pip/pipx install gets
+# today (nothing there ever runs `enable --auto`), and reachable from a
+# .deb install by running `disable` -- the pre-D1 mechanism this module
+# always tested, where the daemon's own XDG autostart entry starts the
+# daemon directly in the login session, which then serves a real daemon/
+# MCP/approval/audit round trip (Phase 3's own contract shape), and "Quit
+# PrivacyFence" stops the real systemd unit, not just the process.
+# --------------------------------------------------------------------------- #
+
+@_needs_deb_login_session
+async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_state):
+    home = _real_home_state
+    user = _current_user()
+    uid = os.getuid()
+
+    deb_path = _built_debs()[-1]
+    port = _free_port()
+
+    # Pre-seed the real $HOME's settings.yaml the same way _prepare_home
+    # does for every other packaged/system test -- a real free port, update
+    # checks off (this tier makes no real outbound network calls) -- but
+    # against the *real* $HOME, before the daemon's own first boot, exactly
+    # what a real first login would find already in place from an earlier
+    # "Authenticate..." session.
+    _prepare_home(home, port=port)
+
+    # ── Install, then explicitly undo #428 D1's now-automatic privilege
+    # separation -- this pins the pre-D1 mechanism, which is *also* still
+    # exactly what a bare pip/pipx install gets today: nothing there ever
+    # runs `enable --auto` at all, since that hook is debian/postinst's
+    # alone. See the first test in this module for the new, separated-by-
+    # default path a plain `.deb` install now takes if left alone. ───────
+    _dpkg("-i", str(deb_path))
+    subprocess.run(
+        ["sudo", "-n", "privacyfence-privilege-separation", "disable", "--user", user],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+
+    # ── Confirm the postinst's own contract (P3.3): a fresh install --
+    # having reverted the auto-enabled privilege separation -- must never
+    # itself start the daemon; only the *next* graphical login's XDG
+    # autostart should ───────────────────────────────────────────────────
+    time.sleep(1.0)
+    assert not resolve_posix_socket_path(home / ".privacyfence").exists(), (
+        "installing the .deb (and reverting the auto-enabled privilege separation) must never "
+        "itself start the daemon -- only the next login should"
+    )
+
+    # ── "Log in": same real systemd --user manager + xdg-desktop-autostart
+    # .target dance as the separated test above. ────────────────────────
+    user_env, systemctl_user = _start_real_login_session(user, uid)
+
+    unit = AUTOSTART_UNIT_NAME
+    unit_def = systemctl_user("cat", unit)
+    assert "/usr/bin/privacyfence-app" in unit_def.stdout, (
+        f"{unit} wasn't generated correctly from the installed autostart entry:\n{unit_def.stdout}"
+    )
+    assert "PartOf=graphical-session.target" in unit_def.stdout
+
+    wants = systemctl_user("show", "xdg-desktop-autostart.target", "-p", "Wants", "--value")
+    assert unit in _systemd_unit_list(wants.stdout), (
+        f"{unit} is not pulled in by xdg-desktop-autostart.target -- a real desktop session "
+        f"would never start it at login:\n{wants.stdout}"
+    )
+
+    _trigger_graphical_session_target(user_env)
+
     _wait_for_unit_property(systemctl_user, unit, "ActiveState", "active", timeout=20)
     main_pid = systemctl_user("show", unit, "-p", "MainPID", "--value").stdout.strip()
     assert main_pid and main_pid != "0", (
@@ -386,7 +735,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     expected_exe = str(OPT_DIR / "PrivacyFenceApp")
     assert exe_link == expected_exe, f"systemd started {exe_link!r}, not the packaged binary at {expected_exe!r}"
 
-    web_token = _wait_for_path_content(home / ".privacyfence" / WEB_TOKEN_FILE_NAME, timeout=20)
+    _wait_for_path(resolve_posix_socket_path(home / ".privacyfence"), timeout=20, what="control channel socket")
     mcp_token = _wait_for_path_content(home / ".privacyfence" / MCP_TOKEN_FILE_NAME, timeout=20)
     _wait_until_connectable("localhost", port)
 
@@ -396,7 +745,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     # ── Phase 3's own daemon/MCP/approval/audit contract shape, against a
     # daemon that this test never itself started a process for ───────────
     async with httpx.AsyncClient(base_url=base_url, follow_redirects=True) as web_client:
-        session_id = await _bootstrap_session(web_client, web_token)
+        session_id = await _bootstrap_session(web_client, home / ".privacyfence")
         assert (await web_client.get("/settings")).status_code == 200
 
         allow_task = asyncio.create_task(
@@ -416,12 +765,12 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     _wait_for_unit_property(systemctl_user, unit, "ActiveState", "inactive", timeout=20)
     assert not Path(f"/proc/{main_pid}").exists(), f"pid {main_pid} still alive after Quit PrivacyFence"
 
-    settings_path = home / ".privacyfence" / "config" / "settings.yaml"
+    settings_path = home / ".privacyfence" / "authority" / "config" / "settings.yaml"
     assert "autostart.example.com" in settings_path.read_text(encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- #
-# Test 2 -- P7.2 "where practical": the real (unmocked) OAuth loopback
+# Test 3 -- where practical, the real (unmocked) OAuth loopback
 # browser-opening flow, under a real Xvfb $DISPLAY.
 # --------------------------------------------------------------------------- #
 

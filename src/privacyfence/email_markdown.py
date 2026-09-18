@@ -1,9 +1,15 @@
 """Markdown -> HTML / plain-text rendering for rich-text email bodies.
 
 Deliberately minimal and independent from drive_client.py's Markdown -> Google
-Docs API parser: supports bold, italic, links, lists, paragraphs, and
-==highlight== only -- the subset that makes sense in an email body. Not
-attempting CommonMark compliance, tables, headings, or nested lists.
+Docs API parser: supports bold, italic, links, lists, paragraphs, two heading
+levels, and ==highlight== only -- the subset that makes sense in an email
+body. Not attempting CommonMark compliance, tables, or nested lists.
+
+Gmail's own web compose UI has no true semantic H1/H2 -- only inline
+font-size presets ("Small / Normal / Large / Huge"). `#`/`##` are mapped to
+those presets (Large/Huge) rather than raw `<h1>`/`<h2>` tags, since raw
+heading tags render inconsistently across mail clients; see
+markdown_to_html's HEADING_SIZES.
 """
 
 from __future__ import annotations
@@ -59,21 +65,30 @@ def _parse_inline_runs(text: str) -> list[_InlineRun]:
 
 
 class _Block(NamedTuple):
-    kind: str  # "para" or "list"
+    kind: str  # "para", "list", or "heading"
     ordered: bool
     lines: list[str]
+    level: int = 0  # heading level (1 or 2); unused for "para"/"list"
+
+
+# `#`/`##` only -- Gmail's compose UI offers just two font-size presets above
+# Normal (Large, Huge), so there's nothing for a third `###`+ level to map
+# to. A `###`+ prefix is therefore left unrecognized and falls through to a
+# plain paragraph, same as before this syntax existed.
+_HEADING_RE = _re.compile(r"^(#{1,2})\s+(.*)")
 
 
 def _parse_blocks(markdown: str) -> list[_Block]:
-    """Split markdown source into paragraph and list blocks.
+    """Split markdown source into paragraph, list, and heading blocks.
 
     A blank line always ends the current block. Consecutive non-blank lines
-    that aren't list items join one paragraph (rendered with a line break
-    between them, not reflowed into one line) -- short emails are usually
-    intentionally line-broken, unlike long-form prose. Consecutive list-item
-    lines of the same kind (bullet vs numbered) join one list block;
-    switching kind starts a new block. Nested/indented lists are not
-    supported.
+    that aren't list items or headings join one paragraph (rendered with a
+    line break between them, not reflowed into one line) -- short emails are
+    usually intentionally line-broken, unlike long-form prose. Consecutive
+    list-item lines of the same kind (bullet vs numbered) join one list
+    block; switching kind starts a new block. A heading line always starts
+    its own single-line block, even directly adjacent to a paragraph or
+    another heading. Nested/indented lists are not supported.
     """
     blocks: list[_Block | None] = []
     for raw_line in markdown.replace("\r\n", "\n").split("\n"):
@@ -92,6 +107,12 @@ def _parse_blocks(markdown: str) -> list[_Block]:
                 top.lines.append(item_text)
             else:
                 blocks.append(_Block("list", ordered, [item_text]))
+            continue
+
+        heading_match = _HEADING_RE.match(line)
+        if heading_match:
+            level = len(heading_match.group(1))
+            blocks.append(_Block("heading", False, [heading_match.group(2)], level))
             continue
 
         top = blocks[-1] if blocks else None
@@ -119,11 +140,19 @@ def _render_inline(text: str) -> str:
     return "".join(chunks)
 
 
+# `#` (Heading 1) -> Gmail's "Large" preset, `##` (Heading 2) -> "Huge".
+# Keyword CSS sizes, not px, matching what Gmail's own compose UI emits for
+# these two presets so a heading built here renders the same as one a human
+# picked from Gmail's own Size menu, in Gmail and elsewhere alike.
+HEADING_SIZES = {1: "large", 2: "xx-large"}
+
+
 def markdown_to_html(markdown: str) -> str:
     """Render the supported Markdown subset (bold, italic, ==highlight==,
-    links, lists, paragraphs) as an HTML fragment for an email's text/html
-    part. All literal text is HTML-escaped; only the constructs above ever
-    produce markup, and link hrefs are restricted to http/https/mailto.
+    links, lists, paragraphs, `#`/`##` headings) as an HTML fragment for an
+    email's text/html part. All literal text is HTML-escaped; only the
+    constructs above ever produce markup, and link hrefs are restricted to
+    http/https/mailto.
     """
     if not markdown or not markdown.strip():
         return ""
@@ -133,6 +162,11 @@ def markdown_to_html(markdown: str) -> str:
             tag = "ol" if block.ordered else "ul"
             items = "".join(f"<li>{_render_inline(item)}</li>" for item in block.lines)
             parts.append(f"<{tag}>{items}</{tag}>")
+        elif block.kind == "heading":
+            size = HEADING_SIZES[block.level]
+            parts.append(
+                f'<p><b style="font-size:{size}">{_render_inline(block.lines[0])}</b></p>'
+            )
         else:
             parts.append(f"<p>{'<br>'.join(_render_inline(line) for line in block.lines)}</p>")
     return "".join(parts)

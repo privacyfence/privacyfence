@@ -17,6 +17,11 @@ scripts/dev_env.sh
 config/settings.yaml
 config/settings.local.yaml
 
+# #428 Phase 1: the same user configuration/authority state as above, moved under its own
+# subdirectory -- dev-mode data_dir() is the repo root, same reasoning as everything else here
+# (paths.py's authority_dir()/authority_root()).
+authority/
+
 # Local runtime caches (dev-mode data_dir() is the repo root -- see paths.py)
 resource_name_cache.json
 update_check_cache.json

@@ -36,6 +36,44 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 # legacy synonym for "private" that the API still accepts on write.
 VALID_VISIBILITIES = {"default", "public", "private", "confidential"}
 
+# Calendar's fixed event color palette (Event.colorId, "1".."11"). The
+# Calendar API's own colors().get() endpoint returns each id's hex
+# background/foreground (see list_event_colors) but, unlike calendarList
+# colors, never returns a name for it -- these are the names Calendar's own
+# web UI shows for each id, kept here as a static, well-known mapping so
+# callers can pass "Tomato" instead of memorizing "11".
+EVENT_COLOR_NAMES: dict[str, str] = {
+    "1": "Lavender",
+    "2": "Sage",
+    "3": "Grape",
+    "4": "Flamingo",
+    "5": "Banana",
+    "6": "Tangerine",
+    "7": "Peacock",
+    "8": "Graphite",
+    "9": "Blueberry",
+    "10": "Basil",
+    "11": "Tomato",
+}
+
+
+def normalize_event_color(color: str) -> str:
+    """Resolve a ``color`` argument (a numeric colorId "1".."11", or a case-
+    insensitive name like "Tomato") to the numeric colorId the Calendar API
+    expects. Raises CalendarClientError for anything else.
+    """
+    color = color.strip()
+    if color in EVENT_COLOR_NAMES:
+        return color
+    lowered = color.lower()
+    for color_id, name in EVENT_COLOR_NAMES.items():
+        if name.lower() == lowered:
+            return color_id
+    raise CalendarClientError(
+        f"color must be an event color id (1-11) or name "
+        f"({', '.join(EVENT_COLOR_NAMES.values())}), got {color!r}"
+    )
+
 
 class CalendarClientError(Exception):
     """Raised for unrecoverable Calendar client problems (auth, config, API)."""
@@ -91,9 +129,22 @@ class CalendarEvent:
     html_link: str
     attachments: list[CalendarAttachment] = field(default_factory=list)
     visibility: str = "default"  # "default" | "public" | "private" | "confidential"
+    color_id: str = ""  # "1".."11" (see EVENT_COLOR_NAMES), or "" for the calendar's default color
 
     def short_summary(self) -> str:
         return f"{self.title} ({self.start_time})"
+
+
+@dataclass
+class EventColor:
+    """One entry of Calendar's fixed event color palette, as returned by
+    colors().get() plus the name from EVENT_COLOR_NAMES (the API itself
+    never returns a name for an event color)."""
+
+    id: str
+    name: str
+    background: str
+    foreground: str
 
 
 @dataclass
@@ -255,6 +306,30 @@ class CalendarClient:
             access_role=raw.get("accessRole", ""),
         )
 
+    def list_event_colors(self) -> list[EventColor]:
+        """List Calendar's fixed event color palette (id, name, hex background/
+        foreground) via colors().get() -- so a caller can show/pick "Tomato"
+        instead of guessing what numeric colorId 11 looks like. The Calendar
+        API returns colorList entries under "event" (and, separately,
+        "calendar" -- a different palette for whole calendars, not exposed
+        here since nothing in this client sets a calendar's own color).
+        """
+        try:
+            result = self._get_service().colors().get().execute()
+        except HttpError as exc:
+            raise CalendarClientError(f"list_event_colors failed: {exc}") from exc
+        colors = []
+        for color_id, raw in result.get("event", {}).items():
+            colors.append(EventColor(
+                id=color_id,
+                name=EVENT_COLOR_NAMES.get(color_id, color_id),
+                background=raw.get("background", ""),
+                foreground=raw.get("foreground", ""),
+            ))
+        colors.sort(key=lambda c: int(c.id))
+        logger.info("list_event_colors returned %d color(s)", len(colors))
+        return colors
+
     def list_events(
         self,
         calendar_id: str,
@@ -402,6 +477,7 @@ class CalendarClient:
         location: str = "",
         add_google_meet: bool = False,
         room_emails: list[str] | None = None,
+        color: str = "",
     ) -> CalendarEvent:
         """Create a new event and return the created CalendarEvent."""
         start_entry: dict[str, str] = {"dateTime": start_time}
@@ -421,6 +497,8 @@ class CalendarClient:
             body["description"] = description
         if location:
             body["location"] = location
+        if color:
+            body["colorId"] = normalize_event_color(color)
         all_attendees = list(attendees or [])
         if room_emails:
             body["attendees"] = (
@@ -457,8 +535,13 @@ class CalendarClient:
         location: str | None = None,
         add_google_meet: bool = False,
         room_emails: list[str] | None = None,
+        color: str | None = None,
     ) -> CalendarEvent:
         """Update fields on an existing event and return the updated CalendarEvent."""
+        # Validate before the fetch, not after -- a doomed call shouldn't
+        # cost a wasted events().get() round trip, same reasoning as
+        # set_event_visibility/set_event_color's own early validation.
+        color_id = normalize_event_color(color) if color is not None else None
         try:
             raw = (
                 self._get_service()
@@ -475,6 +558,8 @@ class CalendarClient:
             raw["description"] = description
         if location is not None:
             raw["location"] = location
+        if color_id is not None:
+            raw["colorId"] = color_id
         if start_time is not None:
             raw.setdefault("start", {})["dateTime"] = start_time
             raw["start"].setdefault("timeZone", "UTC")
@@ -540,6 +625,38 @@ class CalendarClient:
             raise CalendarClientError(f"set_event_visibility update({event_id}) failed: {exc}") from exc
         event = self._parse_event(updated, calendar_id)
         logger.info("set_event_visibility: %s -> %s", event.short_summary(), visibility)
+        return event
+
+    def set_event_color(self, calendar_id: str, event_id: str, color: str) -> CalendarEvent:
+        """Set an event's color, leaving every other field untouched.
+
+        ``color`` is a numeric colorId ("1".."11") or name (see
+        EVENT_COLOR_NAMES, e.g. "Tomato"). Fetches the event's current full
+        body first (same fetch-modify-update shape as set_event_visibility)
+        so only the color field actually changes in the update request.
+        """
+        color_id = normalize_event_color(color)
+        try:
+            raw = (
+                self._get_service()
+                .events()
+                .get(calendarId=calendar_id, eventId=event_id)
+                .execute()
+            )
+        except HttpError as exc:
+            raise CalendarClientError(f"set_event_color get({event_id}) failed: {exc}") from exc
+        raw["colorId"] = color_id
+        try:
+            updated = (
+                self._get_service()
+                .events()
+                .update(calendarId=calendar_id, eventId=event_id, body=raw)
+                .execute()
+            )
+        except HttpError as exc:
+            raise CalendarClientError(f"set_event_color update({event_id}) failed: {exc}") from exc
+        event = self._parse_event(updated, calendar_id)
+        logger.info("set_event_color: %s -> %s", event.short_summary(), color_id)
         return event
 
     def create_out_of_office(
@@ -738,4 +855,5 @@ class CalendarClient:
             html_link=raw.get("htmlLink", ""),
             attachments=attachments,
             visibility=raw.get("visibility", "default"),
+            color_id=raw.get("colorId", ""),
         )

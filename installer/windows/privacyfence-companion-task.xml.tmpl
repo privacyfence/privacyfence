@@ -1,0 +1,95 @@
+<?xml version="1.0"?>
+<!--
+PrivacyFence *companion* autostart Task Scheduler task definition
+(#428 Phase 4, B5c).
+
+scripts/windows_privilege_separation.ps1 substitutes __EXEC_PATH__ with the
+real installed PrivacyFenceCompanion.exe path and registers it via
+`schtasks /create /tn "PrivacyFenceCompanion" /xml <file> /f`. It is written
+only by that script's `enable`, never by the installer: an unseparated
+install autostarts the daemon in the user's own session exactly as it always
+has, and the companion stays opt-in there.
+
+This is ADR 0002's "startup wiring inverts" on Windows. What used to start
+at sign-in was the daemon (installer/privacyfence-task.xml.tmpl, still
+registered by the installer but disabled by `enable`); what starts at
+sign-in now is the companion, while the daemon has become a service running
+as NT SERVICE\PrivacyFence. On this platform the companion is not merely a
+convenience: a service runs in session 0, so the daemon can no longer call
+webbrowser.open() for a Slack/Salesforce/Atlassian OAuth flow, and the
+companion's own control channel is what opens those pages instead
+(ADR 0002 decision 5, the case that decision was originally written for).
+
+Structure deliberately mirrors privacyfence-task.xml.tmpl: same schema
+version, same Principal id / Actions Context pairing, same StartBoundary
+convention, same two inverted battery defaults, and the same
+no-encoding-attribute XML declaration. Every one of those is load bearing
+for the reasons that file's own header comment spells out at length; this
+one does not repeat them.
+
+Three things differ from the daemon's task, and each one is deliberate:
+
+  * No TimeTrigger. The daemon's task carries a repeating PT5M trigger as
+    its real crash-restart mechanism, and relies on the single-instance lock
+    (privacyfence.daemon_main._acquire_instance_lock) to make every
+    redundant tick exit immediately. The companion has no such lock, so a
+    repeating trigger would stack up one tray icon per tick. Crash restart
+    for the *daemon* is now the service's own `sc failure` configuration,
+    which is a better mechanism than the one this replaces; for the
+    companion there is no automatic restart, and the Start Menu shortcut the
+    installer creates is the manual one.
+
+  * MultipleInstancesPolicy is IgnoreNew, not Parallel. Same reason: a
+    second tray icon for the same session is never wanted. It stays correct
+    for multiple simultaneously signed-in users, which is what the daemon's
+    task needed Parallel for, because Task Scheduler scopes that policy per
+    task instance and each user's logon produces its own.
+
+  * RestartOnFailure stays, unchanged, for the one narrow thing it does: a
+    launch failure right at the LogonTrigger's own moment (a locked file
+    mid-upgrade) is retried three times a minute apart rather than leaving
+    the user with no way into the web UI until their next sign-in.
+
+LogonTrigger with no UserId fires for any interactive logon, and Principal
+uses GroupId (the built-in Users group) rather than UserId, so the companion
+runs as whichever user just signed in, in their own session, which is the
+whole point of it. It must be LeastPrivilege: this process is deliberately
+on the *agent's* side of the trust boundary, not the daemon's.
+
+NOTE: this comment intentionally avoids the two-hyphen sequence, which XML
+comments may not contain anywhere in their body.
+-->
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Starts the PrivacyFence companion (tray icon and browser-opening channel) when any user signs in.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <StartBoundary>2020-01-01T00:00:00</StartBoundary>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <GroupId>Builtin\Users</GroupId>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <Enabled>true</Enabled>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>__EXEC_PATH__</Command>
+    </Exec>
+  </Actions>
+</Task>

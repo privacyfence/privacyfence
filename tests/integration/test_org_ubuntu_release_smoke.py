@@ -1,6 +1,8 @@
-"""Release-workflow smoke test for the Ubuntu org-mode service (TST-16;
-extended by the now-removed automated-test-strategy-plan.md Phase 8 -- see its
-"Remaining work" for exactly what that phase added below and why).
+"""Release-workflow smoke test for the Ubuntu org-mode service (TST-16),
+later extended with app-level authz-policy coverage, an approval exercised
+with audit-principal correctness, and persisted state surviving a restart
+(see the classes/tests below for what each covers and why), and promoted
+from dispatch/tag-only to a permanent per-PR CI job.
 
 Every other org-mode test in this repo (tests/unit/web/test_server_org_
 mode.py, test_org_mcp_e2e.py, test_org_session.py, ...) drives web/
@@ -216,8 +218,8 @@ from tests.integration.mock_idp import MockIdp  # noqa: E402
 # --target install, not the .deb" docstring section), not a built artifact --
 # same taxonomy tier as tests/system/test_local_mode_system.py's own daemon/
 # MCP/approval/audit scenario, just against a real Ubuntu org-mode service
-# instead of local mode. Also what the now-removed automated-test-strategy-plan.md
-# Phase 10's own CI-diagnostics capture (tests/diagnostics.py) keys off of.
+# instead of local mode. Also what tests/diagnostics.py's own CI-diagnostics
+# capture keys off of.
 pytestmark = [pytest.mark.system, pytest.mark.timeout(300)]
 
 ISSUER_HOST = "pf.example.internal"
@@ -605,9 +607,14 @@ class TestRunningOrgModeService:
         assert self.client.get("/login").status_code == 302
         assert self.client.get("/.well-known/oauth-authorization-server").status_code == 200
         assert self.client.get("/approvals").status_code == 302  # not signed in yet -> redirect to /login
+        assert self.client.get("/settings").status_code == 302  # #400 -- same, redirect to /login
 
     def test_local_mode_only_routes_are_not_mounted(self):
-        assert self.client.get("/settings").status_code == 404
+        # /settings itself is a real, read-only route in org mode now (#400)
+        # -- see test_org_mode_routes_are_mounted below -- but the local-mode
+        # dispatcher's own /api/settings/{action} endpoint, and the local-
+        # mode-only state stream, must still 404.
+        assert self.client.get("/api/settings/quit_app").status_code == 404
         assert self.client.get("/api/state/stream").status_code == 404
 
     # -- Per-principal session creation ------------------------------------ #
@@ -705,7 +712,7 @@ class TestRunningOrgModeService:
         assert r.status_code == 401
 
     # -- An approval, exercised end to end, with audit-principal
-    # correctness (the now-removed automated-test-strategy-plan.md Phase 8) --------- #
+    # correctness --------------------------------------------------------- #
 
     async def test_an_approval_is_exercised_by_the_correct_principal_and_audited_there(self):
         """``privacyfence_propose_auto_accept_rule_change`` (gate.py's
@@ -919,7 +926,12 @@ class TestCleanShutdownAndRestart:
         port = _free_port()
         _write_org_config(home, _signed_org_config(idp_issuer=mock_idp.base_url, port=port))
         carol_dir = home / ".privacyfence" / "users" / safe_principal_id("carol")
-        settings_file = carol_dir / "config" / "settings.yaml"
+        # #428 Phase 1: settings.yaml lives under an authority/ subdirectory
+        # now; the audit log doesn't move for a non-local principal (it's
+        # never routed through daemon_main.py's authority_root() -- see
+        # audit_log.py's _fallback_log_dir(), the only path org-mode
+        # principals' audit loggers ever take).
+        settings_file = carol_dir / "authority" / "config" / "settings.yaml"
         audit_file = carol_dir / "logs" / "audit" / f"{current_week()}.jsonl"
 
         async def _propose_and_decide_rule(client: LoopbackClient, access_token: str, carol_cookie: str) -> None:

@@ -154,8 +154,7 @@ jobs:
       - name: Run packaged smoke test (TST-15)
         run: pytest tests/integration/test_macos_packaged_smoke.py -v
 
-      # The now-removed automated-test-strategy-plan.md Phase 10: tests/diagnostics.py's
-      # own capture (environment info, an installed-file manifest, and any
+      # tests/diagnostics.py's own capture (environment info, an installed-file manifest, and any
       # daemon.log/*.jsonl audit logs found under the failing test's own
       # tmp_path -- see test_macos_packaged_smoke.py's own `running_packaged_
       # daemon` fixture) -- `if: failure()` since the step above is what
@@ -208,8 +207,7 @@ jobs:
             scripts/build_org_bundle.py \
             scripts/sync_room_directory.py
 
-  # The now-removed windows-support-plan.md Phase 6 (B5 in the now-removed windows-linux-support-
-  # plan.md): the Windows analogue of the `build` job above. Runs in
+  # The Windows analogue of the `build` job above. Runs in
   # parallel with it (and with `build-deb`/`sbom`) rather than depending on
   # it -- same "independent, tagged-source-tree-only" reasoning the `sbom`
   # job's own comment gives. Each of `build`/`build-windows`/`build-deb`/`sbom` only uploads its
@@ -336,8 +334,7 @@ jobs:
       - name: Run packaged installer smoke test (Phase 6.2)
         run: pytest tests/integration/test_windows_packaged_smoke.py -v
 
-      # The now-removed automated-test-strategy-plan.md Phase 10: same tests/
-      # diagnostics.py capture as the `build` job's identically-named step --
+      # Same tests/diagnostics.py capture as the `build` job's identically-named step --
       # this module's own install_dir/home already live under each test's
       # own tmp_path, so the generic per-tmp_path manifest already covers
       # the installed files here, no per-module capture code needed (unlike
@@ -376,10 +373,10 @@ jobs:
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/PrivacyFence-*-setup.exe
 
-  # Linux `.deb` leg (the now-removed linux-local-deb-packaging-plan.md P5.1) -- the Linux equivalent of the
+  # Linux `.deb` leg -- the Linux equivalent of the
   # `build` job above. Independent of it (doesn't need the macOS runner, code signing, or
   # notarization -- `.deb`s aren't gated on a trusted-publisher story the way Gatekeeper/
-  # SmartScreen gate the DMG/Windows installer, per that plan's P5.2), so it runs in parallel
+  # SmartScreen gate the DMG/Windows installer), so it runs in parallel
   # rather than blocking on (or being blocked by) the DMG build. Together with the `build` and
   # `build-windows` jobs, a tag push ends up with one GitHub Release carrying the DMG, the
   # `.mcpb`, the Windows installer, and the `.deb` -- all attached together by `finalize-release`.
@@ -399,8 +396,8 @@ jobs:
         with:
           python-version: '3.12'
 
-      # desktop-file-utils (desktop-file-validate): the now-removed automated-test-strategy-plan.md Phase 6
-      # item 6.3's own packaged-lifecycle test (below, after the build) validates the installed
+      # desktop-file-utils (desktop-file-validate): the packaged-lifecycle test
+      # (below, after the build) validates the installed
       # /etc/xdg/autostart/privacyfence.desktop with it. patchelf: scripts/build_deb.sh strips the
       # build host's own RUNPATH out of the bundled CPython extension modules with it -- on this
       # runner those point back into setup-python's hosted toolcache, which lintian rejects at
@@ -462,8 +459,7 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: bash scripts/build_deb.sh
 
-      # The now-removed automated-test-strategy-plan.md Phase 6 item 6.3 (docs/linux-local-deb-packaging-
-      # plan.md P7.1/P7.3): the one place the actual packaged artifact -- not a source checkout,
+      # The one place the actual packaged artifact -- not a source checkout,
       # not the --target install the org-mode smoke test above uses -- gets exercised at all.
       # Real `dpkg -i`, `desktop-file-validate` on the installed autostart entry, the real
       # installed daemon started and driven through a daemon/MCP/approval/audit round trip, real
@@ -474,8 +470,7 @@ jobs:
       - name: Run packaged .deb lifecycle test (Phase 6.3)
         run: pytest tests/integration/test_deb_packaged_lifecycle.py -v
 
-      # The now-removed automated-test-strategy-plan.md Phase 10: same tests/
-      # diagnostics.py capture as the `build`/`build-windows` jobs' own
+      # Same tests/diagnostics.py capture as the `build`/`build-windows` jobs' own
       # steps -- placed after both pytest steps above (not just the .deb
       # lifecycle one) since `if: failure()` fires for either one; the
       # org-mode smoke test's own `--target install` tmp_path and the .deb
@@ -648,8 +643,11 @@ jobs:
     # Needs `contents: write` now (unlike before privacyfence/privacyfence#373, when this job only
     # read the repo and talked to R2): it's the one place that calls action-gh-release, to attach
     # the complete artifact set (or, on a pre-release tag, to create the asset-less release entry).
+    # `actions: read` is new for privacyfence/privacyfence#374's coverage-report step below -- it
+    # only reads two other workflows' run history, never writes anything via the Actions API.
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -673,6 +671,24 @@ jobs:
           CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Finalizing version=$VERSION channel=$CHANNEL"
+
+      # privacyfence/privacyfence#374, option 1 ("Report, don't gate"): linux-graphical-session.yml
+      # and windows-graphical-session.yml -- the only automated coverage for the daemon starting
+      # itself at login -- run on packaging-related `main` pushes, weekly, and on demand, never on
+      # a tag push and never as a `needs:` of this job, since this tier's own runtime cost must not
+      # sit on a release's critical path (docs/testing-policy.md's Layer 6 row). That leaves a gap
+      # where a tag can ship with autostart broken as long as the last packaging-touching push to
+      # `main` was green and nothing since then re-ran either workflow. This step closes the
+      # "nobody looked" half of that gap without touching the "must not gate" half -- see scripts/
+      # check_graphical_session_coverage.py's own module docstring for exactly what it checks.
+      # Always exits 0: a missing or stale-or-red run only ever prints a `::warning::` annotation on
+      # this job, it never fails it or blocks the release below.
+      - name: Check graphical-session/autostart coverage (report only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/check_graphical_session_coverage.py \
+            --repo "${{ github.repository }}" --commit "${{ github.sha }}"
 
       # Pulls together the four workflow artifacts `build`/`build-windows`/`build-deb`/`sbom`
       # uploaded above (`PrivacyFence-dmg`, `PrivacyFence-windows-installer`, `PrivacyFence-deb`,

@@ -17,15 +17,21 @@ from __future__ import annotations
 import subprocess
 import time
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import sys
 
 import pytest
 from starlette.testclient import TestClient
 
-from privacyfence import daemon_main, resource_names, settings_controller as sc, update_checker
-from privacyfence.web.routes_settings import _ALLOWED_ACTIONS, create_app
+from privacyfence import daemon_main, paths, resource_names, settings_controller as sc, update_checker
+from privacyfence import webauthn_stepup as wa
+from privacyfence.principal import LOCAL_PRINCIPAL
+from privacyfence.step_up_config import StepUpConfig
+from privacyfence.web.routes_settings import _ALLOWED_ACTIONS, _NON_SENSITIVE_ACTIONS, _SENSITIVE_ACTIONS, create_app
 from privacyfence.web.session_auth import SESSION_COOKIE, LocalSessionStore
+
+ORIGIN = "http://localhost"
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -273,6 +279,270 @@ class TestActionDispatch:
         assert r.json()["general"]["notifications_detail"] == "standard"
 
 
+class TestSensitiveActionsCoverAllAllowedActions:
+    """#426 Phase 3's own allowlist-within-the-allowlist -- see module
+    docstring on why _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS are both
+    explicit rather than one being derived as the other's complement: a
+    future action landing in _ALLOWED_ACTIONS with no matching entry in
+    either set must fail here, not silently default to unclassified."""
+
+    def test_every_allowed_action_is_classified_sensitive_or_not(self):
+        assert _SENSITIVE_ACTIONS | _NON_SENSITIVE_ACTIONS == _ALLOWED_ACTIONS
+
+    def test_no_action_is_classified_as_both(self):
+        assert _SENSITIVE_ACTIONS & _NON_SENSITIVE_ACTIONS == frozenset()
+
+
+def _step_up_client(controller, sessions, *, step_up: StepUpConfig) -> TestClient:
+    app = create_app(controller, sessions=sessions, step_up=step_up, step_up_origin=ORIGIN)
+    return TestClient(app, base_url=ORIGIN)
+
+
+class TestSensitiveActionStepUp:
+    """#426 Phase 3: with ``step_up.require_passkey`` on, a sensitive action
+    (module docstring's ``_SENSITIVE_ACTIONS``) needs a fresh WebAuthn
+    assertion the same two-round-trip way web/routes_approvals.py's decide()
+    does; a non-sensitive one is untouched. Mirrors test_routes_approvals.py's
+    own TestRequirePasskeyHardFail/TestStepUpWebAuthnFlow."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _enroll(self):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def test_a_non_sensitive_action_is_never_gated(self, controller, sessions):
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/set_log_level", json={"level": "DEBUG", "csrf": csrf})
+        assert r.status_code == 200
+
+    def test_disabled_step_up_never_gates_a_sensitive_action(self, controller, sessions):
+        client = _step_up_client(controller, sessions, step_up=StepUpConfig(enabled=False, require_passkey=True))
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert r.status_code == 200
+
+    def test_require_passkey_off_never_gates_a_sensitive_action(self, controller, sessions):
+        client = _step_up_client(controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost"))
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert r.status_code == 200
+
+    def test_no_credential_hard_fails_a_sensitive_action(self, controller, sessions):
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert r.status_code == 403
+        body = r.json()
+        assert body["error"] == "passkey_enrollment_required"
+        assert body["enroll_url"] == "/security"
+
+    def test_with_a_credential_offers_webauthn_options(self, controller, sessions):
+        self._enroll()
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+        # Not actually toggled yet -- the ceremony hasn't completed.
+        assert controller.snapshot()["general"]["pii_enabled"] is True
+
+    def test_a_valid_assertion_completes_a_sensitive_action(self, controller, sessions):
+        self._enroll()
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        first = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert first.status_code == 428
+
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post("/api/settings/toggle_pii_detection", json={
+                "csrf": csrf, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert second.status_code == 200
+        assert second.json()["general"]["pii_enabled"] is False
+
+    def test_an_assertion_for_a_different_action_is_rejected(self, controller, sessions):
+        # Fingerprint binding (mirrors webauthn_stepup.decision_fingerprint):
+        # a challenge minted for toggle_pii_detection cannot be reused to
+        # authorize toggle_pii_category.
+        self._enroll()
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        r = client.post("/api/settings/toggle_pii_category", json={
+            "category_key": "email", "csrf": csrf, "webauthn_assertion": {"id": "Y3JlZC0x"},
+        })
+        assert r.status_code == 400
+
+    def test_a_failed_assertion_does_not_apply_the_change(self, controller, sessions):
+        self._enroll()
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        with patch.object(wa.webauthn, "verify_authentication_response", side_effect=ValueError("bad sig")):
+            r = client.post("/api/settings/toggle_pii_detection", json={
+                "csrf": csrf, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert r.status_code == 401
+        assert controller.snapshot()["general"]["pii_enabled"] is True
+
+
+class TestEnableStepUpAction:
+    """B9: the dispatcher-level half of SettingsController.enable_step_up --
+    ``create_app``'s own ``step_up`` and ``controller._step_up`` (wired via
+    ``wire_step_up``) are two independently-passed things; daemon_main.py's
+    real boot path always hands the *same* LiveStepUpConfig to both (see
+    that module's own ``_maybe_start_web_server``), which is what these
+    tests set up too, so enabling step-up through this action is visible to
+    this same dispatcher's own ``_needs_step_up`` gate on the very next
+    request -- no restart."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _enroll(self):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def _live_client(self, controller, sessions):
+        from privacyfence.step_up_config import LiveStepUpConfig
+        live = LiveStepUpConfig(StepUpConfig(rp_id="localhost"))
+        controller.wire_step_up(live)
+        app = create_app(controller, sessions=sessions, step_up=live, step_up_origin=ORIGIN)
+        return TestClient(app, base_url=ORIGIN), live
+
+    def test_is_listed_in_allowed_and_sensitive_actions(self):
+        assert "enable_step_up" in _ALLOWED_ACTIONS
+        assert "enable_step_up" in _SENSITIVE_ACTIONS
+
+    def test_refused_without_an_enrolled_passkey(self, controller, sessions):
+        client, live = self._live_client(controller, sessions)
+        csrf = _authed(client, sessions)
+
+        r = client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        assert r.status_code == 200
+        assert live.enabled is False
+        assert r.json()["error"]
+
+    def test_the_first_enable_is_never_step_up_gated(self, controller, sessions):
+        # _needs_step_up only fires once step_up.enabled/require_passkey are
+        # *already* both true -- the very first call can't be gated on a
+        # ceremony that isn't active yet (module docstring's own B9 note).
+        self._enroll()
+        client, live = self._live_client(controller, sessions)
+        csrf = _authed(client, sessions)
+
+        r = client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        assert r.status_code == 200
+        assert live.enabled is True
+        assert live.require_passkey is True
+        assert r.json()["general"]["step_up_on"] is True
+
+    def test_takes_effect_immediately_for_the_next_sensitive_action(self, controller, sessions):
+        # The point of LiveStepUpConfig: this dispatcher's own step_up
+        # object is the one enable_step_up just mutated, so the very next
+        # request already sees it -- no daemon restart.
+        self._enroll()
+        client, live = self._live_client(controller, sessions)
+        csrf = _authed(client, sessions)
+        client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+
+    def test_reenabling_once_already_on_is_itself_step_up_gated(self, controller, sessions):
+        self._enroll()
+        client, live = self._live_client(controller, sessions)
+        csrf = _authed(client, sessions)
+        client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        r = client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+
+
+class TestRequirePasskeyBanner:
+    """#426 Phase 3: the settings page carries the same banner the
+    approvals list does -- see test_routes_approvals.py's own
+    TestRequirePasskeyBanner and step_up_config.py's
+    local_enrollment_banner()."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def test_banner_shown_when_require_passkey_unmet(self, controller, sessions):
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert '<div class="pf-shell-banner"' in r.text
+        assert "/security" in r.text
+
+    def test_no_banner_once_a_credential_is_enrolled(self, controller, sessions):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert '<div class="pf-shell-banner"' not in r.text
+
+    def test_disabled_requirement_notice_is_shown(self, controller, sessions):
+        """#426 Phase 4: webauthn_stepup.observe_step_up_requirement's own
+        persistent notice, surfaced through this page's banner the same
+        way the Phase 3 enrollment one is."""
+        wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=True)
+        wa.observe_step_up_requirement(LOCAL_PRINCIPAL, enabled=True, require_passkey=False)
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=False),
+        )
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert '<div class="pf-shell-banner"' in r.text
+        assert "turned off" in r.text
+
+    def test_no_disabled_notice_when_never_required(self, controller, sessions):
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=False, rp_id="localhost", require_passkey=False),
+        )
+        _authed(client, sessions)
+        r = client.get("/settings")
+        assert '<div class="pf-shell-banner"' not in r.text
+
+
 class TestConnectorAuthenticationEndToEnd:
     """§16.5's W6 "Done when": a connector can be authenticated from a
     browser, start to finish, with the page reflecting each step -- proven
@@ -354,7 +624,7 @@ class TestOrgConfigUpload:
         assert not (sc.org_dir() / "org_config.json").exists()
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, the now-removed windows-linux-support-plan.md's Track B3)",
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_installed_file_is_0600(self, client, sessions):
         csrf = _authed(client, sessions)
@@ -395,7 +665,7 @@ class TestAuditLogDownload:
     def test_current_week_activity_downloads_with_content_disposition(self, client, controller, sessions):
         from privacyfence.audit_log import AuditEntry, AuditLogger, current_week
 
-        log_dir = sc.data_dir() / "logs" / "audit"
+        log_dir = sc.authority_root(sc.data_dir()) / "logs" / "audit"
         log_dir.mkdir(parents=True)
         week = current_week()
         AuditLogger(str(log_dir)).record(AuditEntry(
@@ -441,6 +711,42 @@ class TestQuitApp:
         r = client.post("/api/settings/quit_app", json={"csrf": csrf, "confirmed": True})
         assert r.status_code == 403
         assert called == []
+
+    def test_shutdown_is_signalled_only_after_the_response_body_is_written(
+        self, controller, sessions, monkeypatch,
+    ):
+        """controller.quit_app() signals daemon_main's own shutdown wait, so
+        calling it inline -- before this route's 21-byte body reaches the
+        socket -- let the process be torn down mid-write: the client got
+        "peer closed connection without sending complete message body
+        (received 0 bytes, expected 21)" instead of its confirmation.
+        Anyone clicking "Quit PrivacyFence" could hit that, and
+        tests/system/test_local_mode_system.py's own quit step did,
+        intermittently, in CI. Asserted as an ordering of real ASGI events
+        rather than by inspecting the response object, since the ordering
+        is the whole guarantee."""
+        from privacyfence.web.routes_settings import create_app as _create_app
+
+        events: list[str] = []
+        monkeypatch.setattr(daemon_main, "request_shutdown", lambda: events.append("shutdown"))
+
+        inner = _create_app(controller, sessions=sessions)
+
+        async def recording_app(scope, receive, send):
+            async def _send(message):
+                await send(message)
+                if message["type"] == "http.response.body" and not message.get("more_body", False):
+                    events.append("body")
+            await inner(scope, receive, _send)
+
+        client = TestClient(recording_app, base_url="http://localhost")
+        csrf = _authed(client, sessions)
+        events.clear()
+
+        r = client.post("/api/settings/quit_app", json={"csrf": csrf, "confirmed": True})
+
+        assert r.status_code == 200
+        assert events == ["body", "shutdown"], events
 
     def test_generic_dispatch_never_reaches_quit_app(self, client):
         # quit_app is deliberately absent from _ALLOWED_ACTIONS -- it only

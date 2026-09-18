@@ -28,8 +28,10 @@ from privacyfence import (
     audit_log,
     daemon_main,
     download_staging,
+    gate,
     pii_detector,
     privacy_filter,
+    privilege_separation,
     resource_names,
     settings_controller,
     web_approval_ui,
@@ -49,11 +51,26 @@ def _reset() -> None:
     download_staging._INSTANCE = None
     settings_controller._main_dispatch = None
     state_stream._loop = None
+    # #428 Phase 4: privilege_separation caches the parsed marker file for
+    # the life of the process (it can't change under a running daemon), so a
+    # test that provisions a fake separated layout would otherwise leave that
+    # answer cached for every test after it -- including the ones asserting
+    # the *un*separated paths.
+    privilege_separation.reset_cache()
     # daemon_main._shutdown_event (P10): a test that calls request_shutdown()
     # (directly, or via SettingsController.quit_app()) must not leave it set
     # for the next test's own _wait_for_shutdown() call to find already
     # signaled.
     daemon_main._shutdown_event.clear()
+    # gate._popup_executor (Phase 0 of the approval-binder plan): sized
+    # against the real PendingApprovalRegistry's own max_pending by
+    # daemon_main.py's configure_popup_executor() call -- a test that
+    # exercises that wiring (e.g. test_daemon_main.py's own web.approvals.
+    # max_pending overrides) would otherwise permanently shrink or grow the
+    # one process-wide executor every other test's real popups run on.
+    # configure_popup_executor() is a no-op once the size already matches,
+    # so this costs nothing on every other test.
+    gate.configure_popup_executor(gate.DEFAULT_MAX_PENDING)
 
 
 @pytest.fixture(autouse=True)

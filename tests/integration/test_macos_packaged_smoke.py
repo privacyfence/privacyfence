@@ -25,8 +25,9 @@ the packaged app:
    built and immediately run on this same machine was never quarantined
    for in the first place) with an isolated ``$HOME``, then mint a
    bootstrap link the same way a human with filesystem access to this
-   machine but no daemon-log line handy would (``POST /api/bootstrap``
-   with the persistent ``web_token`` read straight off disk -- see
+   machine but no daemon-log line handy would (through the #428 Phase 2
+   control channel -- a real Unix domain socket against this daemon's own
+   data directory, via ``tests.control_channel_client`` -- see
    ``running_packaged_daemon`` below for why this, and not scraping the
    daemon's own stdout, is the only reliable way to get one: SEC-10's
    ``SecretRedactingFormatter`` redacts a ``bootstrap=<value>`` substring
@@ -63,8 +64,7 @@ the packaged app:
    manual, per this plan's own governing rule. Runs against its own private
    copy of the bundle (``signed_app_copy``), not the one step 6 deletes --
    see that fixture's own docstring for why.
-8. **Upgrade in place** (the now-removed automated-test-strategy-plan.md Phase 6 item
-   20 -- deliberately not built in the same PR as steps 1-7): install
+8. **Upgrade in place** (deliberately not built in the same PR as steps 1-7): install
    version N, apply real state through the daemon's own MCP surface,
    replace the bundle with a synthetically-relabeled version N+1 at the
    same ``$HOME`` (step 6 already established that "installing" a new
@@ -118,12 +118,13 @@ pytest.importorskip(
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
+from tests.control_channel_client import mint_bootstrap_code_posix, resolve_posix_socket_path  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIM_DIR = REPO_ROOT / "mcpb" / "shim"
 SHIM_ENTRY = SHIM_DIR / "dist" / "shim.js"
 DIST_DIR = REPO_ROOT / "dist"
 SETTINGS_EXAMPLE = REPO_ROOT / "src" / "privacyfence" / "resources" / "settings.yaml.example"
-WEB_TOKEN_FILE_NAME = "web_token"  # web/server.py's TOKEN_FILE_NAME
 MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
 
 
@@ -239,7 +240,6 @@ class RunningDaemon:
     home: Path
     base_url: str
     bootstrap_url: str
-    web_token: str
     mcp_token: str
 
     @property
@@ -252,8 +252,7 @@ def _wait_for_file(path: Path, proc: subprocess.Popen, log_path: Path, timeout: 
     MCP token files, ``load_or_create_token()``/``web/mcp_auth.py``) --
     these are written before the server starts accepting connections, but
     poll rather than assume either is already flushed to disk the instant
-    the socket answers. ``log_path`` (the now-removed automated-test-strategy-plan.md
-    Phase 10) is the daemon's own redirected stdout/stderr, embedded in
+    the socket answers. ``log_path`` is the daemon's own redirected stdout/stderr, embedded in
     either failure message below -- same shape
     test_windows_packaged_smoke.py's identically-named helper already
     uses, and (unlike the in-memory buffer this replaced) still readable
@@ -270,6 +269,23 @@ def _wait_for_file(path: Path, proc: subprocess.Popen, log_path: Path, timeout: 
             content = path.read_text(encoding="utf-8").strip()
             if content:
                 return content
+        time.sleep(0.1)
+    raise AssertionError(f"{path} never appeared within {timeout}s -- log:\n{log_path.read_text(errors='replace')}")
+
+
+def _wait_for_path(path: Path, proc: subprocess.Popen, log_path: Path, timeout: float = 30.0) -> None:
+    """Like ``_wait_for_file()`` but for a path with no meaningful text
+    content of its own -- the control channel's Unix domain socket, in
+    particular, whose ``read_text()`` wouldn't return anything sensible."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise AssertionError(
+                f"daemon exited early (code {proc.poll()}) instead of starting -- log:\n"
+                f"{log_path.read_text(errors='replace')}"
+            )
+        if path.exists():
+            return
         time.sleep(0.1)
     raise AssertionError(f"{path} never appeared within {timeout}s -- log:\n{log_path.read_text(errors='replace')}")
 
@@ -293,26 +309,29 @@ def _running_daemon_at(exe: Path, home: Path):
     ``$HOME`` twice, against two different bundle copies, and still find the
     first boot's state on the second.
 
-    Mints its bootstrap URL via ``POST /api/bootstrap`` (SEC-06,
-    web/server.py's ``_bootstrap_mint_route``) authorized by the persistent
-    ``web_token`` read straight off disk, rather than scraping the daemon's
-    own startup log line for one: SEC-10's ``SecretRedactingFormatter``
+    Mints its bootstrap URL through the #428 Phase 2 control channel (a real
+    Unix domain socket against this daemon's own data directory, via
+    ``tests.control_channel_client``) rather than scraping the daemon's own
+    startup log line for one: SEC-10's ``SecretRedactingFormatter``
     (safe_errors.py) redacts any ``bootstrap=<value>`` substring out of
     every log line -- ``bootstrap`` is literally in its key-name allowlist
     -- so the one line that would otherwise carry it never actually does.
-    Reading the raw persistent secret off disk and minting a fresh code
-    through the same endpoint a human with only filesystem access (no live
-    log line) would use is both correct in the same way and the only thing
-    that actually works here. ``mcp_token`` is read the same way (no
-    minting endpoint needed for it -- it's the daemon's own persistent MCP
-    bearer token, web/mcp_auth.py), for callers that talk to ``/mcp``
-    directly instead of through the real Node shim (the shim resolves its
-    own copy from the same file, from inside the spawned process, so the
-    primary round-trip test below never needs this field itself)."""
+    Minting a fresh code through the same channel a human with only
+    filesystem access (no live log line) would use is both correct in the
+    same way and the only thing that actually works here. ``mcp_token`` is
+    read straight off disk (no minting channel needed for it -- it's the
+    daemon's own persistent MCP bearer token, web/mcp_auth.py), for callers
+    that talk to ``/mcp`` directly instead of through the real Node shim
+    (the shim resolves its own copy from the same file, from inside the
+    spawned process, so the primary round-trip test below never needs this
+    field itself)."""
     assert exe.is_file(), f"{exe} missing -- PyInstaller output layout changed?"
 
     home.mkdir(parents=True, exist_ok=True)
-    config_dir = home / ".privacyfence" / "config"
+    # #428 Phase 1: settings.yaml lives under an authority/ subdirectory of
+    # data_dir(), same as the control channel's socket below -- not
+    # data_dir() itself.
+    config_dir = home / ".privacyfence" / "authority" / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     settings_path = config_dir / "settings.yaml"
     if settings_path.exists():
@@ -328,10 +347,9 @@ def _running_daemon_at(exe: Path, home: Path):
     base_url = f"http://localhost:{port}"  # WebServer.base_url's own construction, host defaults to "localhost"
 
     env = {**os.environ, "HOME": str(home)}
-    # Redirected straight to a file under `home` (docs/automated-test-
-    # strategy-plan.md Phase 10), not `subprocess.PIPE` read on a background
-    # thread -- the same daemon.log convention every other packaged/system
-    # module in this repo already uses, which is what lets Phase 10's own
+    # Redirected straight to a file under `home`, not `subprocess.PIPE` read
+    # on a background thread -- the same daemon.log convention every other
+    # packaged/system module in this repo already uses, which is what lets
     # tests/diagnostics.py find and capture it on a failing test without
     # this module needing any capture code of its own.
     log_path = home / "daemon.log"
@@ -342,18 +360,15 @@ def _running_daemon_at(exe: Path, home: Path):
         _wait_until_connectable("localhost", port, proc, log_path)
 
         data_dir = home / ".privacyfence"
-        web_token = _wait_for_file(data_dir / WEB_TOKEN_FILE_NAME, proc, log_path)
+        _wait_for_path(resolve_posix_socket_path(data_dir), proc, log_path)
         mcp_token = _wait_for_file(data_dir / MCP_TOKEN_FILE_NAME, proc, log_path)
 
-        resp = httpx.post(
-            f"{base_url}/api/bootstrap", headers={"Authorization": f"Bearer {web_token}"}, timeout=10,
-        )
-        resp.raise_for_status()
-        bootstrap_url = f"{base_url}/approvals?bootstrap={resp.json()['bootstrap']}"
+        code = mint_bootstrap_code_posix(resolve_posix_socket_path(data_dir))
+        bootstrap_url = f"{base_url}/approvals?bootstrap={code}"
 
         yield RunningDaemon(
             process=proc, home=home, base_url=base_url, bootstrap_url=bootstrap_url,
-            web_token=web_token, mcp_token=mcp_token,
+            mcp_token=mcp_token,
         )
     finally:
         proc.terminate()
@@ -370,9 +385,8 @@ def running_packaged_daemon(installed_app, tmp_path):
     """The primary round-trip test's own daemon: ``installed_app``'s exe, a
     fresh scratch ``$HOME`` per test. Thin wrapper around
     ``_running_daemon_at`` -- see that function's own docstring for the
-    actual mechanism. ``home`` lives under this test's own ``tmp_path``
-    (the now-removed automated-test-strategy-plan.md Phase 10), not a bare
-    ``tempfile.mkdtemp()`` this fixture used to manually ``shutil.rmtree()``
+    actual mechanism. ``home`` lives under this test's own ``tmp_path``,
+    not a bare ``tempfile.mkdtemp()`` this fixture used to manually ``shutil.rmtree()``
     on the way out -- pytest already owns ``tmp_path``'s own lifecycle
     (rotated, not deleted immediately), which is what lets a failing test's
     ``daemon.log`` still be there afterward for tests/diagnostics.py to
@@ -496,7 +510,7 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
 
     # Confirms the round trip actually reached persisted state, not just a
     # confirmed-but-inert in-memory result.
-    settings_path = running_packaged_daemon.home / ".privacyfence" / "config" / "settings.yaml"
+    settings_path = running_packaged_daemon.home / ".privacyfence" / "authority" / "config" / "settings.yaml"
     assert "trusted_sender_domain" in settings_path.read_text(encoding="utf-8")
 
     # ── State lives outside the package (module docstring, §6) ───────────
@@ -742,7 +756,7 @@ async def test_macos_upgrade_preserves_user_state(tmp_path):
             assert result.isError is not True, getattr(result, "content", result)
             assert result.structuredContent["changed"] is True
 
-        settings_path = home / ".privacyfence" / "config" / "settings.yaml"
+        settings_path = home / ".privacyfence" / "authority" / "config" / "settings.yaml"
         assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
 
         # ── "Install" a synthetically-relabeled version N+1 -- delete the

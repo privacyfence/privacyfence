@@ -425,6 +425,108 @@ class TestPiiDetection:
         assert cfg["pii_detection"].get("detect_financial_figures", True) is True
 
 
+class TestEnableStepUp:
+    """B9: the browser-reachable counterpart to hand-editing config/
+    settings.yaml's own step_up: section. See SettingsController.
+    enable_step_up's own docstring for what it refuses and why."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        # webauthn_stepup.has_credentials/add_credential resolve the
+        # credential store off paths.authority_dir(), which is derived from
+        # paths.data_dir() -- distinct from the controller fixture's own
+        # sc.data_dir monkeypatch (settings_controller.py's own config/org
+        # reads), so this needs its own patch, the same one
+        # TestSensitiveActionStepUp in test_routes_settings.py uses.
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _enroll(self):
+        from privacyfence import webauthn_stepup as wa
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def test_no_step_up_wired_is_refused(self, controller):
+        before = controller._load_config()
+
+        state = controller.enable_step_up()
+
+        assert controller._load_config() == before
+        assert controller.error
+        assert state["general"]["step_up_available"] is False
+        assert state["general"]["step_up_on"] is False
+
+    def test_no_passkey_enrolled_is_refused(self, controller):
+        from privacyfence.step_up_config import LiveStepUpConfig, StepUpConfig
+        live = LiveStepUpConfig(StepUpConfig())
+        controller.wire_step_up(live)
+        before = controller._load_config()
+
+        state = controller.enable_step_up()
+
+        assert controller._load_config() == before
+        assert controller.error
+        assert live.enabled is False
+        assert state["general"]["step_up_has_passkey"] is False
+        assert state["general"]["step_up_on"] is False
+
+    def test_enables_and_makes_mandatory_together(self, controller):
+        from privacyfence.step_up_config import LiveStepUpConfig, StepUpConfig
+        self._enroll()
+        live = LiveStepUpConfig(StepUpConfig())
+        controller.wire_step_up(live)
+
+        state = controller.enable_step_up()
+
+        cfg = controller._load_config()
+        assert cfg["step_up"]["enabled"] is True
+        assert cfg["step_up"]["require_passkey"] is True
+        assert live.enabled is True
+        assert live.require_passkey is True
+        assert controller.error == ""
+        assert state["general"]["step_up_on"] is True
+        assert state["general"]["step_up_has_passkey"] is True
+
+    def test_records_an_audit_entry_for_the_transition(self, controller):
+        from privacyfence.audit_log import init_audit_logger
+        from privacyfence.step_up_config import LiveStepUpConfig, StepUpConfig
+        self._enroll()
+        controller.wire_step_up(LiveStepUpConfig(StepUpConfig()))
+        # Same setup TestAuditLog.test_snapshot_recent_entries_reflect_the_
+        # audit_log above uses: init_audit_logger() registers the instance
+        # get_audit_logger() (this method's own write path) returns, at the
+        # exact directory the controller's own snapshot()/_audit_state reads
+        # back from (authority_root(sc.data_dir())/logs/audit).
+        log_dir = sc.authority_root(sc.data_dir()) / "logs" / "audit"
+        init_audit_logger(str(log_dir))
+
+        controller.enable_step_up()
+
+        recent = controller.snapshot()["audit"]["recent"]
+        assert any(e["decision"] == "step_up_requirement_enabled" for e in recent)
+
+    def test_reenabling_an_already_enabled_install_writes_no_second_audit_entry(self, controller):
+        # observe_step_up_requirement only reports a *transition* -- calling
+        # enable_step_up again while already on must not raise or duplicate
+        # the audit trail (it's also SettingsController's own idempotent
+        # no-op precedent, same as toggle_pii_category's master-switch
+        # guard above).
+        from privacyfence.step_up_config import LiveStepUpConfig, StepUpConfig
+        self._enroll()
+        live = LiveStepUpConfig(StepUpConfig())
+        controller.wire_step_up(live)
+        controller.enable_step_up()
+
+        state = controller.enable_step_up()
+
+        assert live.enabled is True
+        assert live.require_passkey is True
+        assert state["general"]["step_up_on"] is True
+
+
 class TestNotificationsDetail:
     def test_persists_under_web_notifications_detail(self, controller):
         controller.set_notifications_detail("detailed")
@@ -1651,7 +1753,7 @@ class TestAuditLog:
         assert controller.error
 
     def test_export_audit_log_path_no_activity_this_week_sets_error(self, controller):
-        (sc.data_dir() / "logs" / "audit").mkdir(parents=True)
+        (sc.authority_root(sc.data_dir()) / "logs" / "audit").mkdir(parents=True)
 
         path = controller.export_audit_log_path()
 
@@ -1661,7 +1763,7 @@ class TestAuditLog:
     def test_export_audit_log_path_exports_and_returns_the_current_weeks_path(self, controller):
         from privacyfence.audit_log import AuditEntry, AuditLogger, current_week
 
-        log_dir = sc.data_dir() / "logs" / "audit"
+        log_dir = sc.authority_root(sc.data_dir()) / "logs" / "audit"
         log_dir.mkdir(parents=True)
         week = current_week()
         entry = AuditEntry(
@@ -1681,7 +1783,7 @@ class TestAuditLog:
     def test_snapshot_recent_entries_reflect_the_audit_log(self, controller):
         from privacyfence.audit_log import AuditEntry, AuditLogger, current_week
 
-        log_dir = sc.data_dir() / "logs" / "audit"
+        log_dir = sc.authority_root(sc.data_dir()) / "logs" / "audit"
         log_dir.mkdir(parents=True)
         entry = AuditEntry(
             timestamp="2026-07-06T12:00:00+00:00", week=current_week(), request_id="",

@@ -28,15 +28,18 @@ import sys
 import pytest
 
 from privacyfence.calendar_client import (
+    EVENT_COLOR_NAMES,
     SCOPES,
     CalendarAttachment,
     CalendarAttendee,
     CalendarClient,
     CalendarClientError,
     CalendarListEntry,
+    EventColor,
     FreeBusyResult,
     FreeBusySlot,
     _has_timezone,
+    normalize_event_color,
 )
 from googleapiclient.errors import HttpError
 
@@ -177,7 +180,7 @@ class TestLoadCredentials:
 
 class TestSaveToken:
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, the now-removed windows-linux-support-plan.md's Track B3)",
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_writes_credentials_json_with_owner_only_permissions(self, tmp_path):
         token_file = tmp_path / "nested" / "token.json"
@@ -219,6 +222,67 @@ class TestCheckConnection:
         client = make_client(service)
         with pytest.raises(CalendarClientError, match="Calendar connection check failed"):
             client.check_connection()
+
+
+# ---------------------------------------------------------------------------- #
+# normalize_event_color
+# ---------------------------------------------------------------------------- #
+
+class TestNormalizeEventColor:
+    def test_numeric_id_passes_through(self):
+        assert normalize_event_color("11") == "11"
+
+    def test_name_resolved_case_insensitively(self):
+        assert normalize_event_color("tomato") == "11"
+        assert normalize_event_color("Tomato") == "11"
+        assert normalize_event_color("TOMATO") == "11"
+
+    def test_whitespace_stripped(self):
+        assert normalize_event_color("  Sage  ") == "2"
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(CalendarClientError, match="color must be an event color id"):
+            normalize_event_color("Chartreuse")
+
+    def test_out_of_range_numeric_id_raises(self):
+        with pytest.raises(CalendarClientError, match="color must be an event color id"):
+            normalize_event_color("12")
+
+    def test_every_name_round_trips_to_its_own_id(self):
+        for color_id, name in EVENT_COLOR_NAMES.items():
+            assert normalize_event_color(name) == color_id
+            assert normalize_event_color(color_id) == color_id
+
+
+# ---------------------------------------------------------------------------- #
+# list_event_colors
+# ---------------------------------------------------------------------------- #
+
+class TestListEventColors:
+    def test_maps_response_with_names_sorted_numerically(self):
+        service = MagicMock()
+        service.colors.return_value.get.return_value.execute.return_value = {
+            "event": {
+                "11": {"background": "#dc2127", "foreground": "#1d1d1d"},
+                "2": {"background": "#7ae7bf", "foreground": "#1d1d1d"},
+            },
+            "calendar": {"1": {"background": "#ac725e", "foreground": "#1d1d1d"}},
+        }
+        client = make_client(service)
+
+        colors = client.list_event_colors()
+
+        assert colors == [
+            EventColor(id="2", name="Sage", background="#7ae7bf", foreground="#1d1d1d"),
+            EventColor(id="11", name="Tomato", background="#dc2127", foreground="#1d1d1d"),
+        ]
+
+    def test_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.colors.return_value.get.return_value.execute.side_effect = http_error(500)
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="list_event_colors failed"):
+            client.list_event_colors()
 
 
 # ---------------------------------------------------------------------------- #
@@ -316,6 +380,16 @@ class TestParseEvent:
         client = make_client(MagicMock())
         event = client._parse_event({"id": "e1", "visibility": "private"}, "primary")
         assert event.visibility == "private"
+
+    def test_missing_color_id_defaults_to_empty_string(self):
+        client = make_client(MagicMock())
+        event = client._parse_event({"id": "e1"}, "primary")
+        assert event.color_id == ""
+
+    def test_color_id_parsed_from_raw_event(self):
+        client = make_client(MagicMock())
+        event = client._parse_event({"id": "e1", "colorId": "11"}, "primary")
+        assert event.color_id == "11"
 
     def test_calendar_id_is_carried_from_caller_not_the_payload(self):
         client = make_client(MagicMock())
@@ -689,6 +763,29 @@ class TestCreateEvent:
         with pytest.raises(CalendarClientError, match="create_event"):
             client.create_event("primary", "M", "t1", "t2")
 
+    def test_color_name_resolved_to_numeric_id(self):
+        service = MagicMock()
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.create_event("primary", "M", "t1", "t2", color="Tomato")
+        body = service.events.return_value.insert.call_args.kwargs["body"]
+        assert body["colorId"] == "11"
+
+    def test_no_color_omits_color_id(self):
+        service = MagicMock()
+        service.events.return_value.insert.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.create_event("primary", "M", "t1", "t2")
+        body = service.events.return_value.insert.call_args.kwargs["body"]
+        assert "colorId" not in body
+
+    def test_invalid_color_raises_before_any_api_call(self):
+        service = MagicMock()
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="color must be an event color id"):
+            client.create_event("primary", "M", "t1", "t2", color="Chartreuse")
+        service.events.return_value.insert.assert_not_called()
+
 
 # ---------------------------------------------------------------------------- #
 # update_event: partial field updates + room replacement + conferencing
@@ -779,6 +876,31 @@ class TestUpdateEvent:
         with pytest.raises(CalendarClientError, match="update_event\\(e1\\)"):
             client.update_event("primary", "e1", title="x")
 
+    def test_color_name_resolved_to_numeric_id(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1"}
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.update_event("primary", "e1", color="Tomato")
+        body = service.events.return_value.update.call_args.kwargs["body"]
+        assert body["colorId"] == "11"
+
+    def test_color_not_given_leaves_colorid_untouched(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1", "colorId": "5"}
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+        client.update_event("primary", "e1", title="New")
+        body = service.events.return_value.update.call_args.kwargs["body"]
+        assert body["colorId"] == "5"
+
+    def test_invalid_color_raises_before_any_api_call(self):
+        service = MagicMock()
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="color must be an event color id"):
+            client.update_event("primary", "e1", color="Chartreuse")
+        service.events.return_value.get.assert_not_called()
+
 
 # ---------------------------------------------------------------------------- #
 # set_event_visibility: only the visibility field changes
@@ -846,6 +968,74 @@ class TestSetEventVisibility:
         client = make_client(service)
         with pytest.raises(CalendarClientError, match="set_event_visibility update"):
             client.set_event_visibility("primary", "e1", "private")
+
+
+# ---------------------------------------------------------------------------- #
+# set_event_color: only the color field changes
+# ---------------------------------------------------------------------------- #
+
+class TestSetEventColor:
+    def test_invalid_color_raises_before_any_api_call(self):
+        service = MagicMock()
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="color must be an event color id"):
+            client.set_event_color("primary", "e1", "Chartreuse")
+        service.events.return_value.get.assert_not_called()
+
+    def test_name_is_normalized_to_numeric_id(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1", "summary": "Standup"}
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1", "colorId": "11"}
+        client = make_client(service)
+
+        client.set_event_color("primary", "e1", "Tomato")
+
+        body = service.events.return_value.update.call_args.kwargs["body"]
+        assert body["colorId"] == "11"
+
+    def test_only_color_field_changes_other_fields_preserved(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {
+            "id": "e1", "summary": "Standup", "description": "daily sync", "location": "Room 1",
+        }
+        service.events.return_value.update.return_value.execute.return_value = {"id": "e1"}
+        client = make_client(service)
+
+        client.set_event_color("primary", "e1", "2")
+
+        body = service.events.return_value.update.call_args.kwargs["body"]
+        assert body["colorId"] == "2"
+        assert body["summary"] == "Standup"
+        assert body["description"] == "daily sync"
+        assert body["location"] == "Room 1"
+
+    def test_returns_parsed_updated_event(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1"}
+        service.events.return_value.update.return_value.execute.return_value = {
+            "id": "e1", "summary": "Standup", "colorId": "9",
+        }
+        client = make_client(service)
+
+        event = client.set_event_color("primary", "e1", "Blueberry")
+
+        assert event.color_id == "9"
+        assert event.title == "Standup"
+
+    def test_get_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.side_effect = http_error(404)
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="set_event_color get"):
+            client.set_event_color("primary", "e1", "Tomato")
+
+    def test_update_http_error_becomes_calendar_client_error(self):
+        service = MagicMock()
+        service.events.return_value.get.return_value.execute.return_value = {"id": "e1"}
+        service.events.return_value.update.return_value.execute.side_effect = http_error(400)
+        client = make_client(service)
+        with pytest.raises(CalendarClientError, match="set_event_color update"):
+            client.set_event_color("primary", "e1", "Tomato")
 
 
 # ---------------------------------------------------------------------------- #

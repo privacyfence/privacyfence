@@ -21,11 +21,40 @@ case "$1" in
         ;;
 esac
 
-# Deliberately nothing here starts the daemon. The XDG autostart entry
+# Nothing in this block starts the daemon. The XDG autostart entry
 # (/etc/xdg/autostart/privacyfence.desktop, installed above) only fires at the *next* graphical
 # login -- correct DMG-parity behavior (the DMG doesn't launch the app immediately after a
 # drag-install either). postinst runs as root, which can neither correctly determine the
 # installing user's desktop session nor safely start a per-user daemon on their behalf --
 # see the now-removed docs/linux-local-deb-packaging-plan.md P3.3.
+#
+# That is no longer the whole install, though: the D1 block right below hands startup to a
+# *system* unit instead, which root can start outright, and does -- whenever `enable --auto`
+# takes effect (see its own comment for exactly when), this package's `configure` step ends with
+# the daemon already running under privacyfence-daemon.service, not merely armed to start at the
+# next login. Whether that block takes effect is the only thing that decides which of the two
+# behaviors above this install actually gets.
+
+# #428 D1 (4.1, moved up from the original 4.2 plan): auto-enable privilege separation here,
+# on every install and upgrade (dpkg calls this same `configure` case for both -- $2 is the old
+# version on an upgrade, empty on a fresh install, and neither changes what to do). postinst
+# already runs as root, which is exactly what enable needs and what the "postinst can't safely
+# act on a user's behalf" reasoning above was about the *daemon*, not this: `enable --auto`
+# only proceeds when $SUDO_USER names a resolvable, non-root account (i.e. this .deb was
+# installed via `sudo apt install`/`sudo dpkg -i`, not by root directly or by an unattended
+# upgrade with no session behind it) and the packaged executables it needs exist -- see
+# scripts/linux_privilege_separation.sh's --auto handling. Anywhere that's not true, it logs why
+# and exits 0 rather than guessing, leaving the install opt-in exactly as before this. Idempotent
+# either way (enable already refreshes rather than fails on an already-separated install), and
+# best-effort: `|| true` means a failure here is never allowed to fail the package install.
+#
+# On an upgrade of an already-separated install, this is also what starts the daemon back up:
+# debian/prerm's `upgrade` case stops privacyfence-daemon.service before dpkg unpacks this
+# version's files over /opt/privacyfence, so the running PyInstaller onedir process is never
+# reading a directory being swapped out from under it. `enable` (inside cmd_enable's
+# install_services) is what starts it again, now against the new files.
+if [ "$1" = "configure" ] && [ -x /usr/sbin/privacyfence-privilege-separation ]; then
+    /usr/sbin/privacyfence-privilege-separation enable --auto || true
+fi
 
 exit 0

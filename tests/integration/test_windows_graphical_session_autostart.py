@@ -1,6 +1,8 @@
-"""Real Task Scheduler autostart verification for the Windows installer
-(the now-removed automated-test-strategy-plan.md Phase 7 item 2 and Phase 13 item 4;
-The now-removed windows-support-plan.md 8.2).
+"""Real Task Scheduler autostart verification for the Windows installer.
+See `docs/platform-support.md`'s "Known open items" for the full history of
+this verification -- the real Task Scheduler XML definition, the
+crash-restart-on-failure behavior, and what still can't be observed from a
+hosted CI runner.
 
 ``test_windows_packaged_smoke.py`` (Phase 6.2) already proves the installer
 registers *a* Task Scheduler autostart task (``schtasks /query`` against it)
@@ -130,12 +132,12 @@ machine-wide and managing a Task Scheduler task needs it), with a just-built
 own ``.github/workflows/windows-graphical-session.yml`` (packaging-related
 ``main`` pushes, weekly, and on demand) rather than ``build.yml``'s
 tag-triggered release pipeline or ``tests.yml``'s per-PR jobs: this is the
-same flakiest-and-most-expensive tier in ``docs/automated-test-strategy-
-plan.md``'s taxonomy (Phase 7's own objective) the Linux module already
-lives in, so a flaky run here must never block an actual release. The module
-and workflow keep their "graphical session" names, which now read as the
-tier they belong to rather than a literal description of what this module
-drives -- renaming them would break the workflow's own run history and
+same most-expensive tier in ``docs/automated-test-strategy-plan.md``'s
+taxonomy (Phase 7's own objective) the Linux module already lives in, so
+its runtime cost must not sit on an actual release's critical path. The
+module and workflow keep their "graphical session" names, which now read
+as the tier they belong to rather than a literal description of what this
+module drives -- renaming them would break the workflow's own run history and
 ``paths:`` triggers for no gain.
 """
 from __future__ import annotations
@@ -155,6 +157,7 @@ import pytest
 
 pytest.importorskip("mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'")
 
+from tests.control_channel_client import resolve_windows_pipe_name, windows_pipe_exists  # noqa: E402
 from tests.diagnostics import (  # noqa: E402
     capture_directory_manifest,
     copy_named_logs,
@@ -166,7 +169,6 @@ from tests.integration.test_windows_packaged_smoke import (  # noqa: E402
     ALIAS_EXE_NAME,
     MCP_TOKEN_FILE_NAME,
     TASK_NAME,
-    WEB_TOKEN_FILE_NAME,
     _bootstrap_session,
     _built_installers,
     _data_dir,
@@ -207,7 +209,7 @@ pytestmark = [
     pytest.mark.packaged,
     pytest.mark.skipif(
         platform.system() != "Windows",
-        reason="only meaningful against a real installer -- see the now-removed windows-support-plan.md 8.2",
+        reason="only meaningful against a real installer",
     ),
     pytest.mark.skipif(
         not _built_installers(),
@@ -484,6 +486,19 @@ def _wait_for_path_content(path: Path, *, timeout: float) -> str:
     raise AssertionError(f"{path} never appeared/populated within {timeout}s")
 
 
+def _wait_for_pipe(pipe_name: str, *, timeout: float) -> None:
+    """Like ``_wait_for_path_content()`` but for the control channel's named
+    pipe -- not a filesystem object, so there's no path to poll or content
+    to read; ``windows_pipe_exists()`` (open-then-close) is the closest
+    equivalent liveness check."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if windows_pipe_exists(pipe_name):
+            return
+        time.sleep(0.2)
+    raise AssertionError(f"named pipe {pipe_name} never appeared within {timeout}s")
+
+
 def _kill_alias_processes() -> None:
     """Best-effort: end any daemon this module's install left running, so a
     failed test never leaks a process holding the install directory open."""
@@ -521,8 +536,8 @@ def _real_home_state(request):
     identically-named fixture: skip rather than run if this account already
     has PrivacyFence state, and remove whatever this test creates.
 
-    Also doubles as this module's the now-removed automated-test-strategy-plan.md Phase
-    10 diagnostics capture, for the same reason that module's does -- the
+    Also doubles as this module's own diagnostics capture, for the same
+    reason ``test_linux_graphical_session_autostart.py``'s does -- the
     generic per-``tmp_path`` capture in ../conftest.py cannot see any of
     this, and a Scheduler-launched process has no redirected stdout of its
     own to collect either, so this reaches for what Task Scheduler knows
@@ -626,7 +641,7 @@ def _installed(_real_home_state, tmp_path):
     # must never fire under /VERYSILENT (test_windows_packaged_smoke.py's
     # own lifecycle test relies on the same fact); only Task Scheduler
     # should ever start the daemon in this module.
-    assert not (_data_dir(home) / WEB_TOKEN_FILE_NAME).exists(), (
+    assert not windows_pipe_exists(resolve_windows_pipe_name(_data_dir(home))), (
         "a silent install must never itself start the daemon -- only the autostart task should"
     )
 
@@ -698,7 +713,7 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
 
     pid, _owner = _start_task_and_wait_for_daemon(_installed)
 
-    web_token = _wait_for_path_content(_data_dir(_installed.home) / WEB_TOKEN_FILE_NAME, timeout=20)
+    _wait_for_pipe(resolve_windows_pipe_name(_data_dir(_installed.home)), timeout=20)
     mcp_token = _wait_for_path_content(_data_dir(_installed.home) / MCP_TOKEN_FILE_NAME, timeout=20)
     _wait_until_connectable("localhost", _installed.port)
 
@@ -708,7 +723,7 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
     # ── Phase 3's own daemon/MCP/approval/audit contract shape, against a
     # daemon this test never itself started a process for ─────────────────
     async with httpx.AsyncClient(base_url=base_url, follow_redirects=True) as web_client:
-        session_id = await _bootstrap_session(web_client, web_token)
+        session_id = await _bootstrap_session(web_client, _data_dir(_installed.home))
         assert (await web_client.get("/settings")).status_code == 200
 
         allow_task = asyncio.create_task(
@@ -727,7 +742,7 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
         f"{ALIAS_EXE_NAME} (pid {pid}) still running after Quit PrivacyFence"
     )
 
-    settings_path = _data_dir(_installed.home) / "config" / "settings.yaml"
+    settings_path = _data_dir(_installed.home) / "authority" / "config" / "settings.yaml"
     assert "autologon.example.com" in settings_path.read_text(encoding="utf-8")
 
 
@@ -739,8 +754,7 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
 # default, let alone the suite's 30s one.
 @pytest.mark.timeout(600)
 async def test_crash_restart_relaunches_a_killed_daemon(_installed):
-    """The now-removed automated-test-strategy-plan.md Phase 13 item 4 -- the positive
-    assertion, and the direct successor of this module's own negative test,
+    """The positive assertion, and the direct successor of this module's own negative test,
     ``test_restart_on_failure_does_not_cover_a_crashed_daemon`` (preserved in
     git history, not this file). That test measured, rather than assumed,
     that the shipped ``<RestartOnFailure><Interval>PT1M</Interval>

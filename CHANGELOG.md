@@ -35,6 +35,620 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- ADR 0002 (`docs/adr/0002-local-mode-trust-boundary-and-companion-app.md`) records the architecture
+  decision that follows from the statement above: local mode's trust boundary is the OS user
+  account, and a minimal companion app (tray/menu-bar item — Open Approvals, Open Settings, Quit)
+  returns as the channel that gets a human into the web UI without a sign-in credential traveling
+  through the AI client. It fixes the companion app's dependency budget (a second entry point of the
+  existing packaged binary; one platform-conditional tray dependency on macOS/Windows, none on
+  Linux), keeps the web app as the only implementation of approvals and settings, and records why
+  session minting is made *insufficient* (via the passkey in issue #426) rather than uncallable —
+  two processes running as the same user cannot be told apart. Supersedes ADR 0001 in part. No
+  behavior changes with this entry; it is the decision the implementation in issues #428 and #426
+  will follow. See issue #427.
+- Issue #428 Phase 1: local mode's human-authority state — the web-approval bootstrap secret
+  (`web_token`), the privacy policy (`config/settings.yaml`), enrolled WebAuthn credentials, and the
+  audit log plus its HMAC key — now lives under its own `authority` subdirectory, split out of
+  `mcp_token` and the agent's own connector caches/credentials, which stay where they were. A pure
+  refactor with no security gain yet — everything still runs as the same OS user until Phase 4 moves
+  the daemon to its own account and re-owns this subtree to it — but it isolates that later,
+  security-bearing state migration from everything that depends on the storage layout today. A
+  pre-4.1 install's existing `settings.yaml`, WebAuthn credentials, `web_token`, and audit history
+  are moved into the new location automatically on first startup under this version, so nothing is
+  silently reset. See issue #428.
+- Issue #428 Phase 2: minting a fresh bootstrap code on demand — once a previous session or link has
+  already expired, without restarting the daemon — no longer goes through a persistent `web_token`
+  file presented as a `POST /api/bootstrap` Bearer header over the same loopback HTTP port a browser
+  uses. It now goes through a new control channel (`web/control_channel.py`): a Unix domain socket on
+  macOS/Linux, an ACL'd named pipe on Windows — neither reachable by a browser's own loopback
+  connection. `web_token` itself, and the `POST /api/bootstrap` route, are gone. Still no security
+  gain alone — the channel is reachable by anything running as the same OS user, agent included —
+  but it's the interface issue #428's Phase 3 (companion app) and Phase 4 (privilege separation) both
+  need to exist first. The not-authorized page's on-demand recovery command changed to match (`nc -U`
+  on macOS/Linux, PowerShell's `NamedPipeClientStream` on Windows — neither needs Python, matching
+  the previous `curl`-based command's own no-extra-install posture). See issue #428.
+- Issue #428 Phase 3 (ADR 0002): a companion app — `privacyfence-companion`, a second entry point of
+  the same packaged application, not a new binary — gives a human a way into PrivacyFence's web UI
+  that doesn't route a sign-in credential through the AI client. On macOS/Windows it's a persistent
+  tray/menu-bar process (`pystray`, the one platform-conditional dependency ADR 0002 budgets for)
+  offering Open Approvals, Open Settings, and Quit; on Linux — no tray, by design — the same three
+  actions are a real (no longer `NoDisplay`) Applications-menu entry plus two Desktop Actions,
+  invoking `privacyfence-companion --action=...` once and exiting. It mints its own sign-in links
+  over the Phase 2 control channel and opens them in the default browser, and can ask the daemon to
+  quit over a new `QUIT` command on that same channel (gated by the existing `allow_quit` setting).
+  It also runs its own, opposite-direction channel that the daemon's connector OAuth flows
+  (`oauth_loopback.py`) now try first before opening a browser themselves — falling straight back to
+  today's direct `webbrowser.open()` when no companion is running, still the default until a human
+  starts one. Nothing installs or autostarts the companion yet, and it changes no default behavior on
+  its own — that inversion, and the privilege separation it exists to serve, is Phase 4. See issue
+  #428.
+- Issue #428 Phase 4, macOS: `scripts/macos_privilege_separation.sh enable` moves local mode's
+  trust boundary off the logged-in user's account. It creates a dedicated `_privacyfence` system
+  account, relocates the data directory from `~/.privacyfence` to
+  `/Library/Application Support/PrivacyFence` owned by it, and inverts the startup wiring ADR 0002
+  describes — the daemon becomes a LaunchDaemon with no login session, and the Phase 3 companion app
+  becomes the LaunchAgent that autostarts in yours. Four things the AI client could previously do,
+  it now cannot: edit the always-allow rules and PII policy in `config/settings.yaml`, write a
+  forged credential into `webauthn_credentials.json` (which is what makes the local passkey in issue
+  #426 mean anything), read the audit log's HMAC key, or read the daemon's connector credentials.
+  Minting a sign-in session stays deliberately reachable — the companion and the agent run as the
+  same user and no permission bit can tell them apart, so the design makes a session *insufficient*
+  rather than uncallable (ADR 0002 decision 6). The agent's own `mcp_token` also stays reachable, in
+  a group-shared `handoff` directory alongside the control-channel sockets; the MCPB shim and the
+  not-authorized page both follow it there. **Opt-in, and staying opt-in for a full release**: the
+  migration moves live connector OAuth tokens and `… disable` is the only way back. Root still
+  defeats all of it. `… status` audits the on-disk result, and the daemon refuses to start if it
+  finds itself running as the wrong account rather than silently seeding a default policy over the
+  real one. Linux and Windows are unchanged — the same phase for each is still to come. See issue
+  #428.
+- Issue #428 Phase 4, Linux: `sudo scripts/linux_privilege_separation.sh enable` does for Linux
+  what the macOS entry above does for macOS, in this platform's own idioms — a `privacyfence`
+  system account (`useradd --system`, no underscore prefix, which means nothing here), the data
+  directory relocated from `~/.privacyfence` to `/var/lib/privacyfence` (FHS 3.0 §5.8) owned by it,
+  and the startup wiring inverted: a **system** systemd unit
+  (`/etc/systemd/system/privacyfence-daemon.service`) runs the daemon with no desktop session,
+  while both pre-existing ways it used to start in yours — the `.deb`'s XDG autostart entry and the
+  repo's `--user` unit — are moved aside, since either would start a second daemon as you. It
+  closes exactly the same four things, and the layout, modes, marker file and `handoff` directory
+  are identical to macOS's; only the root and the account name differ. `privacyfence-companion`
+  grows a `--serve` mode, which an XDG autostart entry runs in each desktop session: the
+  companion's control channel alone, no tray and no new dependency. That one is not optional —
+  a daemon with no desktop session cannot open a browser, so without it connector OAuth for Slack,
+  Salesforce and Atlassian would have no way to show you a sign-in page. **Opt-in, and staying
+  opt-in for a full release**, same as macOS: the migration moves live connector OAuth tokens, and
+  `… disable` (which restores both startup paths it moved aside) is the only way back. Root still
+  defeats all of it. See issue #428.
+- Issue #428 Phase 4, Windows: `privilege-separation.ps1 enable`, run from an elevated PowerShell
+  (the installer now puts it next to the application; a source checkout runs
+  `scripts/windows_privilege_separation.ps1`), completes Phase 4 on the last platform — and it is
+  the one where the mechanism genuinely differs rather than being differently spelled. The daemon
+  becomes a **Windows service** running as the virtual account `NT SERVICE\PrivacyFence`
+  (materialized by the Service Control Manager with the service, its own SID, no password for
+  anyone to store), the data directory moves from `%LOCALAPPDATA%\PrivacyFence` to
+  `%ProgramData%\PrivacyFence`, and the Scheduled Task that used to start the daemon in your
+  session is disabled in favour of a new one that starts the companion tray app there instead. It
+  closes the same four things — the agent can no longer edit the always-allow rules and PII policy,
+  forge a WebAuthn credential, read the audit log's HMAC key, or read the daemon's connector
+  credentials — and the marker file, the three directories and the `handoff` contents are identical
+  to the other two platforms'.
+  What is new is the permission model: Windows has no mode bits, so the layout is NTFS ACLs written
+  with `icacls` and re-checked on every daemon start, with `/inheritance:r` first because
+  `%ProgramData%` otherwise grants every account on the machine read access by inheritance, and
+  `/setowner` because an owner can rewrite an ACL whatever it says — and moving the data directory
+  out of `%LOCALAPPDATA%` would otherwise leave it owned by the account being excluded. The
+  shared `handoff` directory ends up *tighter* than on POSIX — readable by the new
+  `PrivacyFenceUsers` group, not writable, since both control channels are named pipes rather than
+  socket files and nothing in your session needs to create anything there.
+  Two Windows-only requirements are enforced rather than documented. **A per-machine install is
+  required**: a service runs whatever its path names, so separating an install under your own
+  profile would let the very client this contains rewrite the daemon's executable and have it run
+  as the service account — `enable` reads the install directory's ACL and refuses, which settles
+  issue #407's open question as two install tiers rather than dropping the non-elevated path. **And
+  the companion is mandatory**, because a service runs in session 0 and cannot open a browser, so
+  connector OAuth for Slack, Salesforce and Atlassian goes through it or not at all. **Opt-in, and
+  staying opt-in for a full release**, same as the other two; the migration moves live connector
+  OAuth tokens and `… disable` is the only way back — run it *before* uninstalling, since uninstall
+  leaves `%ProgramData%\PrivacyFence` in place exactly as it leaves `%LOCALAPPDATA%\PrivacyFence`
+  today. Administrator still defeats all of it. See issue #428.
+- Issue #428 D1: privilege separation on macOS and Linux is now **default-on**, moved up from the
+  original plan's 4.2 target rather than waiting the full release cycle the two entries above
+  described. `enable`/`disable`/`status` are unchanged and `disable` remains how to opt back out;
+  what's new is who runs `enable` and when. On Linux, `debian/postinst` runs
+  `privacyfence-privilege-separation enable --auto` on every install and upgrade — it's already
+  root at that point, which is exactly what provisioning the account and the system unit needs.
+  On macOS, which has no equivalent package-manager hook (a DMG install runs nothing as root), the
+  daemon's own startup asks once instead, via the standard admin-password dialog, the first time it
+  finds itself unseparated (`privilege_separation.maybe_auto_enable_macos()`); `scripts/
+  build_dmg.sh` now bundles `scripts/macos_privilege_separation.sh` and its launchd templates into
+  the `.app` so that prompt has something to run — until now, opting in on a DMG install required a
+  source checkout. `--auto`, new on both scripts, is what makes this safe to run unattended: it's
+  the same `enable`, except anywhere that would otherwise fail on something only a human could
+  resolve interactively (no resolvable account owner, no installed executables) it instead logs why
+  and leaves the install opt-in, rather than failing a package install or nagging at every daemon
+  start. A decline of the macOS prompt is respected and not asked again. This still ships ahead of
+  the real-machine verification `docs/platform-support.md`'s "Known open items" describes — the
+  automated contract coverage is unchanged, the manual pass against a release build is not done, and
+  turning the default on makes running it sooner more important, not less. See issue #428.
+- Issue #428 Phase 4, macOS: `scripts/macos_privilege_separation.sh enable` (and D1's auto-enable
+  through it) now refuses to elevate a daemon or companion image that anyone but root or `wheel`
+  could have rewritten, and `privilege_separation.audit_layout()` re-checks the same thing on every
+  daemon start. ADR 0002 §5a asserted that `/Applications` was root-owned the way `/opt` is; it
+  isn't — it's `root:admin drwxrwxr-x`, and a drag-installed `.app` is normally owned by the
+  installing user, the same account the agent runs as — so nothing previously stopped that account
+  from replacing the bundle's executable and getting code execution as the service account once
+  privilege separation elevated to it, the identical escalation Windows already refused to permit.
+  Corrected in ADR 0002 §5a itself.
+- Issue #428 D1 follow-up: the macOS auto-enable prompt above ran whatever
+  `scripts/macos_privilege_separation.sh` resolved to through an admin-password dialog without first
+  checking what that was — on a packaged install the `.app`'s `Resources/` is as writable as anything
+  else the logged-in user owns, and a source checkout never belongs to root at all, so an agent able
+  to write either one could get its own script executed as root behind what looked like a routine
+  permission prompt. `maybe_auto_enable_macos()` now refuses to elevate a script that is not
+  root-owned and not group/world-writable, and, on a packaged install, whose `.app` bundle's
+  signature doesn't verify (`codesign --verify --deep`) — anything else logs why and leaves the
+  install opt-in, the same fallback `--auto` already takes for every other unresolvable case. A
+  source checkout can never satisfy the ownership check, which is deliberate: this prompt now only
+  ever runs a script the installer itself shipped.
+- Issue #428 B4: the control channel's `QUIT` command is now refused unconditionally on a
+  privilege-separated install, regardless of `allow_quit`. The control socket is `0660`
+  group-shared after separation so the companion can still reach it, which puts the agent in the
+  same group too; since a clean exit is exit 0, neither systemd's `Restart=on-failure` nor
+  launchd's `SuccessfulExit: false` restarts a daemon stopped this way, so one `QUIT\n` on that
+  socket was a standing, agent-reachable way to turn the privacy gate off entirely — exactly the
+  capability privilege separation exists to take away from the agent. The error now names this
+  platform's own service-manager command (`PlatformLayout.stop_command`, new alongside
+  `start_command`/`status_command`) instead: a system service is the service manager's to stop,
+  not this channel's. See issue #428.
+- Org mode: a new `step_up.require_passkey` config flag (`--step-up-require-passkey` in
+  `build_org_bundle.py`) closes the WebAuthn step-up gate's IdP-reauth fallback for organizations
+  that want hardware-bound passkeys as a hard requirement before releasing a write approval.
+  Previously, step-up accepted either a passkey assertion or a fresh IdP re-authentication
+  unconditionally, even for an org that had enabled step-up specifically to defend against a
+  compromised or phished IdP session — a principal with no enrolled passkey silently fell back to
+  the weaker path. With `require_passkey` set, that fallback is gone entirely (the IdP step-up
+  endpoint itself refuses, not just its link), and a principal with no enrolled passkey gets a
+  hard failure pointing at `/security` to enroll one instead. Off by default. See issue #406.
+- `web/server.py`'s module docstring no longer claims `/settings` stays unmounted in org mode
+  because its CSRF model can't generalize to org mode's per-session cookie — `org_session.py`'s
+  `check_csrf` already does that double-submit check, the same shape `session_auth.check_csrf`
+  uses in local mode. The real, still-open gap is deciding which of `routes_settings.py`'s ~30
+  actions are per-principal versus install-wide/admin-only and wiring `Principal.is_admin` into
+  authorizing the latter, which the docstring now says instead. `docs/org-mode-setup-guide.md`
+  gains a new §9 explaining where PII/privacy policy (install-wide, from the server's own
+  `config/settings.yaml`, needs a daemon restart to change, and defaults to `block` for any group
+  absent from that file — unlike local mode's `allow`) and auto-accept rules/grants (per-principal,
+  under that user's own `users/<principal>/config/settings.yaml`) actually live today, since
+  neither has a browser page of its own yet. See issue #400.
+- Org mode now has a read-only `/settings` page, linked from `/approvals`'s footer: every
+  signed-in principal can review and remove their own auto-accept rules and trusted-resource
+  grants (never another principal's), and an admin (`Principal.is_admin`) additionally gets
+  `/settings/privacy`, a read-only view of the effective install-wide PII/privacy policy that
+  names which groups are explicitly configured versus silently relying on org mode's fail-safe
+  `block` default. Removing a rule or grant goes through the same CSRF/origin checks as
+  `/approvals` and is written to the audit log. Fixes a related bug found while building this:
+  every org principal but whichever one a `local`-mode `run_app()` happened to initialize for
+  privacy-filter purposes was silently falling through to an unconditional "allow" for every PII
+  category, the opposite of org mode's intended fail-closed default — every org principal's
+  privacy-filter state is now populated (from the real install-wide policy, not an unconfigured
+  per-user file) the same way their auto-accept rules already were. Editing either surface from
+  the browser remains out of scope for this first cut. See issue #400.
+- Org mode's `/settings/privacy` is now editable by an admin, not only readable: each privacy
+  group's default policy, each category's policy, the PII-detection master switch and its two
+  individually-toggleable categories. This closes the question the read-only first cut above left
+  open — whether the UI writes `settings.yaml` and demands a daemon restart, or the filter learns
+  to reload. It reloads: the change is written to the server's own `settings.yaml` atomically and
+  then applied to every principal in the running process, so it governs everyone's next request
+  with no restart. Every change is written to the audit log under the admin who made it, and every
+  audit entry recorded afterwards carries the new policy fingerprint
+  (`AuditEntry.security_config_hash`) rather than the one loaded at startup. The write endpoints
+  re-check `Principal.is_admin` themselves through `org_settings_scope.is_action_permitted` — the
+  page being reachable is not what authorizes the write — on top of the same CSRF and same-origin
+  checks `/approvals` uses. Fixes two bugs found while building it: the org `/settings` pages'
+  inline stylesheet carried no CSP nonce, so both rendered unstyled under the app's own
+  `style-src-elem` policy; and `pii_detector`'s per-principal state was never initialized from the
+  install-wide `settings.yaml` for any org principal, so a category an admin had turned off
+  install-wide stayed on for everyone (fail-closed, so nothing was let through that shouldn't have
+  been, but not something an editable page could ship on top of). Install-wide log level and the
+  Calendar free/busy toggle remain admin-only-in-principle but unwired — neither is privacy policy
+  and each needs a reload path of its own. See issue #400.
+- Issue #426 Phase 1: `StepUpConfig` (the WebAuthn step-up decision, previously org-mode-only) moves
+  out of `org_mode.py` into a new `step_up_config.py`, and local mode gets its own entry point,
+  `from_local_config`, reading a new `step_up:` section of `config/settings.yaml` (`enabled`,
+  `scope`, `rp_id` — defaults to `localhost`, needing no TLS — `rp_name`, `require_passkey`).
+  `web/routes_security.py`'s `/security` enrollment page and its `/api/security/webauthn/*` routes
+  are now mode-agnostic — `build_routes` takes a principal/session resolver instead of an
+  `OrgSessionStore` directly — and are mounted in local mode too, linked from the Settings page's
+  General tab. This is enrollment only: nothing in local mode yet checks for or demands an
+  assertion before releasing an approval (that's Phase 2), and `require_passkey` has no enforcement
+  path there either (Phase 3) — an enrolled local-mode passkey today is inert, not a control
+  already in effect. This phase was gated on issue #428's Phase 4 (privilege separation) having
+  landed for the platform in question, since local mode's credential store is otherwise writable by
+  the same agent the check is meant to defend against — see issue #426 for the full dependency
+  reasoning, and the "Local-mode trust boundary" section of `docs/security-and-compliance.md` for
+  what still doesn't hold until later phases land. See issue #426.
+- Issue #426 Phase 2: local mode's `/api/approvals/{id}/decide` endpoint (`web/routes_approvals.py`)
+  now demands a fresh WebAuthn assertion before releasing an approving decision (`accept`/
+  `accept_all`) on a write, or on a PII-flagged read when `step_up.scope` is set to
+  `writes_and_pii_reads` — ported from `web/routes_org_approvals.py`'s own decide-time gate, minus
+  the IdP re-authentication fallback local mode has no equivalent of. A first attempt with no
+  `webauthn_assertion` gets a `428` carrying fresh assertion options when a passkey is enrolled; a
+  second attempt with a valid, decision-bound assertion completes the decision. `deny` never needs
+  step-up. This is still opt-in machinery, not the guarantee issue #426 exists for: with no passkey
+  enrolled, the `428` has no options to offer and the decision is let through unguarded rather than
+  left permanently stuck — the one place step-up stays evadable at this phase, closed by Phase 3's
+  `require_passkey` enforcement, not this one. See issue #426.
+- Issue #426 Phase 3: `step_up.require_passkey` is now enforced in local mode, on both surfaces an
+  agent could otherwise use to route around it. `web/routes_approvals.py`'s decide endpoint
+  hard-fails (`403`, naming `/security`) instead of letting an approving decision through unguarded
+  when nothing is enrolled — closing Phase 2's own deliberate gap. `web/routes_settings.py`'s
+  sensitive settings actions (the rule-row, grant, policy and PII actions in its new
+  `_SENSITIVE_ACTIONS`, out of the dispatcher's ~30) now demand the same fresh assertion before
+  applying, so adding an always-allow rule or a broader grant can no longer substitute for a forged
+  approval; a test asserts every allowlisted action is classified sensitive-or-not, failing when a
+  future action lands in neither set. `web/routes_security.py` gates deleting your *last* enrolled
+  credential behind a fresh assertion too, regardless of `require_passkey` — removing it is what
+  would silently turn a mandatory install back into an unenforced one. A daemon started with
+  `require_passkey` on and nothing enrolled still starts (refusing to boot would remove the only path
+  to `/security` that fixes it) but logs a warning and shows a new persistent banner
+  (`web_shell.wrap`'s `banner_html`) on every `/approvals`/`/settings` page until a passkey is added.
+  See issue #426.
+- Issue #426 Phase 4: tamper-evidence, recovery, and an honest write-up for local-mode step-up.
+  Enrolling or removing a passkey, spending a recovery code, and `step_up.require_passkey` itself
+  being turned on or off (at this phase, observable only at daemon startup, since there was no UI
+  path to flip it at all yet — see `step_up_config.py`; B9 above adds one for turning it on) are all
+  written to the audit log. Turning the requirement off latches a
+  persistent banner on `/approvals`/`/settings` and a daemon-log warning that survives further
+  restarts, not just a one-time audit line, until a later startup turns it back on. `web/
+  routes_security.py`'s enrollment flow now issues a one-time recovery code — shown to the browser
+  exactly once, stored only as a salted hash — the moment a principal doesn't have an unused one on
+  file, and a new `POST /security/recover` endpoint trades a valid code for the removal of every
+  credential enrolled for that principal, no WebAuthn ceremony required, so someone who loses their
+  only authenticator (a new machine, a wiped TPM) has a sanctioned way back in instead of the
+  shell-edit-and-restart door this feature exists to close. `docs/security-and-compliance.md` gets a
+  new "Tamper-evidence and recovery" subsection and an honest revision of the MCP-issued-sign-in-link
+  net-effect paragraph: with privilege separation active and `require_passkey` on, a session can no
+  longer release a gated write or loosen policy on its own, though it can still be minted and still
+  reaches the review screen. See issue #426.
+- `docs/security-and-compliance.md`'s "What it deliberately does not close" paragraph named
+  "integrity is the strong guarantee — the agent cannot approve its own request" as an unconditional
+  property. #426 Phase 4 (above) revised the neighboring sign-in-link paragraph to say this holds
+  only with privilege separation active, `step_up.enabled`, `step_up.require_passkey`, and a passkey
+  enrolled all together — but left this sentence unrevised, so it still overstated the guarantee.
+  It now names the same four preconditions and says plainly that on a default install, where none of
+  them holds, a session alone is still sufficient to approve its own request. Nothing about the
+  implementation changed; this corrects what is claimed for it.
+- B9 of the 4.1.0 action plan: local mode's step-up requirement can now be turned on from the
+  Settings page, not only by editing `config/settings.yaml` and restarting the daemon — #426 shipped
+  the whole enforcement chain and then defaulted it off with no way to flip it back on short of a
+  shell, which on a privilege-separated install means `sudo` and a text editor for the release's own
+  headline security feature. Once a passkey is enrolled at `/security`, the General page's Security
+  card gets a "Turn on" control (`enable_step_up`) that sets `step_up.enabled` and
+  `step_up.require_passkey` together and takes effect immediately, with no daemon restart — the next
+  write approval already demands the assertion. The action is refused, config untouched, unless a
+  passkey is already enrolled, and is itself an audited, step-up-gated sensitive settings action once
+  step-up is already on. One-directional by design: turning the requirement back off still has no UI
+  path and remains a `config/settings.yaml` edit plus a restart, which is what keeps the existing
+  "treat this install as compromised" banner meaningful — a disable it observes still can never have
+  come from a browser control. See `step_up_config.py`'s `LiveStepUpConfig`.
+- B10 of the 4.1.0 action plan: on a privilege-separated install, the companion app's own control
+  channel (`OPEN <url>`, `web/control_channel.py`'s `CompanionChannelServer`) now refuses a
+  connection unless it comes from the daemon's service-account uid. The socket is `0660`
+  group-shared with the agent (same as the daemon's own MINT/QUIT channel), and before separation
+  that sharing is exactly ADR 0002 decision 6's deliberate trade-off — companion, agent and daemon
+  are all one uid, so no peer check could tell them apart. Separation changes that for this one
+  channel: the daemon moves to a different account while the companion and the agent stay on the
+  logged-in user's, so `SO_PEERCRED`/`LOCAL_PEERCRED`'s uid becomes meaningful here for the first
+  time, and an agent sharing the group could previously send `OPEN` itself to drive the human's
+  browser to an attacker-chosen http(s) URL. The daemon's own MINT/QUIT channel is unchanged — ADR
+  0002 decision 6 still applies there. See `privilege_separation.service_account_uid()`.
+- B11 of the 4.1.0 action plan: `PRIVACYFENCE_SYSTEM_ROOT` (`privilege_separation.py`'s
+  test/development escape hatch for relocating a separated install's authority root) is now
+  refused on a genuinely separated install instead of being honoured unconditionally. The
+  daemon's own environment is controlled by launchd/systemd, but the companion app and the MCPB
+  shim read this variable too, and *their* environment is whatever the signed-in user's session
+  set — exactly the boundary privilege separation exists to hold. `system_root()` and the shim's
+  `privilegeSeparationRoot()` now check the platform's real default root for an already-provisioned
+  marker before trusting the override; once one exists there, a user-session process can no longer
+  redirect itself onto a root it controls instead of the one the installer provisioned and locked
+  down. The override still works exactly as before on the common case — a dev/CI machine, which
+  has no real marker at that literal system root to begin with.
+- B13 of the 4.1.0 action plan: the Slack/Salesforce/Atlassian OAuth loopback listener
+  (`oauth_loopback.py`) no longer inherits `HTTPServer.allow_reuse_address`. On a privilege-separated
+  install the agent is a different, less-trusted process than the daemon (ADR 0002) and could bind
+  the fixed redirect port first; PKCE already stops it from completing the exchange, but leaving
+  address reuse on meant the daemon's own bind() could still silently succeed over that squatted
+  port on Windows, where `SO_REUSEADDR` on a *new* socket lets it steal a port another socket is
+  actively listening on regardless of that socket's own options — leaving it undefined which of the
+  two processes actually received the provider's callback. With reuse off, that bind() now always
+  fails, which the existing actionable `OAuthLoopbackError` already reports.
+- B20 of the 4.1.0 action plan: `web/org_settings_scope.py`'s `PER_PRINCIPAL_ACTIONS` allow-list
+  named `add_rule_row`/`update_rule_row`, the grant equivalents, and the connector actions as
+  permitted for any signed-in principal, but `web/routes_org_settings.py` only ever wired routes
+  for removing a rule row and removing a grant row — the allow-list had run ahead of the routes.
+  No route currently calls `is_action_permitted` with any of the unwired action names, so nothing
+  was actually reachable, but a route added later in good faith could have trusted the allow-list's
+  "yes" without noticing no implementation backed it. `PER_PRINCIPAL_ACTIONS` now holds exactly the
+  two actions with a real route; the rest moved to a new `PER_PRINCIPAL_ACTIONS_UNROUTED` set that
+  `is_action_permitted` denies until each one gets its own route and moves over.
+- B23 of the 4.1.0 action plan: local mode's `/approvals` page now says, once, when step-up isn't
+  actually protecting anything — B9 gave the requirement a browser-reachable on switch, but the
+  default is still off and nothing said so. The two banners that already existed both fired on
+  transitions or misconfigurations (`step_up_config.py`'s `local_enrollment_banner` once
+  `require_passkey` is already in force and nothing is enrolled; `webauthn_stepup.py`'s
+  `step_up_disabled_notice` once a disable transition has been latched), so a fresh install — or any
+  install that has simply never turned this on — showed an approvals page that looked complete while
+  an agent session could still approve its own writes, with no hint beyond the Security card in
+  Settings. A new `StepUpConfig.off_notice()` fires exactly when step-up isn't genuinely required
+  (`enabled and require_passkey` together), and `/approvals` renders it as a dismissible strip
+  (`web_shell.wrap`'s new `dismissible_notice_html`) with a link to turn it on — advisory, not an
+  alarm, so it stays dismissed in that browser once seen rather than nagging on every visit for as
+  long as the install stays in its default state.
+- Approval binder, Phase 5: `docs/approval-list-ui-ux.md`'s "there is intentionally no Allow action
+  on the list" — true up through Phase 2, superseded by Phase 3's batch approve — is replaced with
+  the rule that actually holds, **no approval without disclosure**: what the binder discloses
+  inline, which approval kinds it refuses to batch, and why. `docs/security-and-compliance.md`
+  gains a new "The approval binder's single assertion" subsection stating what one WebAuthn
+  assertion over a whole selected set establishes (the same freshness and user-verification
+  `step_up.enabled` already requires per decision, now bound to an exact, tamper-evident set) and
+  what it does not (per-item attention) — framed against [ADR
+  0002](docs/adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6's own
+  integrity-strong/confidentiality-weak asymmetry rather than as a new claim. No behavior changes
+  with this entry.
+
+### Added
+
+- Policy v2 redesign, P3: a new `policy/engine.py`/`policy/compat.py` evaluator for auto-accept
+  rules, built on the P1 tool registry and P2 scope/condition selectors, now runs alongside the
+  existing `AutoAcceptEvaluator` on every gated call (`gate.py`, shadow mode). Nothing on disk
+  changes, and nothing about what auto-accepts changes by default: the existing evaluator keeps
+  deciding, and a disagreement between the two is logged once at `WARNING` (operation key, each
+  side's matched rule, a redacted context fingerprint — never call content) rather than acted on.
+  A new `policy.engine: v1 | v2` key in `config/settings.yaml` (default `v1`) is the switch for
+  when the new evaluator becomes authoritative instead; flipping it back to `v1` is the documented
+  rollback, no release needed.
+- Gmail draft bodies (`body_markdown` on all 6 draft tools) now support `# Heading 1`/`## Heading 2`
+  syntax, rendered as Gmail's own "Large"/"Huge" font-size compose presets (not raw `<h1>`/`<h2>`
+  tags, which render inconsistently across mail clients). See issue #414.
+- Calendar events can now be given a color. `calendar_create_event`/`calendar_update_event` accept
+  a `color` parameter, and a new `calendar_set_event_color` tool changes just that field on an
+  existing event, mirroring `calendar_set_event_visibility`. A new `calendar_list_colors` tool
+  lists Calendar's fixed color palette (id, name e.g. "Tomato", hex background/foreground) so a
+  color can be picked by name instead of a numeric id. See issue #414.
+- Approval binder, Phase 1: `/approvals` now groups pending, batchable approvals by
+  `(connector, operation)` with a per-group and page-level select-all, and **Deny selected**
+  clears a whole group of unwanted requests in one action (client-side over the existing per-id
+  decide endpoint — no new server-side batch path yet). A confirmation/selection dialog, or a card
+  a PII match forces a second confirmation on, is never offered a checkbox — `PendingApproval.
+  is_batchable()`/`blocked_reason()` classify every kind explicitly, with a coverage test that
+  fails the moment a new kind isn't classified either way. Each row also gets an inline "Details"
+  disclosure, fetched from a new read-only `GET /api/approvals/{id}/preview` fragment (the same
+  metadata-only `preview` dict already stamped onto every approval at registration) — never an
+  `<iframe>` onto the real card document, which would mean weakening the card's own
+  `frame-ancestors 'none'` for cosmetics. Selection lives in the page's own JS state and survives
+  the list's live SSE re-renders. Approving still opens the full card; there is still no bulk
+  Allow.
+- Approval binder, Phase 2: a new `POST /api/approvals/batch/decide` endpoint approves or denies a
+  selected batch in one request (`{items: [{id, result}], csrf}`, `result` one of `accept`/`deny` —
+  no `accept_all`, which still needs its own scoped rule-creation confirmation). Each item resolves
+  independently and the response reports one outcome per item (`applied` / `already_decided` /
+  `unknown` / `not_batchable`) at HTTP 200 — a partial outcome (a rule elsewhere already resolved
+  one of the selected items) is normal, never silent. Every decision is still authorized against
+  `current_principal()`, unchanged from the single-decide endpoint: another principal's id reads as
+  `unknown`, never "exists but forbidden". Every applied decision is still audited individually,
+  now additionally stamped `decided_via: "binder"` with a server-minted `batch_id`, so a reviewer
+  can tell which audit entries a single binder submission released. No passkey step-up on this
+  endpoint yet — that lands with the batch's own bound assertion in the next phase. The
+  decide-time WebAuthn step-up sequence duplicated across `web/routes_approvals.py`, `web/
+  routes_org_approvals.py` and `web/routes_settings.py` is now one shared helper (`web/
+  step_up_decide.py`) all three call, behavior-preserving — the batch endpoint would otherwise have
+  been a fourth copy.
+- Approval binder, Phase 3: an **Approve selected** button on `/approvals` submits a batch
+  approval, gated on one WebAuthn passkey assertion bound to the exact selected set
+  (`webauthn_stepup.batch_decision_fingerprint`) rather than one prompt per item. Submitting with
+  no assertion gets a `428` carrying a fresh challenge and a server-minted `batch_id`; resubmitting
+  the identical items plus that `batch_id` and the completed assertion releases the whole batch in
+  one request. The fingerprint binds the *entire* submitted set, deny items included — an assertion
+  obtained for one selection can't be replayed to authorize a larger, smaller, or differently-decided
+  one, and it's single-use, so replaying it after release also fails. Only an approving item that
+  actually needs step-up (a write, or, in the wider scope, a PII-flagged read) triggers the
+  ceremony at all — a deny-only batch never prompts. `step_up.require_passkey` fails the *whole*
+  batch closed (a `403` naming `/security`, nothing applied) exactly as it already does for a
+  single decision; with it off and nothing enrolled, the batch is let through unguarded, the same
+  evadable behavior the single-decide endpoint already has. A new `step_up.batch` setting
+  (`single_assertion`, the default, or `per_item`) lets an install refuse single-assertion batching
+  entirely instead — with it set, a batch containing anything that needs step-up is rejected
+  outright, nothing applied, and those items have to be decided one at a time from their own card.
+  The submit button itself names the selected set's composition ("Approve 12 · 9 reads, 3 writes")
+  so an unintended write can't hide inside a read-shaped batch. No IdP re-authentication fallback
+  for the batch endpoint even in org mode, unlike its single-decision endpoint — this is a
+  page-level ceremony, the same shape `web/routes_settings.py`'s sensitive actions already use, and
+  that one has never offered an IdP link either.
+- Approval binder, Phase 4: a gated call no longer stalls the previous three phases' batch UI empty.
+  Previously, an agent issuing tool calls one at a time blocked the full 30-second hold window on
+  the first call, relayed one link, and wasn't due to try a second call until a human had already
+  decided the first — the one-at-a-time flow, with extra steps. Once a principal already has one
+  unfinalized approval outstanding, a later gated call's own hold window now collapses to zero
+  instead (`web.approvals.adaptive_hold`, on by default): it returns `approval_pending`
+  immediately, so an agent can keep issuing independently-ready gated calls instead of stalling on
+  each in turn. The `approval_pending` result also gains `pending_count` (this principal's own
+  approvals outstanding, this one included) and `binder_url`; past one, its message points at
+  `/approvals` instead of the one card's own link and asks for every outstanding id to be
+  collected into a single `privacyfence_await_approval` call rather than relayed and awaited one
+  at a time — `privacyfence_await_approval`'s own tool description now says the same thing.
+
+### Fixed
+
+- **Quitting from the settings page no longer truncates its own response.** `/api/settings/quit_app`
+  signalled the daemon's shutdown *before* returning, so the process could be torn down while its
+  21-byte confirmation was still being written and the client saw `peer closed connection without
+  sending complete message body` instead. Shutdown now runs as a background task, after the response
+  body reaches the socket. This also removes an intermittent CI failure in
+  `tests/system/test_local_mode_system.py`.
+- **A refused companion-channel connection now actually receives its refusal.** On a
+  privilege-separated install, `web/control_channel.py`'s peer check wrote `ERROR ...` and closed
+  without reading the request — and closing a socket whose receive queue still holds unread data
+  resets the connection, so the refused peer's own `send()` failed with `EPIPE` before it could read
+  that line. `request_open_url()`'s caller saw a broken pipe rather than the diagnostic explaining
+  why it was refused. The request is now drained before the close. This also removes an intermittent
+  CI failure in `tests/unit/web/test_control_channel.py`.
+
+- An approval that resolved without a human clicking a button — its pending TTL lapsing
+  (`pop_expired_events()`), or an auto-accept rule appearing while it was still waiting
+  (`reevaluate_all()`) — no longer leaks the worker thread that was blocked showing its card.
+  `approvals.PendingApproval.finalize()`/`pop_expired_events()` used to set only the
+  approval-level `finalize_event`, never the UI-step `event` that `web_prompt.block_on_card`
+  actually blocks on (only a human's decision, via `answer()`, ever set that one) — so the
+  `gate.py` popup-executor worker driving that card's interaction never returned. Eight such
+  approvals (the executor's worker count) and the daemon could no longer render any approval
+  card at all, without a restart. Both paths now wake the UI step too; the interaction's own
+  eventual `finalize()` call is a harmless no-op once the real outcome is already recorded.
+- `GET /approvals/{id}` no longer 500s for a genuinely pending approval whose card hasn't been
+  rendered yet. Card HTML is only built on `gate.py`'s dedicated popup executor (`build_card_html`
+  runs from inside `show_popup`/`show_read_popup`, on that worker thread); once every worker is
+  occupied showing an earlier card, a newly registered approval is listed and decidable but its
+  `card.html` is still `""`, which crashed `_inject_shim`'s `html.index("</head>")`. The card page
+  now serves a "preparing this request" placeholder that auto-refreshes instead, in both local
+  mode (`web/routes_approvals.py`) and org mode (`web/routes_org_approvals.py`).
+- `gate.py`'s dedicated popup executor (`_popup_executor`) is now sized against
+  `approvals.DEFAULT_MAX_PENDING` (and, once the daemon starts, against
+  `settings.yaml`'s own `web.approvals.max_pending` override, via the new
+  `gate.configure_popup_executor()`) instead of a literal 8 workers. The "preparing this
+  request" placeholder above covered the crash a worker-starved approval used to cause, but
+  not the underlying stall: past the executor's worker count, a card's HTML was never built at
+  all until an earlier one was decided, however many approvals the registry was otherwise
+  willing to hold pending. The pool and the registry's own cap now stay tied together, so a
+  future change to one can't silently reintroduce the gap between them.
+- `approvals.PendingApproval` now carries the `preview` dict `gated_call()` passes to
+  `show_popup()`/`show_read_popup()`, stamped at registration time rather than left for
+  `build_card_html` to derive later on a `_popup_executor` worker. `preview` stays
+  metadata-only by the same contract that already governs every card (`docs/coding-and-testing-
+  guidelines.md` §1.5) — this only moves *when* it's known, not what it contains — and lets a
+  future consumer (a read-only summary of what's pending) disclose without waiting on that
+  worker at all. No behavior change on its own.
+- Org mode: restarting the daemon no longer forces every connected MCP client through a full
+  browser sign-in. The OAuth refresh tokens `/mcp` clients hold are now persisted across a
+  restart, so the ordinary silent-refresh path survives one and a client re-authenticates with
+  nobody present. Previously every token store was in-process only: a restart emptied them, the
+  refresh path was unavailable along with everything else, and the client had to redo the whole
+  `authorize → IdP redirect → sign-in → code exchange` round trip. For a human at a browser that
+  was an annoyance; for a scheduled or background tool call it was a dead end, because there is
+  nobody there to complete a redirect. Each record is sealed under a key derived from the refresh
+  token itself rather than one the daemon keeps, so the file is inert without a token that was
+  already valid — encrypting under a daemon-held key would have moved the secret rather than
+  protected it. Access tokens (one hour, re-minted by the refresh) and browser sessions (a human
+  is present by definition) are still deliberately in-memory only, and every revocation path —
+  logout, `/revoke`, rotation, the 30-day chain cap — clears the persisted record too. See issue
+  #402.
+- A client holding the session id of a Streamable HTTP session that no longer exists — after a
+  daemon restart, or an eviction — can now recover instead of being refused for the life of its
+  own process. `/mcp` answered any request naming an unknown session with `404 Session not
+  found`, which is correct by the spec and fatal in practice: neither official MCP client
+  transport clears its stored session id on a 404, so it kept stamping the dead id on everything
+  it sent, `initialize` included, and every one of those was refused on account of the id rather
+  than judged on its own merits. An `initialize` that arrives carrying an unknown session id now
+  opens a fresh session. Requests that genuinely need the session they name (a GET reopening an
+  SSE stream, a DELETE, any non-`initialize` POST) still get today's 404. The bundled `.mcpb`
+  shim retries the same frame once without the stale id, so a shim newer than the daemon it talks
+  to recovers as well. See issue #402.
+- The PyPI project page is no longer bare. `pyproject.toml` now declares `[project.urls]`
+  (Homepage, Download, Documentation, Source, Changelog, Issues, Security) and `classifiers`, so
+  the sidebar on `pypi.org/project/privacyfence/` links back to the site and repo and the project
+  is classified (Development Status, License, Operating System, Intended Audience, Topic) rather
+  than surfacing in no browse facet at all. README.md — which is the PyPI long description — had
+  30 relative doc links and 4 relative screenshot `<img>`s that only resolve on GitHub; those are
+  now absolute (`github.com/.../blob/main/...` for docs, `raw.githubusercontent.com/.../main/...`
+  for images), and the three `../../releases` download pointers now point at
+  `privacyfence.eu/download/`, the canonical download surface. See issue #370.
+- `apt remove` on a Linux install that privilege separation (auto-enabled by `postinst`, issue
+  #428 D1) turned on no longer strands it. `debian/prerm` now runs
+  `privacyfence-privilege-separation disable` on a real `remove` — before dpkg deletes the binary
+  that command needs — so the system unit is stopped and removed and the migrated data, including
+  live connector OAuth tokens and the audit log, moves back under `~/.privacyfence` instead of
+  being left behind in a `0700` directory the user can no longer read, owned by an account whose
+  only undo tool was just uninstalled. The operation is best-effort and never runs on a plain
+  upgrade, which must leave a separated install's data and account in place — it just gets briefly
+  stopped and restarted there too, see below.
+- A separated install's daemon (`privacyfence-daemon.service`, a packaged PyInstaller onedir
+  build running straight out of `/opt/privacyfence`) no longer risks crashing partway through a
+  `.deb` upgrade. dpkg unpacks the new version's files over that same directory before `postinst`
+  gets a chance to stop and restart the unit, so a shared library the still-running old process
+  lazily loads could vanish out from under it mid-upgrade. `debian/prerm` now stops
+  `privacyfence-daemon.service` first, on `upgrade`; `postinst`'s `enable --auto`, which already
+  runs on every upgrade (issue #428 D1), starts it again once the new files are in place, so the
+  daemon never ends up left down. A no-op, as before, on an unseparated install, which has no such
+  unit.
+- Issue #428 B8: `debian/postinst`'s header comment no longer claims installing the `.deb` never
+  starts the daemon. That was true before D1 but not after: `enable --auto`, right below it, now
+  starts `privacyfence-daemon.service` immediately (`systemctl enable --now`) whenever it can
+  safely tell who owns the install — the comment now says so instead of asserting the opposite
+  unconditionally. `test_deb_autostart_activates_daemon_via_real_login_session` had the same bug
+  in test form: its "install must never start the daemon" assertion checked the daemon's pre-D1
+  socket path under `~/.privacyfence`, which privilege separation moves out from under it, so the
+  assertion could never fail regardless of what actually happened — fixed as part of splitting
+  that test into separated/unseparated cases (issue #428 B7).
+- Issue #428 B14: two admins saving install-wide privacy/PII policy from `/settings/privacy` at
+  nearly the same moment no longer race to last-write-wins on `settings.yaml`.
+  `org_install_policy.apply_change`'s read-modify-write-and-adopt sequence is now serialized by a
+  module-level lock, so the second admin's save always starts from a `settings` that already
+  reflects the first's rather than overwriting it as if it had never happened. `docs/
+  org-mode-setup-guide.md` also no longer tells operators they can freely hand-edit `settings.yaml`
+  between browser saves: `apply_change` rewrites the whole file from its own in-memory copy, so any
+  hand edit made since the daemon last loaded the file — including comments — is silently discarded
+  the next time an admin saves from the browser, restarted or not.
+- Issue #428 B17: `linux-graphical-session.yml`'s path triggers never gained
+  `scripts/linux_privilege_separation.sh` or `installer/linux/**`, the way `windows-graphical-
+  session.yml` gained its own `.ps1` when B5c landed. A change to the Linux privilege-separation
+  script or the unit templates it renders is exactly the kind of change most likely to break
+  Linux autostart, and it now re-runs the only test that exercises it instead of waiting for the
+  next `main` push that happens to touch something else on the existing path list, or the weekly
+  schedule.
+- B24 of the 4.1.0 action plan: `sudo scripts/linux_privilege_separation.sh enable` (and D1's
+  auto-enable) actually stops the daemon's own XDG autostart entry from autostarting now.
+  `stop_legacy_autostart()` only ever renamed `/etc/xdg/autostart/privacyfence.desktop` to
+  `....desktop.disabled`, on the assumption that XDG autostart only reads `*.desktop` files —
+  `systemd-xdg-autostart-generator` does not filter the autostart directories by filename, and
+  turned the renamed file into a unit under `xdg-desktop-autostart.target` just the same, starting
+  a second daemon in the logged-in user's own session at every login. It failed closed rather than
+  doing damage (`check_runtime_identity` already refuses to run as the wrong account on a
+  separated install), but the disable mechanism did not do what its own comment claimed, and
+  `status`'s `STILL AUTOSTARTS` check — which only ever looked at the original, un-renamed path —
+  reported no problem. The entry is now also marked `Hidden=true`, the key
+  `systemd-xdg-autostart-generator` (and every other XDG-autostart reader) actually honors to skip
+  a file without removing it; `disable` strips it back out when restoring the entry, and `status`
+  now checks the renamed file for it too. An already-separated install upgrading past this fix
+  self-heals the next time `enable --auto` runs (`debian/postinst`, on every install and upgrade),
+  with no separate migration needed.
+- B28 of the 4.1.0 action plan: the approval binder's `decided_via` and `batch_id` fields (Phase 2,
+  schema v3) are now included in the audit log's XLSX export. The row builder wrote nineteen
+  columns and neither field was among them, so a compliance reviewer working from the exported
+  workbook had no way to tell which decisions were released together under one passkey assertion —
+  that information existed only in the underlying JSONL, never in the artifact an auditor is
+  actually handed. `batch_id` is routed through the same formula-injection guard (`_excel_literal`)
+  already applied to the export's other free-text columns.
+- B26 of the 4.1.0 action plan: `StepUpChallengeStore` now sweeps expired entries on every `put()`,
+  closing an unbounded-growth path in the approval binder's batch step-up flow. Its key space was
+  safe to leave unbounded only while it was `(principal_id, approval_id)` — `approval_id`s are
+  themselves bounded by `max_pending` — but the binder's batch decide endpoint keys its own
+  challenges on `f"batch:{batch_id}"`, and `batch_id` is read straight from the request body: a
+  session holding at least one real pending approval could mint an unbounded number of live
+  `StepUpChallengeStore` entries, each also costing a full `begin_assertion` call, just by resending
+  a fresh `batch_id` and never completing the ceremony. Not a privilege escalation, but a
+  slow, unbounded resource leak with a client-controlled multiplier.
+- B27 of the 4.1.0 action plan: the approval binder's `batch_id` is documented (`audit_log.py`) as
+  server-minted, but `POST /api/approvals/batch/decide` (and its org-mode counterpart) accepted any
+  non-empty string the client sent verbatim and stamped it straight into the audit entry — the field
+  the provenance guarantee rests on was, in the one case that mattered, whatever the caller chose. A
+  caller could stamp unrelated decisions with the same `batch_id`, or replay one from a genuine
+  passkey assertion, and make the audit trail read as though one human action authorized them; the
+  WebAuthn authorization itself was unaffected (the fingerprint binds the decided set and is
+  recomputed server-side), only the grouping claim in the record. A resubmitted `batch_id` is now
+  kept only when the WebAuthn challenge-store lookup inside `verify_step_up()` proves it names a live
+  challenge this server began; every other path — no step-up required for the batch, or the
+  no-credential-enrolled/`require_passkey`-off fall-through — mints a fresh one instead of trusting
+  the request body.
+
 ## [4.0.0] — 2026-09-18
 
 PrivacyFence 4.0 moves the entire user interface off macOS-native AppKit and onto a local web

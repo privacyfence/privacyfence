@@ -62,7 +62,7 @@ Alongside the connector-derived tools, the daemon exposes eight `privacyfence_`-
 - `privacyfence_propose_auto_accept_rule_change` — proposes adding, updating, or removing a rule (`target: "rule"`) or a resource-scoped grant (`target: "grant"`). Always blocks on a native confirmation dialog a human must approve — there is no way to change this config without one, even for an entry that already exists — and throws if declined, or outright if the connection is in an unattended session.
 - `privacyfence_begin_unattended_session` / `privacyfence_end_unattended_session` — see "Scheduled / unattended Cowork tasks" below.
 - `privacyfence_await_approval` — long-polls one or more `approval_id`s from a gated call's `{status: "approval_pending", approval_id, ...}` result and reports status only (`pending`, `approved`, `denied`, `expired`, or `unknown`), never content — a re-issue of the original gated call with the same arguments is still what actually retrieves data once `approved`. Both this tool's own description and `gate.py`'s `_pending_result` `message` field tell the calling agent, in-band, not to sit on a pending approval silently: relay the `url` to the human first, then either call this tool to wait, or — where the client can schedule a follow-up (a reminder, a background check) — schedule one instead of blocking the conversation.
-- `privacyfence_get_sign_in_link` — mints a fresh, single-use sign-in link (SEC-06) for local mode's own `/approvals` page, `/settings` (General), or `/settings/connectors` (`page: "connectors"`, issue #396 Part C) and returns it as `{url}`, for a human who's locked out and asked their MCP client (e.g. Claude) for one — local mode's web UI is headless (P10 removed the menu bar icon) and its startup log line for this same link is always redacted (SEC-10), so this is the one channel left that actually works from inside a conversation. `web/server.py`'s `WebServer.mint_bootstrap_url` does the minting; `daemon_main.py` wires it into the dispatcher (`McpDispatcher.set_bootstrap_link_provider`) once the server exists. Errors in organization mode, which has no bootstrap-link concept (`/login` instead).
+- `privacyfence_get_sign_in_link` — mints a fresh, single-use sign-in link (SEC-06) for local mode's own `/approvals` page, `/settings` (General), or `/settings/connectors` (`page: "connectors"`, issue #396 Part C) and returns it as `{url}`, for a human who's locked out and asked their MCP client (e.g. Claude) for one — the daemon's own web UI is otherwise headless (P10 removed the menu bar icon) and its startup log line for this same link is always redacted (SEC-10), so this is the one channel left that works from inside a conversation with no other UI running. Issue #428 Phase 3 (ADR 0002) adds an optional companion app (a tray/menu-bar icon on macOS/Windows, an Applications-menu entry on Linux) whose own Open Approvals/Open Settings items mint the same kind of link without a conversation at all — nothing installs or autostarts it yet, so this tool stays the default path. `web/server.py`'s `WebServer.mint_bootstrap_url` does the minting; `daemon_main.py` wires it into the dispatcher (`McpDispatcher.set_bootstrap_link_provider`) once the server exists. Errors in organization mode, which has no bootstrap-link concept (`/login` instead).
 - `privacyfence_status` (issue #396) — the one meta-tool guaranteed to answer even when `connectors == []` leaves every other tool missing, so an empty or partial tool list reads as "not set up yet", not "nothing to do here". Returns `{mode, setup_complete, connectors, next_step, message}` and, whenever setup isn't complete, `sign_in_url` (always `null` — see below): `mode` is `"local"` or `"org"`; `connectors` is a list of `{name, enabled, authenticated, blocked_by}` (`blocked_by` is `null` once authenticated or deliberately disabled, otherwise `"no_org_config"`, `"not_authenticated"`, or a short redacted reason — `SettingsController.status_connectors`, sourced from `build_connectors()`'s own per-connector failure map); `setup_complete` is `true` once at least one connector is authenticated. **This tool never mints a sign-in credential itself** — a threat-model follow-up to the original issue found that a bootstrap code handed back here would be a live credential (code → `pf_session` cookie → a gated approval's own decide route) issued because a *model* decided to check status, not because a human asked, unlike `privacyfence_get_sign_in_link`'s own deliberate, documented minting. So when local mode is un-onboarded, `next_step` is `"ask_for_sign_in_link"` and `message` tells the model to offer a link and only call `privacyfence_get_sign_in_link(page="connectors")` if the human says yes; organization mode's `next_step` is `"contact_your_administrator"` instead, since org mode has no bootstrap-link concept at all. Wired via `McpDispatcher.set_connectors_state_provider`, a seam parallel to `set_bootstrap_link_provider` above.
 
 Every tool advertised over `/mcp`, meta-tools included, carries the same uniform read-only/non-destructive/idempotent annotations regardless of its real effect (`_UNIFORM_READ_ONLY_ANNOTATIONS` in `web/mcp_tools.py`) — those are MCP UI hints, not a security boundary. The real authorization is the gate itself, enforced here in the daemon.
@@ -263,9 +263,11 @@ bound, since it isn't racing anyone's timeout.
 | `calendar_list_rooms` | read | auto | — | — (lists meeting rooms — name, email, building, floor, capacity — from a static directory IT syncs into `org_config.json` via `scripts/sync_room_directory.py`; not a live lookup, so it may be empty until IT has synced one; the Calendar connector's own OAuth client never holds Workspace admin directory access) |
 | `calendar_get_event_details` | read | review | title, time, organizer, attendee count | Description, full attendee list, conferencing link, file attachments (e.g. Gemini meeting notes/transcript) |
 | `calendar_get_event_visibility` | read | auto | — | — |
-| `calendar_create_event` | write | popup | — | Title, time, attendees, description, location, Google Meet flag, room bookings |
-| `calendar_update_event` | write | popup | — | Title, time, fields changing (old → new), Google Meet flag, room bookings |
+| `calendar_list_colors` | read | auto | — | — (lists Calendar's fixed event color palette — id, name e.g. "Tomato", hex background/foreground — via the Calendar API's own `colors().get()`) |
+| `calendar_create_event` | write | popup | — | Title, time, attendees, description, location, Google Meet flag, room bookings, color |
+| `calendar_update_event` | write | popup | — | Title, time, fields changing (old → new), Google Meet flag, room bookings, color |
 | `calendar_set_event_visibility` | write | popup | — | Event title, calendar, visibility change (old → new) |
+| `calendar_set_event_color` | write | popup | — | Event title, calendar, color change (old → new) |
 | `calendar_create_out_of_office` | write | popup | — | Title, time, fixed "auto-decline new conflicts only" note, decline message |
 | `calendar_set_working_location` | write | popup | — | Date, location (office/home), building/label if given |
 
@@ -283,6 +285,13 @@ that isn't exposed here. Working-location presence only offers "office" or "home
 property of the event is left untouched. There's no separate `calendar_create_event`/
 `calendar_update_event` visibility parameter — set it via `calendar_set_event_visibility` after
 creating or alongside updating the event.
+
+`calendar_create_event`/`calendar_update_event`'s `color` parameter and the standalone
+`calendar_set_event_color` tool (which, like `calendar_set_event_visibility`, changes only that one
+field) all accept either a numeric Calendar event color id (`"1"`-`"11"`) or a case-insensitive name
+(`"Tomato"`, `"Sage"`, ...) — see `calendar_list_colors` for the full id → name → hex mapping. Names
+are this connector's own static table (the Calendar API's `colors().get()` returns hex values per id
+but never a name), matching what Calendar's own web UI shows for each id.
 
 ### Google Contacts
 
@@ -434,7 +443,7 @@ auto-accept rule yet — Allow-once-only, like most new write tools at first cut
 
 ### The `auto` tier, across all connectors
 
-The tables above gate 41 tools `auto` — allowed to proceed with no human in the loop, but still
+The tables above gate 42 tools `auto` — allowed to proceed with no human in the loop, but still
 recorded in the audit log as `auto_accepted` (see
 [Audit integrity and forwarding](security-and-compliance.md#audit-integrity-and-forwarding): the
 `auto` gate is a logged, IT-and-user-configured exception, never a default absence of control).
@@ -456,7 +465,7 @@ tool discloses once a human does approve it.
 | Gmail | `gmail_list_messages`, `gmail_list_threads`, `gmail_list_message_attachments`, `gmail_list_filters`, `gmail_list_labels` | 5 |
 | Google Drive (incl. Sheets) | `drive_list_files`, `drive_get_file_metadata`, `drive_list_folder`, `drive_list_shared_drives`, `drive_create_blank_file`, `drive_sheets_create`, `drive_sheets_get_metadata` | 7 |
 | Slack | `slack_list_channels`, `slack_list_dms`, `slack_list_group_chats`, `slack_resolve_permalink`, `slack_refresh_user_cache`, `slack_refresh_channel_cache` | 6 |
-| Google Calendar | `calendar_list_calendars`, `calendar_list_events`, `calendar_get_free_busy`, `calendar_list_rooms`, `calendar_get_event_visibility` | 5 |
+| Google Calendar | `calendar_list_calendars`, `calendar_list_events`, `calendar_get_free_busy`, `calendar_list_rooms`, `calendar_get_event_visibility`, `calendar_list_colors` | 6 |
 | Google Contacts | `contacts_list`, `contacts_search`, `contacts_get` | 3 |
 | Telegram | `telegram_list_chats`, `telegram_refresh_chat_cache` | 2 |
 | Salesforce | `salesforce_list_reports` | 1 |
@@ -464,7 +473,7 @@ tool discloses once a human does approve it.
 | Confluence | `confluence_list_spaces`, `confluence_search`, `confluence_cql_search`, `confluence_list_pages`, `confluence_list_attachments` | 5 |
 | Google Tasks | `tasks_list_task_lists`, `tasks_list_tasks`, `tasks_get_task` | 3 |
 | Apps Script | `apps_script_list_projects` | 1 |
-| **Total** | | **41** |
+| **Total** | | **42** |
 
 A few things worth calling out explicitly about this tier as a whole, rather than tool by tool:
 
@@ -611,7 +620,7 @@ keys under `web:` in `settings.yaml`:
   own General page. That page also renders a short, dismissible welcome banner (client-side,
   `renderWelcomeBanner` in `settings_window_html.py`) whenever no connector is authenticated yet.
 
-Both pages share one origin, one session (the same local `web_token` §10 of the refactor plan
+Both pages share one origin, one session (the same local `pf_session` cookie §10 of the refactor plan
 already describes), and one shared chrome (`web_shell.py`): a header with Approvals/Settings
 navigation and a live-connection indicator bound to `GET /api/state/stream` — one SSE channel
 carrying both a `settings` event (`SettingsController.snapshot()`, pushed the moment something
@@ -844,7 +853,8 @@ channel(s) alike.
 
 > **`personal_calendar` is grant-managed** — see [Auto-accept grants](#auto-accept-grants) →
 > `calendar.calendars`. One calendar grant's `read`/`write` capabilities cover
-> `calendar.read_event_details`, `calendar.create_modify_event`, and `calendar.set_visibility`.
+> `calendar.read_event_details`, `calendar.create_modify_event`, `calendar.set_visibility`, and
+> `calendar.set_color`.
 
 `calendar_create_out_of_office` (`calendar.out_of_office`) and `calendar_set_working_location`
 (`calendar.working_location`) each have their own operation key, but none of the rules above apply
@@ -854,12 +864,13 @@ auto-accept is the unconditional `always_allow` — there's no narrower resource
 rule to, so it's a plain yes/no rather than the organizer/calendar-scoped rules
 `calendar_create_event`/`calendar_update_event` support.
 
-`calendar_set_event_visibility` (`calendar.set_visibility`) is a write like
-`calendar_create_event`/`calendar_update_event`, so it shares `calendar.create_modify_event`'s
-rule set (`i_am_organizer`, `no_external_attendees`, `personal_calendar`) rather than getting a
-rule of its own — `non_private_event` only applies to `calendar.read_event_details`. Clicking
-**Always allow** on a "Read Calendar Event" prompt proposes `non_private_event` when the event
-isn't private and neither `i_am_organizer` nor `no_external_attendees` apply.
+`calendar_set_event_visibility` (`calendar.set_visibility`) and `calendar_set_event_color`
+(`calendar.set_color`) are writes like `calendar_create_event`/`calendar_update_event`, so both
+share `calendar.create_modify_event`'s rule set (`i_am_organizer`, `no_external_attendees`,
+`personal_calendar`) rather than getting a rule of their own — `non_private_event` only applies to
+`calendar.read_event_details`. Clicking **Always allow** on a "Read Calendar Event" prompt proposes
+`non_private_event` when the event isn't private and neither `i_am_organizer` nor
+`no_external_attendees` apply.
 
 **Salesforce**
 
@@ -1056,9 +1067,8 @@ than ERROR/`1`, so Task Scheduler logs a clean success on every ordinary tick. `
 `<StopIfGoingOnBatteries>` are both set to `false`, inverting Task Scheduler's own defaults: left at
 the defaults, a laptop on battery power would not start PrivacyFence at sign-in and would stop it
 when unplugged — a privacy gate that quietly isn't running, with the MCP client simply finding no
-daemon. This closes
-The now-removed `automated-test-strategy-plan.md` Phase 13, including its
-crash-restart half — measured, not assumed, on a real `windows-latest` runner: killing the
+daemon. This closes the crash-restart gap in Windows autostart — measured, not assumed, on a real
+`windows-latest` runner: killing the
 Scheduler-started daemon produces a new pid, under the same signed-in account, before the
 `<TimeTrigger>`'s own next tick would otherwise be due. See
 [`platform-support.md`](platform-support.md)'s "Known open items" for this mechanism's current
@@ -1074,7 +1084,17 @@ dotfile POSIX uses reused verbatim under `%USERPROFILE%`, since a dot-prefixed n
 convention Explorer honors the way it is on POSIX; `%LOCALAPPDATA%` rather than the Roaming
 `%APPDATA%` because this directory holds credentials and audit logs that shouldn't follow a roaming
 profile across machines), created by the app on first run — the installer never touches it, and
-uninstalling removes only the program files and the scheduled task.
+uninstalling removes only the program files, the scheduled task(s) and, if one exists, the
+privilege-separation service.
+
+**Unless the install has opted into privilege separation** (#428 Phase 4 — see
+`platform-support.md`'s Windows section), in which case that state lives at
+`%ProgramData%\PrivacyFence\` under the `NT SERVICE\PrivacyFence` virtual account instead, the
+daemon is a Windows service rather than the Scheduled Task above (which is left registered but
+disabled), and a second task starts the companion tray app in each user session. Uninstall leaves
+`%ProgramData%\PrivacyFence\` in place exactly as it leaves `%LOCALAPPDATA%\PrivacyFence\`, which
+on a separated install means a directory no ordinary account can read afterwards — so
+`privilege-separation.ps1 disable` before uninstalling is the documented order.
 
 **File-permissions caveat, accepted for v1**: elsewhere on this codebase, credential/token files are
 written with `chmod(0o600/0o700)` to lock them down to the owning user. On Windows, `chmod` is a
@@ -1082,8 +1102,19 @@ silent no-op — there is no POSIX permission bit to set — so those files rely
 a per-user Windows profile already has (restricted to that user and Administrators) rather than an
 explicit lock-down step. This is a deliberate, accepted gap, not an oversight: a single-user Windows
 profile's own default ACLs already provide the same practical protection the `chmod` calls give on
-POSIX, and tightening it further (e.g. via `icacls`/`pywin32`) is out of scope unless a security
-review finds the default insufficient.
+POSIX.
+
+**#428 Phase 4 is the security review that found the default insufficient — for one specific
+reason, and it does not generalize.** The profile's own ACLs protect that data from *other accounts
+on the machine*, which was always the threat this caveat was written against, and they still do.
+What they cannot do is protect it from a process running *as that same user*, which is exactly what
+the AI client is. Privilege separation moves the data out of the profile to `%ProgramData%`
+precisely because a service account cannot own something inside a human's profile, and at that
+point the profile's default ACLs protect nothing at all — so that layout is explicit `icacls`
+grants, written by `scripts/windows_privilege_separation.ps1` and audited on every daemon start by
+`src/privacyfence/windows_acl.py` (which uses `pywin32`, already a Windows dependency for the
+control channel's named pipes). On an install that has *not* opted in, everything in the paragraph
+above is unchanged: no `icacls`, no ACL code in the write path, the profile's defaults as before.
 
 ### Linux
 

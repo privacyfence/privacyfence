@@ -109,63 +109,6 @@ class ServerConfig:
         )
 
 
-StepUpScope = Literal["writes", "writes_and_pii_reads"]
-
-DEFAULT_STEP_UP_SCOPE: StepUpScope = "writes"
-DEFAULT_RP_NAME = "PrivacyFence"
-
-
-@dataclass(frozen=True)
-class StepUpConfig:
-    """§10.6/§15 D7's step-up decision, made concrete per install: "Yes in
-    org mode, scoped and configurable -- via a WebAuthn platform
-    authenticator ... with IdP acr_values step-up as the org-mode
-    alternative ... and OIDC re-auth as the fallback." Lives in
-    ``org_config.json``'s ``step_up`` section, org-mode-only for the same
-    reason ``ServerConfig``/``IdpConfig`` are: local mode's own trust model
-    (physical possession of the machine) is D7's explicit "not this mode"
-    case, not merely an unconfigured default here.
-
-    ``enabled=False`` (the default -- absent ``step_up`` section, or an
-    existing org install that predates P9) is a real off switch, not just
-    "no credentials enrolled yet": web/routes_org_approvals.py's decide
-    endpoint skips the whole step-up check when this is False, so turning
-    P9 on is an explicit opt-in per deployment, exactly like every other
-    org-mode surface this codebase has shipped so far.
-    """
-
-    enabled: bool = False
-    # "writes" (gate_kind == "popup") is D7's baseline scope -- "scope it to
-    # writes, or to writes plus PII-flagged reads ... make the scope
-    # configurable" (§10.6). "writes_and_pii_reads" additionally covers a
-    # read whose PendingApproval.pii_detected is True, the same signal
-    # gate.py's own PII "are you sure?" confirmation already gates on.
-    scope: StepUpScope = DEFAULT_STEP_UP_SCOPE
-    # WebAuthn's Relying Party ID -- must be this server's own registrable
-    # domain (§10.6: "WebAuthn needs a secure context and a registrable-
-    # domain RP ID"). Defaults to ServerConfig.issuer_url's own hostname
-    # (from_org_config, below) rather than requiring a redundant setting.
-    rp_id: str = ""
-    rp_name: str = DEFAULT_RP_NAME
-
-    @staticmethod
-    def from_org_config(org_config: dict[str, Any], *, default_rp_id: str = "") -> "StepUpConfig":
-        raw = org_config.get("step_up")
-        raw = raw if isinstance(raw, dict) else {}
-        scope = raw.get("scope", DEFAULT_STEP_UP_SCOPE)
-        if scope not in ("writes", "writes_and_pii_reads"):
-            raise ConfigurationError(
-                f"org_config.json's \"step_up\".\"scope\" must be \"writes\" or "
-                f"\"writes_and_pii_reads\", got {scope!r}"
-            )
-        return StepUpConfig(
-            enabled=bool(raw.get("enabled", False)),
-            scope=scope,
-            rp_id=raw.get("rp_id", "") or default_rp_id,
-            rp_name=raw.get("rp_name", DEFAULT_RP_NAME) or DEFAULT_RP_NAME,
-        )
-
-
 # Deliberately *larger* than connectors/drive.py's/connectors/gmail.py's/
 # connectors/confluence.py's own pre-approval prefetch caps (5MB),
 # reflecting that in org mode, inline delivery is the primary transport
@@ -188,9 +131,9 @@ class DownloadDeliveryConfig:
     ``gmail_download_attachment``/``confluence_download_attachment``
     deliver file bytes to a principal who has no shell on the daemon's own
     machine. Lives in ``org_config.json``'s ``download_delivery`` section,
-    org-mode-only for the same reason ``ServerConfig``/``StepUpConfig``
-    are -- local mode keeps writing straight to ``destination_dir``,
-    unchanged, and never looks at this class at all.
+    org-mode-only for the same reason ``ServerConfig`` is -- local mode
+    keeps writing straight to ``destination_dir``, unchanged, and never
+    looks at this class at all.
     """
 
     inline_max_bytes: int = DEFAULT_INLINE_MAX_BYTES
@@ -252,10 +195,10 @@ class AuditForwardingConfig:
     """SEC-23: org
     mode's centralized audit-log forwarding destination. Lives in
     ``org_config.json``'s ``audit_forwarding`` section, org-mode-only like
-    ``ServerConfig``/``StepUpConfig``/``DownloadDeliveryConfig`` above --
-    local mode never looks at this at all (there is no "centralize" to
-    speak of for a single employee's own machine); see daemon_main.py's
-    ``run_app`` for the ``resolve_mode(org_config) == "org"`` gate.
+    ``ServerConfig``/``DownloadDeliveryConfig`` above -- local mode never
+    looks at this at all (there is no "centralize" to speak of for a single
+    employee's own machine); see daemon_main.py's ``run_app`` for the
+    ``resolve_mode(org_config) == "org"`` gate.
 
     Forwarding is *additional* visibility, never a replacement for the
     local audit log ``audit_log.py``'s ``AuditLogger`` always writes --
@@ -390,15 +333,11 @@ __all__ = [
     "DEFAULT_INLINE_MAX_BYTES",
     "DEFAULT_LINK_TTL_SECONDS",
     "DEFAULT_MODE",
-    "DEFAULT_RP_NAME",
-    "DEFAULT_STEP_UP_SCOPE",
     "DEFAULT_SYSLOG_PORT",
     "DEFAULT_SYSLOG_PROTOCOL",
     "DownloadDeliveryConfig",
     "Mode",
     "ServerConfig",
-    "StepUpConfig",
-    "StepUpScope",
     "SyslogProtocol",
     "resolve_mode",
 ]

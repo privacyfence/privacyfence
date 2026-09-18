@@ -10,11 +10,11 @@ name: Linux graphical-session autostart
 # manager in CI).
 #
 # Deliberately its own workflow, not a step added to build.yml's build-deb
-# job or tests.yml's per-PR jobs: this is the flakiest, most expensive tier
-# in this repo's whole test taxonomy by design (Phase 7's own objective), so
-# a flaky run here must never block an actual release the way a failure in
-# build.yml's own packaged .deb lifecycle test (Phase 6.3) correctly does,
-# and it's too heavy to run on every PR. Scheduled instead on
+# job or tests.yml's per-PR jobs: this is the most expensive tier in this
+# repo's whole test taxonomy by design (Phase 7's own objective), so it's
+# too heavy to run on every PR or sit on an actual release's critical path
+# the way build.yml's own packaged .deb lifecycle test (Phase 6.3) correctly
+# does. Scheduled instead on
 # packaging-related `main` changes, a weekly cadence (same reasoning as
 # connector-live-check.yml's own schedule -- matched to how often this
 # actually needs re-proving, not to PR cadence), and by explicit maintainer
@@ -28,6 +28,13 @@ on:
       - 'debian/**'
       - 'resources/linux/**'
       - 'scripts/build_deb.sh'
+      # #428 Phase 4 (B5b): build_deb.sh installs this next to the daemon as
+      # /usr/sbin/privacyfence-privilege-separation, along with the two unit
+      # templates it renders -- so a change to either is a change to what
+      # the .deb ships, and the packaged smoke test below is the only thing
+      # in this repo that builds that .deb.
+      - 'scripts/linux_privilege_separation.sh'
+      - 'installer/linux/**'
       - 'scripts/pyinstaller_common.py'
       - 'PrivacyFenceApp.linux.spec'
       - 'tests/integration/test_linux_graphical_session_autostart.py'
@@ -80,8 +87,8 @@ jobs:
       # module carries `pytest.mark.packaged`, and its own $HOME (systemd
       # --user login-equivalent session) lives under each test's own
       # tmp_path, so the generic per-tmp_path manifest/log capture applies
-      # here unchanged. This workflow's own flaky/scheduled-not-release-
-      # gating posture (see the module-level comment above) is exactly why
+      # here unchanged. This workflow's own scheduled/not-release-gating
+      # posture (see the module-level comment above) is exactly why
       # this diagnosability matters more here, not less -- a flaky run still
       # needs to be tellable apart from a real regression without re-running
       # locally.

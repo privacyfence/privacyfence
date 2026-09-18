@@ -10,6 +10,45 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Andras Takacs", email = "info@privacyfence.eu" }]
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "ai-governance",
+    "privacy",
+    "pii",
+    "audit",
+    "gdpr",
+]
+# PyPI's browse/filter facets, and the sidebar metadata a `pip install privacyfence`
+# visitor sees first. `Programming Language :: Python :: 3.x` entries are the versions
+# CI actually tests (.github/workflows/tests.yml: 3.11 and 3.12 in the matrix, 3.13 in
+# the main `test` job), which is also what `requires-python` above claims -- keep the
+# three in sync when a version is added or dropped.
+#
+# Development Status stays at Beta rather than Production/Stable while the README's
+# "Status and scope" section still asks people to review the limitations and security
+# model before using PrivacyFence with production or regulated data.
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS :: MacOS X",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Email",
+    "Topic :: Office/Business",
+    "Topic :: Security",
+    "Topic :: System :: Systems Administration :: Authentication/Directory",
+]
 dependencies = [
     "google-auth>=2.23.0",
     "google-auth-oauthlib>=1.1.0",
@@ -94,10 +133,36 @@ dependencies = [
     # platform, so every install gets it rather than branching the
     # dependency list by sys_platform.
     "portalocker>=2.8",
+    # #428 Phase 3 (ADR 0002 decision 4): the companion app's tray/menu-bar icon on macOS/
+    # Windows -- a base dependency, not an optional extra, so a plain `pip install privacyfence`
+    # can run the companion entry point (companion.py) out of the box on the platforms it
+    # applies to. Platform-marked rather than unconditional: Linux has no tray at all (see
+    # companion.py's own module docstring -- it gets an XDG launcher instead) and would gain
+    # nothing from either package. Pillow backs the icon image pystray.Icon() requires; also
+    # declared (for an unrelated, build-time-only reason) in the dev extra below.
+    "pystray>=0.19; sys_platform == 'darwin' or sys_platform == 'win32'",
+    "Pillow>=10.0; sys_platform == 'darwin' or sys_platform == 'win32'",
 ]
+
+# The PyPI sidebar. Without these the project page carries no link back to anything --
+# no homepage, no source, no issue tracker -- and that page is all a visitor arriving
+# from `pip install privacyfence` gets to see (privacyfence/privacyfence#370).
+# Download points at the website's download page rather than GitHub Releases because
+# that is the canonical download surface and the one that counts the download KPI
+# (docs/downloads-and-release-kpi.md).
+[project.urls]
+Homepage = "https://privacyfence.eu"
+Download = "https://privacyfence.eu/download/"
+Documentation = "https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md"
+Source = "https://github.com/privacyfence/privacyfence"
+Changelog = "https://github.com/privacyfence/privacyfence/blob/main/CHANGELOG.md"
+Issues = "https://github.com/privacyfence/privacyfence/issues"
+Security = "https://github.com/privacyfence/privacyfence/blob/main/SECURITY.md"
 
 [project.scripts]
 privacyfence-app = "privacyfence.daemon_main:main"
+# #428 Phase 3 (ADR 0002): the companion app -- see companion.py's own module docstring.
+privacyfence-companion = "privacyfence.companion:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -180,7 +245,8 @@ test = [
     "hypothesis>=6.100",
 ]
 # Static analysis gate (TST-07). ruff and bandit are CI-blocking steps ([tool.ruff.lint] /
-# [tool.bandit] below); mypy runs in CI too but non-blocking for now -- see the comments on
+# [tool.bandit] below); mypy runs in CI twice -- non-blocking over the whole tree, and blocking
+# over the modules promoted by the [[tool.mypy.overrides]] ratchet below -- see the comments on
 # those tool sections for why.
 lint = [
     "ruff>=0.6",
@@ -279,12 +345,20 @@ python_version = "3.11"
 # files (mostly connector wiring in daemon_main.py and a few Starlette/ASGI
 # signature mismatches) -- none of them are new to this change, and fixing
 # them all is out of this PR's scope (see CLAUDE.md's own "don't silently
-# expand scope" note). CI runs mypy non-blocking for now (informational only) so those
+# expand scope" note). CI runs mypy over the whole tree non-blocking (informational only) so those
 # pre-existing errors are visible without failing every build; per-module
 # `[[tool.mypy.overrides]]` blocks should be added below as modules get cleaned up and
 # promoted to blocking -- see url_safety.py's override just below for the first one, and its
 # own comment for why that override spells out strict's component flags individually rather
 # than using the `strict = true` shorthand.
+#
+# "Promoted to blocking" is literal, and is enforced by a *second* mypy step in
+# .github/workflows/tests.yml's `static-analysis` job: `scripts/mypy_strict_modules.py` reads the
+# module list straight out of the overrides below and runs mypy over just those files, without
+# `continue-on-error`. Adding a block below is therefore all it takes to put a module behind a
+# merge gate -- nothing in the workflow repeats the list. (Until that step existed, the only mypy
+# invocation in CI was the informational one, so an override changed which errors mypy printed and
+# gated nothing at all.)
 ignore_missing_imports = true
 
 # First per-module promotion named in the comment above: url_safety.py is small,
@@ -301,6 +375,53 @@ ignore_missing_imports = true
 # chase the whole-tree error count to zero.
 [[tool.mypy.overrides]]
 module = "privacyfence.url_safety"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+# Next four promotions (privacyfence/privacyfence#377): each was already clean under the
+# flags above with no code changes needed, matching url_safety.py's own bar -- small,
+# security-critical, and picked from the issue's own candidate list (org-config trust,
+# 100%-covered fail-closed/session-boundary modules). privacyfence.privacy_filter, also on
+# that list, is deliberately *not* here yet: it has one real `no-any-return` finding
+# (category_policy() returning an internal `dict[str, Any]` lookup) that needs an actual
+# typed-shape fix, not just a flag flip, so it's left for a PR that touches that file.
+[[tool.mypy.overrides]]
+module = "privacyfence.org_bundle_signing"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "privacyfence.safe_errors"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "privacyfence.web.session_auth"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_any_generics = true
+warn_return_any = true
+no_implicit_reexport = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = "privacyfence.web.org_session"
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_calls = true

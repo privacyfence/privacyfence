@@ -16,17 +16,20 @@ longer "possession of one never-expiring, URL-carried token is the
 authority" the way it was through v4.0.0a12 (the same posture
 ``~/.privacyfence/ipc_token`` had for the bridge, before P5 retired both --
 this surface, reachable from a browser rather than only a local process,
-needed more). ``load_or_create_token()``'s random
-secret is generated once, written 0600 under paths.data_dir(), rotated
-whenever the installed version changes, and now used only to authorize
-minting a bootstrap code on demand (``POST /api/bootstrap``, see
-``_bootstrap_mint_route`` below) -- never sent to a browser or written to a
-URL/log line itself. What a browser actually presents is a short-lived,
+needed more). What a browser actually presents is a short-lived,
 single-use bootstrap code (``?bootstrap=<code>``, see
 ``_BootstrapMiddleware``), exchanged exactly once for an independent,
 random session id (web/session_auth.py's ``LocalSessionStore``) carrying
 its own idle and absolute expiry -- web/routes_approvals.py's own docstring
-covers the CSRF double-submit that session id also backs.
+covers the CSRF double-submit that session id also backs. Minting a fresh
+code on demand -- once a previous one has expired, without restarting the
+daemon -- no longer goes through this loopback port at all: #428 Phase 2
+replaced the old persistent-secret-over-HTTP design (a ``web_token`` file
+presented as a ``POST /api/bootstrap`` Bearer header) with
+``web/control_channel.py``'s ``ControlChannelServer``, a Unix domain socket
+(macOS/Linux) or ACL'd named pipe (Windows) a browser's own loopback
+connection cannot speak. See that module's own docstring for the full
+reasoning.
 
 **Org mode** (P7): a
 configurable bind host/port, optional TLS termination, optional
@@ -50,21 +53,31 @@ decision additionally demands a fresh WebAuthn step-up when
 ``org_config.json``'s ``step_up.enabled`` is set (§10.6, D7) --
 web/routes_org_approvals.py's own module docstring covers both.
 
-**Still deliberately not mounted in org mode**: ``/settings``
-(``routes_settings.py``'s ~30-action surface) -- generalizing its CSRF
-model (today "the one shared token doubles as the session cookie value and
-the per-page CSRF token") to org mode's per-session cookie is real, scoped
-follow-up work no phase through P9 has needed yet (``/connect``, P8, and
-now ``/approvals``/``/security``, P9, are each a small, purpose-built page
-rather than a port of that surface -- see routes_connect.py's own module
-docstring for why that shape was chosen over porting it).
+**`/settings` in org mode** (#400) is, likewise, *not*
+``routes_settings.py``'s ~30-action local-mode surface -- porting that
+dispatcher wholesale was never the plan (see routes_connect.py's own
+module docstring for why a small, purpose-built page is the shape every
+other org-mode surface here already takes). What is mounted instead
+(web/routes_org_settings.py) is two purpose-built pages:
+``GET /settings``, every signed-in principal's own auto-accept rules and
+resource grants, read-only except for removing a row; and
+``GET /settings/privacy``, an admin-only (``Principal.is_admin`` -- #400
+C3c finally gave that field a real consumer) view of the install-wide
+PII/privacy policy, editable since #400 C3e through two ``POST
+/api/settings/privacy/...`` routes that write the server's own
+settings.yaml and hot-reload it for every principal
+(web/org_install_policy.py). The rest of routes_settings.py's ~30 actions
+(connector management, the update banner, Telegram's interactive auth --
+see web/org_settings_scope.py's own ``NOT_APPLICABLE_ACTIONS`` for the
+ones that only ever meant something on a desktop install) remain
+unmounted, as do the two admin-only actions that are install-wide but
+aren't privacy policy (``set_log_level``, ``toggle_calendar_free_busy``).
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import logging
-import secrets
 import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -75,23 +88,24 @@ import uvicorn
 from starlette.applications import Starlette
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
+from starlette.responses import PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import __version__, paths
+from .. import paths, privilege_separation
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, principal_scope
-from ..secure_files import atomic_write_text
 from ..settings_controller import SettingsController, set_main_dispatcher
+from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
 from . import org_session
 from . import routes_connect
 from . import routes_downloads
 from . import routes_org_identity
 from . import state_stream as _state_stream
+from .control_channel import WEB_BASE_URL_FILE_NAME, ControlChannelServer
 from .csp import build_csp
 from .csp import new_nonce as _new_csp_nonce
 from .mcp_auth import load_or_create_mcp_token
@@ -103,22 +117,16 @@ from .routes_mcp import MCP_PATH, mcp_lifespan, mount_mcp, mount_org_oauth, prot
 from .routes_settings import build_routes as build_settings_routes
 from .session_auth import BOOTSTRAP_QUERY_PARAM, BootstrapStore, LocalSessionStore
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
+from .session_auth import authenticated as _session_authenticated
+from .session_auth import check_csrf as _csrf_matches
+from .session_auth import check_origin as _origin_ok
 from .session_auth import set_session_cookie as _set_session_cookie
 from .session_auth import unauthorized_html as _unauthorized_response
-from .session_auth import verify_bearer_secret
 from .state_stream import StateStream
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 8765
-TOKEN_FILE_NAME = "web_token"  # nosec B105  # a filename, not a credential value
-# SEC-06: rotation-tracking sibling of TOKEN_FILE_NAME -- records which
-# installed version last (re)generated it, so an upgrade rotates a token
-# that was minted (and possibly already leaked, logged, or bookmarked
-# from a URL) by an older, pre-SEC-06 build, rather than trusting it
-# forever just because the file itself was never deleted. See
-# load_or_create_token()'s own docstring.
-TOKEN_VERSION_FILE_NAME = "web_token_version"  # nosec B105  # a filename, not a credential value
 MCP_URL_FILE_NAME = "mcp_url"
 
 # Content-Security-Policy: see web/csp.py's own module docstring for the
@@ -161,34 +169,6 @@ _PERMISSIONS_POLICY = (
 _HSTS = "max-age=31536000; includeSubDomains"
 
 
-def load_or_create_token() -> str:
-    """The persistent local-mode secret -- see module docstring. Reused
-    across daemon restarts within the same installed version (same file,
-    same posture as ipc_token), but rotated whenever ``__version__``
-    changes -- including the very first startup after upgrading to this
-    SEC-06 fix, which rotates whatever token an older build already wrote,
-    dead-ending any ``?token=`` link, log line, or shell-history entry that
-    named it. A missing/unreadable version marker counts as "changed" too,
-    so every pre-SEC-06 install (which never wrote one) rotates exactly
-    once on first startup under this version."""
-    path = paths.data_dir() / TOKEN_FILE_NAME
-    version_path = paths.data_dir() / TOKEN_VERSION_FILE_NAME
-    current_version = __version__
-    if path.exists() and version_path.exists():
-        try:
-            same_version = version_path.read_text(encoding="utf-8").strip() == current_version
-        except OSError:
-            same_version = False
-        if same_version:
-            token = path.read_text(encoding="utf-8").strip()
-            if token:
-                return token
-    token = secrets.token_hex(32)
-    atomic_write_text(path, token)
-    atomic_write_text(version_path, current_version)
-    return token
-
-
 def _write_mcp_url_file(url: str) -> None:
     """The direct successor of ipc.py's PORT_FILE for a client that talks to
     /mcp instead of the old IPC socket -- see mcpb/shim/src/protocol.ts's
@@ -196,9 +176,16 @@ def _write_mcp_url_file(url: str) -> None:
     writes ~/.privacyfence/mcp_url when it binds, and clears it on
     shutdown -- the only new daemon-side surface P4b needs." 0600 for the
     same reason web_token/mcp_token are: not a secret itself, but written
-    alongside them under the same directory."""
-    path = paths.data_dir() / MCP_URL_FILE_NAME
-    atomic_write_text(path, url)
+    alongside them under the same directory.
+
+    ``handoff_dir()`` rather than ``data_dir()`` since #428 Phase 4: every
+    discovery file this module writes exists to be read by something in the
+    user's *own* session (the MCPB shim, the companion, a human following the
+    not-authorized page), so all of them stay on the user-reachable side of a
+    privilege-separated install. On every other install the two functions
+    return the same directory and nothing moves."""
+    path = paths.handoff_dir() / MCP_URL_FILE_NAME
+    privilege_separation.write_handoff_file(path, url)
 
 
 def _bootstrap_url_file_name(path: str) -> str:
@@ -224,15 +211,15 @@ def _write_bootstrap_url_file(path: str, url: str) -> None:
     instead. Overwritten, not appended, on every mint -- only the newest
     link is ever meaningful, since consuming or expiring the previous one
     leaves it dead anyway."""
-    file_path = paths.data_dir() / _bootstrap_url_file_name(path)
-    atomic_write_text(file_path, url)
+    file_path = paths.handoff_dir() / _bootstrap_url_file_name(path)
+    privilege_separation.write_handoff_file(file_path, url)
 
 
 def _clear_bootstrap_url_file(path: str) -> None:
     """Mirrors _clear_mcp_url_file: called on WebServer.stop() for every
     path this server ever minted a link for, so a reader after shutdown
     finds no file rather than a stale, now-dead link."""
-    (paths.data_dir() / _bootstrap_url_file_name(path)).unlink(missing_ok=True)
+    (paths.handoff_dir() / _bootstrap_url_file_name(path)).unlink(missing_ok=True)
 
 
 def _clear_mcp_url_file() -> None:
@@ -240,7 +227,21 @@ def _clear_mcp_url_file() -> None:
     finds no file rather than a stale, now-dead URL -- the same reasoning
     ipc_server.py's own shutdown has for not leaving a dangling PORT_FILE
     behind."""
-    (paths.data_dir() / MCP_URL_FILE_NAME).unlink(missing_ok=True)
+    (paths.handoff_dir() / MCP_URL_FILE_NAME).unlink(missing_ok=True)
+
+
+def _write_web_base_url_file(base_url: str) -> None:
+    """#428 Phase 3: the companion's own way to learn this install's base
+    URL (see ``web/control_channel.py``'s ``read_base_url()``) without
+    importing this module -- written unconditionally alongside ``mcp_url``
+    whenever this server runs local mode's own control channel (``self.
+    control_channel is not None`` -- org mode has neither)."""
+    path = paths.handoff_dir() / WEB_BASE_URL_FILE_NAME
+    privilege_separation.write_handoff_file(path, base_url)
+
+
+def _clear_web_base_url_file() -> None:
+    (paths.handoff_dir() / WEB_BASE_URL_FILE_NAME).unlink(missing_ok=True)
 
 
 class _SecurityHeadersMiddleware:
@@ -351,6 +352,22 @@ class OrgAuth:
     # always supplies both.
     connector_registry: ConnectorRegistry | None = None
     org_config: dict = field(default_factory=dict)
+    # #400: the server's own install-wide settings.yaml (run_app()'s
+    # ``config``) -- routes_org_settings.py's admin-only privacy-policy view
+    # reads this directly, and daemon_main._start_org_web_server threads the
+    # same dict into every org principal's own privacy-filter registration
+    # (see _load_principal_settings()'s docstring). Defaults to {} for the
+    # same "every existing OrgAuth() caller keeps working" reason
+    # connector_registry/org_config already do.
+    install_wide_settings: dict = field(default_factory=dict)
+    # #400 C3e: where that dict was loaded from, so the admin privacy page
+    # can write it back. Separate from the dict rather than derived from it
+    # because nothing in a parsed settings.yaml records its own path.
+    # Empty means "read-only": routes_org_settings.py renders the policy
+    # without edit controls and rejects a hand-written write, which is
+    # exactly what an OrgAuth built by a test that never had a real
+    # settings.yaml on disk should do.
+    install_wide_settings_path: str = ""
 
 
 def _default_principal(_request: Request) -> Principal:
@@ -504,23 +521,6 @@ class _BootstrapMiddleware:
         await response(scope, receive, send)
 
 
-def _bootstrap_mint_route(*, token: str, bootstrap: BootstrapStore) -> Route:
-    """``POST /api/bootstrap`` (SEC-06) -- mints a fresh one-time bootstrap
-    code on demand, for a human who still has filesystem access to this
-    machine (``load_or_create_token()``'s persistent secret, read from
-    ``~/.privacyfence/web_token``) but whose previous session or bootstrap
-    link has already expired, without needing to restart the daemon. The
-    secret is presented as an ``Authorization: Bearer`` header, never a
-    query string -- see verify_bearer_secret's own docstring for why."""
-
-    async def handler(request: Request) -> Response:
-        if not verify_bearer_secret(request, token):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse({"bootstrap": bootstrap.mint()}, headers={"Cache-Control": "no-store"})
-
-    return Route("/api/bootstrap", handler, methods=["POST"])
-
-
 def _state_stream_route(stream: StateStream, *, sessions: LocalSessionStore) -> Route:
     """``GET /api/state/stream`` (§16.3) -- the one interface this phase
     and P3 share; see web/state_stream.py's own module docstring for what
@@ -595,7 +595,6 @@ async def _state_stream_loop_lifespan(ready_event: threading.Event | None = None
 def build_app(
     web_ui: WebApprovalUI,
     *,
-    token: str | None = None,
     sessions: LocalSessionStore | None = None,
     bootstrap: BootstrapStore | None = None,
     allowed_hosts: frozenset[str] = frozenset({"localhost", "127.0.0.1"}),
@@ -609,13 +608,15 @@ def build_app(
     loop_ready: threading.Event | None = None,
     principal_resolver: Callable[[Request], Principal] | None = None,
     org: OrgAuth | None = None,
+    step_up: StepUpConfig | None = None,
+    step_up_issuer_url: str = "",
 ) -> ASGIApp:
     """The approval routes, wrapped with the Host allowlist and security
     headers every real deployment needs -- routes_approvals.create_app()
     alone (no wrapping) is what tests reach for when they want to exercise
     the routes without also exercising this middleware stack.
 
-    ``org`` (P7) switches this into org mode: ``token``/``sessions``/
+    ``org`` (P7) switches this into org mode: ``sessions``/
     ``bootstrap``/``mcp_token``/``controller``/``state_stream`` are all
     ignored (org mode doesn't mount the local-session-authenticated
     approval/settings surface at all -- see this module's own docstring for
@@ -649,14 +650,30 @@ def build_app(
     /settings are one application: one header, one nav, one palette, one
     session"). ``state_stream`` (built by WebServer when either
     ``controller`` or ``web_ui`` needs the push channel) backs
-    ``GET /api/state/stream`` either way. ``token`` (SEC-06,
-    ``load_or_create_token()``) is only used to authorize
-    ``POST /api/bootstrap``; ``sessions``/``bootstrap`` default to a fresh
-    store each when omitted, since every real (non-test) local-mode caller
-    is ``WebServer``, which always constructs and shares one pair for its
-    whole lifetime. Every new parameter defaults to ``None``/unchanged
-    behavior, so every existing caller (including this module's own
-    pre-P4 tests) is unaffected.
+    ``GET /api/state/stream`` either way. Minting a fresh bootstrap code on
+    demand is no longer an HTTP route this app exposes at all -- #428 Phase
+    2 moved that to ``web/control_channel.py``'s ``ControlChannelServer``,
+    which ``WebServer`` runs alongside this ASGI app rather than inside it.
+    ``sessions``/``bootstrap`` default to a fresh store each when omitted,
+    since every real (non-test) local-mode caller is ``WebServer``, which
+    always constructs and shares one pair for its whole lifetime. Every new
+    parameter defaults to ``None``/unchanged behavior, so every existing
+    caller (including this module's own pre-P4 tests) is unaffected.
+
+    ``step_up``/``step_up_issuer_url`` (#426 Phase 1) mount ``/security`` in
+    local mode -- ignored when ``org`` is given, since ``_build_org_app``
+    resolves its own ``StepUpConfig`` from ``org.org_config`` directly (see
+    that function's own step_up handling). ``step_up_issuer_url`` is the
+    WebAuthn ceremony's expected origin (``http://<host>:<port>``, the same
+    role ``org.issuer_url`` plays for org mode's own mount below) -- passed
+    separately from ``step_up`` itself since local mode's origin depends on
+    ``WebServer``'s own ``host``/``port``, which this function has no other
+    way to see. The same two values (#426 Phase 2) also gate
+    ``create_approvals_app``'s own decide endpoint on a fresh WebAuthn
+    assertion, and (#426 Phase 3) ``build_settings_routes``'s own sensitive
+    settings actions when ``step_up.require_passkey`` is on -- one
+    ``StepUpConfig``, read once here, drives the enrollment surface, the
+    decide-time check, and the settings-action check alike.
     """
     if org is not None:
         return _build_org_app(
@@ -664,13 +681,10 @@ def build_app(
             principal_resolver=principal_resolver,
         )
 
-    if not token:
-        raise ValueError("token is required in local mode (org=None)")
-
     sessions = sessions or LocalSessionStore()
     bootstrap = bootstrap or BootstrapStore()
 
-    extra_routes = [_bootstrap_mint_route(token=token, bootstrap=bootstrap)]
+    extra_routes: list[Route] = []
     lifespans = []
     if mcp_dispatcher is not None:
         if not mcp_token:
@@ -682,7 +696,26 @@ def build_app(
     if controller is not None:
         extra_routes.extend(build_settings_routes(
             controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
-            notifications_detail=notifications_detail,
+            notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_issuer_url,
+        ))
+
+    # #426 Phase 1: mounted whenever step_up.rp_id is set -- which, unlike
+    # org mode, local mode's own StepUpConfig.from_local_config() always
+    # gives it (DEFAULT_LOCAL_RP_ID), so this is unconditional in practice
+    # for every real (non-test) caller. Enrollment only -- nothing yet
+    # consults an enrolled credential in local mode (#426 Phase 2/3).
+    if step_up is not None and step_up.rp_id:
+        from . import routes_security
+
+        extra_routes.extend(routes_security.build_routes(
+            resolve_principal=lambda request: (
+                LOCAL_PRINCIPAL if _session_authenticated(request, sessions) else None
+            ),
+            check_csrf=_csrf_matches,
+            check_origin=_origin_ok,
+            unauthenticated_response=_unauthorized_response,
+            session_cookie_name=_SESSION_COOKIE,
+            step_up=step_up, issuer_url=step_up_issuer_url,
         ))
 
     if state_stream is not None:
@@ -700,6 +733,7 @@ def build_app(
     app = create_approvals_app(
         web_ui, sessions=sessions, extra_routes=extra_routes, lifespan=lifespan,
         notifications_enabled=notifications_enabled, notifications_detail=notifications_detail,
+        step_up=step_up, step_up_origin=step_up_issuer_url,
     )
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(bootstrapped, principal_resolver or _default_principal)
@@ -713,7 +747,9 @@ def _build_org_app(
 ) -> ASGIApp:
     """org mode's own route set -- see build_app()'s and this module's own
     docstrings for what's deliberately absent (the local-token settings
-    surface, still). ``/approvals`` and ``/security`` (P9,
+    surface's ~30-action dispatcher, still -- only its own purpose-built
+    replacement is mounted, see routes_org_settings below).
+    ``/approvals`` and ``/security`` (P9,
     web/routes_org_approvals.py/web/routes_security.py) are mounted
     unconditionally here -- unlike ``/connect`` (below), they need nothing
     from ``org.connector_registry``, only ``web_ui`` (already a required
@@ -721,8 +757,8 @@ def _build_org_app(
     ``StepUpConfig``."""
     from urllib.parse import urlparse
 
-    from ..org_mode import AuthzPolicyConfig, StepUpConfig
-    from . import routes_org_approvals, routes_security
+    from ..org_mode import AuthzPolicyConfig
+    from . import routes_org_approvals, routes_org_settings, routes_security
 
     extra_routes: list[Route] = []
     lifespans = []
@@ -769,8 +805,22 @@ def _build_org_app(
     ))
     if step_up.rp_id:
         extra_routes.extend(routes_security.build_routes(
-            sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
+            resolve_principal=lambda request: org_session.authenticated(request, org.sessions),
+            check_csrf=org_session.check_csrf,
+            check_origin=org_session.check_origin,
+            unauthenticated_response=lambda request: RedirectResponse(
+                "/login?next=/security", status_code=302, headers={"Cache-Control": "no-store"},
+            ),
+            session_cookie_name=org_session.SESSION_COOKIE,
+            step_up=step_up, issuer_url=org.issuer_url,
         ))
+    # #400: mounted unconditionally, same reasoning as /approvals above --
+    # needs only org.sessions and the install-wide settings dict, both
+    # already required parameters of this function either way.
+    extra_routes.extend(routes_org_settings.build_routes(
+        sessions=org.sessions, install_wide_settings=org.install_wide_settings,
+        install_wide_settings_path=org.install_wide_settings_path,
+    ))
 
     lifespan = None
     if lifespans:
@@ -801,7 +851,6 @@ class WebServer:
         *,
         host: str = "localhost",
         port: int = DEFAULT_PORT,
-        token: str | None = None,
         mcp_dispatcher: McpDispatcher | None = None,
         mcp_token: str | None = None,
         controller: SettingsController | None = None,
@@ -813,6 +862,7 @@ class WebServer:
         ssl_certfile: str | None = None,
         ssl_keyfile: str | None = None,
         trusted_proxies: tuple[str, ...] = (),
+        step_up: StepUpConfig | None = None,
     ) -> None:
         """``org``, ``ssl_certfile``/``ssl_keyfile`` and ``trusted_proxies``
         are org mode's own additions (P7, §10.2) -- every local-mode caller
@@ -824,19 +874,42 @@ class WebServer:
         requires before ``X-Forwarded-For``/``X-Forwarded-Proto`` are
         honored at all -- empty (the default) means never, regardless of
         mode.
+
+        ``step_up`` (#426 Phase 1) is local mode's own ``StepUpConfig`` --
+        ``None`` (the default) mounts no ``/security`` route at all, which
+        is what every caller before this phase gets; daemon_main.py's real
+        boot path always passes one (``StepUpConfig.from_local_config``).
+        Ignored in org mode, which resolves its own from ``org.org_config``
+        (see ``_build_org_app``).
         """
         self.host = host
         self.port = port
         self.org = org
-        self.token = None if org is not None else (token or load_or_create_token())
         # SEC-06: local mode's real session/bootstrap-code stores, built
         # once here and shared with build_app() below -- None in org mode,
         # which has its own OrgSessionStore (org.sessions) and no bootstrap
         # concept at all (org mode's entry point is /login, not a one-time
         # link). See mint_bootstrap_url() for how a human actually gets a
         # code out of self.bootstrap.
-        self.sessions = None if org is not None else LocalSessionStore()
-        self.bootstrap = None if org is not None else BootstrapStore()
+        #
+        # #428 Phase 2: self.control_channel is the control channel that
+        # replaces the old web_token-authenticated POST /api/bootstrap as
+        # the way a fresh code gets minted on demand -- also None in org
+        # mode, same reasoning (nothing to mint a code for). Built from a
+        # local `bootstrap` variable, not `self.bootstrap` directly, purely
+        # so its type stays a plain `BootstrapStore` in this branch --
+        # `self.bootstrap`'s own type is `BootstrapStore | None`, since it's
+        # assigned once for both modes. See web/control_channel.py's own
+        # module docstring.
+        if org is not None:
+            self.sessions = None
+            self.bootstrap = None
+            self.control_channel = None
+        else:
+            self.sessions = LocalSessionStore()
+            bootstrap = BootstrapStore()
+            self.bootstrap = bootstrap
+            self.control_channel = ControlChannelServer(bootstrap=bootstrap, allow_quit=allow_quit)
         # Every path mint_bootstrap_url() has actually written a discovery
         # file for -- stop() clears exactly these, never a hardcoded list,
         # since which paths get minted (just /approvals, or /approvals and
@@ -891,7 +964,6 @@ class WebServer:
         self.allowed_hosts = allowed_hosts
         wrapped = build_app(
             web_ui,
-            token=self.token,
             sessions=self.sessions,
             bootstrap=self.bootstrap,
             allowed_hosts=allowed_hosts,
@@ -905,6 +977,8 @@ class WebServer:
             loop_ready=self._loop_ready,
             principal_resolver=principal_resolver,
             org=org,
+            step_up=step_up,
+            step_up_issuer_url=f"http://{host}:{port}",
         )
         if trusted_proxies:
             # §10.2: honored only when this explicit list is non-empty --
@@ -982,11 +1056,17 @@ class WebServer:
         logger.info("Web approval server listening on %s", self.base_url)
         if self.mcp_url is not None:
             _write_mcp_url_file(self.mcp_url)
+        if self.control_channel is not None:
+            self.control_channel.start()
+            _write_web_base_url_file(self.base_url)
 
     def stop(self) -> None:
         self._server.should_exit = True
         if self._thread is not None:
             self._thread.join(timeout=5)
+        if self.control_channel is not None:
+            self.control_channel.stop()
+            _clear_web_base_url_file()
         if self.mcp_url is not None:
             _clear_mcp_url_file()
         for path in self._minted_bootstrap_paths:

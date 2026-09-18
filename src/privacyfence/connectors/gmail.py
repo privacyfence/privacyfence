@@ -70,11 +70,13 @@ def _body_params() -> list[ToolParam]:
             "body_markdown", "str", required=False, default="",
             description=(
                 "Optional Markdown body for a rich-text draft. Supports "
-                "**bold**, *italic*, ==highlight==, [links](url), and "
-                "bullet/numbered lists (no headings or tables). When given, "
-                "the draft is sent as plain text + HTML together, so it "
-                "renders formatted in HTML-capable clients and as readable "
-                "plain text everywhere else."
+                "**bold**, *italic*, ==highlight==, [links](url), "
+                "bullet/numbered lists, and `# Heading 1`/`## Heading 2` "
+                "(rendered as Gmail's Large/Huge font-size presets, not "
+                "raw heading tags -- no tables). When given, the draft is "
+                "sent as plain text + HTML together, so it renders "
+                "formatted in HTML-capable clients and as readable plain "
+                "text everywhere else."
             ),
         ),
     ]

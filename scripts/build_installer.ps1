@@ -140,10 +140,11 @@ bash scripts/build_mcpb.sh
 if ($LASTEXITCODE -ne 0) { throw "build_mcpb.sh failed" }
 $McpbPath = "dist/${ProductName}-${Version}.mcpb"
 
-# -- 6. Optional code-signing of the daemon executables ---------------------
-# Sign both PrivacyFenceApp.exe and privacyfence-app.exe -- signing only the
-# installer and not these would still show an unrecognized-publisher warning
-# if a user runs either directly rather than through the installer.
+# -- 6. Optional code-signing of the daemon + companion executables ---------
+# Sign PrivacyFenceApp.exe, privacyfence-app.exe, and (#428 Phase 3, ADR 0002)
+# PrivacyFenceCompanion.exe -- signing only the installer and not these would
+# still show an unrecognized-publisher warning if a user runs any of them
+# directly rather than through the installer.
 #
 # Goes through eSigner CodeSignTool rather than signtool.exe against a local
 # cert store: the cert's private key lives only in eSigner's cloud HSM, so
@@ -166,8 +167,10 @@ function Invoke-Signing([string]$Path) {
         -override
     if ($LASTEXITCODE -ne 0) { throw "CodeSignTool failed on $Path" }
 }
+$CompanionExe = Join-Path $DistDir "PrivacyFenceCompanion.exe"
 Invoke-Signing $MainExe
 Invoke-Signing $AliasExe
+Invoke-Signing $CompanionExe
 
 # -- 7. Build the installer with Inno Setup ----------------------------------
 Write-Host "-> Running Inno Setup..."

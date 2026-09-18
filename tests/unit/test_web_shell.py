@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from privacyfence import web_shell
 from privacyfence.approval_window_html import _STYLES_CSS
 
@@ -63,6 +65,73 @@ class TestWrap:
         # approval_icons.py already uses for the card-stack documents.
         html = web_shell.wrap("", title="t", active="approvals")
         assert '<link rel="icon" href="data:image/png;base64,' in html
+
+
+class TestBanner:
+    """#426 Phase 3: the "loud persistent banner" step_up_config.py's
+    StepUpConfig.local_enrollment_banner() drives -- see that function's
+    own docstring for when it fires."""
+
+    def test_no_banner_by_default(self):
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert '<div class="pf-shell-banner"' not in html
+
+    def test_banner_renders_between_header_and_main_when_given(self):
+        html = web_shell.wrap("<p>body</p>", title="t", active="approvals", banner_html="Passkey required")
+        assert '<div class="pf-shell-banner" role="alert">Passkey required</div>' in html
+        assert html.index("pf-shell-banner") < html.index("<p>body</p>")
+
+    def test_banner_html_is_not_escaped(self):
+        # Same convention as body_html itself (test_body_html_is_not_escaped
+        # above) -- callers own their own escaping; step_up_config.py's own
+        # banner text carries a real <a href> link.
+        html = web_shell.wrap("", title="t", active="approvals", banner_html='<a href="/security">add one</a>')
+        assert '<a href="/security">add one</a>' in html
+
+
+class TestDismissibleNotice:
+    """B23 of the 4.1.0 action plan: a second, dismissible strip below
+    banner_html -- see step_up_config.py's own off_notice() for the one
+    real caller today."""
+
+    def test_no_notice_by_default(self):
+        html = web_shell.wrap("", title="t", active="approvals")
+        assert '<div class="pf-shell-notice"' not in html
+
+    def test_notice_renders_between_header_and_main_when_given(self):
+        html = web_shell.wrap(
+            "<p>body</p>", title="t", active="approvals",
+            dismissible_notice_html="Not passkey-protected", dismissible_notice_key="pf_test_key",
+        )
+        assert '<div class="pf-shell-notice"' in html
+        assert "Not passkey-protected" in html
+        assert 'data-dismiss-key="pf_test_key"' in html
+        assert html.index("pf-shell-notice") < html.index("<p>body</p>")
+
+    def test_notice_html_is_not_escaped(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals",
+            dismissible_notice_html='<a href="/settings">turn on</a>', dismissible_notice_key="k",
+        )
+        assert '<a href="/settings">turn on</a>' in html
+
+    def test_carries_a_dismiss_button(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals", dismissible_notice_html="x", dismissible_notice_key="k",
+        )
+        assert "data-dismiss-notice" in html
+
+    def test_missing_key_is_rejected(self):
+        with pytest.raises(ValueError):
+            web_shell.wrap("", title="t", active="approvals", dismissible_notice_html="x")
+
+    def test_dismiss_wiring_reads_the_element_and_key(self):
+        html = web_shell.wrap(
+            "", title="t", active="approvals", dismissible_notice_html="x", dismissible_notice_key="k",
+        )
+        assert "getElementById('pf-shell-notice')" in html
+        assert "data-dismiss-notice" in html
+        assert "localStorage" in html
 
 
 class TestNotifications:

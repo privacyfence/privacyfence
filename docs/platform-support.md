@@ -6,9 +6,9 @@ PrivacyFence local mode is packaged for macOS, Windows, and Debian/Ubuntu Linux.
 
 | Platform | Distribution | Startup model | Release automation |
 |---|---|---|---|
-| macOS | signed/notarized DMG containing the PyInstaller app bundle and MCPB | packaged app/LaunchAgent path | `.github/workflows/build.yml` on `macos-latest` |
-| Windows | Inno Setup installer containing the PyInstaller executable and MCPB | Task Scheduler entry created by the installer | `.github/workflows/build.yml` on `windows-latest` |
-| Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | XDG autostart desktop entry | `.github/workflows/build.yml` on `ubuntu-latest` |
+| macOS | signed/notarized DMG containing the PyInstaller app bundle and MCPB | packaged app/LaunchAgent path, or (default-on, see below) a LaunchDaemon under a dedicated account | `.github/workflows/build.yml` on `macos-latest` |
+| Windows | Inno Setup installer containing the PyInstaller executable and MCPB | Task Scheduler entry created by the installer, or an opt-in Windows service under a virtual service account (see below) | `.github/workflows/build.yml` on `windows-latest` |
+| Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | XDG autostart desktop entry, or (default-on, see below) a system systemd unit under a dedicated account | `.github/workflows/build.yml` on `ubuntu-latest` |
 | Linux Python install | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
 | Linux org mode | Python/system service behind the configured reverse proxy and identity provider | operator-managed service | release smoke coverage in the build/test suite |
 
@@ -24,6 +24,45 @@ The macOS app is defined by `PrivacyFenceApp.spec`. Release builds are produced 
 
 The packaged application keeps user state outside the application bundle. The release workflow signs and notarizes the app/DMG when the required signing credentials are configured.
 
+### Privilege separation (default-on)
+
+Without this, the daemon starts in the logged-in user's session — the LaunchAgent path above —
+which is also the session the AI client it governs runs in. `scripts/macos_privilege_separation.sh
+enable` changes that: it creates a dedicated `_privacyfence` system account, moves the data
+directory from `~/.privacyfence` to `/Library/Application Support/PrivacyFence` owned by that
+account, and inverts the startup wiring — a **LaunchDaemon**
+(`installer/macos/com.privacyfence.daemon.plist.tmpl`) runs the daemon with no login session at
+all, while a **LaunchAgent** (`installer/macos/com.privacyfence.companion.plist.tmpl`) runs the
+companion app in each user session so a human still has a way in.
+
+#428 D1 (4.1) turns this on automatically rather than requiring that command by hand: since a DMG
+install has no package-manager postinstall hook to run it as root, the daemon's own startup asks
+once, via the standard macOS admin-password dialog, the first time it finds itself unseparated
+(`privilege_separation.maybe_auto_enable_macos()`, called from `daemon_main.main()`). Declining that
+prompt is respected — it is not asked again — and running `enable` by hand always remains available,
+as does `disable` to opt back out.
+
+Three parts of the layout matter to anything that has to find PrivacyFence's files:
+
+| Path | Owner | Mode | Holds |
+|---|---|---|---|
+| `/Library/Application Support/PrivacyFence` | `_privacyfence` | `0711` | everything; traversable but not listable |
+| `…/authority` | `_privacyfence` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
+| `…/handoff` | `_privacyfence:_privacyfence` | `2770` | `mcp_token`, `mcp_url`, the control-channel sockets |
+
+The installing user is added to the `_privacyfence` group, which is what keeps `handoff` reachable
+from their session — macOS evaluates group membership at login, so this needs a logout/login to take
+effect. `src/privacyfence/privilege_separation.py` resolves all of it from a marker file the
+installer writes, and the MCPB shim (`mcpb/shim/src/protocol.ts`) reads the same marker so Claude
+Desktop keeps finding the daemon. `… status` audits the result; `… disable` reverses it.
+
+Ships default-on as of #428 D1 (4.1) — the manual `enable`/`disable`/`status` subcommands above still
+exist, and `disable` remains the way to opt back out; the migration moves live connector OAuth
+tokens. Linux has the same thing (below); Windows also has privilege separation now (below) but
+stays opt-in — D1 does not extend to it.
+See [`security-and-compliance.md`](security-and-compliance.md#privilege-separation-macos-linux-and-windows) for
+what the separation does and does not buy.
+
 ## Windows
 
 The Windows executable is defined by `PrivacyFenceApp.win.spec`. `scripts/build_installer.ps1` builds the application and invokes `installer/privacyfence.iss` to produce the installer.
@@ -34,11 +73,100 @@ The installer:
 - installs the bundled MCPB/shim assets;
 - creates a Start Menu entry for the settings UI;
 - creates a Task Scheduler entry for user-session startup;
+- creates a Start Menu entry for the companion app;
+- installs the opt-in privilege-separation tool as `privilege-separation.ps1` next to the
+  application, with the companion autostart task template it renders (see below — installing it
+  changes nothing until it is run);
 - starts PrivacyFence after installation;
-- removes the scheduled task on uninstall;
+- removes the scheduled task, the companion task and the privilege-separation service on uninstall;
 - preserves the user's PrivacyFence state directory on uninstall.
 
 Optional signing is configured through `CODESIGNTOOL_DIR`, `ES_USERNAME`, `ES_PASSWORD`, `ES_CREDENTIAL_ID`, and `ES_TOTP_SECRET` — see `scripts/build_installer.ps1`'s header comment. Signing goes through SSL.com's eSigner CodeSignTool rather than a local Authenticode `.pfx`, since CA/B Forum's 2023 key-storage rules mean code-signing private keys can no longer be exported to a portable `.pfx` at all.
+
+### Privilege separation (opt-in)
+
+The same change as macOS's and Linux's, in Windows' own primitives, and the one platform where
+those primitives are genuinely different rather than differently spelled. By default the daemon
+starts in the logged-in user's session — the Scheduled Task above — which is also the session the AI
+client it governs runs in. From an **elevated** PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" enable
+```
+
+(A source checkout runs the same file as `scripts/windows_privilege_separation.ps1`; `... status`
+audits the result, `... disable` reverses it.)
+
+That creates a **virtual service account** (`NT SERVICE\PrivacyFence` — materialized by the Service
+Control Manager along with the service, with its own SID and no password anyone has to manage, in
+preference to the shared `LocalService` #428 mentions), moves the data directory from
+`%LOCALAPPDATA%\PrivacyFence` to `%ProgramData%\PrivacyFence` owned by it, and inverts the startup
+wiring — a **Windows service** (`PrivacyFence`, `sc.exe`-registered, with its own `sc failure`
+crash-restart) runs the daemon with no desktop session at all, while a **Scheduled Task**
+(`PrivacyFenceCompanion`, from `installer/windows/privacyfence-companion-task.xml.tmpl`) runs the
+companion tray app in each user session. The installer's own `PrivacyFence` task is *disabled*
+rather than deleted, so `disable` can put it back and uninstall still finds it; left enabled it
+would start a second daemon as the logged-in user, which on a separated install refuses to start
+(`privilege_separation.check_runtime_identity()`) rather than silently seeding a default policy.
+
+Three things carry over unchanged from the POSIX layouts — the marker file every PrivacyFence
+process reads, the three directories, and which files move into `handoff\`. What does not carry
+over is the permission model:
+
+| Path | Trustees | POSIX equivalent | Holds |
+|---|---|---|---|
+| `%ProgramData%\PrivacyFence` | service account, `SYSTEM`, `Administrators` full; `Users` traverse-only | `0711` | everything; traversable but not listable |
+| `…\authority` | service account, `SYSTEM`, `Administrators` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
+| `…\handoff` | the above, plus the `PrivacyFenceUsers` local group, read-only | `2770` | `mcp_token`, `mcp_url`, the discovery files |
+
+Two steps before any grant are load-bearing, and both are easy to leave out. `icacls
+/inheritance:r` on each directory: `%ProgramData%` grants `Users` read-and-execute by inheritance,
+so a directory created under it is readable by every account on the machine until that inheritance
+is cut. And `icacls /setowner` on the tree to `Administrators`: an object's owner holds `WRITE_DAC`
+implicitly whatever its ACL says, and `enable` *moves* the data directory out of `%LOCALAPPDATA%` —
+a move preserves ownership, so without this the separated root would be owned by the very account
+being excluded, wearing an ACL that account could rewrite with one command and no elevation.
+Administrators rather than the service account, deliberately: it needs no privilege juggling, and
+it denies the daemon `WRITE_DAC` on its own boundary. Ownership is checked by `… status` and
+re-checked on every daemon start, alongside the grants. The installing user is added
+to `PrivacyFenceUsers`, which is what keeps `handoff\` reachable from their session — Windows puts
+group memberships in the logon token, so this needs a sign-out/sign-in to take effect, exactly like
+macOS and Linux. `src/privacyfence/windows_acl.py` is both the translation table above and the audit
+that reads it back on every daemon start.
+
+`handoff\` is read-only to the group here, where POSIX has to grant `rwx`: on this platform both
+control channels are named pipes rather than socket files, so nothing in the user's session ever
+creates anything in that directory. The pipes carry the equivalent grant in their own DACLs instead
+(`web/control_channel.py`), naming the service account and the group explicitly rather than relying
+on membership — a virtual service account cannot hold one.
+
+Two Windows-only requirements, both enforced rather than documented:
+
+- **A per-machine install.** A service runs whatever its `binPath` names, so an install the
+  logged-in user can rewrite would let the agent run its own code *as the service account*. `enable`
+  reads the install directory's ACL and refuses if anything but `SYSTEM`/`Administrators` can write
+  it, which rules out the non-elevated per-user install path
+  ([#407](https://github.com/privacyfence/privacyfence/issues/407)) — the open question ADR 0002
+  carried, settled as two install tiers with separation available only on the elevated one. The
+  daemon re-checks its own image on every start.
+- **The companion.** A service runs in session 0 and cannot reach the desktop, so
+  `oauth_loopback.run_browser_oauth()` has no browser to open for Slack/Salesforce/Atlassian. The
+  companion's control channel is what opens those pages (ADR 0002 decision 5), so `enable` refuses
+  to install the daemon half alone.
+
+The daemon is started by the SCM as `privacyfence-app.exe --windows-service`, not as the plain
+executable: Windows' service manager waits for a started process to call
+`StartServiceCtrlDispatcher` and kills one that never does (error 1053), so
+`src/privacyfence/windows_service.py` is a service host wrapping the same `daemon_main.main()` the
+console entry point calls. Stopping the service takes the same shutdown path the web UI's own Quit
+button does.
+
+**Uninstall order matters here in a way it does not on the other two platforms.** Uninstalling
+PrivacyFence removes the service and both tasks but, like `%LOCALAPPDATA%\PrivacyFence` before it,
+deliberately leaves `%ProgramData%\PrivacyFence` in place — which on a separated install is a
+directory only the (now deleted) service account and `Administrators` could read. Run
+`... disable` *before* uninstalling to move the data back under your own account; an administrator
+can still recover it afterwards by taking ownership.
 
 The `platform-windows` job in `.github/workflows/tests.yml` runs the full core Python suite on `windows-latest` on every PR, alongside the normal Ubuntu suite. Windows packaging itself (the installer build, silent install/autostart/uninstall) is exercised only by the release build workflow (`build.yml`'s `build-windows` job, tag/`workflow_dispatch`-triggered), not per PR — see "Known open items" below for its current live status.
 
@@ -46,11 +174,69 @@ The `platform-windows` job in `.github/workflows/tests.yml` runs the full core P
 
 The local desktop package is defined by `PrivacyFenceApp.linux.spec`, `scripts/build_deb.sh`, `debian/`, and `resources/linux/privacyfence.desktop`.
 
-The `.deb` installs the self-contained application under `/opt/privacyfence`, exposes `/usr/bin/privacyfence-app`, installs application icons, and installs an XDG autostart desktop entry under `/etc/xdg/autostart/`.
+The `.deb` installs the self-contained application under `/opt/privacyfence`, exposes `/usr/bin/privacyfence-app` and `/usr/bin/privacyfence-companion`, installs application icons, installs an XDG autostart desktop entry under `/etc/xdg/autostart/`, and installs the privilege-separation tool as `/usr/sbin/privacyfence-privilege-separation` with its templates under `/usr/share/privacyfence/` (see below — as of #428 D1, `debian/postinst` runs it automatically, `configure)` case, on every install and upgrade).
 
 The XDG desktop autostart path is separate from the repository's `privacyfence.service`, which is the Python/system-service template rather than the desktop `.deb` startup mechanism.
 
 Package removal does not delete per-user PrivacyFence state from the user's home directory.
+
+### Privilege separation (default-on)
+
+The same change as macOS's, above, in Linux's own idioms. Without it, the daemon starts in the
+logged-in user's session — either of the two startup paths above — which is also the session the AI
+client it governs runs in. `sudo privacyfence-privilege-separation enable` turns that off — the
+`.deb` installs it under that name in `/usr/sbin`, and a source checkout runs the same file as
+`sudo ./scripts/linux_privilege_separation.sh enable`. It
+creates a dedicated `privacyfence` system account (`useradd --system`), moves the data directory
+from `~/.privacyfence` to `/var/lib/privacyfence` owned by that account, and inverts the startup
+wiring — a **system systemd unit**
+(`installer/linux/privacyfence-daemon.service.tmpl` → `/etc/systemd/system/privacyfence-daemon.service`)
+runs the daemon with no desktop session at all, while an **XDG autostart entry**
+(`installer/linux/privacyfence-companion.desktop.tmpl` → `/etc/xdg/autostart/`) runs
+`privacyfence-companion --serve` in each user session.
+
+#428 D1 (4.1): `debian/postinst` now runs `enable --auto` itself on every install and upgrade — it
+already runs as root at that point, which is exactly what this needs. `--auto` only proceeds when
+`$SUDO_USER` names a resolvable, non-root account (i.e. the `.deb` was installed via `sudo apt
+install`/`sudo dpkg -i`, not by root directly or by an unattended upgrade with no session behind
+it); anywhere that's not true it logs why and leaves the install opt-in, exactly as before this,
+rather than guessing wrong about whose install this is. A pip/pipx source install has no such
+postinst hook and stays opt-in via the manual command above. `... disable` remains how to turn it
+back off either way.
+
+Both pre-Phase-4 startup paths are moved aside rather than left in place: `/etc/xdg/autostart/
+privacyfence.desktop` and the `--user` unit each become `.disabled`, because either would start a
+second daemon as the logged-in user — which on a separated install refuses to start (see
+`privilege_separation.check_runtime_identity()`) rather than silently seeding a default policy.
+
+The layout matches macOS exactly apart from the root and the account name:
+
+| Path | Owner | Mode | Holds |
+|---|---|---|---|
+| `/var/lib/privacyfence` | `privacyfence` | `0711` | everything; traversable but not listable |
+| `…/authority` | `privacyfence` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
+| `…/handoff` | `privacyfence:privacyfence` | `2770` | `mcp_token`, `mcp_url`, the control-channel sockets |
+
+`/var/lib` rather than `/opt` for the same reason macOS uses `/Library/Application Support`: this is
+variable state the daemon rewrites (FHS 3.0 §5.8), while `/opt/privacyfence` holds the read-only,
+dpkg-owned application bundle. The installing user is added to the `privacyfence` group, which is
+what keeps `handoff` reachable from their session — group membership is evaluated at login, so this
+needs a logout/login to take effect. `src/privacyfence/privilege_separation.py` resolves all of it
+from a marker file the installer writes, and the MCPB shim (`mcpb/shim/src/protocol.ts`) reads the
+same marker. `… status` audits the result; `… disable` reverses it, restoring both startup paths it
+moved aside.
+
+The `--serve` companion is the one piece with no macOS counterpart, and it is not optional: Linux
+has no tray (ADR 0002 decision 4), so without a persistent process in the user's session a
+separated daemon's `webbrowser.open()` has no display to reach and connector OAuth for
+Slack/Salesforce/Atlassian cannot show a sign-in page. It runs the companion's control channel and
+nothing else — no `pystray`, no new dependency.
+
+Installing the `.deb` does not turn any of this on. What it adds is the tool and its two
+templates; the systemd unit and the companion autostart entry are written only by `enable`, and a
+package install or upgrade never runs it. Everything about a default install — the daemon in your
+own session, started by the XDG autostart entry, with state in `~/.privacyfence` — is exactly as it
+was.
 
 ## Architecture and CPU constraints
 
@@ -240,3 +426,62 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   public `/mcp` URL. The `org-mode-smoke` CI job continues to cover the same daemon/MCP/approval/audit
   contract on every PR, against a synthetic, mocked identity provider — a narrower, faster guarantee
   than a real deployment run, kept for regression coverage rather than as the only proof of the path.
+- **Privilege separation, on any of the three platforms, has no automated end-to-end coverage, and
+  cannot have any from this repo's CI**: provisioning it needs root (or Administrator), creates a
+  real system account, and the property it buys only exists once two real OS accounts are involved —
+  a hosted runner can build the artifact but not prove that
+  `_privacyfence`/`privacyfence`/`NT SERVICE\PrivacyFence` actually owns `authority/` and that the
+  logged-in user actually cannot read it. What CI does prove, per PR, is the contract between
+  the four artifacts involved: `tests/unit/test_privilege_separation.py` asserts that each
+  platform's installer (`scripts/{macos,linux}_privilege_separation.sh`,
+  `scripts/windows_privilege_separation.ps1`), its service definitions (`installer/macos/`'s two
+  launchd plists, `installer/linux/`'s systemd unit and autostart entry, `installer/windows/`'s
+  companion Scheduled Task plus the service and task names `installer/privacyfence.iss` has to clean
+  up), `src/privacyfence/privilege_separation.py` and the MCPB shim's own port of its
+  marker discovery (`mcpb/shim/src/protocol.ts`) still agree on every account name, directory, mode
+  and marker field, and that every path the module resolves from a marker is the one the installer
+  provisions.
+  **Windows' own layout is ACLs rather than modes, and that half has more coverage than the rest
+  rather than less**, because it is the one part a hosted runner really can exercise: an ACL set on
+  a directory the test process just created needs no elevation at all. So
+  `tests/unit/test_windows_acl.py` covers the access-mask arithmetic every layout decision rests on,
+  `TestWindowsLayoutAudit` drives `audit_layout()`'s Windows branch through a synthetic DACL on
+  every platform, and `tests/platform/test_windows_acls.py` proves on the `platform-windows` job
+  that real `icacls` output reads back the way all of that assumes — including the two behaviors the
+  installer's own structure depends on: that a file created in the handoff directory inherits its
+  grants, and that a file *moved* there does not (which is why `enable` runs `icacls /reset` over it
+  after the migration). What none of that reaches is the service, the virtual account, or the
+  logon-token group membership. The remaining half — enable on a real machine, confirm the daemon comes up under the
+  service account, confirm the companion and the MCPB shim still reach it after a logout/login,
+  confirm `disable` restores the previous layout with connector tokens intact — is a manual check,
+  and belongs with the other per-platform human checks in
+  [`release-testing.md`](release-testing.md). **This manual real-machine verification still has not
+  run against a release build.** #428 D1 (4.1) turns privilege separation on by default on macOS and
+  Linux anyway (Windows stays opt-in), ahead of it and ahead of the soak-through-a-release-cycle
+  criterion this section originally argued for — an explicit override of that plan, not a claim that
+  the gap above has closed. The automated coverage this bullet describes is unchanged either way;
+  running the manual checks against the first 4.1 release this ships in is now more urgent, not
+  less, precisely because the default now turns it on for people who never asked for it by name on
+  those two platforms.
+  **macOS's own launchd wiring is now covered too** (B19,
+  [privacyfence/privacyfence#374](https://github.com/privacyfence/privacyfence/issues/374)):
+  `macos-graphical-session.yml`/`test_macos_graphical_session_autostart.py` drives
+  `scripts/macos_privilege_separation.sh enable` directly via passwordless `sudo` (the only path
+  a hosted runner can take at all — the daemon's own unattended trigger,
+  `maybe_auto_enable_macos()`, pops a real GUI admin-password dialog nothing in CI can answer) and
+  confirms both the daemon's `system/` LaunchDaemon and the companion's `gui/<uid>` LaunchAgent
+  actually come up, as the right account, with real control-channel sockets underneath — on the one
+  already-logged-in Aqua session a GitHub-hosted `macos-latest` runner gives it, not a second real
+  login the way a full soak would need.
+  **Linux carries one thing macOS does not**: the companion is a `--serve` process autostarted by
+  an XDG entry rather than a tray app, and XDG autostart is a desktop-environment behavior, not a
+  systemd one — `linux-graphical-session.yml` covers the daemon's own autostart entry on a real
+  session, but the separated install's replacement of it is outside what that workflow provisions.
+  **Windows carries two more.** The service host itself (`src/privacyfence/windows_service.py`) is
+  only ever exercised by the SCM, so "the daemon comes up as `NT SERVICE\PrivacyFence` rather than
+  dying with error 1053" is a manual check and nothing else; and the refusal to separate a
+  user-writable install ([#407](https://github.com/privacyfence/privacyfence/issues/407)) is
+  asserted as a rule (`windows_acl.image_problems`, and the `.ps1`'s own `Assert-ImageProtected`)
+  but never run against a real per-user install, since CI builds only one install tier.
+  A connector OAuth flow completing on a separated Linux install is therefore the specific thing
+  the manual check has to exercise, not just the daemon coming up.

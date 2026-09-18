@@ -152,6 +152,7 @@ import asyncio
 import contextvars
 import functools
 import json
+import hashlib
 import logging
 import time
 import uuid
@@ -161,10 +162,11 @@ from typing import Any
 
 from .approval_ui import get_approval_ui
 from .approval_window_html import NARROW, WIDE
-from .approvals import PendingApproval, PendingApprovalRegistry, canonical_key
+from .approvals import DEFAULT_MAX_PENDING, PendingApproval, PendingApprovalRegistry, canonical_key
 from .audit_log import APPROVED_LIKE_DECISIONS, AuditEntry, current_week, get_audit_logger
 from .auto_accept import (
     TOOL_TO_OPERATION,
+    AutoAcceptEvaluator,
     ReviewContext,
     add_auto_accept_rule,
     add_rules_changed_listener,
@@ -172,6 +174,7 @@ from .auto_accept import (
     describe_rule_change,
     describe_rule_short,
     get_auto_accept_evaluator,
+    get_policy_engine_version,
     known_rule_names,
     mutate_grants,
     remove_auto_accept_rule,
@@ -179,6 +182,8 @@ from .auto_accept import (
     suggest_write_rule,
     temp_accept_key,
 )
+from .policy import compat as policy_compat
+from .policy import engine as policy_engine
 from .pii_detector import (
     PIIAuditMatch,
     describe_match_for_audit,
@@ -279,6 +284,7 @@ _TOOL_LAYOUT: dict[str, str] = {
     "drive_docs_format_content": NARROW,
     "calendar_update_event": NARROW, "calendar_create_out_of_office": NARROW,
     "calendar_set_working_location": NARROW, "calendar_set_event_visibility": NARROW,
+    "calendar_set_event_color": NARROW,
     "contacts_update": NARROW, "contacts_create": NARROW,
     "contacts_add_label": NARROW, "contacts_remove_label": NARROW,
     "jira_update_issue": NARROW, "jira_transition_issue": NARROW,
@@ -305,7 +311,46 @@ _TOOL_LAYOUT: dict[str, str] = {
 # time, so a second worker would have sat idle. It's several now because
 # that's no longer true for the web surface: several approvals showing at
 # once is P3's whole point ("New coalescing case" / "Job 1... obsolete").
-_popup_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="pf-popup")
+#
+# Sized against approvals.DEFAULT_MAX_PENDING, not a literal worker count:
+# every approval the registry considers "live" needs a worker parked on it
+# for the whole time it's undecided (a worker blocks on an Event, not a
+# compute budget -- cheap to over-provision), and a card past whatever this
+# pool's size is renders as web/routes_approvals.py's "Preparing this
+# request" placeholder until one frees up, forever, if the registry can
+# hold more approvals live than this pool has workers for. Tying the two
+# together here means a future change to one default can't silently
+# reintroduce that stall in the other. daemon_main.py calls
+# configure_popup_executor() right after constructing the real registry, to
+# match settings.yaml's own web.approvals.max_pending override when one is
+# given.
+_popup_executor_max_workers = DEFAULT_MAX_PENDING
+_popup_executor = ThreadPoolExecutor(
+    max_workers=_popup_executor_max_workers, thread_name_prefix="pf-popup",
+)
+
+
+def configure_popup_executor(max_workers: int) -> None:
+    """Resize ``_popup_executor`` to ``max_workers`` -- called once by
+    daemon_main.py (both the local- and org-mode setup paths) right after
+    it constructs the real ``PendingApprovalRegistry``, passing that
+    registry's own ``max_pending`` so the two stay tied together even when
+    settings.yaml's ``web.approvals.max_pending`` overrides the default this
+    module was imported with (see ``_popup_executor``'s own comment).
+
+    ``ThreadPoolExecutor`` has no public API to change its worker count in
+    place, so this swaps in a fresh one; safe because daemon_main.py calls
+    this during startup, before the web server accepts its first request --
+    nothing has been submitted to the old executor yet. A no-op when the
+    size already matches, so re-calling it (e.g. from a test) is harmless.
+    """
+    global _popup_executor, _popup_executor_max_workers
+    if max_workers == _popup_executor_max_workers:
+        return
+    old = _popup_executor
+    _popup_executor_max_workers = max_workers
+    _popup_executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pf-popup")
+    old.shutdown(wait=False)
 
 
 async def _run_in_popup_executor(func, *args, **kwargs) -> Any:
@@ -379,6 +424,7 @@ async def _resolve_decision(
     request_id: str,
     summary: str,
     tool_name: str,
+    preview: dict[str, Any] | None,
     operation_key: str,
     ctx: ReviewContext,
     pii_forces_confirmation: list[str],
@@ -386,45 +432,55 @@ async def _resolve_decision(
     pii_categories: list[str],
     claude_reason: str,
     interact: Any,
-) -> tuple[Any, str, float | None]:
+) -> tuple[Any, str, float | None, str, str]:
     """Shared plumbing for the review/popup gate branches: get a decision
     for this call, either by running ``interact`` (see each branch's own
     definition of it) directly, or -- when ``registry`` is not None --
     checking the decision ledger first, then registering (or coalescing
     onto) a pending approval and waiting up to ``registry.hold_window``.
 
-    Returns ``(decision, rule_name, decided_at)``. ``decision`` is one of
-    "accept"/"deny"/"accept_all"/"auto_accepted", or the module-level
-    ``_PENDING`` sentinel -- in which case ``rule_name`` is instead the
-    ``PendingApproval`` the caller should build a pending result from (see
-    each branch's own handling immediately after calling this).
-    ``decided_at`` is None unless this decision came from the registry
-    (either a ledger hit, or a live wait that resolved) -- the "no
-    registry" / legacy path never had a separate decide-then-release split
-    to time, so there is nothing new to report for it.
+    Returns ``(decision, rule_name, decided_at, decided_via, batch_id)``.
+    ``decision`` is one of "accept"/"deny"/"accept_all"/"auto_accepted", or
+    the module-level ``_PENDING`` sentinel -- in which case ``rule_name``
+    is instead the ``PendingApproval`` the caller should build a pending
+    result from (see each branch's own handling immediately after calling
+    this). ``decided_at`` is None unless this decision came from the
+    registry (either a ledger hit, or a live wait that resolved) -- the
+    "no registry" / legacy path never had a separate decide-then-release
+    split to time, so there is nothing new to report for it.
+    ``decided_via``/``batch_id`` (Phase 2 of the approval binder plan) are
+    "" unless the human decided this through the binder's batch decide
+    endpoint -- see approvals.PendingApproval's own fields.
     """
     if registry is None:
         decision, rule_name = await interact(None)
-        return decision, rule_name, None
+        return decision, rule_name, None, "", ""
 
     ledger_hit = registry.consume_ledger(dedupe_key)
     if ledger_hit is not None:
-        decision, rule_name, decided_at = ledger_hit
-        return decision, rule_name, decided_at
+        return ledger_hit.decision, ledger_hit.rule_name, ledger_hit.decided_at, ledger_hit.decided_via, ledger_hit.batch_id
 
     approval, created = registry.register_or_coalesce(
         dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind=gate_kind,
-        request_id=request_id, summary=summary, tool_name=tool_name,
+        request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
         operation_key=operation_key, review_ctx=ctx, pii_forces_confirmation=bool(pii_forces_confirmation),
         pii_detected=pii_detected, pii_categories=pii_categories, claude_reason=claude_reason,
     )
     if created:
         asyncio.ensure_future(_drive_interaction(registry, approval, interact))
 
-    decided = await registry.wait_async(approval, registry.hold_window)
+    # Approval binder, Phase 4: collapse the hold window to zero once this
+    # principal already has something else waiting, rather than blocking
+    # this call for the full window too -- see approvals.PendingApproval
+    # Registry.has_other_live()'s own docstring.
+    hold_window = registry.hold_window
+    if registry.adaptive_hold and registry.has_other_live(approval.principal_id, approval.id):
+        hold_window = 0.0
+
+    decided = await registry.wait_async(approval, hold_window)
     if not decided:
-        return _PENDING, approval, None
-    return approval.final_decision, approval.final_rule_name, approval.decided_at
+        return _PENDING, approval, None, "", ""
+    return approval.final_decision, approval.final_rule_name, approval.decided_at, approval.decided_via, approval.batch_id
 
 
 async def _drive_interaction(registry: PendingApprovalRegistry, approval: PendingApproval, interact: Any) -> None:
@@ -446,19 +502,45 @@ async def _drive_interaction(registry: PendingApprovalRegistry, approval: Pendin
 
 def _pending_result(registry: PendingApprovalRegistry, approval: PendingApproval) -> dict[str, Any]:
     """The structured result gated_call() returns to Claude instead of
-    blocking further."""
-    return {
-        "status": "approval_pending",
-        "approval_id": approval.id,
-        "url": registry.approval_url(approval.id),
-        "expires_at": datetime.fromtimestamp(approval.expires_at, tz=timezone.utc).isoformat(),
-        "message": (
+    blocking further.
+
+    Approval binder, Phase 4: ``pending_count`` (this principal's own
+    outstanding approvals, this one included) and ``binder_url`` (the
+    ``/approvals`` list, not this one card's own link) let Claude tell a
+    single stalled call apart from the case adaptive_hold above exists for --
+    several independent gated calls already waiting on the same human. Past
+    one, the message points at the binder and asks for the rest of this
+    principal's independently-ready gated work to be issued before a single
+    privacyfence_await_approval call collects every outstanding id, instead
+    of relaying N separate links and awaiting them one at a time."""
+    pending_count = len(registry.list_pending(principal_id=approval.principal_id))
+    binder_url = registry.binder_url()
+    if pending_count > 1 and binder_url:
+        message = (
+            f"This step needs a human's approval before it can proceed, and it is one of "
+            f"{pending_count} approvals now waiting on the same human. Do not wait silently, "
+            f"and do not relay these one at a time: reply to the user right now with the binder "
+            f"url ({binder_url}) so they can review and decide the whole batch at once. Then "
+            "issue whatever other gated calls are independently ready rather than deferring them, "
+            "and call privacyfence_await_approval once with every outstanding approval_id "
+            "(this one included) to wait for their decisions together."
+        )
+    else:
+        message = (
             "This step needs a human's approval before it can proceed. Do not wait "
             "silently: reply to the user right now with this result's url so they can "
             "open it and decide, then call privacyfence_await_approval with this "
             "approval_id to wait for their decision (or, if you can schedule a "
             "follow-up check for later, do that instead of blocking here)."
-        ),
+        )
+    return {
+        "status": "approval_pending",
+        "approval_id": approval.id,
+        "url": registry.approval_url(approval.id),
+        "expires_at": datetime.fromtimestamp(approval.expires_at, tz=timezone.utc).isoformat(),
+        "pending_count": pending_count,
+        "binder_url": binder_url,
+        "message": message,
     }
 
 
@@ -506,6 +588,59 @@ def _on_rules_changed() -> None:
             "Pending approval %s auto-accepted after a rule changed: %s/%s rule=%r",
             approval.id, approval.connector, approval.tool, approval.final_rule_name,
         )
+
+
+def _context_fingerprint(ctx: ReviewContext) -> str:
+    """A redacted stand-in for ``ctx`` in a shadow-mode disagreement log (P3): connector, tool
+    and the *set* of argument names -- never an argument value, and never ``ctx.raw_data``, which
+    is exactly the content (a message, a file, an event) auto-accept decisions exist to keep out
+    of logs. Stable across identical calls, so repeated disagreements on the same shape of call
+    are recognisable without a real correlation id."""
+    arg_names = ",".join(sorted(ctx.args.keys()))
+    fingerprint = hashlib.sha256(f"{ctx.connector}|{ctx.tool}|{arg_names}".encode()).hexdigest()[:12]
+    return f"{ctx.connector}.{ctx.tool}#{fingerprint}"
+
+
+def _evaluate_auto_accept(
+    evaluator: AutoAcceptEvaluator, operation_key: str, ctx: ReviewContext,
+) -> tuple[bool, str]:
+    """Decide whether ``operation_key`` auto-accepts, per P3 of the policy v2 redesign.
+
+    Both evaluators run on every call. By default (``policy.engine`` unset or ``"v1"``) the
+    existing ``AutoAcceptEvaluator`` -- unchanged by this function -- keeps deciding, and the new
+    ``policy.engine``/``policy.compat`` evaluator runs alongside it purely to compare; setting
+    ``policy.engine: v2`` flips which one is authoritative, with the other now the one shadowed
+    (see ``policy_engine_config.PolicyEngineConfig`` and ``auto_accept.get_policy_engine_version``
+    for the switch itself, and the redesign proposal's Safety net for why the default keeps v1
+    load-bearing for one release).
+
+    A disagreement -- either engine's boolean differs, or both matched but under different rule
+    identities -- is logged once at ``WARNING`` with the operation key, each side's matched rule,
+    and a redacted context fingerprint (``_context_fingerprint``) -- never ``ctx.args`` or
+    ``ctx.raw_data`` themselves. A v2 evaluation error is swallowed the same way an unrecognised
+    predicate already fails closed in ``policy.engine.evaluate`` -- shadow mode must never be able
+    to affect, or crash, the real (v1, by default) decision.
+    """
+    v1_ok, v1_rule = evaluator.should_auto_accept(operation_key, ctx)
+
+    v2_ok, v2_rule = False, ""
+    try:
+        v2_rules = policy_compat.compile_rules(evaluator.effective_rules)
+        v2_ok, v2_rule = policy_engine.evaluate(
+            v2_rules, operation_key, ctx, is_temp_accepted=evaluator.is_temp_accepted,
+        )
+    except Exception:
+        logger.warning("Policy v2 shadow evaluation raised for op=%r", operation_key, exc_info=True)
+    else:
+        if v1_ok != v2_ok or (v1_ok and v2_ok and v1_rule != v2_rule):
+            logger.warning(
+                "Policy engine disagreement: op=%r v1=(%r, %r) v2=(%r, %r) ctx=%s",
+                operation_key, v1_ok, v1_rule, v2_ok, v2_rule, _context_fingerprint(ctx),
+            )
+
+    if get_policy_engine_version() == "v2":
+        return v2_ok, v2_rule
+    return v1_ok, v1_rule
 
 
 # Set by web/mcp_dispatch.py's McpDispatcher.call() around a single
@@ -812,7 +947,10 @@ async def gated_call(
     # one; the `finally` block below only steps in if none of them did.
     audited = False
 
-    def audit(*, decision: str, auto_accept_rule: str, pii_detected: bool, decided_at: float | None = None) -> None:
+    def audit(
+        *, decision: str, auto_accept_rule: str, pii_detected: bool, decided_at: float | None = None,
+        decided_via: str = "", batch_id: str = "",
+    ) -> None:
         nonlocal audited
         audited = True
         _audit(
@@ -822,11 +960,12 @@ async def gated_call(
             pii_categories=audit_pii_categories,
             pii_match_details=_pii_match_details_for_audit(audit_pii_matches, decision),
             claude_reason=claude_reason, decided_at=decided_at, delivery=delivery,
+            decided_via=decided_via, batch_id=batch_id,
         )
 
     try:
         evaluator = get_auto_accept_evaluator()
-        auto_ok, matched_rule = evaluator.should_auto_accept(operation_key, ctx)
+        auto_ok, matched_rule = _evaluate_auto_accept(evaluator, operation_key, ctx)
 
         if auto_ok and not pii_forces_confirmation and not upload_pii_categories:
             audit(
@@ -855,7 +994,7 @@ async def gated_call(
             # pii_forces_confirmation, not pii_categories itself, since
             # pii_already_reviewed's own carve-out (see module docstring) is
             # unaffected by anything decided in the meantime.
-            auto_ok, matched_rule = evaluator.should_auto_accept(operation_key, ctx)
+            auto_ok, matched_rule = _evaluate_auto_accept(evaluator, operation_key, ctx)
             if auto_ok and not pii_forces_confirmation:
                 audit(decision="auto_accepted", auto_accept_rule=matched_rule, pii_detected=bool(pii_categories))
                 logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
@@ -913,9 +1052,10 @@ async def gated_call(
                     d = "accept"
                 return d, ""
 
-            decision, rule_name, decided_at = await _resolve_decision(
+            decision, rule_name, decided_at, decided_via, batch_id = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="review",
-                request_id=request_id, summary=summary, tool_name=tool_name, operation_key=operation_key, ctx=ctx,
+                request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
+                operation_key=operation_key, ctx=ctx,
                 pii_forces_confirmation=pii_forces_confirmation, pii_detected=bool(pii_categories),
                 pii_categories=audit_pii_categories, claude_reason=claude_reason, interact=_interact,
             )
@@ -927,7 +1067,7 @@ async def gated_call(
             if decision == "auto_accepted":
                 audit(
                     decision="auto_accepted", auto_accept_rule=rule_name, pii_detected=bool(pii_categories),
-                    decided_at=decided_at,
+                    decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
                 )
                 logger.info(
                     "Pending approval auto-accepted after a rule changed: %s/%s rule=%r",
@@ -936,18 +1076,25 @@ async def gated_call(
                 return filtered_data
 
             if decision == "deny":
-                audit(decision="rejected", auto_accept_rule="", pii_detected=bool(pii_categories), decided_at=decided_at)
+                audit(
+                    decision="rejected", auto_accept_rule="", pii_detected=bool(pii_categories),
+                    decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
+                )
                 raise GateDeniedError("Request denied by user")
 
             if decision == "accept_all":
                 audit(
                     decision="accepted_via_accept_all", auto_accept_rule=rule_name,
                     pii_detected=bool(pii_categories), decided_at=decided_at,
+                    decided_via=decided_via, batch_id=batch_id,
                 )
                 logger.info("Always allow: created rule %r for %s", rule_name, operation_key)
                 return filtered_data
 
-            audit(decision="approved", auto_accept_rule="", pii_detected=bool(pii_categories), decided_at=decided_at)
+            audit(
+                decision="approved", auto_accept_rule="", pii_detected=bool(pii_categories), decided_at=decided_at,
+                decided_via=decided_via, batch_id=batch_id,
+            )
             return filtered_data
 
         else:
@@ -969,7 +1116,7 @@ async def gated_call(
 
             # Same race as the review branch above: a rule may already cover
             # this by the time we get here.
-            auto_ok, matched_rule = evaluator.should_auto_accept(operation_key, ctx)
+            auto_ok, matched_rule = _evaluate_auto_accept(evaluator, operation_key, ctx)
             if auto_ok and not upload_pii_categories:
                 audit(decision="auto_accepted", auto_accept_rule=matched_rule, pii_detected=False)
                 logger.info("Auto-accepted: %s/%s rule=%r", connector, tool, matched_rule)
@@ -1026,9 +1173,10 @@ async def gated_call(
                         d = "accept"
                 return d, ""
 
-            decision, rule_name, decided_at = await _resolve_decision(
+            decision, rule_name, decided_at, decided_via, batch_id = await _resolve_decision(
                 registry=registry, dedupe_key=dedupe_key, connector=connector, tool=tool, gate_kind="popup",
-                request_id=request_id, summary=summary, tool_name=tool_name, operation_key=operation_key, ctx=ctx,
+                request_id=request_id, summary=summary, tool_name=tool_name, preview=preview,
+                operation_key=operation_key, ctx=ctx,
                 pii_forces_confirmation=upload_pii_categories, pii_detected=bool(upload_pii_categories),
                 pii_categories=audit_pii_categories, claude_reason=claude_reason, interact=_interact,
             )
@@ -1040,6 +1188,7 @@ async def gated_call(
             if decision == "auto_accepted":
                 audit(
                     decision="auto_accepted", auto_accept_rule=rule_name, pii_detected=False, decided_at=decided_at,
+                    decided_via=decided_via, batch_id=batch_id,
                 )
                 return filtered_data
 
@@ -1047,6 +1196,7 @@ async def gated_call(
                 audit(
                     decision="accepted_via_accept_all", auto_accept_rule=rule_name,
                     pii_detected=bool(upload_pii_categories), decided_at=decided_at,
+                    decided_via=decided_via, batch_id=batch_id,
                 )
                 logger.info("Always allow: created rule %r for %s", rule_name, operation_key)
                 return filtered_data
@@ -1062,6 +1212,7 @@ async def gated_call(
                     audit(
                         decision="accepted_via_temp_session", auto_accept_rule="session_temp_accept",
                         pii_detected=bool(upload_pii_categories), decided_at=decided_at,
+                        decided_via=decided_via, batch_id=batch_id,
                     )
                     logger.info(
                         "Allow once (also armed 5 min grace window): op=%s file=%s (%s, %s)",
@@ -1070,13 +1221,13 @@ async def gated_call(
                 else:
                     audit(
                         decision="approved", auto_accept_rule="", pii_detected=bool(upload_pii_categories),
-                        decided_at=decided_at,
+                        decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
                     )
                 return filtered_data
 
             audit(
                 decision="rejected", auto_accept_rule="", pii_detected=bool(upload_pii_categories),
-                decided_at=decided_at,
+                decided_at=decided_at, decided_via=decided_via, batch_id=batch_id,
             )
             raise GateDeniedError("Request denied by user")
     except asyncio.CancelledError:
@@ -1301,7 +1452,7 @@ def _default_details(raw_data: Any) -> str:
 def _audit(
     *, created_at, request_id, connector, tool, tool_name, summary, sender, decision, auto_accept_rule,
     pii_detected=False, pii_categories=None, pii_match_details="", claude_reason="", decided_at=None,
-    delivery="",
+    delivery="", decided_via="", batch_id="",
 ) -> None:
     try:
         get_audit_logger().record(AuditEntry(
@@ -1332,6 +1483,12 @@ def _audit(
             decided_at=(
                 datetime.fromtimestamp(decided_at, tz=timezone.utc).isoformat() if decided_at else ""
             ),
+            # decided_via/batch_id (Phase 2 of the approval binder plan):
+            # "" unless this decision was released through the binder's
+            # batch decide endpoint -- see approvals.PendingApproval's own
+            # fields and LedgerHit's own docstring for how they get here.
+            decided_via=decided_via,
+            batch_id=batch_id,
         ))
     except Exception as exc:
         logger.warning("Audit log write failed: %s", exc)

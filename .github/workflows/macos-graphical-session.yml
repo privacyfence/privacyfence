@@ -1,0 +1,100 @@
+name: macOS graphical-session autostart
+
+# B19 (privacyfence/privacyfence#374): the third leg of the same coverage
+# linux-graphical-session.yml/windows-graphical-session.yml already give their own
+# platforms -- a real graphical-session/login-equivalent environment actually
+# starting the packaged app via the OS's own autostart mechanism, not a source-tree
+# fixture standing in for it. See tests/integration/test_macos_graphical_session_
+# autostart.py's own docstring for exactly what it proves and the one deliberate
+# substitution it makes (driving scripts/macos_privilege_separation.sh directly via
+# passwordless sudo, rather than the admin-password GUI dialog
+# maybe_auto_enable_macos() would otherwise pop -- nothing in CI can answer that).
+#
+# Deliberately its own workflow, not a step added to build.yml's build job or
+# tests.yml's per-PR jobs -- same reasoning as the Linux/Windows workflows: this is
+# the most expensive tier in this repo's whole test taxonomy by design, so it's too
+# heavy to run on every PR or sit on an actual release's critical path the way a
+# failure in build.yml's own packaged DMG smoke test (TST-15) correctly does.
+# Scheduled instead on packaging-related `main` changes, a weekly
+# cadence (an hour after windows-graphical-session.yml's own Monday slot, same
+# reasoning -- spread the heavier scheduled jobs across the runner pool), and by
+# explicit maintainer trigger.
+on:
+  push:
+    # releases/** is protected the same as main (see CLAUDE.md) and gets the same
+    # packaging-related push trigger.
+    branches: [main, "releases/**"]
+    paths:
+      - 'installer/macos/**'
+      - 'scripts/build_dmg.sh'
+      - 'scripts/macos_privilege_separation.sh'
+      - 'scripts/pyinstaller_common.py'
+      - 'PrivacyFenceApp.spec'
+      - 'src/privacyfence/privilege_separation.py'
+      - 'tests/integration/test_macos_graphical_session_autostart.py'
+      - '.github/workflows/macos-graphical-session.yml'
+  schedule:
+    - cron: '0 9 * * 1'   # weekly, Monday 09:00 UTC -- an hour after
+                           # windows-graphical-session.yml's own Monday 08:00 UTC
+                           # slot so the three heavier scheduled jobs don't contend
+                           # for the same runner pool
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  graphical-session:
+    runs-on: macos-latest   # a real, already-logged-in Aqua session -- see the
+                             # test module's own docstring for why that's what
+                             # makes this reachable in CI at all
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0   # full history + tags -- setuptools_scm needs them (see CLAUDE.md)
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: brew install create-dmg
+
+      - name: Install pinned runtime dependencies
+        # Same reasoning as build.yml's own identically-named step: install from the
+        # hash-verified lockfile first, so what PyInstaller freezes into the DMG this
+        # job builds is the audited dependency set, not just whatever the unpinned
+        # editable install below happens to resolve.
+        run: pip install --require-hashes -r requirements/runtime.lock.txt
+
+      - name: Install Python dependencies
+        run: pip install -e ".[dev,test]"
+
+      - name: Build .app and DMG
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        # Deliberately unsigned (no SIGN_IDENTITY/keychain setup, unlike build.yml's
+        # release job) -- this only ever runs the built .app directly and through
+        # launchd on this same machine, never through Gatekeeper, so a Developer ID
+        # signature proves nothing this job needs. scripts/build_dmg.sh's own
+        # --sign/NOTARIZE_PROFILE stay entirely optional for exactly this case.
+        run: bash scripts/build_dmg.sh
+
+      - name: Run macOS graphical-session/autostart test (B19)
+        run: pytest tests/integration/test_macos_graphical_session_autostart.py -v
+
+      # The now-removed automated-test-strategy-plan.md Phase 10: same tests/
+      # diagnostics.py capture as linux-graphical-session.yml/windows-graphical-
+      # session.yml's own steps -- same reasoning (a flaky/scheduled tier still
+      # needs to be diagnosable from CI, not just tellable apart from a real
+      # regression by re-running locally).
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-graphical-session-failure-diagnostics
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 30
