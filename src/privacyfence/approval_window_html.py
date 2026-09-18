@@ -172,6 +172,11 @@ def disclosure_rows_from_visibility(visibility: dict[str, str]) -> list[tuple[st
 DEFAULT_LINE_CLAMP = 2
 LINE_CLAMP_BY_LABEL = {
     "Attendees": 3,
+    # Same allowance as Attendees, for the same reason: on a read gate the
+    # participant list is the field most likely to decide the request, and
+    # at two lines a realistic thread clips with only a title tooltip
+    # behind it -- which touch has no way to reach at all.
+    "Participants": 3,
     "Description": 4,
 }
 

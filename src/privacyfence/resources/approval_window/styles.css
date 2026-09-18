@@ -431,8 +431,18 @@ img { display: block; max-width: 100%; }
    <button>s with a real disabled attribute, so nothing here needs (or
    gets) a browser-default disabled visual. */
 .pf-btn[aria-disabled="true"] { opacity: .45; pointer-events: none; cursor: default; }
-.pf-btn-primary { background: #5ba4ff; color: #fff; }
-.pf-btn-primary:hover { background: #4a8fe6; }
+/* Tokens, not a hard-coded pair. #5ba4ff/#4a8fe6 was the one colour in this
+   whole document that wasn't a token and didn't invert for dark mode --
+   and it appeared nowhere else in the design, so on a write card, where
+   the rail and every kicker are magenta, the single most consequential
+   control was a blue belonging to nothing.
+
+   --color-accent for both directions rather than each direction's own
+   accent: --color-accent-2 does double duty here as "write" *and* as the
+   risk family (the PII card's own tints), so a magenta primary would read
+   as destructive on exactly the surface where that must not be ambiguous. */
+.pf-btn-primary { background: var(--color-accent); color: #fff; }
+.pf-btn-primary:hover { background: var(--color-accent-600); }
 .pf-btn-deny {
   background: transparent; color: var(--color-danger);
   border-color: color-mix(in srgb, var(--color-danger) 45%, transparent);

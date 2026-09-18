@@ -44,6 +44,17 @@ def _reading_time_label(text: str) -> str:
 
 
 def _seen_count_text(seen_count: int) -> str:
+    """The frequency line, rendered on every card rather than only when
+    something has been seen before.
+
+    It used to be omitted entirely at ``seen_count == 0``, which made "this
+    is the first time Claude has asked for this" look identical to "this
+    kind of card doesn't carry this line" -- and absence read as the
+    latter. The frequency line is the card's main defence against
+    rubber-stamping a request that has quietly become routine, so the
+    first-time case is information, not the lack of it."""
+    if seen_count <= 0:
+        return "First time this week"
     return f"Seen {seen_count} time{'s' if seen_count != 1 else ''} this week"
 
 
@@ -124,7 +135,7 @@ def build_card_html(
         connector_icon_data_uri=approval_icons.icon_data_uri(approval_icons.connector_icon_path(connector)),
         shield_icon_data_uri=approval_icons.icon_data_uri(approval_icons.shield_icon_path()),
         is_read=is_read,
-        seen_count_text=_seen_count_text(seen_count) if seen_count > 0 else "",
+        seen_count_text=_seen_count_text(seen_count),
         preview=preview or {},
         claude_reason=claude_reason or "",
         disclosure_rows=_disclosure_rows(is_read, new_info, visibility),

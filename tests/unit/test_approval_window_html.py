@@ -58,6 +58,11 @@ class TestLineClamp:
     def test_attendees_gets_a_taller_clamp(self):
         assert line_clamp_for("Attendees") == 3
 
+    def test_participants_gets_the_same_allowance_as_attendees(self):
+        # The field most likely to decide a read gate, with only a title
+        # tooltip behind the clamp -- unreachable on touch entirely.
+        assert line_clamp_for("Participants") == 3
+
     def test_description_gets_the_tallest_clamp(self):
         assert line_clamp_for("Description") == 4
 
@@ -418,6 +423,26 @@ class TestResponsiveBreakpoint:
         # deterministic height for a native frame has nothing to buy here.
         html = build_card_stack_html(**_minimal_kwargs())
         assert ".pf-kv { flex-direction: column; gap: 2px; }" in html
+
+
+class TestPrimaryButtonIsTokenized:
+    def test_allow_once_uses_the_accent_token_not_a_hard_coded_blue(self):
+        # #5ba4ff/#4a8fe6 was the one colour in this document that wasn't a
+        # token, didn't invert for dark mode, and appeared nowhere else in
+        # the design -- on the single most consequential control.
+        html = build_card_stack_html(**_minimal_kwargs())
+        assert ".pf-btn-primary { background: var(--color-accent); color: #fff; }" in html
+        assert ".pf-btn-primary:hover { background: var(--color-accent-600); }" in html
+        # The declarations, not the bare hex: the comment above the rule
+        # names the old pair to explain why it went.
+        assert "background: #5ba4ff" not in html
+        assert "background: #4a8fe6" not in html
+
+    def test_a_write_card_does_not_recolour_it_to_the_risk_family(self):
+        # --color-accent-2 is both "write" and the PII/risk tint family
+        # here, so a magenta primary would read as destructive.
+        html = build_card_stack_html(**_minimal_kwargs(is_read=False))
+        assert ".pf-btn-primary { background: var(--color-accent); color: #fff; }" in html
 
 
 class TestTempAcceptDisclosure:

@@ -29,6 +29,13 @@ class TestSeenCountText:
     def test_plural(self):
         assert card_builder._seen_count_text(3) == "Seen 3 times this week"
 
+    def test_first_time_is_stated_rather_than_left_blank(self):
+        # An absent line is indistinguishable from a card that never
+        # carries one, so "not seen before" read as "no information" -- on
+        # the card's main guard against rubber-stamping a request that has
+        # quietly become routine.
+        assert card_builder._seen_count_text(0) == "First time this week"
+
 
 class TestDisclosureRows:
     def test_write_calls_never_get_disclosure_rows(self):
@@ -118,9 +125,9 @@ class TestBuildCardHtml:
         assert "The message body." not in html
         assert "<table" in html
 
-    def test_seen_count_zero_shows_no_caption(self):
+    def test_seen_count_zero_still_states_the_frequency(self):
         html = card_builder.build_card_html(**self._kwargs(seen_count=0))
-        assert "Seen" not in html
+        assert "First time this week" in html
 
     def test_seen_count_positive_shows_caption(self):
         html = card_builder.build_card_html(**self._kwargs(seen_count=2))
