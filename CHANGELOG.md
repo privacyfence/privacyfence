@@ -216,17 +216,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   user (`stat -f '%Su' /dev/console`, since a package script has no `$SUDO_USER` the way `sudo`
   does) rather than waiting on a later, unexplained runtime prompt — and the installer's own
   welcome/conclusion pages (`installer/macos/pkg/resources/`) say what that means and how to
-  reverse it, instead of a bare OS password dialog with no PrivacyFence-specific text at all. A
-  pkg-installed `.app` also lands root:wheel-owned by `pkgbuild`'s own default ownership, which is
-  exactly what `require_trusted_image()` (B1) wants to see without needing the codesign-verify
-  substitute proof the D1 follow-up entry above added for a drag-installed copy. Never fails the
-  package install over a privilege-separation hiccup — every failure path in the postinstall script
-  logs and exits 0, same posture `enable --auto` already takes for itself. The DMG remains the
-  primary distributable and is unaffected; the `.pkg` is an additional, fully-automated-install
-  option, covered the same two-tier way the DMG already is (`test_macos_pkg_smoke.py`, structural,
-  in `build.yml`'s release path; `test_macos_pkg_install.py`, a real `sudo installer -pkg ...
-  -target /` with no separate `enable` call, in the weekly `macos-graphical-session.yml`). See
-  issue #428.
+  reverse it, instead of a bare OS password dialog with no PrivacyFence-specific text at all. Never
+  fails the package install over a privilege-separation hiccup — every failure path in the
+  postinstall script logs and exits 0, same posture `enable --auto` already takes for itself. The
+  DMG remains the primary distributable and is unaffected; the `.pkg` is an additional,
+  fully-automated-install option, covered the same two-tier way the DMG already is
+  (`test_macos_pkg_smoke.py`, structural, in `build.yml`'s release path; `test_macos_pkg_install.py`,
+  a real `sudo installer -pkg ... -target /` with no separate `enable` call, in the weekly
+  `macos-graphical-session.yml`). See issue #428.
+- Issue #428 D2 follow-up (B1): `test_macos_pkg_install.py` — the real install above ran for the
+  first time against a real `/Applications` path and found `enable` always refused to separate
+  anything installed there. `require_trusted_image()` walks every ancestor directory up to `/`, and
+  `/Applications` itself is `root:admin drwxrwxr-x` on every real Mac — group-writable by the same
+  `admin` account the agent runs as on a typical single-user machine — so the walk always failed at
+  `/Applications` itself, regardless of how the `.app` inside it was owned. This wasn't specific to
+  the `.pkg`: the same `require_trusted_image()` call is what D1's own daemon-triggered runtime
+  prompt and a human running `enable` by hand against a real drag-installed copy both go through
+  too, so a real `/Applications` install could never actually have separated under any of the three
+  paths — the gap `docs/platform-support.md`'s "Known open items" already flagged as unverified
+  against a release build turned out to hide a real dead end, not just missing coverage.
+  `macos_privilege_separation.sh`'s `enable` now copies the image — as root, immediately, while it
+  already has the administrator authentication this command required to run at all — into a fresh
+  root:wheel-owned `TRUSTED_IMAGE_DIR` (`/Library/PrivacyFence/image`) before trusting anything, and
+  points the LaunchDaemon/LaunchAgent at the copy; `require_trusted_image()` now runs against that
+  copy, not wherever `--app`/`--daemon-exec`/`--companion-exec` originally pointed.
+  `test_macos_graphical_session_autostart.py` no longer needs its own pre-staging workaround
+  (`_stage_as_root`) to get past this check — it now hands `enable` a plain, `/tmp`-extracted,
+  user-owned copy directly, the real DMG-drag-install shape, and asserts the running daemon/companion
+  actually execute from the staged copy. One real consequence: once separated, replacing
+  `/Applications/PrivacyFenceApp.app` in place (a fresh DMG drag) no longer takes effect on its own —
+  a separated install keeps running the staged copy until `enable` is run again, which is the correct
+  cost of closing this rather than a regression to work around (auto-refreshing from an
+  already-elevated process would mean trusting `/Applications` again, silently). See issue #428.
 - Issue #428 B4: the control channel's `QUIT` command is now refused unconditionally on a
   privilege-separated install, regardless of `allow_quit`. The control socket is `0660`
   group-shared after separation so the companion can still reach it, which puts the agent in the
