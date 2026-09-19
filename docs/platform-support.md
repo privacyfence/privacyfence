@@ -327,6 +327,16 @@ separated daemon's `webbrowser.open()` has no display to reach and connector OAu
 Slack/Salesforce/Atlassian cannot show a sign-in page. It runs the companion's control channel and
 nothing else — no `pystray`, no new dependency.
 
+That channel carries one soft external requirement on Linux specifically. Enrolling a *first* passkey
+asks the companion to confirm with the human at the login session (see
+[`security-and-compliance.md`](security-and-compliance.md#enrolling-a-passkey-is-itself-gated)), and
+the companion puts that question up using **`zenity` or `kdialog`**, whichever is present — still no
+new PrivacyFence dependency, which is what decision 4's budget actually constrains, but not something
+the `.deb` can guarantee either. Every desktop environment this package targets ships one of the two;
+a headless or stripped-down install may ship neither, in which case a first enrollment is refused with
+a message naming them. macOS (`osascript`) and Windows (`MessageBoxW`) have no equivalent gap — both
+are part of the OS.
+
 Installing the `.deb` does not turn any of this on. What it adds is the tool and its two
 templates; the systemd unit and the companion autostart entry are written only by `enable`, and a
 package install or upgrade never runs it. Everything about a default install — the daemon in your

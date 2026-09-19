@@ -60,7 +60,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # just let a real, module-sized regression hide inside the aggregate, which
 # is the exact failure mode MODULE_FLOORS exists to close for the modules
 # listed below; it shouldn't reopen for everything else.
-OVERALL_FLOOR = 94.9
+OVERALL_FLOOR = 95.1
 
 # Security-critical modules get a floor of their own, on top of the overall
 # one above -- see the module docstring for why. Paths are repository-
@@ -134,8 +134,11 @@ MODULE_FLOORS: dict[str, float] = {
     # SEC-10: safe-error taxonomy at the MCP boundary.
     "src/privacyfence/safe_errors.py": 100.0,
     "src/privacyfence/web/routes_mcp.py": 100.0,
-    # CSRF/Origin/step-up auth for write approvals.
-    "src/privacyfence/web/routes_security.py": 96.0,
+    # CSRF/Origin/step-up auth for write approvals. Raised from 96.0 by
+    # Phase 0's enrollment gate and its own tests -- the largest single block
+    # of new branches this module has taken on, and the one it would be worst
+    # to let rot.
+    "src/privacyfence/web/routes_security.py": 97.0,
     "src/privacyfence/webauthn_stepup.py": 98.0,
     # #400: org mode's settings surface. It authorizes on Principal.is_admin
     # and, since C3e, rewrites the install-wide privacy/PII policy for every
@@ -152,8 +155,11 @@ MODULE_FLOORS: dict[str, float] = {
     # (tests/platform/), not by this Linux-only run, the same split
     # windows_acl.py's own floor documents above. Without a floor at all, a
     # regression in the POSIX half this CI run *does* exercise -- the
-    # peer-uid check included -- was invisible to the gate.
-    "src/privacyfence/web/control_channel.py": 61.0,
+    # peer-uid check included -- was invisible to the gate. Raised from 61.0
+    # by Phase 0's CONFIRM ENROLL command and the three platform dialogs
+    # behind it: the POSIX-reachable half of all of that is tested, so the
+    # ratchet should hold it.
+    "src/privacyfence/web/control_channel.py": 66.0,
     # _run_tray() (macOS/Windows only, guarded on sys.platform) is nearly
     # all of what's uncovered -- the tray icon this Linux-only run has
     # nothing to drive. 83.0 reflects that split honestly rather than

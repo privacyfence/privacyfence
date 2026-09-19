@@ -37,6 +37,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **Enrolling a passkey now needs proof of its own, in both deployment modes.** Removing your *last*
+  enrolled credential has always demanded a fresh assertion with it, because letting a session alone
+  un-enroll would silently turn a "mandatory" install back into an unenforced one. Adding one had
+  exactly the same effect by the shorter route and asked for nothing beyond the session cookie: a
+  local process holding a session (ADR 0002 decision 6 names three ways one is reachable by design)
+  could enroll a credential it generated itself and then satisfy every step-up check with it,
+  including on the strongest configuration PrivacyFence offers — privilege-separated,
+  `step_up.enabled`, `step_up.require_passkey` on, and the human's own hardware passkey already
+  enrolled. Approvals, and every sensitive settings change behind the same gate, were self-serve.
+  Checking harder at verification time cannot close that: registration uses `none` attestation and
+  the "user verified" flag is a bit the authenticator sets about itself, which a process that is not
+  a browser sets to 1. So `/security` gates the *enrollment* instead. With a credential already on
+  file, adding another needs a fresh assertion with one you have, through the same prompt-then-retry
+  round trip removing your last one already uses — one extra tap for a human who has a passkey, and
+  a prompt a session holding only a cookie cannot answer. With nothing on file there is nothing to
+  assert with, so local mode asks the companion app to confirm with whoever is at the login session.
+  Refusals are audited (`webauthn_enrollment_refused`), and a successful first enrollment is now
+  named as such in its own audit summary. Three limits are stated plainly in
+  [`docs/security-and-compliance.md`](docs/security-and-compliance.md) rather than left to be
+  inferred: org mode's *first* enrollment has no companion to ask and rests on the IdP session that
+  reached `/security` (which is why that document no longer claims a phished IdP session cannot
+  satisfy step-up on its own); the companion confirmation raises the cost of forging a first
+  enrollment but is not authentication of the companion, which shares an OS user with the agent and
+  cannot be told apart from it; and on Linux the confirmation needs `zenity` or `kdialog` — neither
+  is a PrivacyFence dependency, and a desktop with neither is told so by name.
 - `step_up.scope` takes a third value, `writes_and_reads`, which requires a passkey assertion before
   releasing *any* approving decision — a write, a read PII detection flagged, and a read it did not.
   The two scopes that existed before (`writes`, the default, and `writes_and_pii_reads`) both leave

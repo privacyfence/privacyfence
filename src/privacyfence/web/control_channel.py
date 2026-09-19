@@ -54,7 +54,7 @@ HTTP, via ``?bootstrap=<code>`` (``web/server.py``'s ``_BootstrapMiddleware``).
 
 Phase 3 also adds a second, independent channel running in the *opposite*
 direction: ``CompanionChannelServer`` is owned by the companion app, not the
-daemon, and speaks one command, ``OPEN <url>``, that the daemon's own
+daemon, and speaks ``OPEN <url>``, which the daemon's own
 ``oauth_loopback.py`` sends when it needs a browser opened for a connector
 OAuth flow (ADR 0002 decision 5) -- the thing #428 Phase 4 makes mandatory on
 Windows, where a service-hosted daemon runs in session 0 and cannot open a
@@ -63,6 +63,32 @@ browser in the user's desktop session itself. It reuses this module's own
 ``ControlChannelServer`` itself is built on) rather than the daemon's own
 socket/pipe -- companion and daemon each own the address they *listen* on,
 and each is a *client* of the other's.
+
+The companion channel's second command, ``CONFIRM ENROLL``, is the one place
+in this codebase where the direction of this channel is the *point* rather
+than a platform workaround. Enrolling a passkey when one is already enrolled
+can be gated on asserting with the one already there (web/routes_security.py's
+``register_options``); the *first* enrollment has nothing to assert with, and
+a local-mode ``pf_session`` is not proof of a human -- ADR 0002 decision 6
+and this module's own ``MINT`` paragraph above both say so outright. What is
+left is this process, because it is the only one that runs where a human can
+be asked: ``_confirm_first_enrollment()`` answers by putting the system's own
+dialog in front of whoever is at the login session.
+
+**What that does not make it is authentication of the companion**, and this
+module is the wrong place to pretend otherwise. ``_verify_companion_peer()``
+constrains who may *reach* this server -- on a separated install, the
+daemon's service account and nobody else -- but the address it listens on
+lives under ``handoff_dir()``, which is group-shared with the logged-in user
+by design (``paths.py``: "deliberately *not* a security boundary"), so a
+local process running as that user can bind it first and answer for itself.
+Companion and agent share a uid; ADR 0002 decision 6's "no peer check could
+tell them apart" is as true here as anywhere. What the command buys is that
+forging a first enrollment takes impersonating this process -- loud, and
+destructive to the OAuth flows that share the socket -- instead of being a
+side effect of holding a session. docs/security-and-compliance.md states that
+limit in the same terms; keep the two in agreement. See
+``request_enrollment_confirmation()`` for the daemon's own side.
 """
 from __future__ import annotations
 
@@ -70,6 +96,7 @@ import contextlib
 import hashlib
 import logging
 import socket
+import subprocess  # nosec B404  # the companion's own zenity/kdialog/osascript dialog below -- fixed argv, no shell
 import tempfile
 import threading
 import webbrowser
@@ -328,24 +355,208 @@ def _verify_companion_peer(conn: socket.socket) -> str | None:
     return None
 
 
+# ── The companion's own human-confirmation dialog ─────────────────────────── #
+#
+# What CONFIRM ENROLL puts in front of a human, and the three ways of putting
+# it there. Zero new dependencies is the constraint ADR 0002 decision 4 sets
+# for this process on every platform (and most tightly on Linux, where it
+# rules out a tray icon): these are the system's own dialogs, reached the way
+# privilege_separation.py already reaches osascript for its elevation prompt.
+#
+# The text is fixed here, never taken from the request line. The only caller
+# on a separated install is the daemon (_verify_companion_peer), but a fixed
+# string is also what keeps this from being a way to put arbitrary words in a
+# PrivacyFence-branded dialog on a pre-separation install, where the caller is
+# still "anything running as this OS user" -- the same reasoning OPEN's own
+# scheme restriction above gives.
+_CONFIRM_TITLE = "PrivacyFence"
+_CONFIRM_ENROLL_PROMPT = (
+    "Allow a new passkey to be enrolled for PrivacyFence?\n\n"
+    "This is the first passkey on this install, so it will become what "
+    "approving a gated write requires.\n\n"
+    "If you did not just click \u201cAdd a passkey\u201d on the PrivacyFence "
+    "security page yourself, choose Deny."
+)
+_CONFIRM_ALLOW_LABEL = "Allow"
+_CONFIRM_DENY_LABEL = "Deny"
+
+# How long the dialog is left up. Deliberately shorter than the ~5 minutes a
+# WebAuthn registration challenge lives (webauthn_stepup.py's own
+# _REGISTRATION_CHALLENGE_TTL_SECONDS): a human who is at the keyboard answers
+# in seconds, and this handler runs on _LineProtocolServer's single accept
+# loop, so for as long as it is up this process is not answering OPEN either.
+# Colliding with a connector OAuth flow means starting one *while* confirming
+# a first passkey, which is not a real workflow -- but it is why this is not
+# five minutes.
+CONFIRM_DIALOG_TIMEOUT_SECONDS = 90
+
+# Absolute paths, not shutil.which() lookups, and for a stronger reason than
+# the bandit B607 one privilege_separation.py's own _OSASCRIPT cites: this
+# process runs as the logged-in user, which is the same account the agent runs
+# as, so PATH is something the adversary this dialog exists to stop can write.
+# A which("zenity") would let it ship a "zenity" that answers Allow.
+_OSASCRIPT = "/usr/bin/osascript"
+_LINUX_DIALOG_COMMANDS = (
+    # (argv-prefix, the argv that asks our own question). zenity ships with
+    # GNOME, kdialog with KDE; both exit 0 for yes and nonzero for no/closed,
+    # which is the whole contract needed here.
+    ("/usr/bin/zenity", lambda prompt: [
+        "/usr/bin/zenity", "--question", "--no-markup", f"--title={_CONFIRM_TITLE}",
+        f"--text={prompt}", f"--ok-label={_CONFIRM_ALLOW_LABEL}", f"--cancel-label={_CONFIRM_DENY_LABEL}",
+    ]),
+    ("/usr/bin/kdialog", lambda prompt: [
+        "/usr/bin/kdialog", f"--title={_CONFIRM_TITLE}", "--warningyesno", prompt,
+        f"--yes-label={_CONFIRM_ALLOW_LABEL}", f"--no-label={_CONFIRM_DENY_LABEL}",
+    ]),
+)
+
+
+def _applescript_quoted(text: str) -> str:
+    """Escape ``text`` for a double-quoted AppleScript string literal. Kept
+    here rather than imported from privilege_separation.py's own namesake so
+    this module's dialog does not depend on that one's shell-command-building
+    neighbours -- and because it has to handle one thing that one never sees:
+    a **newline**. That function's input is a shell command, which has none;
+    this one's is a multi-paragraph prompt, and a raw newline inside an
+    AppleScript string literal is a syntax error rather than a line break, so
+    it becomes AppleScript's own ``\\n`` escape (which the language does
+    support). Backslashes are escaped first, or that escape would itself be
+    escaped."""
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + escaped.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n") + '"'
+
+
+def _confirm_macos(prompt: str, *, timeout: float) -> bool:
+    script = (
+        f"display dialog {_applescript_quoted(prompt)} "
+        f"buttons {{{_applescript_quoted(_CONFIRM_DENY_LABEL)}, {_applescript_quoted(_CONFIRM_ALLOW_LABEL)}}} "
+        f"default button {_applescript_quoted(_CONFIRM_DENY_LABEL)} "
+        f"cancel button {_applescript_quoted(_CONFIRM_DENY_LABEL)} "
+        f"with title {_applescript_quoted(_CONFIRM_TITLE)} with icon caution"
+    )
+    result = subprocess.run(  # nosec B603  # fixed argv, no shell; `prompt` is this module's own constant
+        [_OSASCRIPT, "-e", script],
+        capture_output=True, text=True, timeout=timeout, check=False,
+    )
+    # "Deny" is both the default and the cancel button, so a dismissed dialog
+    # (osascript exits 1) and an explicit Deny land in the same place, which
+    # is the safe one.
+    return result.returncode == 0 and _CONFIRM_ALLOW_LABEL in result.stdout
+
+
+def _confirm_windows(prompt: str, *, timeout: float) -> bool:  # noqa: ARG001 -- MessageBoxW has no timeout
+    """``MessageBoxW`` blocks until the human answers and takes no timeout,
+    so ``timeout`` is accepted (for one signature across platforms) and
+    unused -- the daemon-side timeout in ``request_enrollment_confirmation``
+    is what bounds the wait for the caller either way."""
+    import ctypes
+
+    mb_yesno = 0x4
+    mb_iconwarning = 0x30
+    mb_defbutton2 = 0x100  # "No" is the default, same posture as macOS above
+    mb_setforeground = 0x10000
+    id_yes = 6
+    answer = ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined]  # Windows-only
+        0, prompt, _CONFIRM_TITLE, mb_yesno | mb_iconwarning | mb_defbutton2 | mb_setforeground,
+    )
+    return answer == id_yes
+
+
+class _NoDialogAvailable(Exception):
+    """Raised by ``_confirm_linux`` when this desktop has neither zenity nor
+    kdialog -- see its own docstring for why that is not a refusal."""
+
+
+def _confirm_linux(prompt: str, *, timeout: float) -> bool:
+    """zenity or kdialog, whichever this desktop has. Neither is a
+    PrivacyFence dependency (ADR 0002 decision 4's Linux budget) and neither
+    is guaranteed present, so "no dialog program" is a distinct outcome from
+    "the human said no" -- it raises, and the caller turns that into a reply
+    naming the fix rather than a silent refusal the human cannot act on."""
+    for executable, argv_for in _LINUX_DIALOG_COMMANDS:
+        if not Path(executable).exists():
+            continue
+        result = subprocess.run(  # nosec B603  # fixed argv, no shell; `prompt` is this module's own constant
+            argv_for(prompt), capture_output=True, text=True, timeout=timeout, check=False,
+        )
+        return result.returncode == 0
+    raise _NoDialogAvailable(
+        "no dialog program found -- install zenity or kdialog so PrivacyFence can ask "
+        "before a first passkey is enrolled"
+    )
+
+
+def _confirm_first_enrollment() -> str:
+    """``CONFIRM ENROLL``'s actual work: put this module's own fixed prompt
+    in front of whoever is at this login session, and answer with the line
+    the daemon reads back. Returns an ``OK``/``ERROR`` line rather than a
+    bool so the "could not ask" cases stay distinguishable from "asked, and
+    the answer was no" -- web/routes_security.py surfaces the reason
+    verbatim on ``/security``, which is where somebody who cannot enroll is
+    already standing.
+
+    Any refusal, for any reason, is the safe answer: this gate exists
+    because a first passkey has nothing to assert against, so failing it
+    closed costs an enrollment and failing it open costs the guarantee.
+    """
+    platform = privilege_separation.current_platform()
+    if platform == "darwin":
+        confirm = _confirm_macos
+    elif platform == "win32":
+        confirm = _confirm_windows
+    else:
+        confirm = _confirm_linux
+    try:
+        allowed = confirm(_CONFIRM_ENROLL_PROMPT, timeout=CONFIRM_DIALOG_TIMEOUT_SECONDS)
+    except _NoDialogAvailable as exc:
+        logger.warning("Companion could not ask about a first passkey enrollment: %s", exc)
+        return f"ERROR {exc}\n"
+    except subprocess.TimeoutExpired:
+        logger.warning("Nobody answered the first-passkey enrollment dialog within %ss.",
+                       CONFIRM_DIALOG_TIMEOUT_SECONDS)
+        return "ERROR nobody answered the confirmation dialog -- try again\n"
+    except Exception:
+        # Anything else -- a missing osascript, a desktop with no display, a
+        # ctypes failure on Windows -- is "could not ask", which is a refusal.
+        logger.exception("Companion could not show the first-passkey enrollment dialog")
+        return "ERROR could not ask for confirmation on this desktop\n"
+    if not allowed:
+        logger.warning("A first-passkey enrollment was denied at the confirmation dialog.")
+        return "ERROR enrollment was denied\n"
+    return "OK\n"
+
+
 def _handle_companion_request(line: str) -> str:
-    """The companion channel's own dispatch -- one command, ``OPEN <url>``,
-    sent by the daemon (``request_open_url()`` below) and acted on here, in
-    the companion process, which is the one thing in this architecture that
+    """The companion channel's own dispatch -- ``OPEN <url>`` and
+    ``CONFIRM ENROLL``, both sent by the daemon (``request_open_url()``/
+    ``request_enrollment_confirmation()`` below) and acted on here, in the
+    companion process, which is the one thing in this architecture that
     still runs in the user's desktop session once #428 Phase 4 moves the
-    daemon to a service account. Scheme-restricted to http(s): pre-Phase-4,
-    or on a Phase-4 install this dispatch is even reached from at all (see
+    daemon to a service account.
+
+    ``OPEN`` is scheme-restricted to http(s) and ``CONFIRM``'s prompt is a
+    constant of this module for the same single reason: pre-Phase-4, or on a
+    Phase-4 install this dispatch is even reached from at all (see
     ``_verify_companion_peer()`` -- #428 B10 -- for who that is once
     separated), the caller is at minimum "anything running as the same OS
     user" (companion and daemon are still the same uid pre-Phase-4, agent
-    included -- ADR 0002 decision 1), so it's worth not handing that caller
-    a way to open an arbitrary ``file://``/custom-scheme URL for the one
-    capability this process trades away nothing else to gain."""
+    included -- ADR 0002 decision 1), so neither command hands that caller
+    an arbitrary ``file://``/custom-scheme URL to open, nor arbitrary words
+    to put in a PrivacyFence-branded dialog.
+    """
     parts = line.strip().split(maxsplit=1)
     command = parts[0].upper() if parts else ""
-    if command != "OPEN" or len(parts) != 2:
+    argument = parts[1].strip() if len(parts) == 2 else ""
+    if command == "CONFIRM":
+        # One subject, spelled out rather than implied by a bare CONFIRM:
+        # a later one is a new keyword here, never a change of meaning for
+        # a line an older daemon already sends.
+        if argument.upper() != "ENROLL":
+            return "ERROR unknown command\n"
+        return _confirm_first_enrollment()
+    if command != "OPEN" or not argument:
         return "ERROR unknown command\n"
-    url = parts[1].strip()
+    url = argument
     if urlsplit(url).scheme.lower() not in ("http", "https"):
         return "ERROR unsupported scheme\n"
     try:
@@ -867,8 +1078,56 @@ def request_open_url(url: str, *, timeout: float = 2.0) -> bool:
     return reply.startswith("OK")
 
 
+def request_enrollment_confirmation(
+    *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0,
+) -> tuple[bool, str]:
+    """Ask a running companion to confirm a *first* passkey enrollment with
+    the human at its own login session -- the daemon-side half of
+    ``_confirm_first_enrollment()`` above, and the mirror image of
+    ``request_open_url()``: same channel, same client plumbing, opposite
+    meaning for a missing companion.
+
+    Returns ``(confirmed, reason)``. ``confirmed`` is True only for an
+    explicit ``OK`` from a companion that actually asked somebody;
+    ``reason`` is a short, human-facing phrase for every other case, which
+    web/routes_security.py puts in front of whoever is trying to enroll.
+    Unlike ``request_open_url()``, "no companion is running right now" is
+    **not** a soft failure to fall back from -- there is no local fallback
+    that would mean anything, since the thing being established is that a
+    human and not this machine's agent asked for this. It is a refusal with
+    an actionable reason, and the reason names starting the companion.
+
+    ``timeout`` sits just past the companion's own dialog timeout, so the
+    ordinary "nobody was at the keyboard" case is reported by the process
+    that actually knows it (``_confirm_first_enrollment``) rather than
+    guessed at from a socket timing out here.
+    """
+    try:
+        if paths.is_windows():
+            reply = send_line_windows(companion_pipe_name(), "CONFIRM ENROLL\n", timeout=timeout)
+        else:
+            reply = send_line_posix(companion_socket_path(), "CONFIRM ENROLL\n", timeout=timeout)
+    except (OSError, ControlChannelError) as exc:
+        logger.warning("Could not reach the companion to confirm a first passkey enrollment: %s", exc)
+        return False, (
+            "PrivacyFence could not reach its companion app, which is what asks you to confirm "
+            "a first passkey. Start PrivacyFence's companion (the menu-bar/tray icon, or the "
+            "PrivacyFence entry in your applications menu) and try again."
+        )
+    if reply.startswith("OK"):
+        return True, ""
+    # The companion's own ERROR line already says why in words meant for a
+    # human -- passed through rather than restated, so a new reason there
+    # needs no matching change here.
+    reason = reply.strip()
+    if reason.upper().startswith("ERROR"):
+        reason = reason[len("ERROR"):].strip()
+    return False, reason or "the companion did not confirm this enrollment"
+
+
 __all__ = [
     "COMPANION_SOCKET_FILE_NAME",
+    "CONFIRM_DIALOG_TIMEOUT_SECONDS",
     "SOCKET_FILE_NAME",
     "WEB_BASE_URL_FILE_NAME",
     "CompanionChannelServer",
@@ -882,6 +1141,7 @@ __all__ = [
     "pipe_name_for",
     "posix_socket_path",
     "read_base_url",
+    "request_enrollment_confirmation",
     "request_open_url",
     "request_quit",
     "send_line_posix",

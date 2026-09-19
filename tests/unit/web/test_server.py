@@ -957,3 +957,111 @@ class TestWebServerWiresTheStateStream:
         monkeypatch.setattr(ss, "_loop", None)  # no real loop running in this test
         sc.call_on_main(lambda x: recorded.append(x), "hi")
         assert recorded == ["hi"]  # falls back to running inline with no loop captured yet
+
+
+class TestConfirmFirstPasskeyEnrollment:
+    """the enrollment gate: local mode's own
+    ``confirm_first_enrollment``, which web/routes_security.py calls when an
+    enrollment has no already-enrolled credential to be gated on asserting
+    with. Two behaviors live here and nowhere else -- that the ask goes to the
+    companion, and that the one bypass is the developer escape hatch ADR 0003
+    decision 7 already names, on a non-packaged build only.
+    """
+
+    def _server_module(self):
+        from privacyfence.web import server as srv
+
+        return srv
+
+    def test_it_asks_the_companion(self, monkeypatch):
+        from privacyfence import paths, privilege_separation
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
+        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (True, ""))
+
+        assert srv.confirm_first_passkey_enrollment() == (True, "")
+
+    def test_a_refusal_from_the_companion_is_passed_through(self, monkeypatch):
+        from privacyfence import paths, privilege_separation
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
+        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (False, "start the companion"))
+
+        assert srv.confirm_first_passkey_enrollment() == (False, "start the companion")
+
+    def test_a_refusal_on_a_source_checkout_also_names_the_developer_paths(self, monkeypatch):
+        # A checkout autostarts no companion, so "start the companion" is not
+        # the whole answer there -- and a packaged install must never be told
+        # about a variable it does not honor (the test above).
+        from privacyfence import paths, privilege_separation
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
+        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (False, "no companion"))
+
+        _confirmed, reason = srv.confirm_first_passkey_enrollment()
+
+        assert reason.startswith("no companion")
+        assert "privacyfence-companion --serve" in reason
+        assert privilege_separation.DEV_ALLOW_UNSEPARATED_ENV in reason
+
+    def test_the_dev_escape_hatch_skips_the_companion_on_a_non_packaged_build(self, monkeypatch):
+        from privacyfence import paths, privilege_separation
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
+        asked = []
+        monkeypatch.setattr(
+            srv, "request_enrollment_confirmation", lambda: asked.append(1) or (False, "no"),
+        )
+
+        assert srv.confirm_first_passkey_enrollment() == (True, "")
+        assert asked == []
+
+    def test_the_dev_escape_hatch_is_ignored_on_a_packaged_build(self, monkeypatch):
+        # The whole reason is_bundled() is checked first: a packaged install
+        # always has a companion autostarted for it (ADR 0003 decisions 3-5),
+        # so honoring an environment variable there would hand a real shipped
+        # product a way around its own gate.
+        from privacyfence import paths, privilege_separation
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
+        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (False, "companion said no"))
+
+        assert srv.confirm_first_passkey_enrollment() == (False, "companion said no")
+
+
+class TestLocalModeWiresTheFirstEnrollmentGate:
+    def test_build_app_passes_the_companion_confirmation_to_security_routes(self, tmp_path, monkeypatch):
+        """The wiring itself, since nothing else would notice it going
+        missing: ``/security``'s own tests construct their routes directly
+        (tests/unit/web/test_routes_security.py's ``_local_app``), so this is
+        the only place that checks local mode's real ``build_app`` hands the
+        gate over."""
+        from privacyfence import paths
+        from privacyfence.step_up_config import StepUpConfig
+        from privacyfence.web import routes_security, server as srv
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        passed = {}
+        real_build_routes = routes_security.build_routes
+
+        def _spy(**kwargs):
+            passed.update(kwargs)
+            return real_build_routes(**kwargs)
+
+        monkeypatch.setattr(routes_security, "build_routes", _spy)
+        srv.build_app(
+            WebApprovalUI(), sessions=LocalSessionStore(),
+            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
+        )
+
+        assert passed["confirm_first_enrollment"] is srv.confirm_first_passkey_enrollment

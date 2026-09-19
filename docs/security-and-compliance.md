@@ -140,20 +140,102 @@ rather than let through; the same is true for a sensitive subset of the local se
 the rule-row, grant, policy and PII actions in `web/routes_settings.py`'s own `_SENSITIVE_ACTIONS`
 -- so an agent that cannot forge an approval cannot route around the gate by adding an always-allow
 rule or a broader grant either, since that action itself now demands the same fresh assertion; and
-removing your last enrolled credential always needs one first, regardless of this flag, so a session
-alone cannot un-enroll its way back to the unguarded state. If nothing is enrolled when the daemon
+the credential store's own two directions are gated regardless of this flag, so a session alone can
+neither un-enroll its way back to the unguarded state (removing your last credential needs an
+assertion with it) nor enroll its way past it (adding one needs an assertion with a credential
+already on file, or — for the first — the companion's own confirmation; see
+[Enrolling a passkey is itself gated](#enrolling-a-passkey-is-itself-gated)).
+If nothing is enrolled when the daemon
 starts with `require_passkey` on, it still starts (refusing to boot would remove the one path,
 `/security`, that fixes the misconfiguration) but shows a persistent banner on every page until a
 passkey is added, and releases nothing in the meantime. Treat local-mode step-up as a real guarantee
 once `require_passkey` is on and a passkey is enrolled; with `enabled` alone it stays what it always
 was -- opt-in, evadable by simply not enrolling.
 
+### Enrolling a passkey is itself gated
+
+Both directions of the credential store are gated, and for one reason. Removing your *last* enrolled
+credential requires a fresh assertion with it, because a session that could un-enroll on its own would
+silently turn a "mandatory" install back into an unenforced one. **Adding** a credential has exactly
+the same effect by the shorter route — a session that can enroll a credential it generated itself can
+then satisfy every step-up check with it — so adding is gated too.
+
+Checking harder at verification time cannot substitute for this. Registration uses `none` attestation,
+so there is no signed claim about the authenticator's make or model; the user-verified flag
+`require_user_verification=True` checks is a bit the authenticator sets about *itself*, which a real
+platform authenticator sets after a biometric or a PIN and a process that is not one sets to 1,
+because nothing signs the absence of a human; and `authenticator_attachment=platform` and
+`exclude_credentials` are enforced by a cooperating browser and by nothing else. See
+`webauthn_stepup.py`'s own "five things" list, which states each of these where a reader of that
+module will find it.
+
+So `web/routes_security.py`'s `register_options` gates the ceremony **before it starts**, in whichever
+of two ways the credential store's own state allows:
+
+- **A credential is already enrolled** — the gate is a fresh assertion with one of them, over a
+  challenge bound to `enroll-credential|<principal>`, through the same `428`-then-retry round trip
+  removing your last credential and releasing a gated write already use. A human who has a passkey
+  needs one extra tap to add another; a session that has only a cookie gets a `428` it cannot answer.
+  **Identical in both modes** — an org-mode IdP session gets no more latitude here than a local
+  `pf_session`.
+- **Nothing is enrolled yet** — there is nothing to assert with, so the gate is a confirmation from
+  the [companion app](#privilege-separation-macos-linux-and-windows), which
+  [ADR 0003](adr/0003-separated-installs-only.md) decisions 3–5 guarantee is installed and started on
+  all three shipped platforms. The daemon asks over `web/control_channel.py`'s `CONFIRM ENROLL`, and
+  the companion puts the system's own dialog in front of whoever is at the login session — the only
+  PrivacyFence process that runs where a human can be asked at all. A refusal for any reason (denied,
+  nobody answered, no companion running) is a refusal: failing this gate closed costs an enrollment,
+  failing it open costs the guarantee.
+
+`register_verify` does not re-run either gate — that would mean two prompts for one enrollment — but
+it does refuse to complete a registration challenge that was not issued by an `options` call which
+passed one, so a code path that skips the gate fails closed rather than quietly reopening the hole.
+
+Refusals are audited as `webauthn_enrollment_refused`; a `428` asking for the assertion is not, since
+it is an ordinary round trip in every legitimate second enrollment. A successful *first* enrollment
+says so in its own summary ("First passkey enrolled: …"), because it is both the one no
+already-enrolled credential could have gated and the one that decides what every later step-up check
+is satisfied by — the entry to look for by eye.
+
+**What the companion confirmation is, and is not.** Be exact about this, because the temptation is to
+describe it as authentication and it is not: the companion and the agent run as the *same OS user*, so
+no peer check, file permission or shared secret can distinguish them —
+[ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 says so outright, and
+this gate does not repeal it. `handoff/` is group-shared with that user by design, so a determined
+local process can bind the companion's own socket before (or instead of) the real companion and answer
+`CONFIRM ENROLL` itself. What the gate buys is that **forging a first enrollment requires
+impersonating a system component rather than calling an API**: the attempt is loud (it must take over
+a socket the companion also wants, breaking the connector OAuth flows that share it), it is visible in
+the audit trail either way, and it is not a side effect of merely holding a session — which is what
+made the ungated version reachable by anything at all. Distinguishing a human's session from the
+agent's is the change that would close it, and that is a different change from this one: the daemon
+has to be able to tell which holder of a session is asking.
+
+Limits, stated rather than implied:
+
+- **Org mode's first enrollment is not gated**, because that mode has no companion. See
+  [Org mode](#org-mode) below for what it rests on instead.
+- **On Linux the confirmation needs `zenity` or `kdialog`.** Neither is a PrivacyFence dependency
+  (ADR 0002 decision 4's dependency budget for the companion), so on a desktop with neither, a first
+  enrollment is refused with a message naming them. Every PrivacyFence-supported Linux desktop ships
+  one or the other; a stripped-down install may not.
+- **A non-packaged build can bypass the first-enrollment gate** with
+  `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1`, the same escape hatch ADR 0003 decision 7 gives the
+  developer path and `step_up_config.py` honors for `require_passkey`. It is not consulted at all on a
+  packaged build, which always has a companion.
+- **A ceremony a human has already opened is theirs to lose.** The gate is on *starting* an
+  enrollment, and the session is shared, so a local process watching for the moment a human answers
+  the prompt can complete that one already-authorized ceremony with a credential of its own instead.
+  It needs the human to be mid-enrollment to get anything, which makes it a narrow residual — but a
+  residual, and closing it needs the same session-provenance change as the paragraph above.
+
 ### Tamper-evidence and recovery for local-mode step-up (#426 Phase 4)
 
-Four events on the credential-store/requirement lifecycle are written to the audit log, each on its
+Five events on the credential-store/requirement lifecycle are written to the audit log, each on its
 own `decision` value (see `audit_log.py`'s own field docstring for the exact strings): enrolling a
-passkey, removing one, a recovery code being spent, and the `step_up.require_passkey` requirement
-itself turning on or off. None of these prevent anything on their own — see the framing in [What #426
+passkey, removing one, an enrollment being *refused* by the gate above
+(`webauthn_enrollment_refused`), a recovery code being spent, and the `step_up.require_passkey`
+requirement itself turning on or off. None of these prevent anything on their own — see the framing in [What #426
 does and doesn't guarantee](#local-mode-trust-boundary) above: they are detection after the fact,
 recording that a change happened rather than stopping one that shouldn't have — see [Local-mode
 trust boundary](#local-mode-trust-boundary) above for what this feature does and does not guarantee
@@ -430,7 +512,14 @@ The local `/mcp` endpoint uses the generated bearer token stored in the user's P
 
 Org mode authenticates human users through the configured OIDC provider and applies PrivacyFence's org authorization/session model to MCP and web traffic. Principal identity is carried explicitly through request handling and user-scoped storage/connector resolution.
 
-Where configured, WebAuthn step-up is used for sensitive org-mode approval actions. Credential enrollment and lookup are scoped to the authenticated principal. By default, step-up accepts either a passkey assertion or a fresh IdP re-authentication; `step_up.require_passkey` ([#406](https://github.com/privacyfence/privacyfence/issues/406)) closes the IdP-reauth path for organizations that want hardware-bound WebAuthn as a hard requirement — a compromised or phished IdP session can no longer satisfy step-up on its own, and a principal with no enrolled passkey is hard-failed toward enrollment rather than silently allowed through the weaker path.
+Where configured, WebAuthn step-up is used for sensitive org-mode approval actions. Credential enrollment and lookup are scoped to the authenticated principal. By default, step-up accepts either a passkey assertion or a fresh IdP re-authentication; `step_up.require_passkey` ([#406](https://github.com/privacyfence/privacyfence/issues/406)) closes the IdP-reauth path for organizations that want hardware-bound WebAuthn as a hard requirement, and a principal with no enrolled passkey is hard-failed toward enrollment rather than silently allowed through the weaker path.
+
+**What that flag buys against a stolen IdP session depends on whether the principal has enrolled yet**, and it is worth being precise rather than claiming a phished session can never satisfy step-up:
+
+- **Once a passkey is enrolled**, a session alone satisfies nothing: an approving decision needs an assertion from an enrolled credential, and a session can neither produce one nor add a credential to assert with — adding one demands an assertion from a credential already on file, exactly as removing the last one does (see [Enrolling a passkey is itself gated](#enrolling-a-passkey-is-itself-gated); org mode is gated identically).
+- **Before the principal's first enrollment**, the session is enough. A session that reaches `/security` with nothing enrolled can enroll, and a WebAuthn registration this product accepts carries no proof that a human or a genuine authenticator produced it (`none` attestation; the user-verified bit is a claim the authenticator makes about itself — see `webauthn_stepup.py`'s own "five things" list). Local mode gates that with a companion-issued confirmation; org mode has no companion, and the session that got there is at least an external authentication against the IdP rather than a locally minted cookie, so **the first enrollment rests on the IdP session** and `require_passkey` inherits whatever that session is worth.
+
+The operational consequence, for an organization that wants the stronger reading: get every principal enrolled before treating `require_passkey` as a barrier against a stolen session, and treat an unexpected `webauthn_credential_enrolled` audit entry for a principal who had nothing on file as the event it is. Both `webauthn_credential_enrolled` and `webauthn_enrollment_refused` are audited in org mode on the same routes as in local mode.
 
 ## Authorization and principal isolation
 

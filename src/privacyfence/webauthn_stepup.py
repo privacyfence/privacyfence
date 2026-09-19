@@ -29,10 +29,24 @@ resolves *who* (``Principal``) and *what RP*
 Five things from §10.6 this module exists to get right, not just the happy
 path:
 
-- **User verification is checked, not just the signature.**
-  ``require_user_verification=True`` on both verify calls -- a credential
-  that only proved *presence* (no biometric/PIN) is rejected outright, not
-  silently accepted as "good enough".
+- **User verification is checked, not just the signature -- against a
+  cooperating authenticator.** ``require_user_verification=True`` on both
+  verify calls, so a credential that reports having proved only *presence*
+  (no biometric/PIN) is rejected outright rather than silently accepted as
+  "good enough". What that check reads is the ``UV`` bit in the
+  authenticator's own ``authData``, which is a claim the authenticator
+  makes about itself: a real platform authenticator sets it only after a
+  biometric or PIN, and a process that is not one sets it to 1 because
+  nothing signs the *absence* of a human. Registration here uses ``none``
+  attestation (below), so there is also no attestation statement tying the
+  key to a genuine authenticator model to fall back on. Treat this flag as
+  "this authenticator says a human was verified", not as proof that one
+  was -- exactly the same client-side-enforced posture as platform
+  attachment below, and for the same structural reason. The control that
+  makes it *mean* something against a local adversary is not this flag but
+  the enrollment gate (web/routes_security.py's ``register_options``): a
+  key nothing attests to is only as good as the proof demanded before it
+  got into the store in the first place.
 - **Platform attachment is requested, not (and cannot be) cryptographically
   enforced.** ``authenticatorSelection.authenticator_attachment=platform``
   at registration time is what stops a compliant browser from offering a
@@ -40,7 +54,10 @@ path:
   carries no attachment claim to re-verify server-side after the fact (the
   browser-reported ``authenticatorAttachment`` field on the credential is
   informational only), so this is real but client-side-enforced, the same
-  posture every RP using this mechanism has.
+  posture every RP using this mechanism has. ``exclude_credentials`` (below,
+  from ``list_credentials``) is client-side-enforced in the same way and
+  worth naming as such: it stops a *browser* offering to re-enroll an
+  authenticator this principal already has, and stops nothing else.
 - **The RP ID must be a real registrable domain.** D1 (§15) already pins
   local mode's own dev server to ``localhost`` for exactly this reason;
   ``StepUpConfig.rp_id`` here is org mode's own version of that constraint
@@ -239,29 +256,42 @@ def _update_sign_count(principal: Principal, credential_id: str, new_count: int)
 @dataclass
 class _PendingRegistration:
     challenge: bytes
+    authorized: bool = False
     created_at: float = field(default_factory=time.time)
 
 
 class RegistrationChallengeStore:
     """One in-flight enrollment ceremony per principal at a time -- same
     "a daemon restart invalidates it, start over" posture as web/
-    routes_connect.py's own _TelegramAuthStore."""
+    routes_connect.py's own _TelegramAuthStore.
+
+    ``authorized`` is how the
+    two halves of a gated enrollment stay one ceremony: web/
+    routes_security.py's ``register_options`` is where the gate actually
+    runs -- a fresh assertion when this principal already has a credential,
+    a companion confirmation when it has none -- and it records the verdict
+    here, on the challenge it just issued, so ``register_verify`` can check
+    that the ceremony it is being asked to complete is the one that passed
+    rather than re-deciding (and re-prompting) for itself. ``pop`` returns
+    the whole entry for that reason, the same shape ``StepUpChallengeStore.
+    pop`` already returns for the decide-time ceremony.
+    """
 
     def __init__(self, ttl: float = _REGISTRATION_CHALLENGE_TTL_SECONDS) -> None:
         self._ttl = ttl
         self._lock = threading.Lock()
         self._pending: dict[str, _PendingRegistration] = {}
 
-    def put(self, principal_id: str, challenge: bytes) -> None:
+    def put(self, principal_id: str, challenge: bytes, *, authorized: bool = False) -> None:
         with self._lock:
-            self._pending[principal_id] = _PendingRegistration(challenge=challenge)
+            self._pending[principal_id] = _PendingRegistration(challenge=challenge, authorized=authorized)
 
-    def pop(self, principal_id: str) -> bytes | None:
+    def pop(self, principal_id: str) -> _PendingRegistration | None:
         with self._lock:
             entry = self._pending.pop(principal_id, None)
         if entry is None or (time.time() - entry.created_at) > self._ttl:
             return None
-        return entry.challenge
+        return entry
 
 
 def begin_registration(principal: Principal, *, rp_id: str, rp_name: str) -> tuple[str, bytes]:

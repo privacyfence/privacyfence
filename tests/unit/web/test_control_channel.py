@@ -287,6 +287,233 @@ class TestCompanionChannelServer:
         assert cc.posix_socket_path() != cc.companion_socket_path()
 
 
+class TestConfirmEnrollCommand:
+    """the enrollment gate: the companion channel's
+    second command, and the only gate a *first* passkey enrollment can have
+    -- there is no enrolled credential to assert with, and a local-mode
+    session is not proof of a human (ADR 0002 decision 6). See this module's
+    own docstring on why the answer has to come from this process.
+
+    The dialog itself is the one part not exercised here: it is three
+    platform-specific system dialogs, and this suite runs headless on Linux
+    CI. What is exercised is everything around it -- the command's own
+    dispatch, that a refusal in any form stays a refusal, and that the
+    daemon-side client turns each reply into the right ``(confirmed, reason)``
+    pair.
+    """
+
+    def _server(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        server = cc.CompanionChannelServer()
+        server.start()
+        return server
+
+    def test_an_allowed_dialog_answers_ok(self, tmp_path, monkeypatch):
+        asked = []
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: asked.append(prompt) or True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="CONFIRM ENROLL\n").startswith("OK")
+        finally:
+            server.stop()
+        # The prompt is this module's own constant, never taken from the
+        # request line -- see _handle_companion_request's own docstring.
+        assert asked == [cc._CONFIRM_ENROLL_PROMPT]
+
+    def test_a_denied_dialog_answers_error(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="CONFIRM ENROLL\n")
+        finally:
+            server.stop()
+        assert reply.startswith("ERROR")
+        assert "denied" in reply
+
+    def test_a_desktop_with_no_dialog_program_is_a_refusal_naming_the_fix(self, monkeypatch):
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "_LINUX_DIALOG_COMMANDS", ())
+
+        reply = cc._confirm_first_enrollment()
+
+        assert reply.startswith("ERROR")
+        # Not just "no": a human who cannot enroll has to be able to act on
+        # the reason, and routes_security.py shows this line verbatim.
+        assert "zenity" in reply and "kdialog" in reply
+
+    def test_nobody_answering_is_a_refusal_that_says_to_try_again(self, monkeypatch):
+        import subprocess
+
+        def _times_out(prompt, *, timeout):
+            raise subprocess.TimeoutExpired(cmd="zenity", timeout=timeout)
+
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "_confirm_linux", _times_out)
+
+        reply = cc._confirm_first_enrollment()
+
+        assert reply.startswith("ERROR")
+        assert "try again" in reply
+
+    def test_a_dialog_that_cannot_run_at_all_is_a_refusal(self, monkeypatch):
+        def _explodes(prompt, *, timeout):
+            raise OSError("no display")
+
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "_confirm_linux", _explodes)
+
+        assert cc._confirm_first_enrollment().startswith("ERROR")
+
+    def test_each_platform_gets_its_own_dialog(self, monkeypatch):
+        called = []
+        for name in ("_confirm_macos", "_confirm_windows", "_confirm_linux"):
+            monkeypatch.setattr(cc, name, lambda prompt, *, timeout, _n=name: called.append(_n) or True)
+        for platform in ("darwin", "win32", "linux", "freebsd"):
+            monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda _p=platform: _p)
+            assert cc._confirm_first_enrollment() == "OK\n"
+        # Anything that is not macOS or Windows takes the POSIX dialog path,
+        # same fallthrough privilege_separation.py's own platform dispatch has.
+        assert called == ["_confirm_macos", "_confirm_windows", "_confirm_linux", "_confirm_linux"]
+
+    def test_the_macos_dialog_script_carries_no_raw_newline(self, monkeypatch):
+        # A raw newline inside an AppleScript string literal is a syntax
+        # error, not a line break -- and the prompt is three paragraphs. This
+        # is the one platform whose dialog cannot be driven on Linux CI, so
+        # the script it would run is checked instead of its result.
+        scripts = []
+
+        class _Result:
+            returncode = 0
+            stdout = f"button returned:{cc._CONFIRM_ALLOW_LABEL}"
+
+        def _capture(argv, **_kwargs):
+            scripts.append(argv[-1])
+            return _Result()
+
+        monkeypatch.setattr(cc.subprocess, "run", _capture)
+        assert cc._confirm_macos(cc._CONFIRM_ENROLL_PROMPT, timeout=1.0) is True
+        assert "\n" not in scripts[0]
+        # The prompt's paragraph breaks survive as AppleScript's own escape.
+        assert "\\n" in scripts[0]
+
+    def test_the_macos_dialog_treats_a_dismissal_as_a_refusal(self, monkeypatch):
+        # "Deny" is both the default and the cancel button, so a dismissed
+        # dialog (osascript's own nonzero exit) and an explicit Deny land in
+        # the same place.
+        class _Cancelled:
+            returncode = 1
+            stdout = ""
+
+        monkeypatch.setattr(cc.subprocess, "run", lambda argv, **kwargs: _Cancelled())
+        assert cc._confirm_macos(cc._CONFIRM_ENROLL_PROMPT, timeout=1.0) is False
+
+    def test_the_linux_dialog_runs_the_first_program_that_exists(self, monkeypatch, tmp_path):
+        present = tmp_path / "zenity"
+        present.write_text("", encoding="utf-8")
+        argvs = []
+
+        class _Yes:
+            returncode = 0
+
+        monkeypatch.setattr(cc, "_LINUX_DIALOG_COMMANDS", (
+            (str(tmp_path / "missing"), lambda prompt: ["missing", prompt]),
+            (str(present), lambda prompt: [str(present), prompt]),
+        ))
+        monkeypatch.setattr(cc.subprocess, "run", lambda argv, **kwargs: argvs.append(argv) or _Yes())
+
+        assert cc._confirm_linux("ask?", timeout=1.0) is True
+        assert argvs == [[str(present), "ask?"]]
+
+    def test_the_linux_dialog_reads_a_nonzero_exit_as_no(self, monkeypatch, tmp_path):
+        present = tmp_path / "zenity"
+        present.write_text("", encoding="utf-8")
+
+        class _No:
+            returncode = 1
+
+        monkeypatch.setattr(cc, "_LINUX_DIALOG_COMMANDS", ((str(present), lambda prompt: [str(present)]),))
+        monkeypatch.setattr(cc.subprocess, "run", lambda argv, **kwargs: _No())
+
+        assert cc._confirm_linux("ask?", timeout=1.0) is False
+
+    def test_confirm_without_a_subject_is_an_unknown_command(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="CONFIRM\n").startswith("ERROR unknown command")
+            assert _mint(server.address, message="CONFIRM SOMETHING\n").startswith("ERROR unknown command")
+        finally:
+            server.stop()
+
+    def test_open_with_no_url_is_an_unknown_command(self, tmp_path, monkeypatch):
+        # Guarding the refactor that gave OPEN and CONFIRM a shared argument
+        # split: a bare OPEN used to fail the old ``len(parts) != 2`` check.
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="OPEN\n").startswith("ERROR unknown command")
+        finally:
+            server.stop()
+
+
+class TestRequestEnrollmentConfirmation:
+    """The daemon's side of ``CONFIRM ENROLL``. Unlike ``request_open_url``,
+    a missing companion is a refusal here rather than something to fall back
+    from -- there is no local fallback that would mean anything, since what is
+    being established is that a human asked."""
+
+    def _no_windows(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+
+    def test_no_companion_running_refuses_and_says_to_start_it(self, tmp_path, monkeypatch):
+        self._no_windows(tmp_path, monkeypatch)
+
+        confirmed, reason = cc.request_enrollment_confirmation(timeout=0.5)
+
+        assert confirmed is False
+        assert "companion" in reason
+
+    def test_an_ok_reply_confirms(self, tmp_path, monkeypatch):
+        self._no_windows(tmp_path, monkeypatch)
+        monkeypatch.setattr(cc, "_confirm_first_enrollment", lambda: "OK\n")
+        server = cc.CompanionChannelServer()
+        server.start()
+        try:
+            assert cc.request_enrollment_confirmation(timeout=5.0) == (True, "")
+        finally:
+            server.stop()
+
+    def test_an_error_reply_passes_the_companion_s_own_reason_through(self, tmp_path, monkeypatch):
+        self._no_windows(tmp_path, monkeypatch)
+        monkeypatch.setattr(cc, "_confirm_first_enrollment", lambda: "ERROR enrollment was denied\n")
+        server = cc.CompanionChannelServer()
+        server.start()
+        try:
+            confirmed, reason = cc.request_enrollment_confirmation(timeout=5.0)
+        finally:
+            server.stop()
+        # The "ERROR " prefix is protocol, not prose -- stripped, so what
+        # reaches /security is the sentence the companion actually wrote.
+        assert (confirmed, reason) == (False, "enrollment was denied")
+
+    def test_an_unexplained_error_still_produces_a_reason(self, tmp_path, monkeypatch):
+        self._no_windows(tmp_path, monkeypatch)
+        monkeypatch.setattr(cc, "_confirm_first_enrollment", lambda: "ERROR\n")
+        server = cc.CompanionChannelServer()
+        server.start()
+        try:
+            confirmed, reason = cc.request_enrollment_confirmation(timeout=5.0)
+        finally:
+            server.stop()
+        assert confirmed is False
+        assert reason
+
+
 class TestCompanionChannelPeerVerification:
     """#428 B10: unlike ``ControlChannelServer``'s MINT/QUIT (ADR 0002
     decision 6 -- no peer check, deliberately, because companion and agent

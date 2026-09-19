@@ -105,7 +105,7 @@ from . import routes_connect
 from . import routes_downloads
 from . import routes_org_identity
 from . import state_stream as _state_stream
-from .control_channel import WEB_BASE_URL_FILE_NAME, ControlChannelServer
+from .control_channel import WEB_BASE_URL_FILE_NAME, ControlChannelServer, request_enrollment_confirmation
 from .csp import build_csp
 from .csp import new_nonce as _new_csp_nonce
 from .mcp_auth import load_or_create_mcp_token
@@ -167,6 +167,47 @@ _PERMISSIONS_POLICY = (
 # _SecurityHeadersMiddleware's own docstring for why local mode never sends
 # this header at all.
 _HSTS = "max-age=31536000; includeSubDomains"
+
+
+def confirm_first_passkey_enrollment() -> tuple[bool, str]:
+    """Local mode's ``confirm_first_enrollment`` -- what web/routes_security.py
+    calls when an enrollment has no already-enrolled credential to be gated on
+    asserting with. See that module's own docstring for why a first enrollment needs a
+    gate of its own at all, and web/control_channel.py's for why the
+    companion is the thing that can answer: it runs in the human's login
+    session, and on a separated install nothing but the daemon can reach the
+    channel it answers on.
+
+    The one bypass is the escape hatch ADR 0003 decision 7 already gives the
+    developer path -- ``PRIVACYFENCE_DEV_ALLOW_UNSEPARATED`` on a
+    *non-packaged* build, the same pairing ``step_up_config.py``'s
+    ``from_local_config()`` uses for ``require_passkey`` (and the same
+    reasoning: a checkout somebody is working on has no companion autostarted
+    for it, while a packaged install always does -- ADR 0003 decisions 3-5 --
+    so honoring it there would hand a real shipped product a way around its
+    own gate). ``paths.is_bundled()`` is checked first for exactly that
+    reason: the variable is not consulted at all on a packaged build.
+    """
+    if not paths.is_bundled() and privilege_separation.dev_allows_unseparated():
+        logger.warning(
+            "%s is set on this non-packaged install: enrolling a first passkey without asking "
+            "the companion to confirm it.", privilege_separation.DEV_ALLOW_UNSEPARATED_ENV,
+        )
+        return True, ""
+    confirmed, reason = request_enrollment_confirmation()
+    if not confirmed and not paths.is_bundled():
+        # A source checkout or pip install autostarts no companion (ADR 0003
+        # decision 7 -- decisions 3-5's autostart wiring is the packaged
+        # installers' half), so "start the companion" is not the whole answer
+        # here and the escape hatch is. Only added on a non-packaged build,
+        # where it is the honest next step; a packaged install must never be
+        # told about a variable it does not honor.
+        reason = (
+            f"{reason} On a source checkout you can also run "
+            f"`privacyfence-companion --serve`, or set "
+            f"{privilege_separation.DEV_ALLOW_UNSEPARATED_ENV}=1 for local development."
+        )
+    return confirmed, reason
 
 
 def _write_mcp_url_file(url: str) -> None:
@@ -725,6 +766,10 @@ def build_app(
             # the same fact at startup; see privilege_separation.
             # dev_unseparated_notice()'s own docstring.
             dev_unseparated_notice=privilege_separation.dev_unseparated_notice(),
+            # The enrollment gate: local mode's own first-enrollment gate. Org mode's
+            # call below passes nothing -- see routes_security.py's
+            # build_routes docstring on why the two differ here.
+            confirm_first_enrollment=confirm_first_passkey_enrollment,
         ))
 
     if state_stream is not None:
