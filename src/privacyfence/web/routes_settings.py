@@ -806,13 +806,20 @@ def build_routes(
         Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]
     for route in routes:
-        if "POST" not in (getattr(route, "methods", None) or set()) or route.path == "/api/settings/{action}":
+        # isinstance, not getattr: every entry above is a plain Route (never
+        # a Mount/WebSocketRoute), and narrowing this way -- rather than
+        # getattr(route, "path", ...) -- is what gives mypy route.path/
+        # route.methods below as real attributes instead of BaseRoute's own,
+        # narrower interface.
+        if not isinstance(route, Route) or "POST" not in (route.methods or set()):
             continue
-        # nosec B101 -- a real invariant, not a stripped-under-`-O` optimization:
-        # a bespoke POST route this function itself just built, with no
-        # matching _BESPOKE_SENSITIVE_ROUTE_PATHS/_BESPOKE_EXEMPT_ROUTE_PATHS
-        # entry, must never reach the app it's about to be mounted into.
-        assert route.path in _BESPOKE_SENSITIVE_ROUTE_PATHS or route.path in _BESPOKE_EXEMPT_ROUTE_PATHS, (
+        if route.path == "/api/settings/{action}":
+            continue
+        # A real invariant, not a stripped-under-`-O` optimization: a bespoke
+        # POST route this function itself just built, with no matching
+        # _BESPOKE_SENSITIVE_ROUTE_PATHS/_BESPOKE_EXEMPT_ROUTE_PATHS entry,
+        # must never reach the app it's about to be mounted into.
+        assert route.path in _BESPOKE_SENSITIVE_ROUTE_PATHS or route.path in _BESPOKE_EXEMPT_ROUTE_PATHS, (  # nosec B101
             f"{route.path} is a new bespoke POST route with no _BESPOKE_SENSITIVE_ROUTE_PATHS/"
             "_BESPOKE_EXEMPT_ROUTE_PATHS classification (3.3 of the self-approval review) -- "
             "add it to one of the two above before it can bypass _SENSITIVE_ACTIONS-shaped gating "
