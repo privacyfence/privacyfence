@@ -6,7 +6,7 @@ PrivacyFence local mode is packaged for macOS, Windows, and Debian/Ubuntu Linux.
 
 | Platform | Distribution | Startup model | Release automation |
 |---|---|---|---|
-| macOS | signed/notarized DMG (primary) or `.pkg` installer, both containing the PyInstaller app bundle; MCPB ships alongside | packaged app/LaunchAgent path, or (default-on, see below) a LaunchDaemon under a dedicated account -- the `.pkg` provisions the latter at install time, no runtime prompt needed | `.github/workflows/build.yml` on `macos-latest` |
+| macOS | one signed/notarized DMG, carrying the `.pkg` installer (which holds the PyInstaller app bundle) and the MCPB side by side | installed by the `.pkg`, which provisions (default-on, see below) a LaunchDaemon under a dedicated account at install time; the packaged app/LaunchAgent path and D1's runtime prompt remain for an install that bypassed the installer | `.github/workflows/build.yml` on `macos-latest` |
 | Windows | Inno Setup installer containing the PyInstaller executable and MCPB | Task Scheduler entry created by the installer, or an opt-in Windows service under a virtual service account (see below) | `.github/workflows/build.yml` on `windows-latest` |
 | Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | XDG autostart desktop entry, or (default-on, see below) a system systemd unit under a dedicated account | `.github/workflows/build.yml` on `ubuntu-latest` |
 | Linux Python install | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
@@ -21,6 +21,14 @@ The daemon uses `portalocker` for the single-instance lock, so the locking abstr
 ## macOS
 
 The macOS app is defined by `PrivacyFenceApp.spec`. Release builds are produced by `scripts/build_dmg.sh` and the macOS job in `.github/workflows/build.yml`.
+
+**One macOS download.** `scripts/build_dmg.sh` builds the app bundle, the `.mcpb`, and (by calling
+`scripts/build_pkg.sh`) the `.pkg`, then puts the `.pkg` and the `.mcpb` on the DMG — and nothing
+else: no app bundle to drag, no `/Applications` symlink. Mount it, double-click
+`PrivacyFence.pkg`, then double-click `PrivacyFence.mcpb`. The `.pkg` is not published on its own
+(not to GitHub Releases, not to the R2 archive, not as a second card on the download page); the
+DMG that carries it is the macOS release artifact. See the `.pkg` section below for what that
+buys, and `scripts/build_dmg.sh`'s own header for the two problems the old layout had.
 
 The packaged application keeps user state outside the application bundle. The release workflow signs and notarizes the app/DMG when the required signing credentials are configured.
 
@@ -65,15 +73,17 @@ what the separation does and does not buy.
 
 ### `.pkg` installer (#428 D2)
 
-`scripts/build_pkg.sh` packages the same `.app` `scripts/build_dmg.sh` builds into a second macOS
-artifact: a signed installer package (`installer -pkg PrivacyFence-<version>.pkg -target /`, or the
-ordinary double-click Installer.app flow) whose own `postinstall` script
+`scripts/build_pkg.sh` packages the `.app` `scripts/build_dmg.sh` builds into a signed installer
+package (`installer -pkg PrivacyFence-<version>.pkg -target /`, or the ordinary double-click
+Installer.app flow from the mounted DMG) whose own `postinstall` script
 (`installer/macos/pkg/postinstall`) runs `macos_privilege_separation.sh enable --auto` while the
 package install is still running, as root. This exists because D1's own runtime admin-password
-prompt (`maybe_auto_enable_macos()`) is the *only* automatic path a DMG install has — a drag
-install runs nothing as root, so D1 could only ask the daemon's own first start to pop a dialog,
-with no PrivacyFence-specific explanation, that can appear disconnected from anything the person
-just did, and that a decline or a failed safety check silently leaves unresolved. A `.pkg` install
+prompt (`maybe_auto_enable_macos()`) was the *only* automatic path a drag install had — dragging
+an app bundle runs nothing as root, so D1 could only ask the daemon's own first start to pop a
+dialog, with no PrivacyFence-specific explanation, that can appear disconnected from anything the
+person just did, and that a decline or a failed safety check silently leaves unresolved. That
+prompt still exists, for an install that never went through the installer (a `pip`/source run, a
+bundle copied off another machine), but it is no longer what a download leads to. A `.pkg` install
 already runs as root and already asks for an administrator password as the ordinary "Install
 PrivacyFence" step non-technical users already expect, so the one elevation macOS requires for this
 happens there instead — once, with `installer/macos/pkg/resources/welcome.html`/`conclusion.html.tmpl`
@@ -95,12 +105,14 @@ root:wheel-owned copy of whatever `--app` points at before trusting anything. Se
 `macos_privilege_separation.sh`'s `stage_trusted_image()` and `CHANGELOG.md`'s `#428 D2` B1
 follow-up entry for the full story.
 
-The DMG remains the primary distributable; the `.pkg` is an additional artifact for anyone who
-wants a fully-automated install with no separate runtime prompt at all. Signing a `.pkg` needs a
+The `.pkg` *is* the macOS install now — it ships inside the DMG rather than beside it, so there
+is no longer a drag-install path alongside it to be "additional" to. That also made the installer's
+own conclusion screen honest: it tells the user to open `PrivacyFence.mcpb` next to the installer,
+which was simply false for anyone who downloaded a standalone `.pkg`. Signing a `.pkg` needs a
 "Developer ID **Installer**" certificate -- a different type from the "Developer ID **Application**"
-one `scripts/build_dmg.sh --sign` uses -- so `build.yml`'s own pkg-signing step
-(`SIGN_IDENTITY_INSTALLER`/`MACOS_INSTALLER_CERTIFICATE*`) is a separate, optional secret set; an
-unsigned `.pkg` is still a valid local dev build, same as an unsigned DMG. Covered by the same
+one `scripts/build_dmg.sh --sign` uses -- so it is passed separately, as `SIGN_IDENTITY_INSTALLER`
+(with `MACOS_INSTALLER_CERTIFICATE*`), and stays optional; an unsigned `.pkg` inside an otherwise
+signed DMG is still a valid local dev build. Covered by the same
 two-tier split as the DMG: `test_macos_pkg_smoke.py` (structural only -- `pkgutil --expand-full`,
 no install, no root) runs inline in `build.yml`'s release-critical `build` job; `test_macos_pkg_install.py`
 (a real `sudo installer -pkg ... -target /`, with no separate `enable` call, proving the postinstall
@@ -508,8 +520,9 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   running the manual checks against the first 4.1 release this ships in is now more urgent, not
   less, precisely because the default now turns it on for people who never asked for it by name on
   those two platforms.
-  **The `.pkg` installer (#428 D2, above) is a separate path from the DMG's own runtime prompt, and
-  has its own real-CI coverage** (`test_macos_pkg_install.py`, in this same `macos-graphical-
+  **The `.pkg` installer (#428 D2, above) is what a macOS download now installs through -- the
+  daemon's own runtime prompt is the fallback for an install that bypassed it -- and it has its own
+  real-CI coverage** (`test_macos_pkg_install.py`, in this same `macos-graphical-
   session.yml`): a real `sudo installer -pkg ... -target /` with no separate `enable` call,
   confirming the postinstall script alone -- not this test -- wires up the LaunchDaemon and
   companion LaunchAgent. This coverage found a real bug the first time it ran, not just a gap: `enable`

@@ -12,14 +12,28 @@ before (a hidden import, a missing data file) in a way no source-tree test
 can catch, since a source-tree test never leaves the interpreter that
 already knows how to import everything.
 
+The DMG carries ``PrivacyFence.pkg`` and ``PrivacyFence.mcpb`` and nothing
+else -- no ``PrivacyFenceApp.app`` to drag, no ``/Applications`` symlink (see
+``scripts/build_dmg.sh``'s own header for why the .pkg moved inside the image
+instead of shipping beside it). So the app bundle this module exercises comes
+out of the .pkg's payload, which is the only place it exists in a shipped
+artifact at all; ``test_dmg_carries_only_the_installer_and_the_extension``
+below asserts that layout directly, so a regression there fails as itself
+rather than as an unexplained "app missing from the DMG".
+
 This is deliberately narrow -- one round trip, not a real test suite for
 the packaged app:
 
-1. **Install**: mount the just-built DMG (``hdiutil attach``) and copy
-   ``PrivacyFenceApp.app`` out of it, the way dragging it to ``/Applications``
-   would -- minus actually writing to a shared runner's ``/Applications``,
-   which direct execution of the bundle's own binary doesn't require (see
-   ``running_packaged_daemon`` below).
+1. **Install**: mount the just-built DMG (``hdiutil attach``), expand the
+   ``PrivacyFence.pkg`` on it (``pkgutil --expand-full``) and take
+   ``PrivacyFenceApp.app`` out of the payload ``installer(8)`` would have
+   written to ``/Applications`` -- minus actually writing to a shared
+   runner's ``/Applications``, which direct execution of the bundle's own
+   binary doesn't require (see ``running_packaged_daemon`` below). The real
+   ``sudo installer -pkg`` install, postinstall script and all, is
+   ``test_macos_pkg_install.py``'s job in the weekly
+   ``macos-graphical-session.yml`` run, deliberately not this job's -- see
+   that module's own docstring.
 2. **Start the daemon**: run the frozen binary directly (not via
    ``open``/Finder -- that's what would invoke Gatekeeper, which a bundle
    built and immediately run on this same machine was never quarantined
@@ -86,7 +100,9 @@ in tests.yml's ubuntu-latest job.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
+import functools
 import os
 import platform
 import plistlib
@@ -147,6 +163,7 @@ pytestmark = [
         ),
     ),
     pytest.mark.skipif(shutil.which("node") is None, reason="Node not on PATH -- this test spawns the real shim"),
+    pytest.mark.skipif(shutil.which("pkgutil") is None, reason="pkgutil not on PATH -- needed to unpack the DMG's .pkg"),
     # DMG mount/copy + a real PyInstaller cold start + npm install/build (first run per session)
     # + a real headless-browser round trip is comfortably slower than pure-Python socket tests --
     # same reasoning as test_shim_mcp_contract.py's own inflated timeout for the same npm-install
@@ -191,18 +208,10 @@ def _wait_until_connectable(
     ) from last_exc
 
 
-def _copy_app_from_dmg(dst_dir: Path) -> Path:
-    """Mounts the just-built DMG (``hdiutil attach``) and copies
-    ``PrivacyFenceApp.app`` out of it into ``dst_dir`` -- the "install" step,
-    without writing to this runner's real ``/Applications``. Always detaches
-    the mount on the way out, even on failure; the caller owns ``dst_dir``'s
-    own lifecycle (this only ever writes into it, never removes it).
-
-    A plain function, not a fixture, so more than one test can get its own
-    independent copy of the bundle without sharing mutable state through a
-    fixture -- see ``signed_app_copy`` and
-    ``test_macos_upgrade_preserves_user_state`` below for why that
-    independence matters here specifically."""
+@contextlib.contextmanager
+def _mounted_dmg():
+    """Mounts the just-built DMG read-only and yields the mount point, always
+    detaching on the way out even on failure."""
     dmg_path = _built_dmgs()[-1]
     mount_point = Path(tempfile.mkdtemp(prefix="pf-dmg-mount-"))
     subprocess.run(
@@ -210,11 +219,7 @@ def _copy_app_from_dmg(dst_dir: Path) -> Path:
         check=True, capture_output=True, text=True, timeout=60,
     )
     try:
-        app_src = mount_point / "PrivacyFenceApp.app"
-        assert app_src.is_dir(), f"PrivacyFenceApp.app missing from {dmg_path} (mounted at {mount_point})"
-        app_dst = dst_dir / "PrivacyFenceApp.app"
-        shutil.copytree(app_src, app_dst, symlinks=True)
-        return app_dst
+        yield mount_point
     finally:
         subprocess.run(
             ["hdiutil", "detach", str(mount_point), "-force"], capture_output=True, text=True, timeout=30,
@@ -222,12 +227,95 @@ def _copy_app_from_dmg(dst_dir: Path) -> Path:
         shutil.rmtree(mount_point, ignore_errors=True)
 
 
+@functools.lru_cache(maxsize=1)
+def _extracted_app() -> Path:
+    """The one ``PrivacyFenceApp.app`` every test here installs a copy of,
+    taken out of the ``PrivacyFence.pkg`` the DMG carries (the app exists in
+    no other form in a shipped artifact -- see this module's own docstring).
+
+    Mounts the DMG and expands the package exactly once per test session --
+    ``pkgutil --expand-full`` walks the whole PyInstaller payload, so doing it
+    per-copy would cost more than every daemon start in this module put
+    together. The extraction directory is this function's own, cleaned up at
+    interpreter exit; callers never get it directly, only copies of it."""
+    workdir = Path(tempfile.mkdtemp(prefix="pf-dmg-pkg-"))
+    atexit.register(shutil.rmtree, workdir, ignore_errors=True)
+    dmg_path = _built_dmgs()[-1]
+    with _mounted_dmg() as mount_point:
+        pkg_src = mount_point / "PrivacyFence.pkg"
+        assert pkg_src.is_file(), (
+            f"PrivacyFence.pkg missing from {dmg_path} (mounted at {mount_point}, holding "
+            f"{sorted(p.name for p in mount_point.iterdir())})"
+        )
+        expanded = workdir / "expanded"
+        expand = subprocess.run(
+            ["pkgutil", "--expand-full", str(pkg_src), str(expanded)],
+            capture_output=True, text=True, timeout=300,
+        )
+        assert expand.returncode == 0, f"pkgutil --expand-full {pkg_src} failed:\n{expand.stdout}{expand.stderr}"
+
+    # One component package, installing to /Applications -- so its Payload/ holds the bundle
+    # itself. Globbed rather than spelled out, for the same reason test_macos_pkg_smoke.py globs
+    # it: the component package's own filename carries the version.
+    app_bundles = list(expanded.glob("**/Payload/PrivacyFenceApp.app"))
+    assert app_bundles, f"no PrivacyFenceApp.app in any component payload of {pkg_src.name}"
+    return app_bundles[0]
+
+
+def _copy_app_from_dmg(dst_dir: Path) -> Path:
+    """Copies ``PrivacyFenceApp.app`` out of the shipped DMG's installer
+    package into ``dst_dir`` -- the "install" step, without writing to this
+    runner's real ``/Applications``. The caller owns ``dst_dir``'s own
+    lifecycle (this only ever writes into it, never removes it).
+
+    A plain function, not a fixture, so more than one test can get its own
+    independent copy of the bundle without sharing mutable state through a
+    fixture -- see ``signed_app_copy`` and
+    ``test_macos_upgrade_preserves_user_state`` below for why that
+    independence matters here specifically."""
+    app_dst = dst_dir / "PrivacyFenceApp.app"
+    shutil.copytree(_extracted_app(), app_dst, symlinks=True)
+    return app_dst
+
+
+def test_dmg_carries_only_the_installer_and_the_extension():
+    """The shipped macOS artifact is a carrier for two files: the installer
+    that provisions privilege separation at install time (#428 D2) and the
+    Claude Desktop extension the .pkg's own conclusion screen tells the user
+    to open "next to this installer" -- a sentence that is only true because
+    both are on this image.
+
+    The drag-install layout this replaced (``PrivacyFenceApp.app`` plus an
+    ``/Applications`` symlink) is asserted *absent*, not merely "not
+    required": leaving it in would give the same download two install paths,
+    one of which silently skips the installer and gets the deferred
+    admin-password prompt instead."""
+    with _mounted_dmg() as mount_point:
+        # Dot-prefixed entries are the volume's own metadata (.VolumeIcon.icns, .fseventsd,
+        # .Trashes...), never anything this repo puts there -- excluded so an HFS+ housekeeping
+        # file can't fail a release build over a layout that is in fact correct.
+        entries = sorted(p.name for p in mount_point.iterdir() if not p.name.startswith("."))
+        assert "PrivacyFence.pkg" in entries, f"no installer on the shipped DMG: {entries}"
+        assert "PrivacyFence.mcpb" in entries, (
+            f"no Claude Desktop extension on the shipped DMG: {entries} -- the installer's own "
+            f"conclusion screen tells the user to open it right there"
+        )
+        assert "PrivacyFenceApp.app" not in entries, (
+            f"the app bundle is back on the DMG: {entries} -- dragging it out is a second install "
+            f"path that skips the .pkg's install-time privilege separation entirely"
+        )
+        assert "Applications" not in entries, (
+            f"the /Applications drop link is back: {entries} -- same second-install-path problem"
+        )
+
+
 @pytest.fixture(scope="module")
 def installed_app() -> Path:
     """The shared copy of ``PrivacyFenceApp.app`` used by the primary
     round-trip test and (via ``signed_app_copy``'s own reasoning) nothing
-    else -- module-scoped so the DMG is only ever mounted once per test
-    session, not once per test."""
+    else -- module-scoped because the primary test mutates and then deletes
+    it (module docstring §6). The DMG mount and package expansion behind it
+    are shared across the whole session regardless, by ``_extracted_app``."""
     install_dir = Path(tempfile.mkdtemp(prefix="pf-dmg-install-"))
     try:
         yield _copy_app_from_dmg(install_dir)
@@ -601,8 +689,10 @@ def test_packaged_app_signature_and_notarization(signed_app_copy):
     assert assess.returncode == 0, f"Gatekeeper would reject this app (spctl --assess):\n{assess.stdout}{assess.stderr}"
 
     # Notarization is checked against the DMG itself (what ships), not the
-    # extracted bundle -- `xcrun stapler staple` (build_dmg.sh step 8)
-    # staples the ticket to the disk image. A signed-but-not-notarized local
+    # extracted bundle -- `xcrun stapler staple` (build_dmg.sh's last step)
+    # staples the ticket to the disk image. (The .pkg inside it is stapled
+    # separately, by scripts/build_pkg.sh; pkgutil --check-signature over that
+    # is test_macos_pkg_smoke.py's own assertion, not this one's.) A signed-but-not-notarized local
     # build (NOTARIZE_PROFILE unset) is also legitimate and must not fail
     # this test -- `spctl`'s own "source=" line is what actually says
     # whether Apple's notarization ticket was found and accepted, without

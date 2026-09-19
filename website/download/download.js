@@ -15,14 +15,10 @@
   // renders -- falling back to the id itself -- because a manifest that gains a platform should
   // show it rather than silently drop it while waiting for a website deploy.
   const PLATFORMS = {
-    'macos-arm64': { name: 'macOS', detail: 'Apple silicon · drag to Applications', match: /mac/i },
-    // #428 D2: a second macOS artifact, not a replacement for the DMG above -- its installer
-    // provisions privilege separation automatically at install time instead of a later runtime
-    // prompt. Same /mac/i match as the DMG's own entry is harmless: detectPlatformId() returns
-    // the first matching id in insertion order, so 'macos-arm64' (above) stays the recommended
-    // default and this never actually gets picked for the badge -- it only needs a valid regex
-    // so this entry's own `.match.test(...)` call can't throw.
-    'macos-arm64-pkg': { name: 'macOS (.pkg)', detail: 'Apple silicon · fully automated install', match: /mac/i },
+    // One macOS download, not two: the DMG carries the .pkg installer and the Claude Desktop
+    // extension side by side (#428 D2, scripts/build_dmg.sh). The .pkg had its own
+    // 'macos-arm64-pkg' entry here while it was a separate download; it isn't one any more.
+    'macos-arm64': { name: 'macOS', detail: 'Apple silicon · installer + Claude extension', match: /mac/i },
     'windows-x64': { name: 'Windows', detail: '64-bit', match: /win/i },
     'linux-x64': { name: 'Linux', detail: 'Debian / Ubuntu, 64-bit', match: /linux/i },
   };

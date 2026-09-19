@@ -15,12 +15,13 @@ This module drives that for real:
 1. **Install**: ``sudo installer -pkg dist/PrivacyFence-<version>.pkg -target /``
    -- a real package install to this runner's actual ``/Applications``, not a
    copy into a scratch directory. Unlike
-   ``test_macos_graphical_session_autostart.py``'s own DMG path, this needs no
-   ``_stage_as_root`` dance: ``pkgbuild``'s default ownership already lays the
-   installed ``.app`` down root:wheel, which is what makes a pkg-installed app
-   pass ``require_trusted_image()`` (B1) without the codesign-verify
-   substitute proof the runtime prompt needs for a drag-installed copy (see
-   ``scripts/build_pkg.sh``'s own header comment).
+   ``test_macos_graphical_session_autostart.py``'s own scratch-copy path, this
+   needs no ``_stage_as_root`` dance: ``pkgbuild``'s default ownership already
+   lays the installed ``.app`` down root:wheel, which is what makes a
+   pkg-installed app pass ``require_trusted_image()`` (B1) without the
+   codesign-verify substitute proof the runtime prompt needs for a copy the
+   user put there themselves (see ``scripts/build_pkg.sh``'s own header
+   comment).
 2. **No separate ``enable`` call**: this module makes none. If privilege
    separation is on, it is on because the postinstall script already did it.
 3. **Same functional assertions** as the graphical-session module: the daemon
@@ -42,7 +43,7 @@ Installer.app's own.
 
 Skipped entirely unless running on real macOS with a just-built
 ``dist/PrivacyFence-*.pkg`` on disk (``scripts/build_pkg.sh``, itself run
-after ``scripts/build_dmg.sh`` -- see ``.github/workflows/macos-graphical-
+by ``scripts/build_dmg.sh`` -- see ``.github/workflows/macos-graphical-
 session.yml``) and passwordless sudo, same posture as the graphical-session
 module this one complements.
 """
@@ -106,8 +107,8 @@ pytestmark = [
     pytest.mark.skipif(
         not _built_pkgs(),
         reason=(
-            "no dist/PrivacyFence-*.pkg built yet -- run scripts/build_dmg.sh then "
-            "scripts/build_pkg.sh first, same as test_macos_graphical_session_autostart.py's "
+            "no dist/PrivacyFence-*.pkg built yet -- run scripts/build_dmg.sh first (it builds "
+            "the .pkg too), same as test_macos_graphical_session_autostart.py's "
             "own identical skip for the DMG"
         ),
     ),
