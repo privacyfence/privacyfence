@@ -170,7 +170,12 @@ class TestToggleTemplate:
         html = build_html(_make_state())
         for action in (
             "toggle_pii_detection", "toggle_pii_category",
-            "toggle_update_check", "toggle_update_check_beta", "toggle_connector",
+            "toggle_update_check", "toggle_update_check_beta",
+            # F6 of the self-approval review: no single toggle_connector
+            # any more -- both branches of the directional ternary are
+            # present as source text regardless of any connector's actual
+            # state (see settings_window_html.py's renderConnectors).
+            "enable_connector", "disable_connector",
             "toggle_calendar_free_busy", "toggle_grant_capability",
         ):
             assert f"'{action}'" in html, f"missing toggle wiring for {action}"

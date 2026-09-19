@@ -75,7 +75,7 @@ PER_PRINCIPAL_ACTIONS: frozenset[str] = frozenset({
 # `PER_PRINCIPAL_ACTIONS` in the same PR that adds its route, never ahead of
 # it.
 PER_PRINCIPAL_ACTIONS_UNROUTED: frozenset[str] = frozenset({
-    "toggle_connector", "refresh_connectors", "authenticate_connector",
+    "enable_connector", "disable_connector", "refresh_connectors", "authenticate_connector",
     "update_rule_row",
     "toggle_grant_capability", "add_grant_row", "update_grant_row",
 })

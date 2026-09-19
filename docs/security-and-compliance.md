@@ -154,7 +154,12 @@ or `org_config.json` keeps exactly what it set; only one that never expressed an
 **`step_up.require_passkey` (Phase 3) is what makes it a guarantee rather than an opt-in check.**
 With it on: an approving decision with nothing enrolled is hard-failed (`403`, naming `/security`)
 rather than let through; the same is true for a sensitive subset of the local settings actions --
-the rule-row, grant, policy and PII actions in `web/routes_settings.py`'s own `_SENSITIVE_ACTIONS`
+the rule-row, grant, policy and PII actions in `web/routes_settings.py`'s own `_SENSITIVE_ACTIONS`,
+plus organization config bundle uploads (`org_config_upload` has its own route rather than an
+`_ALLOWED_ACTIONS` entry, but is gated the same way -- an uploaded bundle can rewrite the PII
+policy, every auto-accept rule and every connector's OAuth client config in one shot, at least as
+much "what gets gated" as any single `_SENSITIVE_ACTIONS` entry; see
+`_BESPOKE_SENSITIVE_ROUTE_PATHS` in that module)
 -- so an agent that cannot forge an approval cannot route around the gate by adding an always-allow
 rule or a broader grant either, since that action itself now demands the same fresh assertion; and
 the credential store's own two directions are gated regardless of this flag, so a session alone can
@@ -212,7 +217,9 @@ by minting its own were the same object with the same authority.
 | `unattested` | a bare `MINT` on the control channel — anything running as this OS user | yes | no |
 
 `human` is required to release an *approving* decision (`accept`/`accept_all`, individually or in a
-batch) and to take any `_SENSITIVE_ACTIONS` settings action. Denying is not gated, under the same
+batch) and to take any `_SENSITIVE_ACTIONS` settings action, or upload an organization config
+bundle (`org_config_upload`, gated the same way for the same reason -- see immediately above).
+Denying is not gated, under the same
 reasoning step-up uses: denying discloses nothing. Viewing is not gated at all — a locked-out human
 with only an unattested link can still see what is pending, and is told in so many words that this
 link cannot approve it.
