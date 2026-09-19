@@ -740,6 +740,33 @@ class TestCspNonce:
             assert "<style>" not in body, url
 
 
+class TestPersistentNav:
+    """web_shell.wrap()'d (web_shell.ORG_NAV_ITEMS) since the fix that made
+    /approvals'/connect's/security's shared header/nav survive navigating
+    into /settings too -- previously this page was a bare doctype+tokens.css
+    document with a single centred "Approvals" link at the bottom."""
+
+    def test_settings_and_privacy_pages_both_carry_the_shell_nav(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "carol")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ADMIN)
+        for url in ("/settings", "/settings/privacy"):
+            body = client.get(url).text
+            assert 'class="pf-shell-nav-item active" href="/settings"' in body, url
+            for href in ("/approvals", "/connect", "/security"):
+                assert f'class="pf-shell-nav-item" href="{href}"' in body, url
+            assert '<p style="text-align:center;margin-top:2em">' not in body, url
+
+    def test_signed_in_principal_is_shown_in_the_shell_header(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        body = client.get("/settings").text
+        assert f'<div class="pf-shell-principal">{ALICE.email}</div>' in body
+
+
 class TestWriteFailures:
     def test_an_unwritable_settings_yaml_is_a_500_with_the_policy_unchanged(self, tmp_path, monkeypatch):
         _seed(tmp_path, monkeypatch, "carol")

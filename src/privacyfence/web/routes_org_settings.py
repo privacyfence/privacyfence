@@ -34,10 +34,13 @@ Every mutation here is audit-logged under the principal who made it
 org's privacy policy is exactly the kind of act that belongs in the audit
 log under the principal who did it."
 
-Both pages reuse ``routes_org_approvals.py``'s minimal doctype+tokens.css
-shell rather than local mode's ``web_shell.wrap()`` -- this is an org-mode
-surface, so it should look like ``/approvals``/``/security``, not like the
-desktop-app-shaped local settings page.
+Both pages go through ``web_shell.wrap()`` with ``web_shell.ORG_NAV_ITEMS``,
+the same shell ``routes_org_approvals.py``/``routes_connect.py``/``routes_
+security.py`` use -- this is an org-mode surface, so it should look like
+``/approvals``/``/connect``/``/security``, not like the desktop-app-shaped
+local settings page, and (since those other three pages all carry the same
+header) it should carry the persistent top nav they do rather than being the
+one org-mode page a signed-in principal can navigate into and get stuck on.
 """
 from __future__ import annotations
 
@@ -65,6 +68,7 @@ from ..settings_controller import (
     RULES_INT_VALUE,
     RULES_LIST_VALUE,
 )
+from .. import web_shell
 from . import org_install_policy, org_session
 from .csp import nonce_for as _csp_nonce_for
 from .org_session import OrgSessionStore
@@ -72,50 +76,35 @@ from .org_settings_scope import is_action_permitted
 
 logger = logging.getLogger(__name__)
 
-_TOKENS_CSS = None  # lazily loaded -- see _tokens_css()
+_PAGE_CSS = """
+.pf-wrap{max-width:720px;margin:0 auto;padding:24px 20px}
+h1{font-size:1.3rem} h2{font-size:1.05rem;margin-top:2em}
+table{width:100%;border-collapse:collapse;margin:0.5em 0}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--color-border,#ddd);font-size:0.92em}
+.pf-fallback{color:var(--color-warning,#a94500);font-weight:600}
+.pf-empty{color:var(--color-muted,#777);font-style:italic}
+.pf-note{color:var(--color-muted,#777);font-size:0.9em}
+form.pf-remove{display:inline}
+form.pf-set{display:inline}
+button.pf-remove{font-size:0.85em;padding:2px 8px}
+"""
 
 
-def _tokens_css() -> str:
-    # Same lazy-load-once shape as routes_org_approvals.py's own
-    # _tokens_css() -- duplicated rather than imported across modules since
-    # it's three lines and the two pages have no other reason to couple.
-    global _TOKENS_CSS
-    if _TOKENS_CSS is None:
-        from pathlib import Path
-
-        _TOKENS_CSS = (Path(__file__).parent.parent / "resources" / "tokens.css").read_text(encoding="utf-8")
-    return _TOKENS_CSS
-
-
-def _page(title: str, body: str, *, nonce: str) -> str:
-    """``nonce`` is the response's own CSP nonce (web/csp.py). Without it
-    the ``<style>`` element below is dropped by
-    ``_SecurityHeadersMiddleware``'s ``style-src-elem 'nonce-...'`` and both
-    of these pages render unstyled -- which is how #400 C3d shipped them,
-    since the local-mode settings surface it was modelled on goes through
-    ``web_shell.wrap()`` and never builds a document head of its own. The
-    inline ``style="..."`` *attribute* in the footer below needs no nonce;
-    ``style-src-attr`` keeps ``'unsafe-inline'`` deliberately, see web/csp.py.
+def _page(title: str, body: str, *, nonce: str, principal_label: str = "") -> str:
+    """``nonce`` is the response's own CSP nonce (web/csp.py), threaded
+    through to both this page's own ``<style>`` element and to
+    ``web_shell.wrap()``'s -- one document, one CSP header, one nonce, same
+    convention every other org-mode page follows (web_shell.py's own
+    ``wrap()`` docstring). ``active="settings"`` covers both callers below
+    (``/settings`` and the admin-only ``/settings/privacy``) -- there is no
+    separate nav entry for the privacy sub-page.
     """
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PrivacyFence -- {html.escape(title)}</title>
-<style nonce="{html.escape(nonce, quote=True)}">{_tokens_css()}body{{background:var(--color-bg);color:var(--color-text);margin:0;
-font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
-.pf-wrap{{max-width:720px;margin:0 auto;padding:24px 20px}}
-h1{{font-size:1.3rem}} h2{{font-size:1.05rem;margin-top:2em}}
-table{{width:100%;border-collapse:collapse;margin:0.5em 0}}
-th,td{{text-align:left;padding:6px 8px;border-bottom:1px solid var(--color-border,#ddd);font-size:0.92em}}
-.pf-fallback{{color:var(--color-warning,#a94500);font-weight:600}}
-.pf-empty{{color:var(--color-muted,#777);font-style:italic}}
-.pf-note{{color:var(--color-muted,#777);font-size:0.9em}}
-form.pf-remove{{display:inline}}
-form.pf-set{{display:inline}}
-button.pf-remove{{font-size:0.85em;padding:2px 8px}}
-</style></head>
-<body><div class="pf-wrap">{body}
-<p style="text-align:center;margin-top:2em"><a href="/approvals">Approvals</a></p>
-</div></body></html>"""
+    wrapped_body = f'<style nonce="{html.escape(nonce, quote=True)}">{_PAGE_CSS}</style><div class="pf-wrap">{body}</div>'
+    return web_shell.wrap(
+        wrapped_body, title=f"PrivacyFence — {title}", active="settings", nonce=nonce,
+        nav_items=web_shell.ORG_NAV_ITEMS, principal_label=principal_label,
+        live_updates=False, notifications_enabled=False,
+    )
 
 
 def _record_settings_audit(principal: Principal, summary: str) -> None:
@@ -525,7 +514,11 @@ def build_routes(
         session_id = request.cookies.get(org_session.SESSION_COOKIE, "")
         body = _render_settings_page(cfg, principal=principal, csrf=session_id)
         return HTMLResponse(
-            _page("Settings", body, nonce=_csp_nonce_for(request)), headers={"Cache-Control": "no-store"},
+            _page(
+                "Settings", body, nonce=_csp_nonce_for(request),
+                principal_label=principal.email or principal.display_name or principal.id,
+            ),
+            headers={"Cache-Control": "no-store"},
         )
 
     async def privacy_page(request: Request) -> Response:
@@ -547,7 +540,10 @@ def build_routes(
             csrf=request.cookies.get(org_session.SESSION_COOKIE, ""),
         )
         return HTMLResponse(
-            _page("Privacy policy", body, nonce=_csp_nonce_for(request)),
+            _page(
+                "Privacy policy", body, nonce=_csp_nonce_for(request),
+                principal_label=principal.email or principal.display_name or principal.id,
+            ),
             headers={"Cache-Control": "no-store"},
         )
 

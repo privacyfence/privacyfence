@@ -694,6 +694,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Org mode's top navigation bar stays put across every page, not just `/approvals`.**
+  `/connect`, `/security`, and `/settings` (and `/settings/privacy`) were each their own bare
+  document, so following a Connect/Reconnect button, a passkey prompt, or a settings link off
+  `/approvals` dropped the header/nav entirely, leaving only a plain centred link or two at the
+  bottom of the page as a way back. All four now share `web_shell.wrap()`'s persistent
+  header/nav (`web_shell.ORG_NAV_ITEMS`), and the old footer links back to Approvals/
+  Connections/Passkeys/Settings are gone — the nav is the one way back now. Local mode's
+  `/security` is unaffected: it has no web_shell-wrapped page of its own to be consistent with,
+  so it keeps its small, unwrapped document and its own "Back to Connectors" footer link.
 - **Approval cards and confirmation dialogs are readable on a phone.** Neither document declared a
   `<meta name="viewport">`, so iOS and Android laid it out in their default ~980px viewport and
   scaled the result down to fit: 13px body text rendered near 5px, Deny and Allow once were roughly
@@ -971,6 +980,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Approvals/Passkeys/Settings footer the approvals page uses, so a principal who lands there (from
   a first sign-in, or from `/security`'s own "Back to connections" link) isn't stuck without a way
   back short of editing the URL.
+- **macOS: a failed daemon launch no longer kills the `.mcpb` shim itself.** `mcpb/shim/src/
+  daemon.ts`'s `ensureDaemonRunning()` spawned `privacyfence-app` with no `error` listener on the
+  child process; a spawn failure (`ENOENT` for a binary a Finder "upgrade" left missing or
+  partially copied — see privacyfence/privacyfence#431 — or `EACCES`/`ENOEXEC` for a corrupted or
+  quarantined one) emitted an unhandled `error` event, which Node rethrows as an uncaught exception
+  and terminates the whole shim process immediately. That happened before `waitForConnectable`'s
+  timeout, and before `waitForDaemonPatiently`'s never-give-up retry loop (built for exactly this
+  kind of slow/flaky start) ever ran — so a companion app that failed to launch, whether right after
+  an interrupted upgrade or after the daemon had previously crashed and left the install in a bad
+  state, looked to Claude Desktop like the whole MCP connection dying with no diagnostic, rather
+  than the "did not start in time" message the working retry path already produces for a merely
+  slow one. The child's `error` event is now handled (logged, not rethrown), so a bad spawn falls
+  through to the same timeout/retry machinery a slow one already takes.
 
 ## [4.0.0] — 2026-09-18
 
