@@ -248,13 +248,17 @@ then authenticate from there.** The platform-specific steps below are that shape
 installer. Centrally managed ("organization mode") deployments follow a different shape — see
 [Organization mode](#organization-mode-centrally-managed-deployment) below.
 
-### Install from the DMG
+### Install on macOS
 
 1. Download the latest `PrivacyFence-<version>.dmg` from [privacyfence.eu/download](https://privacyfence.eu/download/).
-2. Drag **PrivacyFenceApp.app** to `/Applications`. Don't open it — there's no window to open
-   (local mode is headless, no menu bar icon), and step 3 below starts it for you.
-3. Install **PrivacyFence.mcpb** into Claude Desktop. The next time Claude Desktop loads the
-   extension, its shim starts the daemon automatically if it isn't already running.
+2. Open it and double-click **PrivacyFence.pkg**. The installer puts PrivacyFence in
+   `/Applications` and, using the administrator password it asks for as part of the install, sets
+   up privilege separation right then (see below) — so nothing has to ask you again later. If this
+   is the first PrivacyFence install on this account, log out and back in once when it finishes:
+   macOS only checks group membership at login.
+3. Install **PrivacyFence.mcpb** into Claude Desktop — it's the other file on the disk image, next
+   to the installer. The next time Claude Desktop loads the extension, its shim starts the daemon
+   automatically if it isn't already running.
 4. Ask Claude to set up PrivacyFence. PrivacyFence's `initialize` response already tells Claude to
    check `privacyfence_status` before its first governed action, so you often don't even need to
    ask explicitly — either way, Claude calls it, sees the install isn't onboarded yet, and hands
@@ -271,10 +275,12 @@ signing/notarization credential availability at build time. Full installation de
 
 **Privilege separation is on by default:** without it, PrivacyFence's daemon runs as you — and so
 does the AI client it governs, which is why that client could otherwise read and rewrite the policy
-deciding what it's allowed to do. The first time the daemon finds itself unseparated it asks once,
-via the standard admin-password dialog, to move itself to an account of its own — which takes the
-policy, the audit key and the connector credentials out of its reach — and start a menu-bar
-companion so you still have a way in. Decline once and it won't ask again; run
+deciding what it's allowed to do. The installer in step 2 moves the daemon to an account of its own
+— which takes the policy, the audit key and the connector credentials out of its reach — and starts
+a menu-bar companion so you still have a way in, all while it already has the administrator
+password you gave it. (If you install some other way, by copying the app bundle from another
+machine say, the daemon asks you once itself, via the standard admin-password dialog, the first
+time it starts unseparated; decline once and it won't ask again.) Run
 `sudo ./scripts/macos_privilege_separation.sh enable` any time afterward if you change your mind
 (`... disable` reverses it). Reversible either way, and worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)

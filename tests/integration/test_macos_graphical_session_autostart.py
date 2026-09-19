@@ -10,16 +10,16 @@ own dedicated account, and what starts in the logged-in user's own session inste
 the companion, as a LaunchAgent (``scripts/macos_privilege_separation.sh``,
 ``installer/macos/*.plist.tmpl`` -- ADR 0002's "the startup wiring inverts").
 
-Unlike Linux's ``.deb`` (``debian/postinst`` auto-separates at package-install time,
-no prompt at all) and Windows (no B5c auto-enable yet), macOS has no package-manager
-postinst to lean on -- a DMG install is a drag to ``/Applications``, nothing runs as
-root at install time. So the *only* automatic path, ``privilege_separation.
-maybe_auto_enable_macos()``, fires from the daemon's own first start instead and
-shells out through ``osascript ... with administrator privileges`` -- a real
-admin-password dialog nothing in CI can answer (see that function's own module
-docstring). This module does not attempt to drive that dialog; it drives the same
-script the way a human running it by hand does instead --
-``sudo scripts/macos_privilege_separation.sh enable`` -- the same
+macOS's own package-manager-equivalent path -- the ``.pkg``'s ``postinstall`` running
+as root at install time, the way Linux's ``.deb`` does it with ``debian/postinst`` --
+is ``test_macos_pkg_install.py``'s subject, in this same workflow. What this module
+covers is the other way in, still very much reachable: ``privilege_separation.
+maybe_auto_enable_macos()``, which fires from the daemon's own first start for an
+install that never went through the installer, and shells out through ``osascript ...
+with administrator privileges`` -- a real admin-password dialog nothing in CI can
+answer (see that function's own module docstring). This module does not attempt to
+drive that dialog; it drives the same script the way a human running it by hand does
+instead -- ``sudo scripts/macos_privilege_separation.sh enable`` -- the same
 passwordless-sudo substitution ``test_deb_packaged_lifecycle.py``'s own
 ``_can_install_packages()`` already makes, for the same reason.
 
@@ -42,8 +42,9 @@ CI-only quirk, but the reason the *daemon's own* runtime auto-enable prompt
 either. ``enable`` now stages its own root:wheel-owned copy of whatever ``--app``
 points at (``stage_trusted_image()``, into ``TRUSTED_IMAGE_DIR``) before trusting
 anything, and checks *that* copy instead -- so this module hands it a plain,
-``/tmp``-extracted, user-owned copy directly (``_copy_app_from_dmg``), the same shape
-a real DMG drag-install has, rather than pre-staging a trusted one itself. The
+``/tmp``-extracted, user-owned copy directly (``_copy_app_from_dmg``), the least
+privileged shape an unseparated install can have, rather than pre-staging a trusted
+one itself. The
 daemon/companion assertions below confirm the running processes actually come from
 ``TRUSTED_IMAGE_DIR``, not just that a same-named binary is running from somewhere.
 
@@ -111,20 +112,26 @@ def _built_dmgs() -> list[Path]:
 
 
 def _copy_app_from_dmg(dst_dir: Path) -> Path:
-    """Mounts the just-built DMG and copies ``PrivacyFenceApp.app`` out of it
-    into ``dst_dir`` -- the "install" step, without writing to this runner's
-    real ``/Applications``. Deliberately not imported from
-    ``test_macos_packaged_smoke.py``: that module's own top level runs
-    ``pytest.importorskip("mcp"/"playwright...")``, which this module has no
-    reason to depend on just to reuse ~15 lines -- same "stay independently
-    runnable" posture that module's own ``built_shim_entry`` fixture already
-    states for itself.
+    """Mounts the just-built DMG, expands the ``PrivacyFence.pkg`` it carries
+    and copies ``PrivacyFenceApp.app`` out of that package's payload into
+    ``dst_dir`` -- the "install" step, without writing to this runner's real
+    ``/Applications`` (and without running the package's own ``postinstall``,
+    which is exactly what ``test_macos_pkg_install.py`` exists to do instead).
+    The payload is where the app bundle lives in a shipped artifact at all:
+    the DMG carries the installer and the ``.mcpb``, not a draggable bundle --
+    see ``scripts/build_dmg.sh``.
 
-    Lands under a plain user-owned scratch directory -- the same shape a real
-    DMG drag-install has, and (#428 D2's B1 follow-up) exactly what `enable`
-    now accepts directly: it stages its own root:wheel-owned copy internally
-    before trusting anything, so this module no longer needs to pre-stage
-    one itself."""
+    Deliberately not imported from ``test_macos_packaged_smoke.py``: that
+    module's own top level runs ``pytest.importorskip("mcp"/"playwright...")``,
+    which this module has no reason to depend on just to reuse ~20 lines --
+    same "stay independently runnable" posture that module's own
+    ``built_shim_entry`` fixture already states for itself.
+
+    Lands under a plain user-owned scratch directory -- the least privileged
+    shape an unseparated install can have, and (#428 D2's B1 follow-up)
+    exactly what `enable` now accepts directly: it stages its own
+    root:wheel-owned copy internally before trusting anything, so this module
+    no longer needs to pre-stage one itself."""
     dmg_path = _built_dmgs()[-1]
     mount_point = Path(tempfile.mkdtemp(prefix="pf-dmg-mount-"))
     subprocess.run(
@@ -132,14 +139,23 @@ def _copy_app_from_dmg(dst_dir: Path) -> Path:
         check=True, capture_output=True, text=True, timeout=60,
     )
     try:
-        app_src = mount_point / "PrivacyFenceApp.app"
-        assert app_src.is_dir(), f"PrivacyFenceApp.app missing from {dmg_path} (mounted at {mount_point})"
-        app_dst = dst_dir / "PrivacyFenceApp.app"
-        shutil.copytree(app_src, app_dst, symlinks=True)
-        return app_dst
+        pkg_src = mount_point / "PrivacyFence.pkg"
+        assert pkg_src.is_file(), f"PrivacyFence.pkg missing from {dmg_path} (mounted at {mount_point})"
+        expanded = dst_dir / "pkg-expanded"
+        subprocess.run(
+            ["pkgutil", "--expand-full", str(pkg_src), str(expanded)],
+            check=True, capture_output=True, text=True, timeout=300,
+        )
     finally:
         subprocess.run(["hdiutil", "detach", str(mount_point), "-force"], capture_output=True, text=True, timeout=30)
         shutil.rmtree(mount_point, ignore_errors=True)
+
+    app_bundles = list(expanded.glob("**/Payload/PrivacyFenceApp.app"))
+    assert app_bundles, f"no PrivacyFenceApp.app in any component payload of {pkg_src.name}"
+    app_dst = dst_dir / "PrivacyFenceApp.app"
+    shutil.copytree(app_bundles[0], app_dst, symlinks=True)
+    shutil.rmtree(expanded, ignore_errors=True)
+    return app_dst
 
 
 def _can_sudo() -> bool:
@@ -172,11 +188,12 @@ pytestmark = [
         not _can_sudo(), reason="enabling privilege separation needs root -- run as root or with passwordless sudo",
     ),
     pytest.mark.skipif(shutil.which("launchctl") is None, reason="launchctl not on PATH"),
-    # A real DMG mount/copy, a real `enable` (system account creation, data-layout
-    # provisioning, two real launchd bootstraps) and polling two real processes to
-    # actually come up -- same heavy-setup timeout reasoning as every other
-    # packaged/system test in this repo.
-    pytest.mark.timeout(180),
+    pytest.mark.skipif(shutil.which("pkgutil") is None, reason="pkgutil not on PATH -- needed to unpack the DMG's .pkg"),
+    # A real DMG mount, a `pkgutil --expand-full` over the whole PyInstaller payload, a real
+    # `enable` (system account creation, data-layout provisioning, two real launchd bootstraps)
+    # and polling two real processes to actually come up -- same heavy-setup timeout reasoning as
+    # every other packaged/system test in this repo.
+    pytest.mark.timeout(240),
 ]
 
 
@@ -313,7 +330,7 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
     try:
         # No pre-staging: `enable` itself now copies whatever --app points at into its own
         # root:wheel-owned TRUSTED_IMAGE_DIR before trusting it (B1 follow-up, #428 D2) -- handing
-        # it a plain user-owned, /tmp-extracted copy directly is exactly the real DMG-drag-install
+        # it a plain user-owned, /tmp-extracted copy directly is exactly the least-privileged
         # shape this is supposed to accept, not a workaround for it.
         app_path = _copy_app_from_dmg(app_dir)
         user = _current_user()

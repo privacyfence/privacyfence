@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
-# Build PrivacyFence.pkg — a signed macOS installer package that provisions
-# privilege separation (#428 D2) automatically at install time,
-# instead of leaving that to the daemon's own admin-password runtime prompt
-# (privilege_separation.maybe_auto_enable_macos()) the drag-install DMG path
-# still depends on. A .pkg install already runs as root and already asks for
-# an administrator password as part of the normal "Install PrivacyFence"
-# step non-technical users already expect — so the one unavoidable
-# elevation macOS requires for this (creating a system account and a
-# LaunchDaemon) happens there, once, with PrivacyFence's own explanatory
-# text (installer/macos/pkg/resources/*.html), instead of an unexplained
-# dialog appearing later at some unrelated moment. See ADR 0002 and this
-# repo's CLAUDE.md for the DMG's own account of why that runtime prompt
-# exists at all. The DMG remains the primary distributable; this is an
-# additional artifact for anyone who wants the fully-automated install.
+# Build PrivacyFence.pkg -- the signed macOS installer package that *is* the
+# macOS install. It provisions privilege separation (#428 D2) automatically at
+# install time, instead of leaving that to the daemon's own admin-password
+# runtime prompt (privilege_separation.maybe_auto_enable_macos(), #428 D1),
+# which now only ever fires for an install that bypassed this package. A .pkg
+# install already runs as root and already asks for an administrator password
+# as part of the normal "Install PrivacyFence" step non-technical users already
+# expect -- so the one unavoidable elevation macOS requires for this (creating
+# a system account and a LaunchDaemon) happens there, once, with PrivacyFence's
+# own explanatory text (installer/macos/pkg/resources/*.html), instead of an
+# unexplained dialog appearing later at some unrelated moment. See ADR 0002 and
+# this repo's CLAUDE.md.
+#
+# **This package is not released on its own.** scripts/build_dmg.sh calls this
+# script and puts the resulting .pkg inside the DMG, next to PrivacyFence.mcpb;
+# that DMG is the only macOS artifact that ships. The .pkg used to be a second,
+# separately-downloadable artifact alongside a drag-install DMG, which is what
+# made its conclusion screen's "open <mcpb>, next to this installer" line a lie
+# for anyone who downloaded the .pkg by itself -- there was no .mcpb next to it.
+# Carrying both in one DMG makes that sentence true and leaves exactly one macOS
+# download to explain.
 #
 # A pkg-installed .app lands root:wheel-owned by pkgbuild's own default
 # ownership -- but /Applications itself is always root:admin, so that alone
@@ -25,22 +32,28 @@
 # (#428 D2's own B1 follow-up).
 #
 # Packages the *already-built* dist/PrivacyFenceApp.app -- this script never
-# runs PyInstaller itself, so run scripts/build_dmg.sh first (its DMG and
-# this script's .pkg then ship byte-identical app code from the same dist/).
+# runs PyInstaller itself, so it only ever runs after scripts/build_dmg.sh's
+# own PyInstaller step (which is why that script calls this one rather than
+# the other way round).
 #
 # Prerequisites (build machine only):
-#   dist/PrivacyFenceApp.app already built -- run scripts/build_dmg.sh first
+#   dist/PrivacyFenceApp.app already built -- scripts/build_dmg.sh does this
 #   pip install -e .   # so VERSION below can read installed metadata
 #
-# Usage:
+# Usage (normally: don't -- run scripts/build_dmg.sh, which calls this):
 #   ./scripts/build_pkg.sh [--sign "Developer ID Installer: Your Name (TEAMID)"]
 #
 # Note the certificate *type*: pkg signing needs a "Developer ID Installer"
 # identity, not the "Developer ID Application" one scripts/build_dmg.sh's
 # own --sign signs the .app/.dmg with -- Apple issues them separately, and
-# productsign (not codesign) is what actually consumes this one.
+# productsign (not codesign) is what actually consumes this one. That is also
+# why the environment variable read below is SIGN_IDENTITY_INSTALLER and not
+# SIGN_IDENTITY: this script runs as a child of scripts/build_dmg.sh, whose
+# own SIGN_IDENTITY is in the environment and is the wrong certificate type.
+# Signing with it would fail productsign outright at best, so it is never
+# consulted here.
 #
-# Output: dist/PrivacyFence-<version>.pkg
+# Output: dist/PrivacyFence-<version>.pkg (consumed by scripts/build_dmg.sh)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -69,22 +82,27 @@ PKG_NAME="${PRODUCT_NAME}-${VERSION}.pkg"
 PKG_PATH="dist/${PKG_NAME}"
 
 [ -d "$BUNDLE" ] || {
-  echo "error: ${BUNDLE} not found -- run scripts/build_dmg.sh first (this script packages its output, it doesn't build it)" >&2
+  echo "error: ${BUNDLE} not found -- run scripts/build_dmg.sh, which builds it and then calls this script (this one never runs PyInstaller itself)" >&2
   exit 1
 }
 
-SIGN_IDENTITY="${SIGN_IDENTITY:-}"
-for arg in "$@"; do
-  case "$arg" in
+# --sign wins over the environment; SIGN_IDENTITY_INSTALLER is how
+# scripts/build_dmg.sh (and build.yml's job-level env) passes it in. Never
+# SIGN_IDENTITY -- see this script's own header comment on the certificate type.
+SIGN_IDENTITY="${SIGN_IDENTITY_INSTALLER:-}"
+while [ $# -gt 0 ]; do
+  case "$1" in
     --sign) SIGN_IDENTITY="${2:-}"; shift 2 ;;
+    *) echo "error: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
 echo "=== Building ${PRODUCT_NAME} ${VERSION} installer package ==="
 
 # ── 1. Stage a clean package root ─────────────────────────────────────────
-# Not `--root dist` directly: dist/ also holds the .dmg and .mcpb this same
-# build produces, neither of which belongs under /Applications. ditto (not
+# Not `--root dist` directly: dist/ also holds the .mcpb this same build
+# produces (and, once scripts/build_dmg.sh wraps this .pkg up, the DMG
+# itself), none of which belongs under /Applications. ditto (not
 # cp -R) to preserve the .app bundle's extended attributes and, if it was
 # signed, its code signature intact.
 echo "→ Staging package root…"
@@ -96,7 +114,13 @@ cp -p installer/macos/pkg/postinstall "${SCRIPTS_DIR}/postinstall"
 chmod +x "${SCRIPTS_DIR}/postinstall"
 
 cp -p installer/macos/pkg/resources/welcome.html "${RESOURCES_DIR}/welcome.html"
-MCPB_NAME="${PRODUCT_NAME}-${VERSION}.mcpb"
+# The conclusion screen tells the user to open the .mcpb sitting next to this
+# installer, so the name baked in has to be the name the extension has *in the
+# DMG* -- not dist/'s versioned PrivacyFence-<version>.mcpb. scripts/build_dmg.sh
+# passes its own stable in-DMG name through MCPB_DMG_NAME; the default below
+# duplicates it only so a standalone run of this script still renders something
+# true (both names are "PrivacyFence.mcpb" -- change one, change the other).
+MCPB_NAME="${MCPB_DMG_NAME:-${PRODUCT_NAME}.mcpb}"
 sed -e "s|__MCPB_NAME__|${MCPB_NAME}|g" \
   installer/macos/pkg/resources/conclusion.html.tmpl > "${RESOURCES_DIR}/conclusion.html"
 

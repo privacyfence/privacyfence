@@ -13,6 +13,9 @@ import type { ManifestArtifact } from "./manifest.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   dmg: "application/x-apple-diskimage",
+  // Kept for a manifest from before the macOS `.pkg` moved inside the DMG (scripts/build_dmg.sh)
+  // and stopped being an artifact of its own: rolling `latest.json` back to one of those releases
+  // must still serve its `.pkg` correctly. No new release produces one.
   pkg: "application/octet-stream", // no widely-registered type for Apple's xar-based installer packages
   exe: "application/vnd.microsoft.portable-executable",
   deb: "application/vnd.debian.binary-package",

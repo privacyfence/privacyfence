@@ -1020,7 +1020,7 @@ Configuration that affects security boundaries is validated strictly; invalid va
 
 Current packaging paths are documented in [`platform-support.md`](platform-support.md):
 
-- macOS signed/notarized DMG;
+- macOS signed/notarized DMG, carrying the `.pkg` installer and the `.mcpb`;
 - Windows Inno Setup installer;
 - Debian/Ubuntu self-contained `.deb` for local desktop mode;
 - Python package/system-service path for Linux/server deployments.

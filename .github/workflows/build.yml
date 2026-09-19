@@ -181,7 +181,15 @@ jobs:
       - name: Unlock keychain before build
         run: security unlock-keychain -p "" build.keychain
 
-      - name: Build .app and DMG
+      # Builds the .app, the .mcpb, *and* the .pkg (scripts/build_dmg.sh calls
+      # scripts/build_pkg.sh itself now), then packs the .pkg and the .mcpb into the DMG --
+      # which is the only macOS artifact that ships. The .pkg used to be built by a step of
+      # its own here and uploaded/released beside the DMG; it can't be, now that the DMG has
+      # to contain it. SIGN_IDENTITY_INSTALLER isn't set here because it's a job-level env
+      # var already (see this job's own `env:` block) -- scripts/build_pkg.sh reads it from
+      # the environment, deliberately *not* the SIGN_IDENTITY below, which is the other
+      # certificate type and would fail productsign.
+      - name: Build .app, .pkg, .mcpb and DMG
         env:
           SIGN_IDENTITY: ${{ secrets.SIGN_IDENTITY }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
@@ -189,8 +197,9 @@ jobs:
         run: bash scripts/build_dmg.sh
 
       # The one place the actual packaged artifact -- not a source checkout, not a dev
-      # install -- gets exercised at all. Mounts the DMG just built above,
-      # runs the real frozen daemon binary from it, connects the real .mcpb
+      # install -- gets exercised at all. Mounts the DMG just built above, unpacks the app
+      # bundle out of the .pkg it carries (the only form the app ships in now -- see
+      # scripts/build_dmg.sh), runs that real frozen daemon binary, connects the real .mcpb
       # shim, and drives one real Allow/Deny round trip through a real
       # headless browser against the real served approval UI. A failure here
       # fails this job before the DMG reaches R2/GitHub Releases below.
@@ -211,24 +220,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Upload DMG as artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: PrivacyFence-dmg
-          path: dist/PrivacyFence-*.dmg
-          retention-days: 30
-
-      # scripts/build_pkg.sh packages the .app scripts/build_dmg.sh just built (above) into a
-      # second macOS artifact: a signed installer package whose own postinstall script provisions
-      # privilege separation (#428 D2) at install time, instead of the daemon's own runtime
-      # admin-password prompt the DMG path still depends on (#428 D1). Never re-runs PyInstaller --
-      # see that script's own header comment -- so this is cheap on top of the DMG build above. The
-      # DMG remains the primary distributable; this is an additional, fully-automated-install option.
-      - name: Build .pkg
-        env:
-          SIGN_IDENTITY: ${{ secrets.SIGN_IDENTITY_INSTALLER }}
-        run: bash scripts/build_pkg.sh
-
       # The .pkg's own structural smoke test -- see that module's own docstring for why this
       # stays the fast, no-install half (mirroring test_macos_packaged_smoke.py above) while the
       # real `sudo installer -pkg ...` + launchd verification (test_macos_pkg_install.py) lives in
@@ -245,19 +236,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      - name: Upload pkg as artifact
+      # The DMG is the macOS release artifact -- the .pkg and the .mcpb ride inside it and are
+      # never uploaded on their own (see scripts/build_dmg.sh's own header for why). Uploaded
+      # after *both* smoke tests above, so a broken .pkg stops this job before its carrier
+      # reaches `finalize-release`.
+      - name: Upload DMG as artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: PrivacyFence-pkg
-          path: dist/PrivacyFence-*.pkg
+          name: PrivacyFence-dmg
+          path: dist/PrivacyFence-*.dmg
           retention-days: 30
 
-      # Every channel's DMG + pkg + the two org config build scripts land in the private R2
+      # Every channel's DMG + the two org config build scripts land in the private R2
       # release archive (releases/<channel>/<version>/...) -- see scripts/r2_release.py's module
       # docstring. This runs for stable *and* pre-release tags alike: R2 is the one archive that
       # has everything, regardless of what's also public elsewhere.
       #
-      # Alongside the DMG and pkg, also upload the two org config build scripts (scripts/
+      # Alongside the DMG, also upload the two org config build scripts (scripts/
       # build_org_bundle.py and scripts/sync_room_directory.py). They're stdlib-only / a checked-
       # out copy is not what IT admins are expected to go find -- unlike the rest of scripts/,
       # these two are themselves a release output, run by org admins (not contributors) to
@@ -281,7 +276,6 @@ jobs:
           python3 -m pip install --quiet --user boto3
           python3 scripts/r2_release.py upload --version "${{ steps.release.outputs.version }}" \
             dist/PrivacyFence-*.dmg \
-            dist/PrivacyFence-*.pkg \
             scripts/build_org_bundle.py \
             scripts/sync_room_directory.py
 
@@ -457,8 +451,9 @@ jobs:
   # notarization -- `.deb`s aren't gated on a trusted-publisher story the way Gatekeeper/
   # SmartScreen gate the DMG/Windows installer), so it runs in parallel
   # rather than blocking on (or being blocked by) the DMG build. Together with the `build` and
-  # `build-windows` jobs, a tag push ends up with one GitHub Release carrying the DMG, the
-  # `.mcpb`, the Windows installer, and the `.deb` -- all attached together by `finalize-release`.
+  # `build-windows` jobs, a tag push ends up with one GitHub Release carrying the DMG (which
+  # itself carries the macOS `.pkg` and the `.mcpb`), the Windows installer, and the `.deb` --
+  # all attached together by `finalize-release`.
   build-deb:
     runs-on: ubuntu-latest   # amd64 -- arm64 is a follow-up once there's a concrete request, not
                               # a build-script change (P4.2: PyInstaller needs a real arm64 build
@@ -808,7 +803,6 @@ jobs:
         with:
           files: |
             release-assets/PrivacyFence-*.dmg
-            release-assets/PrivacyFence-*.pkg
             scripts/build_org_bundle.py
             scripts/sync_room_directory.py
             release-assets/PrivacyFence-*-setup.exe

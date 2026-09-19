@@ -39,10 +39,17 @@ full artifact set has been built — but the fix is still to move the release fo
 commit, or to delete the unwanted tag before retagging. A version that has already published
 artifacts stays published; cut the next one.
 
+**macOS ships one file.** `scripts/build_dmg.sh` builds the app bundle, the `.mcpb` and (by
+calling `scripts/build_pkg.sh`) the `.pkg`, then puts the `.pkg` and the `.mcpb` on the DMG and
+nothing else — no app bundle, no `/Applications` symlink. The `.pkg` is never uploaded or attached
+on its own; releasing the DMG releases all three. See `scripts/build_dmg.sh`'s own header and
+`docs/platform-support.md`.
+
 That tag push is what `.github/workflows/build.yml` **and** `.github/workflows/publish-pypi.yml`
-both trigger on (`on: push: tags: ['v*']`) — the former builds and signs the DMG/`.pkg`/Windows
-installer/`.deb` (running each one's own packaged-artifact smoke test, see "Packaged-artifact release gating"
-below) and generates the SBOMs, the latter builds the sdist/wheel from the same tag. The two
+both trigger on (`on: push: tags: ['v*']`) — the former builds and signs the DMG (which carries the
+macOS `.pkg` installer and the `.mcpb`; `scripts/build_dmg.sh` builds all three), the Windows
+installer and the `.deb` (running each one's own packaged-artifact smoke test, see "Packaged-artifact
+release gating" below) and generates the SBOMs, the latter builds the sdist/wheel from the same tag. The two
 workflows trigger independently but no longer publish independently: `publish-pypi.yml`'s
 `wait_for_build` job blocks every one of its own publish steps on `build.yml`'s run for that same
 commit actually succeeding — see "Packaged-artifact release gating" below. Every one of those
@@ -50,7 +57,7 @@ artifacts always uploads to the private Cloudflare R2 release archive (see "Clou
 archive" below);
 whether it *also* reaches a public GitHub Release / PyPI/TestPyPI depends on the tag's channel
 (`a`/`b`/`rc` suffix, or none for stable — same PEP 440 short-form scheme `update_checker.py`'s
-beta channel already ranks by): only a stable tag's DMG/`.pkg`/SBOMs get attached to a public GitHub
+beta channel already ranks by): only a stable tag's DMG/SBOMs get attached to a public GitHub
 Release and only a stable tag's sdist/wheel reach PyPI/TestPyPI; a pre-release tag still gets a
 GitHub Release entry (marked prerelease, so `update_checker.py`'s beta channel — which reads
 exactly that flag — keeps working), just with no files attached to it. The one thing that does need to be
@@ -126,18 +133,18 @@ what is being built.
 
 ### Packaged-artifact release gating
 
-The now-removed `automated-test-strategy-plan.md` Phase 6.4: every published DMG/`.pkg`/installer/`.deb` is
+The now-removed `automated-test-strategy-plan.md` Phase 6.4: every published DMG/installer/`.deb` is
 started and exercised, automatically, before it (or anything else from the same tag) actually
 ships.
 
 Within `build.yml`, this needs no cross-workflow trickery — each of the `build` (macOS),
 `build-windows`, and `build-deb` jobs runs its own packaged-artifact test
-(`tests/integration/test_macos_packaged_smoke.py` and, for the `.pkg` built in that same job,
+(`tests/integration/test_macos_packaged_smoke.py` and, for the `.pkg` inside that same DMG,
 `test_macos_pkg_smoke.py`; `test_windows_packaged_smoke.py`;
 `test_deb_packaged_lifecycle.py` — all `pytest.mark.packaged`) as an ordinary step, right after
 that job builds its own artifact and before that same job's own R2-upload and
 workflow-artifact-upload (`actions/upload-artifact`) steps. An ordinary failed step stops the job
-there, so a broken DMG/`.pkg`/installer/`.deb` never reaches its own upload steps — no `needs:`
+there, so a broken DMG (or the `.pkg` inside it)/installer/`.deb` never reaches its own upload steps — no `needs:`
 needed for this part, since it's all sequencing within one job.
 
 The GitHub Release attachment is a separate guarantee, and it *does* need `needs:` (privacyfence/
@@ -206,7 +213,7 @@ the only place it's published; see below.
 
 Every tag push — stable and pre-release alike — additionally uploads that release's artifacts to
 Cloudflare R2 (bucket `privacyfence-releases`), laid out as `releases/<channel>/<version>/...`:
-the DMG, the `.pkg`, and the two org-config build scripts (`build.yml`'s `build` job), both SBOMs (`build.yml`'s
+the DMG, and the two org-config build scripts (`build.yml`'s `build` job), both SBOMs (`build.yml`'s
 `sbom` job), and the sdist/wheel (`publish-pypi.yml`'s `publish-r2` job). `<version>` is the
 resolved `major.minor.patch[a|b|rc<n>]` string (never the `v`-prefixed tag itself); `<channel>` is
 `stable`, `alpha`, `beta`, or `rc`, derived from that suffix — see `scripts/r2_release.py`, which
@@ -232,11 +239,11 @@ more than it delivers:**
 Concretely, this means:
 
 - **Stable**: reaches PyPI/TestPyPI (see above) and gets a public GitHub Release with the DMG,
-  `.pkg`, org-config scripts, and SBOMs attached, exactly as before — R2 is an additional private
+  org-config scripts, and SBOMs attached, exactly as before — R2 is an additional private
   mirror, not stable's only distribution point.
 - **Alpha / beta / rc**: never reach PyPI/TestPyPI, and their GitHub Release entry (still created,
   marked prerelease, so `update_checker.py`'s beta channel — which reads exactly that flag off the
-  releases list — keeps working) carries no file attachments. The actual DMG/`.pkg`/SBOMs/sdist/wheel
+  releases list — keeps working) carries no file attachments. The actual DMG/SBOMs/sdist/wheel
   are stored only in R2 — reachable through the Worker's own download routes, but listed on no public
   index other than `privacyfence.eu/download/` itself.
 

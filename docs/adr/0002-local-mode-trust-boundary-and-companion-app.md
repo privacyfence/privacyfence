@@ -26,14 +26,16 @@ install time (see decision 5a's Windows-specific "install location is part of th
 Linux's `.deb` `postinst`, both of which *do* get a root-context install step). That prompt is a
 bare, unexplained system dialog that can appear disconnected from anything the person just did, and
 a decline or a failed safety check (`_macos_auto_enable_script_problem()`) leaves it silently
-opt-in. `scripts/build_pkg.sh` adds a second macOS artifact, a signed `.pkg`, whose own
-`postinstall` script runs `enable --auto` itself while already running as root during the ordinary
-"Install PrivacyFence" step — the one elevation this requires happens where a non-technical user
-already expects an administrator-password prompt, with PrivacyFence's own explanatory text
-(`installer/macos/pkg/resources/`) instead of none. This does not replace the DMG or D1's own
-runtime prompt (a DMG-installed copy still needs it, and still can decline it) — it is an
-additional, fully-automated-install option for whoever downloads the `.pkg` instead. See
-`docs/platform-support.md`'s "`.pkg` installer (#428 D2)" section and `CHANGELOG.md`.
+opt-in. `scripts/build_pkg.sh` builds a signed `.pkg` whose own `postinstall` script runs
+`enable --auto` itself while already running as root during the ordinary "Install PrivacyFence"
+step — the one elevation this requires happens where a non-technical user already expects an
+administrator-password prompt, with PrivacyFence's own explanatory text
+(`installer/macos/pkg/resources/`) instead of none. It shipped first as a second, separately
+downloadable macOS artifact beside a drag-install DMG; it is now what the DMG contains
+(`scripts/build_dmg.sh` puts the `.pkg` and the `.mcpb` on the image and nothing else), so this is
+the path a macOS download leads to rather than an alternative to one. D1's own runtime prompt is
+unchanged and still reached by an install that bypassed the installer, which can still decline it.
+See `docs/platform-support.md`'s "`.pkg` installer (#428 D2)" section and `CHANGELOG.md`.
 
 ## Context
 
