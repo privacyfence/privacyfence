@@ -252,14 +252,27 @@ runs the daemon with no desktop session at all, while an **XDG autostart entry**
 (`installer/linux/privacyfence-companion.desktop.tmpl` → `/etc/xdg/autostart/`) runs
 `privacyfence-companion --serve` in each user session.
 
-#428 D1 (4.1): `debian/postinst` now runs `enable --auto` itself on every install and upgrade — it
-already runs as root at that point, which is exactly what this needs. `--auto` only proceeds when
-`$SUDO_USER` names a resolvable, non-root account (i.e. the `.deb` was installed via `sudo apt
-install`/`sudo dpkg -i`, not by root directly or by an unattended upgrade with no session behind
-it); anywhere that's not true it logs why and leaves the install opt-in, exactly as before this,
-rather than guessing wrong about whose install this is. A pip/pipx source install has no such
-postinst hook and stays opt-in via the manual command above. `... disable` remains how to turn it
-back off either way.
+#428 D1 (4.1): `debian/postinst` runs the separation tool itself on every install and upgrade — it
+already runs as root at that point, which is exactly what this needs. ADR 0003 decisions 3 and 5
+made that two calls with two different failure policies, because the work splits into two halves
+that do not need the same things:
+
+- **The machine half** (`enable --machine-only`) — the system account, the data directory, the
+  marker, the systemd unit — needs to know nothing about which human this install is for, so it
+  runs unconditionally and *without* `|| true`. A failure of it fails the package install, loudly,
+  leaving dpkg with a half-configured package rather than an installed-looking one whose central
+  claim does not hold.
+- **The per-user half** (`enable --auto --for-user "$SUDO_USER"`) — the group membership, and
+  migrating that person's existing `~/.privacyfence` — does need to know, and `$SUDO_USER` is the
+  only thing a postinst has that can say. It names a resolvable, non-root account when the `.deb`
+  was installed via `sudo apt install`/`sudo dpkg -i`, and nothing when root installed it directly
+  or an unattended upgrade did. So it stays conditional and stays non-fatal: an unattended install
+  still ends up separated, with this one re-runnable step pending, which `... status` reports as
+  `PENDING USER` (distinct from `OFF`) and which the companion app closes at the first real login
+  session.
+
+A pip/pipx source install has no such postinst hook and stays opt-in via the manual command above.
+`... disable` remains how to turn it back off either way.
 
 Both pre-Phase-4 startup paths are moved aside rather than left in place: `/etc/xdg/autostart/
 privacyfence.desktop` and the `--user` unit each become `.disabled`, because either would start a

@@ -39,23 +39,25 @@ disposable CI account.
 
 #428 D1 (4.1): a plain ``dpkg -i``/``sudo apt install`` of this ``.deb`` no
 longer leaves the daemon's own XDG autostart entry in place -- ``debian/
-postinst`` now runs ``privacyfence-privilege-separation enable --auto`` on
-every install, which separates the daemon into its own system account and
-system unit whenever ``$SUDO_USER`` resolves to a real, non-root account (as
-it does for this workflow's own ``sudo``-invoking ``runner`` CI account, and
-for a real human's ``sudo apt install``). This module now has two autostart
-scenarios instead of one, because that changed *what* is supposed to
-autostart in the login session, not just whether it does:
+postinst`` separates the daemon into its own system account and system unit
+as part of configuring the package. Since ADR 0003 decision 5 the machine
+half of that runs unconditionally; the per-user half, which adds the human to
+the ``privacyfence`` group, additionally runs whenever ``$SUDO_USER``
+resolves to a real, non-root account (as it does for this workflow's own
+``sudo``-invoking ``runner`` CI account, and for a real human's ``sudo apt
+install``). This module now has two autostart scenarios instead of one,
+because that changed *what* is supposed to autostart in the login session,
+not just whether it does:
 
 - **Separated (the new default)**: the daemon is already up under
   ``privacyfence-daemon.service`` (a system unit) *before* any login at
-  all -- ``enable --auto`` starts it synchronously from ``postinst``. What
+  all -- the machine half starts it synchronously from ``postinst``. What
   the login session's own XDG autostart now activates is the *companion*
   app's own control channel (``privacyfence-companion --serve``, ADR 0002
   decision 5b), not the daemon -- the daemon has no desktop session of its
   own to autostart into any more.
 - **Unseparated**: still what a bare ``pip``/``pipx`` install gets today
-  (nothing there ever runs ``enable --auto`` -- that hook is ``debian/
+  (nothing there ever runs ``enable`` at all -- that hook is ``debian/
   postinst``'s alone), and still reachable from a ``.deb`` install by
   running ``disable``. This is the pre-D1 mechanism this module always
   tested: the daemon's own XDG autostart entry starts the daemon directly
@@ -207,7 +209,7 @@ AUTOSTART_UNIT_NAME = f"app-{_systemd_escape_unit_name_component(AUTOSTART_DESKT
 # #428 D1/Phase 4 (B5b): the companion's own autostart entry -- what a
 # separated install's login session activates instead of the daemon's now-
 # disabled entry above. Same generator-derivation reasoning as
-# AUTOSTART_UNIT_NAME, and the system unit `enable --auto` starts the daemon
+# AUTOSTART_UNIT_NAME, and the system unit the postinst's machine half starts the daemon
 # under once separated (installer/linux/privacyfence-daemon.service.tmpl).
 COMPANION_AUTOSTART_DESKTOP_FILE = Path("/etc/xdg/autostart/privacyfence-companion.desktop")
 COMPANION_AUTOSTART_UNIT_NAME = (
@@ -435,7 +437,7 @@ def _start_real_login_session(user: str, uid: int) -> tuple[dict, Callable[..., 
     # `systemctl start` is a no-op against a manager that is already running,
     # and on a CI runner this account's manager generally is -- which would
     # make this a *continued* session, not a new one. That distinction is not
-    # cosmetic here: `enable --auto` adds the installing human to the
+    # cosmetic here: the postinst's per-user half adds the installing human to the
     # `privacyfence` group during this very test's `dpkg -i`, and a process's
     # supplementary groups are fixed when its session is created. A manager
     # that predates the install hands every unit it starts -- the companion
@@ -519,17 +521,18 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
     port = _free_port()
     _prepare_home(home, port=port)
 
-    # ── Install. #428 D1: postinst's `enable --auto` now separates the
-    # install synchronously, inside `dpkg -i` itself, whenever $SUDO_USER
-    # resolves to a real, non-root account -- true of this job's own
-    # `sudo`-invoking `runner` CI account, same as a real human's `sudo apt
-    # install`. ─────────────────────────────────────────────────────────
+    # ── Install. #428 D1 and ADR 0003 decision 5: the postinst separates
+    # the install synchronously, inside `dpkg -i` itself. The machine half
+    # runs unconditionally; the per-user half additionally runs because
+    # $SUDO_USER resolves to a real, non-root account here -- true of this
+    # job's own `sudo`-invoking `runner` CI account, same as a real human's
+    # `sudo apt install`. ───────────────────────────────────────────────
     _dpkg("-i", str(deb_path))
 
     assert PRIVILEGE_SEPARATION_MARKER.is_file(), (
-        f"{PRIVILEGE_SEPARATION_MARKER} missing after dpkg -i -- this test assumes `enable --auto` "
-        "separated the install the same way a real `sudo apt install`/`sudo dpkg -i` would; if "
-        "$SUDO_USER isn't resolving to a real account here, see debian/postinst's own --auto gating"
+        f"{PRIVILEGE_SEPARATION_MARKER} missing after dpkg -i -- the postinst's machine half "
+        "separates the install the same way a real `sudo apt install`/`sudo dpkg -i` would, and "
+        "since ADR 0003 decision 5 a failure of it fails the install rather than reaching here"
     )
 
     # ── The legacy, single-account mechanism is gone: stop_legacy_autostart()
@@ -633,7 +636,7 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
     except AssertionError as exc:
         # The one failure mode worth naming rather than re-deriving from a
         # bare "never appeared": handoff/ is 2770 and group-owned, so a
-        # companion whose session predates `enable --auto`'s `usermod -aG`
+        # companion whose session predates the postinst's `usermod -aG`
         # simply cannot create a socket in it. Print what the process
         # actually got, so this never costs a second workflow round.
         try:
@@ -660,7 +663,7 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
 
 # --------------------------------------------------------------------------- #
 # Test 2 -- the unseparated path: still what a bare pip/pipx install gets
-# today (nothing there ever runs `enable --auto`), and reachable from a
+# today (nothing there ever runs `enable` at all), and reachable from a
 # .deb install by running `disable` -- the pre-D1 mechanism this module
 # always tested, where the daemon's own XDG autostart entry starts the
 # daemon directly in the login session, which then serves a real daemon/
@@ -688,7 +691,7 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     # ── Install, then explicitly undo #428 D1's now-automatic privilege
     # separation -- this pins the pre-D1 mechanism, which is *also* still
     # exactly what a bare pip/pipx install gets today: nothing there ever
-    # runs `enable --auto` at all, since that hook is debian/postinst's
+    # runs `enable` at all, since that hook is debian/postinst's
     # alone. See the first test in this module for the new, separated-by-
     # default path a plain `.deb` install now takes if left alone. ───────
     _dpkg("-i", str(deb_path))
