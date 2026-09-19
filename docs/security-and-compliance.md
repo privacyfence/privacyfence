@@ -43,17 +43,18 @@ on the same machine, so a process running as that user can reach everything the 
 on. This section states plainly what that does and does not mean, because the goals listed above
 are otherwise easy to read more broadly than they hold.
 
-**On macOS, Linux and Windows you can move that boundary** — see [Privilege separation (macOS,
-Linux and Windows)](#privilege-separation-macos-linux-and-windows) below, which is what
-[#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4 builds. macOS and Linux move
-it **by default** as of D1 (4.1); Windows remains opt-in, per that subsection. Everything in the
-rest of this section describes the un-separated install — still what a Windows install is unless
-`enable` is run by hand, still reachable on any platform via `... disable`, and still what a macOS
-install that bypassed the `.pkg` inside the DMG is until its one admin-password prompt is answered
-(the `.pkg` itself, #428 D2, answers this at install time instead — see that subsection). A
-Debian/Ubuntu `.deb` install is no longer among them: since ADR 0003 decision 5 its `postinst`
-separates the machine unconditionally or fails the install. That subsection says exactly which
-of these statements a separated install changes and which it leaves standing.
+**On macOS, Linux and Windows every packaged install moves that boundary automatically** — see
+[Privilege separation (macOS, Linux and Windows)](#privilege-separation-macos-linux-and-windows)
+below, which is what [#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4 builds
+and [ADR 0003](adr/0003-separated-installs-only.md) makes mandatory rather than opt-in on any of the
+three. A packaged build that finds itself unseparated does not serve at all (ADR 0003 decision 6 —
+no `/mcp`, no approvals), so the un-separated install the rest of this section describes is not
+something any of the three platforms' installers ship: it is reachable only via `... disable`
+(documented and deliberate — see that subsection), or from a non-packaged source/pip checkout run
+with `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` for local development (never a real deployment — see
+that subsection and [ADR 0003](adr/0003-separated-installs-only.md) decision 7). That subsection
+says exactly which of the statements below a separated install changes and which it leaves
+standing.
 
 A local process running as the signed-in user can:
 
@@ -97,8 +98,8 @@ configured, WebAuthn step-up binds a write approval to a fresh user-verified ass
 account so its state is neither readable nor writable by processes running as the user
 ([#428](https://github.com/privacyfence/privacyfence/issues/428) — Phases 1 and 2, a state-layout
 refactor and the control-channel interface itself, have landed; Phase 4's actual privilege
-separation is what closes this, and has now shipped on all three desktop platforms — default-on for
-macOS and Linux (D1, 4.1), opt-in for Windows — see below), and giving the human a way
+separation is what closes this, and now ships mandatorily on all three desktop platforms —
+[ADR 0003](adr/0003-separated-installs-only.md), see below), and giving the human a way
 into the web UI that does not route a credential through the AI client
 ([#427](https://github.com/privacyfence/privacyfence/issues/427) — the companion app, Phase 3).
 Local-mode WebAuthn step-up ([#426](https://github.com/privacyfence/privacyfence/issues/426))
@@ -256,28 +257,45 @@ so the daemon leaves your session and the companion app enters it:
 
 All three still ship the manual `enable`/`disable`/`status` subcommands above; the migration moves
 live connector OAuth tokens, so take a backup first if running one by hand. `... disable` reverses
-it on any platform. **macOS and Linux now turn this on by default as of #428 D1 (4.1)**, rather than
-waiting out the originally-planned soak period: the `.deb`'s `postinst` separates the install
-itself, root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)).
-Since ADR 0003 decision 5 the machine half of that — the system account, the data directory, the
-marker, the systemd unit — is unconditional and carries no `|| true`, so an install that could not
-separate itself fails the package install loudly rather than quietly becoming one that isn't; the
-per-user half (the group membership) keeps its `$SUDO_USER` gate and keeps the right to defer, so
-an unattended install with no session behind it still ends up separated, with that one
-re-runnable step pending. An install that is just a copied app bundle has no equivalent
-package-manager hook, so the daemon's
-own startup asks once, via the standard admin-password dialog, the first time it finds itself
-unseparated (`privilege_separation.maybe_auto_enable_macos()`). #428 D2 (4.1) gives macOS a
-root-context install-time hook of its own — `scripts/build_pkg.sh`'s signed `.pkg`, whose own
+it on any platform — and, per [ADR 0003](adr/0003-separated-installs-only.md) decision 6, it stops
+being a way to run PrivacyFence: a packaged build finds no marker afterward and refuses to serve.
+**Every packaged install on all three platforms now separates itself as part of installing**,
+mandatorily rather than opt-in, per ADR 0003. The `.deb`'s `postinst` separates the install itself,
+root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)). Since
+ADR 0003 decision 5 the machine half of that — the system account, the data directory, the marker,
+the systemd unit — is unconditional and carries no `|| true`, so an install that could not separate
+itself fails the package install loudly rather than quietly becoming one that isn't; the per-user
+half (the group membership) keeps its `$SUDO_USER` gate and keeps the right to defer, so an
+unattended install with no session behind it still ends up separated, with that one re-runnable
+step pending, which the companion closes the first time a real login session starts one (ADR 0003
+decision 3). macOS's DMG carries a signed `.pkg` (`scripts/build_pkg.sh`) whose own
 `installer/macos/pkg/postinstall` script runs `enable --auto` itself while the package install is
-still running, the same shape as the `.deb`'s `postinst`. That `.pkg` is what the downloaded DMG
-carries, so it is the ordinary macOS path now and the runtime dialog is the fallback. `--auto`
-(used by the unattended triggers, never by a human directly, and on Linux now only by the half
-that is allowed to defer) is the same `enable`, made safe to run unattended: anywhere it can't
-safely tell who owns the install or find the daemon's executables, it logs why and exits 0 rather
-than guessing or failing the step it was called from. **Windows stays opt-in** — D1
-does not extend to it, on top of the install-tier and mandatory-companion requirements below, which
-raise the bar for an unattended default beyond what the two POSIX platforms needed.
+still running, the same shape as the `.deb`'s `postinst` — since [ADR 0003](adr/0003-separated-installs-only.md)
+decision 2 the DMG holds nothing else to install from, so this `.pkg` step is the only way to get
+macOS PrivacyFence onto a machine, not one path among several. An install that reached a running
+state some other way (a copied app bundle, an in-place upgrade from before this ADR) has no
+package-manager hook behind it, so the daemon's own startup asks, via the standard admin-password
+dialog, the first time it finds itself unseparated (`privilege_separation.
+maybe_auto_enable_macos()`) — asked again on every start it is declined, not once
+(ADR 0003 decision 6 retired the one-shot marker #428 D1 wrote). `--auto` (used by the unattended
+triggers, never by a human directly, and on Linux now only by the half that is allowed to defer) is
+the same `enable`, made safe to run unattended: anywhere it can't safely tell who owns the install
+or find the daemon's executables, it logs why and exits 0 rather than guessing or failing the step
+it was called from. **Windows now separates too, as an installer step**: [ADR 0003](adr/0003-separated-installs-only.md)
+decision 4 withdrew the non-elevated per-user install tier #407 added and ADR 0002 decision 5a
+preserved, and `installer/privacyfence.iss` runs `privilege-separation.ps1 enable` itself with
+Setup's own elevated token, right after the app is laid down — a failure of that step is an install
+failure, not a silently-opt-in install.
+
+**And a packaged build that ends up unseparated anyway does not serve.** ADR 0003 decision 6 is the
+backstop for the installs the paragraph above doesn't cover — a pre-ADR-0003 install upgrading in
+place, a restored backup, an install where `... disable` was run and forgotten: on startup, a
+packaged local-mode daemon attempts its platform's provisioning (the same mechanisms above, run
+again) and, if it is still unseparated afterward, refuses outright — no `/mcp`, no approvals —
+naming the one command that fixes it. Source checkouts and `pip`/`pipx` installs are not packaged
+builds and are not gated this way (they are how org mode is deployed, and how the project is
+developed); what they may not do instead is claim a guarantee they don't hold — see
+`PRIVACYFENCE_DEV_ALLOW_UNSEPARATED` below.
 
 **Windows expresses the same layout in a different primitive, and adds one requirement the others
 do not have.** There are no permission bits there, so the modes below are NTFS ACLs
@@ -285,14 +303,17 @@ do not have.** There are no permission bits there, so the modes below are NTFS A
 stating rather than leaving to be discovered:
 
 - **A service runs whatever its `binPath` names**, so the install location is part of the boundary.
-  PrivacyFence installed under your own profile — the non-elevated, per-user path the installer
-  offers ([#407](https://github.com/privacyfence/privacyfence/issues/407)) — would let a process
-  running as you rewrite the daemon's own executable and have the service run it *as the service
-  account*, which is worse than not separating at all. So `enable` refuses against a user-writable
-  install and says why; privilege separation on Windows requires the per-machine install under
-  `%ProgramFiles%`. That is the resolution of the open question [ADR
-  0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) carried: two install tiers, with
-  separation available only on the elevated one.
+  A non-elevated, per-user install under your own profile would let a process running as you
+  rewrite the daemon's own executable and have the service run it *as the service account*, which
+  is worse than not separating at all — so `enable` refuses against a user-writable install and
+  says why. [ADR 0003](adr/0003-separated-installs-only.md) decision 4 settled the open question
+  [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) carried by withdrawing that
+  tier outright: the non-elevated per-user path [#407](https://github.com/privacyfence/privacyfence/issues/407)
+  added is retired, `installer/privacyfence.iss` has required `PrivilegesRequired=admin` since
+  [#410](https://github.com/privacyfence/privacyfence/issues/410) (originally for an unrelated
+  reason — a non-elevated install could never register its own autostart task), and there is now
+  one Windows install tier: an elevated, per-machine install under `%ProgramFiles%`, which the
+  installer separates as part of installing.
 - **The companion is mandatory, not a convenience.** A Windows service runs in session 0 and cannot
   reach your desktop, so without the tray app there is no way for connector OAuth
   (Slack/Salesforce/Atlassian) to open a sign-in page at all — the case ADR 0002 decision 5 was
@@ -371,6 +392,18 @@ and refuses to start outright if it finds itself running as the wrong account �
 install that would otherwise look like a silent policy reset rather than a failure, since it could
 not read the real `settings.yaml` and would seed a default one.
 
+**The developer path.** A non-packaged install (a source checkout, `pip`/`pipx install
+privacyfence`) is not a packaged build and is not gated by the refusal above — it is how org mode is
+deployed and how the project is developed, and [ADR 0003](adr/0003-separated-installs-only.md)
+decision 7 leaves both untouched. What it may not do is claim protection it does not have:
+`step_up_config.py`'s `from_local_config()` refuses `step_up.require_passkey: true` on a
+non-packaged, unseparated local-mode install — the same "worse than not having the feature"
+reasoning [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 gives for a
+passkey checked against a credential store the agent can rewrite — unless
+`PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` is set, the established house spelling (a sibling of
+`PRIVACYFENCE_DEV_ALLOW_INSECURE_IDP`). Set it only for local development against an unseparated
+checkout, never for a real deployment.
+
 ## Authentication boundaries
 
 ### Local web UI
@@ -387,7 +420,7 @@ What bounds it instead: local mode only (it raises in org mode, which authentica
 
 Net effect: an MCP client can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. The justification this paragraph used to give — that such a client already holds equivalent-or-greater access via every other tool this daemon exposes — holds for connector reads and writes, which are themselves gated. It understates one case: a session also reaches the approval UI, so it can *release* a gated call rather than merely request one, and that is the product's central control rather than one more tool. This is not a weakness introduced by this tool — see [Local-mode trust boundary](#local-mode-trust-boundary), where a process running as the user mints the same session through the control channel without it — but it should not be described as a neutral consequence of existing trust either. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
 
-**Revised, #426 Phase 4:** the paragraph above is still true of a session by itself, and stays true regardless of configuration — this tool has no `step_up` awareness of its own, and doesn't need any: minting a session was never the part step-up narrows. What changes is what that session is *sufficient for*, and only under two conditions together, neither of which is this deployment's default. With [privilege separation](#privilege-separation-macos-linux-and-windows) active (default-on for macOS/Linux as of #428 D1, opt-in for Windows) **and** `step_up.require_passkey` turned on in `config/settings.yaml` (opt-in everywhere — reachable from the Settings page once a passkey is enrolled, B9, or still by hand; see `step_up_config.py`'s own `LiveStepUpConfig` docstring), the credential store a step-up assertion is checked against is no longer writable by the same process minting the session, so that session alone can no longer release an approving decision on a gated write, nor change what a future write can reach through `_SENSITIVE_ACTIONS` (an always-allow rule, a grant, a relaxed default policy). It can still mint the session, still view what's pending, and still hold read access to the review screen — the confidentiality half [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 names as the weaker guarantee, left open on purpose. With either condition missing — no privilege separation, or `step_up.require_passkey` left off — the original paragraph's net effect stands unqualified: the session is enough on its own.
+**Revised, #426 Phase 4:** the paragraph above is still true of a session by itself, and stays true regardless of configuration — this tool has no `step_up` awareness of its own, and doesn't need any: minting a session was never the part step-up narrows. What changes is what that session is *sufficient for*, and only under two conditions together, neither of which is this deployment's default. With [privilege separation](#privilege-separation-macos-linux-and-windows) active (mandatory on a packaged install as of [ADR 0003](adr/0003-separated-installs-only.md); not guaranteed on a non-packaged one — see "The developer path" above) **and** `step_up.require_passkey` turned on in `config/settings.yaml` (opt-in everywhere — reachable from the Settings page once a passkey is enrolled, B9, or still by hand; see `step_up_config.py`'s own `LiveStepUpConfig` docstring), the credential store a step-up assertion is checked against is no longer writable by the same process minting the session, so that session alone can no longer release an approving decision on a gated write, nor change what a future write can reach through `_SENSITIVE_ACTIONS` (an always-allow rule, a grant, a relaxed default policy). It can still mint the session, still view what's pending, and still hold read access to the review screen — the confidentiality half [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 names as the weaker guarantee, left open on purpose. With either condition missing — no privilege separation, or `step_up.require_passkey` left off — the original paragraph's net effect stands unqualified: the session is enough on its own.
 
 ### Local MCP
 
@@ -459,7 +492,7 @@ See [`org-mode-download-delivery.md`](org-mode-download-delivery.md).
 
 PrivacyFence records gate/approval activity in its audit log, including principal information in org mode. Every entry is unconditionally chained to the one before it with a keyed hash (HMAC-SHA256) — this isn't an opt-in feature; `AuditLogger` computes it for every install, and `verify_chain()` (or `scripts/verify_audit_log.py`) detects a line inserted, edited, or removed after the fact.
 
-The chain's signing key lives next to the `.jsonl` files it protects, at the same file permissions. That defends against accidental corruption and against a party who gains write access to the log files specifically (e.g. a bug in some other export/backup path) without also reading the key — it does **not** defend against a party who already has full read/write access to the audit directory, since that party can read the key alongside the log and recompute a consistent chain over a tampered file. The real defense against that threat is a copy that leaves this trust boundary entirely — see the forwarding paragraph below. In local mode that party includes any process running as the signed-in user (see [Local-mode trust boundary](#local-mode-trust-boundary)), so forwarding carries more of the weight there than the file permissions do — unless the install has separated privileges (default-on for a fresh macOS/Linux install as of #428 D1, opt-in on Windows; [privilege separation](#privilege-separation-macos-linux-and-windows)), which moves the audit directory and its key onto an account that user does not hold, and is exactly the change that lets the file permissions carry their own weight again.
+The chain's signing key lives next to the `.jsonl` files it protects, at the same file permissions. That defends against accidental corruption and against a party who gains write access to the log files specifically (e.g. a bug in some other export/backup path) without also reading the key — it does **not** defend against a party who already has full read/write access to the audit directory, since that party can read the key alongside the log and recompute a consistent chain over a tampered file. The real defense against that threat is a copy that leaves this trust boundary entirely — see the forwarding paragraph below. In local mode that party includes any process running as the signed-in user (see [Local-mode trust boundary](#local-mode-trust-boundary)), so forwarding carries more of the weight there than the file permissions do — unless the install has separated privileges (mandatory on a fresh packaged install as of [ADR 0003](adr/0003-separated-installs-only.md); [privilege separation](#privilege-separation-macos-linux-and-windows)), which moves the audit directory and its key onto an account that user does not hold, and is exactly the change that lets the file permissions carry their own weight again.
 
 Org deployments can use the implemented forwarding/export path for external retention/monitoring. Forwarding does not replace local operational decisions about retention, backup, and access control.
 
