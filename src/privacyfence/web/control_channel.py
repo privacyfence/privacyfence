@@ -348,6 +348,13 @@ def _handle_daemon_request(
             # ceremony CONFIRM ENROLL uses, and for the same reason: nothing
             # about the connection itself distinguishes the human's terminal
             # from the agent's subprocess, since they share a uid.
+            #
+            # This blocks this channel's accept loop for as long as the
+            # dialog is up, the same way CONFIRM ENROLL blocks the
+            # companion's (see CONFIRM_DIALOG_TIMEOUT_SECONDS). Somebody
+            # running the break-glass command while also clicking the
+            # companion's menu is not a real workflow -- but it is why that
+            # timeout is 90 seconds and not five minutes.
             confirm_console = confirm_console_mint or request_sign_in_confirmation
             confirmed, reason = confirm_console()
             if not confirmed:
@@ -1310,7 +1317,7 @@ def mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     return reply[len("OK "):].strip()
 
 
-def mint_console_bootstrap_code(*, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0) -> str:
+def mint_console_bootstrap_code(*, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 20.0) -> str:
     """``privacyfence-app --print-sign-in-link``'s own mint (daemon_main.py):
     asks the daemon for a code that can approve, which the daemon grants only
     once the companion has put ``_CONFIRM_SIGN_IN_PROMPT`` in front of a human
@@ -1320,7 +1327,10 @@ def mint_console_bootstrap_code(*, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECON
     reason ``request_enrollment_confirmation()``'s does: the ordinary "nobody
     was at the keyboard" case should be reported by the process that actually
     knows it, in words, rather than guessed at from a socket timing out
-    here."""
+    here. Further past it than the daemon's own wait on the companion
+    (``request_sign_in_confirmation``, dialog + 5s), since a client that gives
+    up at the same moment the daemon is finishing turns a perfectly good
+    answer into a bare socket timeout in somebody's terminal."""
     reply = _send_to_daemon("MINT CONSOLE\n", timeout=timeout)
     if not reply.startswith("OK "):
         raise ControlChannelError(_error_reason(reply) or "the sign-in link was not confirmed")
