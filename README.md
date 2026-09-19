@@ -289,11 +289,13 @@ before you run it by hand — the migration moves live connector tokens.
 ### Install on Windows
 
 1. Download the latest `PrivacyFence-<version>-setup.exe` from [privacyfence.eu/download](https://privacyfence.eu/download/).
-2. Run the installer. It installs PrivacyFence to `%ProgramFiles%\PrivacyFence\` — or, if you run
-   the installer without admin rights, to `%LOCALAPPDATA%\Programs\PrivacyFence\` instead, inside
-   your own user profile — registers a Task Scheduler task so the daemon starts at login, and
-   starts the daemon immediately — no separate "install the mcpb first" step is needed to get it
-   running (unlike macOS, above), though you still need it installed to talk to Claude Desktop.
+2. Run the installer — it asks for administrator rights (it needs them regardless of privilege
+   separation, to register the autostart task) and installs PrivacyFence to
+   `%ProgramFiles%\PrivacyFence\`. Using that same elevated token, it also sets up privilege
+   separation right then (see below) — so nothing has to ask you again later. It registers a Task
+   Scheduler task so the companion starts at login, and starts the daemon immediately — no separate
+   "install the mcpb first" step is needed to get it running (unlike macOS, above), though you
+   still need it installed to talk to Claude Desktop.
 3. Install **PrivacyFence.mcpb** into Claude Desktop: on the installer's last page, leave the
    checked box for it checked and click Finish. If Windows already has a working `.mcpb` file
    association (normally set up by Claude Desktop's own installer), that box reads "Install
@@ -324,20 +326,19 @@ on signing certificate availability at build time. Full installation details, in
 uninstalling does and doesn't remove, are in
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
 
-**Optional:** by default PrivacyFence's daemon runs as you — and so does the AI client it governs,
-which is why that client can read and rewrite the policy deciding what it's allowed to do. From an
-elevated PowerShell,
+**Privilege separation is on by default:** without it, PrivacyFence's daemon runs as you — and so
+does the AI client it governs, which is why that client could otherwise read and rewrite the policy
+deciding what it's allowed to do. The installer in step 2 moves the daemon to a Windows service
+running under a virtual account of its own — which takes the policy, the audit key and the
+connector credentials out of that client's reach — and starts a tray companion so you still have a
+way in, all while it already has the administrator rights it needs to do that. One thing differs
+from macOS and Linux: your data directory moves to `%ProgramData%\PrivacyFence\`, so run `…
+disable` *before* uninstalling if you ever want it back under your own account. The same command,
 `powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" enable`
-moves the daemon to a Windows service running under a virtual account of its own, which takes the
-policy, the audit key and the connector credentials out of that client's reach, and starts a tray
-companion so you still have a way in. Two things differ from macOS and Linux: it needs the
-per-machine install from step 2 (a service runs whatever its path names, so PrivacyFence installed
-inside your own profile could be rewritten by the very client this contains — `enable` refuses
-rather than pretending otherwise), and your data directory moves to `%ProgramData%\PrivacyFence\`,
-so run `… disable` *before* uninstalling if you ever want it back under your own account. Opt-in,
-reversible, and worth reading
+from an elevated PowerShell, remains available for inspecting or re-running it by hand. Reversible,
+and worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
-before you run it — the migration moves live connector tokens.
+either way — the migration moves live connector tokens.
 
 ### Install from the `.deb` (Debian/Ubuntu desktop)
 
@@ -368,19 +369,28 @@ also clean up anything package-owned, and there's no system-wide config here to 
 [Platform support](https://github.com/privacyfence/privacyfence/blob/main/docs/platform-support.md#debianubuntu-local-mode) for how the
 package is built.
 
-Prefer a bare `pip`/`pipx install privacyfence` plus the repo-root `privacyfence.service`
-(`--user` systemd unit) instead? That path works too — see the same
+`pip`/`pipx install privacyfence` plus the repo-root `privacyfence.service` (`--user` systemd unit)
+also works, but is not an answer to "how do I install PrivacyFence on my Linux desktop": it is a
+source install, not a packaged one, so it is not privilege-separated and
+[ADR 0003](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0003-separated-installs-only.md)
+decision 6's "a packaged install that finds itself unseparated does not serve" backstop does not
+apply to it either — it runs, unprotected, with your policy and audit log readable and writable by
+the same account the AI client runs as. That is the right trade for local development and for how
+org mode is deployed, and the wrong one for a laptop; use the `.deb` above for that. See the same
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging) section.
 
-**Privilege separation is on by default for the `.deb`:** `debian/postinst` runs
-`privacyfence-privilege-separation enable --auto` itself, on every install and upgrade, moving the
-daemon to a `privacyfence` system account of its own — a system systemd unit in place of the
-autostart entry — which takes the policy, the audit key and the connector credentials out of the AI
-client's reach. It only skips itself when it can't safely tell who owns the install (an unattended
-upgrade with no `sudo` session behind it); a source checkout, or a `.deb` install it skipped, stays
-opt-in via `sudo privacyfence-privilege-separation enable` (installed by the `.deb`; from a source
-checkout it's `sudo ./scripts/linux_privilege_separation.sh enable`). `... disable` reverses it
-either way. Reversible, and worth reading
+**Privilege separation is mandatory for the `.deb`:** `debian/postinst` separates the install
+itself, on every install and upgrade, moving the daemon to a `privacyfence` system account of its
+own — a system systemd unit in place of the autostart entry — which takes the policy, the audit key
+and the connector credentials out of the AI client's reach. That machine-level move always runs and
+a failure of it fails the package install; the one piece that can be left pending is adding *you* to
+the `privacyfence` group, when the install can't safely tell who owns it (an unattended upgrade with
+no `sudo` session behind it) — the companion app closes that the first time you actually log in.
+A source checkout has no such postinst hook and stays opt-in via
+`sudo privacyfence-privilege-separation enable` (installed by the `.deb`; from a source checkout
+it's `sudo ./scripts/linux_privilege_separation.sh enable`). `... disable` reverses it either way,
+and, on a packaged install, stops being a way to keep the daemon running — it refuses to serve once
+it finds no marker. Reversible, and worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
 before you run it by hand — the migration moves live connector tokens.
 
