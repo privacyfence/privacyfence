@@ -98,6 +98,8 @@ from .session_auth import LocalSessionStore
 from .session_auth import authenticated as _session_authenticated
 from .session_auth import check_csrf as _csrf_matches
 from .session_auth import check_origin as _origin_ok
+from .session_auth import human_session_required_json as _human_session_required_json
+from .session_auth import is_human_session as _is_human_session
 from .session_auth import unauthorized_html as _unauthorized_response
 
 logger = logging.getLogger(__name__)
@@ -362,6 +364,7 @@ def build_routes(
     notifications_detail: str = "minimal",
     step_up: StepUpConfig | None = None,
     step_up_origin: str = "",
+    require_human_session: bool = False,
 ) -> list[BaseRoute]:
     """The Route objects themselves, for server.py to fold into the one
     combined app (extra_routes, same pattern web/routes_mcp.py's
@@ -387,6 +390,16 @@ def build_routes(
     same ``StepUpConfig``/origin it already resolves for web/
     routes_approvals.py's own decide-time check and web/routes_security.py's
     ``/security`` mount.
+
+    ``require_human_session`` (the self-approval plan's Phase 2) refuses
+    every ``_SENSITIVE_ACTIONS`` action -- the same set ``_needs_step_up``
+    already names, i.e. everything that can change *what gets gated* -- to a
+    session web/session_auth.py cannot attribute to a person. Unlike
+    ``_needs_step_up`` it does not wait on ``step_up.require_passkey``: an
+    install with no passkey requirement still has a policy an agent should
+    not be able to rewrite on its own say-so. See web/routes_approvals.py's
+    own ``require_human_session`` paragraph for why web/server.py turns this
+    on for privilege-separated installs only.
     """
     challenges = StepUpChallengeStore()
 
@@ -505,6 +518,13 @@ def build_routes(
         if rejected is not None:
             return rejected
         body = {k: v for k, v in payload.items() if k != "csrf"}
+        if require_human_session and action in _SENSITIVE_ACTIONS and not _is_human_session(request, sessions):
+            # Before the step-up ceremony for the same reason
+            # web/routes_approvals.py's own check is: a passkey prompt for
+            # an action this session cannot take either way is a worse
+            # refusal than the refusal itself.
+            body, status = _human_session_required_json("change this setting")
+            return JSONResponse(body, status_code=status)
         if _needs_step_up(action):
             fingerprint_body = {k: v for k, v in body.items() if k != "webauthn_assertion"}
             assertion = payload.get("webauthn_assertion")
@@ -600,6 +620,7 @@ def create_app(
     controller: SettingsController, *, sessions: LocalSessionStore, allow_quit: bool = True,
     notifications_enabled: bool = True, notifications_detail: str = "minimal",
     step_up: StepUpConfig | None = None, step_up_origin: str = "",
+    require_human_session: bool = False,
 ) -> Starlette:
     """Standalone Starlette app wrapping build_routes() -- what this
     module's own tests construct against, the same "no filesystem/global-
@@ -608,4 +629,5 @@ def create_app(
     return Starlette(routes=build_routes(
         controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
         notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_origin,
+        require_human_session=require_human_session,
     ))

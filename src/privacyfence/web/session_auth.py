@@ -87,11 +87,43 @@ DEFAULT_IDLE_TIMEOUT_SECONDS = 30 * 60
 # ``POST /api/bootstrap`` (see this module's own docstring).
 DEFAULT_ABSOLUTE_TIMEOUT_SECONDS = 24 * 60 * 60
 
+# #428 Phase 2 of the self-approval remediation plan: how the session in
+# front of us was established, which is the one thing about a ``pf_session``
+# nothing downstream used to record.
+#
+# ADR 0002 decision 6 names three ways a local process reaches a session,
+# all of them by design: the companion's own Open Approvals item, a
+# bootstrap link a human was handed, and a bare ``MINT`` on the control
+# channel (web/control_channel.py) -- which privilege separation *widens*
+# from 0600 to 0660 so the companion can reach it, putting the agent in the
+# same group. The three produced the same object with the same authority, so
+# "a session exists" was treated as "a human is here", and an agent holding
+# one could release the write it had itself requested.
+#
+# ``human`` is a session minted through the companion -- the one PrivacyFence
+# process that runs where a human can actually be asked (see
+# control_channel.py's ``CONFIRM MINT``/``CONFIRM SIGNIN``). ``unattested``
+# is everything else: a bare ``MINT``, or a code that reached a browser by
+# some route this daemon cannot attribute to a person. Viewing is unchanged
+# either way; approving a decision, and every _SENSITIVE_ACTIONS settings
+# change, requires ``human``.
+#
+# What this is not: authentication of the companion. Companion and agent
+# share an OS user, so an agent that binds the companion's own address before
+# the companion does answers for it -- the identical limit ADR 0003's
+# first-enrollment gate already accepts and docs/security-and-compliance.md
+# already states. What it buys is that the two silent paths stop being
+# interchangeable with the attended one, and that forging the attended one
+# costs impersonating a process whose absence the human notices.
+PROVENANCE_HUMAN = "human"
+PROVENANCE_UNATTESTED = "unattested"
+
 
 @dataclass
 class _Session:
     created_at: float
     last_seen_at: float
+    provenance: str = PROVENANCE_UNATTESTED
 
 
 class LocalSessionStore:
@@ -113,11 +145,18 @@ class LocalSessionStore:
         self._lock = threading.Lock()
         self._sessions: dict[str, _Session] = {}
 
-    def create(self) -> str:
+    def create(self, *, provenance: str = PROVENANCE_UNATTESTED) -> str:
+        """``provenance`` defaults to ``unattested`` on purpose: the safe
+        answer to "how did this session get here" is "I cannot say", and a
+        caller that *can* say (web/server.py's ``_BootstrapMiddleware``,
+        passing through whatever the consumed code carried) says so
+        explicitly."""
         session_id = secrets.token_urlsafe(32)
         now = time.time()
         with self._lock:
-            self._sessions[session_id] = _Session(created_at=now, last_seen_at=now)
+            self._sessions[session_id] = _Session(
+                created_at=now, last_seen_at=now, provenance=provenance,
+            )
         return session_id
 
     def touch(self, session_id: str) -> bool:
@@ -140,6 +179,17 @@ class LocalSessionStore:
             session.last_seen_at = now
             return True
 
+    def provenance(self, session_id: str) -> str | None:
+        """How ``session_id`` was established, or ``None`` if there is no
+        such session. Deliberately does *not* renew ``last_seen_at`` the way
+        ``touch()`` does -- every caller reads this alongside an
+        authentication check that has already touched the session, and an
+        authorization question should not be able to keep a session alive on
+        its own."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            return None if session is None else session.provenance
+
     def destroy(self, session_id: str) -> None:
         with self._lock:
             self._sessions.pop(session_id, None)
@@ -160,24 +210,35 @@ class BootstrapStore:
     def __init__(self, *, ttl_seconds: float = BOOTSTRAP_TTL_SECONDS) -> None:
         self._ttl_seconds = ttl_seconds
         self._lock = threading.Lock()
-        self._codes: dict[str, float] = {}  # code -> expires_at
+        self._codes: dict[str, tuple[float, str]] = {}  # code -> (expires_at, provenance)
 
-    def mint(self) -> str:
+    def mint(self, *, provenance: str = PROVENANCE_UNATTESTED) -> str:
+        """``provenance`` travels with the code and lands on the session it
+        exchanges for -- the mint is the only moment anything knows how this
+        credential came to exist, so recording it anywhere later would be
+        guesswork. Same defaults-to-``unattested`` reasoning as
+        ``LocalSessionStore.create()``."""
         code = secrets.token_urlsafe(32)
         with self._lock:
-            self._codes[code] = time.time() + self._ttl_seconds
+            self._codes[code] = (time.time() + self._ttl_seconds, provenance)
         return code
 
-    def consume(self, code: str) -> bool:
-        """True iff ``code`` was live and unexpired -- always removes it
-        first, so presenting it again (a slow double-click, a replayed
-        request, an attacker who intercepted it after the fact) never gets
-        a second attempt, successful exchange or not."""
+    def consume(self, code: str) -> str | None:
+        """The provenance ``code`` was minted with iff it was live and
+        unexpired, else ``None`` -- always removes it first, so presenting it
+        again (a slow double-click, a replayed request, an attacker who
+        intercepted it after the fact) never gets a second attempt,
+        successful exchange or not. Returns the provenance rather than a bare
+        ``True`` because the caller's next act is creating the session that
+        inherits it, and every value this can return is truthy."""
         if not code:
-            return False
+            return None
         with self._lock:
-            expires_at = self._codes.pop(code, None)
-        return expires_at is not None and expires_at >= time.time()
+            entry = self._codes.pop(code, None)
+        if entry is None:
+            return None
+        expires_at, provenance = entry
+        return provenance if expires_at >= time.time() else None
 
 
 def authenticated(request: Request, sessions: LocalSessionStore) -> bool:
@@ -185,6 +246,54 @@ def authenticated(request: Request, sessions: LocalSessionStore) -> bool:
     if not session_id:
         return False
     return sessions.touch(session_id)
+
+
+def session_provenance(request: Request, sessions: LocalSessionStore) -> str | None:
+    """How the session behind ``request``'s cookie was established, or
+    ``None`` when there is no live session at all -- which every caller
+    treats exactly like ``unattested``, since "I have never seen this
+    session" is not a better answer than "I cannot say who established
+    it"."""
+    session_id = request.cookies.get(SESSION_COOKIE, "")
+    if not session_id:
+        return None
+    return sessions.provenance(session_id)
+
+
+def is_human_session(request: Request, sessions: LocalSessionStore) -> bool:
+    """True iff this request rides a session a human was actually asked
+    for (``PROVENANCE_HUMAN``, see this module's own constants). The
+    question every approving decision and every sensitive settings action
+    asks before it acts; viewing asks nothing."""
+    return session_provenance(request, sessions) == PROVENANCE_HUMAN
+
+
+def human_session_required_json(what: str) -> tuple[dict[str, str], int]:
+    """The body and status a route returns when ``is_human_session()`` says
+    no -- a ``403`` rather than the ``401`` an *unauthenticated* request
+    gets, because the session is perfectly valid and the answer is still
+    no. Returned as a plain ``(body, status)`` pair rather than a
+    ``JSONResponse`` so this module keeps importing only what its own page
+    rendering needs, and each caller builds the response type its own route
+    already returns.
+
+    ``what`` names the refused act ("approve a decision", "change this
+    setting") -- the message has to be actionable for the human who is
+    legitimately looking at the page and has no idea why their click did
+    nothing, and the action they need is always the same one: reopen this
+    page from the companion, which is what makes a session ``human``."""
+    return (
+        {
+            "error": "human_session_required",
+            "message": (
+                f"This sign-in session cannot {what}. PrivacyFence can only tell that a person "
+                "asked for a session when it was opened from the PrivacyFence companion (the "
+                "menu-bar/tray icon, or the PrivacyFence entry in your applications menu) -- "
+                "reopen Approvals from there and try again."
+            ),
+        },
+        403,
+    )
 
 
 def set_session_cookie(response: Response, session_id: str) -> None:
@@ -382,6 +491,8 @@ __all__ = [
     "BOOTSTRAP_TTL_SECONDS",
     "DEFAULT_ABSOLUTE_TIMEOUT_SECONDS",
     "DEFAULT_IDLE_TIMEOUT_SECONDS",
+    "PROVENANCE_HUMAN",
+    "PROVENANCE_UNATTESTED",
     "SESSION_COOKIE",
     "BootstrapStore",
     "LocalSessionStore",
@@ -389,6 +500,9 @@ __all__ = [
     "check_csrf",
     "check_origin",
     "clear_session_cookie",
+    "human_session_required_json",
+    "is_human_session",
+    "session_provenance",
     "set_session_cookie",
     "unauthorized_html",
 ]

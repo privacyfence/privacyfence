@@ -22,7 +22,13 @@ from privacyfence.web.server import (
     _SecurityHeadersMiddleware,
     build_app,
 )
-from privacyfence.web.session_auth import SESSION_COOKIE, BootstrapStore, LocalSessionStore
+from privacyfence.web.session_auth import (
+    PROVENANCE_HUMAN,
+    PROVENANCE_UNATTESTED,
+    SESSION_COOKIE,
+    BootstrapStore,
+    LocalSessionStore,
+)
 from privacyfence.web_approval_ui import WebApprovalUI
 
 
@@ -485,6 +491,44 @@ class TestWebServerControlChannel:
             server.stop()
 
 
+class TestHumanSessionWiring:
+    """The self-approval plan's Phase 2, at the one place that decides
+    whether the gate is on: privilege separation. It is what ADR 0003 makes
+    mandatory for every packaged install (decision 6), and what guarantees
+    the companion an attested session is minted through exists at all
+    (decisions 3-5) -- on an unseparated build-from-source install neither
+    holds, and an agent that can rewrite the credential store directly (ADR
+    0002 decision 6) gains nothing from a session check anyway.
+
+    The decide route's own behavior is web/routes_approvals.py's to test
+    (TestHumanSessionRequiredToApprove there); what is checked here is that
+    ``build_app`` actually turns it on, which nothing else would notice.
+    """
+
+    def _decide_status(self, monkeypatch, *, separated: bool) -> int:
+        from privacyfence import privilege_separation
+
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: separated)
+        sessions = LocalSessionStore()
+        app = build_app(WebApprovalUI(), sessions=sessions)
+        client = TestClient(app, base_url="http://localhost")
+        session_id = sessions.create(provenance=PROVENANCE_UNATTESTED)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        return client.post(
+            "/api/approvals/no-such-approval/decide",
+            json={"action": "resolve", "result": "accept", "csrf": session_id},
+        ).status_code
+
+    def test_a_separated_install_refuses_an_unattested_approval(self, monkeypatch):
+        assert self._decide_status(monkeypatch, separated=True) == 403
+
+    def test_an_unseparated_install_is_unchanged(self, monkeypatch):
+        # 409, not 200: the id does not exist, which is the answer this
+        # route has always given past the gate -- the point is that it got
+        # past the gate at all.
+        assert self._decide_status(monkeypatch, separated=False) == 409
+
+
 class TestBootstrapFlow:
     def _app(self):
         sessions = LocalSessionStore()
@@ -502,6 +546,29 @@ class TestBootstrapFlow:
         assert r.status_code == 303
         assert r.headers["location"] == "/approvals"
         assert "pf_session" in r.headers.get("set-cookie", "")
+
+    def test_the_session_inherits_the_code_s_own_provenance(self):
+        """The self-approval plan's Phase 2: the mint is the only moment
+        anything knew how this credential came to exist (web/session_auth.py's
+        ``PROVENANCE_*``), so the exchange carries it across rather than
+        deciding it here."""
+        app, sessions, bootstrap = self._app()
+        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
+
+        for provenance in (PROVENANCE_HUMAN, PROVENANCE_UNATTESTED):
+            client.cookies.clear()
+            r = client.get(f"/approvals?bootstrap={bootstrap.mint(provenance=provenance)}")
+            session_id = client.cookies.get("pf_session")
+            assert r.status_code == 303
+            assert sessions.provenance(session_id) == provenance
+
+    def test_a_code_with_no_provenance_of_its_own_mints_an_unattested_session(self):
+        app, sessions, bootstrap = self._app()
+        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
+
+        client.get(f"/approvals?bootstrap={bootstrap.mint()}")
+
+        assert sessions.provenance(client.cookies.get("pf_session")) == PROVENANCE_UNATTESTED
 
     def test_code_is_single_use(self):
         app, _sessions, bootstrap = self._app()

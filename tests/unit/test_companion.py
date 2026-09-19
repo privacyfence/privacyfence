@@ -22,6 +22,61 @@ from privacyfence.web.session_auth import BootstrapStore
 
 
 class TestOpenPath:
+    """Three shapes, since the self-approval plan's Phase 2 -- see
+    ``_open_path``'s own docstring. Which one runs depends on who owns the
+    companion channel, because that is the process the daemon calls back to
+    before it will mint a session that can approve."""
+
+    @pytest.fixture(autouse=True)
+    def _no_companion_listening(self, monkeypatch):
+        """The default for the cases below: nothing else is running, so the
+        delegation step finds no companion and falls through. Set explicitly
+        rather than left to a real connect attempt against whatever socket
+        this machine happens to have."""
+        monkeypatch.setattr(companion, "request_show", lambda path: False)
+        monkeypatch.setattr(companion._channel_running, "is_set", lambda: False)
+
+    def test_this_process_owning_the_channel_mints_an_attested_link_itself(self, monkeypatch):
+        monkeypatch.setattr(companion._channel_running, "is_set", lambda: True)
+        calls = []
+        monkeypatch.setattr(companion, "open_attested_url", lambda path: (bool(calls.append(path)) or True, ""))
+        # Nothing else may be reached on this path: an attested mint is the
+        # whole point, and quietly falling back to an unattested one would
+        # hand back a session whose Approve buttons refuse.
+        monkeypatch.setattr(companion, "mint_bootstrap_code", lambda: pytest.fail("minted unattested"))
+
+        assert companion._open_path("/approvals") is True
+        assert calls == ["/approvals"]
+
+    def test_a_failure_to_mint_attested_is_reported_not_downgraded(self, monkeypatch):
+        monkeypatch.setattr(companion._channel_running, "is_set", lambda: True)
+        monkeypatch.setattr(companion, "open_attested_url", lambda path: (False, "could not open a browser"))
+        assert companion._open_path("/approvals") is False
+
+    def test_a_one_shot_click_hands_the_job_to_a_running_companion(self, monkeypatch):
+        """Linux's applications-menu click (ADR 0002 decision 4): this
+        process exits too soon to answer the daemon's call-back, so the
+        autostarted ``--serve`` process does the minting and the opening."""
+        shown = []
+        monkeypatch.setattr(companion, "request_show", lambda path: bool(shown.append(path)) or True)
+        monkeypatch.setattr(companion, "mint_bootstrap_code", lambda: pytest.fail("minted unattested"))
+
+        assert companion._open_path("/approvals") is True
+        assert shown == ["/approvals"]
+
+    def test_with_no_companion_at_all_the_link_still_signs_in_to_look(self, monkeypatch, caplog):
+        monkeypatch.setattr(companion, "read_base_url", lambda: "http://127.0.0.1:8765")
+        monkeypatch.setattr(companion, "mint_bootstrap_code", lambda: "abc123")
+        opened = []
+        monkeypatch.setattr(companion.webbrowser, "open", lambda url: opened.append(url) or True)
+
+        with caplog.at_level("WARNING"):
+            assert companion._open_path("/approvals") is True
+
+        assert opened == ["http://127.0.0.1:8765/approvals?bootstrap=abc123"]
+        # Said out loud rather than discovered at the Approve button.
+        assert "not approve" in caplog.text
+
     def test_returns_false_when_no_daemon_is_running(self, monkeypatch):
         monkeypatch.setattr(companion, "read_base_url", lambda: None)
         assert companion._open_path("/approvals") is False

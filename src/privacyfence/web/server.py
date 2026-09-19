@@ -557,8 +557,14 @@ class _BootstrapMiddleware:
             await self._app(scope, receive, send)
             return
         response = RedirectResponse(request.url.path, status_code=303)
-        if self._bootstrap.consume(code):
-            _set_session_cookie(response, self._sessions.create())
+        # The code carries its own provenance (web/session_auth.py's
+        # ``PROVENANCE_*``) and the session inherits it unchanged: the mint
+        # is the only moment anything knew how this credential came to
+        # exist, and a middleware reading a query string is in no position
+        # to improve on that.
+        provenance = self._bootstrap.consume(code)
+        if provenance is not None:
+            _set_session_cookie(response, self._sessions.create(provenance=provenance))
         await response(scope, receive, send)
 
 
@@ -734,10 +740,21 @@ def build_app(
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
 
+    # The self-approval plan's Phase 2 -- one answer, read once here, for
+    # both gates below: an approving decision (web/routes_approvals.py) and
+    # a sensitive settings action (web/routes_settings.py) require a session
+    # this daemon can attribute to a person. See either module's own
+    # ``require_human_session`` paragraph for why privilege separation is
+    # the line: it is what ADR 0003 makes mandatory on every packaged
+    # install, and what guarantees the companion that mints such a session
+    # exists at all.
+    require_human_session = privilege_separation.is_enabled()
+
     if controller is not None:
         extra_routes.extend(build_settings_routes(
             controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
             notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_issuer_url,
+            require_human_session=require_human_session,
         ))
 
     # #426 Phase 1: mounted whenever step_up.rp_id is set -- which, unlike
@@ -794,6 +811,7 @@ def build_app(
         any_connector_authenticated=(
             controller.any_connector_authenticated if controller is not None else None
         ),
+        require_human_session=require_human_session,
     )
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(bootstrapped, principal_resolver or _default_principal)

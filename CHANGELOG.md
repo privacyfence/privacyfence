@@ -37,6 +37,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **A sign-in session is no longer treated as proof that a human asked for it.** Three paths reach a
+  local-mode `pf_session`, all by design (ADR 0002 decision 6): the companion's own **Open
+  Approvals** item, a bootstrap link a human was handed, and a bare `MINT` on the control channel —
+  which privilege separation *widens* to a group the agent is in. Nothing downstream recorded which,
+  so all three produced the same object with the same authority, and a local process could release
+  the write it had itself requested. Every session now carries a provenance: `human` for one minted
+  through the companion (its menu item, confirmed by a call-back to the process the human clicked,
+  or `privacyfence-app --print-sign-in-link`, confirmed by the companion's own dialog) and
+  `unattested` for everything else. Releasing an approving decision and changing a sensitive setting
+  require `human`; viewing and denying are unchanged, so an unattested link still shows what is
+  pending and says plainly that it cannot approve it. Enforced on privilege-separated installs —
+  since ADR 0003, every packaged one — where the companion this rests on is guaranteed to be
+  installed and running; a non-packaged `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` checkout has neither
+  a companion nor an `authority/` boundary and is unchanged. See
+  `docs/security-and-compliance.md`'s "A session is not a human", including what this deliberately
+  does *not* claim about telling the companion apart from the agent.
 - **Enrolling a passkey now needs proof of its own, in both deployment modes.** Removing your *last*
   enrolled credential has always demanded a fresh assertion with it, because letting a session alone
   un-enroll would silently turn a "mandatory" install back into an unenforced one. Adding one had

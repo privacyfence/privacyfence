@@ -25,7 +25,12 @@ from privacyfence import paths
 from privacyfence import webauthn_stepup as wa
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web.routes_approvals import _inject_shim, create_app
-from privacyfence.web.session_auth import SESSION_COOKIE, LocalSessionStore
+from privacyfence.web.session_auth import (
+    PROVENANCE_HUMAN,
+    PROVENANCE_UNATTESTED,
+    SESSION_COOKIE,
+    LocalSessionStore,
+)
 from privacyfence.web_approval_ui import WebApprovalUI
 
 ORIGIN = "http://localhost"
@@ -1271,3 +1276,119 @@ class TestBatchStepUp:
             "csrf": session_id, "items": [{"id": approval.id, "result": "deny"}],
         })
         assert r.status_code == 200
+
+
+class TestHumanSessionRequiredToApprove:
+    """The self-approval plan's Phase 2. ADR 0002 decision 6 names three
+    ways a local process reaches a ``pf_session``, all by design; until now
+    all three produced the same object with the same authority, so an agent
+    holding one could release the write it had itself requested.
+
+    ``require_human_session`` is what web/server.py turns on for a
+    privilege-separated install -- the only kind where the guarantee is real
+    and the companion that mints an attested session is guaranteed present
+    (ADR 0003 decisions 3-6).
+    """
+
+    def _app(self):
+        web_ui = WebApprovalUI()
+        sessions = LocalSessionStore()
+        app = create_app(web_ui, sessions=sessions, require_human_session=True)
+        return TestClient(app, base_url=ORIGIN), sessions, web_ui
+
+    def _sign_in(self, client, sessions, provenance):
+        session_id = sessions.create(provenance=provenance)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        return session_id
+
+    def test_an_unattested_session_cannot_approve(self):
+        client, sessions, web_ui = self._app()
+        session_id = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
+        t, card, box = _pending_card(web_ui)
+
+        r = client.post(
+            f"/api/approvals/{card.id}/decide",
+            json={"action": "resolve", "result": "accept", "csrf": session_id},
+        )
+
+        assert r.status_code == 403
+        assert r.json()["error"] == "human_session_required"
+        # The gate refuses rather than silently resolving: the call is still
+        # blocked, which is what makes this a refusal and not a deny.
+        assert box == {}
+        web_ui.resolve(card.id, "deny")
+        t.join(timeout=2)
+
+    def test_an_attested_session_approves_exactly_as_before(self):
+        client, sessions, web_ui = self._app()
+        session_id = self._sign_in(client, sessions, PROVENANCE_HUMAN)
+        t, card, box = _pending_card(web_ui)
+
+        r = client.post(
+            f"/api/approvals/{card.id}/decide",
+            json={"action": "resolve", "result": "accept", "csrf": session_id},
+        )
+
+        assert r.status_code == 200
+        t.join(timeout=2)
+        assert box["result"] == ("accept", None)
+
+    def test_denying_is_not_gated(self):
+        """Same line this module already draws for step-up
+        (``_STEP_UP_RESULTS``): denying leaks nothing, and an agent that can
+        only deny cannot release anything it asked for."""
+        client, sessions, web_ui = self._app()
+        session_id = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
+        t, card, box = _pending_card(web_ui)
+
+        r = client.post(
+            f"/api/approvals/{card.id}/decide",
+            json={"action": "resolve", "result": "deny", "csrf": session_id},
+        )
+
+        assert r.status_code == 200
+        t.join(timeout=2)
+        assert box["result"] == ("deny", None)
+
+    def test_a_batch_containing_an_accept_is_refused_whole(self):
+        client, sessions, web_ui = self._app()
+        session_id = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
+        accept_me = _register(web_ui, dedupe_key="k1")
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id,
+            "items": [{"id": accept_me.id, "result": "accept"}],
+        })
+
+        assert r.status_code == 403
+        assert r.json()["error"] == "human_session_required"
+        assert web_ui.deferred_registry.get(accept_me.id) is not None
+
+    def test_a_batch_of_denies_is_not_gated(self):
+        client, sessions, web_ui = self._app()
+        session_id = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
+        deny_me = _register(web_ui, dedupe_key="k1")
+
+        r = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id,
+            "items": [{"id": deny_me.id, "result": "deny"}],
+        })
+
+        assert r.status_code == 200
+
+    def test_the_gate_is_off_unless_the_install_asks_for_it(self, client, sessions, web_ui):
+        """The default -- and what an unseparated build-from-source install
+        keeps. There is no companion to mint an attested session there, and
+        an agent that can rewrite the credential store directly (ADR 0002
+        decision 6) gains nothing from a session check anyway."""
+        session_id = _signed_in(client, sessions)
+        t, card, box = _pending_card(web_ui)
+
+        r = client.post(
+            f"/api/approvals/{card.id}/decide",
+            json={"action": "resolve", "result": "accept", "csrf": session_id},
+        )
+
+        assert r.status_code == 200
+        t.join(timeout=2)
+        assert box["result"] == ("accept", None)

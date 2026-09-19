@@ -66,7 +66,11 @@ A local process running as the signed-in user can:
   own, since it still sits at the same uid as everything else there) and mint a fresh bootstrap
   code — the not-authorized page prints that exact command, deliberately, for a locked-out human;
 - exchange the code for a `pf_session` cookie by visiting `/approvals?bootstrap=<code>`;
-- `POST /api/approvals/<id>/decide` and release a pending approval.
+- `POST /api/approvals/<id>/decide` and release a pending approval — **on a separated install this
+  last step no longer follows from the first two**: a session minted by a bare `MINT` is
+  `unattested`, and an approving decision requires one a human was asked for. See
+  [A session is not a human](#a-session-is-not-a-human) below, which is the only part of this list
+  privilege separation changes rather than merely relocates.
 
 No browser is involved at any step. The CSRF double-submit and same-origin checks on that last
 request are defenses against a hostile web page loaded in the user's browser: such a page cannot read
@@ -151,6 +155,57 @@ starts with `require_passkey` on, it still starts (refusing to boot would remove
 passkey is added, and releases nothing in the meantime. Treat local-mode step-up as a real guarantee
 once `require_passkey` is on and a passkey is enrolled; with `enabled` alone it stays what it always
 was -- opt-in, evadable by simply not enrolling.
+
+**Step-up asks whether this is the enrolled human; session provenance asks whether a human asked at
+all**, and the second question is asked first, without waiting on any `step_up` setting — see
+[A session is not a human](#a-session-is-not-a-human) directly below.
+
+### A session is not a human
+
+ADR 0002 decision 6 names three ways a local process reaches a `pf_session`, all of them by design:
+the companion's own **Open Approvals** item, a bootstrap link a human was handed, and a bare `MINT`
+on the control channel — which privilege separation *widens* from `0600` to `0660` so the companion
+can reach it, putting the agent in the same group. The decision that made this acceptable was that
+a minted session would be **insufficient** rather than uncallable, with the passkey supplying what
+it lacked.
+
+Nothing downstream recorded *which* of the three a session came from, so the three were
+interchangeable: a session the human obtained by clicking Open Approvals and one the agent obtained
+by minting its own were the same object with the same authority.
+
+**Every local-mode session now carries a provenance** (`web/session_auth.py`):
+
+| provenance | minted by | may view | may approve |
+| --- | --- | --- | --- |
+| `human` | the companion's own menu (`MINT COMPANION <nonce>`, confirmed by a call-back to the process the human clicked), or `privacyfence-app --print-sign-in-link` (`MINT CONSOLE`, confirmed by the companion's own dialog) | yes | yes |
+| `unattested` | a bare `MINT` on the control channel — anything running as this OS user | yes | no |
+
+`human` is required to release an *approving* decision (`accept`/`accept_all`, individually or in a
+batch) and to take any `_SENSITIVE_ACTIONS` settings action. Denying is not gated, under the same
+reasoning step-up uses: denying discloses nothing. Viewing is not gated at all — a locked-out human
+with only an unattested link can still see what is pending, and is told in so many words that this
+link cannot approve it.
+
+**This is enforced on privilege-separated installs only**, which since
+[ADR 0003](adr/0003-separated-installs-only.md) is every packaged install (decision 6: an
+unseparated packaged daemon refuses to serve) and which guarantees the companion is installed and
+running (decisions 3–5). On a non-packaged source checkout run with
+`PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` there is no companion to mint through and no `authority/`
+boundary either — an agent there rewrites the credential store directly, which is the case ADR 0002
+decision 6 names — so the check is not applied and would buy nothing if it were. Same line
+`StepUpConfig.from_local_config()` already draws when it refuses `require_passkey` on such an
+install.
+
+**What this is not: authentication of the companion.** Companion and agent share an OS user, and
+the companion's own channel lives under `handoff_dir()`, which `paths.py` states outright is
+"deliberately *not* a security boundary" — so a local process running as that user can bind that
+address before the companion does and answer the daemon's call-back itself. This is the identical
+limit the [first-enrollment gate](#enrolling-a-passkey-is-itself-gated) accepts, for the identical
+reason, and it is bounded the same way: on a separated install the companion is autostarted at
+login, so winning that race means starting before it and staying there, which breaks the connector
+OAuth flows that share the address and leaves the human with no companion where one is meant to be.
+What provenance buys is that the two silent paths stop being interchangeable with the attended one,
+and that forging the attended one costs impersonating a process whose absence is visible.
 
 ### Enrolling a passkey is itself gated
 
@@ -447,9 +502,18 @@ check that would be sound on macOS and weak on Linux, the design makes a session
 instead of *uncallable*: this phase takes the human-authority files away, and #426's passkey then
 makes possession of a session not enough to release an approval — but only once [privilege
 separation](#privilege-separation-macos-linux-and-windows) is active, `step_up.enabled` and
-`step_up.require_passkey` are both set, and a passkey is enrolled. None of those four is this
-deployment's default, so on a default install the session is still sufficient on its own: the agent
-can approve its own request. The consequence, stated rather than left to be discovered for an
+`step_up.require_passkey` are both set, and a passkey is enrolled. Three of those four are not this
+deployment's default, which used to leave a default install exactly where it started: the agent
+could approve its own request.
+
+**What closes that on a default install is [session provenance](#a-session-is-not-a-human)**, which
+asks a different question than the passkey does and does not wait on any `step_up` setting to ask
+it. A session the agent minted for itself is `unattested` and cannot approve, enrolled passkey or
+not; one minted through the companion is `human` and can. That is a *weaker* statement than the
+passkey's — it rests on the companion being the process a human is in front of, not on a
+cryptographic proof, and that section says exactly where the line is — but it holds by default on
+every packaged (and therefore separated) install rather than only on one that has turned three
+further settings on. The consequence, stated rather than left to be discovered for an
 install that turns all four on: **integrity is the strong guarantee — the agent cannot approve its
 own request — while confidentiality of the review screen is the weaker one**, since an agent that
 reaches the web UI can still read what is pending. The control channel's socket accordingly lives in

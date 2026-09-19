@@ -75,8 +75,10 @@ from .web.control_channel import (
     CompanionChannelServer,
     ControlChannelError,
     mint_bootstrap_code,
+    open_attested_url,
     read_base_url,
     request_quit,
+    request_show,
 )
 
 logger = logging.getLogger("privacyfence.companion")
@@ -94,16 +96,49 @@ _TRAY_PLATFORMS = ("darwin", "win32")
 
 _TRAY_ICON_PATH = Path(__file__).parent / "resources" / "icon_menubar.png"
 
+# Set once this process is actually answering on the companion channel --
+# which is what decides whether ``_open_path()`` can mint an attested link
+# itself or has to hand the job to whichever process is (see its own
+# docstring). A plain module-level Event rather than a parameter threaded
+# through ``_run_action``: the tray's menu callbacks are invoked by pystray
+# with nothing of ours in scope, and a flag set beside the ``start()`` that
+# makes it true cannot fall out of step with it.
+_channel_running = threading.Event()
+
 
 def _open_path(path: str) -> bool:
-    """Mint a fresh bootstrap code over the daemon's own control channel
-    and open ``path`` in the user's default browser -- the exact link
-    ``web/server.py``'s own ``mint_bootstrap_url()`` would have produced,
-    minted the same way daemon_main.py's startup log line is, just from
-    here instead of that log line or ``privacyfence_get_sign_in_link``.
+    """Mint a fresh bootstrap code over the daemon's own control channel and
+    open ``path`` in the user's default browser -- this process's whole
+    product surface (ADR 0002 decision 2), and, since the self-approval
+    plan's Phase 2, the only route to a session that may *approve* rather
+    than merely view (web/session_auth.py's ``PROVENANCE_HUMAN``).
+
+    What makes that session attestable is the daemon calling back to
+    whichever process owns the companion channel, so which process this is
+    decides how the link gets minted:
+
+    1. **This one owns the channel** (the tray loop, or ``--serve``): mint
+       it here, answering the daemon's own call-back from the accept loop.
+    2. **Another companion owns it** -- Linux's one-shot ``--action``, spawned
+       fresh by an applications-menu click while the autostarted ``--serve``
+       process holds the address (ADR 0003 decision 5). Ask that process to
+       do it (``SHOW``): it is the one the daemon can call back, and it
+       opens the browser in the same session this click came from.
+    3. **Nobody owns it**: an unattested link, which still signs the human in
+       to look at what is pending. Logged as the reduced thing it is, naming
+       the companion, rather than silently handing back a session whose
+       Approve buttons will refuse.
+
     Returns False (logging why) rather than raising: every caller here is a
     menu click or a one-shot launcher invocation, neither of which has
     anywhere useful to propagate an exception to."""
+    if _channel_running.is_set():
+        opened, reason = open_attested_url(path)
+        if not opened:
+            logger.error("Could not open %s: %s", path, reason)
+        return opened
+    if request_show(path):
+        return True
     base_url = read_base_url()
     if base_url is None:
         logger.error("PrivacyFence does not appear to be running (local mode) -- nothing to open.")
@@ -113,6 +148,11 @@ def _open_path(path: str) -> bool:
     except (OSError, ControlChannelError) as exc:
         logger.error("Could not reach PrivacyFence's control channel: %s", exc)
         return False
+    logger.warning(
+        "No PrivacyFence companion is running in this session, so this link can view what is "
+        "pending but not approve it. Start PrivacyFence's companion (or run "
+        "`privacyfence-app --print-sign-in-link`) for a link that can.",
+    )
     return webbrowser.open(f"{base_url}{path}?bootstrap={code}")
 
 
@@ -201,6 +241,7 @@ def _run_tray() -> int:
     _start_pending_separation_check()
     channel = CompanionChannelServer()
     channel.start()
+    _channel_running.set()
 
     def _on_open_approvals(_icon: "pystray.Icon", _item: "pystray.MenuItem") -> None:
         _open_path("/approvals")
@@ -213,6 +254,7 @@ def _run_tray() -> int:
         # a tray icon with nothing left to serve has no reason to stay up
         # either, so this process exits right behind it.
         _quit_daemon()
+        _channel_running.clear()
         channel.stop()
         icon.stop()
 
@@ -225,6 +267,7 @@ def _run_tray() -> int:
     try:
         icon.run()
     finally:
+        _channel_running.clear()
         channel.stop()
     return 0
 
@@ -254,6 +297,7 @@ def _run_serve(wait: Callable[[], None] | None = None) -> int:
     if channel.address is None:
         logger.error("Could not start the companion's control channel -- nothing to serve.")
         return 1
+    _channel_running.set()
     logger.info("Companion channel listening on %s", channel.address)
     try:
         (wait or threading.Event().wait)()
@@ -262,6 +306,7 @@ def _run_serve(wait: Callable[[], None] | None = None) -> int:
     finally:
         # Tears the socket down cleanly rather than leaving a stale node
         # behind for the next start to unlink.
+        _channel_running.clear()
         channel.stop()
     return 0
 

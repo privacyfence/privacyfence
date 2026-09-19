@@ -30,7 +30,12 @@ from privacyfence import webauthn_stepup as wa
 from privacyfence.principal import LOCAL_PRINCIPAL
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web.routes_settings import _ALLOWED_ACTIONS, _NON_SENSITIVE_ACTIONS, _SENSITIVE_ACTIONS, create_app
-from privacyfence.web.session_auth import SESSION_COOKIE, LocalSessionStore
+from privacyfence.web.session_auth import (
+    PROVENANCE_HUMAN,
+    PROVENANCE_UNATTESTED,
+    SESSION_COOKIE,
+    LocalSessionStore,
+)
 
 ORIGIN = "http://localhost"
 
@@ -828,3 +833,64 @@ class TestNoSubprocessFromHttp:
             files={"file": ("x.json", b'{"version": 1}', "application/json")},
         )
         client.get("/api/settings/audit_log/download")
+
+
+class TestHumanSessionRequiredForSensitiveActions:
+    """The self-approval plan's Phase 2, on the settings half: an action that
+    changes *what gets gated* needs a session PrivacyFence can attribute to a
+    person, not merely a valid one. Deliberately independent of
+    ``step_up.require_passkey`` -- an install with no passkey requirement
+    still has a policy an agent should not be able to rewrite on its own say
+    so. See web/routes_approvals.py's own gate for the decide-time half."""
+
+    def _client(self, controller, sessions):
+        app = create_app(controller, sessions=sessions, require_human_session=True)
+        return TestClient(app, base_url=ORIGIN)
+
+    def _sign_in(self, client, sessions, provenance):
+        session_id = sessions.create(provenance=provenance)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        return session_id
+
+    def test_an_unattested_session_cannot_change_a_sensitive_setting(self, controller, sessions):
+        client = self._client(controller, sessions)
+        csrf = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
+
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+
+        assert r.status_code == 403
+        assert r.json()["error"] == "human_session_required"
+
+    def test_an_attested_session_changes_it_exactly_as_before(self, controller, sessions):
+        client = self._client(controller, sessions)
+        csrf = self._sign_in(client, sessions, PROVENANCE_HUMAN)
+
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+
+        assert r.status_code == 200
+
+    def test_a_non_sensitive_action_is_untouched(self, controller, sessions):
+        client = self._client(controller, sessions)
+        csrf = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
+
+        r = client.post("/api/settings/set_log_level", json={"level": "DEBUG", "csrf": csrf})
+
+        assert r.status_code == 200
+
+    def test_every_sensitive_action_is_refused_the_same_way(self, controller, sessions):
+        """The set, not a sample: the ratchet
+        (TestSensitiveActionsCoverAllAllowedActions) guarantees a new action
+        lands in one of the two sets, and this guarantees landing in the
+        sensitive one actually gates it."""
+        client = self._client(controller, sessions)
+        csrf = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
+
+        for action in sorted(_SENSITIVE_ACTIONS):
+            r = client.post(f"/api/settings/{action}", json={"csrf": csrf})
+            assert r.status_code == 403, action
+            assert r.json()["error"] == "human_session_required", action
+
+    def test_the_gate_is_off_unless_the_install_asks_for_it(self, client, sessions):
+        csrf = _authed(client, sessions)
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert r.status_code == 200

@@ -95,8 +95,15 @@ class TestBootstrapStore:
     def test_mint_then_consume_succeeds_exactly_once(self):
         store = sa.BootstrapStore()
         code = store.mint()
-        assert store.consume(code) is True
-        assert store.consume(code) is False  # single-use -- burned by the line above
+        assert store.consume(code) == sa.PROVENANCE_UNATTESTED
+        assert store.consume(code) is None  # single-use -- burned by the line above
+
+    def test_consume_returns_the_provenance_the_code_was_minted_with(self):
+        store = sa.BootstrapStore()
+        assert store.consume(store.mint(provenance=sa.PROVENANCE_HUMAN)) == sa.PROVENANCE_HUMAN
+        # The default is the one a bare control-channel MINT gets, and it is
+        # the safe one: nothing about that request says a human asked.
+        assert store.consume(store.mint()) == sa.PROVENANCE_UNATTESTED
 
     def test_two_mints_produce_distinct_codes(self):
         store = sa.BootstrapStore()
@@ -104,11 +111,11 @@ class TestBootstrapStore:
 
     def test_unknown_code_is_rejected(self):
         store = sa.BootstrapStore()
-        assert store.consume("not-a-real-code") is False
+        assert store.consume("not-a-real-code") is None
 
     def test_empty_code_is_rejected(self):
         store = sa.BootstrapStore()
-        assert store.consume("") is False
+        assert store.consume("") is None
 
     def test_expired_code_is_rejected_and_still_consumed(self, monkeypatch):
         store = sa.BootstrapStore(ttl_seconds=60)
@@ -118,12 +125,12 @@ class TestBootstrapStore:
 
         fake_now[0] += 120  # past the TTL
 
-        assert store.consume(code) is False
+        assert store.consume(code) is None
         # ...and it's gone either way -- a second attempt (e.g. a replay
         # racing the first) doesn't get to try again just because the
         # first attempt failed on expiry rather than success.
         fake_now[0] = 1000.0  # even rewinding time doesn't resurrect it
-        assert store.consume(code) is False
+        assert store.consume(code) is None
 
 
 class TestAuthenticated:
@@ -356,3 +363,62 @@ class TestUnauthorizedHtml:
         linux = sa._companion_availability_sentence()
         assert "Applications-menu entry" in linux
         assert "at login" not in linux
+
+
+class TestProvenance:
+    """The self-approval plan's Phase 2: a session records *how* it was
+    established, because three paths reach one (ADR 0002 decision 6) and
+    only one of them can be attributed to a person."""
+
+    def _request(self, cookie: str | None):
+        headers = [(b"cookie", f"{sa.SESSION_COOKIE}={cookie}".encode())] if cookie else []
+        return Request({"type": "http", "headers": headers, "method": "GET", "path": "/"})
+
+    def test_a_session_defaults_to_unattested(self):
+        store = sa.LocalSessionStore()
+        assert store.provenance(store.create()) == sa.PROVENANCE_UNATTESTED
+
+    def test_a_session_keeps_the_provenance_it_was_created_with(self):
+        store = sa.LocalSessionStore()
+        assert store.provenance(store.create(provenance=sa.PROVENANCE_HUMAN)) == sa.PROVENANCE_HUMAN
+
+    def test_an_unknown_session_has_no_provenance(self):
+        assert sa.LocalSessionStore().provenance("nope") is None
+
+    def test_reading_provenance_does_not_keep_an_idle_session_alive(self, monkeypatch):
+        """An authorization question must not double as a heartbeat -- only
+        ``touch()`` renews a session, and it is the authentication check that
+        calls it."""
+        fake_now = [1000.0]
+        monkeypatch.setattr(sa.time, "time", lambda: fake_now[0])
+        store = sa.LocalSessionStore(idle_timeout_seconds=60)
+        session_id = store.create(provenance=sa.PROVENANCE_HUMAN)
+
+        fake_now[0] += 50
+        assert store.provenance(session_id) == sa.PROVENANCE_HUMAN
+        fake_now[0] += 50  # 100s since creation, and nothing touched it
+
+        assert store.touch(session_id) is False
+
+    def test_is_human_session_reads_the_cookie_s_own_session(self):
+        store = sa.LocalSessionStore()
+        human = store.create(provenance=sa.PROVENANCE_HUMAN)
+        unattested = store.create()
+
+        assert sa.is_human_session(self._request(human), store) is True
+        assert sa.is_human_session(self._request(unattested), store) is False
+        assert sa.session_provenance(self._request(unattested), store) == sa.PROVENANCE_UNATTESTED
+
+    def test_no_cookie_and_an_unknown_cookie_both_read_as_not_human(self):
+        store = sa.LocalSessionStore()
+        assert sa.session_provenance(self._request(None), store) is None
+        assert sa.is_human_session(self._request(None), store) is False
+        assert sa.is_human_session(self._request("not-a-session"), store) is False
+
+    def test_the_refusal_body_is_a_403_that_names_the_way_back(self):
+        body, status = sa.human_session_required_json("approve a decision")
+        assert status == 403  # not 401: the session is valid, the answer is still no
+        assert body["error"] == "human_session_required"
+        assert "approve a decision" in body["message"]
+        assert "companion" in body["message"]
+
