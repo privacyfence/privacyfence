@@ -590,9 +590,16 @@ def create_app(
             # decides which of those get asked about at all.
             assertion = payload.get("webauthn_assertion")
             if not isinstance(assertion, dict):
-                stepup_response = _step_up_response(approval_id, result=result, choice=choice)
-                if stepup_response is not None:
-                    return stepup_response
+                # ``require_passkey`` is on in this branch, so
+                # ``_step_up_response`` cannot return ``None`` here -- that
+                # is its "nothing enrolled *and* require_passkey off" case,
+                # which is the one configuration this branch excludes. The
+                # fallback is there so that relaxing the condition above
+                # fails closed rather than falling through to ``resolve``,
+                # which is what the two results it guards do instead.
+                return _step_up_response(approval_id, result=result, choice=choice) or JSONResponse(
+                    {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
+                )
             else:
                 expected_fp = webauthn_stepup.decision_fingerprint(
                     approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
