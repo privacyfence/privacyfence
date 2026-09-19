@@ -24,7 +24,8 @@ import sys
 import pytest
 from starlette.testclient import TestClient
 
-from privacyfence import daemon_main, paths, resource_names, settings_controller as sc, update_checker
+from privacyfence import daemon_main, paths, privilege_separation, resource_names, update_checker
+from privacyfence import settings_controller as sc
 from privacyfence import webauthn_stepup as wa
 from privacyfence.principal import LOCAL_PRINCIPAL
 from privacyfence.step_up_config import StepUpConfig
@@ -420,6 +421,13 @@ class TestEnableStepUpAction:
     @pytest.fixture(autouse=True)
     def _fake_data_dir(self, monkeypatch, tmp_path):
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        # ADR 0003: StepUpConfig.from_local_config() now refuses
+        # require_passkey on an unseparated install -- this class is about
+        # the enable_step_up action's own dispatch/gating behavior, not
+        # that separate check (covered by
+        # TestRequirePasskeyNeedsSeparation in
+        # tests/unit/test_step_up_config.py).
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
         return tmp_path
 
     def _enroll(self):
@@ -487,6 +495,52 @@ class TestEnableStepUpAction:
 
         assert r.status_code == 428
         assert "webauthn_options" in r.json()
+
+
+class TestEnableStepUpRefusesOnAnUnseparatedInstall:
+    """ADR 0003, Context #2: "step_up.require_passkey is reachable from the
+    Settings page of an unseparated install" -- this is that path's fix.
+    Unlike TestEnableStepUpAction above, this class does *not* set the dev
+    override, so the real gate in StepUpConfig.from_local_config() fires."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _enroll(self):
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def _live_client(self, controller, sessions):
+        from privacyfence.step_up_config import LiveStepUpConfig
+        live = LiveStepUpConfig(StepUpConfig(rp_id="localhost"))
+        controller.wire_step_up(live)
+        app = create_app(controller, sessions=sessions, step_up=live, step_up_origin=ORIGIN)
+        return TestClient(app, base_url=ORIGIN), live
+
+    def test_refuses_and_leaves_the_live_config_untouched(self, controller, sessions):
+        self._enroll()
+        client, live = self._live_client(controller, sessions)
+        csrf = _authed(client, sessions)
+
+        r = client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        assert r.status_code == 200
+        assert live.enabled is False
+        assert live.require_passkey is False
+        assert "privilege-separated" in r.json()["error"]
+
+    def test_does_not_persist_the_refused_change_to_disk(self, controller, sessions, tmp_path):
+        self._enroll()
+        client, live = self._live_client(controller, sessions)
+        csrf = _authed(client, sessions)
+
+        client.post("/api/settings/enable_step_up", json={"csrf": csrf})
+
+        on_disk = (tmp_path / "settings.yaml").read_text(encoding="utf-8")
+        assert "require_passkey: true" not in on_disk
 
 
 class TestRequirePasskeyBanner:

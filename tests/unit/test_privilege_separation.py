@@ -1109,61 +1109,56 @@ class TestInstallerContract:
 
 
 class TestAutoEnableMacos:
-    """#428 D1 (4.1): the daemon's own trigger for auto-enabling privilege
-    separation on macOS, since there's no package-manager postinst there to
-    lean on the way Linux's .deb has. Nothing here can exercise the real
-    ``osascript`` admin prompt (no macOS, no human to answer it) -- these
-    cover the two things CI can prove: that the trigger fires (or correctly
-    doesn't) under every precondition, and that the elevated command it
-    builds is what it should be."""
+    """#428 D1 (4.1) / ADR 0003 decision 6: the daemon's own trigger for
+    auto-enabling privilege separation on macOS, since there's no
+    package-manager postinst there to lean on the way Linux's .deb has.
+    Nothing here can exercise the real ``osascript`` admin prompt (no macOS,
+    no human to answer it) -- these cover the two things CI can prove: that
+    the trigger fires (or correctly doesn't) under every precondition, and
+    that the elevated command it builds is what it should be.
+
+    Synchronous since decision 6: unlike the old #428 D1-only version, this
+    is no longer backgrounded on a thread and no longer writes a one-shot
+    marker -- ``enforce_separation()`` needs to read the outcome, and a
+    decline is asked again on the next start rather than respected forever.
+    """
 
     pytestmark = posix_permissions_only
-
-    @staticmethod
-    def _fake_thread_class(started: list):
-        class _FakeThread:
-            def __init__(self, **kw):
-                self.kw = kw
-
-            def start(self) -> None:
-                started.append(self.kw)
-
-        return _FakeThread
 
     def test_noop_on_linux(self, monkeypatch, tmp_path):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
         privilege_separation.reset_cache()
-        started = []
-        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+        calls = []
+        monkeypatch.setattr(privilege_separation, "_run_auto_enable_macos", lambda script: calls.append(script))
 
         privilege_separation.maybe_auto_enable_macos()
 
-        assert started == []
+        assert calls == []
 
     def test_noop_when_already_separated(self, separated, monkeypatch):
         # separated is platform-parametrized (darwin and linux); running on
         # both proves the linux side is *also* a noop here, for the same
         # "already enabled" reason rather than the platform check above.
-        started = []
-        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+        calls = []
+        monkeypatch.setattr(privilege_separation, "_run_auto_enable_macos", lambda script: calls.append(script))
 
         privilege_separation.maybe_auto_enable_macos()
 
-        assert started == []
+        assert calls == []
 
     def test_noop_without_a_packaged_or_checkout_script(self, monkeypatch, tmp_path):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
         monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
         privilege_separation.reset_cache()
         monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: None)
-        started = []
-        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+        calls = []
+        monkeypatch.setattr(privilege_separation, "_run_auto_enable_macos", lambda script: calls.append(script))
 
         privilege_separation.maybe_auto_enable_macos()
 
-        assert started == []
+        assert calls == []
 
-    def test_writes_a_marker_and_starts_the_prompt_exactly_once(self, monkeypatch, tmp_path):
+    def test_runs_the_elevated_attempt_synchronously(self, monkeypatch, tmp_path):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
         monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
         privilege_separation.reset_cache()
@@ -1172,48 +1167,19 @@ class TestAutoEnableMacos:
         monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
         # B2's script-safety check is covered by its own TestMacosAutoEnableScriptProblem
         # below; a script this test writes itself is never root-owned, so it is bypassed
-        # here to keep this test about the marker/threading behavior alone.
+        # here to keep this test about the dispatch behavior alone.
         monkeypatch.setattr(privilege_separation, "_macos_auto_enable_script_problem", lambda _script: None)
-        data_dir = tmp_path / "data"
-        monkeypatch.setattr(paths, "data_dir", lambda: data_dir)
-        started = []
-        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+        calls = []
+        monkeypatch.setattr(privilege_separation, "_run_auto_enable_macos", lambda s: calls.append(s))
 
         privilege_separation.maybe_auto_enable_macos()
 
-        marker = data_dir / privilege_separation.AUTO_ENABLE_ATTEMPTED_MARKER_NAME
-        assert marker.is_file()
-        assert len(started) == 1
-        assert started[0]["args"] == (script,)
+        assert calls == [script]
 
-        # A second call -- the next daemon start -- must not ask again,
-        # whether the human approved the first prompt or cancelled it.
+        # Asked again on the very next call -- decision 6 retired the
+        # one-shot marker that used to make a decline permanent.
         privilege_separation.maybe_auto_enable_macos()
-        assert len(started) == 1
-
-    def test_marker_write_failure_is_swallowed_not_raised(self, monkeypatch, tmp_path):
-        # Best-effort like every other permission-adjacent write in this
-        # module: a daemon startup path must never crash because it could
-        # not write a one-byte marker file.
-        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
-        monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
-        privilege_separation.reset_cache()
-        script = tmp_path / "macos_privilege_separation.sh"
-        script.write_text("#!/bin/sh\n", encoding="utf-8")
-        monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
-        monkeypatch.setattr(privilege_separation, "_macos_auto_enable_script_problem", lambda _script: None)
-        # A file where the marker's parent directory should be: mkdir(parents=True,
-        # exist_ok=True) on it raises FileExistsError (an OSError), since exist_ok
-        # only tolerates an existing *directory*.
-        data_dir = tmp_path / "data"
-        data_dir.write_text("not a directory", encoding="utf-8")
-        monkeypatch.setattr(paths, "data_dir", lambda: data_dir)
-        started = []
-        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
-
-        privilege_separation.maybe_auto_enable_macos()
-
-        assert started == []
+        assert calls == [script, script]
 
     def test_applescript_quoting_escapes_quotes_and_backslashes(self):
         quoted = privilege_separation._applescript_quoted('a "quoted" \\path\\')
@@ -1309,8 +1275,8 @@ class TestAutoEnableMacos:
     def test_noop_when_the_resolved_script_fails_its_safety_check(self, monkeypatch, tmp_path):
         # #428 B2: whatever _macos_auto_enable_script_problem() decides (its
         # own logic is covered by TestMacosAutoEnableScriptProblem below) --
-        # a script that fails it must produce no elevation prompt, no
-        # marker, just a log line naming why.
+        # a script that fails it must produce no elevation prompt, just a
+        # log line naming why.
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
         monkeypatch.delenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, raising=False)
         privilege_separation.reset_cache()
@@ -1322,15 +1288,12 @@ class TestAutoEnableMacos:
             "_macos_auto_enable_script_problem",
             lambda _script: f"{script} is owned by uid 501, not root",
         )
-        data_dir = tmp_path / "data"
-        monkeypatch.setattr(paths, "data_dir", lambda: data_dir)
-        started = []
-        monkeypatch.setattr(privilege_separation.threading, "Thread", self._fake_thread_class(started))
+        calls = []
+        monkeypatch.setattr(privilege_separation, "_run_auto_enable_macos", lambda s: calls.append(s))
 
         privilege_separation.maybe_auto_enable_macos()
 
-        assert started == []
-        assert not (data_dir / privilege_separation.AUTO_ENABLE_ATTEMPTED_MARKER_NAME).exists()
+        assert calls == []
 
 
 class TestMacosAutoEnableScriptProblem:
@@ -3110,3 +3073,302 @@ class TestCompletePerUserSeparation:
 
         assert privilege_separation.complete_per_user_separation() is True
         assert reset == [True]
+
+
+class TestEnableCommand:
+    """ADR 0003 decision 6, Q3 from the rollout plan: PlatformLayout gains
+    an enable_command so enforce_separation()'s refusal names a per-platform
+    fix rather than hand-spelling one at the call site."""
+
+    def test_every_platform_has_one(self, platform_name):
+        layout = privilege_separation.PLATFORM_LAYOUTS[platform_name]
+        assert layout.enable_command
+        assert "enable" in layout.enable_command
+
+    def test_distinct_from_status_and_start(self, platform_name):
+        layout = privilege_separation.PLATFORM_LAYOUTS[platform_name]
+        assert layout.enable_command != layout.status_command
+        assert layout.enable_command != layout.start_command
+
+
+class TestDevAllowsUnseparated:
+    """ADR 0003 decision 7's escape hatch -- "a sibling of
+    PRIVACYFENCE_DEV_ALLOW_INSECURE_IDP", same truthy/falsy spelling."""
+
+    def test_unset_is_false(self, monkeypatch):
+        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
+        assert privilege_separation.dev_allows_unseparated() is False
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "False"])
+    def test_falsy_values(self, monkeypatch, value):
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, value)
+        assert privilege_separation.dev_allows_unseparated() is False
+
+    @pytest.mark.parametrize("value", ["1", "true", "yes", "anything"])
+    def test_truthy_values(self, monkeypatch, value):
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, value)
+        assert privilege_separation.dev_allows_unseparated() is True
+
+
+class TestEnforceSeparation:
+    """ADR 0003 decision 6's own gate. Scoped to paths.is_bundled() (a
+    packaged build) -- see enforce_separation()'s own docstring for why that
+    is, in practice, "local mode and nothing else": org mode is never
+    shipped as a frozen build, only via the wheel/sdist."""
+
+    def test_noop_when_not_bundled(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        privilege_separation.reset_cache()
+        attempts = []
+        monkeypatch.setattr(privilege_separation, "maybe_auto_enable_macos", lambda: attempts.append(1))
+        monkeypatch.setattr(
+            privilege_separation, "_run_full_auto_enable_non_macos", lambda: attempts.append(1)
+        )
+
+        privilege_separation.enforce_separation()
+
+        assert attempts == []
+
+    def test_noop_when_already_separated(self, separated, monkeypatch):
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        attempts = []
+        monkeypatch.setattr(privilege_separation, "maybe_auto_enable_macos", lambda: attempts.append(1))
+        monkeypatch.setattr(
+            privilege_separation, "_run_full_auto_enable_non_macos", lambda: attempts.append(1)
+        )
+
+        privilege_separation.enforce_separation()
+
+        assert attempts == []
+
+    def test_darwin_dispatches_to_maybe_auto_enable_macos(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        privilege_separation.reset_cache()
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        attempts = []
+        monkeypatch.setattr(privilege_separation, "maybe_auto_enable_macos", lambda: attempts.append("macos"))
+        monkeypatch.setattr(
+            privilege_separation, "_run_full_auto_enable_non_macos", lambda: attempts.append("other")
+        )
+
+        with pytest.raises(privilege_separation.PrivilegeSeparationError):
+            privilege_separation.enforce_separation()
+
+        assert attempts == ["macos"]
+
+    @pytest.mark.parametrize("platform_value", ["linux", "win32"])
+    def test_non_darwin_dispatches_to_the_shared_helper(self, monkeypatch, tmp_path, platform_value):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: platform_value)
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        privilege_separation.reset_cache()
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        attempts = []
+        monkeypatch.setattr(privilege_separation, "maybe_auto_enable_macos", lambda: attempts.append("macos"))
+        monkeypatch.setattr(
+            privilege_separation, "_run_full_auto_enable_non_macos", lambda: attempts.append("other")
+        )
+
+        with pytest.raises(privilege_separation.PrivilegeSeparationError):
+            privilege_separation.enforce_separation()
+
+        assert attempts == ["other"]
+
+    def test_returns_quietly_when_the_attempt_takes(self, monkeypatch, tmp_path):
+        # The attempt's own side effect is provisioning the install for
+        # real; simulate that by writing the marker from inside the faked
+        # attempt, exactly like a real enable --auto would.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        root = tmp_path / "PrivacyFence"
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
+        privilege_separation.reset_cache()
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+
+        def _fake_attempt() -> None:
+            _write_marker(root, "linux")
+
+        monkeypatch.setattr(privilege_separation, "_run_full_auto_enable_non_macos", _fake_attempt)
+
+        privilege_separation.enforce_separation()  # must not raise
+
+        assert privilege_separation.is_enabled() is True
+
+    def test_refuses_and_names_the_enable_command_when_the_attempt_does_not_take(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        privilege_separation.reset_cache()
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "_run_full_auto_enable_non_macos", lambda: None)
+
+        with pytest.raises(privilege_separation.PrivilegeSeparationError) as exc:
+            privilege_separation.enforce_separation()
+
+        message = str(exc.value)
+        assert "not privilege-separated" in message
+        assert privilege_separation.PLATFORM_LAYOUTS["linux"].enable_command in message
+
+    def test_no_developer_override_for_a_packaged_build(self, monkeypatch, tmp_path):
+        # Decision 6's refusal is unconditional on a packaged build -- see
+        # dev_allows_unseparated()'s own docstring for why the escape hatch
+        # only applies to the non-packaged step_up_config.py check.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
+        privilege_separation.reset_cache()
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "_run_full_auto_enable_non_macos", lambda: None)
+
+        with pytest.raises(privilege_separation.PrivilegeSeparationError):
+            privilege_separation.enforce_separation()
+
+
+class TestWindowsFullEnableArgv:
+    """The Windows sibling of maybe_auto_enable_macos()'s AppleScript --
+    UAC's own elevation, which (unlike pkexec) is always interactive, so
+    plain `enable` (no -Auto, which doesn't exist on this script) already
+    resolves the current user and completes both halves in one call."""
+
+    def test_elevates_via_uac_and_runs_plain_enable(self, tmp_path):
+        script = tmp_path / "privilege-separation.ps1"
+        argv = privilege_separation._windows_full_enable_argv(script)
+
+        assert "-Verb" in argv[-1] and "RunAs" in argv[-1]
+        assert str(script) in argv[-1]
+        assert "enable" in argv[-1]
+        assert "-Auto" not in argv[-1]
+        assert "-ForUser" not in argv[-1]
+
+
+class TestRunFullAutoEnableNonMacos:
+    @pytest.fixture
+    def script(self, tmp_path, monkeypatch):
+        path = tmp_path / "privilege-separation"
+        path.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(privilege_separation, "installer_script_path", lambda: path)
+        monkeypatch.setattr(privilege_separation, "_elevation_script_problem", lambda s: None)
+        return path
+
+    def test_warns_when_no_script_is_found(self, monkeypatch, caplog):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(privilege_separation, "installer_script_path", lambda: None)
+
+        with caplog.at_level("WARNING"):
+            privilege_separation._run_full_auto_enable_non_macos()
+        assert "no privilege-separation provisioning script" in caplog.text
+
+    def test_refuses_a_script_that_fails_its_safety_check(self, monkeypatch, script, caplog):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(privilege_separation, "_elevation_script_problem", lambda s: "owned by uid 501")
+
+        with caplog.at_level("WARNING"):
+            privilege_separation._run_full_auto_enable_non_macos()
+        assert "owned by uid 501" in caplog.text
+
+    def test_linux_without_pkexec_logs_the_manual_command(self, monkeypatch, script, caplog):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(privilege_separation.shutil, "which", lambda name: None)
+
+        with caplog.at_level("WARNING"):
+            privilege_separation._run_full_auto_enable_non_macos()
+        assert "pkexec" in caplog.text
+        assert str(script) in caplog.text
+
+    def test_linux_with_pkexec_runs_enable_auto(self, monkeypatch, script):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(privilege_separation.shutil, "which", lambda name: "/usr/bin/pkexec")
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", fake_run)
+        reset_calls = []
+        monkeypatch.setattr(privilege_separation, "reset_cache", lambda: reset_calls.append(True))
+
+        privilege_separation._run_full_auto_enable_non_macos()
+
+        assert len(calls) == 1
+        assert calls[0] == ["/usr/bin/pkexec", str(script), "enable", "--auto"]
+        assert reset_calls == [True]
+
+    def test_windows_runs_the_uac_elevated_argv(self, monkeypatch, script):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", fake_run)
+        reset_calls = []
+        monkeypatch.setattr(privilege_separation, "reset_cache", lambda: reset_calls.append(True))
+
+        privilege_separation._run_full_auto_enable_non_macos()
+
+        assert len(calls) == 1
+        assert str(script) in calls[0][-1]
+        assert reset_calls == [True]
+
+    def test_a_declined_prompt_is_not_a_crash(self, monkeypatch, script, caplog):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(privilege_separation.shutil, "which", lambda name: "/usr/bin/pkexec")
+        monkeypatch.setattr(
+            privilege_separation.subprocess, "run",
+            lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, "", "User cancelled."),
+        )
+
+        with caplog.at_level("INFO"):
+            privilege_separation._run_full_auto_enable_non_macos()
+        assert "User cancelled." in caplog.text
+
+    def test_a_subprocess_failure_is_swallowed(self, monkeypatch, script):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(privilege_separation.shutil, "which", lambda name: "/usr/bin/pkexec")
+
+        def _boom(argv, **kwargs):
+            raise OSError("no such binary")
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", _boom)
+
+        privilege_separation._run_full_auto_enable_non_macos()  # must not raise
+
+
+class TestDevUnseparatedNotice:
+    """ADR 0003 decision 7's disclosure -- consulted by daemon_main.py's
+    startup log and by web/routes_security.py's local-mode /security page."""
+
+    def test_none_on_a_packaged_build(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.dev_unseparated_notice() is None
+
+    def test_none_when_already_separated(self, separated, monkeypatch):
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
+
+        assert privilege_separation.dev_unseparated_notice() is None
+
+    def test_none_without_the_override(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.dev_unseparated_notice() is None
+
+    def test_present_for_non_packaged_unseparated_with_override(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        privilege_separation.reset_cache()
+
+        notice = privilege_separation.dev_unseparated_notice()
+
+        assert notice is not None
+        assert privilege_separation.DEV_ALLOW_UNSEPARATED_ENV in notice
+        assert "NOT protected" in notice

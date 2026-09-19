@@ -899,8 +899,22 @@ class SettingsController:
         step_up_cfg = cfg.setdefault("step_up", {})
         step_up_cfg["enabled"] = True
         step_up_cfg["require_passkey"] = True
+        # ADR 0003, "Why not gate the passkey instead": StepUpConfig.
+        # from_local_config() itself now refuses require_passkey on an
+        # unseparated install -- this is that check's own Settings-page
+        # entry point (ADR 0003's Context #2: "step_up.require_passkey is
+        # reachable from the Settings page of an unseparated install").
+        # Validated *before* _save_config() below, not after: persisting
+        # require_passkey: true and only then discovering it refuses to
+        # parse would leave settings.yaml in a state the daemon refuses to
+        # load on its very next start.
+        try:
+            new_step_up = StepUpConfig.from_local_config(cfg)
+        except org_mode.ConfigurationError as exc:
+            self.error = str(exc)
+            return self.snapshot()
         self._save_config(cfg)
-        self._step_up.update(StepUpConfig.from_local_config(cfg))
+        self._step_up.update(new_step_up)
         self.error = ""
         # #426 Phase 4's own tracking -- called here, not just left for the
         # next daemon startup to notice, so this transition is audited the

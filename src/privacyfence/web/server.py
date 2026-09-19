@@ -721,6 +721,10 @@ def build_app(
             # tab is this mode's own equivalent, see routes_security.py's
             # build_routes docstring on back_link.
             back_link=("/settings/connectors", "Back to Connectors"),
+            # ADR 0003 decision 7's /security half -- daemon_main.py logs
+            # the same fact at startup; see privilege_separation.
+            # dev_unseparated_notice()'s own docstring.
+            dev_unseparated_notice=privilege_separation.dev_unseparated_notice(),
         ))
 
     if state_stream is not None:

@@ -1444,6 +1444,11 @@ class TestMaybeStartWebServer:
         # aimed at the daemon's own log; web_shell.py's TestBanner/
         # test_routes_approvals.py's TestRequirePasskeyBanner cover the
         # human-facing half.
+        #
+        # require_passkey also needs a separated install or the ADR 0003
+        # developer override (step_up_config.py's own gate) -- this test is
+        # about the enrollment banner, not that gate, so set the override.
+        monkeypatch.setenv(daemon_main.privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
         self._no_bind(monkeypatch, tmp_path)
         with caplog.at_level(logging.WARNING):
             result = daemon_main._maybe_start_web_server(
@@ -1457,6 +1462,7 @@ class TestMaybeStartWebServer:
     def test_require_passkey_with_a_credential_enrolled_logs_nothing(self, monkeypatch, tmp_path, caplog):
         from privacyfence import webauthn_stepup as wa
         from privacyfence.principal import LOCAL_PRINCIPAL
+        monkeypatch.setenv(daemon_main.privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
         self._no_bind(monkeypatch, tmp_path)
         wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
             credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
@@ -1587,6 +1593,7 @@ class TestMaybeStartWebServer:
         # LiveStepUpConfig it hands the server itself (see that method's
         # own docstring on why it needs to be the *same* object).
         from privacyfence.step_up_config import LiveStepUpConfig
+        monkeypatch.setenv(daemon_main.privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
         self._no_bind(monkeypatch, tmp_path)
         controller = self._controller(tmp_path, monkeypatch)
 
@@ -2911,15 +2918,15 @@ class TestMain:
         assert result == 0
         assert len(calls) == 1
 
-    def test_no_oauth_flag_triggers_the_macos_auto_enable_check(self, monkeypatch):
-        # #428 D1 (4.1): fired only on the path that actually starts the
-        # persistent daemon -- see the next test for why the one-shot CLI
-        # flags below must not trigger it.
+    def test_no_oauth_flag_triggers_the_separation_gate(self, monkeypatch):
+        # ADR 0003 decision 6: fired only on the path that actually starts
+        # the persistent daemon -- see the next test for why the one-shot
+        # CLI flags below must not trigger it.
         self._patch_config(monkeypatch)
         monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
         calls = []
         monkeypatch.setattr(
-            daemon_main.privilege_separation, "maybe_auto_enable_macos", lambda: calls.append(1)
+            daemon_main.privilege_separation, "enforce_separation", lambda: calls.append(1)
         )
 
         result = daemon_main.main([])
@@ -2928,22 +2935,68 @@ class TestMain:
         assert calls == [1]
 
     @pytest.mark.parametrize("flag", ["--gmail-oauth", "--telegram-setup"])
-    def test_oauth_and_telegram_flags_do_not_trigger_the_macos_auto_enable_check(self, monkeypatch, flag):
-        # A password-prompting admin dialog popping up during a scripted,
-        # headless `--gmail-oauth` invocation would be a surprising side
-        # effect of an unrelated flag.
+    def test_oauth_and_telegram_flags_do_not_trigger_the_separation_gate(self, monkeypatch, flag):
+        # A password-prompting admin/UAC/polkit dialog popping up during a
+        # scripted, headless `--gmail-oauth` invocation would be a surprising
+        # side effect of an unrelated flag, and there is nothing to refuse
+        # yet on a one-shot command.
         self._patch_config(monkeypatch)
         monkeypatch.setattr(daemon_main, "run_gmail_oauth", lambda org_config: 0)
         monkeypatch.setattr(daemon_main, "run_telegram_setup", lambda: 0)
         calls = []
         monkeypatch.setattr(
-            daemon_main.privilege_separation, "maybe_auto_enable_macos", lambda: calls.append(1)
+            daemon_main.privilege_separation, "enforce_separation", lambda: calls.append(1)
         )
 
         result = daemon_main.main([flag])
 
         assert result == 0
         assert calls == []
+
+    def test_refuses_to_start_when_the_separation_gate_refuses(self, monkeypatch, capsys):
+        # ADR 0003 decision 6: a packaged, unseparated install must not reach
+        # run_app() at all -- see privilege_separation.enforce_separation()
+        # for what triggers this in practice.
+        self._patch_config(monkeypatch)
+        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
+
+        def refuse() -> None:
+            raise daemon_main.privilege_separation.PrivilegeSeparationError("not privilege-separated")
+
+        monkeypatch.setattr(daemon_main.privilege_separation, "enforce_separation", refuse)
+
+        result = daemon_main.main([])
+
+        assert result == 1
+        assert "not privilege-separated" in capsys.readouterr().err
+
+    def test_logs_the_dev_unseparated_notice_when_present(self, monkeypatch, caplog):
+        # ADR 0003 decision 7's startup-log half -- see privilege_separation.
+        # dev_unseparated_notice()'s own docstring for when this is non-None.
+        self._patch_config(monkeypatch)
+        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
+        monkeypatch.setattr(daemon_main.privilege_separation, "enforce_separation", lambda: None)
+        monkeypatch.setattr(
+            daemon_main.privilege_separation, "dev_unseparated_notice",
+            lambda: "PRIVACYFENCE_DEV_ALLOW_UNSEPARATED is set -- not protected",
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = daemon_main.main([])
+
+        assert result == 0
+        assert "not protected" in caplog.text
+
+    def test_no_log_line_when_the_dev_notice_is_none(self, monkeypatch, caplog):
+        self._patch_config(monkeypatch)
+        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: 0)
+        monkeypatch.setattr(daemon_main.privilege_separation, "enforce_separation", lambda: None)
+        monkeypatch.setattr(daemon_main.privilege_separation, "dev_unseparated_notice", lambda: None)
+
+        with caplog.at_level(logging.WARNING):
+            daemon_main.main([])
+
+        assert "not protected" not in caplog.text
 
     def test_fatal_exception_is_caught_prints_error_and_returns_1(self, monkeypatch, capsys):
         self._patch_config(monkeypatch)

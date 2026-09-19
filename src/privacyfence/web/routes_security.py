@@ -158,6 +158,7 @@ def build_routes(
     step_up: StepUpConfig,
     issuer_url: str,
     back_link: tuple[str, str] = ("/connect", "Back to connections"),
+    dev_unseparated_notice: str | None = None,
 ) -> list[Route]:
     """``resolve_principal``/``check_csrf``/``check_origin`` are the
     mode-specific half of this module (#426 Phase 1) -- org mode's caller
@@ -178,7 +179,12 @@ def build_routes(
     connect.py) since that was this module's only caller until #426 Phase 1;
     local mode's caller overrides it to ``/settings/connectors``, since it
     has no ``/connect`` route to link to (settings_window_html.py's
-    Connectors tab is that mode's own equivalent).
+    Connectors tab is that mode's own equivalent). ``dev_unseparated_notice``
+    (ADR 0003 decision 7) is local mode's own
+    ``privilege_separation.dev_unseparated_notice()`` result, shown verbatim
+    at the top of the page when not ``None``; org mode's caller leaves it
+    unset since that function is never non-``None`` there (org mode is never
+    a packaged build).
     """
     challenges = RegistrationChallengeStore()
     delete_challenges = StepUpChallengeStore()
@@ -229,6 +235,7 @@ def build_routes(
         html = _render_security_page(
             principal=principal, creds=creds, csrf=session_id, step_up=step_up,
             nonce=_csp_nonce_for(request), back_link=back_link,
+            dev_unseparated_notice=dev_unseparated_notice,
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -549,17 +556,21 @@ _SCOPE_NOTES = {
 
 def _render_security_page(
     *, principal: Principal, creds: list, csrf: str, step_up: StepUpConfig, nonce: str,
-    back_link: tuple[str, str],
+    back_link: tuple[str, str], dev_unseparated_notice: str | None = None,
 ) -> str:
     who = _esc(principal.email or principal.display_name or principal.id)
     rows = "".join(_credential_row_html(c) for c in creds)
     body = f'<ul class="creds">{rows}</ul>' if creds else '<div class="empty">No passkeys added yet.</div>'
     scope_note = _SCOPE_NOTES.get(step_up.scope, _SCOPE_NOTES["writes"])
+    dev_notice_html = (
+        f'<p class="flash err">{_esc(dev_unseparated_notice)}</p>' if dev_unseparated_notice else ""
+    )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PrivacyFence -- Security</title><style nonce="{nonce}">{_STYLE}</style></head>
 <body data-csrf="{_esc(csrf)}">
 <h1>Passkeys</h1>
+{dev_notice_html}
 <p class="lead">Signed in as {who}. A passkey (Face ID, Touch ID, fingerprint, or Windows Hello) proves it's
 really you before a write approval is released, even if someone else has your unlocked phone. {_esc(scope_note)}</p>
 {body}

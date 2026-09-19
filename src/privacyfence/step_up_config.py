@@ -33,6 +33,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from . import privilege_separation
 from .org_mode import ConfigurationError
 
 StepUpScope = Literal["writes", "writes_and_pii_reads", "writes_and_reads"]
@@ -220,12 +221,36 @@ class StepUpConfig:
                 f"config/settings.yaml's \"step_up\".\"batch\" must be \"single_assertion\" or "
                 f"\"per_item\", got {batch!r}"
             )
+        require_passkey = bool(raw.get("require_passkey", False))
+        # ADR 0003, "Why not gate the passkey instead": kept as a consequence
+        # of decision 1 rather than dropped, because it is unreachable on a
+        # shipped install (daemon_main.py's enforce_separation() already
+        # refused to start a packaged, unseparated one before load_config()
+        # -- and therefore this -- is ever reached) and catches exactly the
+        # developer path that gate does not cover: a non-packaged local-mode
+        # checkout with `require_passkey: true` in its own settings.yaml but
+        # no service account backing it. ADR 0002 decision 6 already named
+        # why that combination is worse than not having the feature at all --
+        # "a passkey checked against a credential store the agent can write
+        # is a checkbox a local process ticks for itself". The escape hatch
+        # is the same one decision 7 gives the daemon-startup gate's sibling
+        # case, in the same house spelling.
+        separated_or_dev = privilege_separation.is_enabled() or privilege_separation.dev_allows_unseparated()
+        if require_passkey and not separated_or_dev:
+            raise ConfigurationError(
+                "config/settings.yaml's \"step_up\".\"require_passkey\" is true, but this install "
+                "is not privilege-separated (#428 Phase 4 / ADR 0003) -- the credential store a "
+                "passkey is checked against is writable by the same account the agent runs as, so "
+                "turning this on makes the guarantee worse, not better. Separate this install "
+                f"first, or set {privilege_separation.DEV_ALLOW_UNSEPARATED_ENV}=1 for local "
+                "development (never in a real deployment)."
+            )
         return StepUpConfig(
             enabled=bool(raw.get("enabled", False)),
             scope=scope,
             rp_id=raw.get("rp_id", "") or DEFAULT_LOCAL_RP_ID,
             rp_name=raw.get("rp_name", DEFAULT_RP_NAME) or DEFAULT_RP_NAME,
-            require_passkey=bool(raw.get("require_passkey", False)),
+            require_passkey=require_passkey,
             batch=batch,
         )
 
