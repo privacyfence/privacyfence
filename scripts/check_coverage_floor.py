@@ -158,8 +158,11 @@ MODULE_FLOORS: dict[str, float] = {
     # peer-uid check included -- was invisible to the gate. Raised from 61.0
     # by Phase 0's CONFIRM ENROLL command and the three platform dialogs
     # behind it: the POSIX-reachable half of all of that is tested, so the
-    # ratchet should hold it.
-    "src/privacyfence/web/control_channel.py": 66.0,
+    # ratchet should hold it. Raised again from 66.0 by Phase 2's attested
+    # mints -- MINT COMPANION/MINT CONSOLE, their CONFIRM MINT/CONFIRM
+    # SIGNIN call-backs, SHOW, and the client helpers for all of them, every
+    # one of which this run drives against real servers on both sides.
+    "src/privacyfence/web/control_channel.py": 72.0,
     # _run_tray() (macOS/Windows only, guarded on sys.platform) is nearly
     # all of what's uncovered -- the tray icon this Linux-only run has
     # nothing to drive. 83.0 reflects that split honestly rather than

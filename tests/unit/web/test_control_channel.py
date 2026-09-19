@@ -1055,3 +1055,115 @@ class TestEveryMintIsAudited:
 
         assert reply.startswith("OK ")
         assert self._entries() == []
+
+
+class TestAttestedMintClientHelpers:
+    """The client halves of the two attested shapes, driven against *both*
+    real servers at once -- which is the only way to exercise what makes
+    them attested: the daemon's call-back into the companion process while
+    that process is waiting on its own reply. A test that stubbed either
+    side would prove the protocol to itself."""
+
+    @pytest.fixture
+    def both_channels(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        bootstrap = BootstrapStore()
+        daemon = cc.ControlChannelServer(bootstrap=bootstrap)
+        companion = cc.CompanionChannelServer()
+        daemon.start()
+        companion.start()
+        try:
+            yield bootstrap
+        finally:
+            companion.stop()
+            daemon.stop()
+
+    def test_the_companion_shape_mints_a_code_that_may_approve(self, both_channels):
+        code = cc.mint_attested_bootstrap_code()
+
+        assert both_channels.consume(code) == sa.PROVENANCE_HUMAN
+
+    def test_a_nonce_the_companion_never_issued_gets_no_code(self, both_channels, monkeypatch):
+        """What an agent sending this line by hand hits: it cannot produce a
+        nonce the companion would recognize, and it cannot read the one the
+        companion did issue."""
+        monkeypatch.setattr(cc, "issue_mint_nonce", lambda: "not-a-real-nonce")
+
+        with pytest.raises(cc.ControlChannelError):
+            cc.mint_attested_bootstrap_code()
+
+    def test_the_console_shape_mints_one_when_the_dialog_is_allowed(self, both_channels, monkeypatch):
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+
+        code = cc.mint_console_bootstrap_code(timeout=5.0)
+
+        assert both_channels.consume(code) == sa.PROVENANCE_HUMAN
+
+    def test_a_denied_dialog_reaches_the_terminal_in_words(self, both_channels, monkeypatch):
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+
+        with pytest.raises(cc.ControlChannelError) as excinfo:
+            cc.mint_console_bootstrap_code(timeout=5.0)
+
+        # The reason is written where it is known -- the companion's dialog
+        # handler -- and passed through unchanged by everything between.
+        assert "denied" in str(excinfo.value)
+        assert "ERROR" not in str(excinfo.value)  # protocol, not prose
+
+    def test_request_show_reaches_the_running_companion(self, both_channels, monkeypatch):
+        shown = []
+        monkeypatch.setattr(cc, "open_attested_url", lambda path: (bool(shown.append(path)) or True, ""))
+
+        assert cc.request_show("/approvals") is True
+        assert shown == ["/approvals"]
+
+    def test_request_mint_attestation_is_true_only_for_a_live_nonce(self, both_channels):
+        nonce = cc.issue_mint_nonce()
+
+        assert cc.request_mint_attestation(nonce) is True
+        assert cc.request_mint_attestation(nonce) is False  # single-use
+
+
+class TestAttestedMintWithNoCompanion:
+    """Every one of these is the same answer from a different angle: with no
+    companion running, nothing can vouch for a mint, and the caller is told
+    rather than quietly handed a weaker credential."""
+
+    @pytest.fixture(autouse=True)
+    def _daemon_only(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore())
+        server.start()
+        try:
+            yield
+        finally:
+            server.stop()
+
+    def test_the_companion_shape_raises(self):
+        with pytest.raises(cc.ControlChannelError):
+            cc.mint_attested_bootstrap_code(timeout=2.0)
+
+    def test_the_console_shape_raises_with_a_reason_naming_the_companion(self):
+        with pytest.raises(cc.ControlChannelError) as excinfo:
+            cc.mint_console_bootstrap_code(timeout=2.0)
+        assert "companion" in str(excinfo.value)
+
+    def test_request_show_is_false_rather_than_raising(self):
+        # companion.py falls back from here rather than failing the click.
+        assert cc.request_show("/approvals", timeout=1.0) is False
+
+    def test_request_mint_attestation_is_false_rather_than_raising(self):
+        assert cc.request_mint_attestation("some-nonce", timeout=1.0) is False
+
+    def test_a_bare_mint_still_works(self):
+        # The view-only path is the one that must never depend on anything
+        # else being up -- it is what a locked-out human falls back to.
+        assert cc.mint_bootstrap_code()
