@@ -433,8 +433,16 @@ class TestEnableStepUp:
         # sc.data_dir monkeypatch (settings_controller.py's own config/org
         # reads), so this needs its own patch, the same one
         # TestSensitiveActionStepUp in test_routes_settings.py uses.
-        from privacyfence import paths
+        from privacyfence import paths, privilege_separation
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        # ADR 0003: StepUpConfig.from_local_config() now refuses
+        # require_passkey on an unseparated install -- this class is about
+        # enable_step_up's own dispatch/audit/idempotency behavior, not that
+        # separate check (covered by TestRequirePasskeyNeedsSeparation in
+        # tests/unit/test_step_up_config.py and by
+        # TestEnableStepUpRefusesOnAnUnseparatedInstall in
+        # tests/unit/web/test_routes_settings.py).
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
         return tmp_path
 
     def _enroll(self):
