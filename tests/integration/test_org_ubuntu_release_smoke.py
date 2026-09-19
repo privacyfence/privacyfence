@@ -799,7 +799,11 @@ class TestRunningOrgModeService:
                 propose_task.cancel()
 
         assert not result.is_error, result.content
-        assert "trusted_sender_domain" in result.content[0].text
+        # P9 of the policy v2 redesign: propose_rule_change's confirmed-response no longer echoes
+        # the v1 rule_name verbatim -- it reports the v2 rule's own human-readable sentence instead
+        # (policy.describe.rule_sentence), which names the scope ("sender domain example.com") and
+        # the verb, not the v1 predicate string.
+        assert "Gmail - sender domain example.com: allow read" in result.content[0].text
 
         # Audit-principal correctness: the decision this call made landed
         # under carol's own per-principal audit log directory (audit_log.py's
@@ -1009,7 +1013,10 @@ class TestCleanShutdownAndRestart:
 
             result = asyncio.run(_list_rules())
             assert not result.is_error, result.content
-            assert "trusted_sender_domain" in result.content[0].text
+            # P9: privacyfence_list_auto_accept_rules is a deprecated alias of privacyfence_list_policy
+            # now -- it reports the v2 rule's own sentence/scope_type, not the v1 rule_name string.
+            assert "Gmail - sender domain example.com: allow read" in result.content[0].text
+            assert "gmail.sender_domain" in result.content[0].text
 
         # The audit trail grew, in the *same* weekly file, rather than
         # being reset or rotated by the restart -- SEC-23's append-only

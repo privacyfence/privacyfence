@@ -165,7 +165,7 @@ class TestOnChangeMarshaling:
         bg_done = threading.Event()
 
         def background_thread_body():
-            auto_accept.reload_rules({"gmail.read_message": [{"rule": "i_am_sender"}]})
+            auto_accept.notify_rules_changed()
             bg_done.set()
 
         try:
@@ -331,15 +331,15 @@ class TestConfigHelpers:
 
     def test_save_and_reload_persists_and_triggers_rule_reload(self, controller, monkeypatch):
         reload_calls = []
-        monkeypatch.setattr(sc, "reload_rules", lambda rules: reload_calls.append(rules))
+        monkeypatch.setattr(sc, "notify_rules_changed", lambda: reload_calls.append(True))
 
         controller._save_and_reload({"auto_accept_rules": {"gmail.read_message": [{"rule": "i_am_sender"}]}})
 
-        assert reload_calls == [{"gmail.read_message": [{"rule": "i_am_sender"}]}]
+        assert reload_calls == [True]
         assert controller._load_config()["auto_accept_rules"] == {"gmail.read_message": [{"rule": "i_am_sender"}]}
 
     def test_save_and_reload_swallows_reload_failures(self, controller, monkeypatch):
-        monkeypatch.setattr(sc, "reload_rules", lambda rules: (_ for _ in ()).throw(RuntimeError("boom")))
+        monkeypatch.setattr(sc, "notify_rules_changed", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
         controller._save_and_reload({})  # must not raise
 
@@ -1525,9 +1525,7 @@ class TestAddPolicyRule:
         cfg = controller._load_config()
         assert cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] is True
         assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["predicate"] == "approved_folder"
-        # Never *populates* the v1 sections -- build_effective_rules (run by the ordinary v1-side
-        # hot reload _save_and_reload_policy_v2 also triggers) may set an empty auto_accept_rules
-        # key via setdefault, but no v1 rule entry is ever written for a v2-only add.
+        # Never *populates* the v1 sections -- a v2-only add writes nothing under auto_accept_rules.
         assert not cfg.get("auto_accept_rules")
 
     def test_adding_more_verbs_for_the_same_value_widens_the_existing_row(self, controller):
@@ -1654,54 +1652,6 @@ class TestAutoAcceptRuleUsage:
         state = controller.snapshot()
         row = state["auto_accept"]["rules"][0]
         assert row["never_matched"] is True
-
-
-class TestLegacyV1RuleAndGrantActionsForOrgMode:
-    """add_rule_row/remove_rule_row/remove_grant_row survive P6 solely for org mode
-    (web/routes_org_settings.py's own separate, unaffected settings surface) -- see their own
-    docstring in settings_controller.py. The local Auto-accept page never calls these."""
-
-    def test_add_rule_row_appends_an_empty_row(self, controller):
-        controller.add_rule_row("gmail.read_message")
-
-        rules = controller._load_config()["auto_accept_rules"]["gmail.read_message"]
-        assert rules == [{"rule": ""}]
-
-    def test_remove_rule_row(self, controller):
-        cfg = controller._load_config()
-        cfg.setdefault("auto_accept_rules", {})["gmail.read_message"] = [
-            {"rule": "i_am_sender"}, {"rule": "trusted_sender_domain"},
-        ]
-        controller._save_config(cfg)
-
-        controller.remove_rule_row("gmail.read_message", 0)
-
-        rules = controller._load_config()["auto_accept_rules"]["gmail.read_message"]
-        assert rules == [{"rule": "trusted_sender_domain"}]
-
-    def test_remove_rule_row_out_of_range_is_a_no_op(self, controller):
-        cfg = controller._load_config()
-        cfg.setdefault("auto_accept_rules", {})["gmail.read_message"] = [{"rule": "i_am_sender"}]
-        controller._save_config(cfg)
-        before = controller._load_config()
-
-        controller.remove_rule_row("gmail.read_message", 9)
-
-        assert controller._load_config() == before
-
-    def test_remove_grant_row(self, controller):
-        controller._save_config({"auto_accept_grants": {"drive": {"sandbox_folders": [{"id": "F1"}]}}})
-
-        controller.remove_grant_row("drive", "sandbox_folders", 0)
-
-        assert not controller._load_config().get("auto_accept_grants", {}).get("drive", {}).get("sandbox_folders")
-
-    def test_remove_grant_row_unknown_resource_type_is_a_no_op(self, controller):
-        before = controller._load_config()
-
-        controller.remove_grant_row("nope", "nope", 0)
-
-        assert controller._load_config() == before
 
 
 class TestPolicyV2MigrationNotice:
@@ -2073,11 +2023,17 @@ class TestRuleUiCompleteness:
 
     @staticmethod
     def _all_rule_names() -> set[str]:
-        return {
-            name[len("_rule_"):]
-            for name in vars(auto_accept.AutoAcceptEvaluator)
-            if name.startswith("_rule_") and callable(getattr(auto_accept.AutoAcceptEvaluator, name))
-        }
+        """Every v1 predicate name ``policy.compat.compile_rule_entry`` (the migration's own v1
+        -> v2 compiler, and P9's sole remaining reader of v1 rule names, now that
+        ``AutoAcceptEvaluator`` is gone) actually recognizes: every v2 scope selector's own id,
+        plus every legacy name a ``ConditionSelector.replaces`` maps onto one -- see that module's
+        own docstring for why a v1 predicate is always exactly one or the other."""
+        from privacyfence.policy import conditions, scopes
+
+        names = set(scopes.SCOPE_SELECTORS)
+        for selector in conditions.CONDITION_SELECTORS.values():
+            names.update(selector.replaces)
+        return names
 
     @staticmethod
     def _rules_by_operation_names() -> set[str]:

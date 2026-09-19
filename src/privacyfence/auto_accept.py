@@ -1,38 +1,56 @@
-"""Auto-accept rule engine for the human review gate."""
+"""Auto-accept: the v2 policy store's hot-reloaded per-principal cache, plus the tool/gate/
+temp-accept infrastructure every gated call needs regardless of engine.
+
+Through P8 of the policy v2 redesign this module also housed the v1 rule engine
+(``AutoAcceptEvaluator`` and its ~50 ``_rule_*`` predicates), the five suggestion tables the popup's
+"Always allow" button read (``SUGGESTION_FAMILIES``, ``WRITE_RULE_SUGGESTIONS``, ...), the v1
+``auto_accept_rules``/``auto_accept_grants`` writers (``add_auto_accept_rule``, ``mutate_grants``),
+and the ``policy.engine: v1 | v2`` shadow-mode switch. P9 removes all of it: ``gate.py`` evaluates
+against the v2 ``auto_accept:`` section exclusively now (``get_policy_v2_store_rules`` below), the
+popup writes through ``policy.propose``/``policy.describe`` the same way Settings and the MCP bridge
+already do (``add_policy_v2_rules``), and a not-yet-migrated, hand-edited ``settings.yaml`` gets
+folded into v2 once at startup (``policy.compat.migrate_to_policy_v2``) rather than evaluated
+directly forever.
+
+What's left here is genuinely engine-agnostic:
+
+- ``TOOL_TO_OPERATION``/``TOOL_TO_GATE`` -- which operation key and which gate (``auto``/``review``/
+  ``popup``) a tool maps to. Every rule engine v1 or v2 has ever had keys off these.
+- The same-file temp-accept grace window (``TEMP_ACCEPT_ELIGIBLE_OPERATIONS``,
+  ``register_temp_accept``/``is_temp_accepted``) -- an in-memory, non-persisted acceptance that both
+  ``policy.engine.evaluate``/``preflight`` and ``gate.py`` consult via callback, independent of
+  where the rule list they're otherwise checking comes from.
+- ``ReviewContext`` and the small parsing helpers (``_file_from``, ``_domain_of``, ``_address_of``,
+  ``_attendee_email``) P2's scope/condition selectors (``policy/scopes.py``, ``policy/conditions.py``)
+  and P5's proposal builder (``policy/propose.py``) import directly.
+- ``migrate_telegram_search_operation_key`` -- a v1-internal, pre-redesign rename, unrelated to
+  grants/engine choice.
+- ``_AutoAcceptState``/the ``PrincipalRegistry`` it lives in -- per-principal config path, the
+  temp-accept store, the hot-reloaded v2 rule cache, and the rules-changed listener broadcast that
+  lets a pending approval re-resolve the moment a rule changes.
+"""
 from __future__ import annotations
 import logging
 import threading
 import time
+import yaml
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from email.utils import parseaddr
 from typing import TYPE_CHECKING, Any, Callable
 
-import yaml
-
 from .principal import PrincipalRegistry
-from .resource_grants import (
-    DRIVE_FOLDER_READ_TARGETS,
-    DRIVE_SANDBOX_WRITE_TARGETS,
-    build_effective_rules,
-)
+from .policy.resource_registry import DRIVE_SANDBOX_WRITE_TARGETS
 from .secure_files import atomic_write_text
 
 if TYPE_CHECKING:
     # Only for the type hint on `_AutoAcceptState.policy_v2_store_rules`/`set_policy_v2_store_rules`
-    # (P6) and `get_policy_v2_rules`/`add_policy_v2_rules`/`remove_policy_v2_rule` (P7) below -- a
-    # real (non-TYPE_CHECKING) import would be circular: `policy.engine` itself
-    # imports `ReviewContext`/`temp_accept_key` from this module.
+    # below -- a real (non-TYPE_CHECKING) import would be circular: `policy.engine` itself imports
+    # `ReviewContext`/`temp_accept_key` from this module.
     from .policy.engine import PolicyRule
 
 logger = logging.getLogger(__name__)
 
-# Drive/Sheets/Docs write operations deliberately excluded from
-# TEMP_ACCEPT_ELIGIBLE_OPERATIONS below, each for its own reason -- every
-# other entry in DRIVE_SANDBOX_WRITE_TARGETS (resource_grants.py) is eligible
-# by default, so a newly added write tool only stays out of the grace window
-# if someone adds it here on purpose, not by being silently forgotten.
 _TEMP_ACCEPT_EXCLUDED_OPERATIONS: frozenset[str] = frozenset({
     # Destructive with no undo path through PrivacyFence, unlike
     # insert/format -- gets the standing-rule treatment only (like
@@ -293,88 +311,6 @@ TOOL_TO_GATE: dict[str, str] = {
     "apps_script_get_execution_log":   "review",
 }
 
-# Every _rule_* method on AutoAcceptEvaluator classified into exactly one of
-# these two sets -- see test_auto_accept.py::test_every_rule_is_classified,
-# which enforces that a newly added rule can't be left unclassified.
-#
-# ARGS_ONLY_RULES only ever reads ctx.args, never ctx.raw_data, so it can be
-# evaluated correctly before anything is fetched -- this is what
-# AutoAcceptEvaluator.preflight_from_args() (used by privacyfence_check_policy)
-# is allowed to run ahead of time.
-#
-# DATA_DEPENDENT_RULES read ctx.raw_data, i.e. the actual fetched object (a
-# message, a file, an event...). A rule belongs here even if it *looks* like
-# it could degenerately return a verdict with raw_data missing -- several of
-# these are "absence" checks (no_attachments, shared_drive_exclusion,
-# no_conferencing_link, no_file_attachments, no_external_attendees) that
-# would silently evaluate to a false "matched" the moment raw_data is None,
-# since an empty/missing attribute reads the same as a genuinely absent one.
-# Preflighting these would produce a confidently wrong "auto_accept" verdict,
-# which is worse than admitting "unknown" -- so they stay data-dependent.
-ARGS_ONLY_RULES: frozenset[str] = frozenset({
-    "dm_with_myself",
-    "send_to_myself",
-    "group_dm",
-    "approved_channel",
-    "approved_recipient",
-    "reply_in_existing_thread",
-    "personal_calendar",
-    "approved_object_types",
-    "approved_report_ids",
-    "to_is_myself",
-    "approved_recipient_domain",
-    "label_name_allowlist",
-    "parent_folder_allowlist",
-    "no_contact_info_change",
-    "approved_project_keys",
-    "approved_chats",
-    "approved_task_list",
-    "approved_space_keys",  # checks ctx.args first; falls back to raw_data
-                             # only when args lacks space_key, and that
-                             # fallback degrades safely (empty, not a false
-                             # match) when raw_data is unavailable.
-    "always_allow",  # unconditional -- reads nothing at all, args or otherwise.
-})
-
-DATA_DEPENDENT_RULES: frozenset[str] = frozenset({
-    "i_am_sender",
-    "i_am_sole_recipient",
-    "trusted_sender_domain",
-    "label_match",
-    "age_threshold_days",
-    "no_attachments",
-    "i_am_owner",
-    "created_by_me",
-    "approved_folder",
-    "approved_sandbox_folder",
-    "move_within_approved_folders",
-    "file_type_allowlist",
-    "created_this_session",
-    "shared_drive_exclusion",
-    "public_channels_only",
-    "no_file_attachments",
-    "i_am_organizer",
-    "no_external_attendees",
-    "past_event",
-    "time_window_days",
-    "no_conferencing_link",
-    "i_am_reporter",
-    "i_am_assignee",
-    "i_am_author",
-    "no_media_attachments",
-    # These two check every item in a multi-result raw_data list (a search's
-    # matches, spanning however many channels/chats), not a single arg --
-    # see their docstrings for why an args-only equivalent isn't possible.
-    "approved_channel_all_results",
-    "approved_chats_all_results",
-    # non_private_event reads the event's current visibility off
-    # ctx.raw_data (calendar.read_event_details is the only operation that
-    # offers it) -- with raw_data=None that read silently defaults to
-    # "default" (not private), a false "matched" for a read whose real
-    # visibility is unknown, so this stays data-dependent.
-    "non_private_event",
-})
-
 @dataclass
 class ReviewContext:
     connector: str
@@ -388,570 +324,6 @@ class ReviewContext:
     def __post_init__(self):
         self.my_domain = self.my_email.split("@", 1)[-1] if "@" in self.my_email else ""
 
-class AutoAcceptEvaluator:
-    def __init__(self, rules_config: dict[str, list[dict]]) -> None:
-        self._rules = rules_config or {}
-        # (operation_key, file_key) -> monotonic expiry. In-memory only, by
-        # design: it lives and dies with this evaluator instance (i.e. with
-        # the daemon process), unlike the YAML-backed rules above.
-        self._temp_accepts: dict[tuple[str, str], float] = {}
-        self._temp_accepts_lock = threading.Lock()
-
-    @property
-    def effective_rules(self) -> dict[str, list[dict]]:
-        """The live, hot-reloaded ``auto_accept_rules`` + grant-expanded ``auto_accept_grants``
-        this evaluator is currently holding -- the same shape ``reload_rules()`` last passed in.
-        P3's ``policy.compat.compile_rules()`` takes this directly, so a v2 shadow evaluation
-        (gate.py) always compiles from exactly what this evaluator is deciding against, never a
-        separate re-read of settings.yaml that could be one hot-reload out of date."""
-        return self._rules
-
-    def should_auto_accept(self, operation_key: str, ctx: ReviewContext) -> tuple[bool, str]:
-        """Return (should_auto_accept, matched_rule_name)."""
-        for rule_cfg in self._rules.get(operation_key) or []:
-            rule_name = rule_cfg.get("rule", "")
-            value = rule_cfg.get("value")
-            try:
-                if self._evaluate(rule_name, value, ctx):
-                    logger.info("Auto-accept: op=%r matched rule=%r", operation_key, rule_name)
-                    return True, rule_name
-            except Exception as exc:
-                logger.warning("Rule %r evaluation error: %s", rule_name, exc)
-        if self._is_temp_accepted(operation_key, temp_accept_key(operation_key, ctx)):
-            logger.info("Auto-accept: op=%r matched rule=%r", operation_key, "session_temp_accept")
-            return True, "session_temp_accept"
-        return False, ""
-
-    def preflight_from_args(
-        self, operation_key: str, args: dict, my_email: str = ""
-    ) -> tuple[str, str, str]:
-        """Predict should_auto_accept()'s outcome without fetching anything.
-
-        Backs privacyfence_check_policy: Claude calls this before making a
-        gated call, to find out whether it would need a human. Returns
-        (verdict, matched_rule, reason):
-
-          verdict="auto_accept"     -- a temp-accept or an ARGS_ONLY_RULES
-                                        match already decides this rule check;
-                                        for a 'review'-gated tool the real
-                                        call can still land on a popup if
-                                        PrivacyFence's PII detection gate
-                                        forces confirmation on the content
-                                        fetched later (gate.py's
-                                        pii_forces_confirmation) -- this
-                                        preflight has no fetched content to
-                                        check that against (see
-                                        privacyfence_check_policy's own
-                                        pii_gate_may_apply in mcp_tools.py).
-          verdict="requires_review" -- every configured rule for this
-                                        operation is in ARGS_ONLY_RULES and
-                                        none matched, so fetching the real
-                                        data cannot change the answer.
-          verdict="unknown"         -- at least one configured rule needs
-                                        ctx.raw_data (see DATA_DEPENDENT_RULES)
-                                        and none of the args-only rules
-                                        matched first; the real call might
-                                        still auto-accept once the item is
-                                        fetched, or might not.
-
-        Never touches an external API, opens a popup, or mutates state --
-        ctx.raw_data is always None here, which is why only ARGS_ONLY_RULES
-        members are safe to evaluate (see that set's docstring for why the
-        rest can't be, even speculatively).
-        """
-        ctx = ReviewContext(connector="", tool="", args=args or {}, raw_data=None, my_email=my_email)
-
-        file_key = temp_accept_key(operation_key, ctx)
-        if self._is_temp_accepted(operation_key, file_key):
-            return "auto_accept", "session_temp_accept", "Matched an active same-file temp-accept grace window."
-
-        configured = self._rules.get(operation_key) or []
-        if not configured:
-            return "requires_review", "", "No auto-accept rule is configured for this operation."
-
-        undetermined: list[str] = []
-        for rule_cfg in configured:
-            rule_name = rule_cfg.get("rule", "")
-            if rule_name not in ARGS_ONLY_RULES:
-                undetermined.append(rule_name)
-                continue
-            value = rule_cfg.get("value")
-            try:
-                if self._evaluate(rule_name, value, ctx):
-                    return "auto_accept", rule_name, f"Matched args-only rule {rule_name!r}."
-            except Exception as exc:
-                logger.warning("Preflight rule %r evaluation error: %s", rule_name, exc)
-
-        if undetermined:
-            return (
-                "unknown",
-                "",
-                "Depends on the fetched item's data, not just this call's arguments "
-                "(rule(s): " + ", ".join(sorted(set(undetermined))) + ").",
-            )
-        return "requires_review", "", "No configured rule matches these arguments."
-
-    def register_temp_accept(
-        self, operation_key: str, file_key: str, ttl_seconds: float = TEMP_ACCEPT_TTL_SECONDS
-    ) -> None:
-        """Grant a temporary, in-memory auto-accept for one file, for ``ttl_seconds``."""
-        with self._temp_accepts_lock:
-            self._temp_accepts[(operation_key, file_key)] = time.monotonic() + ttl_seconds
-
-    def _is_temp_accepted(self, operation_key: str, file_key: str | None) -> bool:
-        if file_key is None:
-            return False
-        key = (operation_key, file_key)
-        with self._temp_accepts_lock:
-            expiry = self._temp_accepts.get(key)
-            if expiry is None:
-                return False
-            if time.monotonic() >= expiry:
-                del self._temp_accepts[key]
-                return False
-            return True
-
-    def is_temp_accepted(self, operation_key: str, file_key: str | None) -> bool:
-        """Public wrapper around ``_is_temp_accepted`` (P3): lets ``policy.engine.evaluate``/
-        ``preflight`` consult this evaluator's own temp-accept store instead of keeping a second,
-        divergent one -- a user's "Allow once" only ever registers here (``register_temp_accept``),
-        so a v2 shadow evaluation that checked a store of its own would spuriously disagree on
-        every temp-accepted call."""
-        return self._is_temp_accepted(operation_key, file_key)
-
-    def _evaluate(self, rule_name: str, value: Any, ctx: ReviewContext) -> bool:
-        fn = getattr(self, f"_rule_{rule_name}", None)
-        if fn is None:
-            logger.warning("Unknown auto-accept rule: %r", rule_name)
-            return False
-        return fn(value, ctx)
-
-    # ── Gmail ──────────────────────────────────────────────────────────────
-
-    def _rule_i_am_sender(self, _v, ctx):
-        if not ctx.my_email:
-            return False
-        sender = getattr(ctx.raw_data, "sender", "") or ""
-        return _address_of(sender) == ctx.my_email.lower()
-
-    def _rule_i_am_sole_recipient(self, _v, ctx):
-        if not ctx.my_email:
-            return False
-        recips = getattr(ctx.raw_data, "recipients", []) or []
-        return len(recips) == 1 and _address_of(recips[0]) == ctx.my_email.lower()
-
-    def _rule_trusted_sender_domain(self, value, ctx):
-        if not value:
-            return False
-        raw_sender = getattr(ctx.raw_data, "sender", "") or ""
-        email_part = raw_sender
-        if "<" in raw_sender and ">" in raw_sender:
-            email_part = raw_sender[raw_sender.index("<") + 1 : raw_sender.index(">")]
-        domain = email_part.split("@", 1)[-1].lower().strip()
-        allowed = {d.lower().strip() for d in (value if isinstance(value, list) else [value])}
-        # Matches subdomains too (mail.trusted.com under "trusted.com") since
-        # senders routinely mail from a subdomain of their real domain. The
-        # "." separator keeps "eviltrusted.com" from matching "trusted.com".
-        return any(domain == d or domain.endswith("." + d) for d in allowed)
-
-    def _rule_label_match(self, value, ctx):
-        if not value:
-            return False
-        labels = {label.lower() for label in (getattr(ctx.raw_data, "labels", []) or [])}
-        allowed = {v.lower() for v in (value if isinstance(value, list) else [value])}
-        return bool(labels & allowed)
-
-    def _rule_age_threshold_days(self, value, ctx):
-        if not value:
-            return False
-        date_str = getattr(ctx.raw_data, "date", "") or ""
-        if not date_str:
-            return False
-        try:
-            from email.utils import parsedate_to_datetime
-            dt = parsedate_to_datetime(date_str)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return (datetime.now(timezone.utc) - dt).days >= int(value)
-        except Exception:
-            return False
-
-    def _rule_no_attachments(self, _v, ctx):
-        return len(getattr(ctx.raw_data, "attachments", []) or []) == 0
-
-    # ── Drive ─────────────────────────────────────────────────────────────
-
-    def _file_from(self, raw):
-        return _file_from(raw)
-
-    def _rule_i_am_owner(self, _v, ctx):
-        if not ctx.my_email:
-            return False
-        f = self._file_from(ctx.raw_data)
-        owners = getattr(f, "owners", []) or []
-        return any(_address_of(o) == ctx.my_email.lower() for o in owners)
-
-    def _rule_created_by_me(self, v, ctx):
-        return self._rule_i_am_owner(v, ctx)
-
-    def _rule_approved_folder(self, value, ctx):
-        if not value:
-            return False
-        allowed = set(value if isinstance(value, list) else [value])
-        f = self._file_from(ctx.raw_data)
-        parents = getattr(f, "parent_ids", []) or []
-        return bool(set(parents) & allowed)
-
-    def _rule_approved_sandbox_folder(self, value, ctx):
-        return self._rule_approved_folder(value, ctx)
-
-    def _rule_move_within_approved_folders(self, value, ctx):
-        return self._rule_approved_folder(value, ctx)
-
-    def _rule_file_type_allowlist(self, value, ctx):
-        if not value:
-            return False
-        allowed = {v.lower() for v in (value if isinstance(value, list) else [value])}
-        f = self._file_from(ctx.raw_data)
-        return (getattr(f, "mime_type", "") or "").lower() in allowed
-
-    def _rule_created_this_session(self, _v, ctx):
-        f = self._file_from(ctx.raw_data)
-        return getattr(f, "id", "") in ctx.session_created_ids
-
-    def _rule_shared_drive_exclusion(self, _v, ctx):
-        # Never auto-accept shared drive files
-        f = self._file_from(ctx.raw_data)
-        return not getattr(f, "shared", False)
-
-    # ── Slack ─────────────────────────────────────────────────────────────
-
-    def _rule_dm_with_myself(self, _v, ctx):
-        cid = ctx.args.get("channel_id", "") or ""
-        return cid.startswith("D")
-
-    def _rule_send_to_myself(self, v, ctx):
-        return self._rule_dm_with_myself(v, ctx)
-
-    def _rule_group_dm(self, _v, ctx):
-        """Match a group DM (Slack's "mpim" conversation type -- a private
-        multi-person conversation that's neither a channel nor
-        dm_with_myself's 1:1 self-DM) as its own recognizable category,
-        rather than requiring each group's ID to be individually
-        allowlisted under approved_channel. The connector resolves and
-        passes `is_group_dm` in args (slack.py's `_get_channel_history`/
-        `_get_thread_replies`, via SlackClient.resolve_is_group_dm) since
-        the id alone can't tell a group DM apart from a private channel.
-        """
-        return bool(ctx.args.get("is_group_dm", False))
-
-    def _rule_approved_channel(self, value, ctx):
-        if not value:
-            return False
-        allowed = set(value if isinstance(value, list) else [value])
-        cid = ctx.args.get("channel_id", "") or ctx.args.get("channel", "") or ""
-        return cid in allowed
-
-    def _rule_approved_recipient(self, value, ctx):
-        return self._rule_approved_channel(value, ctx)
-
-    def _rule_approved_channel_all_results(self, value, ctx):
-        """Data-dependent counterpart to approved_channel for a call that
-        spans multiple channels at once (slack_search_messages) rather than
-        reading a single channel_id out of ctx.args -- a search's results can
-        come from any number of channels, so there's no one arg to check.
-        Auto-accepts only when every returned message's channel is on the
-        allowlist; a single unapproved result gates the whole call, same as
-        every other all-or-nothing gated response.
-        """
-        if not value:
-            return False
-        allowed = set(value if isinstance(value, list) else [value])
-        items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
-        return bool(items) and all(getattr(m, "channel_id", None) in allowed for m in items)
-
-    def _rule_public_channels_only(self, _v, ctx):
-        raw = ctx.raw_data
-        items = raw if isinstance(raw, list) else [raw]
-        return all(not getattr(m, "is_private", True) for m in items)
-
-    def _rule_no_file_attachments(self, _v, ctx):
-        raw = ctx.raw_data
-        items = raw if isinstance(raw, list) else [raw]
-        return all(not (getattr(m, "files", None)) for m in items)
-
-    def _rule_reply_in_existing_thread(self, _v, ctx):
-        return bool(ctx.args.get("thread_ts"))
-
-    # ── Calendar ──────────────────────────────────────────────────────────
-
-    def _rule_i_am_organizer(self, _v, ctx):
-        raw = ctx.raw_data
-        organizer = (raw.get("organizer_email") if isinstance(raw, dict) else getattr(raw, "organizer_email", "")) or ""
-        return bool(ctx.my_email) and ctx.my_email.lower() == organizer.lower()
-
-    def _rule_no_external_attendees(self, _v, ctx):
-        if not ctx.my_domain:
-            return False
-        raw = ctx.raw_data
-        attendees = (raw.get("attendees") if isinstance(raw, dict) else getattr(raw, "attendees", None)) or []
-        return all(ctx.my_domain in _attendee_email(a) for a in attendees)
-
-    def _rule_personal_calendar(self, value, ctx):
-        if not value:
-            return False
-        allowed = set(value if isinstance(value, list) else [value])
-        return ctx.args.get("calendar_id", "") in allowed
-
-    def _rule_past_event(self, _v, ctx):
-        end_str = getattr(ctx.raw_data, "end_time", "") or ""
-        if not end_str:
-            return False
-        try:
-            dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt < datetime.now(timezone.utc)
-        except Exception:
-            return False
-
-    def _rule_time_window_days(self, value, ctx):
-        if not value:
-            return False
-        start_str = getattr(ctx.raw_data, "start_time", "") or ""
-        if not start_str:
-            return False
-        try:
-            dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            days_ahead = (dt - datetime.now(timezone.utc)).days
-            return 0 <= days_ahead <= int(value)
-        except Exception:
-            return False
-
-    def _rule_no_conferencing_link(self, _v, ctx):
-        raw = ctx.raw_data
-        return not bool(getattr(raw, "conference_link", "") or getattr(raw, "hangout_link", ""))
-
-    def _rule_non_private_event(self, _v, ctx):
-        """Auto-accept a read when the event involved is not marked private."""
-        visibility = getattr(ctx.raw_data, "visibility", None)
-        return (visibility or "default") != "private"
-
-    # ── Salesforce ────────────────────────────────────────────────────────
-
-    def _rule_approved_object_types(self, value, ctx):
-        """Match a single approved object_type (salesforce.read_record) or,
-        for salesforce.search's comma-separated object_types, only when
-        every object type the search actually touches is on the allowlist —
-        a partial match would auto-accept a search that also reaches an
-        unapproved object type."""
-        if not value:
-            return False
-        allowed = {v.lower() for v in (value if isinstance(value, list) else [value])}
-        if "object_types" in ctx.args:
-            requested = [t.strip().lower() for t in (ctx.args.get("object_types") or "").split(",") if t.strip()]
-            return bool(requested) and all(t in allowed for t in requested)
-        return ctx.args.get("object_type", "").lower() in allowed
-
-    def _rule_approved_report_ids(self, value, ctx):
-        if not value:
-            return False
-        allowed = set(value if isinstance(value, list) else [value])
-        return ctx.args.get("report_id", "") in allowed
-
-    # ── Gmail (writes) ───────────────────────────────────────────────────
-
-    def _rule_to_is_myself(self, _v, ctx):
-        to = ctx.args.get("to", "") or ""
-        # gmail_reply_all_draft passes the full expanded audience (a list) so
-        # this only matches if every recipient is you; plain drafts and
-        # single replies pass a lone "to" string.
-        recipients = to if isinstance(to, list) else [to]
-        recipients = [r for r in recipients if r]
-        return bool(ctx.my_email) and bool(recipients) and all(ctx.my_email.lower() in r.lower() for r in recipients)
-
-    def _rule_approved_recipient_domain(self, value, ctx):
-        if not value:
-            return False
-        to = ctx.args.get("to", "") or ""
-        # See _rule_to_is_myself: reply-all passes a list of every recipient
-        # it will actually reach, not just the original sender, so this rule
-        # can't be satisfied by a trusted sender while an external Cc slips
-        # through unauthorized.
-        recipients = to if isinstance(to, list) else [to]
-        recipients = [r for r in recipients if r]
-        allowed = {d.lower().strip() for d in (value if isinstance(value, list) else [value])}
-        return bool(recipients) and all(_domain_of(r) in allowed for r in recipients)
-
-    def _rule_label_name_allowlist(self, value, ctx):
-        if not value:
-            return False
-        allowed = {v.lower() for v in (value if isinstance(value, list) else [value])}
-        label = (ctx.args.get("label_name") or "").lower()
-        return label in allowed
-
-    # ── Drive (writes) ───────────────────────────────────────────────────
-
-    def _rule_parent_folder_allowlist(self, value, ctx):
-        if not value:
-            return False
-        allowed = set(value if isinstance(value, list) else [value])
-        return (ctx.args.get("parent_folder_id") or "") in allowed
-
-    # ── Contacts ──────────────────────────────────────────────────────────
-
-    def _rule_no_contact_info_change(self, _v, ctx):
-        return not (ctx.args.get("emails") or ctx.args.get("phones"))
-
-    # ── Jira ──────────────────────────────────────────────────────────────
-
-    def _rule_approved_project_keys(self, value, ctx):
-        if not value:
-            return False
-        allowed = {v.upper() for v in (value if isinstance(value, list) else [value])}
-        project_key = ctx.args.get("project_key", "") or ""
-        if not project_key:
-            issue_key = ctx.args.get("issue_key", "") or ""
-            project_key = issue_key.split("-")[0] if "-" in issue_key else ""
-        return bool(project_key) and project_key.upper() in allowed
-
-    def _rule_i_am_reporter(self, _v, ctx):
-        raw = ctx.raw_data
-        reporter = (raw.get("reporter") if isinstance(raw, dict) else getattr(raw, "reporter", "")) or ""
-        return bool(ctx.my_email) and ctx.my_email.lower() in reporter.lower()
-
-    def _rule_i_am_assignee(self, _v, ctx):
-        raw = ctx.raw_data
-        assignee = (raw.get("assignee") if isinstance(raw, dict) else getattr(raw, "assignee", "")) or ""
-        return bool(ctx.my_email) and ctx.my_email.lower() in assignee.lower()
-
-    # ── Confluence ────────────────────────────────────────────────────────
-
-    def _rule_approved_space_keys(self, value, ctx):
-        if not value:
-            return False
-        allowed = {v.upper() for v in (value if isinstance(value, list) else [value])}
-        raw = ctx.raw_data
-        space_key = ctx.args.get("space_key") or (raw.get("space_key") if isinstance(raw, dict) else "") or ""
-        return bool(space_key) and space_key.upper() in allowed
-
-    def _rule_i_am_author(self, _v, ctx):
-        raw = ctx.raw_data
-        author = (raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", "")) or ""
-        return bool(ctx.my_email) and ctx.my_email.lower() in author.lower()
-
-    # ── Telegram ──────────────────────────────────────────────────────────
-
-    def _rule_approved_chats(self, value, ctx):
-        if not value:
-            return False
-        allowed = {str(v) for v in (value if isinstance(value, list) else [value])}
-        return str(ctx.args.get("chat_id", "")) in allowed
-
-    def _rule_approved_chats_all_results(self, value, ctx):
-        """Data-dependent counterpart to approved_chats for a call that spans
-        multiple chats at once (telegram_search_messages, which shares this
-        operation key with telegram_get_messages) rather than reading a
-        single chat_id out of ctx.args. Auto-accepts only when every returned
-        message's chat is on the allowlist -- see
-        _rule_approved_channel_all_results's docstring for the same reasoning
-        on the Slack side.
-        """
-        if not value:
-            return False
-        allowed = {str(v) for v in (value if isinstance(value, list) else [value])}
-        items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
-        return bool(items) and all(str(getattr(m, "chat_id", None)) in allowed for m in items)
-
-    def _rule_no_media_attachments(self, _v, ctx):
-        raw = ctx.raw_data
-        items = raw if isinstance(raw, list) else [raw]
-        return all(not getattr(m, "media_type", "") for m in items)
-
-    # ── Tasks ─────────────────────────────────────────────────────────────
-
-    def _rule_approved_task_list(self, value, ctx):
-        """Match a task write scoped to an approved task list.
-
-        create/update/complete/uncomplete carry a single `task_list_id`;
-        `tasks_move_task` carries `source_list_id`/`destination_list_id`
-        instead, and only matches when BOTH ends of the move are approved —
-        otherwise a move could smuggle a task out of (or into) a list the
-        user never approved.
-        """
-        if not value:
-            return False
-        allowed = set(value if isinstance(value, list) else [value])
-        if "task_list_id" in ctx.args:
-            return ctx.args.get("task_list_id", "") in allowed
-        source = ctx.args.get("source_list_id", "")
-        destination = ctx.args.get("destination_list_id", "")
-        return bool(source) and bool(destination) and source in allowed and destination in allowed
-
-    # ── Generic (no resource identity to scope to) ──────────────────────────
-
-    def _rule_always_allow(self, _v, ctx):
-        """Unconditional auto-accept, for operations with no resource
-        identity a narrower rule could ever check against -- e.g. drafting
-        (any recipient, unlike to_is_myself/approved_recipient_domain) or
-        calendar_create_out_of_office/calendar_set_working_location (always
-        act on your own primary calendar, no calendar_id arg at all, so
-        personal_calendar has nothing to check). Value-less, same shape as
-        i_am_owner/dm_with_myself/shared_drive_exclusion -- presence under an
-        operation key is the whole condition.
-        """
-        return True
-
-
-# ── Rule suggestion for the popup's "Always allow" button ────────────────────
-
-# Some operations can produce more than one plausible suggestion -- e.g. a
-# Drive read where you both own the file *and* it's in an approved folder.
-# Each such case is a "family": the tuple below is a fixed declaration
-# order (not user-configurable -- there used to be a settings.yaml-driven
-# rule_suggestion_priority override here; every matching candidate now gets
-# its own "Always allow" button in the popup, so there's nothing left to
-# prioritize or exclude). This governs *only* the order buttons render in
-# through _all_matching_suggestions()/suggest_rule_choices(); it has no
-# effect on should_auto_accept()'s evaluation of whatever rules are actually
-# configured, so it never needs ARGS_ONLY_RULES/DATA_DEPENDENT_RULES/
-# known_rule_names() changes -- no new rule names are introduced here.
-SUGGESTION_FAMILIES: dict[str, tuple[str, ...]] = {
-    "drive_read":           ("i_am_owner", "approved_folder"),
-    "calendar_read_event":  ("i_am_organizer", "no_external_attendees", "non_private_event"),
-    "jira_read_issue":      ("i_am_reporter", "i_am_assignee", "approved_project_keys"),
-    "confluence_read_page": ("i_am_author", "approved_space_keys"),
-}
-
-# Sentinel distinguishing "this candidate doesn't match" from "it matches
-# with a real value of None" (several suggestions, e.g. i_am_owner, take no
-# value at all) -- plain None can't do that job here.
-_NO_MATCH = object()
-
-
-def _all_matching_suggestions(
-    family: str, candidates: dict[str, Callable[[], Any]]
-) -> list[tuple[str, Any]]:
-    """Every candidate in `family` (SUGGESTION_FAMILIES' fixed declaration
-    order) whose zero-arg check doesn't return _NO_MATCH -- one popup button
-    per match, not just the top-priority one. An unrecognized `family` (a
-    typo'd or removed name) has nothing to walk, so it returns empty rather
-    than raising. A candidate name with no matching entry in `candidates`
-    (removed from this operation's possibilities) is silently skipped, not
-    an error -- same "never crash a popup over a rule-suggestion detail"
-    posture as should_auto_accept()'s own rule-evaluation try/except.
-    """
-    matches = []
-    for rule_name in SUGGESTION_FAMILIES.get(family, ()):
-        check = candidates.get(rule_name)
-        if check is None:
-            continue
-        value = check()
-        if value is not _NO_MATCH:
-            matches.append((rule_name, value))
-    return matches
 
 
 def _file_from(raw: Any) -> Any:
@@ -1022,484 +394,6 @@ def _attendee_email(attendee: Any) -> str:
     return getattr(attendee, "email", "") or ""
 
 
-# Candidate builders for the four "family" operations that can suggest more
-# than one rule for the same item -- shared between suggest_rule() (which
-# picks the top-priority match) and suggest_rule_choices() (which returns
-# every match, for the popup's "more than one applies" choice dialog).
-
-def _drive_read_candidates(ctx: ReviewContext) -> dict[str, Callable[[], Any]]:
-    f = _file_from(ctx.raw_data)
-    owners = getattr(f, "owners", []) or []
-    parents = list(getattr(f, "parent_ids", []) or [])
-    return {
-        "i_am_owner": lambda: None if (
-            ctx.my_email and any(ctx.my_email.lower() in o.lower() for o in owners)
-        ) else _NO_MATCH,
-        "approved_folder": lambda: parents if parents else _NO_MATCH,
-    }
-
-
-def _calendar_read_event_candidates(ctx: ReviewContext) -> dict[str, Callable[[], Any]]:
-    organizer = getattr(ctx.raw_data, "organizer_email", "") or ""
-    attendees = getattr(ctx.raw_data, "attendees", []) or []
-    visibility = getattr(ctx.raw_data, "visibility", "default") or "default"
-
-    def _no_external_attendees_check():
-        if not ctx.my_domain:
-            return _NO_MATCH
-        all_internal = all(ctx.my_domain in _attendee_email(a) for a in attendees)
-        return None if all_internal else _NO_MATCH
-
-    return {
-        "i_am_organizer": lambda: None if (
-            ctx.my_email and ctx.my_email.lower() == organizer.lower()
-        ) else _NO_MATCH,
-        "no_external_attendees": _no_external_attendees_check,
-        "non_private_event": lambda: None if visibility != "private" else _NO_MATCH,
-    }
-
-
-def _jira_read_issue_candidates(ctx: ReviewContext) -> dict[str, Callable[[], Any]]:
-    raw = ctx.raw_data
-    reporter = (raw.get("reporter") if isinstance(raw, dict) else getattr(raw, "reporter", "")) or ""
-    assignee = (raw.get("assignee") if isinstance(raw, dict) else getattr(raw, "assignee", "")) or ""
-    issue_key = ctx.args.get("issue_key", "") or ""
-    project_key = issue_key.split("-")[0] if "-" in issue_key else ""
-    return {
-        "i_am_reporter": lambda: None if (
-            ctx.my_email and ctx.my_email.lower() in reporter.lower()
-        ) else _NO_MATCH,
-        "i_am_assignee": lambda: None if (
-            ctx.my_email and ctx.my_email.lower() in assignee.lower()
-        ) else _NO_MATCH,
-        "approved_project_keys": lambda: [project_key] if project_key else _NO_MATCH,
-    }
-
-
-def _confluence_read_page_candidates(ctx: ReviewContext) -> dict[str, Callable[[], Any]]:
-    raw = ctx.raw_data
-    author = (raw.get("author") if isinstance(raw, dict) else getattr(raw, "author", "")) or ""
-    space_key = (
-        (raw.get("space_key") if isinstance(raw, dict) else getattr(raw, "space_key", ""))
-        or ctx.args.get("space_key", "")
-    )
-    return {
-        "i_am_author": lambda: None if (
-            ctx.my_email and ctx.my_email.lower() in author.lower()
-        ) else _NO_MATCH,
-        "approved_space_keys": lambda: [space_key] if space_key else _NO_MATCH,
-    }
-
-
-# Operation keys sharing the "drive_read" suggestion family -- Drive's own
-# reads plus sheets.read_values (Sheets rides on Drive's grant, see
-# resource_grants.DRIVE_FOLDER_READ_TARGETS, the single source of truth this
-# is derived from) -- shared by _MULTI_CANDIDATE_FAMILIES below and
-# suggest_rule()'s own branch condition, instead of each hand-listing its own
-# copy of the same three operation keys.
-_DRIVE_READ_OPERATION_KEYS: tuple[str, ...] = tuple(op_key for op_key, _rule_name in DRIVE_FOLDER_READ_TARGETS)
-
-# operation_key -> (family, candidate builder), for the four multi-candidate
-# operations above -- shared lookup table for suggest_rule_choices() below.
-_MULTI_CANDIDATE_FAMILIES: dict[str, tuple[str, Callable[[ReviewContext], dict[str, Callable[[], Any]]]]] = {
-    **{op_key: ("drive_read", _drive_read_candidates) for op_key in _DRIVE_READ_OPERATION_KEYS},
-    "calendar.read_event_details": ("calendar_read_event", _calendar_read_event_candidates),
-    "jira.read_issue": ("jira_read_issue", _jira_read_issue_candidates),
-    "confluence.read_page": ("confluence_read_page", _confluence_read_page_candidates),
-    # Shares the confluence_read_page family: confluence_download_attachment
-    # fetches the page (for preview Title/Space) before gating, same as
-    # confluence_get_page, and passes that same asdict()'d page as raw_data
-    # -- so i_am_author/approved_space_keys apply identically.
-    "confluence.download_attachment": ("confluence_read_page", _confluence_read_page_candidates),
-}
-
-
-def suggest_rule(operation_key: str, ctx: ReviewContext) -> tuple[str, Any] | None:
-    """Propose one auto-accept rule from the current item's attributes.
-
-    Returns (rule_name, value) — value is None for rules that take none —
-    or None if nothing sensible can be suggested for this operation. The
-    popup only offers "Always allow" when this returns a suggestion, so the
-    button never proposes a rule broader than what the item itself supports.
-    """
-    if operation_key in ("gmail.read_message", "gmail.read_thread", "gmail.download_attachment", "gmail.archive_message"):
-        sender = getattr(ctx.raw_data, "sender", "") or ""
-        if ctx.my_email and ctx.my_email.lower() in sender.lower():
-            return ("i_am_sender", None)
-        domain = _domain_of(sender)
-        return ("trusted_sender_domain", [domain]) if domain else None
-
-    if operation_key in _DRIVE_READ_OPERATION_KEYS:
-        matches = _all_matching_suggestions("drive_read", _drive_read_candidates(ctx))
-        return matches[0] if matches else None
-
-    if operation_key == "slack.read_messages":
-        cid = ctx.args.get("channel_id", "") or ctx.args.get("channel", "") or ""
-        if cid.startswith("D"):
-            return ("dm_with_myself", None)
-        if ctx.args.get("is_group_dm", False):
-            return ("group_dm", None)
-        if cid:
-            return ("approved_channel", [cid])
-        # No single channel in args -- a search spanning multiple channels
-        # (slack_search_messages shares this operation key). Propose the
-        # union of channels actually present across these results, the
-        # data-dependent counterpart to approved_channel above.
-        items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
-        channel_ids = sorted({mcid for m in items if (mcid := getattr(m, "channel_id", None))})
-        return ("approved_channel_all_results", channel_ids) if channel_ids else None
-
-    if operation_key == "calendar.read_event_details":
-        matches = _all_matching_suggestions("calendar_read_event", _calendar_read_event_candidates(ctx))
-        return matches[0] if matches else None
-
-    if operation_key == "salesforce.read_record":
-        object_type = ctx.args.get("object_type", "")
-        return ("approved_object_types", [object_type]) if object_type else None
-
-    if operation_key == "salesforce.run_report":
-        report_id = ctx.args.get("report_id", "")
-        return ("approved_report_ids", [report_id]) if report_id else None
-
-    if operation_key == "salesforce.search":
-        object_types = [t.strip() for t in (ctx.args.get("object_types") or "").split(",") if t.strip()]
-        # An unscoped search reaches Salesforce's whole default set of
-        # globally-searchable objects -- too broad to derive a narrow rule
-        # from, the same reasoning gmail_create_filter has no rule at all.
-        return ("approved_object_types", object_types) if object_types else None
-
-    if operation_key == "jira.read_issue":
-        matches = _all_matching_suggestions("jira_read_issue", _jira_read_issue_candidates(ctx))
-        return matches[0] if matches else None
-
-    if operation_key in ("confluence.read_page", "confluence.download_attachment"):
-        matches = _all_matching_suggestions("confluence_read_page", _confluence_read_page_candidates(ctx))
-        return matches[0] if matches else None
-
-    if operation_key == "telegram.read_chat_messages":
-        chat_id = ctx.args.get("chat_id", "")
-        if chat_id != "":
-            return ("approved_chats", [str(chat_id)])
-        # No single chat in args -- a search spanning multiple chats
-        # (telegram_search_messages shares this operation key). Propose the
-        # union of chats actually present across these results, the
-        # data-dependent counterpart to approved_chats above.
-        items = ctx.raw_data if isinstance(ctx.raw_data, list) else [ctx.raw_data]
-        chat_ids = sorted({str(mcid) for m in items if (mcid := getattr(m, "chat_id", None)) is not None})
-        return ("approved_chats_all_results", chat_ids) if chat_ids else None
-
-    return None
-
-
-def suggest_rule_choices(operation_key: str, ctx: ReviewContext) -> list[tuple[str, Any]]:
-    """Every rule that plausibly applies to this item, in
-    SUGGESTION_FAMILIES' fixed declaration order -- the primary API for the
-    review-gate's "Always allow" flow, called up front (before the popup is
-    even shown) rather than only after an "Always allow" click. Each entry
-    becomes its own button in the popup (approval_window_html.py's
-    ``_button_row_html``) -- gate.py no longer picks a single top-priority
-    suggestion to show a hint for and defers the "which one?" question to a
-    second dialog; every match gets its own button up front.
-
-    Only the four "family" operations in _MULTI_CANDIDATE_FAMILIES can ever
-    have more than one entry here; every other operation has at most one
-    possible suggestion, so this just wraps suggest_rule()'s own single
-    result for them.
-    """
-    entry = _MULTI_CANDIDATE_FAMILIES.get(operation_key)
-    if entry is None:
-        single = suggest_rule(operation_key, ctx)
-        return [single] if single is not None else []
-    family, candidates_fn = entry
-    return _all_matching_suggestions(family, candidates_fn(ctx))
-
-
-# ── Rule suggestion for writes ("Always allow" on the write popup) ──────────
-
-def _project_key_value(ctx: ReviewContext) -> Any:
-    """Derive a Jira project key the same way _rule_approved_project_keys
-    does: jira_create_issue's own args carry project_key directly; every
-    other Jira write op only carries issue_key, so the project is parsed
-    out of its "PROJ-123" prefix instead."""
-    project_key = ctx.args.get("project_key", "") or ""
-    if not project_key:
-        issue_key = ctx.args.get("issue_key", "") or ""
-        project_key = issue_key.split("-")[0] if "-" in issue_key else ""
-    return [project_key] if project_key else _NO_SUGGESTION
-
-
-def _task_list_value(ctx: ReviewContext) -> Any:
-    """Derive an approved_task_list value the same way _rule_approved_task_list
-    reads it: tasks_move_task carries source_list_id/destination_list_id
-    instead of a single task_list_id, and the suggestion has to cover both
-    ends of the move -- a rule scoped to only one list would silently let a
-    task move into (or out of) a list the user never approved."""
-    if "task_list_id" in ctx.args:
-        task_list_id = ctx.args.get("task_list_id") or ""
-        return [task_list_id] if task_list_id else _NO_SUGGESTION
-    source = ctx.args.get("source_list_id", "") or ""
-    destination = ctx.args.get("destination_list_id", "") or ""
-    return sorted({source, destination}) if source and destination else _NO_SUGGESTION
-
-
-def _sandbox_folder_value(ctx: ReviewContext) -> Any:
-    """Derive an approved_sandbox_folder/move_within_approved_folders value
-    from the file's current parent folder(s) -- same _file_from() unwrap as
-    suggest_rule()'s drive_read family, and the same reasoning
-    _rule_approved_folder already reads by for these rule names. For
-    drive.move_file specifically, raw_data's file is the file *before* the
-    move (see drive.py::_move_file), i.e. its source folder -- moving out of
-    an approved folder is what move_within_approved_folders means, not
-    moving into one."""
-    f = _file_from(ctx.raw_data)
-    parents = list(getattr(f, "parent_ids", []) or [])
-    return parents if parents else _NO_SUGGESTION
-
-
-# Sentinel distinguishing "nothing to suggest for this call" from "the
-# suggested value is legitimately None" -- always_allow (see below) is a
-# value-less rule, so its value_of always returns None as a *real* value,
-# not an absence. Reuses the read-side suggestion machinery's naming
-# convention (_NO_MATCH) for the same kind of "can't just use None" gap.
-_NO_SUGGESTION = object()
-
-
-@dataclass(frozen=True)
-class WriteRuleSuggestion:
-    rule_name: str
-    value_of: Callable[[ReviewContext], Any]  # _NO_SUGGESTION -> nothing to suggest for this call
-
-
-# Value builder for each rule_name DRIVE_SANDBOX_WRITE_TARGETS (resource_grants.py)
-# actually uses -- approved_sandbox_folder/move_within_approved_folders both read
-# the file's *current* parent folder(s) off raw_data (_sandbox_folder_value),
-# while parent_folder_allowlist reads the upload's destination folder from args
-# instead (the file doesn't exist yet at upload time).
-_SANDBOX_WRITE_VALUE_BUILDERS: dict[str, Callable[[ReviewContext], Any]] = {
-    "approved_sandbox_folder": _sandbox_folder_value,
-    "move_within_approved_folders": _sandbox_folder_value,
-    "parent_folder_allowlist": (
-        lambda ctx: [ctx.args["parent_folder_id"]] if ctx.args.get("parent_folder_id") else _NO_SUGGESTION
-    ),
-}
-
-# All of Drive's write tools -- writing into a trusted sandbox folder,
-# uploading into it, commenting on a file already there, moving a file out of
-# it, and every Sheets/Docs write tool -- are all covered by the same
-# drive.sandbox_folders grant (see resource_grants.py's
-# DRIVE_SANDBOX_WRITE_TARGETS, the single source of truth for this operation
-# list; upload/move use their own existing rule names since they check a
-# different arg than approved_sandbox_folder's raw_data-derived one, resolved
-# above by rule_name via _SANDBOX_WRITE_VALUE_BUILDERS).
-_DRIVE_SANDBOX_WRITE_SUGGESTIONS: dict[str, WriteRuleSuggestion] = {
-    op_key: WriteRuleSuggestion(rule_name, _SANDBOX_WRITE_VALUE_BUILDERS[rule_name])
-    for op_key, rule_name in DRIVE_SANDBOX_WRITE_TARGETS
-}
-
-
-# Every entry here except gmail.create_draft is resource-identity-scoped
-# (one folder, one label, one calendar, one project, one space, one task
-# list) rather than a bare "accept every future write of this type" toggle --
-# that property is what keeps this table's blast radius contained despite
-# reopening the write gate's "Always allow" button for these operations.
-# gmail.create_draft is a deliberate, narrow exception: Gmail has no tool
-# that actually sends a message (only drafts), so an unconditional
-# always_allow rule for drafting alone doesn't carry the same blast radius
-# a bare toggle would for an operation that actually delivers something.
-WRITE_RULE_SUGGESTIONS: dict[str, WriteRuleSuggestion] = {
-    "gmail.create_draft": WriteRuleSuggestion("always_allow", lambda ctx: None),
-    "gmail.add_label": WriteRuleSuggestion(
-        "label_name_allowlist", lambda ctx: [ctx.args["label_name"]] if ctx.args.get("label_name") else _NO_SUGGESTION
-    ),
-    "gmail.remove_label": WriteRuleSuggestion(
-        "label_name_allowlist", lambda ctx: [ctx.args["label_name"]] if ctx.args.get("label_name") else _NO_SUGGESTION
-    ),
-    "calendar.create_modify_event": WriteRuleSuggestion(
-        "personal_calendar", lambda ctx: [ctx.args["calendar_id"]] if ctx.args.get("calendar_id") else _NO_SUGGESTION
-    ),
-    "calendar.set_visibility": WriteRuleSuggestion(
-        "personal_calendar", lambda ctx: [ctx.args["calendar_id"]] if ctx.args.get("calendar_id") else _NO_SUGGESTION
-    ),
-    "calendar.set_color": WriteRuleSuggestion(
-        "personal_calendar", lambda ctx: [ctx.args["calendar_id"]] if ctx.args.get("calendar_id") else _NO_SUGGESTION
-    ),
-    "calendar.delete_event": WriteRuleSuggestion(
-        "personal_calendar", lambda ctx: [ctx.args["calendar_id"]] if ctx.args.get("calendar_id") else _NO_SUGGESTION
-    ),
-    # Drive/Sheets/Docs writes -- see _DRIVE_SANDBOX_WRITE_SUGGESTIONS above.
-    **_DRIVE_SANDBOX_WRITE_SUGGESTIONS,
-    "jira.create_issue": WriteRuleSuggestion("approved_project_keys", _project_key_value),
-    "jira.add_comment": WriteRuleSuggestion("approved_project_keys", _project_key_value),
-    "jira.update_issue": WriteRuleSuggestion("approved_project_keys", _project_key_value),
-    "jira.transition_issue": WriteRuleSuggestion("approved_project_keys", _project_key_value),
-    "confluence.create_page": WriteRuleSuggestion(
-        "approved_space_keys", lambda ctx: [ctx.args["space_key"]] if ctx.args.get("space_key") else _NO_SUGGESTION
-    ),
-    "confluence.update_page": WriteRuleSuggestion(
-        "approved_space_keys", lambda ctx: [ctx.args["space_key"]] if ctx.args.get("space_key") else _NO_SUGGESTION
-    ),
-    "tasks.create_task": WriteRuleSuggestion("approved_task_list", _task_list_value),
-    "tasks.update_task": WriteRuleSuggestion("approved_task_list", _task_list_value),
-    "tasks.complete_task": WriteRuleSuggestion("approved_task_list", _task_list_value),
-    "tasks.uncomplete_task": WriteRuleSuggestion("approved_task_list", _task_list_value),
-    "tasks.move_task": WriteRuleSuggestion("approved_task_list", _task_list_value),
-}
-
-
-def suggest_write_rule(operation_key: str, ctx: ReviewContext) -> tuple[str, Any] | None:
-    """Propose one auto-accept rule for a write's own "Always allow" button --
-    the write-gate counterpart to suggest_rule() above. Returns None for
-    every operation key not in WRITE_RULE_SUGGESTIONS (the other ~30-odd
-    write operations), by construction -- there is no fallback/generic path
-    here, which is what keeps this mechanism from ever proposing anything
-    broader than the rules the table declares.
-    """
-    entry = WRITE_RULE_SUGGESTIONS.get(operation_key)
-    if entry is None:
-        return None
-    value = entry.value_of(ctx)
-    return None if value is _NO_SUGGESTION else (entry.rule_name, value)
-
-
-def known_rule_names() -> frozenset[str]:
-    """Every rule name AutoAcceptEvaluator actually knows how to evaluate --
-    the `_rule_*` methods it dispatches to in `_evaluate()`. `_evaluate()`
-    itself only logs a warning and treats an unrecognized name as a
-    non-match (see its docstring), so a rule persisted under a misspelled
-    or invalid name doesn't error, it just silently never matches anything.
-    That's fine for a name that was always typed by hand into settings.yaml
-    by whoever wrote the rule, but gate.propose_rule_change() lets Claude
-    supply rule_name directly (unlike the "Always allow" flow, which only
-    ever offers names suggest_rule() itself produces), so it validates
-    against this set before ever showing a confirmation popup -- the same
-    "don't ship an unreachable rule silently" principle menu_bar.py's
-    TestRuleUiCompleteness applies to the UI side.
-    """
-    return frozenset(
-        name[len("_rule_"):]
-        for name in vars(AutoAcceptEvaluator)
-        if name.startswith("_rule_") and callable(getattr(AutoAcceptEvaluator, name))
-    )
-
-
-_RULE_DESCRIPTIONS: dict[str, str] = {
-    "i_am_sender":           "Gmail message/thread reads where you are the sender",
-    "trusted_sender_domain": "Gmail message/thread reads from senders at: {value}",
-    "i_am_owner":            "Drive file reads for files you own",
-    "approved_folder":       "Drive file reads for files in folder(s): {value}",
-    "dm_with_myself":        "Slack reads in your own DM channel",
-    "group_dm":              "Slack reads in your own group DMs",
-    "approved_channel":      "Slack reads in channel(s): {value}",
-    "approved_channel_all_results": "Slack searches where every result is from channel(s): {value}",
-    "i_am_organizer":        "Calendar event reads for events you organize",
-    "no_external_attendees": "Calendar event reads with no external attendees",
-    "non_private_event":     "Calendar event reads where the event is not marked private",
-    "approved_object_types": "Salesforce record reads for object type(s): {value}",
-    "approved_report_ids":   "Salesforce report reads for report(s): {value}",
-    "i_am_reporter":         "Jira issue reads where you are the reporter",
-    "i_am_assignee":         "Jira issue reads where you are the assignee",
-    "approved_project_keys": "Jira issue reads in project(s): {value}",
-    "i_am_author":           "Confluence page reads where you are the author",
-    "approved_space_keys":   "Confluence page reads in space(s): {value}",
-    "approved_chats":        "Telegram chat reads in chat(s): {value}",
-    "approved_chats_all_results": "Telegram searches where every result is from chat(s): {value}",
-}
-
-
-def _format_rule_value(value: Any) -> str:
-    if isinstance(value, list):
-        return ", ".join(value)
-    return str(value)
-
-
-def describe_rule(rule_name: str, value: Any) -> str:
-    """Human-readable description of a proposed auto-accept rule."""
-    template = _RULE_DESCRIPTIONS.get(rule_name, rule_name)
-    return "Auto-accept future " + template.format(value=_format_rule_value(value))
-
-
-# Short, button-label-appropriate phrase for each rule name -- the
-# "Always allow" button itself shows one of these (e.g. "Always allow —
-# if I'm sender") so the reviewer knows roughly what standing rule they're
-# about to create *before* clicking, not just in the confirmation dialog
-# that follows. Deliberately generic per rule *type*, not the specific
-# instance value (a folder id, a full project-key list) -- matches the
-# categories a reviewer actually reasons in ("this folder," not "folder
-# 0ABCxyz"), and keeps the button's own width predictable regardless of
-# how long any one call's real value happens to be. Covers every read-side
-# rule name in _RULE_DESCRIPTIONS above plus every write-side rule name in
-# WRITE_RULE_SUGGESTIONS below -- "always_allow" is deliberately absent:
-# it's the one unconditional rule with nothing to name a category for, so
-# the button just stays plain "Always allow" for it (see
-# describe_rule_short's own docstring).
-_RULE_SHORT_HINTS: dict[str, str] = {
-    # Read
-    "i_am_sender": "if I'm sender",
-    "trusted_sender_domain": "this sender domain",
-    "i_am_owner": "if I own it",
-    "approved_folder": "this folder",
-    "dm_with_myself": "my own DM",
-    "group_dm": "this group DM",
-    "approved_channel": "this channel",
-    "approved_channel_all_results": "this channel",
-    "i_am_organizer": "if I organize it",
-    "no_external_attendees": "no external attendees",
-    "non_private_event": "non-private events",
-    "approved_object_types": "this object type",
-    "approved_report_ids": "this report",
-    "i_am_reporter": "if I'm reporter",
-    "i_am_assignee": "if I'm assignee",
-    "approved_project_keys": "this project",
-    "i_am_author": "if I'm author",
-    "approved_space_keys": "this space",
-    "approved_chats": "this chat",
-    "approved_chats_all_results": "this chat",
-    # Write
-    "label_name_allowlist": "this label",
-    "personal_calendar": "this calendar",
-    "approved_sandbox_folder": "this folder",
-    "parent_folder_allowlist": "this folder",
-    "move_within_approved_folders": "this folder",
-    "approved_task_list": "this list",
-}
-
-
-def describe_rule_short(rule_name: str) -> str:
-    """Short phrase for the "Always allow" button's own label -- see
-    _RULE_SHORT_HINTS' own comment for why this is a fixed per-type phrase,
-    not the specific instance value. Returns "" for "always_allow" (no
-    category to name -- the button stays plain "Always allow") and for any
-    future rule name this dict hasn't caught up with yet, so an unmapped
-    name degrades to the same plain button rather than showing something
-    broken."""
-    return _RULE_SHORT_HINTS.get(rule_name, "")
-
-
-def describe_rule_change(
-    operation: str, operation_key: str, rule_name: str, value: Any = None, old_value: Any = None
-) -> str:
-    """Human-readable description of a bridge-proposed add/update/remove to
-    ``auto_accept_rules``, shown in the confirmation popup gate.propose_rule_change()
-    drives -- see that function's docstring. Unlike describe_rule() (used by
-    the existing "Always allow" flow), this always names operation_key
-    explicitly, since there's no popup already on screen for a specific item
-    to supply that context.
-    """
-    if operation == "remove":
-        suffix = f" = {_format_rule_value(value)}" if value is not None else " (every value)"
-        return f"Remove auto-accept rule {rule_name!r}{suffix} from {operation_key!r}"
-    if operation == "update":
-        old_str = _format_rule_value(old_value) if old_value is not None else "(any existing value)"
-        return (
-            f"Replace auto-accept rule {rule_name!r} on {operation_key!r}: "
-            f"{old_str} -> {_format_rule_value(value)}"
-        )
-    if value is None:
-        # Value-less rule (e.g. always_allow) -- "= None" would misread as
-        # a real value rather than "unconditional, nothing to scope it to".
-        return f"Add auto-accept rule {rule_name!r} to {operation_key!r}"
-    return f"Add auto-accept rule {rule_name!r} = {_format_rule_value(value)} to {operation_key!r}"
-
 
 # ── One-time config migrations ───────────────────────────────────────────────
 
@@ -1542,48 +436,36 @@ def migrate_telegram_search_operation_key(cfg: dict[str, Any]) -> tuple[dict[str
     return cfg, moved
 
 
-# ── Rule persistence (used by the "Always allow" popup button) ──────────────
+# ── Per-principal state ──────────────────────────────────────────────────────
 #
-# Everything below used to be five bare module globals (_config_path,
-# _write_lock, _INSTANCE, _rules_changed_listeners, _rules_changed_listener)
-# -- one AutoAcceptEvaluator, one settings.yaml path, one write lock and one
-# set of hot-reload listeners per *process*. P6 makes each of those per
-# *principal* instead, bundled into _AutoAcceptState so the registry has exactly one
-# thing to key on. Every accessor function below keeps its exact name and
-# signature -- callers (gate.py, settings_controller.py, daemon_main.py)
-# don't change at all; they just now transparently see the current
-# principal's own rules, path, lock and listeners instead of the process's
-# only copy.
+# One PrincipalRegistry entry per principal (local mode has exactly one; org mode one per signed-in
+# user) -- config path, write lock, the temp-accept grace window, the hot-reloaded v2 rule cache, and
+# the rules-changed listener broadcast that lets a pending approval re-resolve the moment a rule
+# changes. Every accessor function below is what gate.py/settings_controller.py/daemon_main.py
+# actually call; nothing outside this module reaches into _AutoAcceptState directly.
 
 
 class _AutoAcceptState:
     def __init__(self) -> None:
-        self.instance: AutoAcceptEvaluator | None = None
         self.config_path: str | None = None
         self.write_lock = threading.Lock()
-        # A list, not a single slot -- P1 through P2 only ever had one
-        # subscriber (the menu bar, via set_rules_changed_listener below),
-        # but P3 adds a second: approvals.PendingApprovalRegistry's own
-        # re-evaluation broadcast (gate.py subscribes it via
-        # add_rules_changed_listener), which must not clobber whatever the
-        # menu bar already registered, and vice versa.
+        # (operation_key, file_key) -> monotonic expiry. In-memory only, by design: it lives and
+        # dies with this principal's registry entry (i.e. with the daemon process), unlike the
+        # YAML-backed rules below.
+        self.temp_accepts: dict[tuple[str, str], float] = {}
+        self.temp_accepts_lock = threading.Lock()
+        # A list, not a single slot -- more than one subscriber exists (the menu bar's own refresh,
+        # via set_rules_changed_listener below, and approvals.PendingApprovalRegistry's own
+        # re-evaluation broadcast, via add_rules_changed_listener), and one must not clobber what
+        # the other already registered.
         self.rules_changed_listeners: list[Callable[[], None]] = []
         self.rules_changed_listener: Callable[[], None] | None = None  # see
         # set_rules_changed_listener's docstring
-        # P3 (policy v2 redesign): which evaluator gate.py treats as authoritative for this
-        # principal -- "v1" (default) or "v2". See policy_engine_config.PolicyEngineConfig and
-        # init_policy_engine_version()/get_policy_engine_version() below.
-        self.policy_engine_version: str = "v1"
-        # P6 (policy v2 redesign): rules that exist *only* in the on-disk v2 `auto_accept:`
-        # section -- added directly through the redesigned Settings page (policy.store,
-        # policy.propose), or migrated there -- refreshed alongside the fields above by
-        # set_policy_v2_store_rules() below. Unlike the v1/v2 shadow comparison in gate.py's
-        # _evaluate_auto_accept (which recompiles v2 rules from this principal's *v1* effective
-        # rules every call), these are read straight off the persisted v2 schema, which is the
-        # only place a rule with no v1 predicate at all -- e.g. Apps Script's `apps_script.
-        # project` scope, previously ungovernable (F5) -- can be expressed. gate.py checks them
-        # unconditionally, regardless of which engine `policy.engine` names authoritative, since
-        # there is no v1 rule for them to be shadowed against.
+        # Rules that exist in the on-disk v2 `auto_accept:` section -- added directly through the
+        # Auto-accept Settings page, the MCP bridge, the popup's own "Always allow" flow, or
+        # migrated there from a hand-edited v1 config -- refreshed by set_policy_v2_store_rules()
+        # below. This is the *only* rule source gate.py evaluates against (P9); there is no longer
+        # a separate v1-compiled layer to also check.
         self.policy_v2_store_rules: list["PolicyRule"] = []
 
 
@@ -1591,32 +473,43 @@ _REGISTRY: PrincipalRegistry[_AutoAcceptState] = PrincipalRegistry(_AutoAcceptSt
 
 
 def init_config_path(path: str) -> None:
-    """Register the on-disk config path so add_auto_accept_rule() can persist."""
+    """Register the on-disk config path so add_policy_v2_rules()/remove_policy_v2_rule() can
+    persist."""
     _REGISTRY.get().config_path = path
 
 
-def init_policy_engine_version(version: str) -> None:
-    """Set the policy v2 engine switch (P3) for the current principal -- see
-    ``policy_engine_config.PolicyEngineConfig``, which validates ``version`` before this is
-    called. ``daemon_main.py`` calls this alongside ``init_config_path``/``reload_rules`` for
-    both local mode and each org principal, so it is always set before ``gate.py`` can read it."""
-    _REGISTRY.get().policy_engine_version = version
+def register_temp_accept(
+    operation_key: str, file_key: str, ttl_seconds: float = TEMP_ACCEPT_TTL_SECONDS
+) -> None:
+    """Grant a temporary, in-memory auto-accept for one file, for ``ttl_seconds``."""
+    state = _REGISTRY.get()
+    with state.temp_accepts_lock:
+        state.temp_accepts[(operation_key, file_key)] = time.monotonic() + ttl_seconds
 
 
-def get_policy_engine_version() -> str:
-    """Which evaluator ``gate.py`` treats as authoritative for the current principal -- ``"v1"``
-    (default) or ``"v2"``. Both always run; this only decides which answer is acted on and which
-    is shadowed (see ``policy.engine`` and the redesign proposal's Safety net)."""
-    return _REGISTRY.get().policy_engine_version
+def is_temp_accepted(operation_key: str, file_key: str | None) -> bool:
+    """Whether ``operation_key``/``file_key`` currently has an active grace-window acceptance --
+    the callback ``policy.engine.evaluate``/``preflight`` take as ``is_temp_accepted``, and what
+    gate.py itself checks directly for a real call."""
+    if file_key is None:
+        return False
+    state = _REGISTRY.get()
+    key = (operation_key, file_key)
+    with state.temp_accepts_lock:
+        expiry = state.temp_accepts.get(key)
+        if expiry is None:
+            return False
+        if time.monotonic() >= expiry:
+            del state.temp_accepts[key]
+            return False
+        return True
 
 
 def set_policy_v2_store_rules(rules: "list[PolicyRule]") -> None:
-    """P6: hot-reload the current principal's v2-only rule set -- called by settings_controller.py
-    after any Auto-accept Settings page mutation (alongside the v1-side ``reload_rules`` above,
-    which a v2-only edit leaves unchanged) and by daemon_main.py at startup, right after the v1 ->
-    v2 migration/``init_policy_engine_version`` calls it already makes for this same principal.
-    See ``_AutoAcceptState.policy_v2_store_rules``'s own comment for why ``gate.py`` checks these
-    unconditionally rather than only when ``policy.engine: v2``."""
+    """Hot-reload the current principal's rule set -- called by settings_controller.py after any
+    Auto-accept Settings page mutation, by this module's own add_policy_v2_rules/
+    remove_policy_v2_rule after a bridge or popup write, and by daemon_main.py at startup, right
+    after the v1 -> v2 migration."""
     _REGISTRY.get().policy_v2_store_rules = list(rules)
 
 
@@ -1625,18 +518,15 @@ def get_policy_v2_store_rules() -> "list[PolicyRule]":
 
 
 def get_policy_v2_rules() -> "list[PolicyRule]":
-    """Read-only snapshot of the on-disk v2 ``auto_accept:`` section, straight from disk -- the P7
-    bridge counterpart of ``get_current_config()``'s v1 read. Backs ``privacyfence_list_policy``,
-    which needs each rule's real, stable id (``policy.store.rule_id_for``) to give a model something
-    ``privacyfence_propose_policy_change``'s ``update``/``remove`` can actually target -- unlike
-    ``get_policy_v2_store_rules()`` above, which is the in-memory hot-reloaded cache ``gate.py``
-    evaluates against, this always re-reads the file, the same "addressable, not cached" posture
-    ``get_current_config()`` already takes for the v1 side.
+    """Read-only snapshot of the on-disk v2 ``auto_accept:`` section, straight from disk -- backs
+    ``privacyfence_list_policy``, which needs each rule's real, stable id
+    (``policy.store.rule_id_for``) to give a model something ``privacyfence_propose_policy_change``'s
+    ``update``/``remove`` can actually target -- unlike ``get_policy_v2_store_rules()`` above, which
+    is the in-memory hot-reloaded cache ``gate.py`` evaluates against, this always re-reads the file.
 
     Imports ``policy.store`` locally rather than at module level: ``policy.engine`` (imported by
     ``policy.store``) itself imports ``ReviewContext``/``temp_accept_key`` from this module, so a
-    module-level import here would be circular -- see the ``TYPE_CHECKING`` import above this
-    function's own comment for the same constraint.
+    module-level import here would be circular.
     """
     from .policy import store as policy_store
 
@@ -1650,14 +540,11 @@ def get_policy_v2_rules() -> "list[PolicyRule]":
 
 
 def add_policy_v2_rules(rules: "list[PolicyRule]") -> bool:
-    """Merge ``rules`` into the on-disk v2 ``auto_accept:`` section and hot-reload the v2-only store
-    layer (``set_policy_v2_store_rules``) -- the P7 bridge-facing counterpart of
-    ``settings_controller.SettingsController.add_policy_rule``, sharing the same
-    ``policy.store.merge_rules``/``rules_to_config`` shape but against this module's own config
-    path/write lock rather than a live ``SettingsController`` instance, which ``gate.py`` (no web
-    surface of its own) has no way to reach. Returns whether the on-disk rule set actually changed --
-    merging a rule that adds no new ``(predicate, value, conditions)`` row and no new operation to an
-    existing one is a no-op, mirroring ``add_auto_accept_rule``'s own idempotence.
+    """Merge ``rules`` into the on-disk v2 ``auto_accept:`` section and hot-reload the store,
+    notifying every rules-changed listener -- the one writer every surface (Settings, the MCP
+    bridge, the popup's own "Always allow" flow) now shares. Returns whether the on-disk rule set
+    actually changed -- merging a rule that adds no new ``(predicate, value, conditions)`` row and
+    no new operation to an existing one is a no-op.
     """
     from .policy import store as policy_store
 
@@ -1675,13 +562,13 @@ def add_policy_v2_rules(rules: "list[PolicyRule]") -> bool:
         cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] = True
         atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
         set_policy_v2_store_rules(merged)
-        return True
+    notify_rules_changed()
+    return True
 
 
 def remove_policy_v2_rule(rule_id: str) -> bool:
-    """Remove the rule with this stable id from the on-disk v2 ``auto_accept:`` section entirely --
-    the P7 bridge-facing counterpart of ``SettingsController.remove_policy_rule``. Returns whether
-    anything was actually removed."""
+    """Remove the rule with this stable id from the on-disk v2 ``auto_accept:`` section entirely.
+    Returns whether anything was actually removed."""
     from .policy import store as policy_store
 
     state = _REGISTRY.get()
@@ -1697,137 +584,16 @@ def remove_policy_v2_rule(rule_id: str) -> bool:
         cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(remaining)
         atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
         set_policy_v2_store_rules(remaining)
-        return True
-
-
-def add_auto_accept_rule(operation_key: str, rule_name: str, value: Any) -> None:
-    """Append a rule to the config file on disk and hot-reload the evaluator.
-
-    No-ops if an identical rule (same name and value) is already present for
-    this operation, so confirming the same "Always allow" suggestion more
-    than once doesn't pile up duplicate entries.
-    """
-    state = _REGISTRY.get()
-    if state.config_path is None:
-        raise RuntimeError("auto_accept config path not initialized")
-    with state.write_lock:
-        with open(state.config_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        rules = cfg.setdefault("auto_accept_rules", {}).setdefault(operation_key, [])
-        new_rule: dict[str, Any] = {"rule": rule_name}
-        if value is not None:
-            new_rule["value"] = value
-        if new_rule in rules:
-            return
-        rules.append(new_rule)
-        atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
-        reload_rules(build_effective_rules(cfg))
-
-
-def remove_auto_accept_rule(operation_key: str, rule_name: str, value: Any = None) -> bool:
-    """Remove auto-accept rule entries under operation_key matching rule_name.
-
-    With value given, only removes an entry whose value matches exactly
-    (mirroring add_auto_accept_rule's own equality check). With value left
-    as None, removes every entry for this rule_name under operation_key
-    regardless of its value. Returns True if anything was removed; only
-    persists to disk and hot-reloads the evaluator when it does.
-    """
-    state = _REGISTRY.get()
-    if state.config_path is None:
-        raise RuntimeError("auto_accept config path not initialized")
-    with state.write_lock:
-        with open(state.config_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        rules = cfg.get("auto_accept_rules", {}).get(operation_key, [])
-        if value is None:
-            remaining = [r for r in rules if r.get("rule") != rule_name]
-        else:
-            target = {"rule": rule_name, "value": value}
-            remaining = [r for r in rules if r != target]
-        if len(remaining) == len(rules):
-            return False
-        if remaining:
-            cfg["auto_accept_rules"][operation_key] = remaining
-        else:
-            cfg.get("auto_accept_rules", {}).pop(operation_key, None)
-        atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
-        reload_rules(build_effective_rules(cfg))
-        return True
-
-
-def get_current_config() -> dict[str, Any]:
-    """Read-only snapshot of the persisted ``auto_accept_rules``/
-    ``auto_accept_grants`` sections, straight from disk -- not the compiled/
-    merged view build_effective_rules() produces. Callers that need to
-    identify an existing entry to update or remove (e.g. the bridge's
-    privacyfence_list_auto_accept_rules meta tool) want the raw, addressable
-    shape, the same one add_auto_accept_rule/remove_auto_accept_rule and the
-    menu bar's rule editor operate on.
-    """
-    state = _REGISTRY.get()
-    if state.config_path is None:
-        raise RuntimeError("auto_accept config path not initialized")
-    with state.write_lock:
-        with open(state.config_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-    return {
-        "auto_accept_rules": cfg.get("auto_accept_rules") or {},
-        "auto_accept_grants": cfg.get("auto_accept_grants") or {},
-    }
-
-
-def mutate_grants(mutator: Callable[[dict[str, Any]], bool]) -> bool:
-    """Read settings.yaml, let `mutator` update it in place (typically its
-    auto_accept_grants section via resource_grants.apply_grant_upsert/
-    apply_grant_removal), and persist + hot-reload only if it reports an
-    actual change.
-
-    Shared plumbing for gate.py's propose_rule_change() grant add/update/
-    remove paths -- keeps the read-modify-write-reload sequence and the
-    write lock in one place rather than duplicating it per grant operation,
-    the same way add_auto_accept_rule/remove_auto_accept_rule own that
-    sequence for the auto_accept_rules side. `mutator` receives the full
-    parsed config (not just the grants section) since resource_grants'
-    helpers operate on it via cfg.setdefault("auto_accept_grants", {}).
-    """
-    state = _REGISTRY.get()
-    if state.config_path is None:
-        raise RuntimeError("auto_accept config path not initialized")
-    with state.write_lock:
-        with open(state.config_path, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f) or {}
-        changed = mutator(cfg)
-        if changed:
-            atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
-            reload_rules(build_effective_rules(cfg))
-        return changed
-
-
-def get_auto_accept_evaluator() -> AutoAcceptEvaluator:
-    state = _REGISTRY.get()
-    if state.instance is None:
-        state.instance = AutoAcceptEvaluator({})
-    return state.instance
-
-def init_auto_accept_evaluator(rules_config: dict) -> AutoAcceptEvaluator:
-    state = _REGISTRY.get()
-    state.instance = AutoAcceptEvaluator(rules_config)
-    return state.instance
+    notify_rules_changed()
+    return True
 
 
 def set_rules_changed_listener(callback: Callable[[], None] | None) -> None:
-    """Register (or, with ``None``, clear) *the* single-slot listener --
-    kept for the one caller that predates P3's multi-listener support
-    (settings_controller.py's own menu-bar refresh) and for tests that
-    patch it directly. Implemented as "replace whatever this call
-    previously added to add_rules_changed_listener's list", so calling this
-    twice doesn't leave two menu-bar callbacks both firing.
-
-    The menu bar uses this to refresh its menu (and the "Manage Auto-accept
-    Rules…" window, if open) when a rule is created from the approval popup,
-    which runs on the IPC server's own thread rather than the menu bar's
-    main thread.
+    """Register (or, with ``None``, clear) *the* single-slot listener -- kept for the one caller
+    that predates the multi-listener support below (settings_controller.py's own menu-bar refresh)
+    and for tests that patch it directly. Implemented as "replace whatever this call previously
+    added to add_rules_changed_listener's list", so calling this twice doesn't leave two menu-bar
+    callbacks both firing.
     """
     state = _REGISTRY.get()
     if state.rules_changed_listener is not None:
@@ -1838,12 +604,10 @@ def set_rules_changed_listener(callback: Callable[[], None] | None) -> None:
 
 
 def add_rules_changed_listener(callback: Callable[[], None]) -> None:
-    """Register an additional callback fired whenever the live rule set
-    changes -- unlike set_rules_changed_listener, doesn't replace any
-    listener already registered this way. approvals.py's rules-changed
-    re-evaluation broadcast (P3) is one such subscriber; more than one can
-    coexist (e.g. the menu bar and the web approval registry, both active
-    in the same process)."""
+    """Register an additional callback fired whenever the live rule set changes -- unlike
+    set_rules_changed_listener, doesn't replace any listener already registered this way.
+    approvals.py's rules-changed re-evaluation broadcast is one such subscriber; more than one can
+    coexist (e.g. the menu bar and the web approval registry, both active in the same process)."""
     listeners = _REGISTRY.get().rules_changed_listeners
     if callback not in listeners:
         listeners.append(callback)
@@ -1855,13 +619,38 @@ def remove_rules_changed_listener(callback: Callable[[], None]) -> None:
         listeners.remove(callback)
 
 
-def reload_rules(rules_config: dict) -> None:
-    """Hot-reload rules into the live evaluator without restarting the daemon."""
+def notify_rules_changed() -> None:
+    """Fire every rules-changed listener for the current principal -- e.g. so an already-pending
+    approval that a rule change now covers is resolved immediately (approvals.PendingApprovalRegistry.
+    reevaluate_all) and so a live Settings tab gets a fresh snapshot pushed. Called by this module's
+    own add_policy_v2_rules/remove_policy_v2_rule after a bridge/popup write, and by
+    settings_controller.py after a Settings page mutation."""
     state = _REGISTRY.get()
-    if state.instance is None:
-        state.instance = AutoAcceptEvaluator(rules_config)
-    else:
-        state.instance._rules = rules_config or {}
-    logger.info("Auto-accept rules reloaded live (%d operations)", len(state.instance._rules))
     for listener in list(state.rules_changed_listeners):
-        listener()
+        try:
+            listener()
+        except Exception:
+            logger.exception("Rules-changed listener raised")
+
+
+__all__ = [
+    "ReviewContext",
+    "TEMP_ACCEPT_ELIGIBLE_OPERATIONS",
+    "TEMP_ACCEPT_TTL_SECONDS",
+    "TOOL_TO_GATE",
+    "TOOL_TO_OPERATION",
+    "add_policy_v2_rules",
+    "add_rules_changed_listener",
+    "get_policy_v2_rules",
+    "get_policy_v2_store_rules",
+    "init_config_path",
+    "is_temp_accepted",
+    "migrate_telegram_search_operation_key",
+    "notify_rules_changed",
+    "register_temp_accept",
+    "remove_policy_v2_rule",
+    "remove_rules_changed_listener",
+    "set_policy_v2_store_rules",
+    "set_rules_changed_listener",
+    "temp_accept_key",
+]

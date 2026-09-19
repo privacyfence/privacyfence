@@ -553,6 +553,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   distinct badge next to its existing Remove link, so a rule list becomes something a person
   maintains rather than one that only ever grows. No behavior change to what auto-accepts: this is
   attribution and staleness reporting only.
+- Policy v2 redesign, P9 (final phase): the two remaining v1 writers — the approval popup's own
+  **Always allow** button and org mode's per-principal settings page (`web/routes_org_settings.py`,
+  untouched by P6) — are ported onto the same v2 primitives P6/P7 already used
+  (`policy/propose.py`, `policy/describe.py`, `auto_accept.add_policy_v2_rules`), then
+  `AutoAcceptEvaluator`, `resource_grants.py`, `policy/compat.py`'s shadow-mode comparison, and the
+  `policy.engine: v1 | v2` switch are deleted. `resource_grants.py`'s manifest survives as
+  `policy/resource_registry.py`, with its resolver callbacks intact, for the three call sites that
+  still need it (migration, audit-log/Settings name resolution, and the deprecated bridge aliases'
+  grant-shaped input) — nothing evaluates a grant against a live call through it anymore, that
+  moved to `policy/engine.py` back in P3. `docs/always-allow-rules-reference.md` is now generated
+  from the scope/tool registry (`scripts/generate_always_allow_reference.py`) rather than
+  hand-maintained, with a CI test failing on drift; `docs/TECHNICAL_REFERENCE.md`'s two auto-accept
+  sections become one. Fixes a latent bug found while porting org mode: `daemon_main.py`'s org
+  principal loader never ran P4's migration, only local mode's startup path did, so an org
+  principal's hand-edited v1 config could go un-migrated indefinitely. See
+  [ADR 0004](docs/adr/0004-retire-the-v1-auto-accept-config-model.md) for the full decision record,
+  including why this phase's scope grew beyond its one-paragraph charter.
 - Gmail draft bodies (`body_markdown` on all 6 draft tools) now support `# Heading 1`/`## Heading 2`
   syntax, rendered as Gmail's own "Large"/"Huge" font-size compose presets (not raw `<h1>`/`<h2>`
   tags, which render inconsistently across mail clients). See issue #414.

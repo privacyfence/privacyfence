@@ -358,7 +358,9 @@ class TestProposeRuleChangeDeniedWhenUnattended:
             })
         assert result.is_error is False
         assert result.structured_content["confirmed"] is True
-        assert self._popup_calls == ["Add auto-accept rule 'i_am_sender' to 'gmail.read_message'"]
+        # P9: propose_rule_change translates its v1-shaped request into a v2 rule and confirms
+        # with policy.describe's own sentence rendering, not the raw operation_key/rule_name.
+        assert self._popup_calls == ["Add auto-accept rule: Gmail - sender: allow read"]
 
 
 class TestGetSignInLinkOverRealTransport:
@@ -414,10 +416,26 @@ class TestGetSignInLinkOverRealTransport:
 class TestListAutoAcceptRulesDisclosureIsAudited:
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
+        # P9: the v1 auto_accept_rules/auto_accept_grants sections are no longer read by anything
+        # live -- privacyfence_list_auto_accept_rules is a deprecated alias of privacyfence_list_policy
+        # now, so the fixture config has to be a real v2 auto_accept: rule for it to show up at all.
+        from privacyfence.policy.store import rule_id_for
+
         init_audit_logger(str(tmp_path))
         self._audit_dir = tmp_path
         config_path = tmp_path / "settings.yaml"
-        config_path.write_text("auto_accept_rules: {gmail.read_message: [{rule: i_am_sender}]}\n", encoding="utf-8")
+        self._rule_id = rule_id_for("i_am_sender", [], ())
+        config_path.write_text(
+            "auto_accept:\n"
+            "  version: 2\n"
+            "  rules:\n"
+            f"    - id: {self._rule_id}\n"
+            "      predicate: i_am_sender\n"
+            "      value: []\n"
+            "      operations: [gmail.read_message]\n"
+            "      conditions: []\n",
+            encoding="utf-8",
+        )
         auto_accept.init_config_path(str(config_path))
 
     async def test_listing_the_rules_writes_an_audit_entry_naming_the_disclosure(self):
@@ -427,11 +445,15 @@ class TestListAutoAcceptRulesDisclosureIsAudited:
                 "privacyfence_list_auto_accept_rules", {"reason": "checking before a scheduled run"},
             )
         assert result.is_error is False
-        assert result.structured_content["auto_accept_rules"]["gmail.read_message"] == [{"rule": "i_am_sender"}]
+        rules = result.structured_content["rules"]
+        assert len(rules) == 1
+        assert rules[0]["id"] == self._rule_id
+        assert rules[0]["operations"] == ["gmail.read_message"]
 
         entries = _read_audit_entries(self._audit_dir)
         assert len(entries) == 1
-        assert entries[0]["decision"] == "rules_listed"
+        # P9: list_rules now returns exactly what list_policy does, decision name included.
+        assert entries[0]["decision"] == "policy_listed"
         assert entries[0]["claude_reason"] == "checking before a scheduled run"
 
     async def test_every_call_gets_its_own_audit_entry_not_deduped(self):

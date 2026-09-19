@@ -11,8 +11,8 @@ it by hand before an ordinary release. Reach for this guide only for:
 - a new connector, before its first release;
 - a material change to a connector's client, tool surface, or gate wiring;
 - an unexplained integration regression a live account is needed to reproduce; or
-- a broad change to `gate.py`, `auto_accept.py`, `resource_grants.py`, or the web approval UI, per
-  `docs/testing-policy.md` §3 — the one case `release-testing.md` still points here for.
+- a broad change to `gate.py`, `auto_accept.py`, `policy/resource_registry.py`, or the web approval
+  UI, per `docs/testing-policy.md` §3 — the one case `release-testing.md` still points here for.
 
 Routine releases that touched none of the above do not need this guide at all.
 

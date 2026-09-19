@@ -30,13 +30,7 @@ from typing import Any, Callable, Hashable
 
 from ..approvals import PendingApprovalRegistry, is_pending_result
 from ..audit_log import AuditEntry, current_week, get_audit_logger
-from ..auto_accept import (
-    TOOL_TO_GATE,
-    TOOL_TO_OPERATION,
-    get_auto_accept_evaluator,
-    get_current_config,
-    get_policy_v2_rules,
-)
+from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_v2_rules
 from ..connector import Connector
 from ..gate import preflight_auto_accept, propose_policy_change, propose_rule_change, reason_scope, unattended_scope
 from ..policy import catalogue as policy_catalogue
@@ -332,7 +326,7 @@ class McpDispatcher:
             operation_key = TOOL_TO_OPERATION.get(tool, f"{connector_name}.{tool}")
             my_email = getattr(connector, "my_email", "")
             verdict, matched_rule, matched_rule_id, reason = preflight_auto_accept(
-                get_auto_accept_evaluator(), operation_key, args, my_email,
+                operation_key, args, my_email,
             )
             if gate == "review":
                 reason += (
@@ -371,34 +365,14 @@ class McpDispatcher:
             logger.warning("Audit log write failed for policy check: %s", exc)
 
     def list_rules(self, claude_reason: str = "") -> dict:
-        # Forces this principal's ConnectorRegistry entry (and the
-        # auto_accept.init_config_path() call daemon_main.py's per-
-        # principal factory makes as a side effect of building it) to
-        # exist first -- same reasoning as propose_rule_change above:
-        # get_current_config() raises "auto_accept config path not
-        # initialized" without it, for a principal whose first-ever MCP
-        # call in this process is this one.
-        _ = self.connectors
-        result = get_current_config()
-        try:
-            get_audit_logger().record(AuditEntry(
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                week=current_week(),
-                request_id=uuid.uuid4().hex[:12],
-                connector="",
-                tool="",
-                tool_name="",
-                summary="Listed current auto-accept rules/grants",
-                sender="",
-                decision="rules_listed",
-                auto_accept_rule="",
-                latency_seconds=0.0,
-                pii_detected=False,
-                claude_reason=claude_reason,
-            ))
-        except Exception as exc:
-            logger.warning("Audit log write failed for list_rules: %s", exc)
-        return result
+        """``privacyfence_list_auto_accept_rules``'s handler -- deprecated alias of
+        ``list_policy`` below (P9). Through P8 this returned a raw read of the v1
+        ``auto_accept_rules``/``auto_accept_grants`` config sections; now that every rule lives in
+        the v2 ``auto_accept:`` section regardless of which surface created it, there is no longer
+        a separate v1 view to show -- reading the old sections directly would show stale content
+        (whatever they held before the one-time migration folded them into v2), not what actually
+        auto-accepts. Returns exactly what ``list_policy`` does."""
+        return self.list_policy(claude_reason)
 
     def list_policy(self, claude_reason: str = "") -> dict:
         """privacyfence_list_policy's handler (P7 of the policy v2 redesign): the on-disk v2

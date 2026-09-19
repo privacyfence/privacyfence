@@ -212,7 +212,7 @@ PROPOSE_RULE_CHANGE_TOOL = types.Tool(
         "target='rule' edits the auto_accept_rules section (one list of {rule, value} entries "
         "per operation_key): operation_key (e.g. 'sheets.format_range'), rule_name (e.g. "
         "'trusted_sender_domain' -- must be one of the real rule names PrivacyFence's rule engine "
-        "knows, see privacyfence_list_auto_accept_rules' output or the Auto-accept rules tables in "
+        "knows, see privacyfence_list_auto_accept_rules' output or the Auto-accept section of "
         "the docs; an unrecognized name is rejected before any popup is shown, not silently "
         "persisted as a dead rule), value (required for add/update -- often a list), old_value "
         "(update only -- the prior value being replaced; omit to add alongside the existing "
