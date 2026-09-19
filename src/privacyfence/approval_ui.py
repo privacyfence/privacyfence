@@ -94,10 +94,15 @@ class ApprovalUI(ABC):
         docstring."""
 
     @abstractmethod
-    def show_rule_confirmation_popup(self, description: str) -> bool:
+    def show_rule_confirmation_popup(self, description: str, *, sensitive: bool = False) -> bool:
         """Second-step confirmation after a specific "Always allow" button
         is clicked. See web_approval_ui.WebApprovalUI.
-        show_rule_confirmation_popup's docstring."""
+        show_rule_confirmation_popup's docstring.
+
+        ``sensitive`` is for the caller this is *not* a second step for:
+        gate.py's two bridge proposals raise this dialog with no card in
+        front of it, so confirming one is the whole gate on the rule --
+        see approvals.PendingApprovalRegistry.register_confirm."""
 
     @property
     def deferred_registry(self):  # -> approvals.PendingApprovalRegistry | None
@@ -145,7 +150,7 @@ class _UnconfiguredApprovalUI(ApprovalUI):
     def show_pii_confirmation_popup(self, categories: list[str]) -> bool:
         self._unconfigured()
 
-    def show_rule_confirmation_popup(self, description: str) -> bool:
+    def show_rule_confirmation_popup(self, description: str, *, sensitive: bool = False) -> bool:
         self._unconfigured()
 
 

@@ -598,7 +598,7 @@ class TestAcceptAll:
         proposal = make_proposal("trusted_sender_domain", ["example.com"], "gmail_get_message")
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [proposal])
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
         added = capture_added_rules(monkeypatch)
 
         result = await gate.gated_call(**base_kwargs(gate="review", connector="gmail", tool="gmail_get_message"))
@@ -631,7 +631,7 @@ class TestAcceptAll:
         proposal = make_proposal("i_am_sender", None, "gmail_get_message")
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [proposal])
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: False)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: False)
         added = capture_added_rules(monkeypatch)
 
         result = await gate.gated_call(**base_kwargs(gate="review"))
@@ -665,7 +665,7 @@ class TestAcceptAllMultipleChoices:
         confirm_calls = []
         monkeypatch.setattr(
             gate, "show_rule_confirmation_popup",
-            lambda description: confirm_calls.append(description) or True,
+            lambda description, *, sensitive=False: confirm_calls.append(description) or True,
         )
         added = capture_added_rules(monkeypatch)
 
@@ -682,7 +682,7 @@ class TestAcceptAllMultipleChoices:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         self._two_choices(monkeypatch)
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
         added = capture_added_rules(monkeypatch)
 
         result = await gate.gated_call(**base_kwargs(gate="review"))
@@ -694,7 +694,7 @@ class TestAcceptAllMultipleChoices:
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         self._two_choices(monkeypatch)
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept_all", 1))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: False)  # cancelled
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: False)  # cancelled
         added = capture_added_rules(monkeypatch)
 
         result = await gate.gated_call(**base_kwargs(gate="review"))
@@ -728,7 +728,7 @@ class TestAcceptAllMultipleChoices:
         proposal = make_proposal("i_am_sender", None, "gmail_get_message")
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [proposal])
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
         added = capture_added_rules(monkeypatch)
 
         result = await gate.gated_call(**base_kwargs(gate="review"))
@@ -748,7 +748,7 @@ class TestAcceptAllWrites:
         proposal = make_proposal("label_name_allowlist", ["Newsletters"], "gmail_add_label", connector="gmail")
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [proposal])
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
         added = capture_added_rules(monkeypatch)
 
         result = await gate.gated_call(**base_kwargs(gate="popup", connector="gmail", tool="gmail_add_label"))
@@ -770,8 +770,14 @@ class TestAcceptAllWrites:
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept_all", 0))
         captured = {}
 
-        def fake_confirm(description):
+        def fake_confirm(description, *, sensitive=False):
             captured["description"] = description
+            # Not marked sensitive, and that is the point: this dialog is a
+            # second step inside a card whose own accept_all already took
+            # both decide-time gates. Marking it would ask for a second
+            # passkey tap on one decision -- see approvals.
+            # PendingApprovalRegistry.register_confirm.
+            captured["sensitive"] = sensitive
             return True
 
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", fake_confirm)
@@ -780,6 +786,7 @@ class TestAcceptAllWrites:
         await gate.gated_call(**base_kwargs(gate="popup", connector="jira", tool="jira_create_issue"))
 
         assert captured["description"] == policy_describe.confirmation_text(proposal)
+        assert captured["sensitive"] is False
 
     async def test_accept_all_without_suggestion_falls_back_to_plain_approve(self, monkeypatch, audit_dir):
         # gmail_send_message has no operation key at all -- even if the (real) popup somehow
@@ -802,7 +809,7 @@ class TestAcceptAllWrites:
         proposal = make_proposal("label_name_allowlist", ["Newsletters"], "gmail_add_label", connector="gmail")
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [proposal])
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: False)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: False)
         added = capture_added_rules(monkeypatch)
 
         result = await gate.gated_call(**base_kwargs(gate="popup", connector="gmail", tool="gmail_add_label"))
@@ -818,7 +825,7 @@ class TestAcceptAllWrites:
         # sandbox-folder suggestion.
         monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
         added = capture_added_rules(monkeypatch)
 
         result = await gate.gated_call(**base_kwargs(
@@ -842,7 +849,7 @@ class TestAcceptAllWrites:
         captured = {}
         monkeypatch.setattr(
             gate, "show_rule_confirmation_popup",
-            lambda description: captured.setdefault("description", description) or True,
+            lambda description, *, sensitive=False: captured.setdefault("description", description) or True,
         )
         added = capture_added_rules(monkeypatch)
 
@@ -972,7 +979,7 @@ class TestAcceptAllWrites:
         proposal = make_proposal("label_name_allowlist", ["Newsletters"], "gmail_add_label", connector="gmail")
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [proposal])
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
         monkeypatch.setattr(gate, "add_policy_v2_rules", lambda rules: True)
 
         def boom(*a, **k):
@@ -1006,10 +1013,29 @@ class TestProposeRuleChange:
         self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(self._config_path))
         auto_accept.set_policy_v2_store_rules([])
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 
     def teardown_method(self):
         auto_accept.set_policy_v2_store_rules([])
+
+    async def test_the_dialog_it_raises_is_marked_sensitive(self, monkeypatch):
+        """The deprecated alias reaches the same dialog as
+        ``propose_policy_change`` and is reachable by the same caller, so it
+        carries the same flag -- see that tool's own test of this, and
+        web/routes_approvals.py's module docstring."""
+        seen = {}
+
+        def confirm(description, *, sensitive=False):
+            seen["sensitive"] = sensitive
+            return True
+
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", confirm)
+        await gate.propose_rule_change(
+            target="rule", operation="add", reason="x",
+            operation_key="gmail.read_message", rule_name="trusted_sender_domain",
+            value=["example.com"],
+        )
+        assert seen["sensitive"] is True
 
     async def test_confirmed_rule_add_persists_and_audits(self, audit_dir):
         result = await gate.propose_rule_change(
@@ -1125,7 +1151,7 @@ class TestProposeRuleChange:
         # produces) -- a misspelled/made-up name must be rejected up front,
         # not persisted as a rule that silently never matches anything.
         called = []
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: called.append(1) or True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: called.append(1) or True)
 
         with pytest.raises(ValueError, match="Unknown auto-accept rule"):
             await gate.propose_rule_change(
@@ -1154,7 +1180,7 @@ class TestProposeRuleChange:
             )
 
     async def test_declined_confirmation_raises_and_audits_rejected_without_applying(self, monkeypatch, audit_dir):
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: False)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: False)
 
         with pytest.raises(RuntimeError, match="denied by user"):
             await gate.propose_rule_change(
@@ -1168,7 +1194,7 @@ class TestProposeRuleChange:
 
     async def test_unattended_connection_denies_without_showing_a_popup(self, monkeypatch, audit_dir):
         called = []
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: called.append(1) or True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: called.append(1) or True)
 
         with gate.unattended_scope(True):
             with pytest.raises(RuntimeError, match="unattended session"):
@@ -1265,7 +1291,7 @@ class TestProposePolicyChange:
         self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(self._config_path))
         auto_accept.set_policy_v2_store_rules([])
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 
     def teardown_method(self):
         auto_accept.set_policy_v2_store_rules([])
@@ -1283,6 +1309,29 @@ class TestProposePolicyChange:
         assert "auto_accept_rules: {}" in text  # v1 section left untouched
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "policy_rule_changed_via_bridge_proposal"
+
+    async def test_the_dialog_it_raises_is_marked_sensitive(self, monkeypatch):
+        """The self-approval review's Phase 4. Nothing gated this dialog
+        before it appeared -- an MCP client asked, no card was shown -- so
+        confirming it is the whole of the gate on a rule that decides what
+        auto-accepts in future. web/routes_approvals.py's decide route reads
+        that flag off the ``PendingApproval`` and holds the confirm to the
+        same two checks web/routes_settings.py holds a
+        ``_SENSITIVE_ACTIONS`` name to; without it the dialog inherits
+        ``webauthn_stepup.is_step_up_required``'s "a confirm is a second
+        step inside a decision the caller's own card already gated", which
+        is exactly what this call site is not."""
+        seen = {}
+
+        def confirm(description, *, sensitive=False):
+            seen["sensitive"] = sensitive
+            return True
+
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", confirm)
+        await gate.propose_policy_change(
+            operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
+        )
+        assert seen["sensitive"] is True
 
     async def test_confirmed_add_is_visible_to_get_policy_v2_rules(self, audit_dir):
         await gate.propose_policy_change(
@@ -1340,7 +1389,7 @@ class TestProposePolicyChange:
 
     async def test_update_with_an_unknown_rule_id_raises_before_any_popup(self, monkeypatch):
         popup_calls = []
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: popup_calls.append(1) or True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: popup_calls.append(1) or True)
         with pytest.raises(ValueError, match="Unknown rule id"):
             await gate.propose_policy_change(
                 operation="update", reason="x", rule_id="r-does-not-exist",
@@ -1349,7 +1398,7 @@ class TestProposePolicyChange:
         assert popup_calls == []
 
     async def test_declined_confirmation_raises_and_persists_nothing(self, monkeypatch, audit_dir):
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: False)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: False)
         with pytest.raises(RuntimeError, match="denied by user"):
             await gate.propose_policy_change(
                 operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
@@ -1358,7 +1407,7 @@ class TestProposePolicyChange:
 
     async def test_unattended_connection_denies_without_showing_a_popup(self, monkeypatch, audit_dir):
         popup_calls = []
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: popup_calls.append(1) or True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: popup_calls.append(1) or True)
         with gate.unattended_scope(True):
             with pytest.raises(RuntimeError, match="unattended session"):
                 await gate.propose_policy_change(
@@ -2086,7 +2135,7 @@ class TestPIIGate:
         )
         monkeypatch.setattr(
             gate, "show_rule_confirmation_popup",
-            lambda description: call_order.append("rule") or True,
+            lambda description, *, sensitive=False: call_order.append("rule") or True,
         )
         monkeypatch.setattr(gate, "add_policy_v2_rules", lambda rules: True)
 
@@ -2107,7 +2156,7 @@ class TestPIIGate:
         rule_confirm_calls = []
         monkeypatch.setattr(
             gate, "show_rule_confirmation_popup",
-            lambda description: rule_confirm_calls.append(1) or True,
+            lambda description, *, sensitive=False: rule_confirm_calls.append(1) or True,
         )
         added = capture_added_rules(monkeypatch)
 
@@ -3126,7 +3175,7 @@ class TestAuditGapSafety:
         proposal = make_proposal("i_am_sender", None, "gmail_get_message")
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [proposal])
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 
         def boom(*a, **k):
             raise OSError("rules file write failed")

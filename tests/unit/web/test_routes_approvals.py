@@ -1392,3 +1392,218 @@ class TestHumanSessionRequiredToApprove:
         assert r.status_code == 200
         t.join(timeout=2)
         assert box["result"] == ("accept", None)
+
+
+def _pending_confirm(web_ui, *, sensitive: bool):
+    """The confirm-dialog counterpart of ``_pending_card`` above: starts a
+    blocking ``show_rule_confirmation_popup()`` on a daemon thread (same
+    reasoning as that helper's own docstring) and waits for its dialog to
+    register."""
+    box = {}
+
+    def run():
+        box["confirmed"] = web_ui.show_rule_confirmation_popup(
+            "Drive · folder 'Claude scratch space' — allow read, update", sensitive=sensitive,
+        )
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    for _ in range(500):
+        card = web_ui.current()
+        if card is not None:
+            return t, card, box
+        time.sleep(0.01)
+    raise AssertionError("confirm dialog never registered")
+
+
+class TestSensitiveConfirmDialog:
+    """The self-approval review's Phase 4, on the two meta-tools the policy
+    v2 redesign added (``privacyfence_list_policy`` is a read;
+    ``privacyfence_propose_policy_change`` is this).
+
+    Confirm dialogs were exempt from both decide-time gates by construction
+    -- ``_STEP_UP_RESULTS`` is ``accept``/``accept_all``, and
+    ``webauthn_stepup.is_step_up_required`` records why: "a confirm is a
+    second step *inside* a decision the caller's own card already gated".
+    True of the PII and "Always allow" dialogs, and not true of a bridge
+    proposal, where the dialog *is* the gate and the party that asked for it
+    is the agent. On the strongest configuration PrivacyFence ships --
+    privilege-separated, step-up on, ``require_passkey`` on, a credential
+    enrolled -- an unattested session could POST ``result: "confirm"`` and
+    give itself an auto-accept rule, which is the same class of change
+    web/routes_settings.py gates as a ``_SENSITIVE_ACTIONS`` name.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    def _enroll(self):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        wa.add_credential(LOCAL_PRINCIPAL, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def _app(self, *, step_up=None, require_human_session=False):
+        web_ui = WebApprovalUI()
+        sessions = LocalSessionStore()
+        app = create_app(
+            web_ui, sessions=sessions, require_human_session=require_human_session,
+            step_up=step_up, step_up_origin=ORIGIN,
+        )
+        return TestClient(app, base_url=ORIGIN), sessions, web_ui
+
+    def _sign_in(self, client, sessions, provenance=PROVENANCE_HUMAN):
+        session_id = sessions.create(provenance=provenance)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        return session_id
+
+    @staticmethod
+    def _decide(client, card_id, session_id, result):
+        return client.post(
+            f"/api/approvals/{card_id}/decide",
+            json={"action": "resolve", "result": result, "csrf": session_id},
+        )
+
+    # -- provenance ---------------------------------------------------- #
+
+    def test_an_unattested_session_cannot_confirm_a_bridge_proposal(self):
+        client, sessions, web_ui = self._app(require_human_session=True)
+        session_id = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
+        t, card, box = _pending_confirm(web_ui, sensitive=True)
+
+        r = self._decide(client, card.id, session_id, "confirm")
+
+        assert r.status_code == 403
+        assert r.json()["error"] == "human_session_required"
+        # Refused, not silently resolved: the rule is not created, and
+        # gate.propose_policy_change is still blocked on the dialog.
+        assert box == {}
+        assert "auto-accept rule" in r.json()["message"]
+        web_ui.resolve(card.id, "cancel")
+        t.join(timeout=2)
+
+    def test_an_unattested_session_may_still_cancel_one(self):
+        """Same line this module already draws for ``deny``: refusing a
+        change leaks nothing, and an agent that can only cancel cannot give
+        itself anything."""
+        client, sessions, web_ui = self._app(require_human_session=True)
+        session_id = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
+        t, card, box = _pending_confirm(web_ui, sensitive=True)
+
+        r = self._decide(client, card.id, session_id, "cancel")
+
+        assert r.status_code == 200
+        t.join(timeout=2)
+        assert box["confirmed"] is False
+
+    def test_an_attested_session_confirms_exactly_as_before(self):
+        client, sessions, web_ui = self._app(require_human_session=True)
+        session_id = self._sign_in(client, sessions, PROVENANCE_HUMAN)
+        t, card, box = _pending_confirm(web_ui, sensitive=True)
+
+        r = self._decide(client, card.id, session_id, "confirm")
+
+        assert r.status_code == 200
+        t.join(timeout=2)
+        assert box["confirmed"] is True
+
+    def test_the_always_allow_dialog_is_untouched(self):
+        """The confirm dialog that really is a second step inside a card:
+        that card's own ``accept_all`` already took both gates, so asking
+        again here would be a second passkey tap for one decision."""
+        client, sessions, web_ui = self._app(require_human_session=True)
+        session_id = self._sign_in(client, sessions, PROVENANCE_UNATTESTED)
+        t, card, box = _pending_confirm(web_ui, sensitive=False)
+
+        r = self._decide(client, card.id, session_id, "confirm")
+
+        assert r.status_code == 200
+        t.join(timeout=2)
+        assert box["confirmed"] is True
+
+    # -- step-up ------------------------------------------------------- #
+
+    def test_confirming_needs_a_passkey_when_require_passkey_is_on(self):
+        self._enroll()
+        client, sessions, web_ui = self._app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        session_id = self._sign_in(client, sessions)
+        t, card, box = _pending_confirm(web_ui, sensitive=True)
+
+        r = self._decide(client, card.id, session_id, "confirm")
+
+        assert r.status_code == 428
+        assert r.json()["error"] == "step_up_required"
+        assert r.json()["webauthn_options"]["challenge"]
+        assert box == {}
+        web_ui.resolve(card.id, "cancel")
+        t.join(timeout=2)
+
+    def test_the_scope_setting_does_not_narrow_it(self):
+        """``writes`` is the narrowest scope there is, and it still covers
+        this: a rule is not a read or a write, it is what decides which of
+        those get asked about at all -- the same reason
+        web/routes_settings.py's ``_needs_step_up`` never consults
+        ``scope`` either."""
+        self._enroll()
+        client, sessions, web_ui = self._app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True, scope="writes"),
+        )
+        session_id = self._sign_in(client, sessions)
+        t, card, box = _pending_confirm(web_ui, sensitive=True)
+
+        r = self._decide(client, card.id, session_id, "confirm")
+
+        assert r.status_code == 428
+        web_ui.resolve(card.id, "cancel")
+        t.join(timeout=2)
+
+    def test_nothing_enrolled_fails_closed_rather_than_through(self):
+        client, sessions, web_ui = self._app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        session_id = self._sign_in(client, sessions)
+        t, card, box = _pending_confirm(web_ui, sensitive=True)
+
+        r = self._decide(client, card.id, session_id, "confirm")
+
+        assert r.status_code == 403
+        assert r.json()["error"] == "passkey_enrollment_required"
+        assert box == {}
+        web_ui.resolve(card.id, "cancel")
+        t.join(timeout=2)
+
+    def test_cancelling_never_needs_a_passkey(self):
+        self._enroll()
+        client, sessions, web_ui = self._app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        session_id = self._sign_in(client, sessions)
+        t, card, box = _pending_confirm(web_ui, sensitive=True)
+
+        r = self._decide(client, card.id, session_id, "cancel")
+
+        assert r.status_code == 200
+        t.join(timeout=2)
+        assert box["confirmed"] is False
+
+    def test_require_passkey_off_leaves_the_dialog_as_it_was(self):
+        """Same line ``_needs_step_up`` draws on the settings surface: with
+        ``require_passkey`` off there is no configuration in which a missing
+        credential could be an answer, so this gate does not run at all."""
+        self._enroll()
+        client, sessions, web_ui = self._app(
+            step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=False),
+        )
+        session_id = self._sign_in(client, sessions)
+        t, card, box = _pending_confirm(web_ui, sensitive=True)
+
+        r = self._decide(client, card.id, session_id, "confirm")
+
+        assert r.status_code == 200
+        t.join(timeout=2)
+        assert box["confirmed"] is True

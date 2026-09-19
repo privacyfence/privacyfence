@@ -218,7 +218,9 @@ by minting its own were the same object with the same authority.
 
 `human` is required to release an *approving* decision (`accept`/`accept_all`, individually or in a
 batch) and to take any `_SENSITIVE_ACTIONS` settings action, or upload an organization config
-bundle (`org_config_upload`, gated the same way for the same reason -- see immediately above).
+bundle (`org_config_upload`, gated the same way for the same reason -- see immediately above), or
+confirm an auto-accept rule an MCP client asked for (see
+[A confirmation dialog is not always a second step](#a-confirmation-dialog-is-not-always-a-second-step)).
 Denying is not gated, under the same
 reasoning step-up uses: denying discloses nothing. Viewing is not gated at all — a locked-out human
 with only an unattested link can still see what is pending, and is told in so many words that this
@@ -271,6 +273,38 @@ login, so winning that race means starting before it and staying there, which br
 OAuth flows that share the address and leaves the human with no companion where one is meant to be.
 What provenance buys is that the two silent paths stop being interchangeable with the attended one,
 and that forging the attended one costs impersonating a process whose absence is visible.
+
+### A confirmation dialog is not always a second step
+
+PrivacyFence raises a small Cancel/Confirm dialog in three places, and until 4.2 the decide endpoint
+treated all three alike: exempt from both the passkey check and the provenance check, because those
+are scoped to a decision *result* named `accept`/`accept_all`. The exemption had a reason, recorded
+in `webauthn_stepup.is_step_up_required` -- "a confirm is a second step *inside* a decision the
+caller's own card already gated, never a release of its own". That is true of the PII dialog and of
+the one an **Always allow** click raises: both appear only after an approval card has already been
+answered, and that card took both checks. Asking again would be a second passkey tap for one
+decision.
+
+It is not true of the third. `privacyfence_propose_policy_change` (and the deprecated
+`privacyfence_propose_auto_accept_rule_change`) lets an MCP client ask for an auto-accept rule
+directly. No card is shown, because nothing is being approved yet -- the dialog *is* the gate, and
+what it writes is a rule that decides what gets approved without asking from then on. That is the
+same kind of change `_SENSITIVE_ACTIONS` names on the Settings page, reached by a different route
+and, until this was closed, without either of that route's two checks.
+
+Those dialogs are now marked at the point they are raised (`sensitive=True` through
+`approvals.PendingApprovalRegistry.register_confirm`), and confirming one takes exactly what the
+equivalent settings action takes:
+
+- **an attributable session** -- `human` provenance, on the installs where provenance is enforced
+  (see above). Org mode has no provenance to check: every session reaching that surface is an IdP
+  authentication.
+- **a passkey, wherever `require_passkey` is on** -- in both deployment modes, and independently of
+  `step_up.scope`. A rule is not a read or a write; it is the thing that decides which of those you
+  are asked about at all, which is why `web/routes_settings.py`'s own `_needs_step_up` never
+  consults `scope` either.
+
+**Cancelling is not gated**, for the same reason denying is not.
 
 ### Enrolling a passkey is itself gated
 

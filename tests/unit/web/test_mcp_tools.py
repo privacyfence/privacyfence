@@ -336,7 +336,7 @@ class TestProposeRuleChangeDeniedWhenUnattended:
         self._popup_calls: list[str] = []
         monkeypatch.setattr(
             gate, "show_rule_confirmation_popup",
-            lambda description: self._popup_calls.append(description) or True,
+            lambda description, *, sensitive=False: self._popup_calls.append(description) or True,
         )
 
     async def test_denied_without_ever_showing_a_confirmation_popup(self):
@@ -466,7 +466,7 @@ class TestListAndProposePolicyOverRealTransport:
         config_path = tmp_path / "settings.yaml"
         config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(config_path))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 
     async def test_list_policy_starts_empty_with_a_real_scope_catalogue(self):
         dispatcher = _dispatcher({})

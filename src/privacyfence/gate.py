@@ -1384,7 +1384,16 @@ async def propose_rule_change(
             "can't be confirmed without a human present."
         )
 
-    confirmed = await _run_in_popup_executor(show_rule_confirmation_popup, description)
+    # ``sensitive=True``: unlike the "Always allow" dialog this shares a
+    # renderer with, nothing gated this one first -- there is no card in
+    # front of it, so confirming it is the whole gate on a rule that
+    # decides what auto-accepts from here on. That is what
+    # web/routes_settings.py's ``_SENSITIVE_ACTIONS`` names, and the
+    # flag is what gets this dialog held to the same two checks. See
+    # approvals.PendingApprovalRegistry.register_confirm.
+    confirmed = await _run_in_popup_executor(
+        show_rule_confirmation_popup, description, sensitive=True,
+    )
 
     if not confirmed:
         _audit(
@@ -1514,7 +1523,16 @@ async def propose_policy_change(
             "can't be confirmed without a human present."
         )
 
-    confirmed = await _run_in_popup_executor(show_rule_confirmation_popup, description)
+    # ``sensitive=True``: unlike the "Always allow" dialog this shares a
+    # renderer with, nothing gated this one first -- there is no card in
+    # front of it, so confirming it is the whole gate on a rule that
+    # decides what auto-accepts from here on. That is what
+    # web/routes_settings.py's ``_SENSITIVE_ACTIONS`` names, and the
+    # flag is what gets this dialog held to the same two checks. See
+    # approvals.PendingApprovalRegistry.register_confirm.
+    confirmed = await _run_in_popup_executor(
+        show_rule_confirmation_popup, description, sensitive=True,
+    )
 
     if not confirmed:
         _audit(

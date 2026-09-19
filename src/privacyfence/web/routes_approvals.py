@@ -46,6 +46,26 @@ mirrors this module's single-decision flow but carries a server-minted
 ``batch_id`` instead of an approval id, and, like web/routes_settings.py's
 own sensitive-action ceremony, never offers an IdP fallback even in org
 mode's counterpart of this endpoint.
+
+**A confirm dialog that is itself the gate (the self-approval review's
+Phase 4)** gets both of the above, which the two checks' own result
+allowlists otherwise skip: ``_STEP_UP_RESULTS`` is ``accept``/``accept_all``
+because ``webauthn_stepup.is_step_up_required`` records that "a confirm is a
+second step *inside* a decision the caller's own card already gated, never a
+release of its own". That was true of every confirm dialog this module had
+when it was written -- the PII one and the popup's "Always allow" one, both
+raised from inside ``gate.gated_call`` after a card had already been
+approved. ``gate.propose_policy_change`` (P7 of the policy v2 redesign) and
+its deprecated predecessor ``propose_rule_change`` are the exception: an MCP
+client asks for a rule, no card is shown, and the confirm dialog is the only
+thing standing between the calling agent and a rule that decides what
+auto-accepts in future. Those register with ``sensitive=True``
+(approvals.PendingApprovalRegistry.register_confirm), and confirming one
+takes the two checks web/routes_settings.py already applies to its own
+``_SENSITIVE_ACTIONS``: an attributable session, and -- independently of
+``step_up.scope``, exactly as ``_needs_step_up`` there -- a passkey whenever
+``require_passkey`` is on. Cancelling is ungated, for the same reason
+denying is.
 """
 from __future__ import annotations
 
@@ -62,7 +82,7 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import BaseRoute, Route
 
 from .. import approval_list_html, approval_window_html, web_shell, webauthn_stepup
-from ..approvals import BATCH_RESULTS
+from ..approvals import BATCH_RESULTS, CONFIRM_RESULTS
 from ..principal import LOCAL_PRINCIPAL
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
@@ -537,17 +557,59 @@ def create_app(
         if not isinstance(result, str):
             result = str(int(result))
 
-        if require_human_session and result in _STEP_UP_RESULTS and not _is_human_session(request, sessions):
+        # A confirm dialog that is the whole gate on a config change rather
+        # than a second step inside a card -- see approvals.
+        # PendingApprovalRegistry.register_confirm's own ``sensitive``
+        # parameter, and this module's docstring.
+        pending = web_ui.deferred_registry.get(approval_id)
+        sensitive_confirm = (
+            pending is not None and pending.sensitive and result == CONFIRM_RESULTS[0]
+        )
+
+        if (
+            require_human_session
+            and (result in _STEP_UP_RESULTS or sensitive_confirm)
+            and not _is_human_session(request, sessions)
+        ):
             # Ahead of the step-up ceremony below, not after it: there is no
             # point walking somebody through a passkey prompt for a decision
             # this session could not have released whatever the answer was.
-            body, status = _human_session_required_json("approve a decision")
+            body, status = _human_session_required_json(
+                "create an auto-accept rule" if sensitive_confirm else "approve a decision",
+            )
             return JSONResponse(body, status_code=status)
 
+        if sensitive_confirm and step_up is not None and step_up.enabled and step_up.require_passkey:
+            # Deliberately not routed through ``is_step_up_required``: that
+            # predicate answers "does this scope cover this gate_kind", and
+            # a confirm dialog has no gate_kind to answer it with. The
+            # question here is the one web/routes_settings.py's
+            # ``_needs_step_up`` asks of a ``_SENSITIVE_ACTIONS`` name --
+            # scope-independent, since changing what a future call can reach
+            # without asking is not a read or a write, it is the thing that
+            # decides which of those get asked about at all.
+            assertion = payload.get("webauthn_assertion")
+            if not isinstance(assertion, dict):
+                stepup_response = _step_up_response(approval_id, result=result, choice=choice)
+                if stepup_response is not None:
+                    return stepup_response
+            else:
+                expected_fp = webauthn_stepup.decision_fingerprint(
+                    approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
+                )
+                try:
+                    step_up_decide.verify_step_up(
+                        LOCAL_PRINCIPAL, rp_id=step_up.rp_id, origin=origin, subject_key=approval_id,
+                        fingerprint=expected_fp, assertion=assertion, challenges=challenges,
+                    )
+                except step_up_decide.StepUpExpired:
+                    return JSONResponse({"error": "step_up_expired"}, status_code=400)
+                except WebAuthnError as exc:
+                    return JSONResponse({"error": str(exc)}, status_code=401)
+
         if step_up is not None and step_up.enabled and result in _STEP_UP_RESULTS:
-            approval = web_ui.deferred_registry.get(approval_id)
-            if approval is not None and webauthn_stepup.is_step_up_required(
-                gate_kind=approval.gate_kind, pii_detected=approval.pii_detected, scope=step_up.scope,
+            if pending is not None and webauthn_stepup.is_step_up_required(
+                gate_kind=pending.gate_kind, pii_detected=pending.pii_detected, scope=step_up.scope,
             ):
                 assertion = payload.get("webauthn_assertion")
                 if not isinstance(assertion, dict):

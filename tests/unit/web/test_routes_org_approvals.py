@@ -1003,3 +1003,95 @@ class TestBatchStepUp:
         assert r.status_code == 400
         assert not accept_me.event.is_set()
         assert not deny_me.event.is_set()
+
+
+class TestSensitiveConfirmDialog:
+    """The self-approval review's Phase 4, org mode's half. Local mode's
+    counterpart (tests/unit/web/test_routes_approvals.py's class of the same
+    name) carries the reasoning; what differs here is that org mode has no
+    session provenance to check -- every session reaching this surface is an
+    IdP authentication -- so the passkey is the whole of it, and it is asked
+    for on the same ``require_passkey`` condition rather than on
+    ``step_up.scope``."""
+
+    def _confirm(self, web_ui, principal, *, sensitive: bool):
+        with principal_scope(principal):
+            approval = web_ui.deferred_registry.register_confirm(sensitive=sensitive)
+        web_ui.deferred_registry.set_html(
+            approval.id, "<!doctype html><html><head></head><body>CONFIRM</body></html>",
+        )
+        return approval
+
+    def _enroll(self):
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+
+    def test_a_bridge_proposal_confirm_needs_a_passkey(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        self._enroll()
+        approval = self._confirm(web_ui, ALICE, sensitive=True)
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "confirm", "csrf": session_id})
+
+        assert r.status_code == 428
+        assert "webauthn_options" in r.json()
+        # require_passkey closes the IdP fallback here exactly as it does
+        # for a write decision -- see _step_up_response.
+        assert "idp_stepup_url" not in r.json()
+
+    def test_the_scope_setting_does_not_narrow_it(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(
+                enabled=True, rp_id="pf.example.com", require_passkey=True, scope="writes",
+            ),
+        )
+        self._enroll()
+        approval = self._confirm(web_ui, ALICE, sensitive=True)
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "confirm", "csrf": session_id})
+
+        assert r.status_code == 428
+
+    def test_the_always_allow_dialog_is_untouched(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        self._enroll()
+        approval = self._confirm(web_ui, ALICE, sensitive=False)
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "confirm", "csrf": session_id})
+
+        assert r.status_code == 200
+
+    def test_cancelling_never_needs_a_passkey(self):
+        app, sessions, web_ui = _app(
+            step_up=StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True),
+        )
+        self._enroll()
+        approval = self._confirm(web_ui, ALICE, sensitive=True)
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "cancel", "csrf": session_id})
+
+        assert r.status_code == 200
+
+    def test_require_passkey_off_leaves_the_dialog_as_it_was(self):
+        app, sessions, web_ui = _app(step_up=StepUpConfig(enabled=True, rp_id="pf.example.com"))
+        self._enroll()
+        approval = self._confirm(web_ui, ALICE, sensitive=True)
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+
+        r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "confirm", "csrf": session_id})
+
+        assert r.status_code == 200

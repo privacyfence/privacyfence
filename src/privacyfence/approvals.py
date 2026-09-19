@@ -234,6 +234,9 @@ class PendingApproval:
     summary: str = ""
     tool_name: str = ""
     dedupe_key: str | None = None  # None for a confirm dialog: never coalesced, never ledgered
+    # True on a confirm dialog that *is* the gate rather than a second step
+    # inside one -- see register_confirm()'s own ``sensitive`` parameter.
+    sensitive: bool = False
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0.0        # pending-TTL deadline
     html: str = ""
@@ -519,15 +522,29 @@ class PendingApprovalRegistry:
             self._by_key[key] = approval.id
             return approval, True
 
-    def register_confirm(self) -> PendingApproval:
+    def register_confirm(self, *, sensitive: bool = False) -> PendingApproval:
         """A PII/"Always allow" confirmation dialog -- never coalesced
         (``dedupe_key=None``), never subject to the pending cap (it's a
         short-lived follow-up to a card someone is already looking at, not
-        a new gated call), never ledgered."""
+        a new gated call), never ledgered.
+
+        ``sensitive`` (the self-approval review's Phase 4) marks the one
+        kind of confirm dialog that sentence is *not* true of: the one an
+        MCP meta-tool raises (``gate.propose_policy_change`` /
+        ``propose_rule_change``), where no card came first and confirming is
+        the whole of the gate on a change to what auto-accepts in future.
+        web/routes_approvals.py's decide route holds those to the same two
+        checks web/routes_settings.py already holds its own
+        ``_SENSITIVE_ACTIONS`` to -- an attributable session, and a passkey
+        where one is required -- rather than to the "a confirm releases
+        nothing of its own" reasoning the default records. Left ``False``
+        for the PII and "Always allow" dialogs, which really are second
+        steps inside a decision their own card already gated."""
         with self._lock:
             now = time.time()
             approval = PendingApproval(
                 id=uuid.uuid4().hex, kind="confirm", created_at=now, expires_at=now + self.pending_ttl,
+                sensitive=sensitive,
             )
             self._pending[approval.id] = approval
             return approval

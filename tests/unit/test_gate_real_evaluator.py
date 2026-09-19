@@ -762,7 +762,7 @@ class TestAcceptAllPersistsARealRule:
         install_rules({})
 
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 
         first = await gate.gated_call(**make_kwargs(
             connector="gmail", tool="gmail_get_message", gate="review",
@@ -809,7 +809,7 @@ class TestAcceptAllPersistsARealRuleForWrites:
         install_rules({})
 
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept_all", 0))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 
         first = await gate.gated_call(**make_kwargs(
             connector="gmail", tool="gmail_add_label", gate="popup",

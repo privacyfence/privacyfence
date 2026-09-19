@@ -464,7 +464,7 @@ class TestListPolicy:
 
     async def test_a_v2_rule_is_listed_with_its_id_sentence_and_covered_tools(self, monkeypatch):
         from privacyfence import gate
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
         await gate.propose_policy_change(
             operation="add", reason="x", group="drive.folder", value=["folder1"], verbs=["read"],
         )
@@ -491,7 +491,7 @@ class TestProposePolicyChangeDispatch:
         self._config_path = tmp_path / "settings.yaml"
         self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(self._config_path))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 
     async def test_confirmed_add_is_persisted_to_disk(self):
         dispatcher = _dispatcher({})
@@ -629,7 +629,7 @@ class TestProposeRuleChange:
         self._config_path = tmp_path / "settings.yaml"
         self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(self._config_path))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 
     async def test_confirmed_rule_add_is_persisted_to_disk(self):
         dispatcher = _dispatcher({})
@@ -643,7 +643,7 @@ class TestProposeRuleChange:
 
     async def test_declined_confirmation_raises(self, monkeypatch):
         from privacyfence import gate
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: False)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: False)
         dispatcher = _dispatcher({})
         with pytest.raises(RuntimeError, match="denied"):
             await dispatcher.propose_rule_change("s1", {
@@ -660,7 +660,7 @@ class TestProposeRuleChange:
         # immediate denial its tool description promises.
         called = []
         from privacyfence import gate
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: called.append(1) or True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: called.append(1) or True)
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
         dispatcher.begin_unattended_session("s1", "scheduled run")
 
@@ -674,7 +674,7 @@ class TestProposeRuleChange:
 
     async def test_a_different_sessions_unattended_flag_does_not_leak_into_this_one(self, monkeypatch):
         from privacyfence import gate
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
         dispatcher.begin_unattended_session("s1", "scheduled run")
 
@@ -705,7 +705,7 @@ class TestOldShapeAliasLandsTheEquivalentV2Rule:
         config_path = tmp_path / "settings.yaml"
         config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(config_path))
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 
     async def test_old_shape_rule_add_is_recognized_by_check_policy_matched_rule_id(self):
         from privacyfence.policy import store as policy_store

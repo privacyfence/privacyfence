@@ -156,7 +156,7 @@ class WebApprovalUI(ApprovalUI):
         )
         return self._run_confirm(html)
 
-    def show_rule_confirmation_popup(self, description: str) -> bool:
+    def show_rule_confirmation_popup(self, description: str, *, sensitive: bool = False) -> bool:
         html = dialog_window_html.build_confirmation_html(
             title="PrivacyFence — Confirm Auto-Accept Rule",
             message_lines=[
@@ -167,7 +167,7 @@ class WebApprovalUI(ApprovalUI):
             cancel_label="Cancel",
             confirm_label="Confirm",
         )
-        return self._run_confirm(html)
+        return self._run_confirm(html, sensitive=sensitive)
 
     # ------------------------------------------------------------------ #
     # Internals
@@ -182,8 +182,8 @@ class WebApprovalUI(ApprovalUI):
         # here -- there's no gated-call context to attach one to.
         return web_prompt.block_on_card(self._registry, html, approval)
 
-    def _run_confirm(self, html: str) -> bool:
-        return web_prompt.block_on_confirm(self._registry, html)
+    def _run_confirm(self, html: str, *, sensitive: bool = False) -> bool:
+        return web_prompt.block_on_confirm(self._registry, html, sensitive=sensitive)
 
 
 _INSTANCE: WebApprovalUI | None = None

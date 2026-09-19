@@ -62,7 +62,24 @@ assertion bound to the whole submitted set
 module's own single-decision ``_step_up_response``, its batch counterpart
 never offers the IdP-reauth fallback -- see ``_batch_step_up_response``'s
 own docstring for what that costs when nothing is enrolled and
-``require_passkey`` is off."""
+``require_passkey`` is off.
+
+**A confirm dialog that is itself the gate (the self-approval review's
+Phase 4)** is the one place ``_STEP_UP_RESULTS``' "only an approving
+decision" rule under-reaches. It is right about every confirm dialog that
+existed when it was written -- the PII one and the popup's "Always allow"
+one, both raised from inside a ``gate.gated_call`` whose own card already
+took this gate. It is wrong about ``gate.propose_policy_change`` (P7 of the
+policy v2 redesign) and its deprecated predecessor ``propose_rule_change``:
+an MCP client asks for a rule, no card is shown, and the dialog is the whole
+gate on a change to what auto-accepts for this principal from here on. Those
+register with ``sensitive=True`` (approvals.PendingApprovalRegistry.
+register_confirm) and are held to the same passkey check a write decision
+takes -- gated on ``require_passkey`` rather than on ``scope``, since a rule
+is not a read or a write but the thing that decides which of those get asked
+about at all, the same line web/routes_settings.py's own ``_needs_step_up``
+draws. Where ``require_passkey`` is off, a step-up here would fall back to
+the IdP re-auth this session already is, so it does not run."""
 from __future__ import annotations
 
 import asyncio
@@ -80,7 +97,7 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import Route
 
 from .. import approval_list_html, approval_window_html, org_identity, web_shell, webauthn_stepup
-from ..approvals import BATCH_RESULTS
+from ..approvals import BATCH_RESULTS, CONFIRM_RESULTS
 from ..org_identity import IdpConfig
 from ..principal import Principal
 from ..step_up_config import StepUpConfig
@@ -428,8 +445,45 @@ def build_routes(
         if not isinstance(result, str):
             result = str(int(result))
 
+        approval = registry.get(approval_id, principal_id=principal.id)
+        # The self-approval review's Phase 4, org mode's half: a confirm
+        # dialog raised by an MCP bridge proposal (gate.propose_policy_change
+        # / propose_rule_change) has no card in front of it, so confirming it
+        # is the whole gate on a rule that changes what auto-accepts for this
+        # principal from here on. ``_STEP_UP_RESULTS`` does not cover
+        # ``confirm``, for a reason that holds of every *other* confirm dialog
+        # -- see approvals.PendingApprovalRegistry.register_confirm and
+        # web/routes_approvals.py's module docstring, whose local-mode
+        # counterpart of this block carries the full reasoning. Gated on
+        # ``require_passkey`` rather than ``scope``, exactly as
+        # web/routes_settings.py's own ``_needs_step_up``; where that is off,
+        # org mode's IdP-reauth fallback is what a step-up would fall back to
+        # anyway, which is the session that is already here.
+        sensitive_confirm = (
+            approval is not None
+            and approval.sensitive
+            and result == CONFIRM_RESULTS[0]
+            and step_up.enabled
+            and step_up.require_passkey
+        )
+        if sensitive_confirm:
+            assertion = payload.get("webauthn_assertion")
+            if not isinstance(assertion, dict):
+                return _step_up_response(principal, approval_id, result=result, choice=choice)
+            expected_fp = webauthn_stepup.decision_fingerprint(
+                approval_id=approval_id, principal_id=principal.id, result=result, choice=choice,
+            )
+            try:
+                step_up_decide.verify_step_up(
+                    principal, rp_id=step_up.rp_id, origin=origin, subject_key=approval_id,
+                    fingerprint=expected_fp, assertion=assertion, challenges=challenges,
+                )
+            except step_up_decide.StepUpExpired:
+                return JSONResponse({"error": "step_up_expired"}, status_code=400)
+            except WebAuthnError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=401)
+
         if step_up.enabled and result in _STEP_UP_RESULTS:
-            approval = registry.get(approval_id, principal_id=principal.id)
             if approval is not None and webauthn_stepup.is_step_up_required(
                 gate_kind=approval.gate_kind, pii_detected=approval.pii_detected, scope=step_up.scope,
             ):

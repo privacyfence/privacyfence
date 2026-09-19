@@ -37,6 +37,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **Confirming an auto-accept rule an AI client asked for now needs the same proof as approving
+  one of its writes.** PrivacyFence has two kinds of confirmation dialog and they had been treated
+  as one. The kind that follows an **Always allow** click is a second step inside a decision whose
+  own approval card already demanded a passkey and an attributable session, so asking again there
+  would be a second tap for one decision. The kind an MCP client raises —
+  `privacyfence_propose_policy_change`, and the deprecated
+  `privacyfence_propose_auto_accept_rule_change` — has no card
+  in front of it: the dialog *is* the whole gate, and what it creates is a rule deciding what gets
+  approved without asking from then on. Both were exempt from the decide-time checks, because those
+  are scoped to a result named `accept`. So on the strongest configuration PrivacyFence offers —
+  privilege-separated, `step_up.enabled`, `require_passkey` on, a passkey enrolled — a local
+  process holding an unattested session could ask for a rule over MCP and then confirm its own
+  dialog, with no passkey and no human. Those dialogs are now marked as what they are, and
+  confirming one takes exactly what changing the same setting from the Settings page already takes:
+  a session PrivacyFence can attribute to a person, and a passkey wherever `require_passkey` is on
+  — regardless of `step_up.scope`, since a rule is not a read or a write but the thing that decides
+  which of those you get asked about at all. Org mode gets the passkey half on the same condition
+  (it has no session provenance to check — every session there is an IdP authentication).
+  **Cancelling is ungated**, for the same reason denying always has been. Found reviewing the
+  policy v2 redesign's two new meta-tools against the rest of the self-approval work, before
+  they ship together.
 - **A packaged install now requires a passkey before it releases anything, out of the box.**
   `step_up.enabled` and `step_up.require_passkey` both default to on for the DMG/`.pkg`, the
   Windows installer and the `.deb` — the same builds ADR 0003 already makes privilege-separated or
