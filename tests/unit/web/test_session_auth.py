@@ -299,17 +299,22 @@ class TestUnauthorizedHtml:
         assert "MINT" in body
         assert "/api/bootstrap" not in body
 
-    def test_mentions_asking_a_connected_mcp_client(self):
+    def test_does_not_send_the_reader_back_to_their_ai_client(self):
+        """Issue #423 part 3 made "ask Claude" the lead here, because P10
+        had removed the menu bar and the tool it named was the only way back
+        in from inside a conversation. The self-approval plan's Phase 2
+        retired that tool -- a live session is not something to hand the
+        party it governs -- so the page must not still be recommending it."""
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
-        assert "privacyfence_get_sign_in_link" in body
+        assert "privacyfence_get_sign_in_link" not in body
+        assert "companion" in body
+        # The lead is the companion, ahead of the "why you're here" line, in
+        # the slot "ask Claude" used to hold.
+        assert body.index("companion") < body.index("expired, was already used")
 
-    def test_asking_claude_leads_rather_than_sitting_a_paragraph_down(self):
-        # Issue #423 part 3: P10 removed the menu bar, so "ask Claude to
-        # reopen this" is the intended recovery path, not a fallback --
-        # this regression-tests that it's the first thing the page says,
-        # ahead of the "why you're here" explanation.
+    def test_offers_the_break_glass_command_for_a_reader_with_no_companion(self):
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
-        assert body.index("privacyfence_get_sign_in_link") < body.index("expired, was already used")
+        assert "privacyfence-app --print-sign-in-link" in body
 
     def test_shows_the_posix_path_and_a_bash_command_by_default(self, monkeypatch):
         # PurePosixPath, not Path -- a real Path constructed from a POSIX-

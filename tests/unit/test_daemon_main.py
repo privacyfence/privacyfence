@@ -1498,18 +1498,21 @@ class TestMaybeStartWebServer:
         # No second push into the dispatcher -- it polls connector_host.connectors.
         assert list(result.mcp_dispatcher.connectors) == [fake_connector.name]
 
-    def test_mcp_dispatcher_gets_a_working_sign_in_link_provider(self, monkeypatch, tmp_path):
-        # privacyfence_get_sign_in_link's own wiring: McpDispatcher.
-        # set_bootstrap_link_provider(server.mint_bootstrap_url), done here
-        # since the dispatcher exists before the WebServer it needs does.
+    def test_the_dispatcher_has_no_way_to_mint_a_sign_in_link(self, monkeypatch, tmp_path):
+        """The self-approval plan's Phase 2 retired
+        ``privacyfence_get_sign_in_link``, and with it the
+        ``set_bootstrap_link_provider`` wiring this call site used to do --
+        the seam that handed the /mcp dispatcher a way to mint a live
+        session. Asserted here, where the wiring lived, so reintroducing it
+        by accident fails rather than passes quietly."""
         self._no_bind(monkeypatch, tmp_path)
 
         result = daemon_main._maybe_start_web_server(
             {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
         )
 
-        link = result.mcp_dispatcher.get_sign_in_link("approvals")
-        assert link["url"].startswith(f"{result.base_url}/approvals?bootstrap=")
+        assert not hasattr(result.mcp_dispatcher, "get_sign_in_link")
+        assert not hasattr(result.mcp_dispatcher, "set_bootstrap_link_provider")
 
     def test_mcp_dispatcher_defaults_to_local_mode(self, monkeypatch, tmp_path):
         # privacyfence_status's own mode field (issue #396 Phase 2) --

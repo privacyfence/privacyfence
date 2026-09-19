@@ -345,38 +345,29 @@ def unauthorized_html(request: Request) -> Response:
     scrubs the code to ``bootstrap=[REDACTED]`` before the line ever
     reaches a file or a terminal -- restarting PrivacyFence changed nothing
     about that, since the fresh line from the new process is redacted the
-    same way. The three things that actually work, in the order most
-    readers can actually use them: asking a connected MCP client (e.g.
-    Claude -- installed alongside PrivacyFence per README.md's Quick start,
-    so this is available even on a first run, before Settings has ever been
-    opened) to call ``privacyfence_get_sign_in_link`` (web/mcp_tools.py),
-    which mints one and hands it straight back in the conversation -- no
-    terminal at all -- is also the one this page now leads with (issue
-    #423's proposed-fix part 3): P10 removed the menu bar, so "ask Claude"
-    is the intended recovery path on a headless install, not a fallback
-    buried under the "why you're here" line; the discovery file
-    ``web/server.py``'s
-    ``mint_bootstrap_url()`` writes outside the logging pipeline every time
-    PrivacyFence (re)starts, for a reader who'd rather grab it themselves;
-    and minting a fresh code on demand through the control channel (#428
-    Phase 2, ``web/control_channel.py``) without restarting anything, for a
-    reader with neither -- this page spells out the actual command for that
-    last one rather than just naming the channel, since a reader who's
-    landed here from a dead link and has no MCP client connected yet is
-    exactly the audience that finding this self-explanatory matters most
-    for.
+    same way.
 
-    #428 Phase 3 (ADR 0002) adds a fifth path, and the page now leads with
-    it ahead of "ask Claude": PrivacyFence's optional companion app (a
-    tray/menu-bar icon on macOS/Windows, an Applications-menu entry on
-    Linux) mints and opens a fresh link itself, from its own Open Approvals/
-    Open Settings items -- no MCP client, no terminal. Nothing installs or
-    autostarts it yet, though (that's #428 Phase 4), so this page can't
-    assume it's running and still lists the other four. ``request`` is
-    otherwise unused here: unlike the old bearer-header
-    ``curl`` command, the control channel is a local socket/pipe, not
-    another HTTP endpoint on this page's own origin, so there's no origin
-    left to splice into the recovery command.
+    This page also used to lead with "ask Claude", which called
+    ``privacyfence_get_sign_in_link`` and handed the reader a link inside
+    the conversation. That tool is retired (the self-approval plan's Phase
+    2): it handed a live session credential to the party the credential
+    governs, and its own justification -- a headless daemon with an optional
+    companion -- expired when ADR 0003 made the companion mandatory and
+    autostarted on all three platforms.
+
+    So the page leads with the companion (#428 Phase 3, ADR 0002), which is
+    also the only route to a session that may approve rather than merely
+    view (``PROVENANCE_HUMAN`` above), and offers ``privacyfence-app
+    --print-sign-in-link`` for a reader whose companion menu is out of
+    reach. It still names the discovery file ``web/server.py`` writes
+    outside the logging pipeline, and still spells out the control
+    channel's own raw command (#428 Phase 2, ``web/control_channel.py``)
+    last, for a reader who has neither -- that one mints an unattested
+    code, which is enough to see what is waiting. ``request`` is otherwise
+    unused here: unlike the old bearer-header ``curl`` command, the control
+    channel is a local socket/pipe, not another HTTP endpoint on this
+    page's own origin, so there's no origin left to splice into the
+    recovery command.
 
     The discovery-file path and the recovery command are both platform-
     dependent -- ``paths.data_dir()`` resolves to the real, live directory
@@ -426,15 +417,16 @@ def unauthorized_html(request: Request) -> Response:
         command = f"printf 'MINT\\n' | nc -U '{sock_path}'"
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
-        "<p><strong>Not authorized.</strong> If PrivacyFence's companion app is running -- a "
+        "<p><strong>Not authorized.</strong> Open PrivacyFence's companion app -- a "
         "tray/menu-bar icon on macOS/Windows, or its entry in your Applications menu on Linux -- "
-        "use its Open Approvals (or Open Settings) item to get back in directly, no MCP client or "
-        "terminal needed. " + _companion_availability_sentence() + "if that's not an option:</p>"
-        "<p>Ask Claude (or any other MCP client already "
-        "connected to PrivacyFence) to get you back in — it can call the "
-        "<code>privacyfence_get_sign_in_link</code> tool and hand you a fresh sign-in link "
-        "directly, no terminal needed. That's the fastest way back in on a headless "
-        "install, so it leads here.</p>"
+        "and use its Open Approvals (or Open Settings) item to get back in. "
+        + _companion_availability_sentence() +
+        "It is also the only way back to a session that can <em>approve</em> what is waiting: a "
+        "link from anywhere else signs you in to look, not to release.</p>"
+        "<p>No companion you can reach right now? From a terminal on this machine, run "
+        "<code>privacyfence-app --print-sign-in-link</code> and open the link it prints. Your AI "
+        "client cannot do this for you: PrivacyFence no longer issues a sign-in link to the "
+        "program it governs.</p>"
         "<p>This link has expired, was already used, or your session timed out.</p>"
         "<p>Prefer to grab it yourself? PrivacyFence just wrote the current one to "
         f"<code>{approvals_url_path}</code> (or <code>settings_url</code> for "

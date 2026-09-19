@@ -37,7 +37,6 @@ from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.web import mcp_tools
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.routes_mcp import build_mcp_asgi_app, mcp_lifespan
-from privacyfence.web.session_auth import BOOTSTRAP_TTL_SECONDS
 
 
 # --------------------------------------------------------------------------- #
@@ -216,16 +215,22 @@ class TestMetaToolManifest:
         assert schema["required"] == ["approval_ids"]
         assert schema["properties"]["approval_ids"]["type"] == "array"
 
-    def test_get_sign_in_link_page_is_an_approvals_settings_or_connectors_enum(self):
-        schema = mcp_tools.GET_SIGN_IN_LINK_TOOL.inputSchema
-        assert schema["properties"]["page"]["enum"] == ["approvals", "settings", "connectors"]
-        assert schema["properties"]["page"]["default"] == "approvals"
-        assert schema["required"] == ["reason"]  # page itself stays optional, defaulting server-side
+    def test_nothing_on_this_server_mints_a_sign_in_link_any_more(self):
+        """The self-approval plan's Phase 2 retired
+        ``privacyfence_get_sign_in_link``: its own justification ("nothing
+        installs or starts the companion automatically yet") expired when ADR
+        0003 made the companion mandatory on all three platforms, and a live
+        session is not something to hand the party it governs. Asserted
+        against the manifest as a whole rather than by name alone, so a
+        differently-named tool that mints one lands here too."""
+        assert not any("sign_in" in tool.name for tool in mcp_tools.META_TOOLS)
+        assert not hasattr(mcp_tools, "GET_SIGN_IN_LINK_TOOL")
+        assert not hasattr(mcp_tools, "sign_in_link_result")
 
     def test_status_tool_requires_only_reason(self):
         # issue #396 Phase 2: the one meta-tool guaranteed to exist even
         # with zero connectors -- no params of its own beyond the shared
-        # audited "reason", same posture as list_rules/get_sign_in_link.
+        # audited "reason", same posture as list_rules.
         schema = mcp_tools.PRIVACYFENCE_STATUS_TOOL.inputSchema
         assert schema["required"] == ["reason"]
         assert set(schema["properties"]) == {"reason"}
@@ -331,54 +336,34 @@ class TestProposeRuleChangeDeniedWhenUnattended:
         assert self._popup_calls == ["Add auto-accept rule 'i_am_sender' to 'gmail.read_message'"]
 
 
-class TestGetSignInLinkOverRealTransport:
-    """End to end through the real /mcp Streamable HTTP transport -- unlike
-    test_mcp_dispatch.py's TestGetSignInLink, this proves routes_mcp.py's
-    own name == mcp_tools.GET_SIGN_IN_LINK_TOOL.name dispatch branch is
-    actually wired up, not just the dispatcher method it delegates to."""
+class TestStatusOverRealTransport:
+    """End to end through the real /mcp Streamable HTTP transport -- what the
+    retired sign-in-link tool's own transport test used to cover here, now
+    asserting the thing that replaced it: an un-onboarded install tells the
+    model to send the human to the companion, and hands over no credential."""
 
-    async def test_no_provider_wired_is_a_tool_error(self):
-        dispatcher = _dispatcher({})  # bootstrap-link provider never set -- org-mode-like
+    async def test_an_un_onboarded_install_points_at_the_companion(self):
+        dispatcher = _dispatcher({})
+        dispatcher.set_connectors_state_provider(lambda: [
+            {"name": "gmail", "enabled": True, "authenticated": False, "blocked_by": "not_authenticated"},
+        ])
         async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("privacyfence_status", {"reason": "checking setup"})
+
+        assert result.isError is False
+        assert result.structuredContent["next_step"] == "open_privacyfence_companion"
+        assert result.structuredContent["sign_in_url"] is None
+
+    async def test_the_retired_tool_is_not_callable_at_all(self):
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            listed = await session.list_tools()
             result = await session.call_tool(
                 "privacyfence_get_sign_in_link", {"page": "approvals", "reason": "locked out"},
             )
+
+        assert not any(t.name == "privacyfence_get_sign_in_link" for t in listed.tools)
         assert result.isError is True
-        assert "organization mode" in result.content[0].text
-
-    async def test_wired_provider_returns_the_url_as_structured_content(self):
-        dispatcher = _dispatcher({})
-        dispatcher.set_bootstrap_link_provider(lambda path: f"http://localhost:8765{path}?bootstrap=abc123")
-        async with _connected_session(dispatcher) as session:
-            result = await session.call_tool(
-                "privacyfence_get_sign_in_link", {"page": "settings", "reason": "need to check a rule"},
-            )
-        assert result.isError is False
-        assert result.structuredContent["url"] == "http://localhost:8765/settings?bootstrap=abc123"
-
-    async def test_page_defaults_to_approvals_when_omitted(self):
-        dispatcher = _dispatcher({})
-        dispatcher.set_bootstrap_link_provider(lambda path: f"http://localhost:8765{path}?bootstrap=abc123")
-        async with _connected_session(dispatcher) as session:
-            result = await session.call_tool("privacyfence_get_sign_in_link", {"reason": "locked out"})
-        assert result.structuredContent["url"] == "http://localhost:8765/approvals?bootstrap=abc123"
-
-    async def test_text_content_is_a_clickable_markdown_link_not_raw_json(self):
-        # Every other meta tool's text content is a json.dumps() blob (see
-        # to_call_tool_result) -- fine for a client that just reads
-        # structuredContent, but this tool exists specifically to hand a
-        # human a link to click, so it gets a markdown link instead of JSON
-        # a human would otherwise have to copy the url out of by hand. The
-        # expiry lives in the same string as the link (not a separate
-        # sentence) so it still reads correctly if only the link text
-        # survives into a screenshot or a shared transcript.
-        dispatcher = _dispatcher({})
-        dispatcher.set_bootstrap_link_provider(lambda path: f"http://localhost:8765{path}?bootstrap=abc123")
-        async with _connected_session(dispatcher) as session:
-            result = await session.call_tool("privacyfence_get_sign_in_link", {"reason": "locked out"})
-        url = "http://localhost:8765/approvals?bootstrap=abc123"
-        minutes = BOOTSTRAP_TTL_SECONDS // 60
-        assert result.content[0].text == f"[Sign in to PrivacyFence]({url}) — one-time link, expires in {minutes} minutes"
 
 
 class TestListAutoAcceptRulesDisclosureIsAudited:

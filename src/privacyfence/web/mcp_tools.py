@@ -13,12 +13,18 @@ friends) -- not sourced from any connector's manifest, ported field-for-field
 from bridge/src/tools.ts's ``registerMetaTools`` (same names, same
 descriptions, same input shapes) since routes_mcp.py replaces the bridge as
 the thing serving them, not what they are (§8.1: "the other three move into
-web/routes_mcp.py against the connector registry directly"). Two exceptions
-have no bridge-era counterpart, both added once P10 (web/server.py's own
-module docstring) had left local mode's web UI headless with no menu bar
-link of its own to fall back on: ``GET_SIGN_IN_LINK_TOOL`` and, later
-(issue #396), ``PRIVACYFENCE_STATUS_TOOL`` -- the one meta-tool that tells
-a client *why* it might need that link in the first place.
+web/routes_mcp.py against the connector registry directly"). One exception has no bridge-era
+counterpart: ``PRIVACYFENCE_STATUS_TOOL`` (issue #396), the meta-tool that
+tells a client an install is not set up yet. It had a companion --
+``GET_SIGN_IN_LINK_TOOL``, added once P10 had left local mode's web UI
+headless with no menu bar link of its own -- which minted a live sign-in
+link and handed it to the agent. The self-approval plan's Phase 2 retired
+it: its own justification ("nothing installs or starts the companion
+automatically yet") expired when ADR 0003 made the companion mandatory on
+all three platforms, and a session is no longer something to hand the party
+it governs (web/session_auth.py's ``PROVENANCE_*``). What is left in its
+place is the companion itself, and ``privacyfence-app
+--print-sign-in-link`` for a human whose companion menu is out of reach.
 """
 from __future__ import annotations
 
@@ -28,7 +34,6 @@ from typing import Any
 from mcp import types
 
 from ..connector import ToolSpec
-from .session_auth import BOOTSTRAP_TTL_SECONDS
 
 # Same rationale as bridge/src/tools.ts's UNIFORM_READ_ONLY_ANNOTATIONS: MCP
 # tool annotations are UI hints, not a security boundary (the spec says so
@@ -100,29 +105,6 @@ def to_call_tool_result(value: Any) -> types.CallToolResult:
     if isinstance(value, dict):
         return types.CallToolResult(content=content, structuredContent=value)
     return types.CallToolResult(content=content)
-
-
-def sign_in_link_result(value: dict[str, str]) -> types.CallToolResult:
-    """privacyfence_get_sign_in_link's own result shape -- everything else
-    goes through the generic ``to_call_tool_result`` above, whose text
-    content is a raw ``json.dumps({"url": ...})`` blob a human has to pick
-    the link out of by hand. This tool exists specifically to hand a human a
-    link to click, so its text content is a single markdown link instead:
-    any client that renders tool text as markdown (most chat clients do)
-    shows it as something clickable rather than JSON to copy-paste from. The
-    link text itself names the expiry (``BootstrapStore``'s TTL, session_auth.py)
-    rather than a second, separate sentence -- one string a human can still
-    act on correctly if only the link text survives into a screenshot or a
-    shared transcript, instead of a bare URL with no context once separated
-    from an explanation next to it. ``structuredContent`` is unchanged --
-    still the plain ``{"url": ...}`` dict, for a client that reads that
-    instead of the text."""
-    url = value["url"]
-    minutes = BOOTSTRAP_TTL_SECONDS // 60
-    text = f"[Sign in to PrivacyFence]({url}) — one-time link, expires in {minutes} minutes"
-    return types.CallToolResult(
-        content=[types.TextContent(type="text", text=text)], structuredContent=value,
-    )
 
 
 def error_result(message: str) -> types.CallToolResult:
@@ -297,39 +279,6 @@ AWAIT_APPROVAL_TOOL = types.Tool(
     annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True),
 )
 
-GET_SIGN_IN_LINK_TOOL = types.Tool(
-    name="privacyfence_get_sign_in_link",
-    description=(
-        "Get a fresh, single-use sign-in link for PrivacyFence's own web UI (Approvals, "
-        "Settings, or Settings' Connectors section directly) -- for a human who's locked out of "
-        "it and asked you for a link. This process itself has no UI of its own beyond the web "
-        "surfaces this mints a link to (local mode is otherwise headless), and its startup log "
-        "line for this link is always redacted for security, so that's never usable either. If "
-        "PrivacyFence's optional companion app happens to be running (a tray/menu-bar icon on "
-        "macOS/Windows, an Applications-menu entry on Linux -- nothing installs or starts it "
-        "automatically yet), its own Open Approvals/Open Settings items do the same thing without "
-        "you. Returns {url}: open it in a "
-        "browser on this same machine within a few minutes, before someone else does -- it's "
-        "consumed by the first visit, successful or not, and expires on its own shortly after if "
-        "unused. This does not open anything itself; hand the url back to the human so *they* "
-        "open it, since this only works from the machine PrivacyFence is actually running on. "
-        "Unavailable (errors) in organization mode, which signs in through its own IdP-backed "
-        "/login instead. "
-        "reason: one sentence on why this link is needed right now -- logged, self-reported, "
-        "unverified, same as every other meta tool's reason param, since this hands out a "
-        "working (if short-lived) credential for a human-facing surface."
-    ),
-    inputSchema={
-        "type": "object",
-        "properties": {
-            "page": {"type": "string", "enum": ["approvals", "settings", "connectors"], "default": "approvals"},
-            "reason": {"type": "string"},
-        },
-        "required": ["reason"],
-    },
-    annotations=types.ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=False),
-)
-
 PRIVACYFENCE_STATUS_TOOL = types.Tool(
     name="privacyfence_status",
     description=(
@@ -346,10 +295,12 @@ PRIVACYFENCE_STATUS_TOOL = types.Tool(
         "token expired -- or a short redacted reason); setup_complete is true once at least one "
         "connector is authenticated; next_step and message tell the model what to do next in "
         "plain language -- relay message to the human as-is when setup isn't complete. This tool "
-        "never mints a sign-in credential itself, so sign_in_url is always null here. In local "
-        "mode when un-onboarded, next_step is 'ask_for_sign_in_link' -- offer the human a "
-        "one-time PrivacyFence sign-in link, and only if they say yes, call "
-        "privacyfence_get_sign_in_link with page='connectors' to actually mint and share one; in "
+        "never mints a sign-in credential itself, and no tool on this server does any more, so "
+        "sign_in_url is always null here. In local mode when un-onboarded, next_step is "
+        "'open_privacyfence_companion' -- tell the human to open PrivacyFence's companion app "
+        "(the menu-bar/tray icon on macOS and Windows, the PrivacyFence entry in the "
+        "applications menu on Linux) and choose Open Settings; you cannot do this for them, and "
+        "there is no link for you to hand them. In "
         "org mode it's 'contact_your_administrator' -- org mode signs in through its own IdP and "
         "has no local link to offer at all. Makes no external API call and has no side effects "
         "other than its own audit entry. reason: one sentence on why this is being checked right "
@@ -381,7 +332,6 @@ META_TOOLS: tuple[types.Tool, ...] = (
     BEGIN_UNATTENDED_SESSION_TOOL,
     END_UNATTENDED_SESSION_TOOL,
     AWAIT_APPROVAL_TOOL,
-    GET_SIGN_IN_LINK_TOOL,
     PRIVACYFENCE_STATUS_TOOL,
 )
 META_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in META_TOOLS)

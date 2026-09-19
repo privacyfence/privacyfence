@@ -71,10 +71,11 @@ class McpDispatcher:
     ) -> None:
         self._connectors_provider = connectors_provider
         # "local" or "org" -- privacyfence_status's own mode field, and what
-        # decides whether it even attempts to mint a sign-in link (org mode
-        # never has one -- see get_sign_in_link's own docstring). daemon_main.py
-        # passes "org" from _start_org_web_server; every other call site (and
-        # every existing test) keeps the local-mode default.
+        # decides which next_step an un-onboarded install reports (open the
+        # companion, or ask an administrator -- org mode has no local sign-in
+        # path at all). daemon_main.py passes "org" from
+        # _start_org_web_server; every other call site (and every existing
+        # test) keeps the local-mode default.
         self._mode = mode
         self._inflight: dict[str, tuple[Any, float]] = {}
         self._last_write_at: dict[tuple[str, str], float] = {}
@@ -87,17 +88,6 @@ class McpDispatcher:
         # in which case every id this tool is asked about is simply
         # "unknown".
         self._registry = registry
-        # privacyfence_get_sign_in_link's own callback -- daemon_main.py
-        # wires this to WebServer.mint_bootstrap_url once the server that
-        # method belongs to actually exists (it's built after this
-        # dispatcher is), same two-step wiring set_unattended_changed_
-        # listener below already uses for a callback the constructor can't
-        # supply yet either. Stays None in org mode (no local-mode
-        # WebServer to wire it to at all) and in a test that never calls
-        # the setter -- get_sign_in_link's own docstring covers both.
-        # privacyfence_status (below) reuses this same seam rather than a
-        # second one of its own.
-        self._bootstrap_link_provider: Callable[[str], str | None] | None = None
         # privacyfence_status's own per-connector view -- {name, enabled,
         # authenticated, blocked_by} rows, reusing SettingsController's
         # already-tracked connector/config/failure state (issue #396 Phase
@@ -129,25 +119,18 @@ class McpDispatcher:
     def set_unattended_changed_listener(self, callback: Callable[[], None] | None) -> None:
         self._unattended_changed_listener = callback
 
-    def set_bootstrap_link_provider(self, callback: Callable[[str], str | None] | None) -> None:
-        """``callback`` is ``WebServer.mint_bootstrap_url`` in production --
-        typed narrowly as ``str -> str | None`` here rather than importing
-        web/server.py (which would be a circular import: server.py already
-        imports this module's ``McpDispatcher``)."""
-        self._bootstrap_link_provider = callback
-
     def set_connectors_state_provider(self, callback: Callable[[], list[dict[str, Any]]] | None) -> None:
         """``callback`` is ``SettingsController.status_connectors`` in
-        production -- typed narrowly as a bare ``Callable`` here, same as
-        ``set_bootstrap_link_provider`` above, rather than importing
-        settings_controller.py just for the annotation."""
+        production -- typed narrowly as a bare ``Callable`` here rather than
+        importing settings_controller.py just for the annotation, which would
+        be a circular import: that module reaches this one."""
         self._connectors_state_provider = callback
 
     def set_tools_changed_broadcaster(self, callback: Callable[[], None] | None) -> None:
         """``callback`` is ``build_mcp_server``'s own local
         ``_broadcast_tools_changed`` closure (web/routes_mcp.py) --
         untyped/unimported here for the same circular-import reason
-        ``set_bootstrap_link_provider`` above gives, and because that
+        ``set_connectors_state_provider`` above gives, and because that
         closure's own state (the live ``ServerSession`` per MCP session)
         has no business living on this dispatcher."""
         self._tools_changed_broadcaster = callback
@@ -365,59 +348,6 @@ class McpDispatcher:
             logger.warning("Audit log write failed for list_rules: %s", exc)
         return result
 
-    # issue #396 Part C: privacyfence_get_sign_in_link's ``page`` values map
-    # onto real paths rather than a bare f"/{page}" interpolation, since
-    # "connectors" isn't a route of its own -- it's Settings landing
-    # directly on its Connectors section (see settings_window_html.py's
-    # ``ui.section`` and web/routes_settings.py's ``/settings/connectors``
-    # route).
-    _SIGN_IN_LINK_PAGES: dict[str, str] = {
-        "approvals": "/approvals", "settings": "/settings", "connectors": "/settings/connectors",
-    }
-
-    def get_sign_in_link(self, page: str, claude_reason: str = "") -> dict:
-        """privacyfence_get_sign_in_link's handler: mint a fresh SEC-06
-        bootstrap link for local mode's own web UI, via whatever
-        ``set_bootstrap_link_provider`` was last wired to -- unset (org
-        mode, or a test that never wires one) raises the same
-        "not available in this configuration" ``ValueError`` posture
-        ``begin_unattended_session`` already takes for a disabled feature,
-        rather than returning a link that doesn't work."""
-        if self._bootstrap_link_provider is None:
-            raise ValueError(
-                "No sign-in link is available in this configuration -- organization mode signs "
-                "in through its own /login page instead of a one-time bootstrap link."
-            )
-        page = page or "approvals"
-        path = self._SIGN_IN_LINK_PAGES.get(page)
-        if path is None:
-            raise ValueError(f"page must be one of {sorted(self._SIGN_IN_LINK_PAGES)}, got {page!r}")
-        url = self._bootstrap_link_provider(path)
-        if url is None:
-            raise ValueError(
-                "No sign-in link is available in this configuration -- organization mode signs "
-                "in through its own /login page instead of a one-time bootstrap link."
-            )
-        try:
-            get_audit_logger().record(AuditEntry(
-                timestamp=datetime.now(timezone.utc).isoformat(),
-                week=current_week(),
-                request_id=uuid.uuid4().hex[:12],
-                connector="",
-                tool="",
-                tool_name="",
-                summary=f"Issued a one-time sign-in link for {path}",
-                sender="",
-                decision="sign_in_link_issued",
-                auto_accept_rule="",
-                latency_seconds=0.0,
-                pii_detected=False,
-                claude_reason=claude_reason,
-            ))
-        except Exception as exc:
-            logger.warning("Audit log write failed for get_sign_in_link: %s", exc)
-        return {"url": url}
-
     def status(self, claude_reason: str = "") -> dict:
         """privacyfence_status's handler (issue #396 Phase 2): the one
         meta-tool guaranteed to answer even when ``connectors == []`` makes
@@ -459,16 +389,23 @@ class McpDispatcher:
             self._audit_status_check("status_checked", claude_reason)
             return result
 
-        result["next_step"] = "ask_for_sign_in_link"
+        # The self-approval plan's Phase 2 repointed this at the companion.
+        # It used to read "ask_for_sign_in_link", which told the model to
+        # offer to mint a live session credential and hand it over -- the
+        # tool that did so is retired (web/mcp_tools.py's own module
+        # docstring), and what is left for an un-onboarded install is the
+        # one affordance that does not route through this process at all.
+        result["next_step"] = "open_privacyfence_companion"
         result["sign_in_url"] = None
         result["message"] = (
             "PrivacyFence is running, but nothing is authenticated yet -- an empty or partial "
-            "tool list means \"not set up\", not \"nothing to do here\". Offer the human a "
-            "one-time PrivacyFence sign-in link; if they say yes, call "
-            "privacyfence_get_sign_in_link with page=\"connectors\" to mint one and share it, so "
-            "they can open Settings and authenticate at least one connector (Gmail, Slack, etc.). "
-            "PrivacyFence-governed tools stay unavailable until they do. Don't mint a link "
-            "unless a human actually asks for one."
+            "tool list means \"not set up\", not \"nothing to do here\". Ask the human to open "
+            "PrivacyFence's companion app -- the menu-bar icon on macOS, the tray icon on "
+            "Windows, the PrivacyFence entry in the applications menu on Linux -- and choose "
+            "Open Settings, then authenticate at least one connector (Gmail, Slack, etc.). "
+            "There is no link for you to hand them: a sign-in link is exactly the credential "
+            "that governs this process, so PrivacyFence no longer issues one to it. "
+            "PrivacyFence-governed tools stay unavailable until they finish."
         )
         self._audit_status_check("status_checked", claude_reason)
         return result
@@ -490,12 +427,13 @@ class McpDispatcher:
     @staticmethod
     def _audit_status_check(decision: str, claude_reason: str = "") -> None:
         # ``decision`` is always "status_checked" -- privacyfence_status
-        # never mints a sign-in link itself (issue #396 threat-model
-        # follow-up: that credential is only ever issued because a human
-        # actually asked for one, via privacyfence_get_sign_in_link, which
-        # records its own "sign_in_link_issued" entry). Kept as a parameter
-        # rather than hardcoded so a future distinct status-only decision
-        # doesn't need this call site touched again.
+        # never mints a sign-in link itself, and since the self-approval
+        # plan's Phase 2 retired privacyfence_get_sign_in_link, nothing
+        # reachable over /mcp does (issue #396's own threat-model follow-up
+        # asked for the narrower version of this: that the credential only
+        # be issued because a human asked). Kept as a parameter rather than
+        # hardcoded so a future distinct status-only decision doesn't need
+        # this call site touched again.
         try:
             get_audit_logger().record(AuditEntry(
                 timestamp=datetime.now(timezone.utc).isoformat(),

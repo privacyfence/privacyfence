@@ -744,8 +744,7 @@ def _maybe_start_web_server(
             # constructor has no visibility into.
             controller.wire_unattended_listener(mcp_dispatcher)
             # privacyfence_status's own per-connector view (issue #396
-            # Phase 2) -- same reasoning as set_bootstrap_link_provider
-            # below, a step ahead: SettingsController already tracks
+            # Phase 2): SettingsController already tracks
             # exactly the enabled/authenticated/blocked_by state that tool
             # needs (Phase 1), so this dispatcher just asks for it rather
             # than re-deriving it from the built connectors alone.
@@ -830,12 +829,6 @@ def _maybe_start_web_server(
             "wasn't done deliberately, treat this install as compromised (see "
             "docs/security-and-compliance.md's Local-mode trust boundary section)",
         )
-    if mcp_dispatcher is not None:
-        # privacyfence_get_sign_in_link's own callback -- wired here rather
-        # than at McpDispatcher construction above because it needs this
-        # WebServer, which doesn't exist yet at that point. See
-        # McpDispatcher.set_bootstrap_link_provider's own docstring.
-        mcp_dispatcher.set_bootstrap_link_provider(server.mint_bootstrap_url)
     # SEC-06: each of
     # these is a fresh, single-use bootstrap link, not a persistent secret --
     # see WebServer.mint_bootstrap_url()'s own docstring. The %s below always

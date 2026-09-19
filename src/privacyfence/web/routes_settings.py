@@ -3,10 +3,10 @@
 web_shell.wrap() so it reads as the same application as ``/approvals``;
 ``GET /settings/connectors`` serves the identical document with its
 Connectors section pre-selected server-side (issue #396 Part C -- the
-first-run destination privacyfence_status and
-privacyfence_get_sign_in_link(page="connectors") both mint a bootstrap link
-to, since Connectors is the screen that actually unblocks an un-onboarded
-install);
+first-run destination privacyfence_status points an un-onboarded install's
+human at, since Connectors is the screen that actually unblocks one; it is
+reached through the companion's Open Settings now that the sign-in-link tool
+that used to mint a link straight to it is retired);
 ``POST /api/settings/{action}`` is the mechanical two-thirds of
 SettingsController's ~30 actions, dispatched through an **explicit
 allowlist** rather than the native dispatcher's bare
@@ -465,9 +465,9 @@ def build_routes(
         # section survives web/server.py's _BootstrapMiddleware, which
         # redirects a consumed ?bootstrap= code to `request.url.path` with
         # its query string stripped but the path itself untouched -- see
-        # that middleware's own docstring. This is what privacyfence_status
-        # and privacyfence_get_sign_in_link(page="connectors") both mint a
-        # link to while an install is un-onboarded.
+        # that middleware's own docstring. This is the screen an
+        # un-onboarded install's human is sent to -- by privacyfence_status's
+        # own message, and by the companion's Open Settings item.
         return await _render_settings_page(request, initial_section="connectors")
 
     def _check_mutation(request: Request, payload: Any) -> Response | None:

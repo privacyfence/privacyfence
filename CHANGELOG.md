@@ -53,6 +53,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a companion nor an `authority/` boundary and is unchanged. See
   `docs/security-and-compliance.md`'s "A session is not a human", including what this deliberately
   does *not* claim about telling the companion apart from the agent.
+- **Removed: `privacyfence_get_sign_in_link`.** This meta-tool minted a live sign-in link for
+  PrivacyFence's own approval and settings UI and handed it to the calling AI client — the exact
+  party the credential governs. It existed because a locked-out human had no other way in: the
+  daemon is headless and the companion app was optional, "nothing installs or starts it
+  automatically yet". ADR 0003 made the companion mandatory and autostarted on all three platforms,
+  so that justification expired. `privacyfence_status` now answers an un-onboarded install with
+  `next_step: "open_privacyfence_companion"` and no link to relay, and the not-authorized page
+  leads with the companion rather than "ask Claude". A human whose companion menu is out of reach
+  runs `privacyfence-app --print-sign-in-link` themselves (above). **If your MCP client's tool list
+  is cached, it will drop this tool on its next refresh; nothing else calls it.**
 - **New: `privacyfence-app --print-sign-in-link`, a way back into the web UI that never routes a
   credential through the agent.** Run it yourself, in your own terminal: PrivacyFence's companion
   app confirms it with you before the link it prints is allowed to approve anything. If nothing
