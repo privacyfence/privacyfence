@@ -201,6 +201,15 @@ decision 6 names — so the check is not applied and would buy nothing if it wer
 `StepUpConfig.from_local_config()` already draws when it refuses `require_passkey` on such an
 install.
 
+**Every mint is audited, and the recent ones are shown.** Each bootstrap code this daemon issues
+— and each attested one it refuses — is recorded under its own `sign_in_code_minted` decision
+(`audit_log.py`'s own vocabulary comment), naming which of the paths above asked and whether the
+resulting session can approve. Before this, the only path that wrote an entry was the MCP
+sign-in-link tool, i.e. the sanctioned one, while the two a local process could use silently wrote
+nothing. `/security` lists the most recent of these under **Recent sign-ins**, because an audit
+entry nobody reads is evidence after the fact: the point is that a link you did not ask for is
+visible on the page you already visit to reason about what can approve here.
+
 **What this is not: authentication of the companion.** Companion and agent share an OS user, and
 the companion's own channel lives under `handoff_dir()`, which `paths.py` states outright is
 "deliberately *not* a security boundary" — so a local process running as that user can bind that
@@ -603,7 +612,8 @@ mints the same bootstrap code through the control channel without any tool's hel
 [Local-mode trust boundary](#local-mode-trust-boundary). Retiring the tool removes the *audited,
 sanctioned* path, not the underlying reachability; what makes the remaining paths insufficient is
 provenance and the passkey, not the absence of a tool. Removing it does mean the one path that was
-audited is gone, which the next change in this cycle answers by auditing every mint instead.
+audited is gone — so every mint is audited now, whichever channel asked for it; see
+[A session is not a human](#a-session-is-not-a-human).
 
 ### Local MCP
 

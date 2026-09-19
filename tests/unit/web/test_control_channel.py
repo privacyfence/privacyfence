@@ -988,3 +988,70 @@ class TestOpenAttestedUrl:
         monkeypatch.setattr(cc, "mint_attested_bootstrap_code", lambda *, timeout: "the-code")
         monkeypatch.setattr(cc.webbrowser, "open", lambda url: False)
         assert cc.open_attested_url("/approvals") == (False, "could not open a browser")
+
+
+class TestEveryMintIsAudited:
+    """The self-approval plan's Phase 2: before it, exactly one of the three
+    ways to a session wrote an audit entry -- the MCP sign-in-link tool, now
+    retired -- and the two silent ones were the two anything on this machine
+    could use. The log recorded the sanctioned path and not the reachable
+    ones."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_audit_log(self, tmp_path):
+        from privacyfence.audit_log import init_audit_logger
+
+        init_audit_logger(str(tmp_path / "audit"))
+        self._audit_dir = tmp_path / "audit"
+
+    def _entries(self):
+        import json
+
+        from privacyfence.audit_log import current_week
+
+        path = self._audit_dir / f"{current_week()}.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def _dispatch(self, line: str, **kwargs) -> str:
+        return cc._handle_daemon_request(BootstrapStore(), allow_quit=True, line=line, **kwargs)
+
+    def test_a_bare_mint_is_audited_as_unattested(self):
+        self._dispatch("MINT\n")
+        entries = self._entries()
+        assert [e["decision"] for e in entries] == [cc.SIGN_IN_MINT_DECISION]
+        assert "unattested" in entries[0]["summary"]
+
+    def test_a_companion_mint_is_audited_as_one_that_can_approve(self):
+        self._dispatch("MINT COMPANION n1\n", confirm_companion_mint=lambda nonce: True)
+        assert "can approve" in self._entries()[0]["summary"]
+
+    def test_a_refused_companion_mint_is_audited_too(self):
+        self._dispatch("MINT COMPANION n1\n", confirm_companion_mint=lambda nonce: False)
+        summary = self._entries()[0]["summary"]
+        assert summary.startswith("Refused")
+        assert "did not confirm" in summary
+
+    def test_a_console_mint_names_the_command_that_asked(self):
+        self._dispatch("MINT CONSOLE\n", confirm_console_mint=lambda: (True, ""))
+        assert "--print-sign-in-link" in self._entries()[0]["summary"]
+
+    def test_a_refused_console_mint_carries_the_reason(self):
+        self._dispatch("MINT CONSOLE\n", confirm_console_mint=lambda: (False, "the sign-in link was denied"))
+        assert "the sign-in link was denied" in self._entries()[0]["summary"]
+
+    def test_an_unwritable_audit_log_does_not_cost_the_human_their_link(self, monkeypatch):
+        """A human locked out because the audit log could not be written
+        would be locked out by the thing meant to reassure them."""
+        from privacyfence.audit_log import get_audit_logger
+
+        def _boom(entry):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(get_audit_logger(), "record", _boom)
+
+        reply = self._dispatch("MINT\n")
+
+        assert reply.startswith("OK ")
+        assert self._entries() == []

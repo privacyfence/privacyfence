@@ -53,6 +53,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a companion nor an `authority/` boundary and is unchanged. See
   `docs/security-and-compliance.md`'s "A session is not a human", including what this deliberately
   does *not* claim about telling the companion apart from the agent.
+- **Every sign-in link PrivacyFence issues is now audited, and the recent ones are shown on the
+  Passkeys page.** Exactly one of the three ways to a session used to write an audit entry — the
+  MCP sign-in-link tool, now removed — and the two silent ones were the two anything on this
+  machine could use, so the log recorded the sanctioned path and not the reachable ones. Each mint
+  (and each refused attested mint) is now recorded under its own `sign_in_code_minted` decision,
+  naming which path asked and whether the resulting session can approve. `/security` lists the
+  recent ones, so a link you did not ask for is visible rather than merely inferable.
 - **PrivacyFence no longer writes a live sign-in link to disk.** Every startup used to leave the
   current `?bootstrap=` link in `~/.privacyfence/approvals_url` (and `settings_url`), refreshed on
   every restart, in a directory that is group-shared with your login account by design — so any

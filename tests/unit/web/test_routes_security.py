@@ -1315,3 +1315,101 @@ class TestRegisterVerifyRequiresAnAuthorizedCeremony:
         })
 
         assert "webauthn_enrollment_refused" in _audit_decisions(_fake_data_dir)
+
+
+class TestRecentSignInsSection:
+    """The self-approval plan's Phase 2, second half: every path to a session
+    is audited now, but an audit entry nobody reads is evidence after the
+    fact -- so the recent ones land on the page a human already visits to
+    reason about what can approve on this install."""
+
+    def _mint_entries(self, tmp_path, *summaries):
+        """Writes entries the way web/control_channel.py's ``_audit_mint``
+        does -- through the real audit logger, not by hand into the file, so
+        this breaks if the two ever disagree about the decision value."""
+        from datetime import datetime, timezone
+
+        from privacyfence.audit_log import AuditEntry, get_audit_logger
+        from privacyfence.web.control_channel import SIGN_IN_MINT_DECISION
+
+        for summary in summaries:
+            get_audit_logger().record(AuditEntry(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                week=current_week(), request_id="r1", connector="", tool="", tool_name="",
+                summary=summary, sender="local", decision=SIGN_IN_MINT_DECISION,
+                auto_accept_rule="", latency_seconds=0.0, pii_detected=False,
+            ))
+
+    def _page(self):
+        app, sessions = _local_app()
+        client = TestClient(app, base_url=LOCAL_ISSUER)
+        _signed_in_local(client, sessions)
+        return client.get("/security").text
+
+    def test_a_mint_is_listed_with_what_the_session_it_made_can_do(self, tmp_path):
+        self._mint_entries(
+            tmp_path,
+            "Issued a sign-in code that can approve (confirmed by the companion app)",
+        )
+
+        body = self._page()
+
+        assert "Recent sign-ins" in body
+        assert "Issued a sign-in code that can approve" in body
+        assert "treat this install as compromised" in body
+
+    def test_a_refused_mint_is_listed_too(self, tmp_path):
+        """"Somebody asked for a session that can approve and was turned
+        down" is exactly the line worth seeing on this page."""
+        self._mint_entries(
+            tmp_path,
+            "Refused a sign-in code that can approve: the companion did not confirm it",
+        )
+
+        assert "Refused a sign-in code" in self._page()
+
+    def test_only_the_most_recent_few_are_shown_newest_first(self, tmp_path):
+        self._mint_entries(tmp_path, *[f"Issued a sign-in code number {i}" for i in range(8)])
+
+        body = self._page()
+
+        assert "number 7" in body
+        assert "number 3" in body  # 8 minus the five shown
+        assert "number 2" not in body
+        assert body.index("number 7") < body.index("number 3")
+
+    def test_an_install_that_has_minted_nothing_renders_no_section(self):
+        assert "Recent sign-ins" not in self._page()
+
+    def test_other_audit_entries_are_not_listed_here(self, tmp_path):
+        from datetime import datetime, timezone
+
+        from privacyfence.audit_log import AuditEntry, get_audit_logger
+
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(), week=current_week(), request_id="r1",
+            connector="gmail", tool="gmail_send", tool_name="Send", summary="Email the Q3 numbers",
+            sender="local", decision="approved", auto_accept_rule="", latency_seconds=0.0,
+            pii_detected=False,
+        ))
+
+        body = self._page()
+
+        assert "Recent sign-ins" not in body
+        assert "Q3 numbers" not in body
+
+    def test_an_unreadable_audit_log_costs_the_section_not_the_page(self, monkeypatch, tmp_path):
+        """This is the least important section on the page, and the page is
+        where somebody goes to fix a passkey problem -- failing the whole
+        render because the log could not be read would be a poor trade."""
+        self._mint_entries(tmp_path, "Issued a sign-in code that can approve")
+
+        def _boom(limit=20):
+            raise OSError("audit log unreadable")
+
+        monkeypatch.setattr(rs.get_audit_logger(), "recent_entries", _boom)
+
+        body = self._page()
+
+        assert "Recent sign-ins" not in body
+        assert "Passkeys" in body  # the page itself still renders

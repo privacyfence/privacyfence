@@ -246,6 +246,51 @@ def companion_pipe_name() -> str:
     return companion_pipe_name_for(paths.data_dir())
 
 
+# The decision every mint is recorded under (audit_log.py's own vocabulary
+# comment says why). Named here rather than inlined at the three call sites
+# below so the log and the page that reads it back (web/routes_security.py's
+# "Recent sign-ins") cannot drift apart over a typo.
+SIGN_IN_MINT_DECISION = "sign_in_code_minted"
+
+
+def _audit_mint(summary: str) -> None:
+    """One entry per bootstrap code this daemon issues, and per attested one
+    it refuses. Never allowed to fail the mint it describes -- same posture
+    every other non-critical audit call in this codebase takes (docs/
+    coding-and-testing-guidelines.md §1.4's "non-critical side effects"
+    rule), and more pointedly here than most: a human locked out because the
+    audit log could not be written would be locked out by the thing meant to
+    reassure them.
+
+    Deferred import, like ``QUIT``'s own ``daemon_main`` below: this module
+    is also imported by the companion process (companion.py), which has no
+    business carrying the audit log's machinery, and by tests that construct
+    a channel with no audit logger initialized at all.
+    """
+    try:
+        from datetime import datetime, timezone
+
+        from ..audit_log import AuditEntry, current_week, get_audit_logger
+        from ..principal import LOCAL_PRINCIPAL
+
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=secrets.token_hex(6),
+            connector="",
+            tool="",
+            tool_name="",
+            summary=summary,
+            sender=LOCAL_PRINCIPAL.email or LOCAL_PRINCIPAL.display_name or LOCAL_PRINCIPAL.id,
+            decision=SIGN_IN_MINT_DECISION,
+            auto_accept_rule="",
+            latency_seconds=0.0,
+            pii_detected=False,
+        ))
+    except Exception as exc:  # noqa: BLE001 -- see this function's own docstring
+        logger.warning("Audit log write failed for a sign-in code mint: %s", exc)
+
+
 def _handle_daemon_request(
     bootstrap: BootstrapStore,
     *,
@@ -276,6 +321,9 @@ def _handle_daemon_request(
         # round trip into the companion process, which is the only
         # PrivacyFence process running where a human can be asked at all.
         if not argument:
+            _audit_mint(
+                "Issued a sign-in code (unattested -- can view what is pending, cannot release it)",
+            )
             return f"OK {bootstrap.mint(provenance=session_auth.PROVENANCE_UNATTESTED)}\n"
         subcommand, _, subargument = argument.partition(" ")
         subargument = subargument.strip()
@@ -289,7 +337,9 @@ def _handle_daemon_request(
             # and cannot read the one it did issue.
             confirm = confirm_companion_mint or request_mint_attestation
             if not subargument or not confirm(subargument):
+                _audit_mint("Refused a sign-in code that can approve: the companion did not confirm it")
                 return "ERROR that mint was not confirmed by the companion\n"
+            _audit_mint("Issued a sign-in code that can approve (confirmed by the companion app)")
             return f"OK {bootstrap.mint(provenance=session_auth.PROVENANCE_HUMAN)}\n"
         if subcommand.upper() == "CONSOLE":
             # `privacyfence-app --print-sign-in-link`, the break-glass path
@@ -301,7 +351,12 @@ def _handle_daemon_request(
             confirm_console = confirm_console_mint or request_sign_in_confirmation
             confirmed, reason = confirm_console()
             if not confirmed:
+                _audit_mint(f"Refused a sign-in code requested from a terminal: {reason}")
                 return f"ERROR {reason}\n"
+            _audit_mint(
+                "Issued a sign-in code that can approve, requested from a terminal "
+                "(privacyfence-app --print-sign-in-link, confirmed at the companion's dialog)",
+            )
             return f"OK {bootstrap.mint(provenance=session_auth.PROVENANCE_HUMAN)}\n"
         return "ERROR unknown command\n"
     if command == "QUIT":
@@ -1449,6 +1504,7 @@ __all__ = [
     "COMPANION_SOCKET_FILE_NAME",
     "CONFIRM_DIALOG_TIMEOUT_SECONDS",
     "SHOW_PATHS",
+    "SIGN_IN_MINT_DECISION",
     "SOCKET_FILE_NAME",
     "WEB_BASE_URL_FILE_NAME",
     "CompanionChannelServer",
