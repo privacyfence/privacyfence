@@ -1060,13 +1060,14 @@ class TestInstallerContract:
         assert "--auto" in self.SCRIPTS[platform]
         assert "AUTO=1" in self.SCRIPTS[platform]
 
-    def test_the_debian_postinst_auto_enables_on_configure(self):
-        # The one place Linux's auto-enable actually gets invoked from --
-        # see debian/postinst's own comment for why postinst (already root,
-        # at package-configure time) can safely do this where the daemon
+    def test_the_debian_postinst_separates_on_configure(self):
+        # The one place Linux's install-time separation actually gets invoked
+        # from -- see debian/postinst's own comment for why postinst (already
+        # root, at package-configure time) can safely do this where the daemon
         # itself couldn't.
         postinst = (REPO_ROOT / "debian" / "postinst").read_text(encoding="utf-8")
-        assert "privacyfence-privilege-separation enable --auto" in postinst
+        assert "privacyfence-privilege-separation enable --machine-only" in postinst
+        assert "privacyfence-privilege-separation enable --auto --for-user" in postinst
         assert '[ "$1" = "configure" ]' in postinst
 
     def test_the_debian_prerm_disables_on_remove(self):
@@ -1614,10 +1615,10 @@ class TestSystemdAndAutostartTemplates:
         # An install separated by a script version that predates B24 has a
         # ${LEGACY_AUTOSTART_PATH}.disabled with no Hidden=true -- and
         # systemd has been autostarting it under its renamed name the whole
-        # time. `enable --auto` re-runs on every package upgrade (debian/
-        # postinst's own -- auto invocation), so stop_legacy_autostart must
-        # heal that file in place rather than only handling a fresh entry
-        # still at its original path.
+        # time. The postinst's machine half re-runs on every package upgrade
+        # (debian/postinst's own `enable --machine-only` call), so
+        # stop_legacy_autostart must heal that file in place rather than only
+        # handling a fresh entry still at its original path.
         assert '"${LEGACY_AUTOSTART_PATH}.disabled" ] && ! autostart_entry_is_hidden' in self.SCRIPT
 
     def test_restoring_the_legacy_entry_undoes_the_hide(self):
@@ -2475,6 +2476,124 @@ class TestEnableSplitContract:
 
         assert 'CONSOLE_USER=""' in postinstall
         assert '"$SEPARATION_SCRIPT" enable --auto --app "$APP_PATH"' in postinstall
+
+
+class TestDebPostinstFailurePolicy:
+    """ADR 0003 decision 5: the ``.deb``'s ``postinst`` stops being
+    best-effort. The two halves of decision 3 are invoked as two calls
+    precisely because they have two different failure policies -- the machine
+    half fails the package install, the per-user half is allowed to defer --
+    and a single call could not express both."""
+
+    SCRIPT = INSTALLERS["linux"].read_text(encoding="utf-8")
+    POSTINST = (REPO_ROOT / "debian" / "postinst").read_text(encoding="utf-8")
+
+    @staticmethod
+    def _separation_block() -> str:
+        block = re.search(
+            r'^if \[ "\$1" = "configure" \] && \[ -x /usr/sbin/privacyfence-privilege-separation'
+            r' \]; then\n(.*?)^fi$',
+            TestDebPostinstFailurePolicy.POSTINST,
+            re.MULTILINE | re.DOTALL,
+        )
+        assert block is not None, "no `configure` privilege-separation block in debian/postinst"
+        return block.group(1)
+
+    def test_the_machine_half_is_unconditional_and_loud(self):
+        # The whole of decision 5, in one assertion: no `|| true`, and no `if`
+        # around it. A failure of this is a failure of the install -- under
+        # decision 1 an install that could not separate itself is not a
+        # less-hardened PrivacyFence, it is one whose central claim does not
+        # hold, which is not the ancillary thing a postinst is meant to shrug
+        # off.
+        machine_half = [
+            line for line in self._separation_block().splitlines()
+            if "enable --machine-only" in line
+        ]
+        assert len(machine_half) == 1, self._separation_block()
+        line = machine_half[0]
+        assert "|| true" not in line
+        # Four spaces: the block's own indentation level, i.e. not nested
+        # inside a condition of its own the way the per-user half is.
+        assert line.startswith("    /usr/sbin/"), line
+
+    def test_the_per_user_half_keeps_sudo_user_and_keeps_deferring(self):
+        # The half that genuinely needs to know which human, and the only
+        # thing in a postinst's environment that can say. Unresolvable is a
+        # supported state (`status` reports PENDING USER, the companion closes
+        # it at the first login session), so it stays conditional and stays
+        # non-fatal -- `--auto` for the failures the script can see from the
+        # inside, `|| true` for the ones it cannot.
+        block = self._separation_block()
+        per_user = re.search(
+            r'if \[ -n "\$\{SUDO_USER:-\}" \] && \[ "\$SUDO_USER" != "root" \]; then\n(.*?)\n    fi',
+            block, re.DOTALL,
+        )
+        assert per_user is not None, block
+        assert "enable --auto --for-user \"$SUDO_USER\"" in per_user.group(1)
+        assert "|| true" in per_user.group(1)
+
+    def test_the_linux_script_has_a_machine_only_flag(self):
+        # Without it the postinst's first call would pick $SUDO_USER out of
+        # its own environment and do the group add on the call that is not
+        # allowed to fail -- putting the one step decision 3 lets defer inside
+        # the one call decision 5 makes fatal.
+        assert "--machine-only)" in self.SCRIPT
+        assert "MACHINE_ONLY=1" in self.SCRIPT
+        body = re.search(
+            r"^cmd_enable\(\) \{\n(.*?)^\}", self.SCRIPT, re.MULTILINE | re.DOTALL
+        ).group(1)
+        assert re.search(
+            r'if \[ "\$MACHINE_ONLY" = "1" \]; then\n.*?\n  else\n\s+resolve_owner_optional', body,
+            re.DOTALL,
+        ), body
+
+    def test_the_machine_half_never_unrecords_an_owner(self):
+        # It re-runs on every install and upgrade now, against installs whose
+        # per-user half is already closed. Writing "" over the recorded name
+        # would report a complete install as PENDING USER and have the
+        # companion re-run the per-user half at every login to fix nothing.
+        body = re.search(
+            r"^write_marker\(\) \{\n(.*?)^\}", self.SCRIPT, re.MULTILINE | re.DOTALL
+        ).group(1)
+        assert re.search(
+            r'if \[ -z "\$recorded_owner" \] && \[ -f "\$marker" \]; then\n'
+            r'\s+recorded_owner="\$\(marker_owner_user\)"',
+            body,
+        ), body
+        assert '"owner_user": "${recorded_owner}"' in body
+
+    def test_the_per_user_half_bounces_the_daemon_around_a_real_migration(self):
+        # It runs against a *live* separated install by construction now: the
+        # postinst calls it moments after the machine half started the unit.
+        # Merging a legacy ~/.privacyfence into a directory the running daemon
+        # has open would corrupt whichever copy lost.
+        body = re.search(
+            r"^cmd_enable_for_user\(\) \{\n(.*?)^\}", self.SCRIPT, re.MULTILINE | re.DOTALL
+        ).group(1)
+        assert 'if [ -d "$(legacy_data_dir)" ] && daemon_unit_is_active; then' in body
+        assert 'systemctl stop "$DAEMON_UNIT"' in body
+        assert 'systemctl start "$DAEMON_UNIT"' in body
+        assert body.index("systemctl stop") < body.index("  migrate_data") < body.index(
+            "systemctl start"
+        )
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1"
+    )
+    def test_machine_only_and_an_owner_are_refused_together(self):
+        # Two complements, not a modifier and a modified: a caller that names
+        # a user and then asks for the half that deliberately has none means
+        # one of the two and typed both. Picking silently is the difference
+        # between an install whose owner is in the group and one whose isn't.
+        for flag in (["--user", "alice"], ["--for-user", "alice"]):
+            result = subprocess.run(
+                ["bash", str(INSTALLERS["linux"]), "enable", "--machine-only", *flag],
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+
+            assert result.returncode != 0
+            assert "cannot be combined" in result.stderr, result.stderr
 
 
 _NET_LOCALGROUP_OUTPUT = """\

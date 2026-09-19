@@ -66,19 +66,28 @@ user would.
    exact gap P7.3's own "partially checked" note (which only re-installed
    the *identical* version) left open: a real version transition, not just a
    reinstall.
+7. **The postinst's own failure policy** (ADR 0003 decision 5): an
+   *unattended* install -- ``dpkg -i`` with no ``$SUDO_USER`` behind it, the
+   MDM/``unattended-upgrades`` case -- configures successfully and still ends
+   up separated, with only the group membership pending; and a machine half
+   made to fail leaves dpkg with a half-configured package rather than an
+   installed-looking, unseparated one. These two are the only tests in this
+   module that assert *about* privilege separation rather than around it.
 
-Every scenario above is deliberately the pre-D1, unseparated lifecycle: issue
-#428 D1 made ``debian/postinst`` auto-enable privilege separation (``enable
---auto``) on every install *and* upgrade whenever ``$SUDO_USER`` resolves to
-a real, non-root account -- true for this module's own passwordless-``sudo``
-CI account, same as a real human's ``sudo dpkg -i``. Left alone, that would
-move the daemon to its own system account/unit and rename away the autostart
-entry this module validates, neither of which this module is testing (see
-``test_linux_graphical_session_autostart.py`` for the separated-by-default
-path instead). ``_disable_auto_enabled_privilege_separation()`` undoes it
-right after each ``_dpkg("-i", ...)`` call, pinning the mechanism this module
-has always tested -- still exactly what a bare ``pip``/``pipx`` install gets
-today, and still reachable from a ``.deb`` install by running ``disable``.
+Scenarios 1-6 above are deliberately the pre-D1, unseparated lifecycle: issue
+#428 D1 made ``debian/postinst`` provision privilege separation on every
+install *and* upgrade, and ADR 0003 decision 5 made its machine half
+unconditional (the per-user half still runs only when ``$SUDO_USER`` resolves
+to a real, non-root account -- true for this module's own
+passwordless-``sudo`` CI account, same as a real human's ``sudo dpkg -i``).
+Left alone, that would move the daemon to its own system account/unit and
+rename away the autostart entry this module validates, neither of which those
+scenarios are testing (see ``test_linux_graphical_session_autostart.py`` for
+the separated-by-default path instead).
+``_disable_auto_enabled_privilege_separation()`` undoes it right after each
+``_dpkg("-i", ...)`` call, pinning the mechanism those scenarios have always
+tested -- still exactly what a bare ``pip``/``pipx`` install gets today, and
+still reachable from a ``.deb`` install by running ``disable``.
 
 Skipped entirely unless running on real Linux with a just-built ``.deb`` on
 disk, ``dpkg``/``dpkg-deb``/``desktop-file-validate`` on ``PATH``, and
@@ -126,6 +135,17 @@ PACKAGE_NAME = "privacyfence"
 DAEMON_BIN = Path("/usr/bin/privacyfence-app")
 OPT_DIR = Path("/opt/privacyfence")
 AUTOSTART_DESKTOP_FILE = Path("/etc/xdg/autostart/privacyfence.desktop")
+
+# ADR 0003 decisions 3 and 5, as the postinst leaves them on disk. Spelled out
+# here rather than imported from privilege_separation: this module asserts what
+# the *installed package* did, and reading the constants from the same module
+# the package's own script is held against (tests/unit/test_privilege_
+# separation.py) would let both drift together.
+SEPARATION_TOOL = Path("/usr/sbin/privacyfence-privilege-separation")
+SYSTEM_ROOT = Path("/var/lib/privacyfence")
+PRIVILEGE_SEPARATION_MARKER = SYSTEM_ROOT / "privilege-separation.json"
+SERVICE_GROUP = "privacyfence"
+DAEMON_SYSTEM_UNIT_FILE = Path("/etc/systemd/system/privacyfence-daemon.service")
 
 MCP_TOKEN_FILE_NAME = "mcp_token"
 
@@ -194,11 +214,12 @@ def _dpkg(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 
 
 def _disable_auto_enabled_privilege_separation() -> None:
-    """Undoes issue #428 D1's ``postinst``-triggered ``enable --auto``, which
-    runs on every ``dpkg -i`` (install *and* upgrade) whenever ``$SUDO_USER``
-    resolves to a real, non-root account -- exactly what this CI runner's own
-    passwordless-``sudo``-invoking account satisfies, same as a real human's
-    ``sudo dpkg -i``/``sudo apt install`` would. This module's whole scenario
+    """Undoes the separation ``postinst`` performs on every ``dpkg -i``
+    (install *and* upgrade) -- since ADR 0003 decision 5 the machine half of
+    it runs unconditionally, and the per-user half additionally runs whenever
+    ``$SUDO_USER`` resolves to a real, non-root account, exactly what this CI
+    runner's own passwordless-``sudo``-invoking account satisfies, same as a
+    real human's ``sudo dpkg -i``/``sudo apt install`` would. This module's whole scenario
     (an autostart ``.desktop`` conffile that survives a plain remove, a daemon
     started directly via the installed wrapper against an isolated ``$HOME``)
     is the pre-D1, unseparated lifecycle -- ``test_linux_graphical_session_
@@ -210,8 +231,8 @@ def _disable_auto_enabled_privilege_separation() -> None:
     against an isolated ``$HOME`` either can't bind its ports/sockets or gets
     refused outright by ``check_runtime_identity`` -- none of which is what
     this module is testing. Must be re-run after every ``_dpkg("-i", ...)``
-    in this module, including the upgrade-in-place one: ``enable --auto``
-    fires on upgrade too, not just on a fresh install."""
+    in this module, including the upgrade-in-place one: the postinst fires on
+    upgrade too, not just on a fresh install."""
     subprocess.run(
         ["sudo", "-n", "privacyfence-privilege-separation", "disable", "--user", getpass.getuser()],
         check=True, capture_output=True, text=True, timeout=30,
@@ -694,3 +715,150 @@ async def test_upgrade_in_place_preserves_user_state(tmp_path):
         assert daemon.process.wait(timeout=15) == 0
 
     assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+# Test 3 -- ADR 0003 decision 5: the postinst's two halves and their two
+# failure policies. Everything above this line deliberately reverts the
+# separation the postinst performs; these two are what assert it happened,
+# and how it behaves when it can't.
+# --------------------------------------------------------------------------- #
+
+def _service_group_members() -> list[str]:
+    """The *recorded* membership, straight out of ``/etc/group`` -- the same
+    thing ``privilege_separation.service_group_members()`` reads, and
+    deliberately not this process's own token (which predates any group change
+    made during this test and would answer for a session, not for the file)."""
+    result = subprocess.run(
+        ["getent", "group", SERVICE_GROUP], capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        return []
+    return [name for name in result.stdout.strip().split(":")[-1].split(",") if name]
+
+
+def _marker_owner() -> str:
+    """``owner_user`` out of the marker the machine half wrote. World-readable
+    on purpose (see the script's own ``write_marker``), so no ``sudo`` here."""
+    return json.loads(PRIVILEGE_SEPARATION_MARKER.read_text(encoding="utf-8"))["owner_user"]
+
+
+def _dpkg_status() -> str:
+    return subprocess.run(
+        ["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True,
+    ).stdout
+
+
+def test_unattended_install_separates_the_machine_and_defers_the_membership(tmp_path):
+    """ADR 0003 decision 5's own stated case: "an unattended upgrade with no
+    session behind it still succeeds *and* still ends up separated".
+
+    ``env -u SUDO_USER`` is what makes this an unattended install rather than
+    a human's: ``sudo`` sets ``SUDO_USER`` in the environment it hands dpkg,
+    and stripping it back off reproduces exactly what an MDM push, a root
+    shell or ``unattended-upgrades`` gives the postinst -- nothing to say
+    which human this install is for. Before decision 3 that left the whole
+    install unseparated; before decision 5 the postinst then swallowed the
+    outcome with ``|| true``."""
+    deb_path = _built_debs()[-1]
+
+    result = subprocess.run(
+        ["sudo", "-n", "env", "-u", "SUDO_USER", "dpkg", "-i", str(deb_path)],
+        capture_output=True, text=True, timeout=120,
+    )
+
+    assert result.returncode == 0, (
+        "an unattended `dpkg -i` must still configure successfully -- decision 3 is what makes "
+        f"the machine half runnable with no human resolvable:\n{result.stdout}{result.stderr}"
+    )
+    assert "Status: install ok installed" in _dpkg_status()
+
+    # Separated, not "opt-in": the machine half ran all of it.
+    assert PRIVILEGE_SEPARATION_MARKER.is_file(), (
+        f"{PRIVILEGE_SEPARATION_MARKER} missing after an unattended install -- the machine half "
+        "either didn't run or didn't complete, and the postinst no longer has a `|| true` that "
+        "would have hidden that"
+    )
+    assert DAEMON_SYSTEM_UNIT_FILE.is_file(), f"{DAEMON_SYSTEM_UNIT_FILE} missing after dpkg -i"
+
+    # ...and what is outstanding is exactly one re-runnable step.
+    assert _marker_owner() == "", (
+        "nobody was resolvable, so the marker must record no owner -- an owner here means the "
+        "machine half picked one up from somewhere an unattended install shouldn't have one"
+    )
+    assert _service_group_members() == [], (
+        f"nobody should be in {SERVICE_GROUP} after an unattended install: "
+        f"{_service_group_members()}"
+    )
+
+    status = subprocess.run(
+        ["sudo", "-n", str(SEPARATION_TOOL), "status"], capture_output=True, text=True, timeout=30,
+    )
+    assert "privilege separation: ON" in status.stdout, status.stdout
+    assert "PENDING USER" in status.stdout, (
+        "the pending membership has to be reported as its own state -- reporting it as OFF would "
+        f"say the daemon and the agent share an account, which is what is no longer true:\n"
+        f"{status.stdout}"
+    )
+
+    # The per-user half closes it, from here, with no reinstall -- which is
+    # what makes deferring it a supported state rather than a broken install.
+    subprocess.run(
+        ["sudo", "-n", str(SEPARATION_TOOL), "enable", "--for-user", getpass.getuser()],
+        check=True, capture_output=True, text=True, timeout=60,
+    )
+    assert _marker_owner() == getpass.getuser()
+    assert getpass.getuser() in _service_group_members()
+
+    _disable_auto_enabled_privilege_separation()
+
+
+def test_a_failing_machine_half_fails_the_package_install(tmp_path):
+    """The other half of decision 5: the ``|| true`` is gone, so a machine
+    half that cannot do its job stops the install where it is.
+
+    The induced failure is a regular file sitting where ``/var/lib/
+    privacyfence`` has to be a directory -- ``migrate_data``'s own
+    ``mkdir -p`` is what trips on it, under the script's ``set -e``. Any
+    failure of the machine half would do; this one is deterministic, needs no
+    edit to the package being tested, and is undone by deleting one file."""
+    deb_path = _built_debs()[-1]
+    subprocess.run(["sudo", "-n", "rm", "-rf", str(SYSTEM_ROOT)], check=True, timeout=30)
+    subprocess.run(["sudo", "-n", "touch", str(SYSTEM_ROOT)], check=True, timeout=30)
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "dpkg", "-i", str(deb_path)], capture_output=True, text=True, timeout=120,
+        )
+
+        assert result.returncode != 0, (
+            "a failed machine half must fail the package install -- this is the whole of decision "
+            f"5:\n{result.stdout}{result.stderr}"
+        )
+        assert "post-installation script subprocess returned error" in result.stderr, result.stderr
+
+        # dpkg's own record of it: something a human (or `apt`) will trip over
+        # again, rather than a package that reports itself installed while the
+        # claim it is installed *for* does not hold.
+        status = _dpkg_status()
+        assert "half-configured" in status, (
+            f"the package should be left unconfigured, not installed:\n{status}"
+        )
+        assert not PRIVILEGE_SEPARATION_MARKER.exists(), (
+            f"{PRIVILEGE_SEPARATION_MARKER} exists -- the machine half was supposed to have failed "
+            "before writing it"
+        )
+    finally:
+        subprocess.run(["sudo", "-n", "rm", "-f", str(SYSTEM_ROOT)], check=True, timeout=30)
+
+    # With the obstruction gone, the very same configure step succeeds and
+    # separates the install -- no reinstall, no repair mode, no leftovers from
+    # the failed run.
+    configure = subprocess.run(
+        ["sudo", "-n", "dpkg", "--configure", PACKAGE_NAME],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert configure.returncode == 0, f"{configure.stdout}{configure.stderr}"
+    assert "Status: install ok installed" in _dpkg_status()
+    assert PRIVILEGE_SEPARATION_MARKER.is_file()
+
+    _disable_auto_enabled_privilege_separation()
