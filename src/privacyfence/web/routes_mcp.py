@@ -82,8 +82,10 @@ SERVER_INSTRUCTIONS = (
     "authenticated yet -- it does NOT mean PrivacyFence has nothing to do with the current "
     "request. Call privacyfence_status before the first PrivacyFence-governed action in a "
     "conversation, or whenever the user asks why a connector isn't available: it reports the "
-    "real setup state and, if nothing is authenticated yet, a link the user can open to finish "
-    "setup. It is the one tool guaranteed to exist even when every other tool is missing.\n\n"
+    "real setup state and, if nothing is authenticated yet, what to tell the user to do about it "
+    "-- which is to open PrivacyFence's own companion app, not to ask you for a link: "
+    "PrivacyFence does not issue sign-in links to this client. It is the one tool guaranteed to "
+    "exist even when every other tool is missing.\n\n"
     "Most conversations have nothing to do with PrivacyFence and should not call any "
     "privacyfence_* tool at all."
 )
