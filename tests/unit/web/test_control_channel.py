@@ -1131,7 +1131,8 @@ class TestAttestedMintCommands:
         store = BootstrapStore()
         reply = self._dispatch("MINT\n", store)
         assert reply.startswith("OK ")
-        assert store.consume(reply[len("OK "):].strip()) == sa.PROVENANCE_UNATTESTED
+        provenance = store.consume(reply[len("OK "):].strip())
+        assert provenance == sa.PROVENANCE_UNATTESTED
 
     def test_a_confirmed_companion_nonce_mints_a_human_code(self):
         store = BootstrapStore()
@@ -1141,7 +1142,8 @@ class TestAttestedMintCommands:
             confirm_companion_mint=lambda nonce: bool(seen.append(nonce)) or True,
         )
         assert seen == ["abc123"]
-        assert store.consume(reply[len("OK "):].strip()) == sa.PROVENANCE_HUMAN
+        provenance = store.consume(reply[len("OK "):].strip())
+        assert provenance == sa.PROVENANCE_HUMAN
 
     def test_an_unconfirmed_companion_nonce_mints_nothing_at_all(self):
         store = BootstrapStore()
@@ -1150,7 +1152,8 @@ class TestAttestedMintCommands:
         # attested code and was refused must not be handed a weaker one it
         # would then treat as the thing it asked for.
         assert reply == "ERROR that mint was not confirmed by the companion\n"
-        assert store.consume(reply.split()[-1]) is None
+        provenance = store.consume(reply.split()[-1])
+        assert provenance is None
 
     def test_a_companion_mint_with_no_nonce_is_refused_without_asking(self):
         asked: list[str] = []
@@ -1164,7 +1167,8 @@ class TestAttestedMintCommands:
     def test_a_confirmed_console_mint_is_human(self):
         store = BootstrapStore()
         reply = self._dispatch("MINT CONSOLE\n", store, confirm_console_mint=lambda: (True, ""))
-        assert store.consume(reply[len("OK "):].strip()) == sa.PROVENANCE_HUMAN
+        provenance = store.consume(reply[len("OK "):].strip())
+        assert provenance == sa.PROVENANCE_HUMAN
 
     def test_a_denied_console_mint_passes_the_reason_back(self):
         reply = self._dispatch(
@@ -1461,7 +1465,8 @@ class TestAttestedMintClientHelpers:
     def test_the_companion_shape_mints_a_code_that_may_approve(self, both_channels):
         code = cc.mint_attested_bootstrap_code()
 
-        assert both_channels.consume(code) == sa.PROVENANCE_HUMAN
+        provenance = both_channels.consume(code)
+        assert provenance == sa.PROVENANCE_HUMAN
 
     def test_a_nonce_the_companion_never_issued_gets_no_code(self, both_channels, monkeypatch):
         """What an agent sending this line by hand hits: it cannot produce a
@@ -1478,7 +1483,8 @@ class TestAttestedMintClientHelpers:
 
         code = cc.mint_console_bootstrap_code(timeout=5.0)
 
-        assert both_channels.consume(code) == sa.PROVENANCE_HUMAN
+        provenance = both_channels.consume(code)
+        assert provenance == sa.PROVENANCE_HUMAN
 
     def test_a_denied_dialog_reaches_the_terminal_in_words(self, both_channels, monkeypatch):
         monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: False)

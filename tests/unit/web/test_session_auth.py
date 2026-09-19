@@ -95,27 +95,37 @@ class TestBootstrapStore:
     def test_mint_then_consume_succeeds_exactly_once(self):
         store = sa.BootstrapStore()
         code = store.mint()
-        assert store.consume(code) == sa.PROVENANCE_UNATTESTED
-        assert store.consume(code) is None  # single-use -- burned by the line above
+        # Both consumes stand on their own lines: the second assertion is only
+        # true *because* the first call burned the code, so leaving that call
+        # inside an assert would make this pair meaningless under `python -O`.
+        first = store.consume(code)
+        second = store.consume(code)
+        assert first == sa.PROVENANCE_UNATTESTED
+        assert second is None  # single-use -- burned by the line above
 
     def test_consume_returns_the_provenance_the_code_was_minted_with(self):
         store = sa.BootstrapStore()
-        assert store.consume(store.mint(provenance=sa.PROVENANCE_HUMAN)) == sa.PROVENANCE_HUMAN
+        human = store.consume(store.mint(provenance=sa.PROVENANCE_HUMAN))
+        assert human == sa.PROVENANCE_HUMAN
         # The default is the one a bare control-channel MINT gets, and it is
         # the safe one: nothing about that request says a human asked.
-        assert store.consume(store.mint()) == sa.PROVENANCE_UNATTESTED
+        default = store.consume(store.mint())
+        assert default == sa.PROVENANCE_UNATTESTED
 
     def test_two_mints_produce_distinct_codes(self):
         store = sa.BootstrapStore()
-        assert store.mint() != store.mint()
+        first, second = store.mint(), store.mint()
+        assert first != second
 
     def test_unknown_code_is_rejected(self):
         store = sa.BootstrapStore()
-        assert store.consume("not-a-real-code") is None
+        consumed = store.consume("not-a-real-code")
+        assert consumed is None
 
     def test_empty_code_is_rejected(self):
         store = sa.BootstrapStore()
-        assert store.consume("") is None
+        consumed = store.consume("")
+        assert consumed is None
 
     def test_expired_code_is_rejected_and_still_consumed(self, monkeypatch):
         store = sa.BootstrapStore(ttl_seconds=60)
@@ -125,12 +135,16 @@ class TestBootstrapStore:
 
         fake_now[0] += 120  # past the TTL
 
-        assert store.consume(code) is None
+        expired = store.consume(code)
+        assert expired is None
         # ...and it's gone either way -- a second attempt (e.g. a replay
         # racing the first) doesn't get to try again just because the
-        # first attempt failed on expiry rather than success.
+        # first attempt failed on expiry rather than success. The consume
+        # above has to happen for that to mean anything, so it is not left
+        # inside the assert.
         fake_now[0] = 1000.0  # even rewinding time doesn't resurrect it
-        assert store.consume(code) is None
+        replayed = store.consume(code)
+        assert replayed is None
 
 
 class TestAuthenticated:
