@@ -308,8 +308,10 @@ def _companion_availability_sentence() -> str:
     """Whether the reader can expect the companion to already be running,
     which #428 Phase 4 changed -- differently per platform.
 
-    On a separated macOS/Windows install the tray item really is started for
-    them at login, so "it should already be there" is a useful instruction.
+    It reads as a whole sentence of its own between "open the companion" and
+    what that buys, so each branch ends in one. On a separated macOS/Windows
+    install the tray item really is started for them at login, so "it should
+    already be there" is a useful instruction.
     On Linux it is not: what a separated install autostarts is the invisible
     ``--serve`` channel (companion.py), the thing that lets the daemon open a
     browser for connector OAuth from outside the user's session. The
@@ -320,7 +322,8 @@ def _companion_availability_sentence() -> str:
     had (ADR 0002 decision 4).
     """
     if not privilege_separation.is_enabled():
-        return "Nothing installs or starts it automatically yet, so "
+        return "Nothing installs or starts it automatically on this install, so you may have to "\
+               "launch it yourself first. "
     if privilege_separation.current_platform() == "linux":
         return (
             "This install has no tray icon (ADR 0002 decision 4) -- the Applications-menu "
@@ -359,21 +362,23 @@ def unauthorized_html(request: Request) -> Response:
     also the only route to a session that may approve rather than merely
     view (``PROVENANCE_HUMAN`` above), and offers ``privacyfence-app
     --print-sign-in-link`` for a reader whose companion menu is out of
-    reach. It still names the discovery file ``web/server.py`` writes
-    outside the logging pipeline, and still spells out the control
-    channel's own raw command (#428 Phase 2, ``web/control_channel.py``)
-    last, for a reader who has neither -- that one mints an unattested
-    code, which is enough to see what is waiting. ``request`` is otherwise
+    reach. The discovery file this page used to point at -- the one
+    ``web/server.py`` wrote a live link into on every startup -- is gone
+    with the same Phase 2 change, for the same reason the tool is: it sat
+    in a group-shared directory, which made it a session for the taking.
+    What is still spelled out last, for a reader who has neither of the
+    first two, is the control channel's own raw command (#428 Phase 2,
+    ``web/control_channel.py``) -- that one mints an unattested code, which
+    is enough to see what is waiting. ``request`` is otherwise
     unused here: unlike the old bearer-header ``curl`` command, the control
     channel is a local socket/pipe, not another HTTP endpoint on this
     page's own origin, so there's no origin left to splice into the
     recovery command.
 
-    The discovery-file path and the recovery command are both platform-
-    dependent -- ``paths.data_dir()`` resolves to the real, live directory
-    this install actually writes ``approvals_url`` into (``~/.privacyfence``
-    on POSIX, ``%LOCALAPPDATA%\\PrivacyFence`` on Windows, see that
-    function's own docstring). Neither command needs Python -- a packaged
+    The recovery command is platform-dependent, and its socket/pipe address
+    is resolved from the real, live directory this install uses
+    (``~/.privacyfence`` on POSIX, ``%LOCALAPPDATA%\\PrivacyFence`` on
+    Windows -- see ``paths.data_dir()``'s own docstring). It needs no Python -- a packaged
     install doesn't guarantee one on ``PATH`` any more than the pre-Phase-2
     page's ``curl`` was guaranteed, so this leans on the same kind of
     already-present OS tool instead: POSIX gets ``nc -U`` (the BSD ``nc``
@@ -383,18 +388,18 @@ def unauthorized_html(request: Request) -> Response:
     ``System.IO.Pipes.NamedPipeClientStream`` (built into every supported
     .NET runtime, so no extra install either)."""
     data_dir = paths.data_dir()
-    # handoff_dir() for the files a *reader of this page* goes looking for:
-    # #428 Phase 4 moves them to a user-reachable subdirectory on a
-    # privilege-separated install, and this page's whole job is telling a
-    # locked-out human where to look. Identical to data_dir() everywhere
-    # else. Unlike authority_dir(), neither call runs a migration.
+    # handoff_dir() for the address a *reader of this page* has to reach:
+    # #428 Phase 4 moved the control socket to a user-reachable
+    # subdirectory on a privilege-separated install, and this page's whole
+    # job is telling a locked-out human where to find it. Identical to
+    # data_dir() everywhere else. Unlike authority_dir(), neither call runs
+    # a migration.
     handoff = paths.handoff_dir()
     # Deferred import: control_channel.py imports BootstrapStore from this
     # module, so importing it back at module scope here would be circular.
     from .control_channel import socket_path_under, windows_pipe_name
 
     if paths.is_windows():
-        approvals_url_path = f"{handoff}\\approvals_url"
         pipe_name = windows_pipe_name().rsplit("\\", 1)[-1]
         command = (
             "$p=New-Object System.IO.Pipes.NamedPipeClientStream('.','" + pipe_name + "',"
@@ -403,7 +408,6 @@ def unauthorized_html(request: Request) -> Response:
             "(New-Object System.IO.StreamReader($p)).ReadLine()"
         )
     else:
-        approvals_url_path = f"{handoff}/approvals_url"
         # A plain join, not control_channel.posix_socket_path() -- that
         # calls the real, side-effecting paths.authority_dir() (creates the
         # directory, runs its migration-on-first-use), which this
@@ -427,16 +431,13 @@ def unauthorized_html(request: Request) -> Response:
         "<code>privacyfence-app --print-sign-in-link</code> and open the link it prints. Your AI "
         "client cannot do this for you: PrivacyFence no longer issues a sign-in link to the "
         "program it governs.</p>"
-        "<p>This link has expired, was already used, or your session timed out.</p>"
-        "<p>Prefer to grab it yourself? PrivacyFence just wrote the current one to "
-        f"<code>{approvals_url_path}</code> (or <code>settings_url</code> for "
-        "Settings) — every startup, and every time an old one is superseded, replaces "
-        "it with a fresh one. (Not the log file: <code>privacyfence.log</code> "
-        "deliberately redacts this link's code for security, so it never contains a "
-        "usable one — restarting PrivacyFence doesn't change that.)</p>"
-        "<p>No MCP client connected yet, and don't want to restart PrivacyFence just for "
-        "this? From a terminal on this machine, mint a new one on demand and open the "
-        "link it returns:</p>"
+        "<p>This link has expired, was already used, or your session timed out. "
+        "(Not the log file: <code>privacyfence.log</code> deliberately redacts this link's "
+        "code for security, so it never contains a usable one — restarting PrivacyFence "
+        "doesn't change that. PrivacyFence no longer writes the link to a file either: that "
+        "file was readable by every program running as you.)</p>"
+        "<p>Neither of the above available? From a terminal on this machine, mint a "
+        "view-only link on demand and open what it returns:</p>"
         "<pre style=\"white-space:pre-wrap;background:#f0f0f0;padding:10px;"
         f"border-radius:4px\">{command}</pre>"
         "</body></html>",

@@ -73,6 +73,21 @@ def _render_report(results: list[ScenarioResult]) -> str:
     return "\n".join(lines)
 
 
+def _sign_in_url(server, path: str) -> str:
+    """A one-time sign-in link for this in-process server.
+
+    ``WebServer.mint_bootstrap_url()`` used to hand one back; the
+    self-approval plan's Phase 2 removed it along with the discovery files it
+    wrote (web/server.py). Minting now belongs to the control channel, and an
+    *attested* mint needs a companion process to call back to -- which this
+    script has no reason to start, so it mints from the store directly, the
+    same way the daemon's own bootstrap middleware consumes from it.
+    """
+    from privacyfence.web.session_auth import PROVENANCE_HUMAN
+
+    return f"{server.base_url}{path}?bootstrap={server.bootstrap.mint(provenance=PROVENANCE_HUMAN)}"
+
+
 def _build_server(tmp_dir: Path, port: int):
     from privacyfence import daemon_main, settings_controller as sc
     from privacyfence.web.server import WebServer
@@ -144,7 +159,7 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
                     results.append(ScenarioResult(name, False, repr(exc), list(console_errors)))
 
             def settings_loads_and_round_trips() -> str:
-                page.goto(server.mint_bootstrap_url("/settings"))
+                page.goto(_sign_in_url(server, "/settings"))
                 page.wait_for_selector("#app")
                 before = controller.snapshot()["general"]["pii_enabled"]
                 page.click("[data-action='toggle_pii_detection']")
@@ -156,7 +171,7 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
             scenario("settings page loads, toggle round-trips", settings_loads_and_round_trips)
 
             def approvals_empty_state() -> str:
-                page.goto(server.mint_bootstrap_url("/approvals"))
+                page.goto(_sign_in_url(server, "/approvals"))
                 page.wait_for_selector(".pf-approvals-empty")
                 return "empty state rendered"
 
@@ -164,7 +179,7 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
 
             def approvals_row_and_deny() -> str:
                 t, box, card_id = _register_card(web_ui)
-                page.goto(server.mint_bootstrap_url("/approvals"))
+                page.goto(_sign_in_url(server, "/approvals"))
                 page.wait_for_selector(f'[data-approval-id="{card_id}"]', timeout=3000)
                 page.click(f'[data-deny="{card_id}"]')
                 t.join(timeout=2)
@@ -175,7 +190,7 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
 
             def card_decide_returns_to_list_with_toast() -> str:
                 t, box, card_id = _register_card(web_ui)
-                page.goto(server.mint_bootstrap_url(f"/approvals/{card_id}"))
+                page.goto(_sign_in_url(server, f"/approvals/{card_id}"))
                 page.wait_for_selector("[data-pf-action='deny']", timeout=3000)
                 page.click("[data-pf-action='deny']")
                 page.wait_for_url(f"{base}/approvals", timeout=3000)
@@ -191,7 +206,7 @@ def _run(chromium_path: str | None) -> list[ScenarioResult]:
             scenario("card decide -> return-to-list toast (regression: script order)", card_decide_returns_to_list_with_toast)
 
             def service_worker_registers() -> str:
-                page.goto(server.mint_bootstrap_url("/approvals"))
+                page.goto(_sign_in_url(server, "/approvals"))
                 page.wait_for_timeout(500)
                 states = page.evaluate(
                     "navigator.serviceWorker.getRegistrations()"

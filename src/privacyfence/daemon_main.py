@@ -817,8 +817,9 @@ def _maybe_start_web_server(
     if local_step_up.local_enrollment_banner(has_credentials=has_webauthn_credentials(LOCAL_PRINCIPAL)) is not None:
         logger.warning(
             "step_up.require_passkey is set but no passkey is enrolled yet -- approving decisions and "
-            "sensitive settings changes will be refused until one is added at %s",
-            server.mint_bootstrap_url("/security"),
+            "sensitive settings changes will be refused until one is added on this install's "
+            "/security page (open PrivacyFence's companion app, or run "
+            "`privacyfence-app --print-sign-in-link`, and follow the Passkeys link)",
         )
     # #426 Phase 4: the persistent half of the same banner posture -- a
     # human reading only this log, not the web UI, should still see that
@@ -829,27 +830,24 @@ def _maybe_start_web_server(
             "wasn't done deliberately, treat this install as compromised (see "
             "docs/security-and-compliance.md's Local-mode trust boundary section)",
         )
-    # SEC-06: each of
-    # these is a fresh, single-use bootstrap link, not a persistent secret --
-    # see WebServer.mint_bootstrap_url()'s own docstring. The %s below always
-    # lands in this log redacted to bootstrap=[REDACTED] (SEC-10's
-    # SecretRedactingFormatter, setup_logging() above, matches the literal
-    # word "bootstrap" in every line this process logs) -- mint_bootstrap_
-    # url() itself writes the real, unredacted link to its own discovery
-    # file for that reason, which is what a human (or script) actually
-    # reading it back should use instead of this log line. Once a link is
-    # expired or already used, a fresh one needs either a daemon restart
-    # (rewrites both discovery files) or a mint request through the #428
-    # Phase 2 control channel (web/control_channel.py), no restart needed.
+    # No link in these lines any more, and no discovery file behind them
+    # either (the self-approval plan's Phase 2 -- see web/server.py's own
+    # _clear_legacy_bootstrap_url_files). Both channels were already
+    # half-broken by design: SEC-10's SecretRedactingFormatter scrubs
+    # bootstrap=<value> out of every line this process logs, so the log line
+    # itself never carried a usable link, and the file that did sat in a
+    # group-shared directory where anything running as this user could take
+    # the session out of it. What a human does instead is open the companion
+    # app, which is also the only route to a session that may approve
+    # (web/session_auth.py's PROVENANCE_HUMAN), or run the break-glass
+    # command these lines name.
     logger.info(
-        "Web approval UI active -- approvals open at %s",
-        server.mint_bootstrap_url("/approvals"),
+        "Web approval UI active -- open approvals from PrivacyFence's companion app, or run "
+        "`privacyfence-app --print-sign-in-link` for a one-time link (%s/approvals)",
+        server.base_url,
     )
     if use_web_settings:
-        logger.info(
-            "Web settings active -- open at %s",
-            server.mint_bootstrap_url("/settings"),
-        )
+        logger.info("Web settings active -- same two ways in (%s/settings)", server.base_url)
     if server.mcp_url:
         from .web.mcp_auth import MCP_TOKEN_FILE_NAME
 

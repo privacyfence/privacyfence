@@ -53,6 +53,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a companion nor an `authority/` boundary and is unchanged. See
   `docs/security-and-compliance.md`'s "A session is not a human", including what this deliberately
   does *not* claim about telling the companion apart from the agent.
+- **PrivacyFence no longer writes a live sign-in link to disk.** Every startup used to leave the
+  current `?bootstrap=` link in `~/.privacyfence/approvals_url` (and `settings_url`), refreshed on
+  every restart, in a directory that is group-shared with your login account by design — so any
+  program running as you, the AI client included, could read a working session out of it. Those
+  files are no longer written, and any left by an older version are deleted the next time
+  PrivacyFence starts. The not-authorized page points at the companion app and
+  `privacyfence-app --print-sign-in-link` instead; the startup log line names those two rather than
+  a link it was never able to print unredacted anyway.
 - **Removed: `privacyfence_get_sign_in_link`.** This meta-tool minted a live sign-in link for
   PrivacyFence's own approval and settings UI and handed it to the calling AI client — the exact
   party the credential governs. It existed because a locked-out human had no other way in: the

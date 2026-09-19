@@ -1025,10 +1025,11 @@ class TestInstallerContract:
         from privacyfence.web import server
 
         assert server.MCP_URL_FILE_NAME in moved
-        # approvals_url/settings_url are matched by the glob rather than
-        # named, since the set grows with every page mint_bootstrap_url()
-        # learns to mint a link for.
-        assert server._bootstrap_url_file_name("/approvals").endswith("_url")
+        # The legacy <page>_url files an older version wrote are matched by
+        # the glob rather than named -- see the scripts' own comment, and
+        # web/server.py's _clear_legacy_bootstrap_url_files for what deletes
+        # them once they have been moved.
+        assert all(name.endswith("_url") for name in server._LEGACY_BOOTSTRAP_URL_FILE_NAMES)
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     @pytest.mark.parametrize("subcommand", ["enable", "disable", "status"])

@@ -279,18 +279,22 @@ class TestUnauthorizedHtml:
         assert response.status_code == 401
         assert response.headers["cache-control"] == "no-store"
 
-    def test_points_at_the_discovery_file_not_the_redacted_log(self):
-        # Regression coverage for the actual bug this page used to send
-        # readers straight into: privacyfence.log's startup line always
-        # reads bootstrap=[REDACTED] (SecretRedactingFormatter, SEC-10), so
-        # "open the newest sign-in link PrivacyFence logged" never worked --
-        # see web/server.py's _write_bootstrap_url_file for where the real
-        # link actually lands instead.
+    def test_does_not_send_the_reader_to_the_redacted_log_or_a_file(self):
+        """Two dead ends this page has pointed at over time. The log line
+        always reads bootstrap=[REDACTED] (SecretRedactingFormatter,
+        SEC-10), so "open the newest sign-in link PrivacyFence logged" never
+        worked. The discovery file that replaced it did work -- for anything
+        running as this user, which is why the self-approval plan's Phase 2
+        stopped writing it (web/server.py's own
+        _clear_legacy_bootstrap_url_files)."""
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
-        assert "approvals_url" in body
-        assert "settings_url" in body
-        assert "redact" in body.lower()
+        assert "approvals_url" not in body
+        assert "settings_url" not in body
         assert "PrivacyFence logged" not in body
+        # Both dead ends are still *named*, so a reader who remembers one
+        # learns why it is not there rather than going to look.
+        assert "redact" in body.lower()
+        assert "no longer writes the link to a file" in body
 
     def test_still_offers_the_on_demand_bootstrap_command(self):
         # #428 Phase 2: the on-demand mint goes through the control channel
@@ -327,7 +331,6 @@ class TestUnauthorizedHtml:
 
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
 
-        assert "/home/alice/.privacyfence/approvals_url" in body
         assert "nc -U '/home/alice/.privacyfence/authority/control.sock'" in body
         assert "Get-Content" not in body
         assert "NamedPipeClientStream" not in body
@@ -344,7 +347,6 @@ class TestUnauthorizedHtml:
 
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
 
-        assert r"C:\Users\alice\AppData\Local\PrivacyFence\approvals_url" in body
         assert "NamedPipeClientStream" in body
         assert "PrivacyFence-Control-" in body
         assert "nc -U" not in body
@@ -358,7 +360,7 @@ class TestUnauthorizedHtml:
         # hunting for a tray icon ADR 0002 decision 4 says this platform
         # deliberately does not have.
         monkeypatch.setattr(sa.privilege_separation, "is_enabled", lambda: False)
-        assert "Nothing installs or starts it automatically yet" in sa._companion_availability_sentence()
+        assert "Nothing installs or starts it automatically" in sa._companion_availability_sentence()
 
         monkeypatch.setattr(sa.privilege_separation, "is_enabled", lambda: True)
         monkeypatch.setattr(sa.privilege_separation, "current_platform", lambda: "darwin")
