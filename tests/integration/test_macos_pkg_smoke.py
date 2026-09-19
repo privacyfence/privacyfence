@@ -1,9 +1,11 @@
 """Release-workflow structural smoke test for the built ``.pkg`` installer
-(``scripts/build_pkg.sh``).
+(``scripts/build_pkg.sh``), which is what the shipped DMG carries and what a
+macOS user actually double-clicks -- see ``scripts/build_dmg.sh``'s own header.
 
 Deliberately the *lightweight* half of this artifact's coverage: it never
 installs anything and needs no root, so it runs inline in ``build.yml``'s
-release-critical ``build`` job, right after ``scripts/build_pkg.sh`` --
+release-critical ``build`` job, right after ``scripts/build_dmg.sh`` (which
+builds the ``.pkg`` itself, via ``scripts/build_pkg.sh``) --
 mirroring how ``test_macos_packaged_smoke.py`` (TST-15) stays a fast, no-
 ``launchctl`` check in that same job while the real install-and-launchd
 verification (this artifact's own analogue is
@@ -71,8 +73,8 @@ pytestmark = [
         not _built_pkgs(),
         reason=(
             "no dist/PrivacyFence-*.pkg built yet -- this is the release-workflow smoke test "
-            "build.yml's `build` job runs after scripts/build_pkg.sh; run scripts/build_dmg.sh "
-            "then scripts/build_pkg.sh locally first to exercise this test outside CI"
+            "build.yml's `build` job runs after scripts/build_dmg.sh; run that script locally "
+            "first (it builds the .pkg too) to exercise this test outside CI"
         ),
     ),
     pytest.mark.skipif(shutil.which("pkgutil") is None, reason="pkgutil not on PATH"),
@@ -151,9 +153,9 @@ def test_pkg_signature(expanded_pkg):
     output = check.stdout + check.stderr
     if "Status: no signature" in output or check.returncode != 0:
         pytest.skip(
-            f"{pkg_path.name} is unsigned for this build (SIGN_IDENTITY unset) -- "
-            f"run scripts/build_pkg.sh --sign '<Developer ID Installer identity>' to exercise "
-            f"this test: {output}"
+            f"{pkg_path.name} is unsigned for this build (SIGN_IDENTITY_INSTALLER unset) -- "
+            f"build with SIGN_IDENTITY_INSTALLER='<Developer ID Installer identity>' set to "
+            f"exercise this test: {output}"
         )
     assert "Developer ID Installer" in output, (
         f"expected a real Developer ID Installer signature, not some other identity type:\n{output}"

@@ -47,6 +47,78 @@ class TestChannelForVersion:
             r2_release.channel_for_version("not-a-version")
 
 
+class TestAssertTagMatchesVersion:
+    """The guard that keeps a retagged commit from building someone else's version.
+
+    setuptools_scm resolves __version__ from `git describe`, which reports *a* tag on the commit
+    being built -- so a commit carrying both v4.1.0a6 and v4.1.0a7 can build as 4.1.0a6 on a
+    v4.1.0a7 push, then fail at upload time against the immutability guard below.
+    """
+
+    @pytest.mark.parametrize(
+        ("tag", "version"),
+        [
+            ("v4.1.0", "4.1.0"),
+            ("4.1.0", "4.1.0"),  # tolerates a tag spelled without the "v", same as channel above
+            ("v4.2.0b1", "4.2.0b1"),
+            ("v4.2.0rc2", "4.2.0rc2"),
+            # PEP 440 lets one pre-release be spelled several ways and setuptools_scm normalizes
+            # them all, so tag and resolved version are routinely spelled differently while naming
+            # one release. This check must not be stricter about that than setuptools_scm is.
+            ("v4.1.0-a1", "4.1.0a1"),
+            ("v4.1.0.rc2", "4.1.0rc2"),
+            ("v4.1.0_b3", "4.1.0b3"),
+            ("v4.1.0-alpha1", "4.1.0a1"),
+            ("v4.1.0-beta2", "4.1.0b2"),
+            ("v4.1.0-preview3", "4.1.0rc3"),
+            ("v4.1.0C4", "4.1.0rc4"),
+        ],
+    )
+    def test_accepts_matching_tag(self, tag, version):
+        assert r2_release.assert_tag_matches_version(tag, version) is None
+
+    @pytest.mark.parametrize(
+        ("tag", "version"),
+        [
+            ("v4.1.0a7", "4.1.0a6"),  # the real one: two alpha tags on one commit
+            ("v4.1.0a7", "4.1.0"),  # pre-release tag, stable version
+            ("v4.1.0", "4.1.0a7"),  # and the reverse
+            ("v4.2.0", "4.1.0"),
+            ("v4.1.1", "4.1.0"),
+            ("v4.2.0b1", "4.2.0a1"),  # same number, different stage
+        ],
+    )
+    def test_rejects_mismatched_tag(self, tag, version):
+        with pytest.raises(ValueError, match="does not name the version this build resolved"):
+            r2_release.assert_tag_matches_version(tag, version)
+
+    def test_rejects_dev_build_version(self):
+        # A shallow clone (or a tag history that never arrived) resolves to fallback_version or a
+        # dev version -- neither names a release, so this fails here rather than at upload.
+        with pytest.raises(ValueError, match="between-tags dev build"):
+            r2_release.assert_tag_matches_version("v4.1.0", "4.1.0.dev3+gabc1234")
+
+    def test_rejects_unparseable_tag(self):
+        with pytest.raises(ValueError, match="doesn't look like a release version"):
+            r2_release.assert_tag_matches_version("not-a-tag", "4.1.0")
+
+
+class TestCheckTagCommand:
+    """The `check-tag` CLI surface build.yml and publish-pypi.yml actually call."""
+
+    def test_exits_zero_on_match(self, capsys):
+        assert r2_release.main(["check-tag", "--tag", "v4.2.0b1", "--version", "4.2.0b1"]) == 0
+        assert "4.2.0b1" in capsys.readouterr().out
+
+    def test_exits_one_on_mismatch(self, capsys):
+        assert r2_release.main(["check-tag", "--tag", "v4.1.0a7", "--version", "4.1.0a6"]) == 1
+        # The message has to be enough to act on from a CI log alone -- both spellings, and why.
+        stderr = capsys.readouterr().err
+        assert "v4.1.0a7" in stderr
+        assert "4.1.0a6" in stderr
+        assert "git describe" in stderr
+
+
 class TestUploadRejectsDevBuild:
     def test_upload_raises_before_touching_r2(self, monkeypatch):
         # A dev-build version should fail fast on channel_for_version(), before upload() ever
@@ -137,7 +209,6 @@ def _seed_release(client, version="4.3.0", channel="stable", *, installers=("dmg
     prefix = f"releases/{channel}/{version}/"
     names = {
         "dmg": f"PrivacyFence-{version}.dmg",
-        "pkg": f"PrivacyFence-{version}.pkg",
         "exe": f"PrivacyFence-{version}-setup.exe",
         "deb": f"privacyfence_{version}_amd64.deb",
     }
@@ -157,7 +228,6 @@ class TestClassifyInstaller:
         [
             ("PrivacyFence-4.3.0.dmg", ("macos-arm64", "macos", "arm64")),
             ("PrivacyFence-4.2.0b1.dmg", ("macos-arm64", "macos", "arm64")),
-            ("PrivacyFence-4.3.0.pkg", ("macos-arm64-pkg", "macos", "arm64")),
             ("PrivacyFence-4.3.0-setup.exe", ("windows-x64", "windows", "x64")),
             ("privacyfence_4.3.0_amd64.deb", ("linux-x64", "linux", "x64")),
         ],
@@ -181,6 +251,12 @@ class TestClassifyInstaller:
         # These stay in R2 but must never enter the manifest: the Worker counts every artifact it
         # serves, so listing them here would silently inflate the installer-download KPI.
         assert r2_release.classify_installer(filename) is None
+
+    def test_macos_pkg_is_not_a_downloadable_artifact(self):
+        # The .pkg (#428 D2) ships *inside* the DMG now (scripts/build_dmg.sh), so build.yml
+        # never uploads one -- and if a stray one ever reached this prefix, it must not become a
+        # second macOS download the Worker serves and counts alongside the DMG that contains it.
+        assert r2_release.classify_installer("PrivacyFence-4.3.0.pkg") is None
 
 
 class TestUploadImmutability:
@@ -259,28 +335,18 @@ class TestFinalize:
         assert fake_s3.objects["releases/stable/latest.json"]["Body"] == b'{"version": "4.2.0"}'
         assert "releases/stable/4.3.0/manifest.json" not in fake_s3.objects
 
-    def test_missing_pkg_does_not_block_latest(self, fake_s3):
-        # #428 D2: unlike dmg/exe/deb, the .pkg is not in REQUIRED_ARTIFACT_IDS -- a release with
-        # no .pkg at all (the default _seed_release set) must still finalize and reach "latest".
-        _seed_release(fake_s3)  # dmg, exe, deb -- no pkg
+    def test_one_installer_per_platform_is_the_whole_required_set(self, fake_s3):
+        # Three downloads, one per platform -- the macOS `.pkg` is not a fourth (it rides inside
+        # the DMG, see classify_installer's own test above), so a complete release is exactly
+        # these three and every one of them is mandatory.
+        _seed_release(fake_s3)
 
         manifest = r2_release.finalize("4.3.0")
 
         assert {artifact["id"] for artifact in manifest["artifacts"]} == {"macos-arm64", "windows-x64", "linux-x64"}
+        assert r2_release.REQUIRED_ARTIFACT_IDS == {"macos-arm64", "windows-x64", "linux-x64"}
         pointer = json.loads(fake_s3.objects["releases/stable/latest.json"]["Body"])
         assert pointer == {"version": "4.3.0", "manifest": "releases/stable/4.3.0/manifest.json"}
-
-    def test_pkg_is_included_when_present_but_still_optional(self, fake_s3):
-        _seed_release(fake_s3, installers=("dmg", "exe", "deb", "pkg"))
-
-        manifest = r2_release.finalize("4.3.0")
-
-        ids = {artifact["id"] for artifact in manifest["artifacts"]}
-        assert ids == {"macos-arm64", "macos-arm64-pkg", "windows-x64", "linux-x64"}
-        pkg_artifact = next(a for a in manifest["artifacts"] if a["id"] == "macos-arm64-pkg")
-        assert pkg_artifact["filename"] == "PrivacyFence-4.3.0.pkg"
-        assert pkg_artifact["platform"] == "macos"
-        assert "macos-arm64-pkg" not in r2_release.REQUIRED_ARTIFACT_IDS
 
     def test_object_without_recorded_digest_is_refused(self, fake_s3):
         prefix = _seed_release(fake_s3)

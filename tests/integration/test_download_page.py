@@ -77,20 +77,22 @@ STABLE_MANIFEST = {
     ],
 }
 
-# #428 D2: the .pkg is an additional macOS artifact alongside the DMG above, not a replacement --
-# STABLE_MANIFEST's own three artifacts plus this one, used by TestMacPkgInstaller below.
-STABLE_MANIFEST_WITH_PKG = {
+# An artifact id download.js's own PLATFORMS map has never heard of -- STABLE_MANIFEST's three
+# plus this one, used by TestUnknownArtifactId below. Deliberately a plausible *future* platform
+# rather than a made-up one: the point of the map's fallback is that adding a platform to a
+# release ships it on the website with no website deploy at all.
+STABLE_MANIFEST_WITH_UNKNOWN_ARTIFACT = {
     **STABLE_MANIFEST,
     "artifacts": [
         *STABLE_MANIFEST["artifacts"],
         {
-            "id": "macos-arm64-pkg",
+            "id": "linux-arm64",
             "kind": "installer",
-            "platform": "macos",
+            "platform": "linux",
             "architecture": "arm64",
-            "filename": "PrivacyFence-4.3.0.pkg",
-            "key": "releases/stable/4.3.0/PrivacyFence-4.3.0.pkg",
-            "size": 104000000,
+            "filename": "privacyfence_4.3.0_arm64.deb",
+            "key": "releases/stable/4.3.0/privacyfence_4.3.0_arm64.deb",
+            "size": 44000000,
             "sha256": "e" * 64,
         },
     ],
@@ -411,37 +413,41 @@ class TestDegradedApi:
             context.close()
 
 
-class TestMacPkgInstaller:
-    """#428 D2: the .pkg is an additional macOS artifact alongside the DMG, not a replacement --
-    a manifest that includes one must render both as separate cards (download.js's own "nothing
-    hardcoded" design means this needs no page change, only the extra manifest entry), and OS
-    detection must still recommend only the DMG: download.js's PLATFORMS map lists 'macos-arm64'
-    before 'macos-arm64-pkg', and detectPlatformId() returns the first id whose regex matches."""
+class TestUnknownArtifactId:
+    """download.js hardcodes nothing about a release: an artifact id its own PLATFORMS map has no
+    display name for still gets a card (falling back to the id itself) rather than being silently
+    dropped while it waits for a website deploy. This is the property that used to be exercised by
+    a second macOS card for the `.pkg` -- which is no longer a download of its own, since the DMG
+    now carries it (see scripts/build_dmg.sh) -- so it is asserted directly here instead."""
 
     MAC_UA = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
     )
 
-    def test_renders_alongside_the_dmg(self, browser, website_server):
-        context, page = _open_download_page(browser, website_server, stable=STABLE_MANIFEST_WITH_PKG)
+    def test_renders_alongside_the_known_platforms(self, browser, website_server):
+        context, page = _open_download_page(
+            browser, website_server, stable=STABLE_MANIFEST_WITH_UNKNOWN_ARTIFACT,
+        )
         try:
             ids = page.eval_on_selector_all(
                 ".download-grid:not(.compact) .download-card", "cards => cards.map(c => c.dataset.artifactId)"
             )
-            assert sorted(ids) == ["linux-x64", "macos-arm64", "macos-arm64-pkg", "windows-x64"]
+            assert sorted(ids) == ["linux-arm64", "linux-x64", "macos-arm64", "windows-x64"]
 
-            href = page.get_attribute('.download-card[data-artifact-id="macos-arm64-pkg"] .download-button', "href")
-            assert href == f"{API_ORIGIN}/download/stable/macos-arm64-pkg"
+            href = page.get_attribute('.download-card[data-artifact-id="linux-arm64"] .download-button', "href")
+            assert href == f"{API_ORIGIN}/download/stable/linux-arm64"
 
             body = page.inner_text("body")
-            assert "PrivacyFence-4.3.0.pkg" in body
+            assert "privacyfence_4.3.0_arm64.deb" in body
         finally:
             context.close()
 
-    def test_only_the_dmg_is_recommended_for_a_mac_visitor(self, browser, website_server):
+    def test_it_never_becomes_the_recommendation(self, browser, website_server):
+        # detectPlatformId() only ever returns an id PLATFORMS knows, so an unmapped artifact can
+        # render without ever being the one a visitor is steered to.
         context, page = _open_download_page(
-            browser, website_server, stable=STABLE_MANIFEST_WITH_PKG, user_agent=self.MAC_UA,
+            browser, website_server, stable=STABLE_MANIFEST_WITH_UNKNOWN_ARTIFACT, user_agent=self.MAC_UA,
         )
         try:
             highlighted = page.eval_on_selector_all(
