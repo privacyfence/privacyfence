@@ -34,11 +34,14 @@ CONSOLE_USER="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
 if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ] || [ "$CONSOLE_USER" = "loginwindow" ]; then
   # Nobody is actually logged in at install time (a remote/unattended install,
   # or a package run at the login window) -- there is no human account yet to
-  # own this install or add to the service group. Leave it opt-in rather than
-  # guess; the daemon's own maybe_auto_enable_macos() asks again once someone
-  # is actually logged in and the daemon first starts in their session.
-  log "no logged-in console user detected (got '${CONSOLE_USER:-<empty>}') -- leaving privilege separation opt-in."
-  exit 0
+  # add to the service group. That used to end this script, leaving the whole
+  # install unseparated; ADR 0003 decision 3 splits `enable` so it no longer
+  # has to. The machine half below runs regardless and fully separates the
+  # install, and the one step that genuinely needs a human -- the group
+  # membership -- is recorded as pending, which the companion app closes by
+  # itself at the first real login session.
+  log "no logged-in console user detected (got '${CONSOLE_USER:-<empty>}') -- provisioning the machine half and leaving the group membership pending."
+  CONSOLE_USER=""
 fi
 
 if [ ! -x "$SEPARATION_SCRIPT" ]; then
@@ -49,9 +52,19 @@ if [ ! -x "$SEPARATION_SCRIPT" ]; then
   exit 0
 fi
 
-log "provisioning privilege separation for ${CONSOLE_USER} (#428 D2)…"
-if "$SEPARATION_SCRIPT" enable --auto --user "$CONSOLE_USER" --app "$APP_PATH"; then
-  log "privilege separation enabled -- ${CONSOLE_USER} still needs to log out and back in once before the companion app and MCP client can reach the daemon (macOS only evaluates group membership at login; see 'sudo ${SEPARATION_SCRIPT} status')."
+log "provisioning privilege separation for ${CONSOLE_USER:-this machine} (#428 D2, ADR 0003 decision 3)…"
+ENABLE_STATUS=0
+if [ -n "$CONSOLE_USER" ]; then
+  "$SEPARATION_SCRIPT" enable --auto --user "$CONSOLE_USER" --app "$APP_PATH" || ENABLE_STATUS=$?
+else
+  "$SEPARATION_SCRIPT" enable --auto --app "$APP_PATH" || ENABLE_STATUS=$?
+fi
+if [ "$ENABLE_STATUS" -eq 0 ]; then
+  if [ -n "$CONSOLE_USER" ]; then
+    log "privilege separation enabled -- ${CONSOLE_USER} still needs to log out and back in once before the companion app and MCP client can reach the daemon (macOS only evaluates group membership at login; see 'sudo ${SEPARATION_SCRIPT} status')."
+  else
+    log "privilege separation enabled -- nobody is in the service group yet; the companion app adds the first account to log in, or run 'sudo ${SEPARATION_SCRIPT} enable --for-user <name>'."
+  fi
 else
   # enable --auto itself never exits non-zero (it logs and returns 0 on every
   # failure path -- see that script's own --auto handling), so reaching this
