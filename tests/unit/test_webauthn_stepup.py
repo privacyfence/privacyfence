@@ -308,7 +308,8 @@ class TestRegistrationChallengeStore:
     def test_put_then_pop(self):
         store = wa.RegistrationChallengeStore()
         store.put("alice", b"chal")
-        assert store.pop("alice").challenge == b"chal"
+        popped = store.pop("alice")
+        assert popped.challenge == b"chal"
 
     def test_pop_is_single_use(self):
         store = wa.RegistrationChallengeStore()
@@ -320,7 +321,8 @@ class TestRegistrationChallengeStore:
         store = wa.RegistrationChallengeStore()
         store.put("alice", b"first")
         store.put("alice", b"second")
-        assert store.pop("alice").challenge == b"second"
+        popped = store.pop("alice")
+        assert popped.challenge == b"second"
 
     def test_a_challenge_is_unauthorized_unless_put_says_otherwise(self):
         # The enrollment gate: web/routes_security.py's register_verify refuses a ceremony
@@ -329,12 +331,14 @@ class TestRegistrationChallengeStore:
         # check fail closed for any future caller that forgets to set it.
         store = wa.RegistrationChallengeStore()
         store.put("alice", b"chal")
-        assert store.pop("alice").authorized is False
+        popped = store.pop("alice")
+        assert popped.authorized is False
 
     def test_an_authorized_challenge_says_so(self):
         store = wa.RegistrationChallengeStore()
         store.put("alice", b"chal", authorized=True)
-        assert store.pop("alice").authorized is True
+        popped = store.pop("alice")
+        assert popped.authorized is True
 
 
 class TestIsStepUpRequired:
