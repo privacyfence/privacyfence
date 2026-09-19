@@ -396,11 +396,12 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
 # The catalogue itself moved to policy/catalogue.py at P7, so the bridge's
 # privacyfence_propose_policy_change can share it instead of re-deriving it a second time (see that
 # module's own docstring). Re-exported here under their original, private spellings so every
-# existing caller/test in this file keeps working unchanged.
-_PolicyExtraScope = policy_catalogue.PolicyExtraScope
+# existing caller/test in this file keeps working unchanged -- which is only these four. P7's
+# original block carried three more (``_PolicyExtraScope``, ``_POLICY_VALUE_HINTS``,
+# ``_extra_operations_for``); nothing referenced them under either spelling, so they were aliases
+# kept for callers that had already moved. Import them from ``policy/catalogue.py`` directly if
+# one ever needs them again, rather than re-adding a private alias here.
 _POLICY_EXTRA_SCOPES = policy_catalogue.EXTRA_SCOPES
-_POLICY_VALUE_HINTS = policy_catalogue.VALUE_HINTS
-_extra_operations_for = policy_catalogue.extra_operations_for
 _policy_scope_catalogue = policy_catalogue.scope_catalogue
 _parse_verbs = policy_catalogue.parse_verbs
 _rules_for_catalogue_entry = policy_catalogue.rules_for_catalogue_entry

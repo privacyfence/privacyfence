@@ -113,6 +113,19 @@ def _resolve_salesforce_report(client: Any, resource_id: str) -> str | None:
         return None
 
 
+def _identity_value_of(entry: dict[str, Any]) -> Any:
+    """``GrantResourceType.value_of``'s default: the whole v1 grant entry.
+
+    A module-level function rather than the inline ``lambda entry: entry`` this used to be. The
+    lambda was correct -- a dataclass field default is assigned onto the instance by the generated
+    ``__init__``, so it never became a bound method and ``rt.value_of(entry)`` always passed
+    exactly one argument -- but it sits in a class body, which every static analyzer reads as a
+    method definition and then flags the one-argument call as passing too many. Naming it here
+    says the same thing to a reader and to an analyzer at once, and retires an ``E731`` waiver.
+    """
+    return entry
+
+
 @dataclass(frozen=True)
 class GrantResourceType:
     """One kind of resource a rule can name the identity of (a Drive folder, a Jira project, ...).
@@ -129,7 +142,7 @@ class GrantResourceType:
     # (client, resource_id) -> display name, or None if not resolvable right now.
     resolver: Callable[[Any, str], str | None]
     # Build the rule value contributed by one v1 grant entry. Defaults to just the id.
-    value_of: Callable[[dict[str, Any]], Any] = lambda entry: entry  # noqa: E731
+    value_of: Callable[[dict[str, Any]], Any] = _identity_value_of
 
     def id_of(self, entry: dict[str, Any]) -> str:
         return str(entry.get(self.id_field, ""))
