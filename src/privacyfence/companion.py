@@ -123,7 +123,13 @@ def _open_path(path: str) -> bool:
        fresh by an applications-menu click while the autostarted ``--serve``
        process holds the address (ADR 0003 decision 5). Ask that process to
        do it (``SHOW``): it is the one the daemon can call back, and it
-       opens the browser in the same session this click came from.
+       opens the browser in the same session this click came from. That
+       process asks the human to confirm first, and cannot be talked out of
+       it: this line arrives from another process running as the same OS
+       user, so it carries no evidence of a human on its own -- see
+       ``control_channel._show_page``. On this platform that dialog is the
+       click's own confirmation, which is the trade for having no tray icon
+       to click instead (ADR 0002 decision 4).
     3. **Nobody owns it**: an unattested link, which still signs the human in
        to look at what is pending. Logged as the reduced thing it is, naming
        the companion, rather than silently handing back a session whose

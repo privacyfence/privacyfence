@@ -932,22 +932,50 @@ class TestConfirmSignInCommand:
 class TestShowCommand:
     """``SHOW <path>``: a one-shot companion invocation (Linux's
     applications-menu click) handing the job to whichever process owns the
-    channel, because that is the only one the daemon can call back."""
+    channel, because that is the only one the daemon can call back.
 
-    def test_it_opens_an_attested_link_for_an_allowlisted_page(self, monkeypatch):
+    Unlike ``CONFIRM MINT``, this one has no evidence of its own that a
+    human is behind it -- it arrives from another process running as this
+    same OS user, and the agent is indistinguishable from the menu click it
+    exists for. So the dialog is what makes the session it produces
+    attributable to a person, and these tests exist mostly to pin that it
+    cannot be skipped.
+    """
+
+    @pytest.fixture
+    def allow(self, monkeypatch):
+        asked: list[str] = []
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: asked.append(prompt) or True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        return asked
+
+    def test_an_allowed_dialog_opens_an_attested_link(self, allow, monkeypatch):
         opened: list[str] = []
         monkeypatch.setattr(cc, "open_attested_url", lambda path: (bool(opened.append(path)) or True, ""))
-        assert cc._handle_companion_request("SHOW /approvals\n") == "OK\n"
-        assert opened == ["/approvals"]
 
-    def test_a_page_outside_the_allowlist_is_refused(self, monkeypatch):
-        monkeypatch.setattr(cc, "open_attested_url", lambda path: (True, ""))
+        assert cc._handle_companion_request("SHOW /approvals\n") == "OK\n"
+
+        assert opened == ["/approvals"]
+        assert allow == [cc._CONFIRM_SHOW_PROMPT]
+
+    def test_a_denied_dialog_mints_nothing_at_all(self, monkeypatch):
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "open_attested_url", lambda path: pytest.fail("minted after a Deny"))
+
+        reply = cc._handle_companion_request("SHOW /approvals\n")
+
+        assert reply.startswith("ERROR")
+        assert "denied" in reply
+
+    def test_a_page_outside_the_allowlist_is_refused_without_asking(self, allow):
         assert cc._handle_companion_request("SHOW /security\n") == "ERROR unknown page\n"
         # Not a URL either: SHOW reaches the process that can mint a session
         # able to approve, so the caller never picks where it lands.
         assert cc._handle_companion_request("SHOW http://evil.example/\n") == "ERROR unknown page\n"
+        assert allow == []
 
-    def test_a_failure_to_open_passes_its_reason_back(self, monkeypatch):
+    def test_a_failure_to_open_passes_its_reason_back(self, allow, monkeypatch):
         monkeypatch.setattr(cc, "open_attested_url", lambda path: (False, "could not open a browser"))
         assert cc._handle_companion_request("SHOW /settings\n") == "ERROR could not open a browser\n"
 
@@ -1117,9 +1145,11 @@ class TestAttestedMintClientHelpers:
 
     def test_request_show_reaches_the_running_companion(self, both_channels, monkeypatch):
         shown = []
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
         monkeypatch.setattr(cc, "open_attested_url", lambda path: (bool(shown.append(path)) or True, ""))
 
-        assert cc.request_show("/approvals") is True
+        assert cc.request_show("/approvals", timeout=10.0) is True
         assert shown == ["/approvals"]
 
     def test_request_mint_attestation_is_true_only_for_a_live_nonce(self, both_channels):

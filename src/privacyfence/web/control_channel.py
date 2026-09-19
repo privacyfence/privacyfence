@@ -543,6 +543,13 @@ _CONFIRM_SIGN_IN_PROMPT = (
     "prints will be able to release writes PrivacyFence is holding.\n\n"
     "If you did not just run that command yourself, choose Deny."
 )
+_CONFIRM_SHOW_PROMPT = (
+    "Open PrivacyFence, with a sign-in that can approve?\n\n"
+    "Something on this machine asked PrivacyFence's companion to open your approvals or "
+    "settings page. The link it opens will be able to release writes PrivacyFence is "
+    "holding.\n\n"
+    "If you did not just choose PrivacyFence from your applications menu, choose Deny."
+)
 _CONFIRM_ALLOW_LABEL = "Allow"
 _CONFIRM_DENY_LABEL = "Deny"
 
@@ -734,12 +741,40 @@ SHOW_PATHS = ("/approvals", "/settings")
 
 
 def _show_page(path: str) -> str:
-    """``SHOW <path>``'s actual work -- mint an attested code for ``path``
-    and open it here, in the process the daemon can call back. Deferred
-    import of nothing: ``_open_attested_url()`` lives in this module so
-    companion.py's one-shot and this handler share one implementation."""
+    """``SHOW <path>``'s actual work -- ask the human, then mint an attested
+    code for ``path`` and open it here, in the process the daemon can call
+    back.
+
+    **The dialog is not optional, and this is the command that most needs
+    it.** ``CONFIRM MINT`` is safe without one because its nonce can only
+    have come from a click in this process; ``SHOW`` has no such evidence.
+    It arrives from another process running as this same OS user -- Linux's
+    one-shot applications-menu click is the caller it exists for, and the
+    agent is indistinguishable from it (ADR 0002 decision 6), on every
+    platform, since ``_verify_companion_peer`` only ever constrains the
+    *daemon-facing* commands and the Windows pipe ACL grants this user.
+    Without a dialog, anything running as the user could make this process
+    mint a session that may approve and hand it to a browser, at any
+    moment, with no human anywhere in it -- and a bootstrap code in a
+    browser's argv is readable by a sibling process on that same account.
+    So what makes the resulting session attributable to a person is that a
+    person clicked Allow, exactly as for ``CONFIRM SIGNIN``.
+
+    On the click this exists for, that dialog is one extra Allow on the
+    platform with no tray icon to click instead (ADR 0002 decision 4). A
+    desktop with neither zenity nor kdialog gets a refusal naming the fix,
+    and companion.py falls back to an unattested link that can still show
+    what is pending -- see its own ``_open_path``.
+    """
     if path not in SHOW_PATHS:
         return "ERROR unknown page\n"
+    asked = _ask_human(
+        _CONFIRM_SHOW_PROMPT,
+        subject="applications-menu sign-in",
+        denied_reason="opening PrivacyFence was denied",
+    )
+    if not asked.startswith("OK"):
+        return asked
     opened, reason = open_attested_url(path)
     return "OK\n" if opened else f"ERROR {reason}\n"
 
@@ -1369,13 +1404,18 @@ def open_attested_url(path: str, *, timeout: float = 5.0) -> tuple[bool, str]:
     return (True, "") if opened else (False, "could not open a browser")
 
 
-def request_show(path: str, *, timeout: float = 5.0) -> bool:
+def request_show(path: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 20.0) -> bool:
     """Ask a *running* companion to open ``path`` itself (``SHOW``) -- what a
     one-shot ``--action`` invocation does instead of minting, since the
     session it could mint on its own would be unattested (see
     ``mint_attested_bootstrap_code()``). False whenever no companion answers,
     which is the ordinary case on an install where nothing autostarts one:
-    companion.py falls back from there rather than failing the click."""
+    companion.py falls back from there rather than failing the click.
+
+    The long default timeout is the dialog on the other end (``_show_page``,
+    which explains why it is there): the reply does not come back until
+    somebody has answered it, and giving up first would turn an Allow into a
+    fallback to a link that cannot approve."""
     if path not in SHOW_PATHS:  # pragma: no cover -- callers pass this module's own constants
         raise ValueError(f"path must be one of {SHOW_PATHS}, got {path!r}")
     try:

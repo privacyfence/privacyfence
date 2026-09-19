@@ -210,6 +210,24 @@ nothing. `/security` lists the most recent of these under **Recent sign-ins**, b
 entry nobody reads is evidence after the fact: the point is that a link you did not ask for is
 visible on the page you already visit to reason about what can approve here.
 
+**A code in a browser's address bar is still a code on this machine.** The companion signs a human
+in the only way a local web UI can: by opening `…?bootstrap=<code>` in their browser. On a
+shared-uid machine a sibling process can read that URL out of the browser's own command line
+(`/proc/<pid>/cmdline` on Linux, the equivalent elsewhere) for as long as it takes the browser to
+redeem it, and the code is single-use, so whoever redeems first wins. What provenance changes is
+that this is now a *race against a human click* rather than a file sitting in a group-shared
+directory being refreshed on every restart — an attested session can no longer be obtained at a
+time of the agent's choosing. It is not a boundary, and nothing about a credential passed through a
+URL can be made into one; closing it properly means the companion handing the daemon a session the
+browser never carries, which is not what any of this ships today.
+
+The same reasoning is why the companion's `SHOW` command — the one an applications-menu click on
+Linux uses to have the running companion do the opening — puts the confirmation dialog in front of
+a human before it mints anything. That line arrives from another process running as the same OS
+user, and the agent is indistinguishable from the menu click it exists for; without the dialog, any
+local process could make the companion mint an approving session and open it in a browser at any
+moment, with the above race for the code and no human anywhere in it.
+
 **What this is not: authentication of the companion.** Companion and agent share an OS user, and
 the companion's own channel lives under `handoff_dir()`, which `paths.py` states outright is
 "deliberately *not* a security boundary" — so a local process running as that user can bind that
