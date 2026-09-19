@@ -20,7 +20,8 @@ application (decision 4), not a new binary.
 Platform behavior:
   - **macOS/Windows**: with no ``--action``, runs a persistent process with
     a tray/menu-bar icon (``pystray``) offering Open Approvals, Open
-    Settings, and Quit -- the whole product surface decision 2 describes.
+    Settings, New Recovery Code and Quit -- the whole product surface
+    decision 2 describes.
     While running, it also runs a ``CompanionChannelServer`` so the
     daemon's own connector OAuth flows (``oauth_loopback.py``) can hand it
     a URL to open instead of calling ``webbrowser.open()`` themselves
@@ -30,7 +31,8 @@ Platform behavior:
   - **Linux**: no tray (decision 4's dependency-budget call) -- ``main()``
     instead dispatches once on a single ``--action`` and exits, invoked by
     ``resources/linux/privacyfence-companion.desktop``'s main ``Exec=``
-    (Open Approvals) and its ``Desktop Action`` entries (Settings, Quit).
+    (Open Approvals) and its ``Desktop Action`` entries (Settings, New
+    Recovery Code, Quit).
     ``--serve`` is the third shape, added by #428 Phase 4 (B5b): the
     ``CompanionChannelServer`` alone, with no tray and no menu, so a
     separated install's daemon -- which now runs as its own account with no
@@ -58,6 +60,25 @@ PrivacyFence process that runs inside a real login session, as the person
 whose membership is missing, so "nobody was logged in at install time" stops
 meaning "this install is unprotected forever" and starts meaning "the
 companion resolves this by existing". See ``_complete_pending_separation()``.
+
+Phase 1 of the self-approval hardening plan leans on that same property
+twice more, and both follow from "the only process that runs where a human
+is". Neither renders any PrivacyFence content of its own -- decision 2 still
+holds, and the module still imports nothing but ``web/control_channel.py``:
+
+- **The first passkey** (item 1.2). A packaged install now defaults
+  ``step_up.enabled``/``step_up.require_passkey`` on
+  (``step_up_config.default_local_step_up()``), so a fresh one comes up
+  requiring a passkey it does not have -- a fail-closed state in which
+  nothing is approved, and one nobody would find on their own. This process
+  asks the daemon whether that is the case at each start and, if it is,
+  opens ``/security`` with a session already minted. See
+  ``_offer_first_enrollment()``.
+- **The one-time recovery code** (item 1.3). It is no longer handed to a
+  browser on a packaged install; the daemon calls into this process's own
+  channel to put it on the desktop. Re-presenting one means issuing a new
+  one, since nothing keeps the plaintext, which is what the menu entry
+  ``_show_recovery_code()`` backs does.
 """
 from __future__ import annotations
 
@@ -65,6 +86,7 @@ import argparse
 import logging
 import sys
 import threading
+import time
 import webbrowser
 from typing import Callable
 from pathlib import Path
@@ -74,9 +96,13 @@ from .std_streams import ensure_std_streams
 from .web.control_channel import (
     CompanionChannelServer,
     ControlChannelError,
+    enrollment_state,
     mint_bootstrap_code,
+    open_attested_url,
     read_base_url,
     request_quit,
+    request_recovery_code,
+    request_show,
 )
 
 logger = logging.getLogger("privacyfence.companion")
@@ -87,23 +113,76 @@ logger = logging.getLogger("privacyfence.companion")
 # (open-settings, quit).
 ACTION_OPEN_APPROVALS = "open-approvals"
 ACTION_OPEN_SETTINGS = "open-settings"
+# Plan item 1.3: the only way a recovery code is ever shown a second time.
+# It is a menu entry rather than anything on /security because the code is
+# not the daemon's to hand a browser any more -- see _show_recovery_code().
+ACTION_RECOVERY_CODE = "recovery-code"
 ACTION_QUIT = "quit"
-_ACTIONS = (ACTION_OPEN_APPROVALS, ACTION_OPEN_SETTINGS, ACTION_QUIT)
+_ACTIONS = (ACTION_OPEN_APPROVALS, ACTION_OPEN_SETTINGS, ACTION_RECOVERY_CODE, ACTION_QUIT)
+
+# How long _offer_first_enrollment() keeps looking for a daemon before
+# giving up for this login session. A packaged install starts its daemon as
+# a system service and this process from the user's own session, so the two
+# race at login by design; ten seconds covers that without keeping a thread
+# (or a human) waiting on an install where PrivacyFence simply is not
+# running, which is an ordinary state this process already tolerates
+# everywhere else.
+_DAEMON_WAIT_ATTEMPTS = 5
+_DAEMON_WAIT_SECONDS = 2.0
 
 _TRAY_PLATFORMS = ("darwin", "win32")
 
 _TRAY_ICON_PATH = Path(__file__).parent / "resources" / "icon_menubar.png"
 
+# Set once this process is actually answering on the companion channel --
+# which is what decides whether ``_open_path()`` can mint an attested link
+# itself or has to hand the job to whichever process is (see its own
+# docstring). A plain module-level Event rather than a parameter threaded
+# through ``_run_action``: the tray's menu callbacks are invoked by pystray
+# with nothing of ours in scope, and a flag set beside the ``start()`` that
+# makes it true cannot fall out of step with it.
+_channel_running = threading.Event()
+
 
 def _open_path(path: str) -> bool:
-    """Mint a fresh bootstrap code over the daemon's own control channel
-    and open ``path`` in the user's default browser -- the exact link
-    ``web/server.py``'s own ``mint_bootstrap_url()`` would have produced,
-    minted the same way daemon_main.py's startup log line is, just from
-    here instead of that log line or ``privacyfence_get_sign_in_link``.
+    """Mint a fresh bootstrap code over the daemon's own control channel and
+    open ``path`` in the user's default browser -- this process's whole
+    product surface (ADR 0002 decision 2), and, since the self-approval
+    plan's Phase 2, the only route to a session that may *approve* rather
+    than merely view (web/session_auth.py's ``PROVENANCE_HUMAN``).
+
+    What makes that session attestable is the daemon calling back to
+    whichever process owns the companion channel, so which process this is
+    decides how the link gets minted:
+
+    1. **This one owns the channel** (the tray loop, or ``--serve``): mint
+       it here, answering the daemon's own call-back from the accept loop.
+    2. **Another companion owns it** -- Linux's one-shot ``--action``, spawned
+       fresh by an applications-menu click while the autostarted ``--serve``
+       process holds the address (ADR 0003 decision 5). Ask that process to
+       do it (``SHOW``): it is the one the daemon can call back, and it
+       opens the browser in the same session this click came from. That
+       process asks the human to confirm first, and cannot be talked out of
+       it: this line arrives from another process running as the same OS
+       user, so it carries no evidence of a human on its own -- see
+       ``control_channel._show_page``. On this platform that dialog is the
+       click's own confirmation, which is the trade for having no tray icon
+       to click instead (ADR 0002 decision 4).
+    3. **Nobody owns it**: an unattested link, which still signs the human in
+       to look at what is pending. Logged as the reduced thing it is, naming
+       the companion, rather than silently handing back a session whose
+       Approve buttons will refuse.
+
     Returns False (logging why) rather than raising: every caller here is a
     menu click or a one-shot launcher invocation, neither of which has
     anywhere useful to propagate an exception to."""
+    if _channel_running.is_set():
+        opened, reason = open_attested_url(path)
+        if not opened:
+            logger.error("Could not open %s: %s", path, reason)
+        return opened
+    if request_show(path):
+        return True
     base_url = read_base_url()
     if base_url is None:
         logger.error("PrivacyFence does not appear to be running (local mode) -- nothing to open.")
@@ -113,6 +192,11 @@ def _open_path(path: str) -> bool:
     except (OSError, ControlChannelError) as exc:
         logger.error("Could not reach PrivacyFence's control channel: %s", exc)
         return False
+    logger.warning(
+        "No PrivacyFence companion is running in this session, so this link can view what is "
+        "pending but not approve it. Start PrivacyFence's companion (or run "
+        "`privacyfence-app --print-sign-in-link`) for a link that can.",
+    )
     return webbrowser.open(f"{base_url}{path}?bootstrap={code}")
 
 
@@ -129,11 +213,34 @@ def _quit_daemon() -> bool:
     return True
 
 
+def _show_recovery_code() -> bool:
+    """Ask the daemon for a *replacement* one-time recovery code (plan item
+    1.3). The code never comes back over this call -- the daemon puts it in
+    front of the human by calling back into this process's own channel
+    (``SHOW RECOVERY``), which is the whole point: nothing that merely
+    speaks a socket ever reads one. What this returns is only whether the
+    round trip succeeded.
+
+    Issuing one invalidates whatever code was on file, so the daemon asks
+    for confirmation on this same desktop first; a human who clicks Deny
+    lands here as an ordinary False with the reason logged, same as every
+    other failure this menu can hit.
+    """
+    try:
+        request_recovery_code()
+    except (OSError, ControlChannelError) as exc:
+        logger.error("Could not get a recovery code from PrivacyFence: %s", exc)
+        return False
+    return True
+
+
 def _run_action(action: str) -> bool:
     if action == ACTION_OPEN_APPROVALS:
         return _open_path("/approvals")
     if action == ACTION_OPEN_SETTINGS:
         return _open_path("/settings")
+    if action == ACTION_RECOVERY_CODE:
+        return _show_recovery_code()
     if action == ACTION_QUIT:
         return _quit_daemon()
     raise ValueError(f"Unknown companion action: {action!r}")  # pragma: no cover -- argparse restricts choices
@@ -173,17 +280,89 @@ def _complete_pending_separation() -> None:
     )
 
 
+def _offer_first_enrollment() -> None:
+    """Plan item 1.2: if this install requires a passkey and has none
+    enrolled, open ``/security`` with a freshly minted session so the human
+    can add one now.
+
+    This is the other half of defaulting step-up on for packaged installs
+    (``step_up_config.default_local_step_up()``). A fresh install comes up
+    requiring a passkey it does not have yet, which is a deliberately
+    fail-closed state -- every approval is refused, and every page carries a
+    banner saying why -- but it is only a *safe* state, not a usable one,
+    and nobody is looking at a page they have no reason to open. This
+    process is the one thing PrivacyFence runs inside a login session, so it
+    is the one thing that can put that page in front of somebody. From
+    there, the existing flow takes over: the first-enrollment gate asks this
+    same companion to confirm, and the recovery code comes back through it
+    too (item 1.3).
+
+    Deliberately re-offered at every companion start until a passkey exists,
+    rather than once and never again: the state it is reacting to is one
+    where PrivacyFence approves nothing at all, so it is worth a tab each
+    login until it is fixed. Once one is enrolled the daemon answers ``ok``
+    and this does nothing, which is every start after the first.
+
+    A daemon that is not (yet) running is an ordinary answer, not an error
+    -- this races the service's own start at login, so it is retried for
+    ``_DAEMON_WAIT_ATTEMPTS`` before being left for the next login.
+    """
+    for attempt in range(_DAEMON_WAIT_ATTEMPTS):
+        try:
+            state = enrollment_state()
+        except OSError:
+            if attempt + 1 < _DAEMON_WAIT_ATTEMPTS:
+                time.sleep(_DAEMON_WAIT_SECONDS)
+                continue
+            logger.info("PrivacyFence is not running -- not checking whether a passkey is needed.")
+            return
+        except ControlChannelError as exc:
+            # An older daemon (or one with no step-up config behind its
+            # control channel) answers ERROR here. Nothing to do about it
+            # from this side, and nothing worth a dialog over.
+            logger.info("PrivacyFence did not answer the passkey-enrollment query: %s", exc)
+            return
+        if state != "pending":
+            return
+        logger.warning(
+            "PrivacyFence requires a passkey and none is enrolled, so no approval can be "
+            "released. Opening the security page to add one.",
+        )
+        _open_path("/security")
+        return
+
+
+def _first_run_checks() -> None:
+    """The startup thread's own body: settle privilege separation first,
+    then offer enrollment.
+
+    In that order, and not merely for tidiness. Closing the pending per-user
+    half (ADR 0003 decision 3) adds this account to the service group, and
+    group membership is only evaluated when a session is created -- so until
+    the human logs out and back in, they cannot reach the daemon's web UI at
+    all, and opening ``/security`` for them would be opening a page that
+    cannot load. ``owner_membership_pending()`` is still true in exactly
+    that window, which is what this checks before going on.
+    """
+    _complete_pending_separation()
+    if privilege_separation.owner_membership_pending():
+        return
+    _offer_first_enrollment()
+
+
 def _start_pending_separation_check() -> None:
-    """Runs ``_complete_pending_separation()`` off the startup path.
+    """Runs ``_first_run_checks()`` off the startup path.
 
     Its own thread for the same reason ``maybe_auto_enable_macos()`` uses
     one: what it may do is put a system password dialog in front of a human,
     and the tray icon appearing (or the companion channel binding) must not
-    wait on somebody answering, or ignoring, that dialog.
+    wait on somebody answering, or ignoring, that dialog. Item 1.2's
+    enrollment offer inherits the same thread and the same reasoning -- it
+    may sit waiting for a daemon that is still starting.
     """
     threading.Thread(
-        target=_complete_pending_separation,
-        name="privacyfence-separation-for-user",
+        target=_first_run_checks,
+        name="privacyfence-first-run",
         daemon=True,
     ).start()
 
@@ -201,6 +380,7 @@ def _run_tray() -> int:
     _start_pending_separation_check()
     channel = CompanionChannelServer()
     channel.start()
+    _channel_running.set()
 
     def _on_open_approvals(_icon: "pystray.Icon", _item: "pystray.MenuItem") -> None:
         _open_path("/approvals")
@@ -213,18 +393,30 @@ def _run_tray() -> int:
         # a tray icon with nothing left to serve has no reason to stay up
         # either, so this process exits right behind it.
         _quit_daemon()
+        _channel_running.clear()
         channel.stop()
         icon.stop()
+
+    def _on_recovery_code(_icon: "pystray.Icon", _item: "pystray.MenuItem") -> None:
+        # Its own thread: the round trip is two dialogs long (confirm, then
+        # show), and pystray runs menu callbacks on the thread that also
+        # draws the menu -- doing this inline would freeze the tray icon for
+        # as long as somebody takes to answer.
+        threading.Thread(
+            target=_show_recovery_code, name="privacyfence-recovery-code", daemon=True,
+        ).start()
 
     menu = pystray.Menu(
         pystray.MenuItem("Open Approvals", _on_open_approvals),
         pystray.MenuItem("Open Settings", _on_open_settings),
+        pystray.MenuItem("New Recovery Code\u2026", _on_recovery_code),
         pystray.MenuItem("Quit", _on_quit),
     )
     icon = pystray.Icon("privacyfence", Image.open(_TRAY_ICON_PATH), "PrivacyFence", menu)
     try:
         icon.run()
     finally:
+        _channel_running.clear()
         channel.stop()
     return 0
 
@@ -254,6 +446,7 @@ def _run_serve(wait: Callable[[], None] | None = None) -> int:
     if channel.address is None:
         logger.error("Could not start the companion's control channel -- nothing to serve.")
         return 1
+    _channel_running.set()
     logger.info("Companion channel listening on %s", channel.address)
     try:
         (wait or threading.Event().wait)()
@@ -262,6 +455,7 @@ def _run_serve(wait: Callable[[], None] | None = None) -> int:
     finally:
         # Tears the socket down cleanly rather than leaving a stale node
         # behind for the next start to unlink.
+        _channel_running.clear()
         channel.stop()
     return 0
 

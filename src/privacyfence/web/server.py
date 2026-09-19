@@ -93,7 +93,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import paths, privilege_separation, web_shell
+from .. import paths, privilege_separation, web_shell, webauthn_stepup
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, principal_scope
@@ -105,7 +105,13 @@ from . import routes_connect
 from . import routes_downloads
 from . import routes_org_identity
 from . import state_stream as _state_stream
-from .control_channel import WEB_BASE_URL_FILE_NAME, ControlChannelServer
+from .control_channel import (
+    WEB_BASE_URL_FILE_NAME,
+    ControlChannelServer,
+    request_enrollment_confirmation,
+    request_recovery_confirmation,
+    send_recovery_code,
+)
 from .csp import build_csp
 from .csp import new_nonce as _new_csp_nonce
 from .mcp_auth import load_or_create_mcp_token
@@ -169,6 +175,119 @@ _PERMISSIONS_POLICY = (
 _HSTS = "max-age=31536000; includeSubDomains"
 
 
+def confirm_first_passkey_enrollment() -> tuple[bool, str]:
+    """Local mode's ``confirm_first_enrollment`` -- what web/routes_security.py
+    calls when an enrollment has no already-enrolled credential to be gated on
+    asserting with. See that module's own docstring for why a first enrollment needs a
+    gate of its own at all, and web/control_channel.py's for why the
+    companion is the thing that can answer: it runs in the human's login
+    session, and on a separated install nothing but the daemon can reach the
+    channel it answers on.
+
+    The one bypass is the escape hatch ADR 0003 decision 7 already gives the
+    developer path -- ``PRIVACYFENCE_DEV_ALLOW_UNSEPARATED`` on a
+    *non-packaged* build, the same pairing ``step_up_config.py``'s
+    ``from_local_config()`` uses for ``require_passkey`` (and the same
+    reasoning: a checkout somebody is working on has no companion autostarted
+    for it, while a packaged install always does -- ADR 0003 decisions 3-5 --
+    so honoring it there would hand a real shipped product a way around its
+    own gate). ``paths.is_bundled()`` is checked first for exactly that
+    reason: the variable is not consulted at all on a packaged build.
+    """
+    if not paths.is_bundled() and privilege_separation.dev_allows_unseparated():
+        logger.warning(
+            "%s is set on this non-packaged install: enrolling a first passkey without asking "
+            "the companion to confirm it.", privilege_separation.DEV_ALLOW_UNSEPARATED_ENV,
+        )
+        return True, ""
+    confirmed, reason = request_enrollment_confirmation()
+    if not confirmed and not paths.is_bundled():
+        # A source checkout or pip install autostarts no companion (ADR 0003
+        # decision 7 -- decisions 3-5's autostart wiring is the packaged
+        # installers' half), so "start the companion" is not the whole answer
+        # here and the escape hatch is. Only added on a non-packaged build,
+        # where it is the honest next step; a packaged install must never be
+        # told about a variable it does not honor.
+        reason = (
+            f"{reason} On a source checkout you can also run "
+            f"`privacyfence-companion --serve`, or set "
+            f"{privilege_separation.DEV_ALLOW_UNSEPARATED_ENV}=1 for local development."
+        )
+    return confirmed, reason
+
+
+def present_recovery_code(code: str) -> tuple[bool, str]:
+    """Local mode's ``deliver_recovery_code`` (web/routes_security.py):
+    hand a freshly minted one-time recovery code to the companion, which
+    puts it in front of whoever is at this machine's own login session.
+
+    Wired only on a *packaged* build -- ``build_app`` below decides that --
+    for the same reason ``confirm_first_passkey_enrollment`` above honors a
+    dev escape hatch: ADR 0003 decisions 3-5 guarantee a companion on every
+    shipped install and nothing guarantees one for a source checkout, so a
+    checkout keeps the pre-1.3 behavior (the code comes back in the
+    response, and ``_PAGE_JS`` shows it) rather than being unable to issue
+    one at all.
+
+    Returns ``(shown, reason)`` straight through: the caller stores the
+    code only on a ``True``, so a companion that could not be reached costs
+    an enrollment its recovery code rather than leaving one on file that
+    nobody has.
+    """
+    return send_recovery_code(code)
+
+
+def reissue_local_recovery_code() -> tuple[bool, str]:
+    """The companion's ``RECOVERY`` command, from the daemon's side: confirm
+    with the human, mint, show, and only then store (plan item 1.3's
+    "re-presented by the companion" half).
+
+    This is the *only* way a second recovery code is ever produced, and it
+    deliberately produces a new one rather than reproducing the old: nothing
+    keeps the plaintext, by design -- ``webauthn_stepup`` stores a salted
+    hash and nothing else. The human gets a working code; whatever they
+    wrote down before stops working, which is what the confirmation dialog
+    says in as many words.
+
+    The confirmation is what makes this safe to expose on a channel the
+    agent shares (web/control_channel.py's own ``0660`` paragraph): the
+    reply carries no code, so triggering this learns an attacker nothing,
+    and the dialog means it cannot even invalidate the human's saved code
+    without somebody at the keyboard agreeing to it.
+    """
+    confirmed, reason = request_recovery_confirmation()
+    if not confirmed:
+        return False, reason or "the companion did not confirm a new recovery code"
+    code = webauthn_stepup.mint_recovery_code()
+    shown, reason = send_recovery_code(code)
+    if not shown:
+        return False, reason or "the companion could not show the recovery code"
+    webauthn_stepup.store_recovery_code(LOCAL_PRINCIPAL, code)
+    return True, ""
+
+
+def local_enrollment_state(step_up: StepUpConfig | None) -> str:
+    """The companion's ``ENROLLMENT`` command, from the daemon's side:
+    ``"pending"`` when this install requires a passkey and has none
+    enrolled, ``"ok"`` otherwise (plan item 1.2).
+
+    "Requires" is ``enabled and require_passkey`` together, the same
+    pairing every other consumer of this config treats as in force (see
+    ``webauthn_stepup.observe_step_up_requirement``) -- an install with
+    step-up off is not waiting for an enrollment, it is simply not using
+    one, and the companion must not nag about it.
+
+    Says nothing else on purpose. The credential store itself lives under
+    ``authority_dir()`` and is unreadable to the logged-in user on a
+    separated install, which is why the companion has to ask at all; the
+    answer it gets back is one of two words, both of which anybody looking
+    at the banner on ``/security`` could already read off the screen.
+    """
+    if step_up is None or not (step_up.enabled and step_up.require_passkey):
+        return "ok"
+    return "ok" if webauthn_stepup.has_credentials(LOCAL_PRINCIPAL) else "pending"
+
+
 def _write_mcp_url_file(url: str) -> None:
     """The direct successor of ipc.py's PORT_FILE for a client that talks to
     /mcp instead of the old IPC socket -- see mcpb/shim/src/protocol.ts's
@@ -188,38 +307,37 @@ def _write_mcp_url_file(url: str) -> None:
     privilege_separation.write_handoff_file(path, url)
 
 
-def _bootstrap_url_file_name(path: str) -> str:
-    """``/approvals`` -> ``approvals_url``, ``/settings`` -> ``settings_url``
-    -- the discovery-file name mint_bootstrap_url() writes each freshly
-    minted link under, mirroring MCP_URL_FILE_NAME's own naming for the
-    same directory."""
-    return f"{path.strip('/').replace('/', '_') or 'root'}_url"
+# The discovery files this daemon used to write a live sign-in link into, on
+# every startup and every re-mint: ``/approvals`` -> ``approvals_url``,
+# ``/settings`` -> ``settings_url``, ``/security`` -> ``security_url``. They
+# were the answer to a real problem -- SecretRedactingFormatter (SEC-10)
+# scrubs ``bootstrap=<value>`` out of every log line, so "the daemon logs its
+# URL on startup" was quietly false, and this file was the only channel that
+# actually delivered a usable link.
+#
+# The self-approval plan's Phase 2 stops writing them. handoff/ is 2770 and
+# group-shared with the logged-in user by design (paths.py: "deliberately
+# *not* a security boundary"), so a live bootstrap code sitting there was a
+# session for the taking, refreshed on every restart, by anything running as
+# that user -- the agent included, which is what §02 of that review counts as
+# the second of three silent paths to a session.
+#
+# Nothing replaces them, because two things already had: the companion's own
+# Open Approvals/Open Settings items, which are how a human gets an attested
+# session at all now, and ``privacyfence-app --print-sign-in-link`` for a
+# reader whose companion menu is out of reach (daemon_main.py).
+_LEGACY_BOOTSTRAP_URL_FILE_NAMES = ("approvals_url", "settings_url", "security_url")
 
 
-def _write_bootstrap_url_file(path: str, url: str) -> None:
-    """SEC-06's bootstrap link, written to disk the same way ``mcp_url`` is
-    (0600, alongside web_token/mcp_token) -- unlike that log line, this file
-    is never touched by SecretRedactingFormatter (daemon_main.py's
-    ``setup_logging``), which matches -- and scrubs -- the literal
-    ``bootstrap=<value>`` substring in *every* log line, startup line
-    included (SEC-10, "on principle"). Before this existed, "the daemon
-    logs its URL on startup" (this project's own onboarding docs) was
-    quietly false: a human reading privacyfence.log for that link only ever
-    found ``bootstrap=[REDACTED]``, no matter how many times the daemon was
-    restarted to try to get a fresh one -- see
-    web/session_auth.py's unauthorized_html(), which now points here
-    instead. Overwritten, not appended, on every mint -- only the newest
-    link is ever meaningful, since consuming or expiring the previous one
-    leaves it dead anyway."""
-    file_path = paths.handoff_dir() / _bootstrap_url_file_name(path)
-    privilege_separation.write_handoff_file(file_path, url)
-
-
-def _clear_bootstrap_url_file(path: str) -> None:
-    """Mirrors _clear_mcp_url_file: called on WebServer.stop() for every
-    path this server ever minted a link for, so a reader after shutdown
-    finds no file rather than a stale, now-dead link."""
-    (paths.handoff_dir() / _bootstrap_url_file_name(path)).unlink(missing_ok=True)
+def _clear_legacy_bootstrap_url_files() -> None:
+    """Deletes any of the above left behind by a previous version, on
+    startup. An upgraded install would otherwise keep whatever file the old
+    daemon wrote last: the code in it is dead once that process exits (the
+    store is in memory), but it reads as a live sign-in link to a human, and
+    leaving a file this daemon no longer maintains where somebody was taught
+    to look for a working link is worse than leaving nothing."""
+    for name in _LEGACY_BOOTSTRAP_URL_FILE_NAMES:
+        (paths.handoff_dir() / name).unlink(missing_ok=True)
 
 
 def _clear_mcp_url_file() -> None:
@@ -516,8 +634,14 @@ class _BootstrapMiddleware:
             await self._app(scope, receive, send)
             return
         response = RedirectResponse(request.url.path, status_code=303)
-        if self._bootstrap.consume(code):
-            _set_session_cookie(response, self._sessions.create())
+        # The code carries its own provenance (web/session_auth.py's
+        # ``PROVENANCE_*``) and the session inherits it unchanged: the mint
+        # is the only moment anything knew how this credential came to
+        # exist, and a middleware reading a query string is in no position
+        # to improve on that.
+        provenance = self._bootstrap.consume(code)
+        if provenance is not None:
+            _set_session_cookie(response, self._sessions.create(provenance=provenance))
         await response(scope, receive, send)
 
 
@@ -693,10 +817,21 @@ def build_app(
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
 
+    # The self-approval plan's Phase 2 -- one answer, read once here, for
+    # both gates below: an approving decision (web/routes_approvals.py) and
+    # a sensitive settings action (web/routes_settings.py) require a session
+    # this daemon can attribute to a person. See either module's own
+    # ``require_human_session`` paragraph for why privilege separation is
+    # the line: it is what ADR 0003 makes mandatory on every packaged
+    # install, and what guarantees the companion that mints such a session
+    # exists at all.
+    require_human_session = privilege_separation.is_enabled()
+
     if controller is not None:
         extra_routes.extend(build_settings_routes(
             controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
             notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_issuer_url,
+            require_human_session=require_human_session,
         ))
 
     # #426 Phase 1: mounted whenever step_up.rp_id is set -- which, unlike
@@ -725,6 +860,17 @@ def build_app(
             # the same fact at startup; see privilege_separation.
             # dev_unseparated_notice()'s own docstring.
             dev_unseparated_notice=privilege_separation.dev_unseparated_notice(),
+            # The enrollment gate: local mode's own first-enrollment gate. Org mode's
+            # call below passes nothing -- see routes_security.py's
+            # build_routes docstring on why the two differ here.
+            confirm_first_enrollment=confirm_first_passkey_enrollment,
+            # Plan item 1.3: the companion shows the one-time recovery code
+            # instead of this response carrying it -- on a packaged build
+            # only, which is the only kind of install ADR 0003 guarantees a
+            # companion for. Everywhere else this stays None and the code
+            # comes back in the body exactly as it always did. See
+            # present_recovery_code() and routes_security.build_routes.
+            deliver_recovery_code=present_recovery_code if paths.is_bundled() else None,
         ))
 
     if state_stream is not None:
@@ -749,6 +895,7 @@ def build_app(
         any_connector_authenticated=(
             controller.any_connector_authenticated if controller is not None else None
         ),
+        require_human_session=require_human_session,
     )
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(bootstrapped, principal_resolver or _default_principal)
@@ -908,8 +1055,9 @@ class WebServer:
         # once here and shared with build_app() below -- None in org mode,
         # which has its own OrgSessionStore (org.sessions) and no bootstrap
         # concept at all (org mode's entry point is /login, not a one-time
-        # link). See mint_bootstrap_url() for how a human actually gets a
-        # code out of self.bootstrap.
+        # link). Nothing in this class hands a code out any more: the
+        # control channel is the only way one is minted, and who may ask for
+        # an *attested* one is web/control_channel.py's own business.
         #
         # #428 Phase 2: self.control_channel is the control channel that
         # replaces the old web_token-authenticated POST /api/bootstrap as
@@ -928,13 +1076,18 @@ class WebServer:
             self.sessions = LocalSessionStore()
             bootstrap = BootstrapStore()
             self.bootstrap = bootstrap
-            self.control_channel = ControlChannelServer(bootstrap=bootstrap, allow_quit=allow_quit)
-        # Every path mint_bootstrap_url() has actually written a discovery
-        # file for -- stop() clears exactly these, never a hardcoded list,
-        # since which paths get minted (just /approvals, or /approvals and
-        # /settings too) depends on daemon_main.py's own config-driven
-        # use_web_settings check.
-        self._minted_bootstrap_paths: set[str] = set()
+            self.control_channel = ControlChannelServer(
+                bootstrap=bootstrap, allow_quit=allow_quit,
+                # Plan items 1.2/1.3: the two questions the companion asks
+                # this daemon that only this daemon can answer -- whether a
+                # first enrollment is still outstanding, and "issue me a
+                # replacement recovery code". Bound to the same StepUpConfig
+                # every other consumer got (a LiveStepUpConfig on the real
+                # boot path, so this reads the current value rather than the
+                # one loaded at startup).
+                enrollment_state=lambda: local_enrollment_state(step_up),
+                reissue_recovery_code=reissue_local_recovery_code,
+            )
         self.mcp_dispatcher = mcp_dispatcher
         self.mcp_token = (
             None if org is not None
@@ -1047,28 +1200,6 @@ class WebServer:
             return None
         return f"{self.base_url}{MCP_PATH}"
 
-    def mint_bootstrap_url(self, path: str) -> str | None:
-        """SEC-06: a fresh, single-use ``?bootstrap=`` link for ``path``
-        (e.g. ``/approvals``, ``/settings``) -- ``None`` in org mode, which
-        has no bootstrap concept (its entry point is ``/login``). Call this
-        once per link actually handed to a human -- daemon_main.py's own
-        startup log lines are the only caller today -- never reuse the
-        result: each call mints a brand-new code, and the previous one (if
-        any) is simply left to expire on its own rather than being
-        invalidated early.
-
-        Also writes the link to its own discovery file
-        (``_write_bootstrap_url_file``) -- the log line daemon_main.py
-        prints alongside this call is always redacted (see that helper's
-        own docstring), so the file is the only channel that actually
-        delivers a usable link. ``stop()`` clears every path minted here."""
-        if self.bootstrap is None:
-            return None
-        url = f"{self.base_url}{path}?bootstrap={self.bootstrap.mint()}"
-        _write_bootstrap_url_file(path, url)
-        self._minted_bootstrap_paths.add(path)
-        return url
-
     def start(self) -> None:
         self._thread = threading.Thread(target=self._server.run, name="web-server", daemon=True)
         self._thread.start()
@@ -1078,6 +1209,9 @@ class WebServer:
         if self.control_channel is not None:
             self.control_channel.start()
             _write_web_base_url_file(self.base_url)
+            # Local mode only: org mode never wrote these (no bootstrap
+            # concept at all), so there is nothing of its own to clean up.
+            _clear_legacy_bootstrap_url_files()
 
     def stop(self) -> None:
         self._server.should_exit = True
@@ -1088,5 +1222,3 @@ class WebServer:
             _clear_web_base_url_file()
         if self.mcp_url is not None:
             _clear_mcp_url_file()
-        for path in self._minted_bootstrap_paths:
-            _clear_bootstrap_url_file(path)

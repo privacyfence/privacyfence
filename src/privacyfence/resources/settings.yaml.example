@@ -291,10 +291,20 @@ web:
 
 # WebAuthn passkey step-up (#426 Phase 1/2) -- enrolling a passkey here
 # mounts /security (linked from the Settings page) and lets you register a
-# Face ID/Touch ID/Windows Hello credential against this install. Absent
-# entirely, this behaves exactly like `enabled: false` below.
+# Face ID/Touch ID/Windows Hello credential against this install.
 # Enrolled credentials live under a service-owned subdirectory of the data
 # directory, not here.
+#
+# `enabled` and `require_passkey` are deliberately left unset below rather
+# than written out as `false`. Unset means "whatever this install can
+# actually back": ON for a packaged install (the DMG/.pkg, the Windows
+# installer, the .deb), which is privilege-separated or refuses to serve at
+# all, so the credential store a passkey is checked against is out of the
+# agent's reach; OFF for a source checkout or a `pip`/`pipx install`, where
+# nothing separates anything and a passkey checked against a store the
+# agent can write is a checkbox a local process ticks for itself. Write
+# either key out by hand to decide for yourself -- an explicit value always
+# wins, in both directions.
 step_up:
   # Turns on step-up at decide time: releasing an approving decision
   # (accept/accept_all) on a gated write -- or, with the wider scope below,
@@ -311,7 +321,10 @@ step_up:
   # the 4.1.0 action plan) and takes effect immediately, no restart. Editing
   # this file directly still works too, and is the only way back to
   # `false` -- there's no UI control that turns step-up back off.
-  enabled: false
+  #
+  # Unset: on for a packaged install, off otherwise (see the note above
+  # this section). Uncomment to decide for yourself.
+  # enabled: false
   # Which approvals require step-up, narrowest first:
   #   writes                 every approval popup for a write
   #   writes_and_pii_reads   also a read PrivacyFence flagged as containing
@@ -323,7 +336,12 @@ step_up:
   # at all, so no scope here asks for a passkey on one. Changing this value
   # needs a daemon restart (the Settings page's "Turn on" button writes
   # `enabled`/`require_passkey` only).
-  scope: writes
+  #
+  # Unset means `writes_and_pii_reads`: the widest scope that only ever
+  # asks about something PrivacyFence has an actual reason to think is
+  # sensitive. Uncomment for the narrower `writes`, or widen to
+  # `writes_and_reads` if you'd rather not depend on PII detection at all.
+  # scope: writes_and_pii_reads
   # WebAuthn's Relying Party ID. Leave unset -- "localhost" is always
   # correct for this daemon's own embedded server and needs no TLS.
   rp_id: localhost
@@ -340,12 +358,19 @@ step_up:
   # with this on, it still starts -- refusing to boot would remove the one
   # path (/security) that fixes it -- but every page carries a persistent
   # banner until a passkey is added, and no approving decision is released
-  # in the meantime. Before #428 (privilege separation) lands for your
-  # platform, this flag and the enrolled-credential store are both files an
-  # agent with shell access on this machine can edit -- see issue #426's
-  # own "What this guarantees, and what it depends on" for what that means
-  # in practice.
-  require_passkey: false
+  # in the meantime. On a packaged install the companion app walks you
+  # through enrolling the first one at its next start, so that state is
+  # meant to last minutes rather than to be lived in.
+  #
+  # Setting this to `true` on an install that is *not* privilege-separated
+  # (ADR 0003) is refused outright at startup, naming the fix: this flag
+  # and the enrolled-credential store would both be files the agent this
+  # check defends against can edit, which makes the guarantee worse than
+  # not having it at all.
+  #
+  # Unset: on for a packaged install, off otherwise (see the note above
+  # this section). Uncomment to decide for yourself.
+  # require_passkey: false
   # The approval binder's own batch decide endpoint (/approvals, Phase 3):
   # "single_assertion" -- the default -- lets one passkey prompt release a
   # whole selected batch of approvals at once, bound to the exact set you

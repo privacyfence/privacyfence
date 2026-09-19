@@ -17,8 +17,9 @@ two modules already have matching shapes (``authenticated``/``check_csrf``/
 ``check_origin``) for exactly this reason (session_auth.py's own module
 docstring: "mirroring web/org_session.py's own real-session model").
 
-``nav_items`` (optional, default ``None``) is the one place this module's
-two callers now genuinely differ: org mode's (web/server.py's
+``nav_items`` (optional, default ``None``) is one of the two places this
+module's two callers genuinely differ (``confirm_first_enrollment``, below, is
+the other): org mode's (web/server.py's
 ``_build_org_app``) passes ``web_shell.ORG_NAV_ITEMS`` so this page carries
 the same persistent header/nav as ``/approvals``/``/connect``/``/settings``,
 replacing the plain ``back_link`` footer paragraph those three pages also
@@ -47,11 +48,57 @@ one of *several* enrolled credentials stays a plain, ungated request --
 there's no enforcement gap to close when at least one other credential
 would remain.
 
+**Enrolling a passkey is itself gated.** The asymmetry this closes is the
+one the paragraph above describes from the other side: removing your *last*
+credential demands proof of possession of it, on the stated grounds that
+leaving that ungated "would silently turn a 'mandatory' install back into an
+unenforced one" -- and *adding* one has exactly the same effect. Ungated, it
+is the shorter route to the same place: a local process holding a session
+(ADR 0002 decision 6 names three ways one is reachable, all by design)
+enrolls a credential it generated itself and satisfies every later step-up
+check with it, on the strongest configuration this product offers. Nothing
+downstream can tell such a credential from a real one: registration uses
+``none`` attestation and the user-verified flag is a bit the authenticator
+sets about itself, so ``require_user_verification=True`` is a claim, not a
+proof -- see webauthn_stepup.py's own "five things" list.
+
+So ``register_options`` gates the ceremony before it starts, in whichever of
+two ways the credential store's own state allows:
+
+- **A credential is already enrolled** -- the gate is a fresh assertion with
+  one of them, over a challenge bound to ``enroll-credential|<principal>``
+  (``_enroll_fingerprint`` below), through the same 428-then-retry protocol
+  ``delete_credential`` and web/routes_approvals.py's ``decide`` already
+  share. Identical in both modes: an org-mode IdP session gets no more
+  latitude here than a local ``pf_session``.
+- **Nothing is enrolled yet** -- there is nothing to assert with, so the
+  gate is ``confirm_first_enrollment`` (``build_routes``' own parameter):
+  local mode passes web/server.py's companion confirmation, which asks
+  whoever is at the login session (web/control_channel.py's
+  ``CONFIRM ENROLL``). That is not authentication of the companion and
+  cannot be -- companion and agent share a uid -- so be careful what it is
+  claimed to buy; docs/security-and-compliance.md states the limit exactly.
+  Org mode passes nothing, and its first enrollment rests on the IdP session
+  that reached ``/security``, stated as such in that same document rather
+  than papered over.
+
+``register_verify`` does not re-run either gate (that would mean a second
+prompt for one enrollment); it requires that the registration challenge it
+is completing was issued by a ``register_options`` call that *passed* one --
+``RegistrationChallengeStore``'s own ``authorized`` flag, see that class's
+docstring. A refusal by either gate is audited
+(``webauthn_enrollment_refused``), which is the signal that makes an
+enrollment nobody asked for distinguishable from one a human made -- the
+``webauthn_credential_enrolled`` entry alone cannot tell them apart.
+
 **Tamper-evidence and recovery (#426 Phase 4)**: every enroll and remove
 here writes an audit entry (see ``_audit`` below), and ``register_verify``
-issues a one-time recovery code -- shown to the browser exactly once, in
-that same response -- whenever this principal doesn't currently have an
-unused one on file. ``recover_credential`` is the code's only consumer:
+issues a one-time recovery code whenever this principal doesn't currently
+have an unused one on file. Who shows it is ``deliver_recovery_code``'s
+answer (plan item 1.3, see ``build_routes``' own docstring): the browser,
+once, in that same response -- or, on a packaged local-mode install, the
+companion app on the human's own desktop, with nothing about it in the
+response at all. ``recover_credential`` is the code's only consumer:
 trading it in removes every credential this principal has enrolled, for
 the case webauthn_stepup.py's own module docstring describes (the only
 authenticator lost to a new machine or a wiped TPM, with no IdP in local
@@ -60,6 +107,7 @@ side of both.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -80,6 +128,13 @@ from ..webauthn_stepup import RegistrationChallengeStore, StepUpChallengeStore, 
 from .csp import nonce_for as _csp_nonce_for
 
 logger = logging.getLogger(__name__)
+
+# StepUpChallengeStore is keyed by (principal_id, approval_id) -- an
+# enrollment has no approval, and only one enrollment ceremony per principal
+# is ever meaningfully in flight, so the second half of the key is this one
+# constant. The string is the same one _enroll_fingerprint() binds to, so a
+# reader grepping either finds the other.
+_ENROLL_CEREMONY = "enroll-credential"
 
 # Shared with web/routes_org_approvals.py's decide-time step-up shim -- see
 # module docstring. Defines window.pfWebauthnCreate(optionsJson) and
@@ -170,6 +225,8 @@ def build_routes(
     back_link: tuple[str, str] = ("/connect", "Back to connections"),
     dev_unseparated_notice: str | None = None,
     nav_items: tuple[tuple[str, str, str], ...] | None = None,
+    confirm_first_enrollment: Callable[[], tuple[bool, str]] | None = None,
+    deliver_recovery_code: Callable[[str], tuple[bool, str]] | None = None,
 ) -> list[Route]:
     """``resolve_principal``/``check_csrf``/``check_origin`` are the
     mode-specific half of this module (#426 Phase 1) -- org mode's caller
@@ -195,6 +252,37 @@ def build_routes(
     unless the caller wants ``/security`` wrapped in web_shell.wrap()'s
     persistent header/nav instead (module docstring) -- when given, it takes
     over entirely from ``back_link``, which is then never rendered.
+    ``confirm_first_enrollment`` (see the module docstring's own enrollment-gate
+    section) is the
+    gate on an enrollment that has no already-enrolled credential to assert
+    against, and is the second place the two modes genuinely differ. Local
+    mode passes web/server.py's ``confirm_first_passkey_enrollment``, which
+    asks the companion; it returns ``(confirmed, reason)``, where ``reason``
+    is shown to whoever is trying to enroll so a refusal is actionable
+    rather than mysterious. Org mode passes ``None``, which means a first
+    enrollment proceeds on the strength of the IdP session alone -- that
+    mode has no companion, and an IdP session is at least an external
+    authentication, which a local-mode bootstrap cookie is not. Called off
+    the event loop (``asyncio.to_thread``), since what it does is put a
+    dialog in front of a human and wait.
+
+    ``deliver_recovery_code`` (plan item 1.3) is the third and last place
+    the two modes differ, and it is packaging-dependent rather than
+    mode-dependent. ``None`` -- org mode, and any local-mode install that is
+    not a packaged build -- keeps what this always did: the one-time
+    recovery code goes back in ``register_verify``'s own JSON body and
+    ``_PAGE_JS`` shows it. A packaged local-mode install passes web/
+    server.py's ``present_recovery_code``, which hands the code to the
+    companion to put on the human's own desktop instead, so a credential-
+    store reset token never travels in a response body a process holding a
+    ``pf_session`` can read (F7 of the review this plan comes from). It
+    returns ``(delivered, reason)``, and a ``False`` is load-bearing: the
+    code is only *stored* once somebody has been shown it, so a failed
+    delivery leaves the principal with no code rather than one nobody has.
+    Called off the event loop (``asyncio.to_thread``) for the same reason
+    ``confirm_first_enrollment`` is -- what it does is put a dialog in
+    front of a human.
+
     ``dev_unseparated_notice`` (ADR 0003 decision 7) is local mode's own
     ``privilege_separation.dev_unseparated_notice()`` result, shown verbatim
     at the top of the page when not ``None``; org mode's caller leaves it
@@ -205,11 +293,28 @@ def build_routes(
     """
     challenges = RegistrationChallengeStore()
     delete_challenges = StepUpChallengeStore()
+    # The enrollment gate's own binding (module docstring). Its own store rather than a
+    # second key space inside delete_challenges: the two ceremonies are
+    # concurrent-capable in principle (a page open in two tabs), and keeping
+    # them apart means an assertion obtained for one can never be popped by
+    # the other even if the fingerprints were ever to collide.
+    enroll_challenges = StepUpChallengeStore()
     origin = issuer_url.rstrip("/")
 
     def _delete_fingerprint(principal_id: str, credential_id: str) -> str:
         payload = f"delete-credential|{principal_id}|{credential_id}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def _enroll_fingerprint(principal_id: str) -> str:
+        """``delete_credential``'s ``_delete_fingerprint`` binds a ceremony
+        to one specific credential because that is what the decision is
+        *about*; an enrollment's subject is the principal's credential store
+        as a whole (the credential being added does not exist yet, and which
+        enrolled credential answers the challenge is the browser's pick), so
+        this binds to the principal and the operation and nothing else. It
+        is still what stops an assertion obtained for a *delete* -- or for a
+        decide-time step-up -- from being replayed into an enrollment."""
+        return hashlib.sha256(f"enroll-credential|{principal_id}".encode("utf-8")).hexdigest()
 
     def _check_post(request: Request, csrf: Any) -> Response | None:
         if not check_csrf(request, csrf):
@@ -256,6 +361,69 @@ def build_routes(
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
+    async def _enrollment_gate(principal: Principal, payload: Any) -> Response | None:
+        """The enrollment gate, in full -- see the module docstring for why it
+        exists and which of its two halves applies when. Returns the refusal
+        to send, or None to let the enrollment ceremony start.
+
+        Called from ``register_options`` only: it is the first of the two
+        round trips, so refusing here costs the caller nothing it would
+        otherwise have done, and it is the only one of the two that can ask
+        for something (a 428 carrying assertion options) rather than merely
+        say no.
+        """
+        existing = webauthn_stepup.list_credentials(principal)
+        if not existing:
+            # Nothing to assert with. Whether that is gated at all is the
+            # caller's own decision -- see build_routes' docstring on
+            # confirm_first_enrollment, and docs/security-and-compliance.md
+            # on what org mode's own answer to this rests on instead.
+            if confirm_first_enrollment is None:
+                return None
+            confirmed, reason = await asyncio.to_thread(confirm_first_enrollment)
+            if confirmed:
+                return None
+            _audit(
+                principal, "webauthn_enrollment_refused",
+                f"First passkey enrollment was not confirmed: {reason}",
+            )
+            return JSONResponse(
+                {"error": "first_enrollment_not_confirmed", "detail": reason}, status_code=403,
+            )
+        assertion = payload.get("webauthn_assertion") if isinstance(payload, dict) else None
+        fingerprint = _enroll_fingerprint(principal.id)
+        if not isinstance(assertion, dict):
+            begun = webauthn_stepup.begin_assertion(principal, rp_id=step_up.rp_id)
+            if begun is None:  # pragma: no cover -- see below
+                # begin_assertion() returns None only for a principal with no
+                # enrolled credential, and ``existing`` above just proved there
+                # is one. Reachable only if the credential file is emptied
+                # between those two reads, which is a refusal either way --
+                # and not one to wave through as "nothing to assert with", or
+                # a local process would have found its own way to skip this
+                # gate.
+                return JSONResponse({"error": "step_up_expired"}, status_code=400)
+            options_json, challenge = begun
+            enroll_challenges.put(principal.id, _ENROLL_CEREMONY, challenge=challenge, fingerprint=fingerprint)
+            return JSONResponse(
+                {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
+            )
+        pending = enroll_challenges.pop(principal.id, _ENROLL_CEREMONY)
+        if pending is None or pending.fingerprint != fingerprint:
+            return JSONResponse({"error": "step_up_expired"}, status_code=400)
+        try:
+            webauthn_stepup.verify_assertion(
+                principal, assertion, expected_challenge=pending.challenge,
+                rp_id=step_up.rp_id, origin=origin,
+            )
+        except WebAuthnError as exc:
+            _audit(
+                principal, "webauthn_enrollment_refused",
+                f"Passkey enrollment refused: the step-up assertion failed ({exc})",
+            )
+            return JSONResponse({"error": str(exc)}, status_code=401)
+        return None
+
     async def register_options(request: Request) -> Response:
         principal = resolve_principal(request)
         if principal is None:
@@ -269,10 +437,16 @@ def build_routes(
             return rejected
         if not step_up.rp_id:
             return JSONResponse({"error": "WebAuthn is not configured on this server"}, status_code=400)
+        gate_refusal = await _enrollment_gate(principal, payload)
+        if gate_refusal is not None:
+            return gate_refusal
         options_json, challenge = webauthn_stepup.begin_registration(
             principal, rp_id=step_up.rp_id, rp_name=step_up.rp_name,
         )
-        challenges.put(principal.id, challenge)
+        # authorized=True is the whole of what register_verify checks --
+        # reaching this line means whichever gate applied has already passed
+        # (module docstring; RegistrationChallengeStore's own docstring).
+        challenges.put(principal.id, challenge, authorized=True)
         return JSONResponse({"options": json.loads(options_json)})
 
     async def register_verify(request: Request) -> Response:
@@ -288,13 +462,32 @@ def build_routes(
         rejected = _check_post(request, payload.get("csrf"))
         if rejected is not None:
             return rejected
-        challenge = challenges.pop(principal.id)
-        if challenge is None:
+        pending_registration = challenges.pop(principal.id)
+        if pending_registration is None:
             return JSONResponse({"error": "Registration attempt expired -- try again."}, status_code=400)
+        if not pending_registration.authorized:
+            # Unreachable from register_options, which only ever stores an
+            # authorized challenge -- kept as the invariant's own tripwire so
+            # a future path that issues a registration challenge without
+            # passing the enrollment gate fails closed here rather than silently
+            # restoring F1. See the module docstring.
+            logger.warning("Refused to complete an enrollment whose challenge was never authorized.")
+            _audit(
+                principal, "webauthn_enrollment_refused",
+                "Passkey enrollment refused: the registration challenge was never authorized",
+            )
+            return JSONResponse({"error": "enrollment_not_authorized"}, status_code=403)
+        challenge = pending_registration.challenge
         credential = payload.get("credential")
         label = str(payload.get("label") or "Passkey")[:64]
         if not isinstance(credential, dict):
             return JSONResponse({"error": "missing credential"}, status_code=400)
+        # Read before finish_registration, which is what makes it false: which
+        # of the gate's two halves authorized this ceremony is not recorded
+        # anywhere else, and "the first passkey on this install was enrolled"
+        # is the entry a reviewer cares most about -- it is the one that
+        # decides what every later step-up check is satisfied by.
+        was_first = not webauthn_stepup.has_credentials(principal)
         try:
             saved = webauthn_stepup.finish_registration(
                 principal, credential, expected_challenge=challenge,
@@ -302,16 +495,33 @@ def build_routes(
             )
         except WebAuthnError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        _audit(principal, "webauthn_credential_enrolled", f"Passkey enrolled: {saved.label!r}")
+        _audit(
+            principal, "webauthn_credential_enrolled",
+            f"{'First passkey' if was_first else 'Passkey'} enrolled: {saved.label!r}",
+        )
         response: dict[str, Any] = {"status": "ok", "credential_id": saved.credential_id, "label": saved.label}
         # #426 Phase 4: issue a recovery code the moment there stops being
         # an unused one on file -- covers both the first-ever enrollment
-        # and an upgrade from before this feature existed. Returned exactly
-        # once, in this response only; _PAGE_JS is what actually shows it
-        # to the human -- see this module's own docstring on why it can
-        # never be recovered again after this.
+        # and an upgrade from before this feature existed. It is shown
+        # exactly once either way; what differs (plan item 1.3, see
+        # build_routes' docstring on deliver_recovery_code) is who shows it.
         if not webauthn_stepup.has_recovery_code(principal):
-            response["recovery_code"] = webauthn_stepup.generate_recovery_code(principal)
+            code = webauthn_stepup.mint_recovery_code()
+            if deliver_recovery_code is None:
+                webauthn_stepup.store_recovery_code(principal, code)
+                response["recovery_code"] = code
+            else:
+                delivered, reason = await asyncio.to_thread(deliver_recovery_code, code)
+                if delivered:
+                    # Stored only now. A code that reached nobody is not
+                    # this principal's recovery code -- see
+                    # webauthn_stepup.mint_recovery_code()'s own docstring.
+                    webauthn_stepup.store_recovery_code(principal, code)
+                    response["recovery_shown_by_companion"] = True
+                else:
+                    response["recovery_shown_by_companion"] = False
+                    response["recovery_detail"] = reason
+                    logger.warning("No recovery code was issued at enrollment: %s", reason)
         return JSONResponse(response)
 
     async def delete_credential(request: Request) -> Response:
@@ -434,6 +644,11 @@ li.cred:last-child{border-bottom:none}
 button.add{padding:8px 16px;border:none;border-radius:6px;background:#2451c9;color:#fff;font-size:14px;cursor:pointer}
 button.remove{background:none;color:#a02a2a;text-decoration:underline;border:none;padding:0;font-size:13px;cursor:pointer}
 .empty{color:#888;padding:20px 0}
+h2{font-size:16px;margin:32px 0 4px}
+ul.mints{list-style:none;padding:0;margin:8px 0 0}
+li.mint{padding:8px 0;border-bottom:1px solid #eee;font-size:13px}
+li.mint:last-child{border-bottom:none}
+li.mint .when{color:#888;font-size:12px;display:block}
 """
 
 _PAGE_JS = """
@@ -447,15 +662,45 @@ document.addEventListener('DOMContentLoaded', function () {
     if (status) { status.textContent = 'This browser does not support passkeys.'; }
     return;
   }
+  // The enrollment gate: enrolling is gated too, and the options call is where the gate
+  // runs. With a credential already enrolled the server answers 428 with
+  // assertion options -- prove possession of one you already have, then ask
+  // again with the assertion attached, exactly the shape pfDeleteCredential
+  // below already uses for removing your last one. With nothing enrolled the
+  // gate is the companion's own dialog (local mode), which needs no round
+  // trip here: the same call either returns options or a 403 whose `detail`
+  // says what to do about it.
+  function pfRegisterOptions(assertion) {
+    var body = {csrf: csrf};
+    if (assertion) { body.webauthn_assertion = assertion; }
+    return fetch('/api/security/webauthn/register/options', {
+      method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (r.status === 428) {
+        return r.json().then(function (data) {
+          if (!data.webauthn_options || !window.PublicKeyCredential) {
+            throw new Error('adding a passkey needs a prompt from one you already have, and none is available');
+          }
+          if (status) { status.textContent = 'First, confirm with a passkey you already have...'; }
+          return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function (newAssertion) {
+            if (status) { status.textContent = 'Follow your browser\\'s prompt...'; }
+            return pfRegisterOptions(newAssertion);
+          });
+        });
+      }
+      return r.json().then(function (data) {
+        if (data.error) { throw new Error(data.detail || data.error); }
+        return data.options;
+      });
+    });
+  }
+
   btn.addEventListener('click', function () {
     btn.disabled = true;
     if (status) { status.textContent = 'Follow your browser\\'s prompt...'; }
-    fetch('/api/security/webauthn/register/options', {
-      method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({csrf: csrf})
-    }).then(function (r) { return r.json(); }).then(function (data) {
-      if (data.error) { throw new Error(data.error); }
-      return pfWebauthnCreate(JSON.stringify(data.options));
+    pfRegisterOptions(null).then(function (options) {
+      return pfWebauthnCreate(JSON.stringify(options));
     }).then(function (credential) {
       return fetch('/api/security/webauthn/register/verify', {
         method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
@@ -471,6 +716,17 @@ document.addEventListener('DOMContentLoaded', function () {
           'Save this recovery code somewhere safe -- it will not be shown again.\\n\\n' +
           data.recovery_code +
           '\\n\\nIf you ever lose every passkey enrolled here, this code is the only way back in.'
+        );
+      }
+      // Plan item 1.3: on a packaged install the code is never in this
+      // response at all -- the companion put it on the desktop. Only the
+      // failure is worth a word here, since the success already happened
+      // somewhere the human was looking.
+      if (data.recovery_shown_by_companion === false) {
+        window.alert(
+          'Your passkey was added, but no recovery code could be issued:\\n\\n' +
+          (data.recovery_detail || 'the companion app did not show it') +
+          '\\n\\nAsk for one from the PrivacyFence companion once that is sorted out.'
         );
       }
       window.location.reload();
@@ -573,6 +829,67 @@ _SCOPE_NOTES = {
 }
 
 
+# How many of them the page shows. Long enough to cover "did anything mint a
+# session while I was away from this machine this morning", short enough that
+# the list stays something a human reads rather than scrolls -- the full trail
+# is the audit log's own export, which this is a glance at, not a browser for
+# (audit_log.recent_entries' own docstring draws the same line).
+_RECENT_MINTS_SHOWN = 5
+
+# How far back through recent_entries() to look for them. A busy install can
+# put a lot of ordinary approvals between two mints, and a mint that scrolled
+# off the end would be exactly the one worth seeing.
+_RECENT_MINTS_SCANNED = 200
+
+
+def _recent_mints() -> list[tuple[str, str]]:
+    """``(when, what)`` for the most recent sign-in code mints and refusals,
+    newest first -- the self-approval plan's Phase 2 half that makes an
+    unexpected mint *visible* rather than merely inferable.
+
+    Every path to a session is audited now (web/control_channel.py's
+    ``_audit_mint``), but an audit entry nobody reads is evidence after the
+    fact and not much else; this puts them on the one page a human already
+    visits to reason about what can approve on this install.
+
+    Returns an empty list rather than raising for any reason at all --
+    including org mode, where nothing ever mints one of these and the
+    section simply does not render. A page that fails to load because its
+    least important section could not be built would be a poor trade.
+    """
+    try:
+        from .control_channel import SIGN_IN_MINT_DECISION
+
+        entries = get_audit_logger().recent_entries(_RECENT_MINTS_SCANNED)
+    except Exception as exc:  # noqa: BLE001 -- see this function's own docstring
+        logger.warning("Could not read recent sign-in mints for /security: %s", exc)
+        return []
+    rows: list[tuple[str, str]] = []
+    for entry in entries:
+        if entry.decision != SIGN_IN_MINT_DECISION:
+            continue
+        rows.append((entry.timestamp.replace("T", " ")[:19] + " UTC", entry.summary))
+        if len(rows) == _RECENT_MINTS_SHOWN:
+            break
+    return rows
+
+
+def _recent_mints_html(rows: list[tuple[str, str]]) -> str:
+    if not rows:
+        return ""
+    items = "".join(
+        f'<li class="mint">{_esc(what)}<span class="when">{_esc(when)}</span></li>'
+        for when, what in rows
+    )
+    return (
+        "<h2>Recent sign-ins</h2>"
+        '<p class="meta">Every sign-in link this install has issued, and every one it refused. '
+        "A link that can approve is only ever issued through PrivacyFence's companion app -- if "
+        "you see one here you did not ask for, treat this install as compromised.</p>"
+        f'<ul class="mints">{items}</ul>'
+    )
+
+
 def _render_security_page(
     *, principal: Principal, creds: list, csrf: str, step_up: StepUpConfig, nonce: str,
     back_link: tuple[str, str], nav_items: tuple[tuple[str, str, str], ...] | None = None,
@@ -607,6 +924,7 @@ def _render_security_page(
         '<span id="pf-passkey-status" class="meta"></span></p>'
         '<p>Lost every passkey enrolled here? <button type="button" class="remove" id="pf-use-recovery-code">Use your recovery code</button>'
         '<span id="pf-recovery-status" class="meta"></span></p>'
+        f"{_recent_mints_html(_recent_mints())}"
         f"{back_link_html}"
         f'<script nonce="{nonce}">{_PAGE_JS}</script>'
         "</div>"

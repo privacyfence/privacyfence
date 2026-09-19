@@ -108,7 +108,8 @@ class AuditEntry:
                             # "bridge_proposal_no_op" | "error" |
                             # "approval_pending" | "expired" |
                             # "webauthn_credential_enrolled" | "webauthn_credential_removed" |
-                            # "webauthn_recovery_code_used" |
+                            # "webauthn_enrollment_refused" | "webauthn_recovery_code_used" |
+                            # "sign_in_code_minted" |
                             # "step_up_requirement_enabled" | "step_up_requirement_disabled"
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed": #426
                             #  Phase 4 -- web/routes_security.py's register_verify/delete_credential,
@@ -116,7 +117,36 @@ class AuditEntry:
                             #  evidence for the credential store itself: enrolling or removing a
                             #  passkey changes what a future step-up check can be satisfied with, so
                             #  it's worth its own trail even though neither event is itself a gated
-                            #  decision.)
+                            #  decision. An enrollment that found nothing already on file says "First
+                            #  passkey enrolled" in its summary: that is the one that decides what
+                            #  every later step-up check is satisfied by, and -- since it is the only
+                            #  enrollment no already-enrolled credential could gate -- the one worth
+                            #  picking out of the log by eye.)
+                            # ("webauthn_enrollment_refused": the enrollment gate --
+                            #  plan -- web/routes_security.py's register_options/register_verify,
+                            #  recorded when the gate on *adding* a passkey turns an enrollment away:
+                            #  a failed step-up assertion where a credential is already enrolled, or
+                            #  a first enrollment the companion did not confirm. The counterpart to
+                            #  "webauthn_credential_enrolled" above, and the entry whose absence was
+                            #  the gap: before that gate existed, an enrollment nobody asked for left
+                            #  a successful enrollment entry and nothing to distinguish it from one
+                            #  the human made. A 428 asking for the assertion is not recorded -- it
+                            #  is a round trip in the ordinary protocol, not a refusal.)
+                            # ("sign_in_code_minted": the self-approval plan's Phase 2 --
+                            #  web/control_channel.py's own MINT handler, recorded for *every*
+                            #  bootstrap code this daemon issues, whichever shape asked for it.
+                            #  Before this, exactly one of the three ways to a session wrote an
+                            #  audit entry (the MCP sign-in-link tool, now retired) and the two
+                            #  silent ones were the two anything on this machine could use, so the
+                            #  log recorded the sanctioned path and not the reachable ones. The
+                            #  summary names which shape asked and what the resulting session may
+                            #  do: "human" (the companion's own menu, or --print-sign-in-link, both
+                            #  confirmed by the companion) or "unattested" (a bare MINT -- can view
+                            #  what is pending, cannot release it). A *refused* attested mint is
+                            #  recorded too, since "somebody asked for a session that can approve
+                            #  and was turned down" is exactly the line a human scanning this log
+                            #  wants to see. /security shows the recent ones, so an unexpected mint
+                            #  is visible rather than merely inferable.)
                             # ("webauthn_recovery_code_used": #426 Phase 4 -- web/routes_security.py's
                             #  recover_credential, local mode's sanctioned way back in when the only
                             #  enrolled authenticator is lost with no IdP to fall back on: trading in

@@ -60,7 +60,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # just let a real, module-sized regression hide inside the aggregate, which
 # is the exact failure mode MODULE_FLOORS exists to close for the modules
 # listed below; it shouldn't reopen for everything else.
-OVERALL_FLOOR = 94.9
+OVERALL_FLOOR = 95.1
 
 # Security-critical modules get a floor of their own, on top of the overall
 # one above -- see the module docstring for why. Paths are repository-
@@ -134,9 +134,17 @@ MODULE_FLOORS: dict[str, float] = {
     # SEC-10: safe-error taxonomy at the MCP boundary.
     "src/privacyfence/safe_errors.py": 100.0,
     "src/privacyfence/web/routes_mcp.py": 100.0,
-    # CSRF/Origin/step-up auth for write approvals.
-    "src/privacyfence/web/routes_security.py": 96.0,
+    # CSRF/Origin/step-up auth for write approvals. Raised from 96.0 by
+    # Phase 0's enrollment gate and its own tests -- the largest single block
+    # of new branches this module has taken on, and the one it would be worst
+    # to let rot.
+    "src/privacyfence/web/routes_security.py": 97.0,
     "src/privacyfence/webauthn_stepup.py": 98.0,
+    # Phase 1.1: this module decides whether a passkey is required at all --
+    # an install's single most consequential security default, and now a
+    # packaging-dependent one. Small enough that the overall floor would
+    # never notice it rotting, which is exactly what this list is for.
+    "src/privacyfence/step_up_config.py": 99.0,
     # #400: org mode's settings surface. It authorizes on Principal.is_admin
     # and, since C3e, rewrites the install-wide privacy/PII policy for every
     # principal -- the same class of thing as the fail-closed load path
@@ -152,15 +160,28 @@ MODULE_FLOORS: dict[str, float] = {
     # (tests/platform/), not by this Linux-only run, the same split
     # windows_acl.py's own floor documents above. Without a floor at all, a
     # regression in the POSIX half this CI run *does* exercise -- the
-    # peer-uid check included -- was invisible to the gate.
-    "src/privacyfence/web/control_channel.py": 61.0,
-    # _run_tray() (macOS/Windows only, guarded on sys.platform) is nearly
-    # all of what's uncovered -- the tray icon this Linux-only run has
-    # nothing to drive. 83.0 reflects that split honestly rather than
-    # padding it with a pragma; raised from 81.0 by ADR 0003 decision 3's
-    # _complete_pending_separation(), which is new code this run does cover
-    # in full.
-    "src/privacyfence/companion.py": 83.0,
+    # peer-uid check included -- was invisible to the gate. Raised from 61.0
+    # by Phase 0's CONFIRM ENROLL command and the three platform dialogs
+    # behind it: the POSIX-reachable half of all of that is tested, so the
+    # ratchet should hold it. Raised again from 66.0 by Phase 1's ENROLLMENT/
+    # RECOVERY/SHOW RECOVERY commands and Phase 2's attested mints -- MINT
+    # COMPANION/MINT CONSOLE, their CONFIRM MINT/CONFIRM SIGNIN call-backs,
+    # SHOW, and the client helpers for all of them -- every one of which this
+    # run drives against real servers on both sides.
+    "src/privacyfence/web/control_channel.py": 75.0,
+    # Was 81.0, then 83.0 (ADR 0003 decision 3's _complete_pending_
+    # separation()), then 86.0 (Phase 1.2's first-run enrollment offer and
+    # 1.3's recovery-code action). Each of those left _run_tray() -- macOS/
+    # Windows only, guarded on sys.platform -- as nearly all of what was
+    # uncovered, on the reasoning that this Linux-only run has no tray icon
+    # to drive. Merging Phases 1 and 2 is what retired that reasoning: both
+    # had added behaviour *inside* that function (the recovery-code item,
+    # the attested _open_path), so the untested block was no longer just the
+    # loop. tests/unit/test_companion.py's TestTrayLoop stubs pystray/Pillow
+    # at the deferred import _run_tray does itself and drives the menu, the
+    # channel's setup/teardown and the Quit ordering -- running the real
+    # loop still needs a display, wiring it up does not. 86.0 -> 98.0.
+    "src/privacyfence/companion.py": 98.0,
     # The SSE stream's own generator body (approvals_stream's event_source,
     # a poll loop no test here consumes to exhaustion) plus a couple of
     # decide()'s edge branches (the bare-index "choice" coercion, the plain

@@ -87,11 +87,43 @@ DEFAULT_IDLE_TIMEOUT_SECONDS = 30 * 60
 # ``POST /api/bootstrap`` (see this module's own docstring).
 DEFAULT_ABSOLUTE_TIMEOUT_SECONDS = 24 * 60 * 60
 
+# #428 Phase 2 of the self-approval remediation plan: how the session in
+# front of us was established, which is the one thing about a ``pf_session``
+# nothing downstream used to record.
+#
+# ADR 0002 decision 6 names three ways a local process reaches a session,
+# all of them by design: the companion's own Open Approvals item, a
+# bootstrap link a human was handed, and a bare ``MINT`` on the control
+# channel (web/control_channel.py) -- which privilege separation *widens*
+# from 0600 to 0660 so the companion can reach it, putting the agent in the
+# same group. The three produced the same object with the same authority, so
+# "a session exists" was treated as "a human is here", and an agent holding
+# one could release the write it had itself requested.
+#
+# ``human`` is a session minted through the companion -- the one PrivacyFence
+# process that runs where a human can actually be asked (see
+# control_channel.py's ``CONFIRM MINT``/``CONFIRM SIGNIN``). ``unattested``
+# is everything else: a bare ``MINT``, or a code that reached a browser by
+# some route this daemon cannot attribute to a person. Viewing is unchanged
+# either way; approving a decision, and every _SENSITIVE_ACTIONS settings
+# change, requires ``human``.
+#
+# What this is not: authentication of the companion. Companion and agent
+# share an OS user, so an agent that binds the companion's own address before
+# the companion does answers for it -- the identical limit ADR 0003's
+# first-enrollment gate already accepts and docs/security-and-compliance.md
+# already states. What it buys is that the two silent paths stop being
+# interchangeable with the attended one, and that forging the attended one
+# costs impersonating a process whose absence the human notices.
+PROVENANCE_HUMAN = "human"
+PROVENANCE_UNATTESTED = "unattested"
+
 
 @dataclass
 class _Session:
     created_at: float
     last_seen_at: float
+    provenance: str = PROVENANCE_UNATTESTED
 
 
 class LocalSessionStore:
@@ -113,11 +145,18 @@ class LocalSessionStore:
         self._lock = threading.Lock()
         self._sessions: dict[str, _Session] = {}
 
-    def create(self) -> str:
+    def create(self, *, provenance: str = PROVENANCE_UNATTESTED) -> str:
+        """``provenance`` defaults to ``unattested`` on purpose: the safe
+        answer to "how did this session get here" is "I cannot say", and a
+        caller that *can* say (web/server.py's ``_BootstrapMiddleware``,
+        passing through whatever the consumed code carried) says so
+        explicitly."""
         session_id = secrets.token_urlsafe(32)
         now = time.time()
         with self._lock:
-            self._sessions[session_id] = _Session(created_at=now, last_seen_at=now)
+            self._sessions[session_id] = _Session(
+                created_at=now, last_seen_at=now, provenance=provenance,
+            )
         return session_id
 
     def touch(self, session_id: str) -> bool:
@@ -140,6 +179,17 @@ class LocalSessionStore:
             session.last_seen_at = now
             return True
 
+    def provenance(self, session_id: str) -> str | None:
+        """How ``session_id`` was established, or ``None`` if there is no
+        such session. Deliberately does *not* renew ``last_seen_at`` the way
+        ``touch()`` does -- every caller reads this alongside an
+        authentication check that has already touched the session, and an
+        authorization question should not be able to keep a session alive on
+        its own."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            return None if session is None else session.provenance
+
     def destroy(self, session_id: str) -> None:
         with self._lock:
             self._sessions.pop(session_id, None)
@@ -160,24 +210,35 @@ class BootstrapStore:
     def __init__(self, *, ttl_seconds: float = BOOTSTRAP_TTL_SECONDS) -> None:
         self._ttl_seconds = ttl_seconds
         self._lock = threading.Lock()
-        self._codes: dict[str, float] = {}  # code -> expires_at
+        self._codes: dict[str, tuple[float, str]] = {}  # code -> (expires_at, provenance)
 
-    def mint(self) -> str:
+    def mint(self, *, provenance: str = PROVENANCE_UNATTESTED) -> str:
+        """``provenance`` travels with the code and lands on the session it
+        exchanges for -- the mint is the only moment anything knows how this
+        credential came to exist, so recording it anywhere later would be
+        guesswork. Same defaults-to-``unattested`` reasoning as
+        ``LocalSessionStore.create()``."""
         code = secrets.token_urlsafe(32)
         with self._lock:
-            self._codes[code] = time.time() + self._ttl_seconds
+            self._codes[code] = (time.time() + self._ttl_seconds, provenance)
         return code
 
-    def consume(self, code: str) -> bool:
-        """True iff ``code`` was live and unexpired -- always removes it
-        first, so presenting it again (a slow double-click, a replayed
-        request, an attacker who intercepted it after the fact) never gets
-        a second attempt, successful exchange or not."""
+    def consume(self, code: str) -> str | None:
+        """The provenance ``code`` was minted with iff it was live and
+        unexpired, else ``None`` -- always removes it first, so presenting it
+        again (a slow double-click, a replayed request, an attacker who
+        intercepted it after the fact) never gets a second attempt,
+        successful exchange or not. Returns the provenance rather than a bare
+        ``True`` because the caller's next act is creating the session that
+        inherits it, and every value this can return is truthy."""
         if not code:
-            return False
+            return None
         with self._lock:
-            expires_at = self._codes.pop(code, None)
-        return expires_at is not None and expires_at >= time.time()
+            entry = self._codes.pop(code, None)
+        if entry is None:
+            return None
+        expires_at, provenance = entry
+        return provenance if expires_at >= time.time() else None
 
 
 def authenticated(request: Request, sessions: LocalSessionStore) -> bool:
@@ -185,6 +246,54 @@ def authenticated(request: Request, sessions: LocalSessionStore) -> bool:
     if not session_id:
         return False
     return sessions.touch(session_id)
+
+
+def session_provenance(request: Request, sessions: LocalSessionStore) -> str | None:
+    """How the session behind ``request``'s cookie was established, or
+    ``None`` when there is no live session at all -- which every caller
+    treats exactly like ``unattested``, since "I have never seen this
+    session" is not a better answer than "I cannot say who established
+    it"."""
+    session_id = request.cookies.get(SESSION_COOKIE, "")
+    if not session_id:
+        return None
+    return sessions.provenance(session_id)
+
+
+def is_human_session(request: Request, sessions: LocalSessionStore) -> bool:
+    """True iff this request rides a session a human was actually asked
+    for (``PROVENANCE_HUMAN``, see this module's own constants). The
+    question every approving decision and every sensitive settings action
+    asks before it acts; viewing asks nothing."""
+    return session_provenance(request, sessions) == PROVENANCE_HUMAN
+
+
+def human_session_required_json(what: str) -> tuple[dict[str, str], int]:
+    """The body and status a route returns when ``is_human_session()`` says
+    no -- a ``403`` rather than the ``401`` an *unauthenticated* request
+    gets, because the session is perfectly valid and the answer is still
+    no. Returned as a plain ``(body, status)`` pair rather than a
+    ``JSONResponse`` so this module keeps importing only what its own page
+    rendering needs, and each caller builds the response type its own route
+    already returns.
+
+    ``what`` names the refused act ("approve a decision", "change this
+    setting") -- the message has to be actionable for the human who is
+    legitimately looking at the page and has no idea why their click did
+    nothing, and the action they need is always the same one: reopen this
+    page from the companion, which is what makes a session ``human``."""
+    return (
+        {
+            "error": "human_session_required",
+            "message": (
+                f"This sign-in session cannot {what}. PrivacyFence can only tell that a person "
+                "asked for a session when it was opened from the PrivacyFence companion (the "
+                "menu-bar/tray icon, or the PrivacyFence entry in your applications menu) -- "
+                "reopen Approvals from there and try again."
+            ),
+        },
+        403,
+    )
 
 
 def set_session_cookie(response: Response, session_id: str) -> None:
@@ -199,8 +308,10 @@ def _companion_availability_sentence() -> str:
     """Whether the reader can expect the companion to already be running,
     which #428 Phase 4 changed -- differently per platform.
 
-    On a separated macOS/Windows install the tray item really is started for
-    them at login, so "it should already be there" is a useful instruction.
+    It reads as a whole sentence of its own between "open the companion" and
+    what that buys, so each branch ends in one. On a separated macOS/Windows
+    install the tray item really is started for them at login, so "it should
+    already be there" is a useful instruction.
     On Linux it is not: what a separated install autostarts is the invisible
     ``--serve`` channel (companion.py), the thing that lets the daemon open a
     browser for connector OAuth from outside the user's session. The
@@ -211,7 +322,8 @@ def _companion_availability_sentence() -> str:
     had (ADR 0002 decision 4).
     """
     if not privilege_separation.is_enabled():
-        return "Nothing installs or starts it automatically yet, so "
+        return "Nothing installs or starts it automatically on this install, so you may have to "\
+               "launch it yourself first. "
     if privilege_separation.current_platform() == "linux":
         return (
             "This install has no tray icon (ADR 0002 decision 4) -- the Applications-menu "
@@ -236,44 +348,37 @@ def unauthorized_html(request: Request) -> Response:
     scrubs the code to ``bootstrap=[REDACTED]`` before the line ever
     reaches a file or a terminal -- restarting PrivacyFence changed nothing
     about that, since the fresh line from the new process is redacted the
-    same way. The three things that actually work, in the order most
-    readers can actually use them: asking a connected MCP client (e.g.
-    Claude -- installed alongside PrivacyFence per README.md's Quick start,
-    so this is available even on a first run, before Settings has ever been
-    opened) to call ``privacyfence_get_sign_in_link`` (web/mcp_tools.py),
-    which mints one and hands it straight back in the conversation -- no
-    terminal at all -- is also the one this page now leads with (issue
-    #423's proposed-fix part 3): P10 removed the menu bar, so "ask Claude"
-    is the intended recovery path on a headless install, not a fallback
-    buried under the "why you're here" line; the discovery file
-    ``web/server.py``'s
-    ``mint_bootstrap_url()`` writes outside the logging pipeline every time
-    PrivacyFence (re)starts, for a reader who'd rather grab it themselves;
-    and minting a fresh code on demand through the control channel (#428
-    Phase 2, ``web/control_channel.py``) without restarting anything, for a
-    reader with neither -- this page spells out the actual command for that
-    last one rather than just naming the channel, since a reader who's
-    landed here from a dead link and has no MCP client connected yet is
-    exactly the audience that finding this self-explanatory matters most
-    for.
+    same way.
 
-    #428 Phase 3 (ADR 0002) adds a fifth path, and the page now leads with
-    it ahead of "ask Claude": PrivacyFence's optional companion app (a
-    tray/menu-bar icon on macOS/Windows, an Applications-menu entry on
-    Linux) mints and opens a fresh link itself, from its own Open Approvals/
-    Open Settings items -- no MCP client, no terminal. Nothing installs or
-    autostarts it yet, though (that's #428 Phase 4), so this page can't
-    assume it's running and still lists the other four. ``request`` is
-    otherwise unused here: unlike the old bearer-header
-    ``curl`` command, the control channel is a local socket/pipe, not
-    another HTTP endpoint on this page's own origin, so there's no origin
-    left to splice into the recovery command.
+    This page also used to lead with "ask Claude", which called
+    ``privacyfence_get_sign_in_link`` and handed the reader a link inside
+    the conversation. That tool is retired (the self-approval plan's Phase
+    2): it handed a live session credential to the party the credential
+    governs, and its own justification -- a headless daemon with an optional
+    companion -- expired when ADR 0003 made the companion mandatory and
+    autostarted on all three platforms.
 
-    The discovery-file path and the recovery command are both platform-
-    dependent -- ``paths.data_dir()`` resolves to the real, live directory
-    this install actually writes ``approvals_url`` into (``~/.privacyfence``
-    on POSIX, ``%LOCALAPPDATA%\\PrivacyFence`` on Windows, see that
-    function's own docstring). Neither command needs Python -- a packaged
+    So the page leads with the companion (#428 Phase 3, ADR 0002), which is
+    also the only route to a session that may approve rather than merely
+    view (``PROVENANCE_HUMAN`` above), and offers ``privacyfence-app
+    --print-sign-in-link`` for a reader whose companion menu is out of
+    reach. The discovery file this page used to point at -- the one
+    ``web/server.py`` wrote a live link into on every startup -- is gone
+    with the same Phase 2 change, for the same reason the tool is: it sat
+    in a group-shared directory, which made it a session for the taking.
+    What is still spelled out last, for a reader who has neither of the
+    first two, is the control channel's own raw command (#428 Phase 2,
+    ``web/control_channel.py``) -- that one mints an unattested code, which
+    is enough to see what is waiting. ``request`` is otherwise
+    unused here: unlike the old bearer-header ``curl`` command, the control
+    channel is a local socket/pipe, not another HTTP endpoint on this
+    page's own origin, so there's no origin left to splice into the
+    recovery command.
+
+    The recovery command is platform-dependent, and its socket/pipe address
+    is resolved from the real, live directory this install uses
+    (``~/.privacyfence`` on POSIX, ``%LOCALAPPDATA%\\PrivacyFence`` on
+    Windows -- see ``paths.data_dir()``'s own docstring). It needs no Python -- a packaged
     install doesn't guarantee one on ``PATH`` any more than the pre-Phase-2
     page's ``curl`` was guaranteed, so this leans on the same kind of
     already-present OS tool instead: POSIX gets ``nc -U`` (the BSD ``nc``
@@ -283,18 +388,18 @@ def unauthorized_html(request: Request) -> Response:
     ``System.IO.Pipes.NamedPipeClientStream`` (built into every supported
     .NET runtime, so no extra install either)."""
     data_dir = paths.data_dir()
-    # handoff_dir() for the files a *reader of this page* goes looking for:
-    # #428 Phase 4 moves them to a user-reachable subdirectory on a
-    # privilege-separated install, and this page's whole job is telling a
-    # locked-out human where to look. Identical to data_dir() everywhere
-    # else. Unlike authority_dir(), neither call runs a migration.
+    # handoff_dir() for the address a *reader of this page* has to reach:
+    # #428 Phase 4 moved the control socket to a user-reachable
+    # subdirectory on a privilege-separated install, and this page's whole
+    # job is telling a locked-out human where to find it. Identical to
+    # data_dir() everywhere else. Unlike authority_dir(), neither call runs
+    # a migration.
     handoff = paths.handoff_dir()
     # Deferred import: control_channel.py imports BootstrapStore from this
     # module, so importing it back at module scope here would be circular.
     from .control_channel import socket_path_under, windows_pipe_name
 
     if paths.is_windows():
-        approvals_url_path = f"{handoff}\\approvals_url"
         pipe_name = windows_pipe_name().rsplit("\\", 1)[-1]
         command = (
             "$p=New-Object System.IO.Pipes.NamedPipeClientStream('.','" + pipe_name + "',"
@@ -303,7 +408,6 @@ def unauthorized_html(request: Request) -> Response:
             "(New-Object System.IO.StreamReader($p)).ReadLine()"
         )
     else:
-        approvals_url_path = f"{handoff}/approvals_url"
         # A plain join, not control_channel.posix_socket_path() -- that
         # calls the real, side-effecting paths.authority_dir() (creates the
         # directory, runs its migration-on-first-use), which this
@@ -317,25 +421,23 @@ def unauthorized_html(request: Request) -> Response:
         command = f"printf 'MINT\\n' | nc -U '{sock_path}'"
     return HTMLResponse(
         "<!DOCTYPE html><html><body style=\"font:15px sans-serif;padding:40px;max-width:640px\">"
-        "<p><strong>Not authorized.</strong> If PrivacyFence's companion app is running -- a "
+        "<p><strong>Not authorized.</strong> Open PrivacyFence's companion app -- a "
         "tray/menu-bar icon on macOS/Windows, or its entry in your Applications menu on Linux -- "
-        "use its Open Approvals (or Open Settings) item to get back in directly, no MCP client or "
-        "terminal needed. " + _companion_availability_sentence() + "if that's not an option:</p>"
-        "<p>Ask Claude (or any other MCP client already "
-        "connected to PrivacyFence) to get you back in — it can call the "
-        "<code>privacyfence_get_sign_in_link</code> tool and hand you a fresh sign-in link "
-        "directly, no terminal needed. That's the fastest way back in on a headless "
-        "install, so it leads here.</p>"
-        "<p>This link has expired, was already used, or your session timed out.</p>"
-        "<p>Prefer to grab it yourself? PrivacyFence just wrote the current one to "
-        f"<code>{approvals_url_path}</code> (or <code>settings_url</code> for "
-        "Settings) — every startup, and every time an old one is superseded, replaces "
-        "it with a fresh one. (Not the log file: <code>privacyfence.log</code> "
-        "deliberately redacts this link's code for security, so it never contains a "
-        "usable one — restarting PrivacyFence doesn't change that.)</p>"
-        "<p>No MCP client connected yet, and don't want to restart PrivacyFence just for "
-        "this? From a terminal on this machine, mint a new one on demand and open the "
-        "link it returns:</p>"
+        "and use its Open Approvals (or Open Settings) item to get back in. "
+        + _companion_availability_sentence() +
+        "It is also the only way back to a session that can <em>approve</em> what is waiting: a "
+        "link from anywhere else signs you in to look, not to release.</p>"
+        "<p>No companion you can reach right now? From a terminal on this machine, run "
+        "<code>privacyfence-app --print-sign-in-link</code> and open the link it prints. Your AI "
+        "client cannot do this for you: PrivacyFence no longer issues a sign-in link to the "
+        "program it governs.</p>"
+        "<p>This link has expired, was already used, or your session timed out. "
+        "(Not the log file: <code>privacyfence.log</code> deliberately redacts this link's "
+        "code for security, so it never contains a usable one — restarting PrivacyFence "
+        "doesn't change that. PrivacyFence no longer writes the link to a file either: that "
+        "file was readable by every program running as you.)</p>"
+        "<p>Neither of the above available? From a terminal on this machine, mint a "
+        "view-only link on demand and open what it returns:</p>"
         "<pre style=\"white-space:pre-wrap;background:#f0f0f0;padding:10px;"
         f"border-radius:4px\">{command}</pre>"
         "</body></html>",
@@ -382,6 +484,8 @@ __all__ = [
     "BOOTSTRAP_TTL_SECONDS",
     "DEFAULT_ABSOLUTE_TIMEOUT_SECONDS",
     "DEFAULT_IDLE_TIMEOUT_SECONDS",
+    "PROVENANCE_HUMAN",
+    "PROVENANCE_UNATTESTED",
     "SESSION_COOKIE",
     "BootstrapStore",
     "LocalSessionStore",
@@ -389,6 +493,9 @@ __all__ = [
     "check_csrf",
     "check_origin",
     "clear_session_cookie",
+    "human_session_required_json",
+    "is_human_session",
+    "session_provenance",
     "set_session_cookie",
     "unauthorized_html",
 ]

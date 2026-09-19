@@ -1,12 +1,17 @@
-"""Tests for privacyfence.companion -- #428 Phase 3 (ADR 0002). The tray
-loop itself (_run_tray) needs a real display and pystray/Pillow, neither of
-which this CI OS has (or, on Linux, ever will -- see companion.py's own
-module docstring for why pystray isn't even a dependency here), so it's
-untested the same way test_control_channel.py leaves the Windows
-named-pipe half to a Windows-hosted run: real coverage of the pure
-dispatch logic (_open_path/_quit_daemon/_run_action/main's argparse
-wiring) plus a couple of true end-to-end runs against real
+"""Tests for privacyfence.companion -- #428 Phase 3 (ADR 0002). Real
+coverage of the pure dispatch logic (_open_path/_quit_daemon/_run_action/
+main's argparse wiring) plus a couple of true end-to-end runs against real
 ControlChannelServer/CompanionChannelServer instances.
+
+*Running* the tray loop still needs a real display and pystray/Pillow,
+neither of which this CI OS has (or, on Linux, ever will -- see
+companion.py's own module docstring for why pystray isn't even a dependency
+here). What _run_tray *wires up* does not: TestTrayLoop below stubs both at
+the deferred import _run_tray does itself, and exercises the menu, the
+channel's setup/teardown and the Quit ordering. That stopped being optional
+when the self-approval plan added two behaviours to that function -- Phase
+1's recovery-code item and Phase 2's attested _open_path -- neither of which
+anything else reaches.
 """
 from __future__ import annotations
 
@@ -22,6 +27,61 @@ from privacyfence.web.session_auth import BootstrapStore
 
 
 class TestOpenPath:
+    """Three shapes, since the self-approval plan's Phase 2 -- see
+    ``_open_path``'s own docstring. Which one runs depends on who owns the
+    companion channel, because that is the process the daemon calls back to
+    before it will mint a session that can approve."""
+
+    @pytest.fixture(autouse=True)
+    def _no_companion_listening(self, monkeypatch):
+        """The default for the cases below: nothing else is running, so the
+        delegation step finds no companion and falls through. Set explicitly
+        rather than left to a real connect attempt against whatever socket
+        this machine happens to have."""
+        monkeypatch.setattr(companion, "request_show", lambda path: False)
+        monkeypatch.setattr(companion._channel_running, "is_set", lambda: False)
+
+    def test_this_process_owning_the_channel_mints_an_attested_link_itself(self, monkeypatch):
+        monkeypatch.setattr(companion._channel_running, "is_set", lambda: True)
+        calls = []
+        monkeypatch.setattr(companion, "open_attested_url", lambda path: (bool(calls.append(path)) or True, ""))
+        # Nothing else may be reached on this path: an attested mint is the
+        # whole point, and quietly falling back to an unattested one would
+        # hand back a session whose Approve buttons refuse.
+        monkeypatch.setattr(companion, "mint_bootstrap_code", lambda: pytest.fail("minted unattested"))
+
+        assert companion._open_path("/approvals") is True
+        assert calls == ["/approvals"]
+
+    def test_a_failure_to_mint_attested_is_reported_not_downgraded(self, monkeypatch):
+        monkeypatch.setattr(companion._channel_running, "is_set", lambda: True)
+        monkeypatch.setattr(companion, "open_attested_url", lambda path: (False, "could not open a browser"))
+        assert companion._open_path("/approvals") is False
+
+    def test_a_one_shot_click_hands_the_job_to_a_running_companion(self, monkeypatch):
+        """Linux's applications-menu click (ADR 0002 decision 4): this
+        process exits too soon to answer the daemon's call-back, so the
+        autostarted ``--serve`` process does the minting and the opening."""
+        shown = []
+        monkeypatch.setattr(companion, "request_show", lambda path: bool(shown.append(path)) or True)
+        monkeypatch.setattr(companion, "mint_bootstrap_code", lambda: pytest.fail("minted unattested"))
+
+        assert companion._open_path("/approvals") is True
+        assert shown == ["/approvals"]
+
+    def test_with_no_companion_at_all_the_link_still_signs_in_to_look(self, monkeypatch, caplog):
+        monkeypatch.setattr(companion, "read_base_url", lambda: "http://127.0.0.1:8765")
+        monkeypatch.setattr(companion, "mint_bootstrap_code", lambda: "abc123")
+        opened = []
+        monkeypatch.setattr(companion.webbrowser, "open", lambda url: opened.append(url) or True)
+
+        with caplog.at_level("WARNING"):
+            assert companion._open_path("/approvals") is True
+
+        assert opened == ["http://127.0.0.1:8765/approvals?bootstrap=abc123"]
+        # Said out loud rather than discovered at the Approve button.
+        assert "not approve" in caplog.text
+
     def test_returns_false_when_no_daemon_is_running(self, monkeypatch):
         monkeypatch.setattr(companion, "read_base_url", lambda: None)
         assert companion._open_path("/approvals") is False
@@ -252,7 +312,7 @@ class TestPendingSeparation:
 
         companion._start_pending_separation_check()
 
-        assert started[0]["target"] is companion._complete_pending_separation
+        assert started[0]["target"] is companion._first_run_checks
         assert started[0]["daemon"] is True
         assert started[-1] == "started"
 
@@ -360,3 +420,266 @@ class TestCompanionEndToEnd:
             assert opened == ["https://example.com/callback"]
         finally:
             server.stop()
+
+
+class TestRecoveryCodeAction:
+    """Plan item 1.3's "re-presented by the companion" half. The code itself
+    never travels back over this call -- the daemon calls back into this
+    process's own channel to put it on screen -- so all this action can do
+    is succeed or explain why it didn't."""
+
+    def test_asks_the_daemon_and_reports_success(self, monkeypatch):
+        asked = []
+        monkeypatch.setattr(companion, "request_recovery_code", lambda: asked.append("asked"))
+        assert companion._show_recovery_code() is True
+        assert asked == ["asked"]
+
+    def test_a_refusal_is_logged_not_raised(self, monkeypatch, caplog):
+        def _raise():
+            raise cc.ControlChannelError("issuing a new recovery code was denied")
+
+        monkeypatch.setattr(companion, "request_recovery_code", _raise)
+        with caplog.at_level("ERROR"):
+            assert companion._show_recovery_code() is False
+        assert "denied" in caplog.text
+
+    def test_no_daemon_running_is_a_plain_false(self, monkeypatch):
+        def _raise():
+            raise OSError("no such socket")
+
+        monkeypatch.setattr(companion, "request_recovery_code", _raise)
+        assert companion._show_recovery_code() is False
+
+    def test_the_action_is_dispatchable(self, monkeypatch):
+        monkeypatch.setattr(companion, "_show_recovery_code", lambda: True)
+        assert companion._run_action(companion.ACTION_RECOVERY_CODE) is True
+
+    def test_argparse_accepts_it(self, monkeypatch):
+        # The Linux Desktop Action for this (resources/linux/privacyfence-
+        # companion.desktop) runs exactly this argv.
+        seen = []
+        monkeypatch.setattr(companion, "_run_action", lambda action: seen.append(action) or True)
+        assert companion.main(["--action", "recovery-code"]) == 0
+        assert seen == [companion.ACTION_RECOVERY_CODE]
+
+
+class TestFirstEnrollmentOffer:
+    """Plan item 1.2: the other half of defaulting step-up on for packaged
+    installs. A fresh install requires a passkey it does not have, which is
+    a safe state (nothing is approved) but not a usable one, and nobody is
+    looking at a page they have no reason to open."""
+
+    def test_a_pending_enrollment_opens_the_security_page(self, monkeypatch, caplog):
+        monkeypatch.setattr(companion, "enrollment_state", lambda: "pending")
+        opened = []
+        monkeypatch.setattr(companion, "_open_path", lambda path: opened.append(path) or True)
+
+        with caplog.at_level("WARNING"):
+            companion._offer_first_enrollment()
+
+        assert opened == ["/security"]
+        # The log line has to stand on its own for anyone reading it without
+        # the browser tab in front of them.
+        assert "no approval can be released" in caplog.text
+
+    def test_an_install_with_a_passkey_opens_nothing(self, monkeypatch):
+        monkeypatch.setattr(companion, "enrollment_state", lambda: "ok")
+
+        def _unexpected(path):
+            raise AssertionError(f"opened {path} with nothing pending")
+
+        monkeypatch.setattr(companion, "_open_path", _unexpected)
+        companion._offer_first_enrollment()
+
+    def test_a_daemon_that_is_still_starting_is_retried(self, monkeypatch):
+        # A packaged install starts its daemon as a system service and this
+        # process from the user's own session: the two race at every login.
+        answers = [OSError("not yet"), OSError("not yet"), "pending"]
+        slept = []
+        monkeypatch.setattr(companion.time, "sleep", lambda seconds: slept.append(seconds))
+
+        def _state():
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(companion, "enrollment_state", _state)
+        opened = []
+        monkeypatch.setattr(companion, "_open_path", lambda path: opened.append(path) or True)
+
+        companion._offer_first_enrollment()
+
+        assert opened == ["/security"]
+        assert slept == [companion._DAEMON_WAIT_SECONDS] * 2
+
+    def test_a_daemon_that_never_arrives_is_left_for_the_next_login(self, monkeypatch):
+        def _raise():
+            raise OSError("no such socket")
+
+        monkeypatch.setattr(companion.time, "sleep", lambda seconds: None)
+        monkeypatch.setattr(companion, "enrollment_state", _raise)
+
+        def _unexpected(path):
+            raise AssertionError(f"opened {path} with no daemon running")
+
+        monkeypatch.setattr(companion, "_open_path", _unexpected)
+        companion._offer_first_enrollment()
+
+    def test_a_daemon_that_cannot_answer_is_not_worth_a_browser_tab(self, monkeypatch):
+        # An older daemon, or one with no step-up config behind its control
+        # channel, answers ERROR. Nothing to act on from this side.
+        def _raise():
+            raise cc.ControlChannelError("enrollment state is not available on this install")
+
+        monkeypatch.setattr(companion, "enrollment_state", _raise)
+
+        def _unexpected(path):
+            raise AssertionError(f"opened {path} on an ERROR reply")
+
+        monkeypatch.setattr(companion, "_open_path", _unexpected)
+        companion._offer_first_enrollment()
+
+    def test_enrollment_is_not_offered_while_group_membership_is_pending(self, monkeypatch):
+        # Group membership is evaluated when a session is created, so until
+        # the human logs out and back in they cannot reach the web UI at all
+        # -- opening /security would be opening a page that cannot load.
+        monkeypatch.setattr(companion, "_complete_pending_separation", lambda: None)
+        monkeypatch.setattr(
+            companion.privilege_separation, "owner_membership_pending", lambda: True
+        )
+
+        def _unexpected():
+            raise AssertionError("asked about enrollment before the relog")
+
+        monkeypatch.setattr(companion, "_offer_first_enrollment", _unexpected)
+        companion._first_run_checks()
+
+    def test_separation_is_settled_before_enrollment_is_offered(self, monkeypatch):
+        order = []
+        monkeypatch.setattr(
+            companion, "_complete_pending_separation", lambda: order.append("separation"),
+        )
+        monkeypatch.setattr(
+            companion.privilege_separation, "owner_membership_pending", lambda: False
+        )
+        monkeypatch.setattr(companion, "_offer_first_enrollment", lambda: order.append("enrollment"))
+
+        companion._first_run_checks()
+
+        assert order == ["separation", "enrollment"]
+
+
+class TestTrayLoop:
+    """``_run_tray`` itself -- the one part of this module the header above
+    called untestable. Running the real loop still is: it needs a display,
+    and pystray/Pillow are not dependencies on this OS. What is testable,
+    with those two stubbed at the import ``_run_tray`` does itself, is
+    everything the tray is *wiring up* -- and both halves of the self-approval
+    plan added to it (Phase 1 the recovery-code item, Phase 2 the attested
+    ``_open_path``), so the menu had grown two behaviours nothing checked.
+    """
+
+    @pytest.fixture
+    def tray(self, monkeypatch):
+        """A fake ``pystray``/``PIL.Image`` pair, installed in ``sys.modules``
+        so ``_run_tray``'s own deferred import picks them up, plus a captured
+        icon so the test can invoke the menu callbacks the way a click would."""
+        captured = SimpleNamespace(icon=None, ran=False, stopped=False)
+
+        class _Icon:
+            def __init__(self, name, image, title, menu):
+                self.name, self.image, self.title, self.menu = name, image, title, menu
+                captured.icon = self
+
+            def run(self):
+                captured.ran = True
+
+            def stop(self):
+                captured.stopped = True
+
+        class _MenuItem:
+            def __init__(self, text, action):
+                self.text, self.action = text, action
+
+        class _Menu:
+            def __init__(self, *items):
+                self.items = items
+
+        pystray = SimpleNamespace(Icon=_Icon, Menu=_Menu, MenuItem=_MenuItem)
+        pil_image = SimpleNamespace(open=lambda path: f"image:{path}")
+        monkeypatch.setitem(sys.modules, "pystray", pystray)
+        monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=pil_image))
+        monkeypatch.setitem(sys.modules, "PIL.Image", pil_image)
+
+        # Nothing real starts: the separation check spawns a thread, and the
+        # channel would bind a socket this test has no business owning.
+        monkeypatch.setattr(companion, "_start_pending_separation_check", lambda: None)
+        channel = SimpleNamespace(started=False, stopped=False)
+        channel.start = lambda: setattr(channel, "started", True)
+        channel.stop = lambda: setattr(channel, "stopped", True)
+        monkeypatch.setattr(companion, "CompanionChannelServer", lambda: channel)
+        captured.channel = channel
+        return captured
+
+    def _items(self, tray):
+        return {item.text: item.action for item in tray.icon.menu.items}
+
+    def test_the_menu_offers_exactly_the_four_documented_items(self, tray):
+        assert companion._run_tray() == 0
+        assert list(self._items(tray)) == [
+            "Open Approvals", "Open Settings", "New Recovery Code…", "Quit",
+        ]
+        assert tray.ran is True
+
+    def test_the_channel_is_up_while_the_icon_runs_and_torn_down_after(self, tray):
+        assert companion._run_tray() == 0
+        assert tray.channel.started is True
+        # The finally: arm -- a tray process that exits leaves nothing bound,
+        # so the next companion to start can take the address.
+        assert tray.channel.stopped is True
+        assert companion._channel_running.is_set() is False
+
+    def test_open_items_dispatch_to_open_path(self, tray, monkeypatch):
+        opened = []
+        monkeypatch.setattr(companion, "_open_path", opened.append)
+        companion._run_tray()
+        items = self._items(tray)
+        items["Open Approvals"](tray.icon, None)
+        items["Open Settings"](tray.icon, None)
+        assert opened == ["/approvals", "/settings"]
+
+    def test_quit_stops_the_daemon_before_taking_the_icon_down(self, tray, monkeypatch):
+        order = []
+        monkeypatch.setattr(companion, "_quit_daemon", lambda: order.append("daemon") or True)
+        companion._run_tray()
+        tray.channel.stop = lambda: order.append("channel")
+        tray.icon.stop = lambda: order.append("icon")
+        self._items(tray)["Quit"](tray.icon, None)
+        # A tray icon with nothing left to serve has no reason to stay up --
+        # and the daemon has to be asked first, since stopping the channel
+        # first would remove the way to ask.
+        assert order == ["daemon", "channel", "icon"]
+
+    def test_the_recovery_item_runs_off_the_menu_thread(self, tray, monkeypatch):
+        # pystray runs menu callbacks on the thread that draws the menu, and
+        # this round trip is two dialogs long -- inline would freeze the icon
+        # for as long as somebody takes to answer.
+        threads = []
+
+        class _Thread:
+            def __init__(self, *, target, name, daemon):
+                self.target, self.name, self.daemon = target, name, daemon
+                threads.append(self)
+
+            def start(self):
+                self.target()
+
+        monkeypatch.setattr(companion.threading, "Thread", _Thread)
+        shown = []
+        monkeypatch.setattr(companion, "_show_recovery_code", lambda: shown.append(True) or True)
+        companion._run_tray()
+        self._items(tray)["New Recovery Code…"](tray.icon, None)
+        assert len(threads) == 1
+        assert threads[0].daemon is True
+        assert shown == [True]

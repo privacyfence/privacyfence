@@ -37,9 +37,125 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **A packaged install now requires a passkey before it releases anything, out of the box.**
+  `step_up.enabled` and `step_up.require_passkey` both default to on for the DMG/`.pkg`, the
+  Windows installer and the `.deb` — the same builds ADR 0003 already makes privilege-separated or
+  refuses to serve at all, so the credential store the passkey is checked against is out of the
+  agent's reach on exactly the installs this switches on. ADR 0003 listed this default under *Out
+  of scope* because decision 1 was only half the precondition; the other half is the enrollment
+  gate below, without which defaulting this on would have advertised a guarantee a local process
+  could defeat by enrolling a passkey of its own. An explicit `enabled`/`require_passkey` in
+  `config/settings.yaml` still wins in both directions, and every install seeded from an older
+  `settings.yaml.example` has both written out as `false` — so **this changes fresh installs, not
+  existing ones on upgrade**. A source checkout, an editable install and `pipx install
+  privacyfence` all still default off, for the reason they always have: nothing separates them, and
+  a passkey checked against a store the agent can write is a checkbox a local process ticks for
+  itself. Setting `require_passkey: true` on an unseparated install is still refused outright at
+  startup, naming the fix.
+- **The companion app walks you through your first passkey.** A fresh packaged install comes up
+  requiring a passkey it does not have yet — a deliberately fail-closed state in which nothing is
+  approved and every page says why, but not one anybody would find on their own. The companion now
+  asks the daemon at each start whether that is the case and, if it is, opens `/security` with a
+  session already minted. It re-offers at every start until something is enrolled and does nothing
+  once one is; it stays quiet while privilege separation's per-user half is still pending, since
+  until you have logged out and back in there is no page to open yet.
+- **The one-time recovery code no longer travels in an HTTP response body on a packaged install.**
+  That code removes every passkey enrolled for a principal when spent, which made it a
+  credential-store reset token handed to whoever completed an enrollment — including a local
+  process that had reached one. The daemon now mints it, has the companion put it in a dialog on
+  your own desktop, and only *then* stores it: a code nobody could be shown is never stored either,
+  so the install is left able to issue one rather than holding one that exists and cannot be
+  produced. If the companion cannot be reached, the passkey is still enrolled and `/security` says
+  why no code was issued. Because nothing keeps the plaintext, re-presenting a code means issuing a
+  new one, and the companion is where that happens: **New Recovery Code…** on the macOS/Windows
+  menu bar, a matching Applications-menu entry on Linux. The daemon asks you to confirm through the
+  companion first — issuing one stops whatever you wrote down before from working — and no reply on
+  the daemon's own control channel ever carries a code, in either direction, which matters because
+  that channel is group-shared with the logged-in user on a separated install. Org mode is
+  unchanged (no companion, and the session that reached `/security` is an IdP authentication), and
+  so is any non-packaged local-mode install, which autostarts no companion.
+- **`step_up.scope` now defaults to `writes_and_pii_reads` rather than `writes`**, in both
+  deployment modes. The narrower default was chosen when the adversary in view was a human at the
+  keyboard; ADR 0003 adopts a different one — an agent with code execution on the same machine —
+  and against that adversary `writes` leaves every read releasable by a session alone, including
+  one PrivacyFence itself flagged as carrying personal data. An install with `scope:` written out
+  in `config/settings.yaml` or `org_config.json` keeps exactly what it set; only one that never
+  expressed an opinion moves, and it moves one rung, not to the widest.
+- **A sign-in session is no longer treated as proof that a human asked for it.** Three paths reach a
+  local-mode `pf_session`, all by design (ADR 0002 decision 6): the companion's own **Open
+  Approvals** item, a bootstrap link a human was handed, and a bare `MINT` on the control channel —
+  which privilege separation *widens* to a group the agent is in. Nothing downstream recorded which,
+  so all three produced the same object with the same authority, and a local process could release
+  the write it had itself requested. Every session now carries a provenance: `human` for one minted
+  through the companion (its menu item, confirmed by a call-back to the process the human clicked,
+  or `privacyfence-app --print-sign-in-link`, confirmed by the companion's own dialog) and
+  `unattested` for everything else. Releasing an approving decision and changing a sensitive setting
+  require `human`; viewing and denying are unchanged, so an unattested link still shows what is
+  pending and says plainly that it cannot approve it. Enforced on privilege-separated installs —
+  since ADR 0003, every packaged one — where the companion this rests on is guaranteed to be
+  installed and running; a non-packaged `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` checkout has neither
+  a companion nor an `authority/` boundary and is unchanged. See
+  `docs/security-and-compliance.md`'s "A session is not a human", including what this deliberately
+  does *not* claim about telling the companion apart from the agent.
+- **Every sign-in link PrivacyFence issues is now audited, and the recent ones are shown on the
+  Passkeys page.** Exactly one of the three ways to a session used to write an audit entry — the
+  MCP sign-in-link tool, now removed — and the two silent ones were the two anything on this
+  machine could use, so the log recorded the sanctioned path and not the reachable ones. Each mint
+  (and each refused attested mint) is now recorded under its own `sign_in_code_minted` decision,
+  naming which path asked and whether the resulting session can approve. `/security` lists the
+  recent ones, so a link you did not ask for is visible rather than merely inferable.
+- **PrivacyFence no longer writes a live sign-in link to disk.** Every startup used to leave the
+  current `?bootstrap=` link in `~/.privacyfence/approvals_url` (and `settings_url`), refreshed on
+  every restart, in a directory that is group-shared with your login account by design — so any
+  program running as you, the AI client included, could read a working session out of it. Those
+  files are no longer written, and any left by an older version are deleted the next time
+  PrivacyFence starts. The not-authorized page points at the companion app and
+  `privacyfence-app --print-sign-in-link` instead; the startup log line names those two rather than
+  a link it was never able to print unredacted anyway.
+- **Removed: `privacyfence_get_sign_in_link`.** This meta-tool minted a live sign-in link for
+  PrivacyFence's own approval and settings UI and handed it to the calling AI client — the exact
+  party the credential governs. It existed because a locked-out human had no other way in: the
+  daemon is headless and the companion app was optional, "nothing installs or starts it
+  automatically yet". ADR 0003 made the companion mandatory and autostarted on all three platforms,
+  so that justification expired. `privacyfence_status` now answers an un-onboarded install with
+  `next_step: "open_privacyfence_companion"` and no link to relay, and the not-authorized page
+  leads with the companion rather than "ask Claude". A human whose companion menu is out of reach
+  runs `privacyfence-app --print-sign-in-link` themselves (above). **If your MCP client's tool list
+  is cached, it will drop this tool on its next refresh; nothing else calls it.**
+- **New: `privacyfence-app --print-sign-in-link`, a way back into the web UI that never routes a
+  credential through the agent.** Run it yourself, in your own terminal: PrivacyFence's companion
+  app confirms it with you before the link it prints is allowed to approve anything. If nothing
+  confirms it, it still prints a link and says what that link is — a view-only session — rather than
+  leaving you with nothing when the reason you are locked out may well be that no companion is
+  running. This is the break-glass path that replaces asking your AI client for a sign-in link.
+- **Enrolling a passkey now needs proof of its own, in both deployment modes.** Removing your *last*
+  enrolled credential has always demanded a fresh assertion with it, because letting a session alone
+  un-enroll would silently turn a "mandatory" install back into an unenforced one. Adding one had
+  exactly the same effect by the shorter route and asked for nothing beyond the session cookie: a
+  local process holding a session (ADR 0002 decision 6 names three ways one is reachable by design)
+  could enroll a credential it generated itself and then satisfy every step-up check with it,
+  including on the strongest configuration PrivacyFence offers — privilege-separated,
+  `step_up.enabled`, `step_up.require_passkey` on, and the human's own hardware passkey already
+  enrolled. Approvals, and every sensitive settings change behind the same gate, were self-serve.
+  Checking harder at verification time cannot close that: registration uses `none` attestation and
+  the "user verified" flag is a bit the authenticator sets about itself, which a process that is not
+  a browser sets to 1. So `/security` gates the *enrollment* instead. With a credential already on
+  file, adding another needs a fresh assertion with one you have, through the same prompt-then-retry
+  round trip removing your last one already uses — one extra tap for a human who has a passkey, and
+  a prompt a session holding only a cookie cannot answer. With nothing on file there is nothing to
+  assert with, so local mode asks the companion app to confirm with whoever is at the login session.
+  Refusals are audited (`webauthn_enrollment_refused`), and a successful first enrollment is now
+  named as such in its own audit summary. Three limits are stated plainly in
+  [`docs/security-and-compliance.md`](docs/security-and-compliance.md) rather than left to be
+  inferred: org mode's *first* enrollment has no companion to ask and rests on the IdP session that
+  reached `/security` (which is why that document no longer claims a phished IdP session cannot
+  satisfy step-up on its own); the companion confirmation raises the cost of forging a first
+  enrollment but is not authentication of the companion, which shares an OS user with the agent and
+  cannot be told apart from it; and on Linux the confirmation needs `zenity` or `kdialog` — neither
+  is a PrivacyFence dependency, and a desktop with neither is told so by name.
 - `step_up.scope` takes a third value, `writes_and_reads`, which requires a passkey assertion before
   releasing *any* approving decision — a write, a read PII detection flagged, and a read it did not.
-  The two scopes that existed before (`writes`, the default, and `writes_and_pii_reads`) both leave
+  The two scopes that existed before (`writes` and `writes_and_pii_reads`) both leave
   an unflagged read releasable by a session on its own, which is the right trade only for an install
   that trusts `pii_detector.py` to have flagged everything worth a second factor; this value is for
   the installs that would rather not depend on that. It behaves identically in both deployment

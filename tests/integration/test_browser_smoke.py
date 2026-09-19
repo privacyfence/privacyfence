@@ -63,6 +63,7 @@ from privacyfence.web.oauth_provider import OrgOAuthProvider  # noqa: E402
 from privacyfence.web.org_session import OrgSessionStore  # noqa: E402
 from privacyfence.web.routes_approvals import _DECIDED_MESSAGE, _DENIED_MESSAGE  # noqa: E402
 from privacyfence.web.server import OrgAuth, WebServer  # noqa: E402
+from privacyfence.web.session_auth import PROVENANCE_HUMAN  # noqa: E402
 from privacyfence.web.session_auth import SESSION_COOKIE as _LOCAL_SESSION_COOKIE  # noqa: E402
 from privacyfence.web_approval_ui import WebApprovalUI  # noqa: E402
 
@@ -410,7 +411,7 @@ class TestBootstrapLogin:
         nothing left in its own address bar, not just that the server sent
         the right header."""
         server, _web_ui = local_server
-        url = server.mint_bootstrap_url("/approvals")
+        url = _sign_in_url(server, "/approvals")
         assert "bootstrap=" in url  # sanity: the link under test does carry one
 
         page.goto(url)
@@ -423,7 +424,7 @@ class TestBootstrapLogin:
 
     def test_bootstrap_code_is_single_use(self, page, context, local_server):
         server, _web_ui = local_server
-        url = server.mint_bootstrap_url("/approvals")
+        url = _sign_in_url(server, "/approvals")
         page.goto(url)
         page.wait_for_load_state("load")
 
@@ -452,8 +453,24 @@ class TestBootstrapLogin:
 # --------------------------------------------------------------------- #
 
 
+def _sign_in_url(server, path: str = "/approvals", *, provenance: str = PROVENANCE_HUMAN) -> str:
+    """A one-time sign-in link for a real browser to follow.
+
+    ``WebServer.mint_bootstrap_url()`` used to do this, and wrote the link to
+    a discovery file besides; the self-approval plan's Phase 2 removed both
+    (web/server.py's own ``_clear_legacy_bootstrap_url_files``). Minting is
+    the control channel's business now, and *attested* minting requires a
+    companion process to call back to -- which an in-process browser test has
+    no reason to stand up, so it reaches into the store the same way the
+    daemon's own middleware does. ``provenance`` defaults to ``human`` because
+    what these tests drive is a human at a browser; the one that checks what
+    an unattested session cannot do passes the other value.
+    """
+    return f"{server.base_url}{path}?bootstrap={server.bootstrap.mint(provenance=provenance)}"
+
+
 def _sign_in_local(page, server) -> None:
-    page.goto(server.mint_bootstrap_url("/approvals"))
+    page.goto(_sign_in_url(server))
     page.wait_for_load_state("load")
 
 

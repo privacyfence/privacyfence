@@ -17,7 +17,8 @@ class TestStepUpConfigFromOrgConfig:
     def test_absent_section_is_disabled_with_defaults(self):
         config = step_up_config.StepUpConfig.from_org_config({})
         assert config.enabled is False
-        assert config.scope == "writes"
+        assert config.scope == "writes_and_pii_reads"
+        assert config.scope == step_up_config.DEFAULT_STEP_UP_SCOPE
         assert config.rp_id == ""
         assert config.rp_name == step_up_config.DEFAULT_RP_NAME
         assert config.require_passkey is False
@@ -83,7 +84,8 @@ class TestStepUpConfigFromLocalConfig:
     def test_absent_section_is_disabled_with_local_defaults(self):
         config = step_up_config.StepUpConfig.from_local_config({})
         assert config.enabled is False
-        assert config.scope == "writes"
+        assert config.scope == "writes_and_pii_reads"
+        assert config.scope == step_up_config.DEFAULT_STEP_UP_SCOPE
         assert config.rp_id == step_up_config.DEFAULT_LOCAL_RP_ID
         assert config.rp_id == "localhost"
         assert config.rp_name == step_up_config.DEFAULT_RP_NAME
@@ -176,6 +178,98 @@ class TestRequirePasskeyNeedsSeparation:
             {"step_up": {"enabled": True, "require_passkey": False}},
         )
         assert config.require_passkey is False
+
+
+class TestDefaultLocalStepUp:
+    """Plan item 1.1: the ADR 0003 *Out of scope* item, now that Phase 0 has
+    made the passkey actually bind. The whole decision is "is this a build
+    ADR 0003 already guarantees is privilege-separated?", because a passkey
+    checked against a credential store the agent can write is a checkbox a
+    local process ticks for itself (ADR 0002 decision 6)."""
+
+    @pytest.fixture
+    def packaged(self, monkeypatch):
+        monkeypatch.setattr(step_up_config.paths, "is_bundled", lambda: True)
+
+    def test_off_on_a_source_checkout(self):
+        # Nothing separates a checkout, an editable install or a `pipx
+        # install privacyfence`, so nothing here may turn this on.
+        assert step_up_config.default_local_step_up() is False
+
+    def test_on_for_a_packaged_separated_install(self, packaged, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        assert step_up_config.default_local_step_up() is True
+
+    def test_on_for_a_packaged_install_with_the_dev_override(self, packaged, monkeypatch):
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
+        assert step_up_config.default_local_step_up() is True
+
+    def test_off_for_a_packaged_install_that_is_somehow_unseparated(self, packaged, monkeypatch, caplog):
+        # Unreachable on a real shipped install -- enforce_separation() has
+        # already refused to serve one by the time any config is read -- and
+        # deliberately not an error anyway: a *default* that could fail a
+        # daemon's boot would turn an unexpected packaging state into an
+        # install nobody can start.
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+        with caplog.at_level("WARNING"):
+            assert step_up_config.default_local_step_up() is False
+        assert "not privilege-separated" in caplog.text
+
+
+class TestPackagedLocalDefaults:
+    """Plan item 1.1, through ``from_local_config``: the same decision as it
+    is actually reached, plus the two things that must not change with it --
+    an explicit value still wins in both directions, and a hand-written
+    ``require_passkey: true`` an install cannot back is still refused
+    outright rather than quietly downgraded."""
+
+    @pytest.fixture
+    def packaged_and_separated(self, monkeypatch):
+        monkeypatch.setattr(step_up_config.paths, "is_bundled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+
+    def test_a_fresh_packaged_install_requires_a_passkey(self, packaged_and_separated):
+        config = step_up_config.StepUpConfig.from_local_config({})
+        assert (config.enabled, config.require_passkey) == (True, True)
+
+    def test_a_packaged_install_with_the_key_absent_from_an_existing_section(self, packaged_and_separated):
+        # A settings.yaml that has a step_up: section but said nothing about
+        # these two -- the shape settings.yaml.example now seeds.
+        config = step_up_config.StepUpConfig.from_local_config({"step_up": {"rp_name": "PrivacyFence"}})
+        assert (config.enabled, config.require_passkey) == (True, True)
+
+    def test_an_explicit_false_still_wins_on_a_packaged_install(self, packaged_and_separated):
+        # Every install seeded from a pre-1.1 example has both keys written
+        # out as false -- an upgrade must not silently flip those on, least
+        # of all on an install with nothing enrolled, where it would block
+        # every approval at the next restart.
+        config = step_up_config.StepUpConfig.from_local_config(
+            {"step_up": {"enabled": False, "require_passkey": False}},
+        )
+        assert (config.enabled, config.require_passkey) == (False, False)
+
+    def test_a_defaulted_on_value_never_fails_the_boot(self, monkeypatch):
+        # Packaged, but unseparated: default_local_step_up() answers False,
+        # so from_local_config() returns an off config rather than raising
+        # the ConfigurationError an explicit `require_passkey: true` gets.
+        monkeypatch.setattr(step_up_config.paths, "is_bundled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+        config = step_up_config.StepUpConfig.from_local_config({})
+        assert (config.enabled, config.require_passkey) == (False, False)
+
+    def test_an_explicit_true_on_an_unseparated_install_still_raises(self, monkeypatch):
+        monkeypatch.setattr(step_up_config.paths, "is_bundled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+        with pytest.raises(org_mode.ConfigurationError):
+            step_up_config.StepUpConfig.from_local_config({"step_up": {"require_passkey": True}})
+
+    def test_org_mode_defaults_are_untouched(self, packaged_and_separated):
+        # is_bundled() is about how *this* process was built, and org mode
+        # has an administrator writing the bundle -- an unstated opinion
+        # there stays unstated. Guards against wiring the local default into
+        # the shared dataclass by accident.
+        config = step_up_config.StepUpConfig.from_org_config({})
+        assert (config.enabled, config.require_passkey) == (False, False)
 
 
 class TestLocalEnrollmentBanner:

@@ -29,12 +29,15 @@ passkey, and nothing yet asks you for it."
 """
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from . import privilege_separation
+from . import paths, privilege_separation
 from .org_mode import ConfigurationError
+
+logger = logging.getLogger(__name__)
 
 StepUpScope = Literal["writes", "writes_and_pii_reads", "writes_and_reads"]
 StepUpBatchMode = Literal["single_assertion", "per_item"]
@@ -46,7 +49,25 @@ StepUpBatchMode = Literal["single_assertion", "per_item"]
 STEP_UP_SCOPES: tuple[StepUpScope, ...] = ("writes", "writes_and_pii_reads", "writes_and_reads")
 _SCOPE_CHOICES_TEXT = ", ".join(f'"{name}"' for name in STEP_UP_SCOPES)
 
-DEFAULT_STEP_UP_SCOPE: StepUpScope = "writes"
+# Phase 1.4 of the self-approval hardening plan: "writes_and_pii_reads",
+# not the "writes" this shipped with through 4.1. D7 names both as
+# reasonable, and the narrower one was picked back when the adversary in
+# view was a human at the keyboard. ADR 0003 adopts a different one -- an
+# agent with code execution on this machine -- and against that adversary
+# "writes" leaves every read a session alone can release, including one
+# pii_detector.py *did* flag as carrying personal data. Exfiltration is the
+# obvious thing such an agent wants and the one thing the narrower default
+# never asked a human about, so the floor moves up by one rung. The widest
+# rung ("writes_and_reads", every gated read, flagged or not) stays opt-in:
+# it asks for a passkey on reads nothing has any reason to think are
+# sensitive, which is the kind of prompt people learn to click through.
+#
+# One value for both modes, deliberately -- see this module's own docstring
+# on why a key that means two different things by mode is the thing this
+# module exists to stop. An install with its own ``scope:`` set (either
+# mode) keeps exactly what it set; only an install that never expressed an
+# opinion moves.
+DEFAULT_STEP_UP_SCOPE: StepUpScope = "writes_and_pii_reads"
 # The approval binder's own knob (Phase 3 of the binder plan): "single_
 # assertion" is one bound WebAuthn ceremony over the whole selected set
 # (webauthn_stepup.batch_decision_fingerprint) -- the whole point of the
@@ -68,6 +89,56 @@ DEFAULT_RP_NAME = "PrivacyFence"
 DEFAULT_LOCAL_RP_ID = "localhost"
 
 
+def default_local_step_up() -> bool:
+    """What ``step_up.enabled``/``step_up.require_passkey`` default to in
+    local mode when ``config/settings.yaml`` expresses no opinion about
+    them -- Phase 1.1 of the self-approval hardening plan, and the item ADR
+    0003 listed under *Out of scope* ("the default stays off").
+
+    True on a **packaged** install, False everywhere else. That split is
+    the whole of the decision, and it is ADR 0003's own gate reused rather
+    than a second one: ``privilege_separation.enforce_separation()`` is
+    scoped to ``paths.is_bundled()`` too, and refuses to serve a packaged
+    install it could not separate -- so on exactly the builds this returns
+    True for, the credential store a passkey is checked against is already
+    out of the agent's reach by the time this is read. Everywhere else
+    (a source checkout, an editable install, ``pipx install privacyfence``)
+    nothing separates anything, and ADR 0002 decision 6's verdict on
+    turning this on there still stands: a passkey checked against a
+    credential store the agent can write is a checkbox a local process
+    ticks for itself.
+
+    The separation check is repeated here rather than assumed from
+    ``is_bundled()`` alone because a *default* must never be able to fail a
+    daemon's boot. ``from_local_config``'s ``ConfigurationError`` below is
+    the right answer for somebody who wrote ``require_passkey: true`` into
+    a file by hand; it is the wrong answer for a value nobody chose, which
+    would turn an unexpected packaging state into an install that will not
+    start at all. So a packaged install that somehow reaches this
+    unseparated defaults *off*, loudly, instead.
+
+    Deliberately not retroactive. This is consulted only for a key that is
+    absent, and every install seeded from a settings.yaml.example older
+    than this one has ``enabled: false``/``require_passkey: false`` written
+    out in full -- so an existing install keeps the posture it has, and it
+    is fresh installs that come up protected. An upgrade that silently
+    flipped this on would also be an upgrade that, for installs with
+    nothing enrolled, blocked every approval the moment it restarted; Phase
+    1.2's first-run enrollment is what makes that state short-lived on a
+    fresh install, and it has no equivalent for one that is already set up.
+    """
+    if not paths.is_bundled():
+        return False
+    if privilege_separation.is_enabled() or privilege_separation.dev_allows_unseparated():
+        return True
+    logger.warning(
+        "This is a packaged build that is not privilege-separated, so step-up is defaulting to "
+        "off rather than on -- a passkey checked against a credential store the agent can write "
+        "guarantees nothing (ADR 0002 decision 6).",
+    )
+    return False
+
+
 @dataclass(frozen=True)
 class StepUpConfig:
     """§10.6/§15 D7's step-up decision, made concrete per install: "Yes in
@@ -79,19 +150,27 @@ class StepUpConfig:
     section (``from_local_config``) -- see this module's own docstring for
     why local mode gets one at all now.
 
-    ``enabled=False`` (the default -- absent ``step_up`` section, or an
-    existing install that predates this) is a real off switch, not just "no
-    credentials enrolled yet": web/routes_org_approvals.py's decide endpoint
-    skips the whole step-up check when this is False, and local mode's own
-    decide-time check (#426 Phase 2) does the same -- turning step-up on is
-    an explicit opt-in per deployment either way.
+    ``enabled=False`` is a real off switch, not just "no credentials
+    enrolled yet": web/routes_org_approvals.py's decide endpoint skips the
+    whole step-up check when this is False, and local mode's own
+    decide-time check (#426 Phase 2) does the same.
 
-    ``require_passkey=False`` (the default) keeps D7's original two-path
-    design in org mode -- a WebAuthn assertion *or* a fresh IdP
-    re-authentication. Local mode has no IdP, so ``require_passkey`` there
-    is the only path a decide-time check (#426 Phase 2/3) could ever offer
-    -- this field is generalized here (rather than added fresh) so its name
-    and semantics can't drift between the two modes.
+    ``require_passkey=False`` keeps D7's original two-path design in org
+    mode -- a WebAuthn assertion *or* a fresh IdP re-authentication. Local
+    mode has no IdP, so ``require_passkey`` there is the only path a
+    decide-time check (#426 Phase 2/3) could ever offer -- this field is
+    generalized here (rather than added fresh) so its name and semantics
+    can't drift between the two modes.
+
+    Both default to False *on this class*, which is the value a caller that
+    constructs one directly gets and the value org mode resolves for an
+    ``org_config.json`` with no ``step_up`` section -- org mode has an IdP
+    and a human administrator writing that bundle, so an unstated opinion
+    there stays an unstated opinion. Local mode no longer reads these
+    field defaults for an absent key: ``from_local_config`` resolves its
+    own from ``default_local_step_up()``, which is True on a packaged
+    install (Phase 1.1). The two are not the same question, so they are not
+    the same default -- see that function's own docstring.
     """
 
     enabled: bool = False
@@ -106,8 +185,10 @@ class StepUpConfig:
     # wants if it trusts pii_detector.py to have seen everything worth
     # confirming; this third value is for the installs that don't (a read
     # nobody flagged still discloses whatever the connector returned).
-    # Defaults to "writes" in both modes -- one key name meaning two
-    # different things by mode is exactly what this module exists to stop.
+    # Defaults to DEFAULT_STEP_UP_SCOPE in both modes -- one key name
+    # meaning two different things by mode is exactly what this module
+    # exists to stop. See that constant for why the floor is
+    # "writes_and_pii_reads" rather than the "writes" this shipped with.
     scope: StepUpScope = DEFAULT_STEP_UP_SCOPE
     # WebAuthn's Relying Party ID -- must be this server's own registrable
     # domain (§10.6: "WebAuthn needs a secure context and a registrable-
@@ -221,7 +302,15 @@ class StepUpConfig:
                 f"config/settings.yaml's \"step_up\".\"batch\" must be \"single_assertion\" or "
                 f"\"per_item\", got {batch!r}"
             )
-        require_passkey = bool(raw.get("require_passkey", False))
+        # Phase 1.1: the *absent*-key default is packaging-dependent now --
+        # see ``default_local_step_up()`` for why, and why it is resolved
+        # once here so ``enabled`` and ``require_passkey`` can never default
+        # apart. An explicitly written value always wins, in both
+        # directions: an install that says ``require_passkey: false`` keeps
+        # it off, packaged or not.
+        default_on = default_local_step_up()
+        require_passkey_is_explicit = "require_passkey" in raw
+        require_passkey = bool(raw.get("require_passkey", default_on))
         # ADR 0003, "Why not gate the passkey instead": kept as a consequence
         # of decision 1 rather than dropped, because it is unreachable on a
         # shipped install (daemon_main.py's enforce_separation() already
@@ -235,8 +324,14 @@ class StepUpConfig:
         # is a checkbox a local process ticks for itself". The escape hatch
         # is the same one decision 7 gives the daemon-startup gate's sibling
         # case, in the same house spelling.
+        # Only ever raised for a value somebody wrote down: the defaulted
+        # one already answered this question for itself (``default_local_
+        # step_up()``'s own docstring on why a default must not be able to
+        # fail a boot), so ``require_passkey_is_explicit`` is what separates
+        # "you asked for something this install cannot back" from "nobody
+        # asked for anything".
         separated_or_dev = privilege_separation.is_enabled() or privilege_separation.dev_allows_unseparated()
-        if require_passkey and not separated_or_dev:
+        if require_passkey and require_passkey_is_explicit and not separated_or_dev:
             raise ConfigurationError(
                 "config/settings.yaml's \"step_up\".\"require_passkey\" is true, but this install "
                 "is not privilege-separated (#428 Phase 4 / ADR 0003) -- the credential store a "
@@ -246,7 +341,7 @@ class StepUpConfig:
                 "development (never in a real deployment)."
             )
         return StepUpConfig(
-            enabled=bool(raw.get("enabled", False)),
+            enabled=bool(raw.get("enabled", default_on)),
             scope=scope,
             rp_id=raw.get("rp_id", "") or DEFAULT_LOCAL_RP_ID,
             rp_name=raw.get("rp_name", DEFAULT_RP_NAME) or DEFAULT_RP_NAME,
@@ -358,4 +453,5 @@ __all__ = [
     "StepUpBatchMode",
     "StepUpConfig",
     "StepUpScope",
+    "default_local_step_up",
 ]

@@ -95,20 +95,37 @@ class TestBootstrapStore:
     def test_mint_then_consume_succeeds_exactly_once(self):
         store = sa.BootstrapStore()
         code = store.mint()
-        assert store.consume(code) is True
-        assert store.consume(code) is False  # single-use -- burned by the line above
+        # Both consumes stand on their own lines: the second assertion is only
+        # true *because* the first call burned the code, so leaving that call
+        # inside an assert would make this pair meaningless under `python -O`.
+        first = store.consume(code)
+        second = store.consume(code)
+        assert first == sa.PROVENANCE_UNATTESTED
+        assert second is None  # single-use -- burned by the line above
+
+    def test_consume_returns_the_provenance_the_code_was_minted_with(self):
+        store = sa.BootstrapStore()
+        human = store.consume(store.mint(provenance=sa.PROVENANCE_HUMAN))
+        assert human == sa.PROVENANCE_HUMAN
+        # The default is the one a bare control-channel MINT gets, and it is
+        # the safe one: nothing about that request says a human asked.
+        default = store.consume(store.mint())
+        assert default == sa.PROVENANCE_UNATTESTED
 
     def test_two_mints_produce_distinct_codes(self):
         store = sa.BootstrapStore()
-        assert store.mint() != store.mint()
+        first, second = store.mint(), store.mint()
+        assert first != second
 
     def test_unknown_code_is_rejected(self):
         store = sa.BootstrapStore()
-        assert store.consume("not-a-real-code") is False
+        consumed = store.consume("not-a-real-code")
+        assert consumed is None
 
     def test_empty_code_is_rejected(self):
         store = sa.BootstrapStore()
-        assert store.consume("") is False
+        consumed = store.consume("")
+        assert consumed is None
 
     def test_expired_code_is_rejected_and_still_consumed(self, monkeypatch):
         store = sa.BootstrapStore(ttl_seconds=60)
@@ -118,12 +135,16 @@ class TestBootstrapStore:
 
         fake_now[0] += 120  # past the TTL
 
-        assert store.consume(code) is False
+        expired = store.consume(code)
+        assert expired is None
         # ...and it's gone either way -- a second attempt (e.g. a replay
         # racing the first) doesn't get to try again just because the
-        # first attempt failed on expiry rather than success.
+        # first attempt failed on expiry rather than success. The consume
+        # above has to happen for that to mean anything, so it is not left
+        # inside the assert.
         fake_now[0] = 1000.0  # even rewinding time doesn't resurrect it
-        assert store.consume(code) is False
+        replayed = store.consume(code)
+        assert replayed is None
 
 
 class TestAuthenticated:
@@ -272,18 +293,22 @@ class TestUnauthorizedHtml:
         assert response.status_code == 401
         assert response.headers["cache-control"] == "no-store"
 
-    def test_points_at_the_discovery_file_not_the_redacted_log(self):
-        # Regression coverage for the actual bug this page used to send
-        # readers straight into: privacyfence.log's startup line always
-        # reads bootstrap=[REDACTED] (SecretRedactingFormatter, SEC-10), so
-        # "open the newest sign-in link PrivacyFence logged" never worked --
-        # see web/server.py's _write_bootstrap_url_file for where the real
-        # link actually lands instead.
+    def test_does_not_send_the_reader_to_the_redacted_log_or_a_file(self):
+        """Two dead ends this page has pointed at over time. The log line
+        always reads bootstrap=[REDACTED] (SecretRedactingFormatter,
+        SEC-10), so "open the newest sign-in link PrivacyFence logged" never
+        worked. The discovery file that replaced it did work -- for anything
+        running as this user, which is why the self-approval plan's Phase 2
+        stopped writing it (web/server.py's own
+        _clear_legacy_bootstrap_url_files)."""
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
-        assert "approvals_url" in body
-        assert "settings_url" in body
-        assert "redact" in body.lower()
+        assert "approvals_url" not in body
+        assert "settings_url" not in body
         assert "PrivacyFence logged" not in body
+        # Both dead ends are still *named*, so a reader who remembers one
+        # learns why it is not there rather than going to look.
+        assert "redact" in body.lower()
+        assert "no longer writes the link to a file" in body
 
     def test_still_offers_the_on_demand_bootstrap_command(self):
         # #428 Phase 2: the on-demand mint goes through the control channel
@@ -292,17 +317,22 @@ class TestUnauthorizedHtml:
         assert "MINT" in body
         assert "/api/bootstrap" not in body
 
-    def test_mentions_asking_a_connected_mcp_client(self):
+    def test_does_not_send_the_reader_back_to_their_ai_client(self):
+        """Issue #423 part 3 made "ask Claude" the lead here, because P10
+        had removed the menu bar and the tool it named was the only way back
+        in from inside a conversation. The self-approval plan's Phase 2
+        retired that tool -- a live session is not something to hand the
+        party it governs -- so the page must not still be recommending it."""
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
-        assert "privacyfence_get_sign_in_link" in body
+        assert "privacyfence_get_sign_in_link" not in body
+        assert "companion" in body
+        # The lead is the companion, ahead of the "why you're here" line, in
+        # the slot "ask Claude" used to hold.
+        assert body.index("companion") < body.index("expired, was already used")
 
-    def test_asking_claude_leads_rather_than_sitting_a_paragraph_down(self):
-        # Issue #423 part 3: P10 removed the menu bar, so "ask Claude to
-        # reopen this" is the intended recovery path, not a fallback --
-        # this regression-tests that it's the first thing the page says,
-        # ahead of the "why you're here" explanation.
+    def test_offers_the_break_glass_command_for_a_reader_with_no_companion(self):
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
-        assert body.index("privacyfence_get_sign_in_link") < body.index("expired, was already used")
+        assert "privacyfence-app --print-sign-in-link" in body
 
     def test_shows_the_posix_path_and_a_bash_command_by_default(self, monkeypatch):
         # PurePosixPath, not Path -- a real Path constructed from a POSIX-
@@ -315,7 +345,6 @@ class TestUnauthorizedHtml:
 
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
 
-        assert "/home/alice/.privacyfence/approvals_url" in body
         assert "nc -U '/home/alice/.privacyfence/authority/control.sock'" in body
         assert "Get-Content" not in body
         assert "NamedPipeClientStream" not in body
@@ -332,7 +361,6 @@ class TestUnauthorizedHtml:
 
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
 
-        assert r"C:\Users\alice\AppData\Local\PrivacyFence\approvals_url" in body
         assert "NamedPipeClientStream" in body
         assert "PrivacyFence-Control-" in body
         assert "nc -U" not in body
@@ -346,7 +374,7 @@ class TestUnauthorizedHtml:
         # hunting for a tray icon ADR 0002 decision 4 says this platform
         # deliberately does not have.
         monkeypatch.setattr(sa.privilege_separation, "is_enabled", lambda: False)
-        assert "Nothing installs or starts it automatically yet" in sa._companion_availability_sentence()
+        assert "Nothing installs or starts it automatically" in sa._companion_availability_sentence()
 
         monkeypatch.setattr(sa.privilege_separation, "is_enabled", lambda: True)
         monkeypatch.setattr(sa.privilege_separation, "current_platform", lambda: "darwin")
@@ -356,3 +384,62 @@ class TestUnauthorizedHtml:
         linux = sa._companion_availability_sentence()
         assert "Applications-menu entry" in linux
         assert "at login" not in linux
+
+
+class TestProvenance:
+    """The self-approval plan's Phase 2: a session records *how* it was
+    established, because three paths reach one (ADR 0002 decision 6) and
+    only one of them can be attributed to a person."""
+
+    def _request(self, cookie: str | None):
+        headers = [(b"cookie", f"{sa.SESSION_COOKIE}={cookie}".encode())] if cookie else []
+        return Request({"type": "http", "headers": headers, "method": "GET", "path": "/"})
+
+    def test_a_session_defaults_to_unattested(self):
+        store = sa.LocalSessionStore()
+        assert store.provenance(store.create()) == sa.PROVENANCE_UNATTESTED
+
+    def test_a_session_keeps_the_provenance_it_was_created_with(self):
+        store = sa.LocalSessionStore()
+        assert store.provenance(store.create(provenance=sa.PROVENANCE_HUMAN)) == sa.PROVENANCE_HUMAN
+
+    def test_an_unknown_session_has_no_provenance(self):
+        assert sa.LocalSessionStore().provenance("nope") is None
+
+    def test_reading_provenance_does_not_keep_an_idle_session_alive(self, monkeypatch):
+        """An authorization question must not double as a heartbeat -- only
+        ``touch()`` renews a session, and it is the authentication check that
+        calls it."""
+        fake_now = [1000.0]
+        monkeypatch.setattr(sa.time, "time", lambda: fake_now[0])
+        store = sa.LocalSessionStore(idle_timeout_seconds=60)
+        session_id = store.create(provenance=sa.PROVENANCE_HUMAN)
+
+        fake_now[0] += 50
+        assert store.provenance(session_id) == sa.PROVENANCE_HUMAN
+        fake_now[0] += 50  # 100s since creation, and nothing touched it
+
+        assert store.touch(session_id) is False
+
+    def test_is_human_session_reads_the_cookie_s_own_session(self):
+        store = sa.LocalSessionStore()
+        human = store.create(provenance=sa.PROVENANCE_HUMAN)
+        unattested = store.create()
+
+        assert sa.is_human_session(self._request(human), store) is True
+        assert sa.is_human_session(self._request(unattested), store) is False
+        assert sa.session_provenance(self._request(unattested), store) == sa.PROVENANCE_UNATTESTED
+
+    def test_no_cookie_and_an_unknown_cookie_both_read_as_not_human(self):
+        store = sa.LocalSessionStore()
+        assert sa.session_provenance(self._request(None), store) is None
+        assert sa.is_human_session(self._request(None), store) is False
+        assert sa.is_human_session(self._request("not-a-session"), store) is False
+
+    def test_the_refusal_body_is_a_403_that_names_the_way_back(self):
+        body, status = sa.human_session_required_json("approve a decision")
+        assert status == 403  # not 401: the session is valid, the answer is still no
+        assert body["error"] == "human_session_required"
+        assert "approve a decision" in body["message"]
+        assert "companion" in body["message"]
+

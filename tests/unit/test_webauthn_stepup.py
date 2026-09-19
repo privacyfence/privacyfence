@@ -308,7 +308,8 @@ class TestRegistrationChallengeStore:
     def test_put_then_pop(self):
         store = wa.RegistrationChallengeStore()
         store.put("alice", b"chal")
-        assert store.pop("alice") == b"chal"
+        popped = store.pop("alice")
+        assert popped.challenge == b"chal"
 
     def test_pop_is_single_use(self):
         store = wa.RegistrationChallengeStore()
@@ -320,7 +321,24 @@ class TestRegistrationChallengeStore:
         store = wa.RegistrationChallengeStore()
         store.put("alice", b"first")
         store.put("alice", b"second")
-        assert store.pop("alice") == b"second"
+        popped = store.pop("alice")
+        assert popped.challenge == b"second"
+
+    def test_a_challenge_is_unauthorized_unless_put_says_otherwise(self):
+        # The enrollment gate: web/routes_security.py's register_verify refuses a ceremony
+        # whose options call did not pass the enrollment gate, and this flag is
+        # the whole of how it knows. Defaulting to False is what makes that
+        # check fail closed for any future caller that forgets to set it.
+        store = wa.RegistrationChallengeStore()
+        store.put("alice", b"chal")
+        popped = store.pop("alice")
+        assert popped.authorized is False
+
+    def test_an_authorized_challenge_says_so(self):
+        store = wa.RegistrationChallengeStore()
+        store.put("alice", b"chal", authorized=True)
+        popped = store.pop("alice")
+        assert popped.authorized is True
 
 
 class TestIsStepUpRequired:
@@ -344,6 +362,45 @@ class TestIsStepUpRequired:
     def test_a_bare_confirm_dialog_never_requires_it_under_any_scope(self):
         for scope in step_up_config.STEP_UP_SCOPES:
             assert wa.is_step_up_required(gate_kind="", pii_detected=True, scope=scope) is False
+
+
+class TestRecoveryCodeMintAndStore:
+    """Plan item 1.3 split ``generate_recovery_code`` in two so local mode
+    can mint a code, get it in front of a human, and only *then* make it the
+    one live code on file. What is tested is that the split is real: minting
+    alone changes nothing on disk."""
+
+    def test_minting_stores_nothing(self):
+        code = wa.mint_recovery_code()
+        assert code
+        assert wa.has_recovery_code(ALICE) is False
+        assert not (paths.authority_dir(ALICE) / wa.RECOVERY_CODE_FILE_NAME).exists()
+
+    def test_storing_makes_it_the_live_code(self):
+        code = wa.mint_recovery_code()
+        wa.store_recovery_code(ALICE, code)
+        assert wa.has_recovery_code(ALICE) is True
+        assert wa.consume_recovery_code(ALICE, code) is True
+
+    def test_storing_a_second_one_invalidates_the_first(self):
+        # What the companion's "New Recovery Code" action does, and what its
+        # confirmation dialog warns about in as many words.
+        first = wa.mint_recovery_code()
+        wa.store_recovery_code(ALICE, first)
+        second = wa.mint_recovery_code()
+        wa.store_recovery_code(ALICE, second)
+        assert wa.consume_recovery_code(ALICE, first) is False
+        assert wa.consume_recovery_code(ALICE, second) is True
+
+    def test_each_mint_is_distinct(self):
+        assert len({wa.mint_recovery_code() for _ in range(50)}) == 50
+
+    def test_generate_is_still_the_two_halves_in_one_call(self):
+        # Org mode still uses it: there is no companion there, and the
+        # browser that reached /security is IdP-authenticated.
+        code = wa.generate_recovery_code(ALICE)
+        assert wa.has_recovery_code(ALICE) is True
+        assert wa.consume_recovery_code(ALICE, code) is True
 
 
 class TestRecoveryCode:
@@ -504,3 +561,84 @@ class TestStepUpDisabledNotice:
         assert change is not None
         assert change.was_required is False
         assert change.is_required is True
+
+
+class TestUserVerificationIsAClaimNotAProof:
+    """The enrollment gate, in test form.
+
+    The rest of this file mocks the library at the module boundary (see this
+    file's own docstring). This class deliberately does not: it drives both
+    ceremonies for real, with real ES256 signatures, from
+    ``tests/software_authenticator.py`` -- because what is being asserted is
+    precisely that the real verification path cannot tell that authenticator
+    from a platform one, and a mock would assert nothing about that.
+
+    These tests pass *by design*, and are here so that stops being invisible.
+    ``require_user_verification=True`` reads the ``UV`` bit out of the
+    authenticator's own ``authData``; a real authenticator sets it after a
+    biometric or PIN, and nothing signs its absence. The control that makes
+    an enrolled credential mean something is therefore the gate on enrolling
+    (web/routes_security.py's ``register_options``), not this flag -- see
+    this module's own "five things" list, which now says so, and
+    TestEnrollmentGate in tests/unit/web/test_routes_security.py for the gate
+    itself.
+    """
+
+    RP_ID = "pf.example.com"
+    ORIGIN = "https://pf.example.com"
+
+    def _software_authenticator(self, **kwargs):
+        from tests.software_authenticator import SoftwareAuthenticator
+
+        return SoftwareAuthenticator(**kwargs)
+
+    def _enroll(self, authenticator, principal=ALICE, label="Synthetic"):
+        _options_json, challenge = wa.begin_registration(principal, rp_id=self.RP_ID, rp_name="PrivacyFence")
+        credential = authenticator.register(challenge=challenge, rp_id=self.RP_ID, origin=self.ORIGIN)
+        return wa.finish_registration(
+            principal, credential, expected_challenge=challenge,
+            rp_id=self.RP_ID, origin=self.ORIGIN, label=label,
+        )
+
+    def test_a_synthetic_authenticator_setting_the_uv_bit_enrolls_successfully(self):
+        # The finding, executed: no human, no hardware, no browser, and
+        # finish_registration() -- with require_user_verification=True --
+        # accepts it, because the bit it checks is one the caller set.
+        saved = self._enroll(self._software_authenticator(user_verified=True))
+        assert saved.label == "Synthetic"
+        assert [c.credential_id for c in wa.list_credentials(ALICE)] == [saved.credential_id]
+
+    def test_and_then_satisfies_a_step_up_assertion_with_its_own_key(self):
+        # The second half: the credential enrolled above is indistinguishable
+        # from a real one at *assertion* time too, so it satisfies every later
+        # step-up check. This is why the enrollment gate gates enrollment rather than
+        # trying to strengthen verification.
+        authenticator = self._software_authenticator()
+        self._enroll(authenticator)
+        begun = wa.begin_assertion(ALICE, rp_id=self.RP_ID)
+        assert begun is not None
+        _options_json, challenge = begun
+        assertion = authenticator.assert_(challenge=challenge, rp_id=self.RP_ID, origin=self.ORIGIN)
+        # Returns None on success and raises on any failure -- no exception
+        # here is the assertion.
+        wa.verify_assertion(
+            ALICE, assertion, expected_challenge=challenge, rp_id=self.RP_ID, origin=self.ORIGIN,
+        )
+
+    def test_clearing_the_uv_bit_is_still_rejected(self):
+        # The check does do the one thing it can: an authenticator that
+        # reports *not* having verified a user is refused. That is a real
+        # property worth keeping -- it is only the inverse ("UV set, so a
+        # human was present") that does not follow.
+        with pytest.raises(wa.WebAuthnError):
+            self._enroll(self._software_authenticator(user_verified=False))
+
+    def test_exclude_credentials_does_not_stop_a_second_synthetic_enrollment(self):
+        # begin_registration() lists every enrolled credential in
+        # exclude_credentials, which a cooperating browser honors by refusing
+        # to re-enroll the same authenticator. A non-browser ignores it, so
+        # "one is already enrolled" is not itself a barrier -- the gate is.
+        first = self._enroll(self._software_authenticator(), label="First")
+        second = self._enroll(self._software_authenticator(), label="Second")
+        assert first.credential_id != second.credential_id
+        assert {c.label for c in wa.list_credentials(ALICE)} == {"First", "Second"}

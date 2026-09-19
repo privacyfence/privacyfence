@@ -54,7 +54,7 @@ HTTP, via ``?bootstrap=<code>`` (``web/server.py``'s ``_BootstrapMiddleware``).
 
 Phase 3 also adds a second, independent channel running in the *opposite*
 direction: ``CompanionChannelServer`` is owned by the companion app, not the
-daemon, and speaks one command, ``OPEN <url>``, that the daemon's own
+daemon, and speaks ``OPEN <url>``, which the daemon's own
 ``oauth_loopback.py`` sends when it needs a browser opened for a connector
 OAuth flow (ADR 0002 decision 5) -- the thing #428 Phase 4 makes mandatory on
 Windows, where a service-hosted daemon runs in session 0 and cannot open a
@@ -63,21 +63,81 @@ browser in the user's desktop session itself. It reuses this module's own
 ``ControlChannelServer`` itself is built on) rather than the daemon's own
 socket/pipe -- companion and daemon each own the address they *listen* on,
 and each is a *client* of the other's.
+
+The companion channel's second command, ``CONFIRM ENROLL``, is the one place
+in this codebase where the direction of this channel is the *point* rather
+than a platform workaround. Enrolling a passkey when one is already enrolled
+can be gated on asserting with the one already there (web/routes_security.py's
+``register_options``); the *first* enrollment has nothing to assert with, and
+a local-mode ``pf_session`` is not proof of a human -- ADR 0002 decision 6
+and this module's own ``MINT`` paragraph above both say so outright. What is
+left is this process, because it is the only one that runs where a human can
+be asked: ``_confirm_first_enrollment()`` answers by putting the system's own
+dialog in front of whoever is at the login session.
+
+**What that does not make it is authentication of the companion**, and this
+module is the wrong place to pretend otherwise. ``_verify_companion_peer()``
+constrains who may *reach* this server -- on a separated install, the
+daemon's service account and nobody else -- but the address it listens on
+lives under ``handoff_dir()``, which is group-shared with the logged-in user
+by design (``paths.py``: "deliberately *not* a security boundary"), so a
+local process running as that user can bind it first and answer for itself.
+Companion and agent share a uid; ADR 0002 decision 6's "no peer check could
+tell them apart" is as true here as anywhere. What the command buys is that
+forging a first enrollment takes impersonating this process -- loud, and
+destructive to the OAuth flows that share the socket -- instead of being a
+side effect of holding a session. docs/security-and-compliance.md states that
+limit in the same terms; keep the two in agreement. See
+``request_enrollment_confirmation()`` for the daemon's own side.
+
+Phase 1 of the self-approval hardening plan adds two more commands in each
+direction, and both exist for the same reason ``CONFIRM ENROLL`` does -- the
+companion is the only PrivacyFence process that runs where a human is:
+
+- ``ENROLLMENT`` (companion -> daemon) answers ``OK pending`` when this
+  install requires a passkey and has none enrolled, ``OK ok`` otherwise. It
+  is what lets the companion walk somebody through their first enrollment at
+  its own next start (plan item 1.2) instead of leaving a freshly installed,
+  passkey-required install sitting behind a banner nobody is looking at. The
+  credential store lives under ``authority_dir()`` and is unreadable to the
+  logged-in user on a separated install, so the companion cannot answer this
+  question for itself -- hence a command rather than a file check.
+- ``RECOVERY`` (companion -> daemon), and ``CONFIRM RECOVERY`` / ``SHOW
+  RECOVERY <code>`` (daemon -> companion), move the one-time recovery code
+  off the ``/security`` HTTP response body and onto the companion's own
+  dialog (plan item 1.3). ``RECOVERY``'s reply never carries the code -- it
+  is ``OK`` or ``ERROR <reason>`` and nothing else, so a local process that
+  speaks this socket learns only that a human was asked, never what they
+  were shown.
+
+``SHOW RECOVERY`` is the one command that puts a value *from the wire* in
+front of a human, which the rest of this module is careful never to do. It is
+allowed exactly one shape -- ``_RECOVERY_CODE_PATTERN``, the format
+``webauthn_stepup.generate_recovery_code()`` emits and nothing else -- and is
+embedded in a fixed sentence; a line that does not match that pattern is
+refused rather than displayed, so the "no arbitrary words in a PrivacyFence-
+branded dialog" rule the ``OPEN`` and ``CONFIRM`` commands state above still
+holds here.
 """
 from __future__ import annotations
 
 import contextlib
 import hashlib
 import logging
+import re
+import secrets
 import socket
+import subprocess  # nosec B404  # the companion's own zenity/kdialog/osascript dialog below -- fixed argv, no shell
 import tempfile
 import threading
+import time
 import webbrowser
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit
 
 from .. import paths, privilege_separation
+from . import session_auth
 from .session_auth import BootstrapStore
 
 logger = logging.getLogger(__name__)
@@ -216,11 +276,154 @@ def companion_pipe_name() -> str:
     return companion_pipe_name_for(paths.data_dir())
 
 
-def _handle_daemon_request(bootstrap: BootstrapStore, *, allow_quit: bool, line: str) -> str:
+# The decision every mint is recorded under (audit_log.py's own vocabulary
+# comment says why). Named here rather than inlined at the three call sites
+# below so the log and the page that reads it back (web/routes_security.py's
+# "Recent sign-ins") cannot drift apart over a typo.
+SIGN_IN_MINT_DECISION = "sign_in_code_minted"
+
+
+def _audit_mint(summary: str) -> None:
+    """One entry per bootstrap code this daemon issues, and per attested one
+    it refuses. Never allowed to fail the mint it describes -- same posture
+    every other non-critical audit call in this codebase takes (docs/
+    coding-and-testing-guidelines.md §1.4's "non-critical side effects"
+    rule), and more pointedly here than most: a human locked out because the
+    audit log could not be written would be locked out by the thing meant to
+    reassure them.
+
+    Deferred import, like ``QUIT``'s own ``daemon_main`` below: this module
+    is also imported by the companion process (companion.py), which has no
+    business carrying the audit log's machinery, and by tests that construct
+    a channel with no audit logger initialized at all.
+    """
+    try:
+        from datetime import datetime, timezone
+
+        from ..audit_log import AuditEntry, current_week, get_audit_logger
+        from ..principal import LOCAL_PRINCIPAL
+
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=secrets.token_hex(6),
+            connector="",
+            tool="",
+            tool_name="",
+            summary=summary,
+            sender=LOCAL_PRINCIPAL.email or LOCAL_PRINCIPAL.display_name or LOCAL_PRINCIPAL.id,
+            decision=SIGN_IN_MINT_DECISION,
+            auto_accept_rule="",
+            latency_seconds=0.0,
+            pii_detected=False,
+        ))
+    except Exception as exc:  # noqa: BLE001 -- see this function's own docstring
+        logger.warning("Audit log write failed for a sign-in code mint: %s", exc)
+
+
+def _handle_daemon_request(
+    bootstrap: BootstrapStore,
+    *,
+    allow_quit: bool,
+    line: str,
+    enrollment_state: Callable[[], str] | None = None,
+    reissue_recovery_code: Callable[[], tuple[bool, str]] | None = None,
+    confirm_companion_mint: Callable[[str], bool] | None = None,
+    confirm_console_mint: Callable[[], tuple[bool, str]] | None = None,
+) -> str:
+    """``enrollment_state``/``reissue_recovery_code`` are the daemon's own
+    answers to this channel's two Phase 1 commands (module docstring). Both
+    default to ``None`` -- "this install does not offer that" -- because
+    every caller that constructs a ``ControlChannelServer`` without a
+    ``StepUpConfig`` behind it (the tests that exercise ``MINT``/``QUIT``
+    alone, and any org-mode path, which has no control channel at all) has
+    nothing to answer them with, and a command that answers ``ERROR`` is a
+    better shape for that than one that raises.
+
+    ``confirm_companion_mint``/``confirm_console_mint`` are the two
+    call-backs an attested ``MINT`` makes into the companion's own channel
+    (``request_mint_attestation()``/``request_sign_in_confirmation()``,
+    which is what they default to). Injectable because the real ones talk to
+    another process: a test for this dispatch's own logic should not have to
+    stand one up.
+    """
     parts = line.strip().split(maxsplit=1)
     command = parts[0].upper() if parts else ""
+    argument = parts[1].strip() if len(parts) == 2 else ""
     if command == "MINT":
-        return f"OK {bootstrap.mint()}\n"
+        # The three shapes, and what each one is allowed to claim about who
+        # asked -- see session_auth.py's own PROVENANCE_* comment for the
+        # finding this answers.
+        #
+        # A bare MINT stays exactly what it was, including its reply format:
+        # it is what the unauthorized page's copy-paste command sends, and
+        # what anything on this machine can send, so it mints the session
+        # that may view but not approve. The two attested shapes cost a
+        # round trip into the companion process, which is the only
+        # PrivacyFence process running where a human can be asked at all.
+        if not argument:
+            _audit_mint(
+                "Issued a sign-in code (unattested -- can view what is pending, cannot release it)",
+            )
+            return f"OK {bootstrap.mint(provenance=session_auth.PROVENANCE_UNATTESTED)}\n"
+        subcommand, _, subargument = argument.partition(" ")
+        subargument = subargument.strip()
+        if subcommand.upper() == "COMPANION":
+            # The companion's own Open Approvals/Open Settings click. The
+            # nonce is one the *companion* issued to itself moments ago
+            # (issue_mint_nonce()); this daemon hands it straight back over
+            # the companion's channel and mints an attested code only if the
+            # process listening there recognizes it. An agent sending this
+            # line has no nonce to send that the companion would recognize,
+            # and cannot read the one it did issue.
+            confirm = confirm_companion_mint or request_mint_attestation
+            if not subargument or not confirm(subargument):
+                _audit_mint("Refused a sign-in code that can approve: the companion did not confirm it")
+                return "ERROR that mint was not confirmed by the companion\n"
+            _audit_mint("Issued a sign-in code that can approve (confirmed by the companion app)")
+            return f"OK {bootstrap.mint(provenance=session_auth.PROVENANCE_HUMAN)}\n"
+        if subcommand.upper() == "CONSOLE":
+            # `privacyfence-app --print-sign-in-link`, the break-glass path
+            # (daemon_main.py). Unlike COMPANION there is no click to point
+            # at, so the companion asks with its own dialog -- the same
+            # ceremony CONFIRM ENROLL uses, and for the same reason: nothing
+            # about the connection itself distinguishes the human's terminal
+            # from the agent's subprocess, since they share a uid.
+            #
+            # This blocks this channel's accept loop for as long as the
+            # dialog is up, the same way CONFIRM ENROLL blocks the
+            # companion's (see CONFIRM_DIALOG_TIMEOUT_SECONDS). Somebody
+            # running the break-glass command while also clicking the
+            # companion's menu is not a real workflow -- but it is why that
+            # timeout is 90 seconds and not five minutes.
+            confirm_console = confirm_console_mint or request_sign_in_confirmation
+            confirmed, reason = confirm_console()
+            if not confirmed:
+                _audit_mint(f"Refused a sign-in code requested from a terminal: {reason}")
+                return f"ERROR {reason}\n"
+            _audit_mint(
+                "Issued a sign-in code that can approve, requested from a terminal "
+                "(privacyfence-app --print-sign-in-link, confirmed at the companion's dialog)",
+            )
+            return f"OK {bootstrap.mint(provenance=session_auth.PROVENANCE_HUMAN)}\n"
+        return "ERROR unknown command\n"
+    if command == "ENROLLMENT":
+        # Deliberately says nothing about *which* credentials exist, only
+        # whether this install is in the one state the companion acts on --
+        # a local process reading this socket learns nothing it could not
+        # already infer from the banner on every page.
+        if enrollment_state is None:
+            return "ERROR enrollment state is not available on this install\n"
+        return f"OK {enrollment_state()}\n"
+    if command == "RECOVERY":
+        # Blocks this accept loop for as long as the two companion dialogs
+        # are up (see CONFIRM_DIALOG_TIMEOUT_SECONDS) -- acceptable because
+        # the only client this channel has is the companion, and the
+        # companion is the process waiting on this very call.
+        if reissue_recovery_code is None:
+            return "ERROR recovery codes are not available on this install\n"
+        issued, reason = reissue_recovery_code()
+        return "OK\n" if issued else f"ERROR {reason}\n"
     if command == "QUIT":
         if privilege_separation.is_enabled():
             # #428 B4: this socket is 0660 group-shared with the companion
@@ -328,24 +531,511 @@ def _verify_companion_peer(conn: socket.socket) -> str | None:
     return None
 
 
+# ── The companion's own mint nonces ───────────────────────────────────────── #
+#
+# What makes a ``MINT COMPANION`` line attestable. The companion issues one
+# of these to itself immediately before asking the daemon for a code, and the
+# daemon hands it straight back here (``CONFIRM MINT <nonce>``) before minting
+# anything. Neither half is a secret the daemon keeps: the whole point is that
+# only the process that *issued* the nonce can recognize it, and that process
+# is the one a human clicked.
+#
+# Short-lived and single-use for the same reason a bootstrap code is: the
+# window between a click and the daemon's call-back is a socket round trip,
+# so anything longer is a nonce sitting around waiting to be guessed at. A
+# nonce that is never redeemed (the daemon is not running, the mint failed)
+# simply expires -- nothing sweeps this dict, because its ceiling is the
+# number of menu clicks a human makes in 30 seconds.
+_MINT_NONCE_TTL_SECONDS = 30
+
+_mint_nonce_lock = threading.Lock()
+_mint_nonces: dict[str, float] = {}
+
+
+def issue_mint_nonce() -> str:
+    """Mint a nonce for this process's own upcoming ``MINT COMPANION`` --
+    companion.py's ``_open_path()`` calls this, then sends the nonce to the
+    daemon, which calls back with it."""
+    nonce = secrets.token_urlsafe(16)
+    with _mint_nonce_lock:
+        _mint_nonces[nonce] = time.time() + _MINT_NONCE_TTL_SECONDS
+    return nonce
+
+
+def _consume_mint_nonce(nonce: str) -> bool:
+    """True iff this process issued ``nonce`` and it has neither expired nor
+    already been redeemed. Removed on every attempt, valid or not -- same
+    single-use posture as ``session_auth.BootstrapStore.consume()``."""
+    if not nonce:
+        return False
+    with _mint_nonce_lock:
+        expires_at = _mint_nonces.pop(nonce, None)
+    return expires_at is not None and expires_at >= time.time()
+
+
+# ── The companion's own human-confirmation dialog ─────────────────────────── #
+#
+# What CONFIRM ENROLL puts in front of a human, and the three ways of putting
+# it there. Zero new dependencies is the constraint ADR 0002 decision 4 sets
+# for this process on every platform (and most tightly on Linux, where it
+# rules out a tray icon): these are the system's own dialogs, reached the way
+# privilege_separation.py already reaches osascript for its elevation prompt.
+#
+# The text is fixed here, never taken from the request line. The only caller
+# on a separated install is the daemon (_verify_companion_peer), but a fixed
+# string is also what keeps this from being a way to put arbitrary words in a
+# PrivacyFence-branded dialog on a pre-separation install, where the caller is
+# still "anything running as this OS user" -- the same reasoning OPEN's own
+# scheme restriction above gives.
+_CONFIRM_TITLE = "PrivacyFence"
+_CONFIRM_ENROLL_PROMPT = (
+    "Allow a new passkey to be enrolled for PrivacyFence?\n\n"
+    "This is the first passkey on this install, so it will become what "
+    "approving a gated write requires.\n\n"
+    "If you did not just click \u201cAdd a passkey\u201d on the PrivacyFence "
+    "security page yourself, choose Deny."
+)
+_CONFIRM_RECOVERY_PROMPT = (
+    "Issue a new PrivacyFence recovery code?\n\n"
+    "A recovery code removes every passkey enrolled here, so you can enroll "
+    "a fresh one after losing the old authenticator. Issuing a new code "
+    "immediately stops the previous one from working.\n\n"
+    "If you did not just ask PrivacyFence for a recovery code yourself, "
+    "choose Deny."
+)
+_CONFIRM_SIGN_IN_PROMPT = (
+    "Allow a PrivacyFence sign-in link that can approve?\n\n"
+    "Somebody on this machine ran \u201cprivacyfence-app --print-sign-in-link\u201d. The link it "
+    "prints will be able to release writes PrivacyFence is holding.\n\n"
+    "If you did not just run that command yourself, choose Deny."
+)
+_CONFIRM_SHOW_PROMPT = (
+    "Open PrivacyFence, with a sign-in that can approve?\n\n"
+    "Something on this machine asked PrivacyFence's companion to open your approvals or "
+    "settings page. The link it opens will be able to release writes PrivacyFence is "
+    "holding.\n\n"
+    "If you did not just choose PrivacyFence from your applications menu, choose Deny."
+)
+_CONFIRM_ALLOW_LABEL = "Allow"
+_CONFIRM_DENY_LABEL = "Deny"
+
+# The one place a value off the wire reaches a dialog (module docstring).
+# The pattern is webauthn_stepup.generate_recovery_code()'s own output shape
+# -- four groups of four uppercase hex characters -- restated rather than
+# imported, because companion.py reaches this module and nothing else
+# (companion.py's own docstring on why it imports no daemon modules), and
+# importing webauthn_stepup here would pull py_webauthn into the companion
+# process for one regex. tests/unit/web/test_control_channel.py asserts the
+# two stay in agreement.
+_RECOVERY_CODE_PATTERN = re.compile(r"\A[0-9A-F]{4}(?:-[0-9A-F]{4}){3}\Z")
+_SHOW_RECOVERY_PREFIX = (
+    "Your PrivacyFence recovery code:\n\n"
+)
+_SHOW_RECOVERY_SUFFIX = (
+    "\n\nWrite it down somewhere safe. It is shown once, it will not be "
+    "shown again, and it is the only way back in if you lose every passkey "
+    "enrolled on this install -- using it removes them all so you can enroll "
+    "a new one.\n\n"
+    "PrivacyFence can issue a replacement from its menu at any time; doing "
+    "that stops this code from working."
+)
+_ACKNOWLEDGE_LABEL = "OK"
+
+# How long the dialog is left up. Deliberately shorter than the ~5 minutes a
+# WebAuthn registration challenge lives (webauthn_stepup.py's own
+# _REGISTRATION_CHALLENGE_TTL_SECONDS): a human who is at the keyboard answers
+# in seconds, and this handler runs on _LineProtocolServer's single accept
+# loop, so for as long as it is up this process is not answering OPEN either.
+# Colliding with a connector OAuth flow means starting one *while* confirming
+# a first passkey, which is not a real workflow -- but it is why this is not
+# five minutes.
+CONFIRM_DIALOG_TIMEOUT_SECONDS = 90
+
+# Absolute paths, not shutil.which() lookups, and for a stronger reason than
+# the bandit B607 one privilege_separation.py's own _OSASCRIPT cites: this
+# process runs as the logged-in user, which is the same account the agent runs
+# as, so PATH is something the adversary this dialog exists to stop can write.
+# A which("zenity") would let it ship a "zenity" that answers Allow.
+_OSASCRIPT = "/usr/bin/osascript"
+_LINUX_DIALOG_COMMANDS = (
+    # (argv-prefix, the argv that asks our own question). zenity ships with
+    # GNOME, kdialog with KDE; both exit 0 for yes and nonzero for no/closed,
+    # which is the whole contract needed here.
+    ("/usr/bin/zenity", lambda prompt: [
+        "/usr/bin/zenity", "--question", "--no-markup", f"--title={_CONFIRM_TITLE}",
+        f"--text={prompt}", f"--ok-label={_CONFIRM_ALLOW_LABEL}", f"--cancel-label={_CONFIRM_DENY_LABEL}",
+    ]),
+    ("/usr/bin/kdialog", lambda prompt: [
+        "/usr/bin/kdialog", f"--title={_CONFIRM_TITLE}", "--warningyesno", prompt,
+        f"--yes-label={_CONFIRM_ALLOW_LABEL}", f"--no-label={_CONFIRM_DENY_LABEL}",
+    ]),
+)
+# The same two programs, asked to *state* something rather than ask it --
+# what SHOW RECOVERY needs. Same absolute-path rule and the same "neither is
+# a dependency, so absent is a distinct outcome" handling as above.
+_LINUX_MESSAGE_COMMANDS = (
+    ("/usr/bin/zenity", lambda message: [
+        "/usr/bin/zenity", "--info", "--no-markup", f"--title={_CONFIRM_TITLE}", f"--text={message}",
+    ]),
+    ("/usr/bin/kdialog", lambda message: [
+        "/usr/bin/kdialog", f"--title={_CONFIRM_TITLE}", "--msgbox", message,
+    ]),
+)
+
+
+def _applescript_quoted(text: str) -> str:
+    """Escape ``text`` for a double-quoted AppleScript string literal. Kept
+    here rather than imported from privilege_separation.py's own namesake so
+    this module's dialog does not depend on that one's shell-command-building
+    neighbours -- and because it has to handle one thing that one never sees:
+    a **newline**. That function's input is a shell command, which has none;
+    this one's is a multi-paragraph prompt, and a raw newline inside an
+    AppleScript string literal is a syntax error rather than a line break, so
+    it becomes AppleScript's own ``\\n`` escape (which the language does
+    support). Backslashes are escaped first, or that escape would itself be
+    escaped."""
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return '"' + escaped.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n") + '"'
+
+
+def _confirm_macos(prompt: str, *, timeout: float) -> bool:
+    script = (
+        f"display dialog {_applescript_quoted(prompt)} "
+        f"buttons {{{_applescript_quoted(_CONFIRM_DENY_LABEL)}, {_applescript_quoted(_CONFIRM_ALLOW_LABEL)}}} "
+        f"default button {_applescript_quoted(_CONFIRM_DENY_LABEL)} "
+        f"cancel button {_applescript_quoted(_CONFIRM_DENY_LABEL)} "
+        f"with title {_applescript_quoted(_CONFIRM_TITLE)} with icon caution"
+    )
+    result = subprocess.run(  # nosec B603  # fixed argv, no shell; `prompt` is this module's own constant
+        [_OSASCRIPT, "-e", script],
+        capture_output=True, text=True, timeout=timeout, check=False,
+    )
+    # "Deny" is both the default and the cancel button, so a dismissed dialog
+    # (osascript exits 1) and an explicit Deny land in the same place, which
+    # is the safe one.
+    return result.returncode == 0 and _CONFIRM_ALLOW_LABEL in result.stdout
+
+
+def _confirm_windows(prompt: str, *, timeout: float) -> bool:  # noqa: ARG001 -- MessageBoxW has no timeout
+    """``MessageBoxW`` blocks until the human answers and takes no timeout,
+    so ``timeout`` is accepted (for one signature across platforms) and
+    unused -- the daemon-side timeout in ``request_enrollment_confirmation``
+    is what bounds the wait for the caller either way."""
+    import ctypes
+
+    mb_yesno = 0x4
+    mb_iconwarning = 0x30
+    mb_defbutton2 = 0x100  # "No" is the default, same posture as macOS above
+    mb_setforeground = 0x10000
+    id_yes = 6
+    answer = ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined]  # Windows-only
+        0, prompt, _CONFIRM_TITLE, mb_yesno | mb_iconwarning | mb_defbutton2 | mb_setforeground,
+    )
+    return answer == id_yes
+
+
+class _NoDialogAvailable(Exception):
+    """Raised by ``_confirm_linux`` when this desktop has neither zenity nor
+    kdialog -- see its own docstring for why that is not a refusal."""
+
+
+def _confirm_linux(prompt: str, *, timeout: float) -> bool:
+    """zenity or kdialog, whichever this desktop has. Neither is a
+    PrivacyFence dependency (ADR 0002 decision 4's Linux budget) and neither
+    is guaranteed present, so "no dialog program" is a distinct outcome from
+    "the human said no" -- it raises, and the caller turns that into a reply
+    naming the fix rather than a silent refusal the human cannot act on."""
+    for executable, argv_for in _LINUX_DIALOG_COMMANDS:
+        if not Path(executable).exists():
+            continue
+        result = subprocess.run(  # nosec B603  # fixed argv, no shell; `prompt` is this module's own constant
+            argv_for(prompt), capture_output=True, text=True, timeout=timeout, check=False,
+        )
+        return result.returncode == 0
+    raise _NoDialogAvailable(
+        "no dialog program found -- install zenity or kdialog so PrivacyFence can ask "
+        "before a first passkey is enrolled"
+    )
+
+
+def _message_macos(message: str, *, timeout: float) -> bool:
+    script = (
+        f"display dialog {_applescript_quoted(message)} "
+        f"buttons {{{_applescript_quoted(_ACKNOWLEDGE_LABEL)}}} "
+        f"default button {_applescript_quoted(_ACKNOWLEDGE_LABEL)} "
+        f"with title {_applescript_quoted(_CONFIRM_TITLE)}"
+    )
+    result = subprocess.run(  # nosec B603  # fixed argv, no shell; `message` is pattern-checked, see _show_recovery_code
+        [_OSASCRIPT, "-e", script],
+        capture_output=True, text=True, timeout=timeout, check=False,
+    )
+    return result.returncode == 0
+
+
+def _message_windows(message: str, *, timeout: float) -> bool:  # noqa: ARG001 -- MessageBoxW has no timeout
+    """See ``_confirm_windows`` on why ``timeout`` is accepted and unused."""
+    import ctypes
+
+    mb_ok = 0x0
+    mb_iconinformation = 0x40
+    mb_setforeground = 0x10000
+    answer = ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined]  # Windows-only
+        0, message, _CONFIRM_TITLE, mb_ok | mb_iconinformation | mb_setforeground,
+    )
+    return answer != 0
+
+
+def _message_linux(message: str, *, timeout: float) -> bool:
+    """zenity or kdialog, same availability rule as ``_confirm_linux`` --
+    and the same distinct ``_NoDialogAvailable`` outcome, which matters more
+    here than there: a recovery code nobody could be shown must not be
+    stored as the live one (web/routes_security.py rolls it back), or the
+    install would hold a code that exists and cannot be produced."""
+    for executable, argv_for in _LINUX_MESSAGE_COMMANDS:
+        if not Path(executable).exists():
+            continue
+        result = subprocess.run(  # nosec B603  # fixed argv, no shell; `message` is pattern-checked
+            argv_for(message), capture_output=True, text=True, timeout=timeout, check=False,
+        )
+        return result.returncode == 0
+    raise _NoDialogAvailable(
+        "no dialog program found -- install zenity or kdialog so PrivacyFence can show you "
+        "your recovery code"
+    )
+
+
+def _dialog_for(kind: str):  # noqa: ANN201 -- one of this module's own module-level functions
+    """The platform's question dialog (``kind="confirm"``) or its statement
+    dialog (``kind="message"``). One lookup rather than two near-identical
+    if/elif ladders, and it is deliberately a function rather than a dict
+    literal: the tests (and this module's own dispatch) monkeypatch the
+    six functions by name, which a dict built at import time would have
+    captured before they could."""
+    if privilege_separation.current_platform() == "darwin":
+        return _confirm_macos if kind == "confirm" else _message_macos
+    if privilege_separation.current_platform() == "win32":
+        return _confirm_windows if kind == "confirm" else _message_windows
+    return _confirm_linux if kind == "confirm" else _message_linux
+
+
+def _ask_human(prompt: str, *, kind: str, what: str, denied: str) -> str:
+    """Put ``prompt`` in front of whoever is at this login session and
+    answer with the ``OK``/``ERROR`` line the daemon reads back. The shared
+    body of ``_confirm_first_enrollment()`` and ``_show_recovery_code()``
+    -- the two differ only in which dialog they need and what to say when
+    it does not happen, and every failure mode below is identical for both:
+    any way of not getting an answer is reported as one, with a reason a
+    human can act on, rather than as a silent yes or a bare False.
+
+    ``what`` names the subject in this process's own logs only; ``denied``
+    is the reason line sent back when the dialog ran and the answer was no
+    (for a statement dialog, when it could not be put on screen).
+    """
+    dialog = _dialog_for(kind)
+    try:
+        answered = dialog(prompt, timeout=CONFIRM_DIALOG_TIMEOUT_SECONDS)
+    except _NoDialogAvailable as exc:
+        logger.warning("Companion could not show a dialog about %s: %s", what, exc)
+        return f"ERROR {exc}\n"
+    except subprocess.TimeoutExpired:
+        logger.warning("Nobody answered the %s dialog within %ss.", what, CONFIRM_DIALOG_TIMEOUT_SECONDS)
+        return "ERROR nobody answered the confirmation dialog -- try again\n"
+    except Exception:
+        # Anything else -- a missing osascript, a desktop with no display, a
+        # ctypes failure on Windows -- is "could not ask", which is a refusal.
+        logger.exception("Companion could not show the %s dialog", what)
+        return "ERROR could not ask for confirmation on this desktop\n"
+    if not answered:
+        logger.warning("A dialog about %s was not accepted.", what)
+        return f"ERROR {denied}\n"
+    return "OK\n"
+
+
+def _show_recovery_code(code: str) -> str:
+    """``SHOW RECOVERY <code>``'s actual work. ``code`` has already been
+    checked against ``_RECOVERY_CODE_PATTERN`` by the dispatch below -- the
+    one value this module ever takes off the wire and puts on screen, and
+    the reason that check is in the dispatch rather than here is so no
+    future caller can reach this with an unchecked string."""
+    return _ask_human(
+        f"{_SHOW_RECOVERY_PREFIX}{code}{_SHOW_RECOVERY_SUFFIX}",
+        kind="message", what="a recovery code",
+        denied="the recovery code could not be shown on this desktop",
+    )
+
+
+def _confirm_first_enrollment() -> str:
+    """``CONFIRM ENROLL``'s actual work: put this module's own fixed prompt
+    in front of whoever is at this login session, and answer with the line
+    the daemon reads back. Returns an ``OK``/``ERROR`` line rather than a
+    bool so the "could not ask" cases stay distinguishable from "asked, and
+    the answer was no" -- web/routes_security.py surfaces the reason
+    verbatim on ``/security``, which is where somebody who cannot enroll is
+    already standing.
+
+    Any refusal, for any reason, is the safe answer for both callers: each
+    gate exists because the thing it guards (a first passkey, a session that
+    can approve) has nothing else to prove itself with, so failing closed
+    costs one ceremony and failing open costs the guarantee. ``subject``
+    names the ceremony in this process's own log lines; ``denied_reason`` is
+    what the daemon reads back on an explicit Deny.
+    """
+    return _ask_human(
+        _CONFIRM_ENROLL_PROMPT, kind="confirm", what="a first passkey enrollment",
+        denied="enrollment was denied",
+    )
+
+
+def _confirm_recovery_reissue() -> str:
+    """``CONFIRM RECOVERY``'s own work -- the same dialog machinery asking a
+    different question. Issuing a recovery code is not an escalation on its
+    own (the code itself only ever reaches ``_show_recovery_code()``'s
+    dialog, never a reply on either channel), but it *invalidates* whatever
+    code the human already wrote down, so a local process that speaks this
+    socket must not be able to do it unnoticed. Failing closed here costs a
+    replacement code somebody can ask for again."""
+    return _ask_human(
+        _CONFIRM_RECOVERY_PROMPT, kind="confirm", what="issuing a new recovery code",
+        denied="issuing a new recovery code was denied",
+    )
+
+
+def _confirm_console_sign_in() -> str:
+    """``CONFIRM SIGNIN``'s actual work: the dialog behind
+    ``privacyfence-app --print-sign-in-link`` (daemon_main.py), which is the
+    break-glass way to a session that can approve when the companion's own
+    menu is not reachable -- an SSH login, a Linux desktop whose applications
+    menu nobody has open, a tray icon that failed to start.
+
+    The dialog is the whole gate. The command runs as the same OS user the
+    agent does, and the connection it arrives on carries nothing that tells
+    the two apart (ADR 0002 decision 6), so what makes the resulting session
+    attributable to a person is that a person clicked Allow on the desktop
+    -- not that the request came from a terminal.
+    """
+    return _ask_human(
+        _CONFIRM_SIGN_IN_PROMPT, kind="confirm", what="a terminal sign-in link",
+        denied="the sign-in link was denied",
+    )
+
+
+# What ``SHOW`` may be asked to open -- the companion's own two menu items
+# and nothing else. A path allowlist rather than a URL because the base URL
+# is this install's own (``read_base_url()``) and the caller has no business
+# choosing it: ``SHOW`` reaches a process that can mint a session able to
+# approve, so the one thing it must not become is a way to point that
+# session's landing page somewhere of the caller's choosing.
+SHOW_PATHS = ("/approvals", "/settings")
+
+
+def _show_page(path: str) -> str:
+    """``SHOW <path>``'s actual work -- ask the human, then mint an attested
+    code for ``path`` and open it here, in the process the daemon can call
+    back.
+
+    **The dialog is not optional, and this is the command that most needs
+    it.** ``CONFIRM MINT`` is safe without one because its nonce can only
+    have come from a click in this process; ``SHOW`` has no such evidence.
+    It arrives from another process running as this same OS user -- Linux's
+    one-shot applications-menu click is the caller it exists for, and the
+    agent is indistinguishable from it (ADR 0002 decision 6), on every
+    platform, since ``_verify_companion_peer`` only ever constrains the
+    *daemon-facing* commands and the Windows pipe ACL grants this user.
+    Without a dialog, anything running as the user could make this process
+    mint a session that may approve and hand it to a browser, at any
+    moment, with no human anywhere in it -- and a bootstrap code in a
+    browser's argv is readable by a sibling process on that same account.
+    So what makes the resulting session attributable to a person is that a
+    person clicked Allow, exactly as for ``CONFIRM SIGNIN``.
+
+    On the click this exists for, that dialog is one extra Allow on the
+    platform with no tray icon to click instead (ADR 0002 decision 4). A
+    desktop with neither zenity nor kdialog gets a refusal naming the fix,
+    and companion.py falls back to an unattested link that can still show
+    what is pending -- see its own ``_open_path``.
+    """
+    if path not in SHOW_PATHS:
+        return "ERROR unknown page\n"
+    asked = _ask_human(
+        _CONFIRM_SHOW_PROMPT, kind="confirm", what="an applications-menu sign-in",
+        denied="opening PrivacyFence was denied",
+    )
+    if not asked.startswith("OK"):
+        return asked
+    opened, reason = open_attested_url(path)
+    return "OK\n" if opened else f"ERROR {reason}\n"
+
+
 def _handle_companion_request(line: str) -> str:
-    """The companion channel's own dispatch -- one command, ``OPEN <url>``,
-    sent by the daemon (``request_open_url()`` below) and acted on here, in
-    the companion process, which is the one thing in this architecture that
+    """The companion channel's own dispatch -- ``OPEN <url>`` and
+    ``CONFIRM ENROLL``, both sent by the daemon (``request_open_url()``/
+    ``request_enrollment_confirmation()`` below) and acted on here, in the
+    companion process, which is the one thing in this architecture that
     still runs in the user's desktop session once #428 Phase 4 moves the
-    daemon to a service account. Scheme-restricted to http(s): pre-Phase-4,
-    or on a Phase-4 install this dispatch is even reached from at all (see
+    daemon to a service account.
+
+    ``OPEN`` is scheme-restricted to http(s) and ``CONFIRM``'s prompt is a
+    constant of this module for the same single reason: pre-Phase-4, or on a
+    Phase-4 install this dispatch is even reached from at all (see
     ``_verify_companion_peer()`` -- #428 B10 -- for who that is once
     separated), the caller is at minimum "anything running as the same OS
     user" (companion and daemon are still the same uid pre-Phase-4, agent
-    included -- ADR 0002 decision 1), so it's worth not handing that caller
-    a way to open an arbitrary ``file://``/custom-scheme URL for the one
-    capability this process trades away nothing else to gain."""
+    included -- ADR 0002 decision 1), so neither command hands that caller
+    an arbitrary ``file://``/custom-scheme URL to open, nor arbitrary words
+    to put in a PrivacyFence-branded dialog.
+    """
     parts = line.strip().split(maxsplit=1)
     command = parts[0].upper() if parts else ""
-    if command != "OPEN" or len(parts) != 2:
+    argument = parts[1].strip() if len(parts) == 2 else ""
+    if command == "CONFIRM":
+        # Each subject spelled out rather than implied by a bare CONFIRM:
+        # a new one is a new keyword here, never a change of meaning for
+        # a line an older daemon already sends.
+        subject, _, subargument = argument.partition(" ")
+        subject = subject.upper()
+        if subject == "ENROLL":
+            return _confirm_first_enrollment()
+        if subject == "RECOVERY":
+            return _confirm_recovery_reissue()
+        if subject == "MINT":
+            # No dialog: the human already clicked, in this process, moments
+            # ago -- asking again would put a second confirmation in front of
+            # somebody who just answered the first one by choosing the menu
+            # item. What is being established here is only that the line
+            # reached the process that issued the nonce.
+            if _consume_mint_nonce(subargument.strip()):
+                return "OK\n"
+            return "ERROR no sign-in was requested from this companion\n"
+        if subject == "SIGNIN":
+            return _confirm_console_sign_in()
         return "ERROR unknown command\n"
-    url = parts[1].strip()
+    if command == "SHOW":
+        subject, _, value = argument.partition(" ")
+        if subject.upper() == "RECOVERY":
+            code = value.strip()
+            # The gate the module docstring promises: one shape, checked here
+            # so nothing downstream ever sees an unchecked string. A mismatch
+            # is a bug or an impostor, and either way there is nothing worth
+            # putting on screen -- so it is refused without echoing what was
+            # sent.
+            if not _RECOVERY_CODE_PATTERN.match(code):
+                return "ERROR malformed recovery code\n"
+            return _show_recovery_code(code)
+        # Otherwise a page: a companion that is *not* this process (Linux's
+        # one-shot ``--action open-approvals``, spawned fresh by an
+        # applications-menu click) asking this one -- the process that owns
+        # this address, and so the only one that can answer the daemon's
+        # CONFIRM MINT -- to do the minting and the opening on its behalf.
+        # Without this, a Linux click could only ever produce an unattested
+        # session, because the process the human clicked exits before the
+        # daemon could call it back. Same fixed-vocabulary posture as OPEN's
+        # scheme check: the caller picks from this module's own paths, never
+        # supplies a URL. ``RECOVERY`` above is not one of SHOW_PATHS, so the
+        # two subjects cannot collide.
+        return _show_page(argument)
+    if command != "OPEN" or not argument:
+        return "ERROR unknown command\n"
+    url = argument
     if urlsplit(url).scheme.lower() not in ("http", "https"):
         return "ERROR unsupported scheme\n"
     try:
@@ -629,9 +1319,18 @@ class ControlChannelServer:
     ``allow_quit`` -- see ``_handle_daemon_request()``.
     """
 
-    def __init__(self, *, bootstrap: BootstrapStore, allow_quit: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        bootstrap: BootstrapStore,
+        allow_quit: bool = True,
+        enrollment_state: Callable[[], str] | None = None,
+        reissue_recovery_code: Callable[[], tuple[bool, str]] | None = None,
+    ) -> None:
         self._bootstrap = bootstrap
         self._allow_quit = allow_quit
+        self._enrollment_state = enrollment_state
+        self._reissue_recovery_code = reissue_recovery_code
         self._impl = _LineProtocolServer(
             handler=self._handle,
             socket_path=posix_socket_path,
@@ -640,7 +1339,11 @@ class ControlChannelServer:
         )
 
     def _handle(self, line: str) -> str:
-        return _handle_daemon_request(self._bootstrap, allow_quit=self._allow_quit, line=line)
+        return _handle_daemon_request(
+            self._bootstrap, allow_quit=self._allow_quit, line=line,
+            enrollment_state=self._enrollment_state,
+            reissue_recovery_code=self._reissue_recovery_code,
+        )
 
     @property
     def address(self) -> str | None:
@@ -822,10 +1525,17 @@ def _send_to_daemon(message: str, *, timeout: float) -> str:
 
 
 def mint_bootstrap_code(*, timeout: float = 5.0) -> str:
-    """The companion's own way to get a fresh, single-use bootstrap code
-    without restarting the daemon or going through a browser at all --
-    what backs its "Open Approvals"/"Open Settings" actions (companion.py).
-    Raises ``ControlChannelError`` on anything other than a well-formed
+    """A fresh, single-use bootstrap code, without restarting the daemon or
+    going through a browser at all -- and **unattested**
+    (session_auth.py's ``PROVENANCE_UNATTESTED``): the session it exchanges
+    for may view PrivacyFence but not approve anything, because a bare
+    ``MINT`` is reachable by anything running as this OS user and the daemon
+    has no way to tell which of them sent it.
+
+    That is what this call has always been; what changed is that the
+    resulting session now says so. The attested counterparts are
+    ``mint_attested_bootstrap_code()`` (the companion's own menu) and
+    ``mint_console_bootstrap_code()`` (``--print-sign-in-link``). Raises ``ControlChannelError`` on anything other than a well-formed
     ``OK <code>`` reply; raises ``OSError`` (uncaught) if no daemon is
     listening at all -- callers that treat "no daemon running" as a normal,
     expected case (companion.py's own) catch that themselves."""
@@ -833,6 +1543,153 @@ def mint_bootstrap_code(*, timeout: float = 5.0) -> str:
     if not reply.startswith("OK "):
         raise ControlChannelError(f"control channel mint failed: {reply!r}")
     return reply[len("OK "):].strip()
+
+
+def mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
+    """A code that exchanges for a session which may *approve*, not merely
+    view (session_auth.py's ``PROVENANCE_HUMAN``) -- what backs the
+    companion's own Open Approvals/Open Settings items.
+
+    Only callable from the process that owns the companion channel, because
+    the nonce it sends is one this process issues to itself and the daemon
+    redeems by calling straight back (``CONFIRM MINT``). A one-shot
+    ``--action`` invocation has no channel of its own and must delegate to a
+    running companion instead (``request_show()``), or settle for
+    ``mint_bootstrap_code()``'s unattested code.
+
+    Raises ``ControlChannelError`` on anything other than a well-formed
+    ``OK <code>`` reply -- including the daemon's own refusal when the
+    call-back did not confirm -- and ``OSError`` (uncaught) if no daemon is
+    listening at all, same as ``mint_bootstrap_code()``."""
+    reply = _send_to_daemon(f"MINT COMPANION {issue_mint_nonce()}\n", timeout=timeout)
+    if not reply.startswith("OK "):
+        raise ControlChannelError(f"control channel mint failed: {reply!r}")
+    return reply[len("OK "):].strip()
+
+
+def mint_console_bootstrap_code(*, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 20.0) -> str:
+    """``privacyfence-app --print-sign-in-link``'s own mint (daemon_main.py):
+    asks the daemon for a code that can approve, which the daemon grants only
+    once the companion has put ``_CONFIRM_SIGN_IN_PROMPT`` in front of a human
+    and they chose Allow.
+
+    ``timeout`` sits past the companion's own dialog timeout for the same
+    reason ``request_enrollment_confirmation()``'s does: the ordinary "nobody
+    was at the keyboard" case should be reported by the process that actually
+    knows it, in words, rather than guessed at from a socket timing out
+    here. Further past it than the daemon's own wait on the companion
+    (``request_sign_in_confirmation``, dialog + 5s), since a client that gives
+    up at the same moment the daemon is finishing turns a perfectly good
+    answer into a bare socket timeout in somebody's terminal."""
+    reply = _send_to_daemon("MINT CONSOLE\n", timeout=timeout)
+    if not reply.startswith("OK "):
+        raise ControlChannelError(_error_reason(reply) or "the sign-in link was not confirmed")
+    return reply[len("OK "):].strip()
+
+
+def _error_reason(reply: str) -> str:
+    """The human-facing half of an ``ERROR <reason>`` line. The reason is
+    written where it is known (the companion's dialog handler, the daemon's
+    own dispatch) and passed through unchanged by everything between, so a
+    new reason at either end needs no matching change here."""
+    reason = reply.strip()
+    if reason.upper().startswith("ERROR"):
+        reason = reason[len("ERROR"):].strip()
+    return reason
+
+
+def open_attested_url(path: str, *, timeout: float = 5.0) -> tuple[bool, str]:
+    """Mint an attested code for ``path`` and open it in this session's
+    browser -- the companion's Open Approvals/Open Settings, in one call, so
+    the tray handler and the ``SHOW`` handler cannot drift apart. Returns
+    ``(opened, reason)``; ``reason`` is empty on success and a short phrase
+    otherwise, since both callers report rather than raise."""
+    base_url = read_base_url()
+    if base_url is None:
+        return False, "PrivacyFence does not appear to be running (local mode)"
+    try:
+        code = mint_attested_bootstrap_code(timeout=timeout)
+    except (OSError, ControlChannelError) as exc:
+        return False, f"could not reach PrivacyFence's control channel: {exc}"
+    try:
+        opened = webbrowser.open(f"{base_url}{path}?bootstrap={code}")
+    except Exception:
+        logger.exception("Companion could not open a browser for %s", path)
+        return False, "could not open a browser"
+    return (True, "") if opened else (False, "could not open a browser")
+
+
+def request_show(path: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 20.0) -> bool:
+    """Ask a *running* companion to open ``path`` itself (``SHOW``) -- what a
+    one-shot ``--action`` invocation does instead of minting, since the
+    session it could mint on its own would be unattested (see
+    ``mint_attested_bootstrap_code()``). False whenever no companion answers,
+    which is the ordinary case on an install where nothing autostarts one:
+    companion.py falls back from there rather than failing the click.
+
+    The long default timeout is the dialog on the other end (``_show_page``,
+    which explains why it is there): the reply does not come back until
+    somebody has answered it, and giving up first would turn an Allow into a
+    fallback to a link that cannot approve."""
+    if path not in SHOW_PATHS:  # pragma: no cover -- callers pass this module's own constants
+        raise ValueError(f"path must be one of {SHOW_PATHS}, got {path!r}")
+    try:
+        if paths.is_windows():
+            reply = send_line_windows(companion_pipe_name(), f"SHOW {path}\n", timeout=timeout)
+        else:
+            reply = send_line_posix(companion_socket_path(), f"SHOW {path}\n", timeout=timeout)
+    except (OSError, ControlChannelError):
+        return False
+    return reply.startswith("OK")
+
+
+def request_mint_attestation(nonce: str, *, timeout: float = 2.0) -> bool:
+    """The daemon's own half of ``MINT COMPANION``: hand ``nonce`` back to
+    whatever is listening on the companion's address and believe an ``OK``
+    only from a process that recognizes it. False for every other outcome,
+    no companion running included -- an unrecognized nonce and an absent
+    companion mean the same thing here, which is that nothing has vouched
+    for this mint.
+
+    Short timeout, unlike the two confirmation calls either side of it: this
+    one asks no human anything, so anything slower than a local socket round
+    trip is already wrong."""
+    try:
+        if paths.is_windows():
+            reply = send_line_windows(companion_pipe_name(), f"CONFIRM MINT {nonce}\n", timeout=timeout)
+        else:
+            reply = send_line_posix(companion_socket_path(), f"CONFIRM MINT {nonce}\n", timeout=timeout)
+    except (OSError, ControlChannelError) as exc:
+        logger.warning("Could not reach the companion to confirm a mint: %s", exc)
+        return False
+    return reply.startswith("OK")
+
+
+def request_sign_in_confirmation(
+    *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0,
+) -> tuple[bool, str]:
+    """The daemon's own half of ``MINT CONSOLE``: ask a running companion to
+    confirm, with a human at its login session, a sign-in link that will be
+    able to approve. Same shape and same reasoning as
+    ``request_enrollment_confirmation()`` below -- "no companion is running"
+    is a refusal with an actionable reason, not a soft failure to fall back
+    from, because the thing being established is precisely that a human and
+    not this machine's agent asked."""
+    try:
+        if paths.is_windows():
+            reply = send_line_windows(companion_pipe_name(), "CONFIRM SIGNIN\n", timeout=timeout)
+        else:
+            reply = send_line_posix(companion_socket_path(), "CONFIRM SIGNIN\n", timeout=timeout)
+    except (OSError, ControlChannelError) as exc:
+        logger.warning("Could not reach the companion to confirm a terminal sign-in link: %s", exc)
+        return False, (
+            "PrivacyFence could not reach its companion app, which is what asks you to confirm a "
+            "sign-in link that can approve. Start PrivacyFence's companion (the menu-bar/tray "
+            "icon, or the PrivacyFence entry in your applications menu) and try again."
+        )
+    if reply.startswith("OK"):
+        return True, ""
+    return False, _error_reason(reply) or "the companion did not confirm this sign-in link"
 
 
 def request_quit(*, timeout: float = 5.0) -> None:
@@ -867,8 +1724,143 @@ def request_open_url(url: str, *, timeout: float = 2.0) -> bool:
     return reply.startswith("OK")
 
 
+def enrollment_state(*, timeout: float = 5.0) -> str:
+    """The companion's own side of ``ENROLLMENT`` (module docstring):
+    ``"pending"`` when this install requires a passkey and has none
+    enrolled, ``"ok"`` otherwise. Raises ``ControlChannelError`` on a reply
+    that is not a well-formed ``OK <state>``, and ``OSError`` (uncaught)
+    when no daemon is listening at all -- same contract as
+    ``mint_bootstrap_code()``, and the same reason: companion.py treats
+    "PrivacyFence is not running" as an ordinary case and catches it
+    itself."""
+    reply = _send_to_daemon("ENROLLMENT\n", timeout=timeout)
+    if not reply.startswith("OK "):
+        raise ControlChannelError(f"control channel enrollment query failed: {reply!r}")
+    return reply[len("OK "):].strip()
+
+
+def request_recovery_code(*, timeout: float = (CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0) * 2) -> None:
+    """The companion's own side of ``RECOVERY``: asks the daemon to issue a
+    replacement recovery code and show it here. Returns nothing on success
+    -- deliberately, because the code never travels back over this channel;
+    it reaches the human through the daemon's own ``SHOW RECOVERY`` call
+    into this same process (see the module docstring). Raises
+    ``ControlChannelError`` when the daemon declines, with the reason it
+    gave, and ``OSError`` when nothing is listening.
+
+    The default timeout covers *two* dialogs end to end (confirm, then
+    show), each bounded by ``CONFIRM_DIALOG_TIMEOUT_SECONDS`` on the side
+    that actually puts them up -- so an unanswered dialog is reported by the
+    process that knows why rather than guessed at from a socket timing
+    out here."""
+    reply = _send_to_daemon("RECOVERY\n", timeout=timeout)
+    if not reply.startswith("OK"):
+        reason = reply.strip()
+        if reason.upper().startswith("ERROR"):
+            reason = reason[len("ERROR"):].strip()
+        raise ControlChannelError(reason or "the daemon did not issue a recovery code")
+
+
+def _ask_companion(line: str, *, timeout: float, unreachable: str) -> tuple[bool, str]:
+    """Send one line to a running companion and normalize its answer to the
+    ``(ok, reason)`` pair every daemon-side caller here wants. Shared by
+    ``request_enrollment_confirmation()`` and ``send_recovery_code()``,
+    which differ only in the line and in what to say when no companion
+    answers -- see the former's docstring for why that case is a refusal
+    with an actionable reason rather than a soft failure to fall back
+    from."""
+    try:
+        if paths.is_windows():
+            reply = send_line_windows(companion_pipe_name(), line, timeout=timeout)
+        else:
+            reply = send_line_posix(companion_socket_path(), line, timeout=timeout)
+    except (OSError, ControlChannelError) as exc:
+        logger.warning("Could not reach the companion (%s): %s", line.strip(), exc)
+        return False, unreachable
+    if reply.startswith("OK"):
+        return True, ""
+    # The companion's own ERROR line already says why in words meant for a
+    # human -- passed through rather than restated, so a new reason there
+    # needs no matching change here.
+    reason = reply.strip()
+    if reason.upper().startswith("ERROR"):
+        reason = reason[len("ERROR"):].strip()
+    return False, reason
+
+
+_COMPANION_UNREACHABLE = (
+    "PrivacyFence could not reach its companion app. Start PrivacyFence's companion (the "
+    "menu-bar/tray icon, or the PrivacyFence entry in your applications menu) and try again."
+)
+
+
+def send_recovery_code(code: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0) -> tuple[bool, str]:
+    """Hand a freshly minted recovery code to a running companion to put in
+    front of the human (plan item 1.3). Returns ``(shown, reason)``; a
+    ``False`` here means the code reached nobody, and web/routes_security.py
+    treats that as "no code was issued" rather than storing one that cannot
+    be produced. Never call this with anything but a code straight from
+    ``webauthn_stepup``: the companion refuses a line that does not match
+    the format, which is the backstop, not the contract."""
+    return _ask_companion(
+        f"SHOW RECOVERY {code}\n", timeout=timeout, unreachable=_COMPANION_UNREACHABLE,
+    )
+
+
+def request_recovery_confirmation(
+    *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0,
+) -> tuple[bool, str]:
+    """Ask a running companion to confirm, with the human, that a
+    *replacement* recovery code should be issued -- see
+    ``_confirm_recovery_reissue()`` for why issuing one needs asking at
+    all."""
+    return _ask_companion(
+        "CONFIRM RECOVERY\n", timeout=timeout, unreachable=_COMPANION_UNREACHABLE,
+    )
+
+
+def request_enrollment_confirmation(
+    *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0,
+) -> tuple[bool, str]:
+    """Ask a running companion to confirm a *first* passkey enrollment with
+    the human at its own login session -- the daemon-side half of
+    ``_confirm_first_enrollment()`` above, and the mirror image of
+    ``request_open_url()``: same channel, same client plumbing, opposite
+    meaning for a missing companion.
+
+    Returns ``(confirmed, reason)``. ``confirmed`` is True only for an
+    explicit ``OK`` from a companion that actually asked somebody;
+    ``reason`` is a short, human-facing phrase for every other case, which
+    web/routes_security.py puts in front of whoever is trying to enroll.
+    Unlike ``request_open_url()``, "no companion is running right now" is
+    **not** a soft failure to fall back from -- there is no local fallback
+    that would mean anything, since the thing being established is that a
+    human and not this machine's agent asked for this. It is a refusal with
+    an actionable reason, and the reason names starting the companion.
+
+    ``timeout`` sits just past the companion's own dialog timeout, so the
+    ordinary "nobody was at the keyboard" case is reported by the process
+    that actually knows it (``_confirm_first_enrollment``) rather than
+    guessed at from a socket timing out here.
+    """
+    confirmed, reason = _ask_companion(
+        "CONFIRM ENROLL\n", timeout=timeout,
+        unreachable=(
+            "PrivacyFence could not reach its companion app, which is what asks you to confirm "
+            "a first passkey. Start PrivacyFence's companion (the menu-bar/tray icon, or the "
+            "PrivacyFence entry in your applications menu) and try again."
+        ),
+    )
+    if confirmed:
+        return True, ""
+    return False, reason or "the companion did not confirm this enrollment"
+
+
 __all__ = [
     "COMPANION_SOCKET_FILE_NAME",
+    "CONFIRM_DIALOG_TIMEOUT_SECONDS",
+    "SHOW_PATHS",
+    "SIGN_IN_MINT_DECISION",
     "SOCKET_FILE_NAME",
     "WEB_BASE_URL_FILE_NAME",
     "CompanionChannelServer",
@@ -878,14 +1870,26 @@ __all__ = [
     "companion_pipe_name_for",
     "companion_socket_path",
     "companion_socket_path_under",
+    "enrollment_state",
+    "issue_mint_nonce",
+    "mint_attested_bootstrap_code",
     "mint_bootstrap_code",
+    "mint_console_bootstrap_code",
+    "open_attested_url",
     "pipe_name_for",
     "posix_socket_path",
     "read_base_url",
+    "request_enrollment_confirmation",
+    "request_mint_attestation",
     "request_open_url",
     "request_quit",
+    "request_recovery_code",
+    "request_recovery_confirmation",
+    "request_show",
+    "request_sign_in_confirmation",
     "send_line_posix",
     "send_line_windows",
+    "send_recovery_code",
     "socket_path_under",
     "windows_pipe_name",
 ]

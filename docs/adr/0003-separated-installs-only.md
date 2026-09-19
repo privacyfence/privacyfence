@@ -4,9 +4,9 @@
 
 Accepted; implemented. Decisions 2 and 3 landed in #547 (`4d28549`, `c8caba0`, `f2ad715`),
 decisions 4 and 5 in #549/#550 (Windows installer, `.deb` postinst), and decisions 6 and 7 in the
-PR that added this Status update. Two amendment notes below (under decision 2 and under decision
-6) record where what shipped differs from what this ADR originally wrote — an ADR is a record, so
-those are notes on the decision rather than edits to it.
+PR that added this Status update. Three amendment notes below (under decision 2, under decision
+6, and under the first *Out of scope* item) record where what shipped differs from what this ADR
+originally wrote — an ADR is a record, so those are notes on the decision rather than edits to it.
 
 Supersedes [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md) decision 5a's answer
 ("two install tiers", the non-elevated Windows per-user path kept), and retires the macOS DMG and
@@ -344,6 +344,35 @@ existed.
   be trusted; it does not decide that it should be on by default, which is a separate trade (a lost
   authenticator on a local-mode install has no IdP-backed recovery — see
   `docs/security-and-compliance.md`). Worth its own issue now that the blocker is gone.
+
+  **Amendment (2026-09-19): it does default on, on packaged installs, and decision 1 was only half
+  the precondition.** The other half is that enrolling a passkey now needs more than a session.
+  When this ADR was written, a local process holding a `pf_session` could enroll a credential it
+  had generated itself and then satisfy every step-up check with it — registration uses `none`
+  attestation, and the user-verified bit is a claim the authenticator makes about itself, so
+  nothing downstream could tell that key from a platform one. Defaulting `require_passkey` on
+  against that would have shipped a guarantee the product could not keep, which is the exact
+  failure this ADR exists to stop, one layer up. `register_options` now gates the ceremony before
+  it starts — on a fresh assertion with an already-enrolled credential, or, for the first
+  enrollment, on a confirmation the companion puts in front of a human — and *that*, together with
+  decision 1, is what makes the default defensible.
+
+  What shipped, in `step_up_config.default_local_step_up()`: `step_up.enabled` and
+  `step_up.require_passkey` default to true when `paths.is_bundled()` is true, which is the same
+  predicate `enforce_separation()` is scoped to — so the builds that default on are exactly the
+  builds this ADR guarantees are separated or refuse to serve. An explicit value in
+  `config/settings.yaml` still wins in both directions, and every install seeded from an older
+  `settings.yaml.example` has both keys written out as `false`, so this reaches fresh installs
+  rather than retroactively changing existing ones. Source checkouts, editable installs and
+  `pipx install privacyfence` default off, unchanged: ADR 0002 decision 6's verdict on a passkey
+  checked against a credential store the agent can write still applies to them.
+
+  The recovery trade this bullet names is answered rather than accepted: on a packaged install the
+  one-time recovery code no longer comes back in an HTTP response body at all. The daemon hands it
+  to the companion, which shows it on the human's own desktop, and the companion can issue a
+  replacement later from its own menu — see `docs/security-and-compliance.md`. Decision 3's
+  companion is what makes both that and the first-enrollment confirmation possible, which is a
+  second thing that decision turned out to be load-bearing for.
 - **Org mode**, for ADR 0002's reasons, unchanged.
 - **Non-x64/arm64 targets and other Linux packaging formats.** A future Flatpak/AppImage/Homebrew
   path is subject to decision 1 like anything else — it ships if it can separate itself — but

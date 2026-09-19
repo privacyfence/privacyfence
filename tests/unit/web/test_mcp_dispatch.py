@@ -397,94 +397,10 @@ class TestListRules:
 
 
 # --------------------------------------------------------------------------- #
-# get_sign_in_link -- privacyfence_get_sign_in_link's handler. No bridge-era
-# equivalent (this tool is new, see mcp_tools.py's own module docstring).
-# --------------------------------------------------------------------------- #
-
-class TestGetSignInLink:
-    @pytest.fixture(autouse=True)
-    def _setup(self, tmp_path):
-        init_audit_logger(str(tmp_path / "audit"))
-        self._audit_dir = tmp_path / "audit"
-
-    def _read_entries(self):
-        week_file = self._audit_dir / f"{current_week()}.jsonl"
-        if not week_file.exists():
-            return []
-        return [json.loads(line) for line in week_file.read_text(encoding="utf-8").splitlines()]
-
-    def test_no_provider_wired_raises(self):
-        # The state every dispatcher starts in, and org mode's permanent
-        # state (daemon_main.py's _start_org_web_server never wires one --
-        # see McpDispatcher.set_bootstrap_link_provider's own docstring).
-        with pytest.raises(ValueError, match="organization mode"):
-            _dispatcher({}).get_sign_in_link("approvals")
-
-    def test_delegates_to_the_wired_provider_with_a_leading_slash_path(self):
-        calls = []
-        dispatcher = _dispatcher({})
-        dispatcher.set_bootstrap_link_provider(lambda path: calls.append(path) or f"http://x{path}?bootstrap=abc")
-
-        result = dispatcher.get_sign_in_link("settings")
-
-        assert calls == ["/settings"]
-        assert result == {"url": "http://x/settings?bootstrap=abc"}
-
-    def test_delegates_the_connectors_page_to_settings_connectors_path(self):
-        calls = []
-        dispatcher = _dispatcher({})
-        dispatcher.set_bootstrap_link_provider(lambda path: calls.append(path) or f"http://x{path}?bootstrap=abc")
-
-        result = dispatcher.get_sign_in_link("connectors")
-
-        assert calls == ["/settings/connectors"]
-        assert result == {"url": "http://x/settings/connectors?bootstrap=abc"}
-
-    def test_empty_page_defaults_to_approvals(self):
-        dispatcher = _dispatcher({})
-        dispatcher.set_bootstrap_link_provider(lambda path: f"http://x{path}")
-        assert dispatcher.get_sign_in_link("") == {"url": "http://x/approvals"}
-
-    def test_invalid_page_is_rejected_before_the_provider_is_called(self):
-        dispatcher = _dispatcher({})
-        dispatcher.set_bootstrap_link_provider(lambda path: pytest.fail("must not be called"))
-        with pytest.raises(ValueError, match="page must be"):
-            dispatcher.get_sign_in_link("not-a-real-page")
-
-    def test_provider_returning_none_raises_the_same_as_unwired(self):
-        # WebServer.mint_bootstrap_url() itself returns None in org mode
-        # (web/server.py) -- a provider wired to it, called through org
-        # mode's own web server by mistake, must fail the same clear way
-        # an unwired dispatcher already does, not hand back a None url.
-        dispatcher = _dispatcher({})
-        dispatcher.set_bootstrap_link_provider(lambda path: None)
-        with pytest.raises(ValueError, match="organization mode"):
-            dispatcher.get_sign_in_link("approvals")
-
-    def test_records_a_sign_in_link_issued_audit_entry(self):
-        dispatcher = _dispatcher({})
-        dispatcher.set_bootstrap_link_provider(lambda path: f"http://x{path}")
-
-        dispatcher.get_sign_in_link("approvals", "I'm locked out and need to check a pending approval")
-
-        entries = self._read_entries()
-        assert entries[0]["decision"] == "sign_in_link_issued"
-        assert entries[0]["claude_reason"] == "I'm locked out and need to check a pending approval"
-
-    def test_unset_provider_after_being_wired_raises_again(self):
-        # set_bootstrap_link_provider(None) is a real, documented value --
-        # the same "explicitly clear it" shape set_unattended_changed_
-        # listener already accepts -- not just an unused default.
-        dispatcher = _dispatcher({})
-        dispatcher.set_bootstrap_link_provider(lambda path: f"http://x{path}")
-        dispatcher.set_bootstrap_link_provider(None)
-        with pytest.raises(ValueError, match="organization mode"):
-            dispatcher.get_sign_in_link("approvals")
-
-
-# --------------------------------------------------------------------------- #
 # status -- privacyfence_status's handler (issue #396 Phase 2). No
-# bridge-era equivalent, same as get_sign_in_link above.
+# bridge-era equivalent; the meta-tool that used to stand beside it,
+# privacyfence_get_sign_in_link, is retired (the self-approval plan's
+# Phase 2) and its tests with it.
 # --------------------------------------------------------------------------- #
 
 class TestStatus:
@@ -527,7 +443,7 @@ class TestStatus:
         ])
         result = dispatcher.status("checking")
         assert result["setup_complete"] is False
-        assert result["next_step"] == "ask_for_sign_in_link"
+        assert result["next_step"] == "open_privacyfence_companion"
 
     def test_setup_complete_when_at_least_one_connector_is_authenticated(self):
         dispatcher = _dispatcher({})
@@ -539,30 +455,24 @@ class TestStatus:
         assert result["next_step"] is None
         assert "sign_in_url" not in result
 
-    def test_never_mints_a_sign_in_url_when_local_and_un_onboarded(self):
-        # issue #396 threat-model follow-up: privacyfence_status must not
-        # mint a live sign-in credential unprompted -- that's a bootstrap
-        # code that can release a gated approval, and this tool is called
-        # because a model decided to check, not because a human asked.
-        # Minting stays privacyfence_get_sign_in_link's job alone.
-        dispatcher = _dispatcher({})
-        dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
-        dispatcher.set_bootstrap_link_provider(lambda path: pytest.fail("must not be called"))
-        result = dispatcher.status("checking")
-        assert result["sign_in_url"] is None
-        assert result["next_step"] == "ask_for_sign_in_link"
-
-    def test_asks_for_sign_in_link_even_with_no_bootstrap_provider_wired(self):
+    def test_never_hands_a_sign_in_url_to_the_caller(self):
+        """issue #396's threat-model follow-up asked that this tool not mint
+        a live sign-in credential unprompted, since it is called because a
+        model decided to check rather than because a human asked. The
+        self-approval plan's Phase 2 widened that from "not this tool" to
+        "nothing on this server": the tool that did mint one is retired, so
+        the field stays null and the message names the companion."""
         dispatcher = _dispatcher({})
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
         result = dispatcher.status("checking")
         assert result["sign_in_url"] is None
-        assert result["next_step"] == "ask_for_sign_in_link"
+        assert result["next_step"] == "open_privacyfence_companion"
+        assert "companion" in result["message"]
+        assert "no link for you to hand them" in result["message"]
 
-    def test_org_mode_never_mints_a_link_even_if_one_is_wired(self):
+    def test_org_mode_points_at_an_administrator_instead(self):
         dispatcher = _dispatcher({}, mode="org")
         dispatcher.set_connectors_state_provider(lambda: [self._row("gmail")])
-        dispatcher.set_bootstrap_link_provider(lambda path: pytest.fail("must not be called"))
         result = dispatcher.status("checking")
         assert result["sign_in_url"] is None
         assert result["next_step"] == "contact_your_administrator"

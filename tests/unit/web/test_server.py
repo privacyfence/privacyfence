@@ -22,7 +22,13 @@ from privacyfence.web.server import (
     _SecurityHeadersMiddleware,
     build_app,
 )
-from privacyfence.web.session_auth import SESSION_COOKIE, BootstrapStore, LocalSessionStore
+from privacyfence.web.session_auth import (
+    PROVENANCE_HUMAN,
+    PROVENANCE_UNATTESTED,
+    SESSION_COOKIE,
+    BootstrapStore,
+    LocalSessionStore,
+)
 from privacyfence.web_approval_ui import WebApprovalUI
 
 
@@ -485,6 +491,44 @@ class TestWebServerControlChannel:
             server.stop()
 
 
+class TestHumanSessionWiring:
+    """The self-approval plan's Phase 2, at the one place that decides
+    whether the gate is on: privilege separation. It is what ADR 0003 makes
+    mandatory for every packaged install (decision 6), and what guarantees
+    the companion an attested session is minted through exists at all
+    (decisions 3-5) -- on an unseparated build-from-source install neither
+    holds, and an agent that can rewrite the credential store directly (ADR
+    0002 decision 6) gains nothing from a session check anyway.
+
+    The decide route's own behavior is web/routes_approvals.py's to test
+    (TestHumanSessionRequiredToApprove there); what is checked here is that
+    ``build_app`` actually turns it on, which nothing else would notice.
+    """
+
+    def _decide_status(self, monkeypatch, *, separated: bool) -> int:
+        from privacyfence import privilege_separation
+
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: separated)
+        sessions = LocalSessionStore()
+        app = build_app(WebApprovalUI(), sessions=sessions)
+        client = TestClient(app, base_url="http://localhost")
+        session_id = sessions.create(provenance=PROVENANCE_UNATTESTED)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        return client.post(
+            "/api/approvals/no-such-approval/decide",
+            json={"action": "resolve", "result": "accept", "csrf": session_id},
+        ).status_code
+
+    def test_a_separated_install_refuses_an_unattested_approval(self, monkeypatch):
+        assert self._decide_status(monkeypatch, separated=True) == 403
+
+    def test_an_unseparated_install_is_unchanged(self, monkeypatch):
+        # 409, not 200: the id does not exist, which is the answer this
+        # route has always given past the gate -- the point is that it got
+        # past the gate at all.
+        assert self._decide_status(monkeypatch, separated=False) == 409
+
+
 class TestBootstrapFlow:
     def _app(self):
         sessions = LocalSessionStore()
@@ -502,6 +546,29 @@ class TestBootstrapFlow:
         assert r.status_code == 303
         assert r.headers["location"] == "/approvals"
         assert "pf_session" in r.headers.get("set-cookie", "")
+
+    def test_the_session_inherits_the_code_s_own_provenance(self):
+        """The self-approval plan's Phase 2: the mint is the only moment
+        anything knew how this credential came to exist (web/session_auth.py's
+        ``PROVENANCE_*``), so the exchange carries it across rather than
+        deciding it here."""
+        app, sessions, bootstrap = self._app()
+        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
+
+        for provenance in (PROVENANCE_HUMAN, PROVENANCE_UNATTESTED):
+            client.cookies.clear()
+            r = client.get(f"/approvals?bootstrap={bootstrap.mint(provenance=provenance)}")
+            session_id = client.cookies.get("pf_session")
+            assert r.status_code == 303
+            assert sessions.provenance(session_id) == provenance
+
+    def test_a_code_with_no_provenance_of_its_own_mints_an_unattested_session(self):
+        app, sessions, bootstrap = self._app()
+        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
+
+        client.get(f"/approvals?bootstrap={bootstrap.mint()}")
+
+        assert sessions.provenance(client.cookies.get("pf_session")) == PROVENANCE_UNATTESTED
 
     def test_code_is_single_use(self):
         app, _sessions, bootstrap = self._app()
@@ -559,115 +626,75 @@ class TestBootstrapFlow:
         assert r.status_code == 404
 
 
-class TestWebServerBootstrap:
-    def _server(self, tmp_path, monkeypatch):
-        # mint_bootstrap_url() writes a discovery file as of the fix below
-        # (TestBootstrapUrlFile) -- redirect paths.data_dir() the same way
-        # that class and TestMcpUrlFile do, so this doesn't leak a real
-        # ``approvals_url`` file into a dev checkout's own repo root
-        # (paths.data_dir()'s non-bundled fallback) every time this runs.
-        from privacyfence import paths
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        return WebServer(WebApprovalUI(), host="localhost", port=1234)
-
-    def test_mint_bootstrap_url_embeds_a_fresh_code_under_the_given_path(self, tmp_path, monkeypatch):
-        server = self._server(tmp_path, monkeypatch)
-        url = server.mint_bootstrap_url("/approvals")
-        assert url.startswith("http://localhost:1234/approvals?bootstrap=")
-
-    def test_each_call_mints_a_different_code(self, tmp_path, monkeypatch):
-        server = self._server(tmp_path, monkeypatch)
-        first = server.mint_bootstrap_url("/approvals")
-        second = server.mint_bootstrap_url("/approvals")
-        assert first != second
-
-
 # --------------------------------------------------------------------------- #
-# The bootstrap-link discovery files (approvals_url/settings_url) --
-# mint_bootstrap_url()'s only reliable way to actually deliver a usable
-# link to a human: daemon_main.py's startup log line for the same link is
-# always redacted (SEC-10's SecretRedactingFormatter matches the literal
-# word "bootstrap"), so a reader scraping privacyfence.log instead of one
-# of these files never gets a working code, restart or not. See
-# web/session_auth.py's unauthorized_html() for the reader-facing side of
-# this.
+# The bootstrap-link discovery files (approvals_url/settings_url/security_url).
+# The daemon used to write a live sign-in link into one on every startup and
+# every re-mint, because the log line for the same link is always redacted
+# (SEC-10's SecretRedactingFormatter matches the literal word "bootstrap") and
+# the file was the only channel that actually delivered a usable one.
+#
+# The self-approval plan's Phase 2 stopped writing them: handoff/ is
+# group-shared with the logged-in user by design, so that file was a session
+# for the taking, refreshed on every restart, by anything running as that user
+# -- the second of the three silent paths to a session that review counts.
+# What is left here is the cleanup of files an older version wrote.
 # --------------------------------------------------------------------------- #
 
-class TestBootstrapUrlFile:
+class TestLegacyBootstrapUrlFiles:
     def _server(self, tmp_path, monkeypatch):
         from privacyfence import paths
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         return WebServer(WebApprovalUI(), host="localhost", port=0)
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
-    )
-    def test_mint_writes_the_unredacted_link_to_its_own_file(self, tmp_path, monkeypatch):
+    def test_nothing_mints_a_link_into_the_handoff_directory_any_more(self, tmp_path, monkeypatch):
         server = self._server(tmp_path, monkeypatch)
-        url = server.mint_bootstrap_url("/approvals")
+        server.start()
+        try:
+            # ``web_base_url`` is the companion's own discovery file and
+            # carries no credential -- just "http://127.0.0.1:<port>".
+            written = sorted(
+                p.name for p in tmp_path.iterdir()
+                if p.name.endswith("_url") and p.name != "web_base_url"
+            )
+        finally:
+            server.stop()
 
-        url_file = tmp_path / "approvals_url"
-        assert url_file.exists()
-        assert url_file.read_text(encoding="utf-8") == url
-        assert "bootstrap=" in url_file.read_text(encoding="utf-8")
-        assert oct(url_file.stat().st_mode)[-3:] == "600"
+        assert written == []
+        # Belt and braces: no file anywhere under the data directory carries
+        # a live code, whatever it is called.
+        for path in tmp_path.rglob("*"):
+            if path.is_file():
+                assert "bootstrap=" not in path.read_text(encoding="utf-8", errors="replace")
 
-    def test_settings_path_gets_its_own_file(self, tmp_path, monkeypatch):
+    def test_a_file_left_by_an_older_version_is_deleted_on_startup(self, tmp_path, monkeypatch):
+        """The code in it is dead the moment that older daemon exited (the
+        store is in memory), but it reads as a live sign-in link to a human
+        -- and a file this daemon no longer maintains, in the place somebody
+        was taught to look for a working link, is worse than no file."""
         server = self._server(tmp_path, monkeypatch)
-        url = server.mint_bootstrap_url("/settings")
+        for name in ("approvals_url", "settings_url", "security_url"):
+            (tmp_path / name).write_text("http://localhost:1/x?bootstrap=stale", encoding="utf-8")
 
-        assert (tmp_path / "settings_url").read_text(encoding="utf-8") == url
-        assert not (tmp_path / "approvals_url").exists()
+        server.start()
+        try:
+            leftovers = sorted(
+                p.name for p in tmp_path.iterdir()
+                if p.name.endswith("_url") and p.name != "web_base_url"
+            )
+        finally:
+            server.stop()
 
-    def test_a_second_mint_overwrites_rather_than_appends(self, tmp_path, monkeypatch):
+        assert leftovers == []
+
+    def test_the_minting_method_is_gone_from_the_server_itself(self, tmp_path, monkeypatch):
+        """Minting is the control channel's business now, and who may ask
+        for an *attested* code is decided there (web/control_channel.py).
+        Asserted so that reintroducing a convenience method here -- which is
+        what fed both the discovery files and the retired MCP tool -- fails
+        rather than passes quietly."""
         server = self._server(tmp_path, monkeypatch)
-        server.mint_bootstrap_url("/approvals")
-        second = server.mint_bootstrap_url("/approvals")
-
-        assert (tmp_path / "approvals_url").read_text(encoding="utf-8") == second
-
-    def test_stop_clears_every_path_that_was_ever_minted(self, tmp_path, monkeypatch):
-        server = self._server(tmp_path, monkeypatch)
-        server.mint_bootstrap_url("/approvals")
-        server.mint_bootstrap_url("/settings")
-
-        server.stop()
-
-        assert not (tmp_path / "approvals_url").exists()
-        assert not (tmp_path / "settings_url").exists()
-
-    def test_org_mode_never_writes_a_file(self, tmp_path, monkeypatch):
-        # bootstrap is None in org mode (module docstring) -- mint_bootstrap_
-        # url() already short-circuits to None before it would ever write
-        # one; this pins that no file appears either. Mirrors test_server_
-        # org_mode.py's own _org_auth() helper for building a real OrgAuth.
-        from privacyfence import org_identity as oi
-        from privacyfence import paths
-        from privacyfence.web.oauth_provider import OrgOAuthProvider
-        from privacyfence.web.org_session import OrgSessionStore
-        from privacyfence.web.server import OrgAuth
-
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        monkeypatch.setattr(
-            "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "clients.json"),
-        )
-        monkeypatch.setattr(
-            "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "refresh.json"),
-        )
-        idp = oi.IdpConfig(
-            issuer="https://idp.example.com", client_id="privacyfence", client_secret="s",
-            authorization_endpoint="https://idp.example.com/authorize",
-            token_endpoint="https://idp.example.com/token", jwks_uri="https://idp.example.com/jwks",
-        )
-        issuer_url = "https://org.example.com"
-        provider = OrgOAuthProvider(idp, idp_callback_url=f"{issuer_url}/oauth/idp/callback")
-        org = OrgAuth(provider=provider, sessions=OrgSessionStore(), idp=idp, issuer_url=issuer_url)
-        server = WebServer(WebApprovalUI(), host="localhost", port=0, org=org)
-
-        assert server.mint_bootstrap_url("/approvals") is None
-        assert not (tmp_path / "approvals_url").exists()
+        assert not hasattr(server, "mint_bootstrap_url")
 
 
 # --------------------------------------------------------------------------- #
@@ -957,3 +984,277 @@ class TestWebServerWiresTheStateStream:
         monkeypatch.setattr(ss, "_loop", None)  # no real loop running in this test
         sc.call_on_main(lambda x: recorded.append(x), "hi")
         assert recorded == ["hi"]  # falls back to running inline with no loop captured yet
+
+
+class TestConfirmFirstPasskeyEnrollment:
+    """the enrollment gate: local mode's own
+    ``confirm_first_enrollment``, which web/routes_security.py calls when an
+    enrollment has no already-enrolled credential to be gated on asserting
+    with. Two behaviors live here and nowhere else -- that the ask goes to the
+    companion, and that the one bypass is the developer escape hatch ADR 0003
+    decision 7 already names, on a non-packaged build only.
+    """
+
+    def _server_module(self):
+        from privacyfence.web import server as srv
+
+        return srv
+
+    def test_it_asks_the_companion(self, monkeypatch):
+        from privacyfence import paths, privilege_separation
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
+        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (True, ""))
+
+        assert srv.confirm_first_passkey_enrollment() == (True, "")
+
+    def test_a_refusal_from_the_companion_is_passed_through(self, monkeypatch):
+        from privacyfence import paths, privilege_separation
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
+        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (False, "start the companion"))
+
+        assert srv.confirm_first_passkey_enrollment() == (False, "start the companion")
+
+    def test_a_refusal_on_a_source_checkout_also_names_the_developer_paths(self, monkeypatch):
+        # A checkout autostarts no companion, so "start the companion" is not
+        # the whole answer there -- and a packaged install must never be told
+        # about a variable it does not honor (the test above).
+        from privacyfence import paths, privilege_separation
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        monkeypatch.delenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, raising=False)
+        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (False, "no companion"))
+
+        _confirmed, reason = srv.confirm_first_passkey_enrollment()
+
+        assert reason.startswith("no companion")
+        assert "privacyfence-companion --serve" in reason
+        assert privilege_separation.DEV_ALLOW_UNSEPARATED_ENV in reason
+
+    def test_the_dev_escape_hatch_skips_the_companion_on_a_non_packaged_build(self, monkeypatch):
+        from privacyfence import paths, privilege_separation
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
+        asked = []
+        monkeypatch.setattr(
+            srv, "request_enrollment_confirmation", lambda: asked.append(1) or (False, "no"),
+        )
+
+        assert srv.confirm_first_passkey_enrollment() == (True, "")
+        assert asked == []
+
+    def test_the_dev_escape_hatch_is_ignored_on_a_packaged_build(self, monkeypatch):
+        # The whole reason is_bundled() is checked first: a packaged install
+        # always has a companion autostarted for it (ADR 0003 decisions 3-5),
+        # so honoring an environment variable there would hand a real shipped
+        # product a way around its own gate.
+        from privacyfence import paths, privilege_separation
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
+        monkeypatch.setattr(srv, "request_enrollment_confirmation", lambda: (False, "companion said no"))
+
+        assert srv.confirm_first_passkey_enrollment() == (False, "companion said no")
+
+
+class TestLocalModeWiresTheFirstEnrollmentGate:
+    def test_build_app_passes_the_companion_confirmation_to_security_routes(self, tmp_path, monkeypatch):
+        """The wiring itself, since nothing else would notice it going
+        missing: ``/security``'s own tests construct their routes directly
+        (tests/unit/web/test_routes_security.py's ``_local_app``), so this is
+        the only place that checks local mode's real ``build_app`` hands the
+        gate over."""
+        from privacyfence import paths
+        from privacyfence.step_up_config import StepUpConfig
+        from privacyfence.web import routes_security, server as srv
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        passed = {}
+        real_build_routes = routes_security.build_routes
+
+        def _spy(**kwargs):
+            passed.update(kwargs)
+            return real_build_routes(**kwargs)
+
+        monkeypatch.setattr(routes_security, "build_routes", _spy)
+        srv.build_app(
+            WebApprovalUI(), sessions=LocalSessionStore(),
+            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
+        )
+
+        assert passed["confirm_first_enrollment"] is srv.confirm_first_passkey_enrollment
+
+
+class TestLocalEnrollmentState:
+    """Plan item 1.2's daemon-side answer: the one question the companion
+    cannot answer for itself, because on a separated install the credential
+    store is unreadable to the logged-in user."""
+
+    def _server_module(self):
+        from privacyfence.web import server as srv
+
+        return srv
+
+    def test_pending_when_a_passkey_is_required_and_none_is_enrolled(self, monkeypatch):
+        from privacyfence.step_up_config import StepUpConfig
+
+        srv = self._server_module()
+        monkeypatch.setattr(srv.webauthn_stepup, "has_credentials", lambda principal: False)
+
+        state = srv.local_enrollment_state(StepUpConfig(enabled=True, require_passkey=True))
+
+        assert state == "pending"
+
+    def test_ok_once_something_is_enrolled(self, monkeypatch):
+        from privacyfence.step_up_config import StepUpConfig
+
+        srv = self._server_module()
+        monkeypatch.setattr(srv.webauthn_stepup, "has_credentials", lambda principal: True)
+
+        assert srv.local_enrollment_state(StepUpConfig(enabled=True, require_passkey=True)) == "ok"
+
+    def test_an_install_not_using_step_up_is_not_waiting_for_anything(self, monkeypatch):
+        # "Requires" is enabled *and* require_passkey together, the same
+        # pairing every other consumer treats as in force. An install with
+        # step-up off is not waiting for an enrollment, and the companion
+        # must not nag about one.
+        from privacyfence.step_up_config import StepUpConfig
+
+        srv = self._server_module()
+
+        def _unexpected(principal):
+            raise AssertionError("read the credential store for an install with step-up off")
+
+        monkeypatch.setattr(srv.webauthn_stepup, "has_credentials", _unexpected)
+
+        assert srv.local_enrollment_state(None) == "ok"
+        assert srv.local_enrollment_state(StepUpConfig()) == "ok"
+        assert srv.local_enrollment_state(StepUpConfig(enabled=True)) == "ok"
+        assert srv.local_enrollment_state(StepUpConfig(require_passkey=True)) == "ok"
+
+
+class TestRecoveryCodeDelivery:
+    """Plan item 1.3: a credential-store reset token stops being a value a
+    process holding a ``pf_session`` can read out of an HTTP response."""
+
+    def _server_module(self):
+        from privacyfence.web import server as srv
+
+        return srv
+
+    def test_present_recovery_code_hands_it_to_the_companion(self, monkeypatch):
+        srv = self._server_module()
+        sent = []
+        monkeypatch.setattr(srv, "send_recovery_code", lambda code: sent.append(code) or (True, ""))
+
+        assert srv.present_recovery_code("A1B2-C3D4-E5F6-1789") == (True, "")
+        assert sent == ["A1B2-C3D4-E5F6-1789"]
+
+    def test_a_reissue_confirms_then_shows_then_stores(self, monkeypatch, tmp_path):
+        from privacyfence import paths, webauthn_stepup
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        order = []
+        monkeypatch.setattr(
+            srv, "request_recovery_confirmation", lambda: order.append("confirm") or (True, ""),
+        )
+        shown = []
+        monkeypatch.setattr(
+            srv, "send_recovery_code",
+            lambda code: (order.append("show"), shown.append(code), (True, ""))[-1],
+        )
+
+        assert srv.reissue_local_recovery_code() == (True, "")
+        assert order == ["confirm", "show"]
+        assert webauthn_stepup.has_recovery_code(LOCAL_PRINCIPAL)
+        # And it is the code that was shown, not some other one.
+        assert webauthn_stepup.consume_recovery_code(LOCAL_PRINCIPAL, shown[0])
+
+    def test_a_denied_confirmation_stores_nothing(self, monkeypatch, tmp_path):
+        from privacyfence import paths, webauthn_stepup
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(srv, "request_recovery_confirmation", lambda: (False, "denied"))
+
+        def _unexpected(code):
+            raise AssertionError("showed a code after the confirmation was denied")
+
+        monkeypatch.setattr(srv, "send_recovery_code", _unexpected)
+
+        assert srv.reissue_local_recovery_code() == (False, "denied")
+        assert not webauthn_stepup.has_recovery_code(LOCAL_PRINCIPAL)
+
+    def test_a_code_nobody_could_be_shown_is_never_stored(self, monkeypatch, tmp_path):
+        # The whole reason minting and storing are two calls: a stored code
+        # nobody has would make has_recovery_code() true forever, and no
+        # later enrollment would ever issue another.
+        from privacyfence import paths, webauthn_stepup
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(srv, "request_recovery_confirmation", lambda: (True, ""))
+        monkeypatch.setattr(srv, "send_recovery_code", lambda code: (False, "no display"))
+
+        assert srv.reissue_local_recovery_code() == (False, "no display")
+        assert not webauthn_stepup.has_recovery_code(LOCAL_PRINCIPAL)
+
+    def test_build_app_wires_the_companion_delivery_on_a_packaged_build(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        from privacyfence.step_up_config import StepUpConfig
+        from privacyfence.web import routes_security, server as srv
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        passed = {}
+        real_build_routes = routes_security.build_routes
+
+        def _spy(**kwargs):
+            passed.update(kwargs)
+            return real_build_routes(**kwargs)
+
+        monkeypatch.setattr(routes_security, "build_routes", _spy)
+        srv.build_app(
+            WebApprovalUI(), sessions=LocalSessionStore(),
+            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
+        )
+
+        assert passed["deliver_recovery_code"] is srv.present_recovery_code
+
+    def test_a_source_checkout_keeps_the_pre_1_3_behavior(self, tmp_path, monkeypatch):
+        # Nothing autostarts a companion for a checkout (ADR 0003 decisions
+        # 3-5 are the packaged installers' half), so routing the code through
+        # one there would mean a dev could never get a recovery code at all.
+        from privacyfence import paths
+        from privacyfence.step_up_config import StepUpConfig
+        from privacyfence.web import routes_security, server as srv
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        passed = {}
+        real_build_routes = routes_security.build_routes
+
+        def _spy(**kwargs):
+            passed.update(kwargs)
+            return real_build_routes(**kwargs)
+
+        monkeypatch.setattr(routes_security, "build_routes", _spy)
+        srv.build_app(
+            WebApprovalUI(), sessions=LocalSessionStore(),
+            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
+        )
+
+        assert passed["deliver_recovery_code"] is None

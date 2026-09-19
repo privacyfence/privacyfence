@@ -58,6 +58,10 @@ standing.
 
 A local process running as the signed-in user can:
 
+- read the current sign-in link straight out of `handoff/approvals_url` — **no longer: that file
+  is not written any more** (the self-approval plan's Phase 2), and any left by an older version is
+  deleted on the next start. It was the second of the three paths to a session §02 of that review
+  counts, and the only one that took no more than reading a file;
 - connect to the control channel under the data directory's `authority` subdirectory ([#428](https://github.com/privacyfence/privacyfence/issues/428)
   Phase 1 split this, and `config/settings.yaml`, enrolled WebAuthn credentials, and the audit log,
   out of the rest of the data directory; Phase 2 replaced the persistent `web_token` file and its
@@ -66,7 +70,11 @@ A local process running as the signed-in user can:
   own, since it still sits at the same uid as everything else there) and mint a fresh bootstrap
   code — the not-authorized page prints that exact command, deliberately, for a locked-out human;
 - exchange the code for a `pf_session` cookie by visiting `/approvals?bootstrap=<code>`;
-- `POST /api/approvals/<id>/decide` and release a pending approval.
+- `POST /api/approvals/<id>/decide` and release a pending approval — **on a separated install this
+  last step no longer follows from the first two**: a session minted by a bare `MINT` is
+  `unattested`, and an approving decision requires one a human was asked for. See
+  [A session is not a human](#a-session-is-not-a-human) below, which is the only part of this list
+  privilege separation changes rather than merely relocates.
 
 No browser is involved at any step. The CSRF double-submit and same-origin checks on that last
 request are defenses against a hostile web page loaded in the user's browser: such a page cannot read
@@ -90,8 +98,9 @@ not as a boundary against local code execution.
 
 **Org mode does not share this**, for a structural reason rather than a difference in checks: the
 daemon runs on a server the organization operates, so an AI client on an employee's device has no
-loopback access to it, no control channel to reach and no bootstrap endpoint to call —
-`privacyfence_get_sign_in_link` raises there outright. Authentication is IdP-backed, and where
+loopback access to it, no control channel to reach and no bootstrap endpoint to call — and, since
+the self-approval plan's Phase 2 retired `privacyfence_get_sign_in_link`, no tool that would mint
+one in either mode. Authentication is IdP-backed, and where
 configured, WebAuthn step-up binds a write approval to a fresh user-verified assertion.
 
 **Closing this in local mode** takes two changes, both tracked: running the daemon under its own
@@ -122,8 +131,8 @@ serve local and org mode alike; only where the value is configured differs
 
 | `scope` | write | read flagged by `pii_detector.py` | any other read |
 | --- | --- | --- | --- |
-| `writes` (default) | passkey | — | — |
-| `writes_and_pii_reads` | passkey | passkey | — |
+| `writes` | passkey | — | — |
+| `writes_and_pii_reads` (default) | passkey | passkey | — |
 | `writes_and_reads` | passkey | passkey | passkey |
 
 Denying never needs step-up under any scope (denying discloses nothing), and neither does a bare
@@ -134,26 +143,212 @@ gets gated. Pick it over `writes_and_pii_reads` when the install would rather no
 detection having flagged everything worth a second factor; the cost is a passkey prompt on every
 read a rule doesn't already cover.
 
+The default was `writes` through 4.1 and is `writes_and_pii_reads` from 4.2, in both modes. The
+narrower one was chosen when the adversary in view was a human at the keyboard; [ADR
+0003](adr/0003-separated-installs-only.md) adopts a different one — an agent with code execution
+on this machine — and against that adversary `writes` leaves every read releasable by a session
+alone, including one PrivacyFence itself flagged as carrying personal data. Exfiltration is the
+obvious thing such an agent wants. An install with `scope:` written out in `config/settings.yaml`
+or `org_config.json` keeps exactly what it set; only one that never expressed an opinion moves.
+
 **`step_up.require_passkey` (Phase 3) is what makes it a guarantee rather than an opt-in check.**
 With it on: an approving decision with nothing enrolled is hard-failed (`403`, naming `/security`)
 rather than let through; the same is true for a sensitive subset of the local settings actions --
 the rule-row, grant, policy and PII actions in `web/routes_settings.py`'s own `_SENSITIVE_ACTIONS`
 -- so an agent that cannot forge an approval cannot route around the gate by adding an always-allow
 rule or a broader grant either, since that action itself now demands the same fresh assertion; and
-removing your last enrolled credential always needs one first, regardless of this flag, so a session
-alone cannot un-enroll its way back to the unguarded state. If nothing is enrolled when the daemon
+the credential store's own two directions are gated regardless of this flag, so a session alone can
+neither un-enroll its way back to the unguarded state (removing your last credential needs an
+assertion with it) nor enroll its way past it (adding one needs an assertion with a credential
+already on file, or — for the first — the companion's own confirmation; see
+[Enrolling a passkey is itself gated](#enrolling-a-passkey-is-itself-gated)).
+If nothing is enrolled when the daemon
 starts with `require_passkey` on, it still starts (refusing to boot would remove the one path,
 `/security`, that fixes the misconfiguration) but shows a persistent banner on every page until a
 passkey is added, and releases nothing in the meantime. Treat local-mode step-up as a real guarantee
 once `require_passkey` is on and a passkey is enrolled; with `enabled` alone it stays what it always
 was -- opt-in, evadable by simply not enrolling.
 
+**On a packaged install, `enabled` and `require_passkey` are both on by default** as of 4.2 (the
+DMG/`.pkg`, the Windows installer, the `.deb` -- `paths.is_bundled()`, which is the same predicate
+[ADR 0003](adr/0003-separated-installs-only.md)'s `enforce_separation()` is scoped to, so the
+builds that default on are exactly the builds that are privilege-separated or refuse to serve).
+A source checkout, an editable install and `pipx install privacyfence` all still default off:
+nothing separates those, and a passkey checked against a credential store the agent can write is a
+checkbox a local process ticks for itself ([ADR
+0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6). An explicit value in
+`config/settings.yaml` wins either way, in both directions, and an install seeded from a
+`settings.yaml.example` older than 4.2 has both keys written out as `false` -- so this reaches
+fresh installs rather than silently changing the posture of existing ones on upgrade.
+
+A fresh packaged install therefore comes up requiring a passkey it does not have yet, which is the
+banner-and-release-nothing state above. It is meant to last minutes: the companion app checks at
+its own next start, and opens `/security` with a session already minted so the human can enroll
+one. Nothing ships a configuration where `require_passkey` is on with nothing enrolled *and*
+nothing is trying to fix it.
+
+**Step-up asks whether this is the enrolled human; session provenance asks whether a human asked at
+all**, and the second question is asked first, without waiting on any `step_up` setting — see
+[A session is not a human](#a-session-is-not-a-human) directly below.
+
+### A session is not a human
+
+ADR 0002 decision 6 names three ways a local process reaches a `pf_session`, all of them by design:
+the companion's own **Open Approvals** item, a bootstrap link a human was handed, and a bare `MINT`
+on the control channel — which privilege separation *widens* from `0600` to `0660` so the companion
+can reach it, putting the agent in the same group. The decision that made this acceptable was that
+a minted session would be **insufficient** rather than uncallable, with the passkey supplying what
+it lacked.
+
+Nothing downstream recorded *which* of the three a session came from, so the three were
+interchangeable: a session the human obtained by clicking Open Approvals and one the agent obtained
+by minting its own were the same object with the same authority.
+
+**Every local-mode session now carries a provenance** (`web/session_auth.py`):
+
+| provenance | minted by | may view | may approve |
+| --- | --- | --- | --- |
+| `human` | the companion's own menu (`MINT COMPANION <nonce>`, confirmed by a call-back to the process the human clicked), or `privacyfence-app --print-sign-in-link` (`MINT CONSOLE`, confirmed by the companion's own dialog) | yes | yes |
+| `unattested` | a bare `MINT` on the control channel — anything running as this OS user | yes | no |
+
+`human` is required to release an *approving* decision (`accept`/`accept_all`, individually or in a
+batch) and to take any `_SENSITIVE_ACTIONS` settings action. Denying is not gated, under the same
+reasoning step-up uses: denying discloses nothing. Viewing is not gated at all — a locked-out human
+with only an unattested link can still see what is pending, and is told in so many words that this
+link cannot approve it.
+
+**This is enforced on privilege-separated installs only**, which since
+[ADR 0003](adr/0003-separated-installs-only.md) is every packaged install (decision 6: an
+unseparated packaged daemon refuses to serve) and which guarantees the companion is installed and
+running (decisions 3–5). On a non-packaged source checkout run with
+`PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` there is no companion to mint through and no `authority/`
+boundary either — an agent there rewrites the credential store directly, which is the case ADR 0002
+decision 6 names — so the check is not applied and would buy nothing if it were. Same line
+`StepUpConfig.from_local_config()` already draws when it refuses `require_passkey` on such an
+install.
+
+**Every mint is audited, and the recent ones are shown.** Each bootstrap code this daemon issues
+— and each attested one it refuses — is recorded under its own `sign_in_code_minted` decision
+(`audit_log.py`'s own vocabulary comment), naming which of the paths above asked and whether the
+resulting session can approve. Before this, the only path that wrote an entry was the MCP
+sign-in-link tool, i.e. the sanctioned one, while the two a local process could use silently wrote
+nothing. `/security` lists the most recent of these under **Recent sign-ins**, because an audit
+entry nobody reads is evidence after the fact: the point is that a link you did not ask for is
+visible on the page you already visit to reason about what can approve here.
+
+**A code in a browser's address bar is still a code on this machine.** The companion signs a human
+in the only way a local web UI can: by opening `…?bootstrap=<code>` in their browser. On a
+shared-uid machine a sibling process can read that URL out of the browser's own command line
+(`/proc/<pid>/cmdline` on Linux, the equivalent elsewhere) for as long as it takes the browser to
+redeem it, and the code is single-use, so whoever redeems first wins. What provenance changes is
+that this is now a *race against a human click* rather than a file sitting in a group-shared
+directory being refreshed on every restart — an attested session can no longer be obtained at a
+time of the agent's choosing. It is not a boundary, and nothing about a credential passed through a
+URL can be made into one; closing it properly means the companion handing the daemon a session the
+browser never carries, which is not what any of this ships today.
+
+The same reasoning is why the companion's `SHOW` command — the one an applications-menu click on
+Linux uses to have the running companion do the opening — puts the confirmation dialog in front of
+a human before it mints anything. That line arrives from another process running as the same OS
+user, and the agent is indistinguishable from the menu click it exists for; without the dialog, any
+local process could make the companion mint an approving session and open it in a browser at any
+moment, with the above race for the code and no human anywhere in it.
+
+**What this is not: authentication of the companion.** Companion and agent share an OS user, and
+the companion's own channel lives under `handoff_dir()`, which `paths.py` states outright is
+"deliberately *not* a security boundary" — so a local process running as that user can bind that
+address before the companion does and answer the daemon's call-back itself. This is the identical
+limit the [first-enrollment gate](#enrolling-a-passkey-is-itself-gated) accepts, for the identical
+reason, and it is bounded the same way: on a separated install the companion is autostarted at
+login, so winning that race means starting before it and staying there, which breaks the connector
+OAuth flows that share the address and leaves the human with no companion where one is meant to be.
+What provenance buys is that the two silent paths stop being interchangeable with the attended one,
+and that forging the attended one costs impersonating a process whose absence is visible.
+
+### Enrolling a passkey is itself gated
+
+Both directions of the credential store are gated, and for one reason. Removing your *last* enrolled
+credential requires a fresh assertion with it, because a session that could un-enroll on its own would
+silently turn a "mandatory" install back into an unenforced one. **Adding** a credential has exactly
+the same effect by the shorter route — a session that can enroll a credential it generated itself can
+then satisfy every step-up check with it — so adding is gated too.
+
+Checking harder at verification time cannot substitute for this. Registration uses `none` attestation,
+so there is no signed claim about the authenticator's make or model; the user-verified flag
+`require_user_verification=True` checks is a bit the authenticator sets about *itself*, which a real
+platform authenticator sets after a biometric or a PIN and a process that is not one sets to 1,
+because nothing signs the absence of a human; and `authenticator_attachment=platform` and
+`exclude_credentials` are enforced by a cooperating browser and by nothing else. See
+`webauthn_stepup.py`'s own "five things" list, which states each of these where a reader of that
+module will find it.
+
+So `web/routes_security.py`'s `register_options` gates the ceremony **before it starts**, in whichever
+of two ways the credential store's own state allows:
+
+- **A credential is already enrolled** — the gate is a fresh assertion with one of them, over a
+  challenge bound to `enroll-credential|<principal>`, through the same `428`-then-retry round trip
+  removing your last credential and releasing a gated write already use. A human who has a passkey
+  needs one extra tap to add another; a session that has only a cookie gets a `428` it cannot answer.
+  **Identical in both modes** — an org-mode IdP session gets no more latitude here than a local
+  `pf_session`.
+- **Nothing is enrolled yet** — there is nothing to assert with, so the gate is a confirmation from
+  the [companion app](#privilege-separation-macos-linux-and-windows), which
+  [ADR 0003](adr/0003-separated-installs-only.md) decisions 3–5 guarantee is installed and started on
+  all three shipped platforms. The daemon asks over `web/control_channel.py`'s `CONFIRM ENROLL`, and
+  the companion puts the system's own dialog in front of whoever is at the login session — the only
+  PrivacyFence process that runs where a human can be asked at all. A refusal for any reason (denied,
+  nobody answered, no companion running) is a refusal: failing this gate closed costs an enrollment,
+  failing it open costs the guarantee.
+
+`register_verify` does not re-run either gate — that would mean two prompts for one enrollment — but
+it does refuse to complete a registration challenge that was not issued by an `options` call which
+passed one, so a code path that skips the gate fails closed rather than quietly reopening the hole.
+
+Refusals are audited as `webauthn_enrollment_refused`; a `428` asking for the assertion is not, since
+it is an ordinary round trip in every legitimate second enrollment. A successful *first* enrollment
+says so in its own summary ("First passkey enrolled: …"), because it is both the one no
+already-enrolled credential could have gated and the one that decides what every later step-up check
+is satisfied by — the entry to look for by eye.
+
+**What the companion confirmation is, and is not.** Be exact about this, because the temptation is to
+describe it as authentication and it is not: the companion and the agent run as the *same OS user*, so
+no peer check, file permission or shared secret can distinguish them —
+[ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 says so outright, and
+this gate does not repeal it. `handoff/` is group-shared with that user by design, so a determined
+local process can bind the companion's own socket before (or instead of) the real companion and answer
+`CONFIRM ENROLL` itself. What the gate buys is that **forging a first enrollment requires
+impersonating a system component rather than calling an API**: the attempt is loud (it must take over
+a socket the companion also wants, breaking the connector OAuth flows that share it), it is visible in
+the audit trail either way, and it is not a side effect of merely holding a session — which is what
+made the ungated version reachable by anything at all. Distinguishing a human's session from the
+agent's is the change that would close it, and that is a different change from this one: the daemon
+has to be able to tell which holder of a session is asking.
+
+Limits, stated rather than implied:
+
+- **Org mode's first enrollment is not gated**, because that mode has no companion. See
+  [Org mode](#org-mode) below for what it rests on instead.
+- **On Linux the confirmation needs `zenity` or `kdialog`.** Neither is a PrivacyFence dependency
+  (ADR 0002 decision 4's dependency budget for the companion), so on a desktop with neither, a first
+  enrollment is refused with a message naming them. Every PrivacyFence-supported Linux desktop ships
+  one or the other; a stripped-down install may not.
+- **A non-packaged build can bypass the first-enrollment gate** with
+  `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1`, the same escape hatch ADR 0003 decision 7 gives the
+  developer path and `step_up_config.py` honors for `require_passkey`. It is not consulted at all on a
+  packaged build, which always has a companion.
+- **A ceremony a human has already opened is theirs to lose.** The gate is on *starting* an
+  enrollment, and the session is shared, so a local process watching for the moment a human answers
+  the prompt can complete that one already-authorized ceremony with a credential of its own instead.
+  It needs the human to be mid-enrollment to get anything, which makes it a narrow residual — but a
+  residual, and closing it needs the same session-provenance change as the paragraph above.
+
 ### Tamper-evidence and recovery for local-mode step-up (#426 Phase 4)
 
-Four events on the credential-store/requirement lifecycle are written to the audit log, each on its
+Five events on the credential-store/requirement lifecycle are written to the audit log, each on its
 own `decision` value (see `audit_log.py`'s own field docstring for the exact strings): enrolling a
-passkey, removing one, a recovery code being spent, and the `step_up.require_passkey` requirement
-itself turning on or off. None of these prevent anything on their own — see the framing in [What #426
+passkey, removing one, an enrollment being *refused* by the gate above
+(`webauthn_enrollment_refused`), a recovery code being spent, and the `step_up.require_passkey`
+requirement itself turning on or off. None of these prevent anything on their own — see the framing in [What #426
 does and doesn't guarantee](#local-mode-trust-boundary) above: they are detection after the fact,
 recording that a change happened rather than stopping one that shouldn't have — see [Local-mode
 trust boundary](#local-mode-trust-boundary) above for what this feature does and does not guarantee
@@ -190,10 +385,10 @@ this whole feature exists to close for an adversary, not merely to close for eve
 that door needs the service account or an elevation prompt, a sanctioned way back in stops being
 optional. `web/routes_security.py`'s enrollment flow (`register_verify`) issues a one-time recovery
 code — a 16-character, human-typeable string in four groups — the moment a principal doesn't
-currently have an unused one on file, most often their very first enrollment. It is shown to the
-browser exactly once, in that same response, and never again: only a salted SHA-256 hash of it is
-stored (`webauthn_stepup.py`'s own `generate_recovery_code`/`consume_recovery_code`), alongside the
-credential file itself, under the same service-owned root a separated install protects. Trading the
+currently have an unused one on file, most often their very first enrollment. Only a salted SHA-256
+hash of it is stored (`webauthn_stepup.py`'s own `store_recovery_code`/`consume_recovery_code`),
+alongside the credential file itself, under the same service-owned root a separated install
+protects. Trading the
 code in at `POST /security/recover` needs no WebAuthn ceremony — deliberately, since producing one is
 exactly what a locked-out human cannot do — only the still-valid session that got them to `/security`
 in the first place, which local mode's ordinary sign-in path (a bootstrap link) still provides even
@@ -201,8 +396,40 @@ with `require_passkey` on, since step-up gates *decisions*, not sign-in itself. 
 removes every credential enrolled for that principal, clearing the stuck state so a fresh passkey can
 be enrolled immediately afterward, and is itself audited (`webauthn_recovery_code_used`) whether or
 not the human goes on to enroll again. The code is single-use: spending it, correctly or not, never
-grants a second attempt at the same code, and a fresh one is only issued at the next successful
-enrollment.
+grants a second attempt at the same code. A fresh one is issued at the next successful enrollment
+that finds none on file — or, on a packaged install, whenever the companion is asked for one (see
+below).
+
+**Where the code is shown is not the same in both modes, as of 4.2.** In org mode it goes back to
+the browser in `register_verify`'s own response, once, exactly as it always did: there is no
+companion there, and the session that reached `/security` is an IdP authentication rather than a
+locally minted cookie.
+
+On a **packaged local-mode install** it never appears in that response at all. The daemon mints the
+code, hands it to the companion over the companion's own channel (`SHOW RECOVERY`, see
+`web/control_channel.py`), and the companion puts it in a dialog on the human's own desktop — and
+only *then* does the daemon store it. The ordering is the point twice over: a credential-store
+reset token stops being a value any local process holding a `pf_session` can read out of an HTTP
+body, and a code nobody could be shown never becomes the one code on file (which would otherwise
+leave the principal holding a recovery code that exists and cannot be produced, with no later
+enrollment issuing another). If the companion cannot be reached, the passkey is still enrolled, no
+code is issued, and `/security` says so with the companion's own reason.
+
+Because nothing keeps the plaintext, **re-presenting a code means issuing a new one**, and the
+companion is where that happens: "New Recovery Code…" on the macOS/Windows menu-bar item, or the
+matching entry in the Linux applications menu. It asks the daemon, the daemon asks the human to
+confirm through that same companion — issuing one invalidates whatever they wrote down before — and
+then shows the new code. The reply on the daemon's own control channel carries no code in either
+direction, which matters because that channel is `0660` group-shared with the logged-in user (and
+therefore the agent) on a separated install: a local process that speaks it can, at most, put a
+dialog on somebody's screen that they have to decline.
+
+A non-packaged local-mode install (a source checkout, an editable install, `pipx install
+privacyfence`) keeps the org-mode behavior — the code comes back in the response. Nothing
+autostarts a companion for those ([ADR 0003](adr/0003-separated-installs-only.md) decisions 3–5 are
+the packaged installers' half), so routing the code through one would mean never being able to
+issue a recovery code there at all. Those installs also default `require_passkey` off, so there is
+no recovery to be locked out of.
 
 ### The approval binder's single assertion
 
@@ -365,12 +592,24 @@ check that would be sound on macOS and weak on Linux, the design makes a session
 instead of *uncallable*: this phase takes the human-authority files away, and #426's passkey then
 makes possession of a session not enough to release an approval — but only once [privilege
 separation](#privilege-separation-macos-linux-and-windows) is active, `step_up.enabled` and
-`step_up.require_passkey` are both set, and a passkey is enrolled. None of those four is this
-deployment's default, so on a default install the session is still sufficient on its own: the agent
-can approve its own request. The consequence, stated rather than left to be discovered for an
-install that turns all four on: **integrity is the strong guarantee — the agent cannot approve its
-own request — while confidentiality of the review screen is the weaker one**, since an agent that
-reaches the web UI can still read what is pending. The control channel's socket accordingly lives in
+`step_up.require_passkey` are both set, and a passkey is enrolled. **On a packaged install as of
+4.2, all four are the default**: separation is mandatory or the daemon refuses to serve ([ADR
+0003](adr/0003-separated-installs-only.md)), both flags default on, and the companion walks the
+human through enrolling at its next start. Anywhere else — a source checkout, an editable install,
+`pipx install privacyfence` — none of the four is a default.
+
+**[Session provenance](#a-session-is-not-a-human) is what holds where they are not.** It asks a
+different question than the passkey does, and does not wait on any `step_up` setting to ask it: a
+session the agent minted for itself is `unattested` and cannot approve, enrolled passkey or not;
+one minted through the companion is `human` and can. That is a *weaker* statement than the
+passkey's — it rests on the companion being the process a human is in front of, not on a
+cryptographic proof, and that section says exactly where the line is — but it costs nobody a
+setting they have to find first. The two stack rather than substitute: a packaged install has both,
+and an install with none of the four still cannot have an approval released by a session the agent
+minted for itself. The consequence, stated rather than left to be
+discovered, for an install that has all four: **integrity is the strong guarantee — the agent
+cannot approve its own request — while confidentiality of the review screen is the weaker one**,
+since an agent that reaches the web UI can still read what is pending. The control channel's socket accordingly lives in
 a group-shared `<system root>/handoff` directory, not under `authority`, along with the agent's own
 `mcp_token` (which is the agent's credential and is meant to stay reachable). See
 [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 for the full
@@ -412,15 +651,49 @@ The local browser UI is not authenticated by a reusable token in the URL. The da
 
 Mutating requests require the authenticated session, same-origin checks, and CSRF validation. Session/bootstrap secrets are not intended for logging or propagation into connector data.
 
-### MCP-issued sign-in links
+The ordinary way a human reaches that exchange is the companion app's own **Open Approvals**/**Open Settings** items. `privacyfence-app --print-sign-in-link` is the break-glass alternative, for a session the companion's menu is not reachable from (an SSH login, a desktop whose applications menu nobody has open, a tray icon that failed to start): it prints one link, to stdout alone so it can be piped, and asks the companion to confirm with the human at the login session first — the command runs as the same OS user the agent does, so what makes the resulting session `human` (see [A session is not a human](#a-session-is-not-a-human)) is that a person clicked Allow, not that the request came from a terminal. If nothing confirms it, it prints an `unattested` link instead and says so: enough to see what is pending, not to release it.
 
-`privacyfence_get_sign_in_link` is a meta-tool, available over `/mcp` like every connector tool, that mints a fresh bootstrap link for this same local web UI (`/approvals` or `/settings`) and returns it to the calling MCP client. It is dispatched directly rather than through the gated-call path every connector tool uses — deliberately: the human approval that path would require lives behind the very UI a locked-out user is trying to reach, so gating this tool on that UI would be circular.
+### Sign-in links are no longer issued over MCP
 
-What bounds it instead: local mode only (it raises in org mode, which authenticates through IdP-backed OAuth rather than a bootstrap link, so it can never return a working credential there); the link it mints is the same single-use, short-lived bootstrap code every other sign-in path in this section uses, consumed by the first visit whether or not it succeeds; `page` is allowlisted to `approvals`/`settings`, never an arbitrary path; and the local web UI is bound to `localhost`, so the link is only useful from the same machine the MCP client and daemon are already both running on. Every call is written to the audit log under its own `sign_in_link_issued` decision, carrying the calling client's self-reported reason — the same disclosed-and-unverified posture every other tool's `reason` parameter has.
+`privacyfence_get_sign_in_link` was a meta-tool, available over `/mcp` like every connector tool,
+that minted a fresh bootstrap link for the local web UI and returned it to the calling MCP client.
+**It is retired** (the self-approval plan's Phase 2), and this section records why rather than
+deleting the reasoning along with it.
 
-Net effect: an MCP client can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. The justification this paragraph used to give — that such a client already holds equivalent-or-greater access via every other tool this daemon exposes — holds for connector reads and writes, which are themselves gated. It understates one case: a session also reaches the approval UI, so it can *release* a gated call rather than merely request one, and that is the product's central control rather than one more tool. This is not a weakness introduced by this tool — see [Local-mode trust boundary](#local-mode-trust-boundary), where a process running as the user mints the same session through the control channel without it — but it should not be described as a neutral consequence of existing trust either. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
+It was never gated on a human approval, deliberately: the approval that would have required lives
+behind the very UI a locked-out user is trying to reach, so gating it on that UI would have been
+circular. What bounded it instead was local mode only, a single-use short-lived code, an allowlisted
+`page`, a loopback-bound UI, and a `sign_in_link_issued` audit entry carrying the caller's
+self-reported reason. Its net effect, which this document stated plainly, was that **an MCP client
+could obtain a working session for the human-facing approval surface without a human approving that
+specific request** — a session that can *release* a gated call rather than merely request one.
 
-**Revised, #426 Phase 4:** the paragraph above is still true of a session by itself, and stays true regardless of configuration — this tool has no `step_up` awareness of its own, and doesn't need any: minting a session was never the part step-up narrows. What changes is what that session is *sufficient for*, and only under two conditions together, neither of which is this deployment's default. With [privilege separation](#privilege-separation-macos-linux-and-windows) active (mandatory on a packaged install as of [ADR 0003](adr/0003-separated-installs-only.md); not guaranteed on a non-packaged one — see "The developer path" above) **and** `step_up.require_passkey` turned on in `config/settings.yaml` (opt-in everywhere — reachable from the Settings page once a passkey is enrolled, B9, or still by hand; see `step_up_config.py`'s own `LiveStepUpConfig` docstring), the credential store a step-up assertion is checked against is no longer writable by the same process minting the session, so that session alone can no longer release an approving decision on a gated write, nor change what a future write can reach through `_SENSITIVE_ACTIONS` (an always-allow rule, a grant, a relaxed default policy). It can still mint the session, still view what's pending, and still hold read access to the review screen — the confidentiality half [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 names as the weaker guarantee, left open on purpose. With either condition missing — no privilege separation, or `step_up.require_passkey` left off — the original paragraph's net effect stands unqualified: the session is enough on its own.
+Two things changed that turned "documented cost" into "no longer worth paying":
+
+- **Its justification expired.** The tool existed because a locked-out human had no other way in:
+  the daemon is headless (P10 removed the menu bar) and the companion app was optional, "nothing
+  installs or starts it automatically yet". [ADR 0003](adr/0003-separated-installs-only.md) makes
+  the companion mandatory and autostarted on all three platforms (decisions 3–5), so that sentence
+  is no longer true anywhere PrivacyFence ships.
+- **A session stopped being one thing.** With [session provenance](#a-session-is-not-a-human), the
+  link this tool minted would be `unattested` and could not approve anything — so the tool would be
+  handing the agent a credential that no longer does what the tool's own description promised, while
+  still granting read access to the review screen.
+
+What replaces it: the companion's own **Open Approvals**/**Open Settings** items, and — for a human
+whose companion menu is out of reach — `privacyfence-app --print-sign-in-link`, run by that human in
+their own terminal (see [Local web UI](#local-web-ui)). `privacyfence_status` still tells a model
+that an install is un-onboarded; its `next_step` is now `open_privacyfence_companion`, and it has no
+link to hand over.
+
+**What this does not close**, and it is the same sentence as before: a process running as the user
+mints the same bootstrap code through the control channel without any tool's help — see
+[Local-mode trust boundary](#local-mode-trust-boundary). Retiring the tool removes the *audited,
+sanctioned* path, not the underlying reachability; what makes the remaining paths insufficient is
+provenance and the passkey — which, on a packaged install as of 4.2, is on by default rather than
+waiting to be turned on. Removing the tool does mean the one path that was
+audited is gone — so every mint is audited now, whichever channel asked for it; see
+[A session is not a human](#a-session-is-not-a-human).
 
 ### Local MCP
 
@@ -430,7 +703,14 @@ The local `/mcp` endpoint uses the generated bearer token stored in the user's P
 
 Org mode authenticates human users through the configured OIDC provider and applies PrivacyFence's org authorization/session model to MCP and web traffic. Principal identity is carried explicitly through request handling and user-scoped storage/connector resolution.
 
-Where configured, WebAuthn step-up is used for sensitive org-mode approval actions. Credential enrollment and lookup are scoped to the authenticated principal. By default, step-up accepts either a passkey assertion or a fresh IdP re-authentication; `step_up.require_passkey` ([#406](https://github.com/privacyfence/privacyfence/issues/406)) closes the IdP-reauth path for organizations that want hardware-bound WebAuthn as a hard requirement — a compromised or phished IdP session can no longer satisfy step-up on its own, and a principal with no enrolled passkey is hard-failed toward enrollment rather than silently allowed through the weaker path.
+Where configured, WebAuthn step-up is used for sensitive org-mode approval actions. Credential enrollment and lookup are scoped to the authenticated principal. By default, step-up accepts either a passkey assertion or a fresh IdP re-authentication; `step_up.require_passkey` ([#406](https://github.com/privacyfence/privacyfence/issues/406)) closes the IdP-reauth path for organizations that want hardware-bound WebAuthn as a hard requirement, and a principal with no enrolled passkey is hard-failed toward enrollment rather than silently allowed through the weaker path.
+
+**What that flag buys against a stolen IdP session depends on whether the principal has enrolled yet**, and it is worth being precise rather than claiming a phished session can never satisfy step-up:
+
+- **Once a passkey is enrolled**, a session alone satisfies nothing: an approving decision needs an assertion from an enrolled credential, and a session can neither produce one nor add a credential to assert with — adding one demands an assertion from a credential already on file, exactly as removing the last one does (see [Enrolling a passkey is itself gated](#enrolling-a-passkey-is-itself-gated); org mode is gated identically).
+- **Before the principal's first enrollment**, the session is enough. A session that reaches `/security` with nothing enrolled can enroll, and a WebAuthn registration this product accepts carries no proof that a human or a genuine authenticator produced it (`none` attestation; the user-verified bit is a claim the authenticator makes about itself — see `webauthn_stepup.py`'s own "five things" list). Local mode gates that with a companion-issued confirmation; org mode has no companion, and the session that got there is at least an external authentication against the IdP rather than a locally minted cookie, so **the first enrollment rests on the IdP session** and `require_passkey` inherits whatever that session is worth.
+
+The operational consequence, for an organization that wants the stronger reading: get every principal enrolled before treating `require_passkey` as a barrier against a stolen session, and treat an unexpected `webauthn_credential_enrolled` audit entry for a principal who had nothing on file as the event it is. Both `webauthn_credential_enrolled` and `webauthn_enrollment_refused` are audited in org mode on the same routes as in local mode.
 
 ## Authorization and principal isolation
 

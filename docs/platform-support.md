@@ -18,6 +18,34 @@ All desktop platforms run the same Python daemon and embedded web UI. MCP client
 
 The daemon uses `portalocker` for the single-instance lock, so the locking abstraction is shared across POSIX and Windows. Platform-specific behavior is concentrated in packaging, process discovery/startup, filesystem locations, browser launching, and installer integration.
 
+### What the companion does on every platform
+
+The companion app is the only PrivacyFence process that runs inside a human's own login session
+(the daemon runs as a service account on every packaged install — see each platform's *Privilege
+separation* section below), which is what makes it the place for anything that needs a person
+rather than a process. Three jobs, in the order they happen:
+
+1. **Close the pending per-user half of privilege separation** ([ADR
+   0003](adr/0003-separated-installs-only.md) decision 3) — the group membership an installer with
+   nobody at the console could not add.
+2. **Offer the first passkey enrollment.** A packaged install defaults `step_up.enabled` and
+   `step_up.require_passkey` on (see [`security-and-compliance.md`](security-and-compliance.md)),
+   so a fresh one comes up requiring a passkey it does not have yet and releasing nothing until it
+   does. The companion asks the daemon whether that is the case at each start, and if it is, opens
+   `/security` with a session already minted. It re-offers at every start until something is
+   enrolled, and does nothing at all once one is. (Skipped while the membership from step 1 is
+   still pending: group membership is evaluated when a session is created, so until the human has
+   logged out and back in there is no page to open.)
+3. **Show the one-time recovery code**, and issue a replacement on request — "New Recovery Code…"
+   on the macOS/Windows menu bar, the matching Applications-menu entry on Linux
+   (`--action=recovery-code`). The code is never in an HTTP response body on a packaged install.
+
+All three need a dialog on the human's desktop. macOS uses `osascript`, Windows `MessageBoxW`, and
+Linux whichever of `zenity` or `kdialog` is present — none of them a PrivacyFence dependency (ADR
+0002 decision 4's Linux budget). **On Linux, a desktop with neither program installed cannot show
+these**, and PrivacyFence says so rather than failing quietly: a first enrollment is refused with
+that reason, and a recovery code is not issued rather than issued to nobody.
+
 ## macOS
 
 The macOS app is defined by `PrivacyFenceApp.spec`. Release builds are produced by `scripts/build_dmg.sh` and the macOS job in `.github/workflows/build.yml`.
@@ -326,6 +354,16 @@ has no tray (ADR 0002 decision 4), so without a persistent process in the user's
 separated daemon's `webbrowser.open()` has no display to reach and connector OAuth for
 Slack/Salesforce/Atlassian cannot show a sign-in page. It runs the companion's control channel and
 nothing else — no `pystray`, no new dependency.
+
+That channel carries one soft external requirement on Linux specifically. Enrolling a *first* passkey
+asks the companion to confirm with the human at the login session (see
+[`security-and-compliance.md`](security-and-compliance.md#enrolling-a-passkey-is-itself-gated)), and
+the companion puts that question up using **`zenity` or `kdialog`**, whichever is present — still no
+new PrivacyFence dependency, which is what decision 4's budget actually constrains, but not something
+the `.deb` can guarantee either. Every desktop environment this package targets ships one of the two;
+a headless or stripped-down install may ship neither, in which case a first enrollment is refused with
+a message naming them. macOS (`osascript`) and Windows (`MessageBoxW`) have no equivalent gap — both
+are part of the OS.
 
 Installing the `.deb` does not turn any of this on. What it adds is the tool and its two
 templates; the systemd unit and the companion autostart entry are written only by `enable`, and a

@@ -29,10 +29,24 @@ resolves *who* (``Principal``) and *what RP*
 Five things from §10.6 this module exists to get right, not just the happy
 path:
 
-- **User verification is checked, not just the signature.**
-  ``require_user_verification=True`` on both verify calls -- a credential
-  that only proved *presence* (no biometric/PIN) is rejected outright, not
-  silently accepted as "good enough".
+- **User verification is checked, not just the signature -- against a
+  cooperating authenticator.** ``require_user_verification=True`` on both
+  verify calls, so a credential that reports having proved only *presence*
+  (no biometric/PIN) is rejected outright rather than silently accepted as
+  "good enough". What that check reads is the ``UV`` bit in the
+  authenticator's own ``authData``, which is a claim the authenticator
+  makes about itself: a real platform authenticator sets it only after a
+  biometric or PIN, and a process that is not one sets it to 1 because
+  nothing signs the *absence* of a human. Registration here uses ``none``
+  attestation (below), so there is also no attestation statement tying the
+  key to a genuine authenticator model to fall back on. Treat this flag as
+  "this authenticator says a human was verified", not as proof that one
+  was -- exactly the same client-side-enforced posture as platform
+  attachment below, and for the same structural reason. The control that
+  makes it *mean* something against a local adversary is not this flag but
+  the enrollment gate (web/routes_security.py's ``register_options``): a
+  key nothing attests to is only as good as the proof demanded before it
+  got into the store in the first place.
 - **Platform attachment is requested, not (and cannot be) cryptographically
   enforced.** ``authenticatorSelection.authenticator_attachment=platform``
   at registration time is what stops a compliant browser from offering a
@@ -40,7 +54,10 @@ path:
   carries no attachment claim to re-verify server-side after the fact (the
   browser-reported ``authenticatorAttachment`` field on the credential is
   informational only), so this is real but client-side-enforced, the same
-  posture every RP using this mechanism has.
+  posture every RP using this mechanism has. ``exclude_credentials`` (below,
+  from ``list_credentials``) is client-side-enforced in the same way and
+  worth naming as such: it stops a *browser* offering to re-enroll an
+  authenticator this principal already has, and stops nothing else.
 - **The RP ID must be a real registrable domain.** D1 (§15) already pins
   local mode's own dev server to ``localhost`` for exactly this reason;
   ``StepUpConfig.rp_id`` here is org mode's own version of that constraint
@@ -68,9 +85,20 @@ this module only tracks the state an entry needs to be written from:
   authenticator (a new machine, a wiped TPM) needs a sanctioned way back
   in that isn't "edit the config file from a shell" -- the very door the
   agent this feature defends against would also use. Generated once,
-  shown once (the caller must hand it to the browser in the same response
-  that generates it -- it is never recoverable again), stored only as a
-  salted hash.
+  shown once, never recoverable again, stored only as a salted hash.
+
+  *Where* it is shown once is mode-dependent as of plan item 1.3. Org mode
+  hands it to the browser in the same response that generates it
+  (``generate_recovery_code``), which is what this always did. Local mode
+  does not: a packaged local-mode install mints the code
+  (``mint_recovery_code``), has the companion put it in front of the human
+  on their own desktop (web/control_channel.py's ``SHOW RECOVERY``), and
+  only then makes it live (``store_recovery_code``) -- so a credential-
+  store reset token is never a value a process that merely holds a
+  ``pf_session`` can read out of an HTTP response body, and a code nobody
+  was shown never becomes the one code on file. The companion can also
+  issue a replacement later, which is the only way this is ever shown
+  twice: a new one, with the old invalidated.
 - **Requirement enable/disable tracking**
   (``observe_step_up_requirement``/``step_up_disabled_notice``) -- through
   #426 Phase 4 there was no UI to flip ``step_up.require_passkey`` at all
@@ -239,29 +267,42 @@ def _update_sign_count(principal: Principal, credential_id: str, new_count: int)
 @dataclass
 class _PendingRegistration:
     challenge: bytes
+    authorized: bool = False
     created_at: float = field(default_factory=time.time)
 
 
 class RegistrationChallengeStore:
     """One in-flight enrollment ceremony per principal at a time -- same
     "a daemon restart invalidates it, start over" posture as web/
-    routes_connect.py's own _TelegramAuthStore."""
+    routes_connect.py's own _TelegramAuthStore.
+
+    ``authorized`` is how the
+    two halves of a gated enrollment stay one ceremony: web/
+    routes_security.py's ``register_options`` is where the gate actually
+    runs -- a fresh assertion when this principal already has a credential,
+    a companion confirmation when it has none -- and it records the verdict
+    here, on the challenge it just issued, so ``register_verify`` can check
+    that the ceremony it is being asked to complete is the one that passed
+    rather than re-deciding (and re-prompting) for itself. ``pop`` returns
+    the whole entry for that reason, the same shape ``StepUpChallengeStore.
+    pop`` already returns for the decide-time ceremony.
+    """
 
     def __init__(self, ttl: float = _REGISTRATION_CHALLENGE_TTL_SECONDS) -> None:
         self._ttl = ttl
         self._lock = threading.Lock()
         self._pending: dict[str, _PendingRegistration] = {}
 
-    def put(self, principal_id: str, challenge: bytes) -> None:
+    def put(self, principal_id: str, challenge: bytes, *, authorized: bool = False) -> None:
         with self._lock:
-            self._pending[principal_id] = _PendingRegistration(challenge=challenge)
+            self._pending[principal_id] = _PendingRegistration(challenge=challenge, authorized=authorized)
 
-    def pop(self, principal_id: str) -> bytes | None:
+    def pop(self, principal_id: str) -> _PendingRegistration | None:
         with self._lock:
             entry = self._pending.pop(principal_id, None)
         if entry is None or (time.time() - entry.created_at) > self._ttl:
             return None
-        return entry.challenge
+        return entry
 
 
 def begin_registration(principal: Principal, *, rp_id: str, rp_name: str) -> tuple[str, bytes]:
@@ -527,20 +568,43 @@ def has_recovery_code(principal: Principal) -> bool:
     return bool(raw) and not raw.get("used_at")
 
 
-def generate_recovery_code(principal: Principal) -> str:
-    """Generates and stores a fresh recovery code, returning the plaintext
-    once -- the caller must surface it to the human in this same response;
-    it is never retrievable again, only its salted SHA-256 hash is kept.
-    Overwrites (invalidates) any code already on file for this principal,
-    used or not -- there is only ever one live code per principal."""
-    raw_code = "-".join(
+def mint_recovery_code() -> str:
+    """A fresh recovery code's plaintext, stored nowhere -- the half of
+    ``generate_recovery_code`` below that has no side effect.
+
+    Split out for plan item 1.3's delivery order: local mode hands the code
+    to the companion to put on screen (web/control_channel.py's ``SHOW
+    RECOVERY``), and a code that reached nobody must not become the one
+    live code on file -- ``has_recovery_code`` would then be True forever
+    for a value no human has, and no later enrollment would issue another.
+    So the caller mints, delivers, and only then calls
+    ``store_recovery_code``. Nothing but the ordering changes: the stored
+    shape and the verification path are exactly what they were."""
+    return "-".join(
         secrets.token_hex(_RECOVERY_CODE_GROUP_CHARS // 2).upper() for _ in range(_RECOVERY_CODE_GROUPS)
     )
+
+
+def store_recovery_code(principal: Principal, code: str) -> None:
+    """Makes ``code`` this principal's one live recovery code, keeping only
+    its salted SHA-256 hash. Overwrites (invalidates) any code already on
+    file, used or not -- there is only ever one live code per principal."""
     salt = secrets.token_bytes(16)
-    digest = hashlib.sha256(salt + raw_code.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(salt + code.encode("utf-8")).hexdigest()
     atomic_write_json(_recovery_code_path(principal), {
         "salt": salt.hex(), "digest": digest, "created_at": time.time(), "used_at": None,
     })
+
+
+def generate_recovery_code(principal: Principal) -> str:
+    """Mint and store in one step, returning the plaintext once -- the
+    caller must surface it to the human in this same response; it is never
+    retrievable again. What org mode's enrollment still does, since it has
+    no companion to hand a code to and the browser that reached ``/security``
+    is IdP-authenticated (docs/security-and-compliance.md says so in the
+    same terms). Local mode uses the two halves above instead."""
+    raw_code = mint_recovery_code()
+    store_recovery_code(principal, raw_code)
     return raw_code
 
 
@@ -668,10 +732,12 @@ __all__ = [
     "generate_recovery_code",
     "has_credentials",
     "has_recovery_code",
+    "mint_recovery_code",
     "is_step_up_required",
     "list_credentials",
     "observe_step_up_requirement",
     "remove_credential",
     "step_up_disabled_notice",
+    "store_recovery_code",
     "verify_assertion",
 ]

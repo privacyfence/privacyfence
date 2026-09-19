@@ -6,7 +6,7 @@ Exec=/usr/bin/privacyfence-companion --action=open-approvals
 Icon=privacyfence
 Terminal=false
 Categories=Utility;
-Actions=Settings;Quit;
+Actions=Settings;RecoveryCode;Quit;
 # #428 Phase 3 (ADR 0002 decision 2): Linux's own "same menu items as the
 # macOS/Windows tray" -- this entry (installed to /usr/share/applications/,
 # not /etc/xdg/autostart/ -- see privacyfence.desktop's own comment) is a
@@ -18,6 +18,10 @@ Actions=Settings;Quit;
 [Desktop Action Settings]
 Name=Settings
 Exec=/usr/bin/privacyfence-companion --action=open-settings
+
+[Desktop Action RecoveryCode]
+Name=New PrivacyFence recovery code
+Exec=/usr/bin/privacyfence-companion --action=recovery-code
 
 [Desktop Action Quit]
 Name=Quit PrivacyFence
