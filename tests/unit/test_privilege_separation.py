@@ -46,6 +46,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -2442,24 +2443,29 @@ class TestServiceGroupMembers:
     own docstring for why reading the token would prompt at every start
     until the human logged out."""
 
+    @staticmethod
+    def _fake_grp(monkeypatch, getgrnam):
+        # Injected into sys.modules rather than monkeypatched onto the real
+        # module: ``grp`` is POSIX-only and this file is collected on Windows
+        # too, where importing it at all is a ModuleNotFoundError. The code
+        # under test imports it inside the function, after its own platform
+        # check, so the injected module is what it picks up -- which keeps
+        # the POSIX branch covered on every runner rather than skipped on one.
+        monkeypatch.setitem(sys.modules, "grp", SimpleNamespace(getgrnam=getgrnam))
+
     def test_posix_reads_the_group_file(self, monkeypatch):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
-        import grp
-
-        monkeypatch.setattr(
-            grp, "getgrnam", lambda name: type("G", (), {"gr_mem": ["alice", "bob"]})()
-        )
+        self._fake_grp(monkeypatch, lambda name: SimpleNamespace(gr_mem=["alice", "bob"]))
 
         assert privilege_separation.service_group_members("privacyfence") == {"alice", "bob"}
 
     def test_posix_answers_none_for_a_group_that_does_not_exist(self, monkeypatch):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
-        import grp
 
         def _missing(name):
             raise KeyError(name)
 
-        monkeypatch.setattr(grp, "getgrnam", _missing)
+        self._fake_grp(monkeypatch, _missing)
 
         assert privilege_separation.service_group_members("privacyfence") is None
 
@@ -2572,22 +2578,35 @@ class TestInstallerScriptResolution:
         assert privilege_separation.installer_script_path() == script
 
     def test_linux_prefers_what_the_deb_installs(self, monkeypatch, tmp_path):
+        # Relocated rather than asserted at its real path: /usr/sbin is not a
+        # place a test may write, and on the Windows runner this file is also
+        # collected on it is not even a path that can exist.
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
         packaged = tmp_path / "privacyfence-privilege-separation"
         packaged.write_text("#!/bin/sh\n", encoding="utf-8")
-        real_is_file = Path.is_file
-        monkeypatch.setattr(
-            Path, "is_file",
-            lambda self: True if str(self) == "/usr/sbin/privacyfence-privilege-separation"
-            else real_is_file(self),
-        )
+        monkeypatch.setattr(privilege_separation, "LINUX_PACKAGED_INSTALLER", packaged)
 
-        assert privilege_separation.installer_script_path() == Path(
+        assert privilege_separation.installer_script_path() == packaged
+
+    def test_the_packaged_linux_path_is_the_one_the_deb_writes(self):
+        # The constant above is only a test seam if it still names what
+        # build_deb.sh actually installs -- and what the status command in
+        # PLATFORM_LAYOUTS quotes at a human reading a daemon log.
+        build_deb = (REPO_ROOT / "scripts" / "build_deb.sh").read_text(encoding="utf-8")
+
+        assert privilege_separation.LINUX_PACKAGED_INSTALLER.as_posix() == (
             "/usr/sbin/privacyfence-privilege-separation"
         )
+        assert f'{privilege_separation.LINUX_PACKAGED_INSTALLER.as_posix()}"' in build_deb
 
-    def test_linux_falls_back_to_the_checkout(self, monkeypatch):
+    def test_linux_falls_back_to_the_checkout(self, monkeypatch, tmp_path):
+        # The packaged path is pointed at nothing explicitly rather than left
+        # to be absent: on a developer's own Debian box the .deb really is
+        # installed, and the fallback is what this test is about.
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(
+            privilege_separation, "LINUX_PACKAGED_INSTALLER", tmp_path / "not-installed"
+        )
 
         assert privilege_separation.installer_script_path() == INSTALLERS["linux"]
 
@@ -2614,10 +2633,8 @@ class TestInstallerScriptResolution:
         monkeypatch.setattr(
             privilege_separation, "_checkout_script_path", lambda name: tmp_path / name
         )
-        real_is_file = Path.is_file
         monkeypatch.setattr(
-            Path, "is_file",
-            lambda self: False if str(self).startswith("/usr/sbin/") else real_is_file(self),
+            privilege_separation, "LINUX_PACKAGED_INSTALLER", tmp_path / "not-installed"
         )
 
         assert privilege_separation.installer_script_path() is None
