@@ -385,31 +385,37 @@ def owner_problems(path: Path, owner: str | None, *, service_account: str) -> li
 
 
 def image_problems(path: Path, aces: list[Ace], *, service_account: str) -> list[str]:
-    """The Windows half of this weakness, and the reason a per-user install
-    cannot carry privilege separation (#407). ``privilege_separation.
+    """The Windows half of this weakness: a service runs whatever its
+    ``binPath`` names, so an image the logged-in user can rewrite is not
+    privilege separation -- it is a way for the agent to execute its own
+    code *as the service account*, which is strictly worse than the
+    unseparated install it replaced. ``privilege_separation.
     _posix_image_problems()`` is the POSIX half, added by B1 once it turned
     out ``/Applications`` does not put a drag-installed ``.app`` somewhere
     root owns the way ``/opt/privacyfence`` (dpkg-owned) does -- ADR 0002
     §5a asserted otherwise and was wrong.
 
-    Windows' installer offers both: an elevated per-machine install under
-    ``%ProgramFiles%``, and a non-elevated per-user one under
-    ``%LOCALAPPDATA%\\Programs`` (``PrivilegesRequired=lowest`` in
-    ``installer/privacyfence.iss``). A service that runs a binary the
-    logged-in user can rewrite is not privilege separation -- it is a way
-    for the agent to execute its own code *as the service account*, which
-    is strictly worse than the unseparated install it replaced.
+    §5a's own answer to this on Windows was a second install tier: an
+    elevated per-machine install under ``%ProgramFiles%`` that could be
+    separated, and a non-elevated per-user one under
+    ``%LOCALAPPDATA%\\Programs`` (#407) that could not. ADR 0003 decision 4
+    withdraws the tier rather than the requirement -- ``installer/
+    privacyfence.iss`` is ``PrivilegesRequired=admin`` and runs ``enable``
+    itself, so every shipped install lands somewhere only administrators
+    can write.
 
-    So this is checked, not documented: ``scripts/windows_privilege_
-    separation.ps1`` refuses to enable against a user-writable image, and
-    ``privilege_separation.audit_layout()`` re-checks it on every start in
-    case the install was later replaced in place.
+    That makes this a check on what happened to an install *afterwards*
+    rather than on how it was made, which is why it was always checked and
+    not documented: ``scripts/windows_privilege_separation.ps1`` refuses to
+    enable against a user-writable image, and ``privilege_separation.
+    audit_layout()`` re-checks it on every start in case the install was
+    later replaced in place.
     """
     return [
         f"{path} is writable by '{ace.trustee}' (mask {ace.mask:#010x}) -- the daemon runs this "
         f"image as '{service_account}', so anything that can rewrite it can run code as that "
         "account. A privilege-separated install has to live somewhere only administrators can "
-        "write (this is why the non-elevated per-user install path cannot be separated)."
+        "write, which is where the PrivacyFence installer puts one."
         for ace in aces
         if ace.grants_write() and not is_trusted(ace.trustee)
         and not trustee_matches(ace.trustee, service_account)

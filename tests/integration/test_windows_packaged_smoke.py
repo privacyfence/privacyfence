@@ -20,8 +20,17 @@ as possible to how a real user would.
    already carrying a full, unfiltered admin token (no interactive UAC
    prompt to get in this test's way) rather than on the installer not
    needing one.
+
+   That scratch directory is created with an administrators-only ACL before
+   Setup is pointed at it (``_admin_only_writable_dir``), which is not
+   cosmetic: since ADR 0003 decision 4 the install separates itself, and
+   ``enable``'s ``Assert-ImageProtected`` refuses an install directory the
+   signed-in user can rewrite, because a service runs whatever its
+   ``binPath`` names. An ordinary ``tmp_path`` directory *is* user-writable,
+   so isolation and installability now have to be arranged together. Test 3
+   below is the same fact asserted from the other side.
 2. **Validate the autostart entry**: ``installer/privacyfence.iss``'s
-   ``[Run]`` section registers the Task Scheduler task as part of the
+   ``[Code]`` section registers the Task Scheduler task as part of the
    (silent) install itself, not a separate opt-in step -- ``schtasks /query`` against it is
    the one thing that would silently no-op at next logon if the install step
    ever stopped wiring it up.
@@ -75,6 +84,40 @@ as possible to how a real user would.
    than a side-by-side one, the same way a second real release's installer
    would behave against a machine that already has PrivacyFence installed.
 
+6. **The install separates itself** (ADR 0003 decision 4, ``test_windows_
+   install_separates_with_no_manual_enable``): the ``.iss``'s own
+   ``CurStepChanged(ssPostInstall)`` runs ``privilege-separation.ps1
+   enable``, so a plain silent install ends up with the marker written, the
+   ``PrivacyFence`` service created against the installed image and running
+   as ``NT SERVICE\\PrivacyFence``, the installing account in
+   ``PrivacyFenceUsers``, the companion task registered and the daemon
+   autostart task disabled -- **with no separate ``enable`` call from this
+   module**. The same claim ``test_macos_pkg_install.py`` makes for the
+   ``.pkg``'s ``postinstall`` and ``test_deb_packaged_lifecycle.py`` for the
+   ``.deb``'s ``postinst``.
+7. **An install that cannot separate is not an install**
+   (``test_windows_install_fails_when_the_image_is_user_writable``): Setup
+   pointed at an ordinary, user-writable directory exits non-zero and says
+   why, rather than reporting success for an install whose approval UI would
+   mean less than it says. Inno ignores a ``[Run]`` entry's exit code and
+   the autostart step next to it deliberately only warns, so "finished
+   successfully" is the default outcome of a post-install problem here --
+   which is exactly why this one is asserted.
+
+**Scenarios 1-5 deliberately run the unseparated lifecycle, and undo the
+install's own separation to get it.** ``_disable_installer_enabled_privilege_
+separation()`` runs right after every ``_run_installer(setup...)`` call in
+those tests, for the same reason ``test_deb_packaged_lifecycle.py``'s
+identically-shaped ``_disable_auto_enabled_privilege_separation()`` has run
+after every ``dpkg -i`` since #428 D1: once separation is on, the daemon is a
+service running as its own account, and a second copy started directly out of
+``tmp_path`` against an isolated ``%LOCALAPPDATA%`` is refused outright by
+``privilege_separation.check_runtime_identity()``. That lifecycle -- an
+alias exe started by hand, its own profile, its own port -- is what scenarios
+1-5 are about, and it is still exactly what a ``disable``d install gets.
+Scenarios 6 and 7 are where the separated-by-default path is asserted, and
+they make no ``enable`` call of their own.
+
 Skipped entirely unless running on real Windows with a just-built
 ``dist/PrivacyFence-*-setup.exe`` on disk -- this only makes sense as a step
 in ``.github/workflows/build.yml``'s ``build-windows`` job, right after
@@ -111,6 +154,16 @@ mcp_client = pytest.importorskip(
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
+from privacyfence.privilege_separation import (  # noqa: E402
+    MARKER_FILE_NAME,
+    MARKER_VERSION,
+    WINDOWS_COMPANION_TASK_NAME,
+    WINDOWS_DAEMON_TASK_NAME,
+    WINDOWS_SERVICE_ACCOUNT_NAME,
+    WINDOWS_SERVICE_GROUP_NAME,
+    WINDOWS_SERVICE_NAME,
+    WINDOWS_SYSTEM_ROOT,
+)
 from tests.control_channel_client import mint_bootstrap_code_windows, resolve_windows_pipe_name  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -122,6 +175,11 @@ MAIN_EXE_NAME = "PrivacyFenceApp.exe"
 ALIAS_EXE_NAME = "privacyfence-app.exe"  # what the Task Scheduler task/mcpb shim both look for
 
 MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
+
+# installer/privacyfence.iss copies scripts/windows_privilege_separation.ps1
+# into {app} under this name; [Code]'s SeparateInstall runs it from there.
+SEPARATION_SCRIPT_NAME = "privilege-separation.ps1"
+MARKER_PATH = WINDOWS_SYSTEM_ROOT / MARKER_FILE_NAME
 
 
 def _built_installers() -> list[Path]:
@@ -172,6 +230,187 @@ def _clean_task_state():
     _delete_task_if_present()
     yield
     _delete_task_if_present()
+
+
+# --------------------------------------------------------------------------- #
+# Privilege separation -- what the install now does to itself, and how the
+# scenarios that predate it get back to the lifecycle they were written for.
+# ADR 0003 decision 4; see this module's own docstring.
+# --------------------------------------------------------------------------- #
+
+# Well-known SIDs rather than names, for the reason
+# scripts/windows_privilege_separation.ps1's own constants give: "BUILTIN\Users"
+# is "BUILTIN\Utilisateurs" on a French Windows and icacls would reject it.
+SID_SYSTEM = "*S-1-5-18"
+SID_ADMINISTRATORS = "*S-1-5-32-544"
+SID_USERS = "*S-1-5-32-545"
+
+
+def _icacls(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    result = subprocess.run(["icacls", *args], capture_output=True, text=True, timeout=60)
+    if check:
+        assert result.returncode == 0, f"icacls {' '.join(args)} failed:\n{result.stdout}{result.stderr}"
+    return result
+
+
+def _admin_only_writable_dir(path: Path) -> Path:
+    """Creates ``path`` with the ACL a real ``%ProgramFiles%`` install has:
+    full control for SYSTEM and Administrators, read-and-execute for everyone
+    else, and no inheritance from whatever ``tmp_path`` sits under.
+
+    Needed because the two halves of what this module wants now pull against
+    each other. Isolation wants the install somewhere disposable; ADR 0003
+    decision 4 has Setup run ``enable`` on itself, and ``enable`` refuses an
+    install directory the signed-in user can rewrite (``Assert-ImageProtected``
+    -- a service runs whatever its ``binPath`` names, so a writable image is a
+    way for the agent to run its own code *as* the service account). A plain
+    ``tmp_path`` subdirectory fails that, correctly. Rather than dodge the
+    check, this reproduces the property a real install has, explicitly, so the
+    rest of the module keeps its scratch directory.
+
+    ``/setowner`` too, not only the grants: an object's owner holds WRITE_DAC
+    implicitly on Windows, so leaving it owned by the account this test runs as
+    would make the ACL above advisory -- the same reasoning
+    ``Set-Layout`` gives for re-owning the separated root itself.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    _icacls(str(path), "/inheritance:r", "/q")
+    _icacls(
+        str(path), "/grant:r",
+        f"{SID_SYSTEM}:(OI)(CI)(F)", f"{SID_ADMINISTRATORS}:(OI)(CI)(F)", f"{SID_USERS}:(OI)(CI)(RX)",
+        "/q",
+    )
+    _icacls(str(path), "/setowner", SID_ADMINISTRATORS, "/t", "/c", "/q")
+    return path
+
+
+def _run_separation_script(install_dir: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    """The installed script, run the way ``installer/privacyfence.iss``'s own
+    ``SeparateInstall`` runs it -- same interpreter flags, so a failure here
+    and a failure there are the same failure."""
+    script = install_dir / SEPARATION_SCRIPT_NAME
+    assert script.is_file(), f"{script} missing -- installer/privacyfence.iss's [Files] entry for it changed?"
+    result = subprocess.run(
+        [
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", str(script), *args,
+        ],
+        capture_output=True, text=True, timeout=180,
+    )
+    if check:
+        assert result.returncode == 0, (
+            f"{SEPARATION_SCRIPT_NAME} {' '.join(args)} failed (exit {result.returncode}):\n"
+            f"{result.stdout}{result.stderr}"
+        )
+    return result
+
+
+def _disable_installer_enabled_privilege_separation(install_dir: Path) -> None:
+    """Undoes ADR 0003 decision 4's installer-run ``enable``, which fires on
+    every silent install *and* every upgrade over one.
+
+    Exactly the role ``test_deb_packaged_lifecycle.py``'s own
+    ``_disable_auto_enabled_privilege_separation()`` plays after each
+    ``dpkg -i``, for the same reason: this module's scenarios are the
+    unseparated lifecycle -- an alias exe started directly against an isolated
+    ``%LOCALAPPDATA%`` -- and a separated install refuses that outright
+    (``privilege_separation.check_runtime_identity()``), quite apart from the
+    real service the installer just started competing for the same data
+    directory. ``disable`` also re-enables the daemon autostart task that
+    ``enable`` disabled, which is what leaves step 2's ``schtasks /query``
+    assertion meaning what it always meant.
+
+    Must be re-run after every install in those tests, the upgrade-in-place one
+    included: ``enable`` runs on an upgrade too, not just a first install.
+    """
+    _run_separation_script(install_dir, "disable")
+    assert not MARKER_PATH.exists(), f"{MARKER_PATH} survived `disable`"
+
+
+def _service_config(name: str = WINDOWS_SERVICE_NAME) -> str | None:
+    """``sc.exe qc`` output for a service, or None if it does not exist."""
+    result = subprocess.run(["sc.exe", "qc", name], capture_output=True, text=True, timeout=30)
+    return result.stdout if result.returncode == 0 else None
+
+
+def _local_group_members(group: str) -> list[str]:
+    result = subprocess.run(["net", "localgroup", group], capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        return []
+    # `net localgroup` frames its member list between a dashed rule and the
+    # "The command completed successfully." trailer.
+    lines = result.stdout.splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if set(line.strip()) == {"-"}) + 1
+    except StopIteration:
+        return []
+    return [line.strip() for line in lines[start:] if line.strip() and not line.startswith("The command")]
+
+
+def _task_state(name: str) -> str | None:
+    result = subprocess.run(
+        ["schtasks", "/query", "/tn", name, "/fo", "list", "/v"], capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        return None
+    match = re.search(r"^Scheduled Task State:\s*(.+)$", result.stdout, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _tear_down_separation() -> None:
+    """Removes whatever an installer-run ``enable`` left behind, without going
+    through the script.
+
+    ``disable`` is the supported route and every test that gets that far uses
+    it; this is the floor under it, for a run that died between ``enable`` and
+    its own teardown, or one where the install directory (and with it the
+    script) is already gone. Machine-wide state -- a service, a scheduled task
+    and a directory under ``%ProgramData%`` -- is not something ``tmp_path``
+    isolates, so leaving any of it behind would poison whatever runs next on
+    this runner.
+
+    ``takeown`` before the delete because a separated root is owned by
+    Administrators and its ``authority\\`` subtree grants the service account
+    and nothing else; ``shutil.rmtree`` on its own would stop at the first
+    directory it cannot open. The ``PrivacyFenceUsers`` group is deliberately
+    left alone -- ``disable`` leaves it too (it owns nothing once the ACLs are
+    gone), and re-adding a member is idempotent.
+    """
+    subprocess.run(["sc.exe", "stop", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=60)
+    subprocess.run(["sc.exe", "delete", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=60)
+    subprocess.run(
+        ["schtasks", "/delete", "/tn", WINDOWS_COMPANION_TASK_NAME, "/f"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if WINDOWS_SYSTEM_ROOT.exists():
+        subprocess.run(
+            ["takeown", "/f", str(WINDOWS_SYSTEM_ROOT), "/r", "/d", "Y"],
+            capture_output=True, text=True, timeout=120,
+        )
+        _icacls(str(WINDOWS_SYSTEM_ROOT), "/grant", f"{SID_ADMINISTRATORS}:(OI)(CI)(F)", "/t", "/c", "/q",
+                check=False)
+        shutil.rmtree(WINDOWS_SYSTEM_ROOT, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def _clean_separation_state():
+    """Guaranteed on both sides, same reasoning as ``_clean_task_state`` above.
+
+    Also removes the real ``%LOCALAPPDATA%\\PrivacyFence`` this runner's own
+    account ends up with -- but only if it did not already exist: ``disable``
+    moves the separated root *back* there, so a module whose every install
+    separates itself now creates that directory as a side effect even though
+    every daemon it starts runs against an isolated profile instead. Anything
+    that was there before this test is somebody else's.
+    """
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    legacy = Path(local_app_data) / "PrivacyFence" if local_app_data else None
+    preexisting = legacy is not None and legacy.exists()
+    _tear_down_separation()
+    yield
+    _tear_down_separation()
+    if legacy is not None and not preexisting:
+        shutil.rmtree(legacy, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -450,7 +689,7 @@ def _run_installer(*args: str, timeout: float = 120.0) -> subprocess.CompletedPr
 
 async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     setup_exe = _built_installers()[-1]
-    install_dir = tmp_path / "install"
+    install_dir = _admin_only_writable_dir(tmp_path / "install")
     home = tmp_path / "home"
     log_path = tmp_path / "install.log"
 
@@ -461,7 +700,9 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     # an elevation dodge: PrivilegesRequired=admin means Setup needs an
     # elevated token regardless of which directory it's writing to, and
     # this module's own docstring explains why this test still runs
-    # unattended (the hosted runner's account already has one).
+    # unattended (the hosted runner's account already has one). The
+    # directory is pre-created administrators-only so that the install's own
+    # `enable` step accepts it -- see _admin_only_writable_dir.
     result = _run_installer(
         str(setup_exe),
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
@@ -472,6 +713,11 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
         f"installer failed (exit {result.returncode}):\n{result.stdout}{result.stderr}\n"
         f"---- install log ----\n{log_path.read_text(errors='replace') if log_path.exists() else '(missing)'}"
     )
+
+    # Back to the unseparated lifecycle this module's scenarios are about --
+    # see the module docstring, and test_windows_install_separates_with_no_
+    # manual_enable below for the separated one.
+    _disable_installer_enabled_privilege_separation(install_dir)
 
     main_exe = install_dir / MAIN_EXE_NAME
     alias_exe = install_dir / ALIAS_EXE_NAME
@@ -585,7 +831,7 @@ def _synthetic_next_version_installer(setup_exe: Path, output_dir: Path) -> tupl
                              # isn't enough headroom for both in one test.
 async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     setup_exe_n = _built_installers()[-1]
-    install_dir = tmp_path / "install"
+    install_dir = _admin_only_writable_dir(tmp_path / "install")
     home = tmp_path / "home"
 
     # ── Install version N; create real on-disk state the app itself
@@ -600,6 +846,7 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     assert install_result.returncode == 0, (
         f"installer failed (exit {install_result.returncode}):\n{install_result.stdout}{install_result.stderr}"
     )
+    _disable_installer_enabled_privilege_separation(install_dir)
     alias_exe = install_dir / ALIAS_EXE_NAME
 
     with _running_daemon(alias_exe, home) as daemon:
@@ -637,6 +884,10 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
         f"---- install log ----\n"
         f"{upgrade_log_path.read_text(errors='replace') if upgrade_log_path.exists() else '(missing)'}"
     )
+    # `enable` runs on an upgrade too -- installer/privacyfence.iss's
+    # CurStepChanged(ssPostInstall) makes no distinction -- so this is not a
+    # first-install-only step.
+    _disable_installer_enabled_privilege_separation(install_dir)
     assert alias_exe.is_file(), f"{alias_exe} missing after upgrade install"
 
     # ── The autostart task is still registered -- installer/privacyfence.iss's
@@ -666,3 +917,159 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     assert uninstall_result.returncode == 0, (
         f"uninstall failed (exit {uninstall_result.returncode}):\n{uninstall_result.stdout}{uninstall_result.stderr}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Test 3 -- the install separates itself (ADR 0003 decision 4)
+# --------------------------------------------------------------------------- #
+
+def test_windows_install_separates_with_no_manual_enable(tmp_path):
+    """A plain silent install ends up privilege-separated, and this module
+    makes no ``enable`` call to get it there.
+
+    The Windows half of the claim ``test_macos_pkg_install.py`` makes for the
+    ``.pkg`` and ``test_deb_packaged_lifecycle.py`` for the ``.deb``. Until ADR
+    0003 decision 4 there was nothing here to assert: Windows shipped
+    ``privilege-separation.ps1`` and left running it to a human who had to find
+    out it existed, which meant the one platform where the install flow said
+    nothing about the subject was also the one where the product's central
+    claim -- the agent cannot approve its own request -- was false by default.
+
+    Everything below is a *consequence* of the installer's own `enable`, so
+    each assertion names the step of it that would have to have gone wrong:
+    the marker (Write-Marker), the service and its account (Install-Daemon\
+    Service), the group membership (Add-OwnerToServiceGroup), the companion
+    task (Install-CompanionTask) and the daemon task's state
+    (Disable-DaemonTask).
+    """
+    setup_exe = _built_installers()[-1]
+    install_dir = _admin_only_writable_dir(tmp_path / "install")
+    log_path = tmp_path / "install.log"
+
+    result = _run_installer(
+        str(setup_exe),
+        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
+        f"/DIR={install_dir}",
+        f"/LOG={log_path}",
+    )
+    assert result.returncode == 0, (
+        f"installer failed (exit {result.returncode}):\n{result.stdout}{result.stderr}\n"
+        f"---- install log ----\n{log_path.read_text(errors='replace') if log_path.exists() else '(missing)'}"
+    )
+
+    try:
+        # ── The marker: written by `enable`, and the one file every other
+        # process in this product reads to decide which layout it is looking
+        # at (privilege_separation.separation()). ────────────────────────────
+        assert MARKER_PATH.is_file(), (
+            f"{MARKER_PATH} missing after a silent install -- installer/privacyfence.iss's "
+            f"CurStepChanged(ssPostInstall) did not separate the install:\n"
+            f"{log_path.read_text(errors='replace') if log_path.exists() else '(missing log)'}"
+        )
+        marker = json.loads(MARKER_PATH.read_text(encoding="utf-8"))
+        assert marker["version"] == MARKER_VERSION
+        assert marker["platform"] == "win32"
+        assert marker["service_account"] == WINDOWS_SERVICE_ACCOUNT_NAME
+        assert marker["service_group"] == WINDOWS_SERVICE_GROUP_NAME
+        # Setup ran as this account, so `enable`'s optional owner resolution
+        # found one -- the pending-membership case (ADR 0003 decision 3) is an
+        # MDM/SYSTEM-context install, which a hosted runner cannot produce.
+        assert marker["owner_user"].lower() == os.environ["USERNAME"].lower(), (
+            f"the marker records owner_user={marker['owner_user']!r}, not the account that ran Setup"
+        )
+
+        # ── The service, against the image the installer just placed. A
+        # binPath pointing anywhere else is the whole #407 failure mode. ─────
+        config = _service_config()
+        assert config is not None, f"the {WINDOWS_SERVICE_NAME} service does not exist after install"
+        assert str(install_dir / ALIAS_EXE_NAME).lower() in config.lower(), (
+            f"the {WINDOWS_SERVICE_NAME} service's binPath does not name the installed daemon:\n{config}"
+        )
+        assert "--windows-service" in config, f"binPath is missing the service-host flag:\n{config}"
+        assert WINDOWS_SERVICE_ACCOUNT_NAME.lower() in config.lower(), (
+            f"the {WINDOWS_SERVICE_NAME} service does not run as {WINDOWS_SERVICE_ACCOUNT_NAME}:\n{config}"
+        )
+
+        # ── The per-user half (ADR 0003 decision 3), closed at install time
+        # because Setup had a real account to resolve. ──────────────────────
+        members = [member.lower() for member in _local_group_members(WINDOWS_SERVICE_GROUP_NAME)]
+        assert any(os.environ["USERNAME"].lower() in member for member in members), (
+            f"{os.environ['USERNAME']} is not in {WINDOWS_SERVICE_GROUP_NAME}: {members}"
+        )
+
+        # ── The two scheduled tasks. The companion is the only thing left in
+        # the user's session once the daemon is a service (ADR 0002 decision
+        # 5), and the daemon's own autostart task must be *disabled* rather
+        # than left to start a second, refusing daemon at every sign-in. ────
+        assert _task_exists(WINDOWS_COMPANION_TASK_NAME), (
+            f"the {WINDOWS_COMPANION_TASK_NAME!r} task was not registered"
+        )
+        assert _task_state(WINDOWS_DAEMON_TASK_NAME) == "Disabled", (
+            f"the {WINDOWS_DAEMON_TASK_NAME!r} autostart task is "
+            f"{_task_state(WINDOWS_DAEMON_TASK_NAME)!r}, not Disabled -- it would start a second "
+            f"daemon in the signed-in user's own session"
+        )
+
+        # ── `disable` is the way back out, and it is what the documented
+        # "disable before uninstalling" order depends on. ───────────────────
+        _disable_installer_enabled_privilege_separation(install_dir)
+        assert _service_config() is None, f"the {WINDOWS_SERVICE_NAME} service survived `disable`"
+        assert not _task_exists(WINDOWS_COMPANION_TASK_NAME)
+        assert _task_state(WINDOWS_DAEMON_TASK_NAME) == "Enabled", (
+            "`disable` must re-enable the daemon autostart task it turned off"
+        )
+    finally:
+        uninstaller = install_dir / "unins000.exe"
+        if uninstaller.is_file():
+            _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
+
+
+# --------------------------------------------------------------------------- #
+# Test 4 -- an install that cannot separate is not an install
+# --------------------------------------------------------------------------- #
+
+def test_windows_install_fails_when_the_image_is_user_writable(tmp_path):
+    """Setup pointed at a directory the signed-in user can rewrite fails,
+    loudly, instead of finishing successfully without mentioning the subject.
+
+    The negative half of ADR 0003 decision 1. It matters because every default
+    around it points the other way: Inno ignores a ``[Run]`` entry's exit code
+    entirely, and ``CurStepChanged``'s own autostart step next door deliberately
+    only warns -- so "finished successfully" is what a post-install problem
+    looks like here unless something is done about it, and what it would have
+    meant in this case is an install whose approval UI, passkey enrollment and
+    audit log all say more than they can keep.
+
+    An ordinary ``tmp_path`` directory is exactly the input that produces it:
+    ``enable``'s ``Assert-ImageProtected`` refuses a user-writable image
+    because a service runs whatever its ``binPath`` names. No ACL is applied
+    here on purpose -- this is ``_admin_only_writable_dir`` not being called.
+    """
+    setup_exe = _built_installers()[-1]
+    install_dir = tmp_path / "user-writable-install"
+    install_dir.mkdir()
+    log_path = tmp_path / "install.log"
+
+    result = _run_installer(
+        str(setup_exe),
+        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
+        f"/DIR={install_dir}",
+        f"/LOG={log_path}",
+    )
+    install_log = log_path.read_text(errors="replace") if log_path.exists() else ""
+
+    assert result.returncode != 0, (
+        "Setup reported success for an install it could not privilege-separate\n"
+        f"---- install log ----\n{install_log}"
+    )
+    # The exit code alone would not distinguish this from Setup falling over
+    # for some unrelated reason, and the reason is the point: the log carries
+    # `enable`'s own refusal, captured by SeparateInstall through cmd.exe.
+    assert "SeparateInstall" in install_log, (
+        f"nothing in the install log says the separation step ran:\n{install_log}"
+    )
+    assert "refusing to enable" in install_log, (
+        f"the install log does not carry `enable`'s own refusal:\n{install_log}"
+    )
+    assert not MARKER_PATH.exists(), f"{MARKER_PATH} was written by an install that failed"
+    assert _service_config() is None, f"a failed install left the {WINDOWS_SERVICE_NAME} service behind"

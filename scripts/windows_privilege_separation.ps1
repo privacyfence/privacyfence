@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  #428 Phase 4 (B5c): opt into -- or back out of -- running the PrivacyFence
+  #428 Phase 4 (B5c): provision -- or back out of -- running the PrivacyFence
   daemon under its own Windows account.
 
 .DESCRIPTION
@@ -28,9 +28,11 @@
   3. The install location is part of the boundary. A service runs whatever its
      binPath names, so a PrivacyFence the logged-in user can rewrite would let
      the agent run its own code *as the service account*. This script refuses to
-     enable against such an install, which is what settles #407's open question:
-     the non-elevated per-user install path cannot be separated. See
-     Assert-ImageProtected below.
+     enable against such an install -- see Assert-ImageProtected below. #407's
+     non-elevated per-user install tier was the case that made that refusal
+     reachable by an ordinary user; ADR 0003 decision 4 withdraws the tier
+     rather than the refusal, which stays as the check on every install
+     directory this is ever pointed at.
 
 .EXAMPLE
   # From an elevated PowerShell, against a real install:
@@ -54,8 +56,13 @@
   later, idempotently, and is what the companion app runs by itself at the
   first real sign-in.
 
-  Ships opt-in deliberately. #428 P4 does not default on for a platform until
-  that platform's opt-in has soaked through a full release cycle.
+  No longer opt-in. ADR 0003 decision 4 has installer/privacyfence.iss run
+  `enable` itself, elevated, as a step of every install -- so on Windows this
+  script is normally something a human runs only to look at an install
+  (`status`) or to unwind one (`disable`), the same way the .deb's postinst
+  has run the Linux script since #428 D1. Running `enable` by hand still
+  works, and is the documented way to re-provision an install whose service,
+  ACLs or companion task have drifted.
 #>
 [CmdletBinding()]
 param(
@@ -312,11 +319,17 @@ function Assert-ImageProtected {
       #407, settled: a service runs whatever binPath names, so an install the
       logged-in user can rewrite turns privilege separation inside out -- the
       agent gains a way to run its own code *as the service account*, which is
-      strictly worse than the unseparated install it replaced. Windows is the
-      only platform where this is reachable: macOS and Linux put the daemon
-      under /Applications and /opt as a side effect of how they install
-      software at all, while privacyfence.iss offers a non-elevated per-user
-      install under %LOCALAPPDATA%\Programs (PrivilegesRequired=lowest).
+      strictly worse than the unseparated install it replaced.
+
+      This used to be a check on which install *tier* had been chosen:
+      privacyfence.iss offered a non-elevated per-user install under
+      %LOCALAPPDATA%\Programs, and that tier is what this refused. ADR 0003
+      decision 4 removed the tier -- Setup is PrivilegesRequired=admin and runs
+      this script itself, so a stock install lands under %ProgramFiles% and
+      never reaches the refusal below. What is left for it to catch is
+      everything else that can put a writable image under a service's binPath:
+      a -DaemonExec pointed at a copy somewhere in a profile, an install
+      directory whose ACL was relaxed afterwards, a hand-assembled build.
 
       Checked rather than documented, and checked again at every daemon start
       (privilege_separation.audit_layout -> windows_acl.image_problems) in case
@@ -336,10 +349,11 @@ The daemon would run this image as $ServiceAccount, so anything that can
 rewrite it -- including the AI agent this feature exists to contain -- could
 run its own code as that account. That is worse than no separation at all.
 
-This is what a non-elevated, per-user install looks like (#407): PrivacyFence
-installed under your own profile rather than under %ProgramFiles%. Re-run the
-PrivacyFence installer and let it elevate, so it installs per-machine, then run
-this again.
+A separated install has to live somewhere only administrators can write. The
+PrivacyFence installer puts one under %ProgramFiles% and runs this script
+itself; an install directory under a user profile, or one whose permissions
+have been relaxed since, is what this refuses. Re-run the PrivacyFence
+installer and accept its elevation prompt, keeping the offered location.
 "@
         }
     }

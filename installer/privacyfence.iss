@@ -47,12 +47,13 @@
 ; plan.md Phase 7 / B6) -- keep these in sync if this changes.
 #define InstallDirName "PrivacyFence"
 #define TaskName "PrivacyFence"
-; #428 Phase 4 (B5c). Both of these are created only by
-; scripts/windows_privilege_separation.ps1's `enable`, never by this
-; installer -- they are named here because *uninstall* has to clean them up
-; whether or not the user ever opted in. Kept in sync with
-; privilege_separation.WINDOWS_COMPANION_TASK_NAME / WINDOWS_SERVICE_NAME
-; (tests/unit/test_privilege_separation.py asserts it).
+; #428 Phase 4 (B5c). Both of these are created by
+; scripts/windows_privilege_separation.ps1's `enable` -- which, since ADR 0003
+; decision 4, [Code]'s CurStepChanged(ssPostInstall) below runs as part of
+; every install. They are still named here rather than derived, because
+; *uninstall* has to clean them up without running that script at all. Kept in
+; sync with privilege_separation.WINDOWS_COMPANION_TASK_NAME /
+; WINDOWS_SERVICE_NAME (tests/unit/test_privilege_separation.py asserts it).
 #define CompanionTaskName "PrivacyFenceCompanion"
 #define ServiceName "PrivacyFence"
 #define CompanionExeName "PrivacyFenceCompanion.exe"
@@ -114,13 +115,19 @@ Source: "{#McpbPath}"; DestDir: "{app}"; Flags: ignoreversion
 ; below) -- dontcopy means Setup extracts it to {tmp} for [Code] to read at
 ; install time, but it's never actually installed into {app}.
 Source: "privacyfence-task.xml.tmpl"; Flags: dontcopy
-; #428 Phase 4 (B5c): the opt-in privilege-separation tool and the companion
+; #428 Phase 4 (B5c): the privilege-separation tool and the companion
 ; autostart task it registers. Both are *installed* rather than extracted to
-; {tmp}: unlike the daemon task above, nothing here runs at install time.
-; Installing them changes nothing at all -- the service, the ACLs and the
-; startup inversion are written only when a human runs this script with
-; `enable` from an elevated PowerShell, exactly as the .deb ships
-; /usr/sbin/privacyfence-privilege-separation without running it.
+; {tmp}, because both outlive the install: the script is how a human inspects
+; (`status`) or unwinds (`disable`) the separation afterwards, and the template
+; is what a later re-run of `enable` renders the companion task from.
+;
+; This used to be the whole of it -- the script shipped, nothing ran it, and a
+; Windows install stayed unseparated until somebody typed `enable` into an
+; elevated PowerShell. ADR 0003 decision 4 withdraws that: [Code]'s
+; CurStepChanged(ssPostInstall) below runs `enable` itself, with Setup's own
+; elevated token, and a failure of that step fails the install. The .deb's
+; postinst is the same shape; the difference was never a design, only which
+; platform had an installer hook wired up.
 ;
 ; Renamed to privilege-separation.ps1 on the way in, and the template lands
 ; beside it: the script resolves its template directory as "the checkout's
@@ -165,12 +172,19 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 ; session, restarting on crash," has no equivalent exposed through
 ; schtasks.exe's plain flags at all).
 ;
-; Start the daemon immediately after install, same as the macOS DMG's
-; LaunchAgent starting the app right after a drag-install's first login --
-; without this, a user would otherwise have to log out/in before
-; PrivacyFence is running at all.
-Filename: "{app}\{#AliasExeName}"; Description: "Launch {#AppName} now"; \
-    Flags: nowait postinstall skipifsilent
+; There is deliberately no "Launch PrivacyFence now" entry here any more.
+; Until ADR 0003 decision 4 this section started {#AliasExeName} on the
+; Finish page, because otherwise nothing would be running until the next
+; sign-in. Both halves of that reasoning are gone now that the install
+; separates itself: `enable` starts the PrivacyFence service (sc.exe start)
+; and asks Task Scheduler to run the companion in the signed-in session, so
+; there is already a daemon serving and a tray icon on the way; and starting
+; {#AliasExeName} directly would be *refused* rather than redundant --
+; privilege_separation.check_runtime_identity() fails closed for a daemon
+; started as the logged-in user against a separated install, which is exactly
+; what that checkbox would produce. A Finish-page option whose only outcome is
+; an error dialog is worse than no option.
+;
 ; Offer to open the bundled .mcpb right after install (privacyfence/
 ; privacyfence#407) -- without this, a user has to already know the .mcpb
 ; ships alongside the daemon rather than being downloaded separately, before
@@ -218,10 +232,13 @@ Filename: "{win}\explorer.exe"; \
 Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#TaskName}"" /f"; \
     Flags: runhidden; RunOnceId: "RemovePrivacyFenceTask"
 ; #428 Phase 4 (B5c): the two things a privilege-separated install adds, torn
-; down here rather than left behind. Both are no-ops on an install that never
-; opted in -- schtasks and sc.exe each exit non-zero for something that does
-; not exist, which Inno ignores for an [UninstallRun] entry, and that is the
-; right behavior: this must not fail an uninstall over the ordinary case.
+; down here rather than left behind. Since ADR 0003 decision 4 every install
+; has both; they are still tolerant of finding neither -- an install whose
+; separation was unwound with `disable` first (the documented order, see
+; [UninstallDelete] below) has already removed them, and schtasks and sc.exe
+; each exit non-zero for something that does not exist, which Inno ignores for
+; an [UninstallRun] entry. That is the right behavior either way: this must
+; not fail an uninstall over a step that has already happened.
 ;
 ; Deleting the service is also what retires the NT SERVICE\PrivacyFence
 ; virtual account -- it exists only for as long as its service does, which is
@@ -253,12 +270,14 @@ Filename: "{sys}\sc.exe"; Parameters: "delete ""{#ServiceName}"""; \
 ; to it: a privilege-separated install keeps its state under
 ; %ProgramData%\PrivacyFence instead, holding the same credentials, settings
 ; and audit log plus the policy and passkeys the service account owns. It is
-; not removed here either. Uninstalling while separated therefore leaves a
-; directory no account can read except the service account that no longer
-; exists and the Administrators group -- which is why
-; scripts/windows_privilege_separation.ps1 disable, run *before* uninstalling,
-; is the documented order (docs/platform-support.md). An administrator can
-; still recover the directory afterwards by taking ownership of it.
+; not removed here either. Since ADR 0003 decision 4 that is every install,
+; not only one that opted in, so the order matters to everyone now:
+; uninstalling while separated leaves a directory no account can read except
+; the service account that no longer exists and the Administrators group --
+; which is why scripts/windows_privilege_separation.ps1 disable, run *before*
+; uninstalling, is the documented order (docs/platform-support.md). An
+; administrator can still recover the directory afterwards by taking
+; ownership of it.
 
 [Code]
 (* Backs the [Run] section's Check: on the two mutually-exclusive
@@ -282,8 +301,9 @@ begin
     Result := RegKeyExists(HKCR, ProgId + '\shell\open\command');
 end;
 
-(* Copies whatever schtasks.exe wrote on stdout/stderr into Setup's own log
-   file, one line per log entry.
+(* Copies whatever a captured [Code] command wrote on stdout/stderr into
+   Setup's own log file, one line per log entry, tagged with which step ran
+   it.
 
    Everything about the autostart registration below was otherwise
    invisible: Inno logs its own [Run] entries automatically but says
@@ -298,23 +318,42 @@ end;
    this finally ran, schtasks' own stderr was the thing that named the
    defect outright ("(1,40)::ERROR: unable to switch the encoding", the
    task XML's encoding declaration -- see privacyfence-task.xml.tmpl). *)
-procedure LogSchtasksOutput(OutFile: String);
+procedure LogCommandOutput(Prefix: String; OutFile: String);
 var
   Lines: TArrayOfString;
   I: Integer;
 begin
   if not FileExists(OutFile) then
   begin
-    Log('RegisterAutostartTask: no schtasks output file at ' + OutFile);
+    Log(Prefix + ': no output file at ' + OutFile);
     Exit;
   end;
   if not LoadStringsFromFile(OutFile, Lines) then
   begin
-    Log('RegisterAutostartTask: could not read schtasks output file ' + OutFile);
+    Log(Prefix + ': could not read output file ' + OutFile);
     Exit;
   end;
   for I := 0 to GetArrayLength(Lines) - 1 do
-    Log('RegisterAutostartTask: schtasks: ' + Lines[I]);
+    Log(Prefix + ': ' + Lines[I]);
+end;
+
+(* The same captured output, as one string, for a message a human will
+   actually read -- Log() goes to Setup's log file, which nobody opens
+   unprompted (the whole lesson of privacyfence/privacyfence#410). When the
+   separation step below fails, what `enable` printed about *why* is the only
+   useful thing Setup can say, so it is carried into the error itself. *)
+function ReadCapturedOutput(OutFile: String): String;
+var
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  Result := '';
+  if not FileExists(OutFile) then
+    Exit;
+  if not LoadStringsFromFile(OutFile, Lines) then
+    Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+    Result := Result + Lines[I] + #13#10;
 end;
 
 (* Registers the autostart Task Scheduler task (Phase 3.1) via a real Task
@@ -332,7 +371,7 @@ end;
 
    schtasks runs through cmd.exe rather than directly for one reason only:
    so its stdout and stderr can be redirected to a file and read back into
-   the log (LogSchtasksOutput above).
+   the log (LogCommandOutput above).
 
    The whole body is wrapped in try/except with a Log() at each step. That
    was added while the failure was still unexplained, on the theory that an
@@ -398,7 +437,7 @@ begin
       Log('RegisterAutostartTask: Exec itself failed to launch cmd.exe');
       Exit;
     end;
-    LogSchtasksOutput(OutFile);
+    LogCommandOutput('RegisterAutostartTask: schtasks', OutFile);
     Log('RegisterAutostartTask: schtasks exit code = ' + IntToStr(ResultCode));
     Result := ResultCode = 0;
   except
@@ -407,46 +446,157 @@ begin
   end;
 end;
 
+(* ADR 0003 decision 4: the installer separates the install, rather than
+   shipping privilege-separation.ps1 and hoping somebody runs it.
+
+   Runs `enable` -- not `enable -ForUser` -- with Setup's own elevated token.
+   The distinction matters and is ADR 0003 decision 3's: `enable` does every
+   step an administrator can take alone (creates the NT SERVICE\PrivacyFence
+   virtual account, moves and re-owns %ProgramData%\PrivacyFence, writes the
+   marker, installs the service and the companion task) and, for the one step
+   that needs to know which human this install is for, adds whoever is running
+   Setup to PrivacyFenceUsers -- or, in a SYSTEM-context/MDM install where no
+   human account resolves at all, records that membership as pending for the
+   companion to close at the first real sign-in. Either way the install ends
+   up separated, which is the thing decision 1 is about.
+
+   `enable`'s own refusals are deliberately left exactly as they are. The one
+   that can actually fire here is Assert-ImageProtected: an install directory
+   the logged-in user can rewrite cannot be separated, because a service runs
+   whatever its binPath names. Under PrivilegesRequired=admin, {autopf} is
+   %ProgramFiles% and that refusal does not fire; a /DIR= pointed somewhere
+   user-writable is the case it exists for, and failing the install there is
+   the correct outcome, not a rough edge to smooth over.
+
+   Via cmd.exe for the same single reason RegisterAutostartTask goes through
+   it: Exec() captures neither stream, and what `enable` printed is the only
+   explanation of a failure there will ever be. -NoProfile so an administrator
+   profile script cannot change what runs, -NonInteractive so a prompt can
+   never wait forever behind SW_HIDE on an unattended install, and
+   -ExecutionPolicy Bypass because a machine-wide policy of AllSigned or
+   Restricted would otherwise block a script Setup just installed itself.
+
+   Returns the captured output through Output whether it succeeded or not. *)
+function SeparateInstall(var Output: String): Boolean;
+var
+  ScriptPath, OutFile, CmdLine: String;
+  ResultCode: Integer;
+begin
+  Result := False;
+  Output := '';
+  try
+    ScriptPath := ExpandConstant('{app}\privilege-separation.ps1');
+    OutFile := ExpandConstant('{tmp}\privilege-separation.out');
+    Log('SeparateInstall: running ' + ScriptPath + ' enable');
+    (* Same doubled-outer-quotes rule cmd.exe imposes on RegisterAutostartTask's
+       own /C line: cmd strips the outermost pair and runs what is left. *)
+    CmdLine := '/C ""' + ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe') +
+      '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath +
+      '" enable > "' + OutFile + '" 2>&1"';
+    if not Exec(ExpandConstant('{cmd}'), CmdLine, '', SW_HIDE,
+        ewWaitUntilTerminated, ResultCode) then
+    begin
+      Log('SeparateInstall: Exec itself failed to launch cmd.exe');
+      Output := 'Setup could not start powershell.exe at all.';
+      Exit;
+    end;
+    LogCommandOutput('SeparateInstall', OutFile);
+    Log('SeparateInstall: exit code = ' + IntToStr(ResultCode));
+    Output := ReadCapturedOutput(OutFile);
+    Result := ResultCode = 0;
+  except
+    Log('SeparateInstall: exception: ' + GetExceptionMessage);
+    Output := GetExceptionMessage;
+    Result := False;
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  AutostartRegistered: Boolean;
+  SeparationOutput: String;
 begin
   if CurStep = ssPostInstall then
   begin
     (* A failed registration deliberately does not abort the install: every
-       other part of the install is still usable without autostart, and the
-       user can start PrivacyFence from the Start menu meanwhile. It is
-       logged as a failure rather than passed over silently so that the
-       install log actually says so -- which is also what Phase 7's
-       graphical-session test reads back when it finds the task missing.
+       other part of the install is still usable without this task, and what
+       it would cost is narrower than it used to be -- see the dialog below.
+       It is logged as a failure rather than passed over silently so that the
+       install log actually says so, which is also what Phase 7's
+       graphical-session test reads back when it finds the task missing. *)
+    AutostartRegistered := RegisterAutostartTask();
+    if not AutostartRegistered then
+      Log('RegisterAutostartTask: FAILED; the sign-in task was not registered.');
 
-       That install log is not something an ordinary user will ever open,
-       though -- Log() alone left a real install (privacyfence/privacyfence#410)
-       reporting overall success while autostart silently never got wired
-       up, discovered only after the next reboot left the daemon not
-       running with no clue why. So a failure here also raises a dialog,
-       guarded by WizardSilent so an unattended/scripted install (this
-       repo's own /VERYSILENT integration tests included) never blocks on
-       a message box nobody is there to dismiss. *)
-    if not RegisterAutostartTask() then
+    (* Deliberately after RegisterAutostartTask, not before: `enable`'s last
+       act is to *disable* that task (it would start a second daemon, in the
+       user's own session, against a data directory only the service account
+       can read -- see Disable-DaemonTask in the .ps1). Registering it
+       afterwards would hand the separated install exactly the thing the
+       separation just took away, and `... status` would report
+       STILL AUTOSTARTS on a fresh install. `disable` puts it back.
+
+       Unlike the autostart step above, a failure here aborts the install.
+       That is ADR 0003 decision 1 in one line: a PrivacyFence that cannot
+       separate itself still renders the same approval dialogs, accepts the
+       same passkey enrollment and writes the same audit log, none of which
+       mean what they say when the daemon and the AI client it governs share
+       an account. Shipping that silently is the outcome this refuses -- and
+       RaiseException here is what makes Setup roll back and exit non-zero,
+       rather than reporting success for an install that isn't one. *)
+    if not SeparateInstall(SeparationOutput) then
     begin
-      Log('RegisterAutostartTask: FAILED; PrivacyFence will not start ' +
-          'automatically at logon.');
-      if not WizardSilent() then
-        (* Every continuation line below starts with a quoted string or
-           ExpandConstant, never a bare #13#10 -- Inno's preprocessor (ISPP)
-           treats a line whose first non-blank character is '#' as a
-           directive line, and "unknown preprocessor directive" is a
-           compile-time error, not a Pascal one, so this bit it once
-           already (privacyfence/privacyfence#411's own CI). Each #13#10
-           pair stays glued to the end of the previous line instead. *)
-        MsgBox(
-          'PrivacyFence could not set up its Windows autostart task, so it ' +
-          'will not launch automatically the next time you sign in.' + #13#10 + #13#10 +
-          'PrivacyFence is still running now. Until this is fixed, you''ll ' +
-          'need to start it manually after each reboot, from:' + #13#10 +
-          ExpandConstant('{app}\{#AppExeName}') + #13#10 + #13#10 +
-          'Re-running this installer may resolve it -- if it keeps ' +
-          'happening, please report it to the PrivacyFence project.',
-          mbInformation, MB_OK);
+      Log('SeparateInstall: FAILED; aborting the installation.');
+      RaiseException(
+        'PrivacyFence could not set up privilege separation, so it has not ' +
+        'been installed.' + #13#10 + #13#10 +
+        'PrivacyFence runs its approval daemon under a dedicated Windows ' +
+        'account, so that the AI client it governs cannot rewrite its own ' +
+        'policy, forge a passkey or read the audit log''s key. An install ' +
+        'that cannot do that would still show you the same approval prompts ' +
+        'while meaning something weaker by them, so it is not installed at ' +
+        'all.' + #13#10 + #13#10 +
+        'This usually means the install location can be written by the ' +
+        'signed-in user. Installing into the default location under ' +
+        'Program Files is what this expects.' + #13#10 + #13#10 +
+        'The separation step reported:' + #13#10 + SeparationOutput);
     end;
+
+    (* Reported only now, once separation has succeeded, because what a
+       missing sign-in task actually costs depends on that -- and because an
+       install that is about to abort should not first stop to discuss its
+       autostart arrangements.
+
+       The dialog exists at all because Log() alone was not enough:
+       privacyfence/privacyfence#410 was a real install reporting overall
+       success while autostart silently never got wired up, discovered only
+       after the next reboot left the daemon not running with no clue why.
+       What it says has changed with decision 4, because the daemon is a
+       service now and the service is what starts it -- this task is the
+       *unseparated* install's autostart, which is to say the one `disable`
+       hands back. Saying "PrivacyFence will not start at sign-in" here
+       would be alarming and wrong.
+
+       WizardSilent guards it so an unattended/scripted install (this repo's
+       own /VERYSILENT integration tests included) never blocks on a message
+       box nobody is there to dismiss.
+
+       Every continuation line below starts with a quoted string or
+       ExpandConstant, never a bare #13#10 -- Inno's preprocessor (ISPP)
+       treats a line whose first non-blank character is '#' as a directive
+       line, and "unknown preprocessor directive" is a compile-time error,
+       not a Pascal one, so this bit it once already
+       (privacyfence/privacyfence#411's own CI). Each #13#10 pair stays glued
+       to the end of the previous line instead. *)
+    if (not AutostartRegistered) and (not WizardSilent()) then
+      MsgBox(
+        'PrivacyFence could not register its Windows sign-in task.' + #13#10 + #13#10 +
+        'This does not stop PrivacyFence from running: the daemon runs as a ' +
+        'Windows service and starts with the machine. The task only matters ' +
+        'if you later turn privilege separation off, which moves the daemon ' +
+        'back into your own session and relies on it.' + #13#10 + #13#10 +
+        'Re-running this installer may resolve it -- if it keeps ' +
+        'happening, please report it to the PrivacyFence project.',
+        mbInformation, MB_OK);
   end;
 end;

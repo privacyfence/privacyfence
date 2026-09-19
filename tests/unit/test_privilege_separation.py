@@ -1752,6 +1752,60 @@ class TestWindowsInstallerContract:
         assert (WINDOWS_TEMPLATE_DIR / "privacyfence-companion-task.xml.tmpl").is_file()
         assert "privacyfence-companion-task.xml.tmpl" in self.SCRIPT
 
+    def test_the_installer_runs_enable_itself(self):
+        # ADR 0003 decision 4, and the only part of it that is a contract
+        # between two files rather than a behavior: Setup has to run *this*
+        # script, by the name [Files] installs it under, with the machine
+        # half's own subcommand.
+        #
+        # `enable` and not `enable -ForUser`: decision 3 split them so that
+        # the half needing no human always runs, and -ForUser is the other
+        # half on its own -- an installer calling it would refuse outright
+        # against an install nothing has separated yet ("run '... enable'
+        # first" in Invoke-EnableForUser).
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        separate = inno.split("function SeparateInstall", 1)[1].split("\nend;", 1)[0]
+
+        assert "ScriptPath := ExpandConstant('{app}\\privilege-separation.ps1')" in separate
+        assert "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " in separate
+        assert "'\" enable > \"'" in separate
+        assert "-ForUser" not in separate
+
+    def test_a_failed_enable_fails_the_install(self):
+        # The whole of decision 1 on this platform. Inno ignores a [Run]
+        # entry's exit code and CurStepChanged's own autostart step
+        # deliberately only warns, so "Setup finished successfully" is the
+        # default outcome of anything that goes wrong in post-install --
+        # which for this step would mean shipping an install whose approval
+        # UI means less than it says. RaiseException is what turns it into a
+        # rollback and a non-zero exit instead.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+        post_install = inno.split("procedure CurStepChanged", 1)[1]
+
+        assert "if not SeparateInstall(SeparationOutput) then" in post_install
+        assert "RaiseException(" in post_install
+        # ...and after the autostart registration, not before: `enable` ends
+        # by disabling that task (Disable-DaemonTask), so registering it
+        # afterwards would re-arm a second daemon in the user's own session
+        # on every fresh install.
+        assert post_install.index("RegisterAutostartTask()") < post_install.index("SeparateInstall(")
+
+    def test_nothing_in_the_installer_starts_the_daemon_directly(self):
+        # A separated install's daemon is a service; a copy of it started in
+        # the logged-in user's session is refused by check_runtime_identity()
+        # rather than merely redundant. So the Finish-page "launch now" entry
+        # that used to run the alias exe is gone, and the only [Run] entries
+        # left are the two that open the .mcpb.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+        run_section = inno.split("\n[Run]\n", 1)[1].split("\n[UninstallRun]\n", 1)[0]
+        # Comments in this section talk about the entry that was removed and
+        # why, so they have to come out before asking what it still runs.
+        entries = [line for line in run_section.splitlines() if not line.lstrip().startswith(";")]
+
+        assert "{#AliasExeName}" not in "\n".join(entries)
+        assert "{#AppExeName}" not in "\n".join(entries)
+
     def test_marker_matches(self):
         assert self._assign("MarkerName") == privilege_separation.MARKER_FILE_NAME
         assert f"$MarkerVersion = {privilege_separation.MARKER_VERSION}" in self.SCRIPT

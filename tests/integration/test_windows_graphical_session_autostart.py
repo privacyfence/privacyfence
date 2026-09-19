@@ -124,6 +124,23 @@ gated on ``_is_admin()`` below, never once exercised that failure), so
 ``INSTALL_DIR`` exists for this module's own isolation from a real
 ``%ProgramFiles%\\PrivacyFence`` some other install might already occupy,
 not to force a machine-wide layout the installer wouldn't otherwise pick.
+It is created administrators-only before Setup is pointed at it
+(``_admin_only_writable_dir``), because ADR 0003 decision 4 has the install
+separate itself and ``enable`` refuses an install directory the signed-in
+user can rewrite -- see that helper's own docstring.
+
+**And the separation is then undone, every time.** This module's subject is
+the *daemon's* autostart task: a task that starts ``privacyfence-app.exe`` in
+the signed-in user's own session. A separated install has no such thing --
+``enable`` disables that task (the daemon is a service by then) and
+``check_runtime_identity()`` would refuse the process even if something
+started it. So ``_disable_installer_enabled_privilege_separation()`` runs
+right after the install in the fixture below, the same way
+``test_deb_packaged_lifecycle.py`` has undone the ``.deb``'s own
+``enable --auto`` since #428 D1, and this module goes on testing what it has
+always tested. The separated-by-default install is asserted in
+``test_windows_packaged_smoke.py``'s own
+``test_windows_install_separates_with_no_manual_enable``.
 
 Skipped entirely unless running on real Windows, elevated (installing
 machine-wide and managing a Task Scheduler task needs it), with a just-built
@@ -169,9 +186,11 @@ from tests.integration.test_windows_packaged_smoke import (  # noqa: E402
     ALIAS_EXE_NAME,
     MCP_TOKEN_FILE_NAME,
     TASK_NAME,
+    _admin_only_writable_dir,
     _bootstrap_session,
     _built_installers,
     _data_dir,
+    _disable_installer_enabled_privilege_separation,
     _free_port,
     _prepare_home,
     _propose_trusted_sender_rule,
@@ -179,6 +198,7 @@ from tests.integration.test_windows_packaged_smoke import (  # noqa: E402
     _quit,
     _run_installer,
     _task_exists,
+    _tear_down_separation,
     _wait_until_connectable,
 )
 from tests.windows_task_contract import assert_task_xml_matches_autostart_contract  # noqa: E402
@@ -603,11 +623,15 @@ def _installed(_real_home_state, tmp_path):
     next on this machine)."""
     home = _real_home_state
     port = _free_port()
-    _prepare_home(home, port=port)
 
     if INSTALL_DIR.exists():  # a previous run that died before its own cleanup
         _kill_alias_processes()
         shutil.rmtree(INSTALL_DIR, ignore_errors=True)
+    # Likewise for the machine-wide state an installer-run `enable` leaves --
+    # a service and a %ProgramData% directory outlive an interrupted run the
+    # same way a stray install directory does.
+    _tear_down_separation()
+    _admin_only_writable_dir(INSTALL_DIR)
 
     _enable_task_scheduler_event_log()
     log_path = tmp_path / "install.log"
@@ -620,6 +644,16 @@ def _installed(_real_home_state, tmp_path):
         f"installer failed (exit {install_result.returncode}):\n{install_result.stdout}{install_result.stderr}\n"
         f"---- install log (tail) ----\n{_install_log_tail(log_path)}"
     )
+    # Back to the unseparated install this module is about -- and before the
+    # task assertion below, since `enable` leaves that task *disabled* and
+    # `disable` is what re-enables it. See the module docstring.
+    _disable_installer_enabled_privilege_separation(INSTALL_DIR)
+    # Seeded only now, not before the install: `enable` *moves* this profile's
+    # data directory under %ProgramData% and `disable` moves it back, so a
+    # settings.yaml written beforehand would make its round trip part of this
+    # fixture's setup for no reason. Nothing reads it until a test asks Task
+    # Scheduler to start the daemon, which is well after this returns.
+    _prepare_home(home, port=port)
     # RegisterAutostartTask (installer/privacyfence.iss's [Code] section)
     # doesn't abort Setup on its own failure, so a silent install can still
     # exit 0 with no task actually registered -- the install log (Inno's
@@ -654,6 +688,7 @@ def _installed(_real_home_state, tmp_path):
         if uninstaller.is_file():
             _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
         shutil.rmtree(INSTALL_DIR, ignore_errors=True)
+        _tear_down_separation()
 
 
 def _assert_registered_task_matches_autostart_contract(exec_path: str) -> None:
