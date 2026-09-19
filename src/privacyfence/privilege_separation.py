@@ -1345,6 +1345,14 @@ def owner_membership_pending() -> bool:
     return not any(accounts_equal(member, user) for member in members)
 
 
+#: Where ``scripts/build_deb.sh`` installs the Linux provisioning script, and
+#: the name ``PLATFORM_LAYOUTS["linux"].status_command`` quotes. Its own
+#: constant rather than a literal inside ``installer_script_path()`` so a test
+#: can point it somewhere that exists -- on a runner of any OS, which a
+#: hardcoded POSIX path cannot be.
+LINUX_PACKAGED_INSTALLER = Path("/usr/sbin/privacyfence-privilege-separation")
+
+
 def _checkout_script_path(name: str) -> Path:
     return Path(__file__).resolve().parents[2] / "scripts" / name
 
@@ -1369,10 +1377,8 @@ def installer_script_path() -> Path | None:
     if platform == "darwin":
         return _macos_installer_script_path()
     if platform == "linux":
-        # What ``scripts/build_deb.sh`` installs, which is also the name
-        # ``PLATFORM_LAYOUTS["linux"].status_command`` quotes.
         return _first_existing(
-            Path("/usr/sbin/privacyfence-privilege-separation"),
+            LINUX_PACKAGED_INSTALLER,
             _checkout_script_path("linux_privilege_separation.sh"),
         )
     if platform == "win32":
