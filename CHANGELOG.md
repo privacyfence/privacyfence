@@ -81,6 +81,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one PrivacyFence itself flagged as carrying personal data. An install with `scope:` written out
   in `config/settings.yaml` or `org_config.json` keeps exactly what it set; only one that never
   expressed an opinion moves, and it moves one rung, not to the widest.
+- **A sign-in session is no longer treated as proof that a human asked for it.** Three paths reach a
+  local-mode `pf_session`, all by design (ADR 0002 decision 6): the companion's own **Open
+  Approvals** item, a bootstrap link a human was handed, and a bare `MINT` on the control channel —
+  which privilege separation *widens* to a group the agent is in. Nothing downstream recorded which,
+  so all three produced the same object with the same authority, and a local process could release
+  the write it had itself requested. Every session now carries a provenance: `human` for one minted
+  through the companion (its menu item, confirmed by a call-back to the process the human clicked,
+  or `privacyfence-app --print-sign-in-link`, confirmed by the companion's own dialog) and
+  `unattested` for everything else. Releasing an approving decision and changing a sensitive setting
+  require `human`; viewing and denying are unchanged, so an unattested link still shows what is
+  pending and says plainly that it cannot approve it. Enforced on privilege-separated installs —
+  since ADR 0003, every packaged one — where the companion this rests on is guaranteed to be
+  installed and running; a non-packaged `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` checkout has neither
+  a companion nor an `authority/` boundary and is unchanged. See
+  `docs/security-and-compliance.md`'s "A session is not a human", including what this deliberately
+  does *not* claim about telling the companion apart from the agent.
+- **Every sign-in link PrivacyFence issues is now audited, and the recent ones are shown on the
+  Passkeys page.** Exactly one of the three ways to a session used to write an audit entry — the
+  MCP sign-in-link tool, now removed — and the two silent ones were the two anything on this
+  machine could use, so the log recorded the sanctioned path and not the reachable ones. Each mint
+  (and each refused attested mint) is now recorded under its own `sign_in_code_minted` decision,
+  naming which path asked and whether the resulting session can approve. `/security` lists the
+  recent ones, so a link you did not ask for is visible rather than merely inferable.
+- **PrivacyFence no longer writes a live sign-in link to disk.** Every startup used to leave the
+  current `?bootstrap=` link in `~/.privacyfence/approvals_url` (and `settings_url`), refreshed on
+  every restart, in a directory that is group-shared with your login account by design — so any
+  program running as you, the AI client included, could read a working session out of it. Those
+  files are no longer written, and any left by an older version are deleted the next time
+  PrivacyFence starts. The not-authorized page points at the companion app and
+  `privacyfence-app --print-sign-in-link` instead; the startup log line names those two rather than
+  a link it was never able to print unredacted anyway.
+- **Removed: `privacyfence_get_sign_in_link`.** This meta-tool minted a live sign-in link for
+  PrivacyFence's own approval and settings UI and handed it to the calling AI client — the exact
+  party the credential governs. It existed because a locked-out human had no other way in: the
+  daemon is headless and the companion app was optional, "nothing installs or starts it
+  automatically yet". ADR 0003 made the companion mandatory and autostarted on all three platforms,
+  so that justification expired. `privacyfence_status` now answers an un-onboarded install with
+  `next_step: "open_privacyfence_companion"` and no link to relay, and the not-authorized page
+  leads with the companion rather than "ask Claude". A human whose companion menu is out of reach
+  runs `privacyfence-app --print-sign-in-link` themselves (above). **If your MCP client's tool list
+  is cached, it will drop this tool on its next refresh; nothing else calls it.**
+- **New: `privacyfence-app --print-sign-in-link`, a way back into the web UI that never routes a
+  credential through the agent.** Run it yourself, in your own terminal: PrivacyFence's companion
+  app confirms it with you before the link it prints is allowed to approve anything. If nothing
+  confirms it, it still prints a link and says what that link is — a view-only session — rather than
+  leaving you with nothing when the reason you are locked out may well be that no companion is
+  running. This is the break-glass path that replaces asking your AI client for a sign-in link.
 - **Enrolling a passkey now needs proof of its own, in both deployment modes.** Removing your *last*
   enrolled credential has always demanded a fresh assertion with it, because letting a session alone
   un-enroll would silently turn a "mandatory" install back into an unenforced one. Adding one had

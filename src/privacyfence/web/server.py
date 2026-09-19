@@ -307,38 +307,37 @@ def _write_mcp_url_file(url: str) -> None:
     privilege_separation.write_handoff_file(path, url)
 
 
-def _bootstrap_url_file_name(path: str) -> str:
-    """``/approvals`` -> ``approvals_url``, ``/settings`` -> ``settings_url``
-    -- the discovery-file name mint_bootstrap_url() writes each freshly
-    minted link under, mirroring MCP_URL_FILE_NAME's own naming for the
-    same directory."""
-    return f"{path.strip('/').replace('/', '_') or 'root'}_url"
+# The discovery files this daemon used to write a live sign-in link into, on
+# every startup and every re-mint: ``/approvals`` -> ``approvals_url``,
+# ``/settings`` -> ``settings_url``, ``/security`` -> ``security_url``. They
+# were the answer to a real problem -- SecretRedactingFormatter (SEC-10)
+# scrubs ``bootstrap=<value>`` out of every log line, so "the daemon logs its
+# URL on startup" was quietly false, and this file was the only channel that
+# actually delivered a usable link.
+#
+# The self-approval plan's Phase 2 stops writing them. handoff/ is 2770 and
+# group-shared with the logged-in user by design (paths.py: "deliberately
+# *not* a security boundary"), so a live bootstrap code sitting there was a
+# session for the taking, refreshed on every restart, by anything running as
+# that user -- the agent included, which is what §02 of that review counts as
+# the second of three silent paths to a session.
+#
+# Nothing replaces them, because two things already had: the companion's own
+# Open Approvals/Open Settings items, which are how a human gets an attested
+# session at all now, and ``privacyfence-app --print-sign-in-link`` for a
+# reader whose companion menu is out of reach (daemon_main.py).
+_LEGACY_BOOTSTRAP_URL_FILE_NAMES = ("approvals_url", "settings_url", "security_url")
 
 
-def _write_bootstrap_url_file(path: str, url: str) -> None:
-    """SEC-06's bootstrap link, written to disk the same way ``mcp_url`` is
-    (0600, alongside web_token/mcp_token) -- unlike that log line, this file
-    is never touched by SecretRedactingFormatter (daemon_main.py's
-    ``setup_logging``), which matches -- and scrubs -- the literal
-    ``bootstrap=<value>`` substring in *every* log line, startup line
-    included (SEC-10, "on principle"). Before this existed, "the daemon
-    logs its URL on startup" (this project's own onboarding docs) was
-    quietly false: a human reading privacyfence.log for that link only ever
-    found ``bootstrap=[REDACTED]``, no matter how many times the daemon was
-    restarted to try to get a fresh one -- see
-    web/session_auth.py's unauthorized_html(), which now points here
-    instead. Overwritten, not appended, on every mint -- only the newest
-    link is ever meaningful, since consuming or expiring the previous one
-    leaves it dead anyway."""
-    file_path = paths.handoff_dir() / _bootstrap_url_file_name(path)
-    privilege_separation.write_handoff_file(file_path, url)
-
-
-def _clear_bootstrap_url_file(path: str) -> None:
-    """Mirrors _clear_mcp_url_file: called on WebServer.stop() for every
-    path this server ever minted a link for, so a reader after shutdown
-    finds no file rather than a stale, now-dead link."""
-    (paths.handoff_dir() / _bootstrap_url_file_name(path)).unlink(missing_ok=True)
+def _clear_legacy_bootstrap_url_files() -> None:
+    """Deletes any of the above left behind by a previous version, on
+    startup. An upgraded install would otherwise keep whatever file the old
+    daemon wrote last: the code in it is dead once that process exits (the
+    store is in memory), but it reads as a live sign-in link to a human, and
+    leaving a file this daemon no longer maintains where somebody was taught
+    to look for a working link is worse than leaving nothing."""
+    for name in _LEGACY_BOOTSTRAP_URL_FILE_NAMES:
+        (paths.handoff_dir() / name).unlink(missing_ok=True)
 
 
 def _clear_mcp_url_file() -> None:
@@ -635,8 +634,14 @@ class _BootstrapMiddleware:
             await self._app(scope, receive, send)
             return
         response = RedirectResponse(request.url.path, status_code=303)
-        if self._bootstrap.consume(code):
-            _set_session_cookie(response, self._sessions.create())
+        # The code carries its own provenance (web/session_auth.py's
+        # ``PROVENANCE_*``) and the session inherits it unchanged: the mint
+        # is the only moment anything knew how this credential came to
+        # exist, and a middleware reading a query string is in no position
+        # to improve on that.
+        provenance = self._bootstrap.consume(code)
+        if provenance is not None:
+            _set_session_cookie(response, self._sessions.create(provenance=provenance))
         await response(scope, receive, send)
 
 
@@ -812,10 +817,21 @@ def build_app(
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
 
+    # The self-approval plan's Phase 2 -- one answer, read once here, for
+    # both gates below: an approving decision (web/routes_approvals.py) and
+    # a sensitive settings action (web/routes_settings.py) require a session
+    # this daemon can attribute to a person. See either module's own
+    # ``require_human_session`` paragraph for why privilege separation is
+    # the line: it is what ADR 0003 makes mandatory on every packaged
+    # install, and what guarantees the companion that mints such a session
+    # exists at all.
+    require_human_session = privilege_separation.is_enabled()
+
     if controller is not None:
         extra_routes.extend(build_settings_routes(
             controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
             notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_issuer_url,
+            require_human_session=require_human_session,
         ))
 
     # #426 Phase 1: mounted whenever step_up.rp_id is set -- which, unlike
@@ -879,6 +895,7 @@ def build_app(
         any_connector_authenticated=(
             controller.any_connector_authenticated if controller is not None else None
         ),
+        require_human_session=require_human_session,
     )
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
     scoped: ASGIApp = _PrincipalScopeMiddleware(bootstrapped, principal_resolver or _default_principal)
@@ -1038,8 +1055,9 @@ class WebServer:
         # once here and shared with build_app() below -- None in org mode,
         # which has its own OrgSessionStore (org.sessions) and no bootstrap
         # concept at all (org mode's entry point is /login, not a one-time
-        # link). See mint_bootstrap_url() for how a human actually gets a
-        # code out of self.bootstrap.
+        # link). Nothing in this class hands a code out any more: the
+        # control channel is the only way one is minted, and who may ask for
+        # an *attested* one is web/control_channel.py's own business.
         #
         # #428 Phase 2: self.control_channel is the control channel that
         # replaces the old web_token-authenticated POST /api/bootstrap as
@@ -1070,12 +1088,6 @@ class WebServer:
                 enrollment_state=lambda: local_enrollment_state(step_up),
                 reissue_recovery_code=reissue_local_recovery_code,
             )
-        # Every path mint_bootstrap_url() has actually written a discovery
-        # file for -- stop() clears exactly these, never a hardcoded list,
-        # since which paths get minted (just /approvals, or /approvals and
-        # /settings too) depends on daemon_main.py's own config-driven
-        # use_web_settings check.
-        self._minted_bootstrap_paths: set[str] = set()
         self.mcp_dispatcher = mcp_dispatcher
         self.mcp_token = (
             None if org is not None
@@ -1188,28 +1200,6 @@ class WebServer:
             return None
         return f"{self.base_url}{MCP_PATH}"
 
-    def mint_bootstrap_url(self, path: str) -> str | None:
-        """SEC-06: a fresh, single-use ``?bootstrap=`` link for ``path``
-        (e.g. ``/approvals``, ``/settings``) -- ``None`` in org mode, which
-        has no bootstrap concept (its entry point is ``/login``). Call this
-        once per link actually handed to a human -- daemon_main.py's own
-        startup log lines are the only caller today -- never reuse the
-        result: each call mints a brand-new code, and the previous one (if
-        any) is simply left to expire on its own rather than being
-        invalidated early.
-
-        Also writes the link to its own discovery file
-        (``_write_bootstrap_url_file``) -- the log line daemon_main.py
-        prints alongside this call is always redacted (see that helper's
-        own docstring), so the file is the only channel that actually
-        delivers a usable link. ``stop()`` clears every path minted here."""
-        if self.bootstrap is None:
-            return None
-        url = f"{self.base_url}{path}?bootstrap={self.bootstrap.mint()}"
-        _write_bootstrap_url_file(path, url)
-        self._minted_bootstrap_paths.add(path)
-        return url
-
     def start(self) -> None:
         self._thread = threading.Thread(target=self._server.run, name="web-server", daemon=True)
         self._thread.start()
@@ -1219,6 +1209,9 @@ class WebServer:
         if self.control_channel is not None:
             self.control_channel.start()
             _write_web_base_url_file(self.base_url)
+            # Local mode only: org mode never wrote these (no bootstrap
+            # concept at all), so there is nothing of its own to clean up.
+            _clear_legacy_bootstrap_url_files()
 
     def stop(self) -> None:
         self._server.should_exit = True
@@ -1229,5 +1222,3 @@ class WebServer:
             _clear_web_base_url_file()
         if self.mcp_url is not None:
             _clear_mcp_url_file()
-        for path in self._minted_bootstrap_paths:
-            _clear_bootstrap_url_file(path)

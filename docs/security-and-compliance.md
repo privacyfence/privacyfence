@@ -58,6 +58,10 @@ standing.
 
 A local process running as the signed-in user can:
 
+- read the current sign-in link straight out of `handoff/approvals_url` — **no longer: that file
+  is not written any more** (the self-approval plan's Phase 2), and any left by an older version is
+  deleted on the next start. It was the second of the three paths to a session §02 of that review
+  counts, and the only one that took no more than reading a file;
 - connect to the control channel under the data directory's `authority` subdirectory ([#428](https://github.com/privacyfence/privacyfence/issues/428)
   Phase 1 split this, and `config/settings.yaml`, enrolled WebAuthn credentials, and the audit log,
   out of the rest of the data directory; Phase 2 replaced the persistent `web_token` file and its
@@ -66,7 +70,11 @@ A local process running as the signed-in user can:
   own, since it still sits at the same uid as everything else there) and mint a fresh bootstrap
   code — the not-authorized page prints that exact command, deliberately, for a locked-out human;
 - exchange the code for a `pf_session` cookie by visiting `/approvals?bootstrap=<code>`;
-- `POST /api/approvals/<id>/decide` and release a pending approval.
+- `POST /api/approvals/<id>/decide` and release a pending approval — **on a separated install this
+  last step no longer follows from the first two**: a session minted by a bare `MINT` is
+  `unattested`, and an approving decision requires one a human was asked for. See
+  [A session is not a human](#a-session-is-not-a-human) below, which is the only part of this list
+  privilege separation changes rather than merely relocates.
 
 No browser is involved at any step. The CSRF double-submit and same-origin checks on that last
 request are defenses against a hostile web page loaded in the user's browser: such a page cannot read
@@ -90,8 +98,9 @@ not as a boundary against local code execution.
 
 **Org mode does not share this**, for a structural reason rather than a difference in checks: the
 daemon runs on a server the organization operates, so an AI client on an employee's device has no
-loopback access to it, no control channel to reach and no bootstrap endpoint to call —
-`privacyfence_get_sign_in_link` raises there outright. Authentication is IdP-backed, and where
+loopback access to it, no control channel to reach and no bootstrap endpoint to call — and, since
+the self-approval plan's Phase 2 retired `privacyfence_get_sign_in_link`, no tool that would mint
+one in either mode. Authentication is IdP-backed, and where
 configured, WebAuthn step-up binds a write approval to a fresh user-verified assertion.
 
 **Closing this in local mode** takes two changes, both tracked: running the daemon under its own
@@ -177,6 +186,84 @@ banner-and-release-nothing state above. It is meant to last minutes: the compani
 its own next start, and opens `/security` with a session already minted so the human can enroll
 one. Nothing ships a configuration where `require_passkey` is on with nothing enrolled *and*
 nothing is trying to fix it.
+
+**Step-up asks whether this is the enrolled human; session provenance asks whether a human asked at
+all**, and the second question is asked first, without waiting on any `step_up` setting — see
+[A session is not a human](#a-session-is-not-a-human) directly below.
+
+### A session is not a human
+
+ADR 0002 decision 6 names three ways a local process reaches a `pf_session`, all of them by design:
+the companion's own **Open Approvals** item, a bootstrap link a human was handed, and a bare `MINT`
+on the control channel — which privilege separation *widens* from `0600` to `0660` so the companion
+can reach it, putting the agent in the same group. The decision that made this acceptable was that
+a minted session would be **insufficient** rather than uncallable, with the passkey supplying what
+it lacked.
+
+Nothing downstream recorded *which* of the three a session came from, so the three were
+interchangeable: a session the human obtained by clicking Open Approvals and one the agent obtained
+by minting its own were the same object with the same authority.
+
+**Every local-mode session now carries a provenance** (`web/session_auth.py`):
+
+| provenance | minted by | may view | may approve |
+| --- | --- | --- | --- |
+| `human` | the companion's own menu (`MINT COMPANION <nonce>`, confirmed by a call-back to the process the human clicked), or `privacyfence-app --print-sign-in-link` (`MINT CONSOLE`, confirmed by the companion's own dialog) | yes | yes |
+| `unattested` | a bare `MINT` on the control channel — anything running as this OS user | yes | no |
+
+`human` is required to release an *approving* decision (`accept`/`accept_all`, individually or in a
+batch) and to take any `_SENSITIVE_ACTIONS` settings action. Denying is not gated, under the same
+reasoning step-up uses: denying discloses nothing. Viewing is not gated at all — a locked-out human
+with only an unattested link can still see what is pending, and is told in so many words that this
+link cannot approve it.
+
+**This is enforced on privilege-separated installs only**, which since
+[ADR 0003](adr/0003-separated-installs-only.md) is every packaged install (decision 6: an
+unseparated packaged daemon refuses to serve) and which guarantees the companion is installed and
+running (decisions 3–5). On a non-packaged source checkout run with
+`PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` there is no companion to mint through and no `authority/`
+boundary either — an agent there rewrites the credential store directly, which is the case ADR 0002
+decision 6 names — so the check is not applied and would buy nothing if it were. Same line
+`StepUpConfig.from_local_config()` already draws when it refuses `require_passkey` on such an
+install.
+
+**Every mint is audited, and the recent ones are shown.** Each bootstrap code this daemon issues
+— and each attested one it refuses — is recorded under its own `sign_in_code_minted` decision
+(`audit_log.py`'s own vocabulary comment), naming which of the paths above asked and whether the
+resulting session can approve. Before this, the only path that wrote an entry was the MCP
+sign-in-link tool, i.e. the sanctioned one, while the two a local process could use silently wrote
+nothing. `/security` lists the most recent of these under **Recent sign-ins**, because an audit
+entry nobody reads is evidence after the fact: the point is that a link you did not ask for is
+visible on the page you already visit to reason about what can approve here.
+
+**A code in a browser's address bar is still a code on this machine.** The companion signs a human
+in the only way a local web UI can: by opening `…?bootstrap=<code>` in their browser. On a
+shared-uid machine a sibling process can read that URL out of the browser's own command line
+(`/proc/<pid>/cmdline` on Linux, the equivalent elsewhere) for as long as it takes the browser to
+redeem it, and the code is single-use, so whoever redeems first wins. What provenance changes is
+that this is now a *race against a human click* rather than a file sitting in a group-shared
+directory being refreshed on every restart — an attested session can no longer be obtained at a
+time of the agent's choosing. It is not a boundary, and nothing about a credential passed through a
+URL can be made into one; closing it properly means the companion handing the daemon a session the
+browser never carries, which is not what any of this ships today.
+
+The same reasoning is why the companion's `SHOW` command — the one an applications-menu click on
+Linux uses to have the running companion do the opening — puts the confirmation dialog in front of
+a human before it mints anything. That line arrives from another process running as the same OS
+user, and the agent is indistinguishable from the menu click it exists for; without the dialog, any
+local process could make the companion mint an approving session and open it in a browser at any
+moment, with the above race for the code and no human anywhere in it.
+
+**What this is not: authentication of the companion.** Companion and agent share an OS user, and
+the companion's own channel lives under `handoff_dir()`, which `paths.py` states outright is
+"deliberately *not* a security boundary" — so a local process running as that user can bind that
+address before the companion does and answer the daemon's call-back itself. This is the identical
+limit the [first-enrollment gate](#enrolling-a-passkey-is-itself-gated) accepts, for the identical
+reason, and it is bounded the same way: on a separated install the companion is autostarted at
+login, so winning that race means starting before it and staying there, which breaks the connector
+OAuth flows that share the address and leaves the human with no companion where one is meant to be.
+What provenance buys is that the two silent paths stop being interchangeable with the attended one,
+and that forging the attended one costs impersonating a process whose absence is visible.
 
 ### Enrolling a passkey is itself gated
 
@@ -509,8 +596,17 @@ separation](#privilege-separation-macos-linux-and-windows) is active, `step_up.e
 4.2, all four are the default**: separation is mandatory or the daemon refuses to serve ([ADR
 0003](adr/0003-separated-installs-only.md)), both flags default on, and the companion walks the
 human through enrolling at its next start. Anywhere else — a source checkout, an editable install,
-`pipx install privacyfence` — none of the four is a default, and the session is still sufficient on
-its own: the agent can approve its own request. The consequence, stated rather than left to be
+`pipx install privacyfence` — none of the four is a default.
+
+**[Session provenance](#a-session-is-not-a-human) is what holds where they are not.** It asks a
+different question than the passkey does, and does not wait on any `step_up` setting to ask it: a
+session the agent minted for itself is `unattested` and cannot approve, enrolled passkey or not;
+one minted through the companion is `human` and can. That is a *weaker* statement than the
+passkey's — it rests on the companion being the process a human is in front of, not on a
+cryptographic proof, and that section says exactly where the line is — but it costs nobody a
+setting they have to find first. The two stack rather than substitute: a packaged install has both,
+and an install with none of the four still cannot have an approval released by a session the agent
+minted for itself. The consequence, stated rather than left to be
 discovered, for an install that has all four: **integrity is the strong guarantee — the agent
 cannot approve its own request — while confidentiality of the review screen is the weaker one**,
 since an agent that reaches the web UI can still read what is pending. The control channel's socket accordingly lives in
@@ -555,15 +651,49 @@ The local browser UI is not authenticated by a reusable token in the URL. The da
 
 Mutating requests require the authenticated session, same-origin checks, and CSRF validation. Session/bootstrap secrets are not intended for logging or propagation into connector data.
 
-### MCP-issued sign-in links
+The ordinary way a human reaches that exchange is the companion app's own **Open Approvals**/**Open Settings** items. `privacyfence-app --print-sign-in-link` is the break-glass alternative, for a session the companion's menu is not reachable from (an SSH login, a desktop whose applications menu nobody has open, a tray icon that failed to start): it prints one link, to stdout alone so it can be piped, and asks the companion to confirm with the human at the login session first — the command runs as the same OS user the agent does, so what makes the resulting session `human` (see [A session is not a human](#a-session-is-not-a-human)) is that a person clicked Allow, not that the request came from a terminal. If nothing confirms it, it prints an `unattested` link instead and says so: enough to see what is pending, not to release it.
 
-`privacyfence_get_sign_in_link` is a meta-tool, available over `/mcp` like every connector tool, that mints a fresh bootstrap link for this same local web UI (`/approvals` or `/settings`) and returns it to the calling MCP client. It is dispatched directly rather than through the gated-call path every connector tool uses — deliberately: the human approval that path would require lives behind the very UI a locked-out user is trying to reach, so gating this tool on that UI would be circular.
+### Sign-in links are no longer issued over MCP
 
-What bounds it instead: local mode only (it raises in org mode, which authenticates through IdP-backed OAuth rather than a bootstrap link, so it can never return a working credential there); the link it mints is the same single-use, short-lived bootstrap code every other sign-in path in this section uses, consumed by the first visit whether or not it succeeds; `page` is allowlisted to `approvals`/`settings`, never an arbitrary path; and the local web UI is bound to `localhost`, so the link is only useful from the same machine the MCP client and daemon are already both running on. Every call is written to the audit log under its own `sign_in_link_issued` decision, carrying the calling client's self-reported reason — the same disclosed-and-unverified posture every other tool's `reason` parameter has.
+`privacyfence_get_sign_in_link` was a meta-tool, available over `/mcp` like every connector tool,
+that minted a fresh bootstrap link for the local web UI and returned it to the calling MCP client.
+**It is retired** (the self-approval plan's Phase 2), and this section records why rather than
+deleting the reasoning along with it.
 
-Net effect: an MCP client can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. The justification this paragraph used to give — that such a client already holds equivalent-or-greater access via every other tool this daemon exposes — holds for connector reads and writes, which are themselves gated. It understates one case: a session also reaches the approval UI, so it can *release* a gated call rather than merely request one, and that is the product's central control rather than one more tool. This is not a weakness introduced by this tool — see [Local-mode trust boundary](#local-mode-trust-boundary), where a process running as the user mints the same session through the control channel without it — but it should not be described as a neutral consequence of existing trust either. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
+It was never gated on a human approval, deliberately: the approval that would have required lives
+behind the very UI a locked-out user is trying to reach, so gating it on that UI would have been
+circular. What bounded it instead was local mode only, a single-use short-lived code, an allowlisted
+`page`, a loopback-bound UI, and a `sign_in_link_issued` audit entry carrying the caller's
+self-reported reason. Its net effect, which this document stated plainly, was that **an MCP client
+could obtain a working session for the human-facing approval surface without a human approving that
+specific request** — a session that can *release* a gated call rather than merely request one.
 
-**Revised, #426 Phase 4:** the paragraph above is still true of a session by itself, and stays true regardless of configuration — this tool has no `step_up` awareness of its own, and doesn't need any: minting a session was never the part step-up narrows. What changes is what that session is *sufficient for*, and only under two conditions together -- both of which a packaged install has by default as of 4.2, and neither of which a source checkout or a `pip`/`pipx` install has at all. With [privilege separation](#privilege-separation-macos-linux-and-windows) active (mandatory on a packaged install as of [ADR 0003](adr/0003-separated-installs-only.md); not guaranteed on a non-packaged one — see "The developer path" above) **and** `step_up.require_passkey` turned on in `config/settings.yaml` (on by default on a packaged install as of 4.2, opt-in everywhere else — reachable from the Settings page once a passkey is enrolled, B9, or still by hand; see `step_up_config.py`'s own `default_local_step_up`/`LiveStepUpConfig` docstrings), the credential store a step-up assertion is checked against is no longer writable by the same process minting the session, so that session alone can no longer release an approving decision on a gated write, nor change what a future write can reach through `_SENSITIVE_ACTIONS` (an always-allow rule, a grant, a relaxed default policy). It can still mint the session, still view what's pending, and still hold read access to the review screen — the confidentiality half [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 names as the weaker guarantee, left open on purpose. With either condition missing — no privilege separation, or `step_up.require_passkey` left off — the original paragraph's net effect stands unqualified: the session is enough on its own.
+Two things changed that turned "documented cost" into "no longer worth paying":
+
+- **Its justification expired.** The tool existed because a locked-out human had no other way in:
+  the daemon is headless (P10 removed the menu bar) and the companion app was optional, "nothing
+  installs or starts it automatically yet". [ADR 0003](adr/0003-separated-installs-only.md) makes
+  the companion mandatory and autostarted on all three platforms (decisions 3–5), so that sentence
+  is no longer true anywhere PrivacyFence ships.
+- **A session stopped being one thing.** With [session provenance](#a-session-is-not-a-human), the
+  link this tool minted would be `unattested` and could not approve anything — so the tool would be
+  handing the agent a credential that no longer does what the tool's own description promised, while
+  still granting read access to the review screen.
+
+What replaces it: the companion's own **Open Approvals**/**Open Settings** items, and — for a human
+whose companion menu is out of reach — `privacyfence-app --print-sign-in-link`, run by that human in
+their own terminal (see [Local web UI](#local-web-ui)). `privacyfence_status` still tells a model
+that an install is un-onboarded; its `next_step` is now `open_privacyfence_companion`, and it has no
+link to hand over.
+
+**What this does not close**, and it is the same sentence as before: a process running as the user
+mints the same bootstrap code through the control channel without any tool's help — see
+[Local-mode trust boundary](#local-mode-trust-boundary). Retiring the tool removes the *audited,
+sanctioned* path, not the underlying reachability; what makes the remaining paths insufficient is
+provenance and the passkey — which, on a packaged install as of 4.2, is on by default rather than
+waiting to be turned on. Removing the tool does mean the one path that was
+audited is gone — so every mint is audited now, whichever channel asked for it; see
+[A session is not a human](#a-session-is-not-a-human).
 
 ### Local MCP
 

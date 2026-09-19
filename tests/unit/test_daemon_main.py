@@ -1498,18 +1498,21 @@ class TestMaybeStartWebServer:
         # No second push into the dispatcher -- it polls connector_host.connectors.
         assert list(result.mcp_dispatcher.connectors) == [fake_connector.name]
 
-    def test_mcp_dispatcher_gets_a_working_sign_in_link_provider(self, monkeypatch, tmp_path):
-        # privacyfence_get_sign_in_link's own wiring: McpDispatcher.
-        # set_bootstrap_link_provider(server.mint_bootstrap_url), done here
-        # since the dispatcher exists before the WebServer it needs does.
+    def test_the_dispatcher_has_no_way_to_mint_a_sign_in_link(self, monkeypatch, tmp_path):
+        """The self-approval plan's Phase 2 retired
+        ``privacyfence_get_sign_in_link``, and with it the
+        ``set_bootstrap_link_provider`` wiring this call site used to do --
+        the seam that handed the /mcp dispatcher a way to mint a live
+        session. Asserted here, where the wiring lived, so reintroducing it
+        by accident fails rather than passes quietly."""
         self._no_bind(monkeypatch, tmp_path)
 
         result = daemon_main._maybe_start_web_server(
             {"web": {"mcp": {"enabled": True}}}, self._connector_host(), unattended_sessions_enabled=False,
         )
 
-        link = result.mcp_dispatcher.get_sign_in_link("approvals")
-        assert link["url"].startswith(f"{result.base_url}/approvals?bootstrap=")
+        assert not hasattr(result.mcp_dispatcher, "get_sign_in_link")
+        assert not hasattr(result.mcp_dispatcher, "set_bootstrap_link_provider")
 
     def test_mcp_dispatcher_defaults_to_local_mode(self, monkeypatch, tmp_path):
         # privacyfence_status's own mode field (issue #396 Phase 2) --
@@ -3230,3 +3233,100 @@ class TestLoadPrincipalSettings:
         with principal_scope(Principal(id="alice")):
             daemon_main._load_principal_settings(install_wide_config=install_wide)
             assert "IP address" not in pii_detector.detect_pii_categories("ping 10.1.2.3 please")
+
+
+class TestPrintSignInLink:
+    """The self-approval plan's Phase 2 break-glass path: a sign-in link
+    printed in the human's own terminal, never handed to the agent. It
+    replaces ``privacyfence_get_sign_in_link``, which handed exactly this
+    credential to the party the credential governs.
+
+    The confirmation dialog itself belongs to the companion process and is
+    tested there (tests/unit/web/test_control_channel.py); what is exercised
+    here is the command's own behavior around each of the three answers it
+    can get.
+    """
+
+    @pytest.fixture
+    def channel(self, monkeypatch):
+        from privacyfence.web import control_channel
+
+        monkeypatch.setattr(control_channel, "read_base_url", lambda: "http://127.0.0.1:8765")
+        return control_channel
+
+    def test_a_confirmed_link_is_printed_on_stdout_alone(self, channel, monkeypatch, capsys):
+        monkeypatch.setattr(channel, "mint_console_bootstrap_code", lambda: "attested-code")
+
+        assert daemon_main.run_print_sign_in_link() == 0
+
+        captured = capsys.readouterr()
+        # stdout is the URL and nothing else, so this can be piped straight
+        # into a browser command.
+        assert captured.out.strip() == "http://127.0.0.1:8765/approvals?bootstrap=attested-code"
+        assert "consumed by the first visit" in captured.err
+
+    def test_an_unconfirmed_link_still_prints_but_says_what_it_is(self, channel, monkeypatch, capsys):
+        def _refused():
+            raise channel.ControlChannelError("the sign-in link was denied")
+
+        monkeypatch.setattr(channel, "mint_console_bootstrap_code", _refused)
+        monkeypatch.setattr(channel, "mint_bootstrap_code", lambda: "unattested-code")
+
+        assert daemon_main.run_print_sign_in_link() == 0
+
+        captured = capsys.readouterr()
+        assert captured.out.strip() == "http://127.0.0.1:8765/approvals?bootstrap=unattested-code"
+        # The reader is told at the terminal, not at the Approve button.
+        assert "the sign-in link was denied" in captured.err
+        assert "approving from it will be refused" in captured.err.lower()
+
+    def test_no_daemon_running_prints_nothing_to_stdout(self, monkeypatch, capsys):
+        from privacyfence.web import control_channel
+
+        monkeypatch.setattr(control_channel, "read_base_url", lambda: None)
+
+        assert daemon_main.run_print_sign_in_link() == 1
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "does not appear to be running" in captured.err
+
+    def test_an_unreachable_control_channel_is_an_error_not_a_traceback(self, channel, monkeypatch, capsys):
+        def _boom():
+            raise OSError("no such socket")
+
+        monkeypatch.setattr(channel, "mint_console_bootstrap_code", _boom)
+
+        assert daemon_main.run_print_sign_in_link() == 1
+        assert capsys.readouterr().out == ""
+
+    def test_a_fallback_that_also_fails_prints_nothing_to_stdout(self, channel, monkeypatch, capsys):
+        def _refused():
+            raise channel.ControlChannelError("no companion answered")
+
+        def _also_refused():
+            raise OSError("no such socket")
+
+        monkeypatch.setattr(channel, "mint_console_bootstrap_code", _refused)
+        monkeypatch.setattr(channel, "mint_bootstrap_code", _also_refused)
+
+        assert daemon_main.run_print_sign_in_link() == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Could not mint a sign-in link at all" in captured.err
+
+    def test_main_dispatches_before_the_runtime_identity_check(self, monkeypatch):
+        """On a separated install ``check_runtime_identity()`` refuses the
+        very account this command is meant to be run from -- it exists to
+        stop the *daemon* starting as the wrong user. So the flag is handled
+        ahead of it, and ahead of reading any config."""
+        from privacyfence import privilege_separation
+
+        def _refuse():
+            raise privilege_separation.PrivilegeSeparationError("wrong account")
+
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", _refuse)
+        monkeypatch.setattr(daemon_main, "load_config", lambda path: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "run_print_sign_in_link", lambda: 0)
+
+        assert daemon_main.main(["--print-sign-in-link"]) == 0

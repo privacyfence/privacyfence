@@ -644,6 +644,11 @@ li.cred:last-child{border-bottom:none}
 button.add{padding:8px 16px;border:none;border-radius:6px;background:#2451c9;color:#fff;font-size:14px;cursor:pointer}
 button.remove{background:none;color:#a02a2a;text-decoration:underline;border:none;padding:0;font-size:13px;cursor:pointer}
 .empty{color:#888;padding:20px 0}
+h2{font-size:16px;margin:32px 0 4px}
+ul.mints{list-style:none;padding:0;margin:8px 0 0}
+li.mint{padding:8px 0;border-bottom:1px solid #eee;font-size:13px}
+li.mint:last-child{border-bottom:none}
+li.mint .when{color:#888;font-size:12px;display:block}
 """
 
 _PAGE_JS = """
@@ -824,6 +829,67 @@ _SCOPE_NOTES = {
 }
 
 
+# How many of them the page shows. Long enough to cover "did anything mint a
+# session while I was away from this machine this morning", short enough that
+# the list stays something a human reads rather than scrolls -- the full trail
+# is the audit log's own export, which this is a glance at, not a browser for
+# (audit_log.recent_entries' own docstring draws the same line).
+_RECENT_MINTS_SHOWN = 5
+
+# How far back through recent_entries() to look for them. A busy install can
+# put a lot of ordinary approvals between two mints, and a mint that scrolled
+# off the end would be exactly the one worth seeing.
+_RECENT_MINTS_SCANNED = 200
+
+
+def _recent_mints() -> list[tuple[str, str]]:
+    """``(when, what)`` for the most recent sign-in code mints and refusals,
+    newest first -- the self-approval plan's Phase 2 half that makes an
+    unexpected mint *visible* rather than merely inferable.
+
+    Every path to a session is audited now (web/control_channel.py's
+    ``_audit_mint``), but an audit entry nobody reads is evidence after the
+    fact and not much else; this puts them on the one page a human already
+    visits to reason about what can approve on this install.
+
+    Returns an empty list rather than raising for any reason at all --
+    including org mode, where nothing ever mints one of these and the
+    section simply does not render. A page that fails to load because its
+    least important section could not be built would be a poor trade.
+    """
+    try:
+        from .control_channel import SIGN_IN_MINT_DECISION
+
+        entries = get_audit_logger().recent_entries(_RECENT_MINTS_SCANNED)
+    except Exception as exc:  # noqa: BLE001 -- see this function's own docstring
+        logger.warning("Could not read recent sign-in mints for /security: %s", exc)
+        return []
+    rows: list[tuple[str, str]] = []
+    for entry in entries:
+        if entry.decision != SIGN_IN_MINT_DECISION:
+            continue
+        rows.append((entry.timestamp.replace("T", " ")[:19] + " UTC", entry.summary))
+        if len(rows) == _RECENT_MINTS_SHOWN:
+            break
+    return rows
+
+
+def _recent_mints_html(rows: list[tuple[str, str]]) -> str:
+    if not rows:
+        return ""
+    items = "".join(
+        f'<li class="mint">{_esc(what)}<span class="when">{_esc(when)}</span></li>'
+        for when, what in rows
+    )
+    return (
+        "<h2>Recent sign-ins</h2>"
+        '<p class="meta">Every sign-in link this install has issued, and every one it refused. '
+        "A link that can approve is only ever issued through PrivacyFence's companion app -- if "
+        "you see one here you did not ask for, treat this install as compromised.</p>"
+        f'<ul class="mints">{items}</ul>'
+    )
+
+
 def _render_security_page(
     *, principal: Principal, creds: list, csrf: str, step_up: StepUpConfig, nonce: str,
     back_link: tuple[str, str], nav_items: tuple[tuple[str, str, str], ...] | None = None,
@@ -858,6 +924,7 @@ def _render_security_page(
         '<span id="pf-passkey-status" class="meta"></span></p>'
         '<p>Lost every passkey enrolled here? <button type="button" class="remove" id="pf-use-recovery-code">Use your recovery code</button>'
         '<span id="pf-recovery-status" class="meta"></span></p>'
+        f"{_recent_mints_html(_recent_mints())}"
         f"{back_link_html}"
         f'<script nonce="{nonce}">{_PAGE_JS}</script>'
         "</div>"

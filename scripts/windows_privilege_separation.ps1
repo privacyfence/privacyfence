@@ -391,12 +391,17 @@ function Add-OwnerToServiceGroup {
 # data directory once separation is on, because something in the *user's*
 # session reads them: the agent's own credential and the URL it reaches the
 # daemon at (mcp_token/mcp_url, read by the MCPB shim), and the discovery files
-# a human or the companion reads (web_base_url, <page>_url). Mirrors
+# a human or the companion reads (web_base_url, plus any legacy <page>_url
+# below). Mirrors
 # paths.handoff_dir()'s callers -- see test_privilege_separation.py, which
 # asserts this list matches the file-name constants those call sites use.
 $HandoffFileNames = @('mcp_token', 'mcp_url', 'web_base_url')
-# <page>_url, one per page mint_bootstrap_url() has ever minted a link for
-# (web/server.py's _bootstrap_url_file_name): approvals_url, settings_url.
+# <page>_url: approvals_url/settings_url/security_url, written by versions
+# before the self-approval plan's Phase 2 stopped putting a live sign-in link
+# in a group-shared directory. Kept in the glob so an upgrade does not strand
+# one outside the handoff directory while it still exists -- the daemon
+# deletes them on its next start (web/server.py's
+# _clear_legacy_bootstrap_url_files).
 $HandoffFileGlob = '*_url'
 
 function Move-Data {

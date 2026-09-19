@@ -17,6 +17,7 @@ import sys
 import pytest
 
 from privacyfence.web import control_channel as cc
+from privacyfence.web import session_auth as sa
 from privacyfence.web.session_auth import BootstrapStore
 
 pytestmark = pytest.mark.skipif(
@@ -631,11 +632,23 @@ class TestShowRecoveryCommand:
             server.stop()
         assert reply.startswith("ERROR")
 
-    def test_show_with_an_unknown_subject_is_an_unknown_command(self, tmp_path, monkeypatch):
+    def test_show_with_an_unknown_subject_is_refused_without_a_dialog(self, tmp_path, monkeypatch):
+        # ``SHOW`` carries two subjects now: this class's ``RECOVERY <code>``
+        # and Phase 2's ``SHOW <path>``. Anything that is not ``RECOVERY`` is
+        # therefore read as a page, and an unknown one answers "unknown page"
+        # rather than "unknown command" -- ``RECOVERY`` is not in SHOW_PATHS,
+        # so the two subjects cannot collide. What has to stay true either way
+        # is what this class is about: an unrecognized subject is refused
+        # before anything reaches a dialog.
+        def _never(*args, **kwargs):
+            raise AssertionError("an unknown SHOW subject reached a dialog")
+
+        monkeypatch.setattr(cc, "_message_linux", _never)
+        monkeypatch.setattr(cc, "_confirm_linux", _never)
         server = self._server(tmp_path, monkeypatch)
         try:
-            assert _mint(server.address, message="SHOW SOMETHING\n").startswith("ERROR unknown command")
-            assert _mint(server.address, message="SHOW\n").startswith("ERROR unknown command")
+            assert _mint(server.address, message="SHOW SOMETHING\n").startswith("ERROR unknown page")
+            assert _mint(server.address, message="SHOW\n").startswith("ERROR unknown page")
         finally:
             server.stop()
 
@@ -1097,3 +1110,439 @@ class TestReadBaseUrl:
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         (tmp_path / cc.WEB_BASE_URL_FILE_NAME).write_text("http://127.0.0.1:8765", encoding="utf-8")
         assert cc.read_base_url() == "http://127.0.0.1:8765"
+
+
+class TestAttestedMintCommands:
+    """The self-approval plan's Phase 2: ``MINT`` grew two attested shapes,
+    because the one it had could not say who asked for the session it minted
+    -- and every session it minted could approve (web/session_auth.py's own
+    ``PROVENANCE_*`` comment).
+
+    Both shapes cost a round trip into the companion process. Neither is
+    authentication of that process (companion and agent share a uid, ADR 0002
+    decision 6) -- what they establish is that the line reached the process a
+    human is actually in front of, which the bare ``MINT`` never did.
+    """
+
+    def _dispatch(self, line: str, store: BootstrapStore, **kwargs) -> str:
+        return cc._handle_daemon_request(store, allow_quit=True, line=line, **kwargs)
+
+    def test_a_bare_mint_is_unattested(self):
+        store = BootstrapStore()
+        reply = self._dispatch("MINT\n", store)
+        assert reply.startswith("OK ")
+        assert store.consume(reply[len("OK "):].strip()) == sa.PROVENANCE_UNATTESTED
+
+    def test_a_confirmed_companion_nonce_mints_a_human_code(self):
+        store = BootstrapStore()
+        seen: list[str] = []
+        reply = self._dispatch(
+            "MINT COMPANION abc123\n", store,
+            confirm_companion_mint=lambda nonce: bool(seen.append(nonce)) or True,
+        )
+        assert seen == ["abc123"]
+        assert store.consume(reply[len("OK "):].strip()) == sa.PROVENANCE_HUMAN
+
+    def test_an_unconfirmed_companion_nonce_mints_nothing_at_all(self):
+        store = BootstrapStore()
+        reply = self._dispatch("MINT COMPANION abc123\n", store, confirm_companion_mint=lambda nonce: False)
+        # Not "mints an unattested one instead": a caller that asked for an
+        # attested code and was refused must not be handed a weaker one it
+        # would then treat as the thing it asked for.
+        assert reply == "ERROR that mint was not confirmed by the companion\n"
+        assert store.consume(reply.split()[-1]) is None
+
+    def test_a_companion_mint_with_no_nonce_is_refused_without_asking(self):
+        asked: list[str] = []
+        reply = self._dispatch(
+            "MINT COMPANION\n", BootstrapStore(),
+            confirm_companion_mint=lambda nonce: bool(asked.append(nonce)) or True,
+        )
+        assert reply.startswith("ERROR")
+        assert asked == []
+
+    def test_a_confirmed_console_mint_is_human(self):
+        store = BootstrapStore()
+        reply = self._dispatch("MINT CONSOLE\n", store, confirm_console_mint=lambda: (True, ""))
+        assert store.consume(reply[len("OK "):].strip()) == sa.PROVENANCE_HUMAN
+
+    def test_a_denied_console_mint_passes_the_reason_back(self):
+        reply = self._dispatch(
+            "MINT CONSOLE\n", BootstrapStore(),
+            confirm_console_mint=lambda: (False, "the sign-in link was denied"),
+        )
+        assert reply == "ERROR the sign-in link was denied\n"
+
+    def test_an_unknown_mint_shape_is_not_a_silently_unattested_mint(self):
+        assert self._dispatch("MINT SOMETHING\n", BootstrapStore()) == "ERROR unknown command\n"
+
+
+class TestMintNonces:
+    """What makes ``MINT COMPANION`` attestable: a nonce the *companion*
+    issues to itself and the daemon hands straight back. Nothing here is a
+    secret the daemon keeps -- only the process that issued one can
+    recognize it, and that is the process a human clicked."""
+
+    def test_an_issued_nonce_is_accepted_exactly_once(self):
+        nonce = cc.issue_mint_nonce()
+        assert cc._consume_mint_nonce(nonce) is True
+        assert cc._consume_mint_nonce(nonce) is False
+
+    def test_a_nonce_this_process_never_issued_is_refused(self):
+        assert cc._consume_mint_nonce("not-a-real-nonce") is False
+        assert cc._consume_mint_nonce("") is False
+
+    def test_an_expired_nonce_is_refused(self, monkeypatch):
+        fake_now = [1000.0]
+        monkeypatch.setattr(cc.time, "time", lambda: fake_now[0])
+        nonce = cc.issue_mint_nonce()
+        fake_now[0] += cc._MINT_NONCE_TTL_SECONDS + 1
+        assert cc._consume_mint_nonce(nonce) is False
+
+    def test_two_nonces_are_distinct(self):
+        assert cc.issue_mint_nonce() != cc.issue_mint_nonce()
+
+
+class TestConfirmMintCommand:
+    """``CONFIRM MINT <nonce>`` on the companion's own channel -- the
+    call-back half of the pair above. No dialog: the human already clicked
+    the menu item in this process moments ago, and asking again would put a
+    second confirmation in front of somebody who just answered the first."""
+
+    def _server(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        server = cc.CompanionChannelServer()
+        server.start()
+        return server
+
+    def test_a_nonce_this_companion_issued_is_confirmed(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        nonce = cc.issue_mint_nonce()
+        try:
+            assert _mint(server.address, message=f"CONFIRM MINT {nonce}\n").startswith("OK")
+            # Single-use all the way through: replaying the same line is a
+            # refusal, not a second attested session.
+            assert _mint(server.address, message=f"CONFIRM MINT {nonce}\n").startswith("ERROR")
+        finally:
+            server.stop()
+
+    def test_an_unknown_nonce_is_refused(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message="CONFIRM MINT made-up\n")
+        finally:
+            server.stop()
+        assert reply.startswith("ERROR")
+        assert "no sign-in was requested" in reply
+
+    def test_an_unknown_confirm_subject_is_still_unknown(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="CONFIRM SOMETHING\n") == "ERROR unknown command\n"
+        finally:
+            server.stop()
+
+
+class TestConfirmSignInCommand:
+    """``CONFIRM SIGNIN``: the dialog behind ``privacyfence-app
+    --print-sign-in-link``. The dialog *is* the gate -- the command runs as
+    the same OS user the agent does, so what makes the resulting session
+    attributable to a person is that a person clicked Allow."""
+
+    def test_an_allowed_dialog_answers_ok(self, monkeypatch):
+        asked = []
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: asked.append(prompt) or True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        assert cc._handle_companion_request("CONFIRM SIGNIN\n") == "OK\n"
+        assert asked == [cc._CONFIRM_SIGN_IN_PROMPT]
+
+    def test_a_denied_dialog_answers_error(self, monkeypatch):
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        reply = cc._handle_companion_request("CONFIRM SIGNIN\n")
+        assert reply.startswith("ERROR") and "denied" in reply
+
+    def test_the_daemon_side_turns_a_missing_companion_into_an_actionable_refusal(
+        self, tmp_path, monkeypatch,
+    ):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+
+        confirmed, reason = cc.request_sign_in_confirmation(timeout=0.5)
+
+        assert confirmed is False
+        assert "companion" in reason
+
+
+class TestShowCommand:
+    """``SHOW <path>``: a one-shot companion invocation (Linux's
+    applications-menu click) handing the job to whichever process owns the
+    channel, because that is the only one the daemon can call back.
+
+    Unlike ``CONFIRM MINT``, this one has no evidence of its own that a
+    human is behind it -- it arrives from another process running as this
+    same OS user, and the agent is indistinguishable from the menu click it
+    exists for. So the dialog is what makes the session it produces
+    attributable to a person, and these tests exist mostly to pin that it
+    cannot be skipped.
+    """
+
+    @pytest.fixture
+    def allow(self, monkeypatch):
+        asked: list[str] = []
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: asked.append(prompt) or True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        return asked
+
+    def test_an_allowed_dialog_opens_an_attested_link(self, allow, monkeypatch):
+        opened: list[str] = []
+        monkeypatch.setattr(cc, "open_attested_url", lambda path: (bool(opened.append(path)) or True, ""))
+
+        assert cc._handle_companion_request("SHOW /approvals\n") == "OK\n"
+
+        assert opened == ["/approvals"]
+        assert allow == [cc._CONFIRM_SHOW_PROMPT]
+
+    def test_a_denied_dialog_mints_nothing_at_all(self, monkeypatch):
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "open_attested_url", lambda path: pytest.fail("minted after a Deny"))
+
+        reply = cc._handle_companion_request("SHOW /approvals\n")
+
+        assert reply.startswith("ERROR")
+        assert "denied" in reply
+
+    def test_a_page_outside_the_allowlist_is_refused_without_asking(self, allow):
+        assert cc._handle_companion_request("SHOW /security\n") == "ERROR unknown page\n"
+        # Not a URL either: SHOW reaches the process that can mint a session
+        # able to approve, so the caller never picks where it lands.
+        assert cc._handle_companion_request("SHOW http://evil.example/\n") == "ERROR unknown page\n"
+        assert allow == []
+
+    def test_a_failure_to_open_passes_its_reason_back(self, allow, monkeypatch):
+        monkeypatch.setattr(cc, "open_attested_url", lambda path: (False, "could not open a browser"))
+        assert cc._handle_companion_request("SHOW /settings\n") == "ERROR could not open a browser\n"
+
+
+class TestOpenAttestedUrl:
+    """The companion's own Open Approvals, end to end within this module --
+    one implementation shared by the tray handler and the ``SHOW`` handler so
+    the two cannot drift apart."""
+
+    def test_it_mints_through_the_companion_shape_and_opens_that_url(self, monkeypatch):
+        monkeypatch.setattr(cc, "read_base_url", lambda: "http://127.0.0.1:8765")
+        monkeypatch.setattr(cc, "mint_attested_bootstrap_code", lambda *, timeout: "the-code")
+        opened: list[str] = []
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: bool(opened.append(url)) or True)
+
+        assert cc.open_attested_url("/approvals") == (True, "")
+        assert opened == ["http://127.0.0.1:8765/approvals?bootstrap=the-code"]
+
+    def test_no_daemon_running_is_reported_not_raised(self, monkeypatch):
+        monkeypatch.setattr(cc, "read_base_url", lambda: None)
+        opened, reason = cc.open_attested_url("/approvals")
+        assert opened is False
+        assert "does not appear to be running" in reason
+
+    def test_an_unreachable_control_channel_is_reported_not_raised(self, monkeypatch):
+        monkeypatch.setattr(cc, "read_base_url", lambda: "http://127.0.0.1:8765")
+
+        def _boom(*, timeout):
+            raise cc.ControlChannelError("mint refused")
+
+        monkeypatch.setattr(cc, "mint_attested_bootstrap_code", _boom)
+        opened, reason = cc.open_attested_url("/approvals")
+        assert opened is False
+        assert "mint refused" in reason
+
+    def test_a_browser_that_will_not_open_is_reported(self, monkeypatch):
+        monkeypatch.setattr(cc, "read_base_url", lambda: "http://127.0.0.1:8765")
+        monkeypatch.setattr(cc, "mint_attested_bootstrap_code", lambda *, timeout: "the-code")
+        monkeypatch.setattr(cc.webbrowser, "open", lambda url: False)
+        assert cc.open_attested_url("/approvals") == (False, "could not open a browser")
+
+
+class TestEveryMintIsAudited:
+    """The self-approval plan's Phase 2: before it, exactly one of the three
+    ways to a session wrote an audit entry -- the MCP sign-in-link tool, now
+    retired -- and the two silent ones were the two anything on this machine
+    could use. The log recorded the sanctioned path and not the reachable
+    ones."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_audit_log(self, tmp_path):
+        from privacyfence.audit_log import init_audit_logger
+
+        init_audit_logger(str(tmp_path / "audit"))
+        self._audit_dir = tmp_path / "audit"
+
+    def _entries(self):
+        import json
+
+        from privacyfence.audit_log import current_week
+
+        path = self._audit_dir / f"{current_week()}.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def _dispatch(self, line: str, **kwargs) -> str:
+        return cc._handle_daemon_request(BootstrapStore(), allow_quit=True, line=line, **kwargs)
+
+    def test_a_bare_mint_is_audited_as_unattested(self):
+        self._dispatch("MINT\n")
+        entries = self._entries()
+        assert [e["decision"] for e in entries] == [cc.SIGN_IN_MINT_DECISION]
+        assert "unattested" in entries[0]["summary"]
+
+    def test_a_companion_mint_is_audited_as_one_that_can_approve(self):
+        self._dispatch("MINT COMPANION n1\n", confirm_companion_mint=lambda nonce: True)
+        assert "can approve" in self._entries()[0]["summary"]
+
+    def test_a_refused_companion_mint_is_audited_too(self):
+        self._dispatch("MINT COMPANION n1\n", confirm_companion_mint=lambda nonce: False)
+        summary = self._entries()[0]["summary"]
+        assert summary.startswith("Refused")
+        assert "did not confirm" in summary
+
+    def test_a_console_mint_names_the_command_that_asked(self):
+        self._dispatch("MINT CONSOLE\n", confirm_console_mint=lambda: (True, ""))
+        assert "--print-sign-in-link" in self._entries()[0]["summary"]
+
+    def test_a_refused_console_mint_carries_the_reason(self):
+        self._dispatch("MINT CONSOLE\n", confirm_console_mint=lambda: (False, "the sign-in link was denied"))
+        assert "the sign-in link was denied" in self._entries()[0]["summary"]
+
+    def test_an_unwritable_audit_log_does_not_cost_the_human_their_link(self, monkeypatch):
+        """A human locked out because the audit log could not be written
+        would be locked out by the thing meant to reassure them."""
+        from privacyfence.audit_log import get_audit_logger
+
+        def _boom(entry):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(get_audit_logger(), "record", _boom)
+
+        reply = self._dispatch("MINT\n")
+
+        assert reply.startswith("OK ")
+        assert self._entries() == []
+
+
+class TestAttestedMintClientHelpers:
+    """The client halves of the two attested shapes, driven against *both*
+    real servers at once -- which is the only way to exercise what makes
+    them attested: the daemon's call-back into the companion process while
+    that process is waiting on its own reply. A test that stubbed either
+    side would prove the protocol to itself."""
+
+    @pytest.fixture
+    def both_channels(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        bootstrap = BootstrapStore()
+        daemon = cc.ControlChannelServer(bootstrap=bootstrap)
+        companion = cc.CompanionChannelServer()
+        daemon.start()
+        companion.start()
+        try:
+            yield bootstrap
+        finally:
+            companion.stop()
+            daemon.stop()
+
+    def test_the_companion_shape_mints_a_code_that_may_approve(self, both_channels):
+        code = cc.mint_attested_bootstrap_code()
+
+        assert both_channels.consume(code) == sa.PROVENANCE_HUMAN
+
+    def test_a_nonce_the_companion_never_issued_gets_no_code(self, both_channels, monkeypatch):
+        """What an agent sending this line by hand hits: it cannot produce a
+        nonce the companion would recognize, and it cannot read the one the
+        companion did issue."""
+        monkeypatch.setattr(cc, "issue_mint_nonce", lambda: "not-a-real-nonce")
+
+        with pytest.raises(cc.ControlChannelError):
+            cc.mint_attested_bootstrap_code()
+
+    def test_the_console_shape_mints_one_when_the_dialog_is_allowed(self, both_channels, monkeypatch):
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+
+        code = cc.mint_console_bootstrap_code(timeout=5.0)
+
+        assert both_channels.consume(code) == sa.PROVENANCE_HUMAN
+
+    def test_a_denied_dialog_reaches_the_terminal_in_words(self, both_channels, monkeypatch):
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+
+        with pytest.raises(cc.ControlChannelError) as excinfo:
+            cc.mint_console_bootstrap_code(timeout=5.0)
+
+        # The reason is written where it is known -- the companion's dialog
+        # handler -- and passed through unchanged by everything between.
+        assert "denied" in str(excinfo.value)
+        assert "ERROR" not in str(excinfo.value)  # protocol, not prose
+
+    def test_request_show_reaches_the_running_companion(self, both_channels, monkeypatch):
+        shown = []
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "open_attested_url", lambda path: (bool(shown.append(path)) or True, ""))
+
+        assert cc.request_show("/approvals", timeout=10.0) is True
+        assert shown == ["/approvals"]
+
+    def test_request_mint_attestation_is_true_only_for_a_live_nonce(self, both_channels):
+        nonce = cc.issue_mint_nonce()
+
+        assert cc.request_mint_attestation(nonce) is True
+        assert cc.request_mint_attestation(nonce) is False  # single-use
+
+
+class TestAttestedMintWithNoCompanion:
+    """Every one of these is the same answer from a different angle: with no
+    companion running, nothing can vouch for a mint, and the caller is told
+    rather than quietly handed a weaker credential."""
+
+    @pytest.fixture(autouse=True)
+    def _daemon_only(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore())
+        server.start()
+        try:
+            yield
+        finally:
+            server.stop()
+
+    def test_the_companion_shape_raises(self):
+        with pytest.raises(cc.ControlChannelError):
+            cc.mint_attested_bootstrap_code(timeout=2.0)
+
+    def test_the_console_shape_raises_with_a_reason_naming_the_companion(self):
+        with pytest.raises(cc.ControlChannelError) as excinfo:
+            cc.mint_console_bootstrap_code(timeout=2.0)
+        assert "companion" in str(excinfo.value)
+
+    def test_request_show_is_false_rather_than_raising(self):
+        # companion.py falls back from here rather than failing the click.
+        assert cc.request_show("/approvals", timeout=1.0) is False
+
+    def test_request_mint_attestation_is_false_rather_than_raising(self):
+        assert cc.request_mint_attestation("some-nonce", timeout=1.0) is False
+
+    def test_a_bare_mint_still_works(self):
+        # The view-only path is the one that must never depend on anything
+        # else being up -- it is what a locked-out human falls back to.
+        assert cc.mint_bootstrap_code()

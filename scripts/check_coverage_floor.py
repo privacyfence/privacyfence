@@ -163,19 +163,25 @@ MODULE_FLOORS: dict[str, float] = {
     # peer-uid check included -- was invisible to the gate. Raised from 61.0
     # by Phase 0's CONFIRM ENROLL command and the three platform dialogs
     # behind it: the POSIX-reachable half of all of that is tested, so the
-    # ratchet should hold it. Raised again (66.0 -> 70.0) by Phase 1's
-    # ENROLLMENT/RECOVERY/SHOW RECOVERY commands and their own dialogs,
-    # same reasoning.
-    "src/privacyfence/web/control_channel.py": 70.0,
-    # _run_tray() (macOS/Windows only, guarded on sys.platform) is nearly
-    # all of what's uncovered -- the tray icon this Linux-only run has
-    # nothing to drive. 83.0 reflects that split honestly rather than
-    # padding it with a pragma; raised from 81.0 by ADR 0003 decision 3's
-    # _complete_pending_separation(), which is new code this run does cover
-    # in full. Raised again (83.0 -> 86.0) by Phase 1.2's first-run
-    # enrollment offer and 1.3's recovery-code action, both of which are
-    # ordinary dispatch this run drives end to end.
-    "src/privacyfence/companion.py": 86.0,
+    # ratchet should hold it. Raised again from 66.0 by Phase 1's ENROLLMENT/
+    # RECOVERY/SHOW RECOVERY commands and Phase 2's attested mints -- MINT
+    # COMPANION/MINT CONSOLE, their CONFIRM MINT/CONFIRM SIGNIN call-backs,
+    # SHOW, and the client helpers for all of them -- every one of which this
+    # run drives against real servers on both sides.
+    "src/privacyfence/web/control_channel.py": 75.0,
+    # Was 81.0, then 83.0 (ADR 0003 decision 3's _complete_pending_
+    # separation()), then 86.0 (Phase 1.2's first-run enrollment offer and
+    # 1.3's recovery-code action). Each of those left _run_tray() -- macOS/
+    # Windows only, guarded on sys.platform -- as nearly all of what was
+    # uncovered, on the reasoning that this Linux-only run has no tray icon
+    # to drive. Merging Phases 1 and 2 is what retired that reasoning: both
+    # had added behaviour *inside* that function (the recovery-code item,
+    # the attested _open_path), so the untested block was no longer just the
+    # loop. tests/unit/test_companion.py's TestTrayLoop stubs pystray/Pillow
+    # at the deferred import _run_tray does itself and drives the menu, the
+    # channel's setup/teardown and the Quit ordering -- running the real
+    # loop still needs a display, wiring it up does not. 86.0 -> 98.0.
+    "src/privacyfence/companion.py": 98.0,
     # The SSE stream's own generator body (approvals_stream's event_source,
     # a poll loop no test here consumes to exhaustion) plus a couple of
     # decide()'s edge branches (the bare-index "choice" coercion, the plain

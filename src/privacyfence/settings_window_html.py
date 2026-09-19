@@ -667,7 +667,7 @@ _JS = r"""
   }
 
   // issue #396 Part C: shown on first run (nothing authenticated yet) so
-  // landing here from privacyfence_status's own sign-in link isn't a blank
+  // landing here from the companion's Open Settings item isn't a blank
   // connector list with no explanation of what any of it means or what
   // order to do things in. Dismissible, client-side only -- see ui.
   // welcomeBannerDismissed's own comment above; a page reload brings it
@@ -1286,7 +1286,7 @@ def build_html(state: dict, *, nonce: str | None = None, initial_section: str | 
     ``initial_section`` (issue #396 Part C): a deliberate, narrow exception
     to ``ui.section`` otherwise being purely client-side state (see this
     module's own docstring) -- ``GET /settings/connectors`` passes
-    ``"connectors"`` so a sign-in link minted while un-onboarded lands
+    ``"connectors"`` so a link opened while un-onboarded lands
     directly on the screen that unblocks the user, instead of ``/settings``'s
     default General page. ``None`` (every other route) emits no script at
     all, leaving the JS's own ``'general'`` fallback exactly as before.

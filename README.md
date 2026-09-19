@@ -259,13 +259,12 @@ installer. Centrally managed ("organization mode") deployments follow a differen
 3. Install **PrivacyFence.mcpb** into Claude Desktop — it's the other file on the disk image, next
    to the installer. The next time Claude Desktop loads the extension, its shim starts the daemon
    automatically if it isn't already running.
-4. Ask Claude to set up PrivacyFence. PrivacyFence's `initialize` response already tells Claude to
-   check `privacyfence_status` before its first governed action, so you often don't even need to
-   ask explicitly — either way, Claude calls it, sees the install isn't onboarded yet, and hands
-   you a sign-in link. Open it. (If you'd rather not go through Claude: the same link is also
-   written to `~/.privacyfence/settings_url`, rewritten fresh on every startup —
-   `privacyfence.log` intentionally redacts this link's code, so don't look for it there.)
-5. That link lands on Settings' Connectors page: install the organization configuration provided
+4. Open PrivacyFence's menu-bar icon and choose **Open Settings**. (Ask Claude to set up
+   PrivacyFence and it will tell you the same thing: its `initialize` response already tells
+   Claude to check `privacyfence_status` before its first governed action, and an un-onboarded
+   install answers that with "send the human to the companion". Claude cannot hand you a sign-in
+   link — PrivacyFence does not issue one to the program it governs.)
+5. Settings opens on its Connectors page: install the organization configuration provided
    by your IT administrator, if any, and authenticate the connectors you want.
 
 Stable releases are code-signed and notarized by Apple, so this just works — no Gatekeeper
@@ -312,13 +311,11 @@ before you run it by hand — the migration moves live connector tokens.
    Explorer yourself: paste the install path from step 2 into the address bar
    (`%ProgramFiles%\PrivacyFence\` or `%LOCALAPPDATA%\Programs\PrivacyFence\`, whichever applies to
    you) and press Enter, then act on the `.mcpb` file there as above.
-4. Ask Claude to set up PrivacyFence. PrivacyFence's `initialize` response already tells Claude to
-   check `privacyfence_status` before its first governed action, so you often don't even need to
-   ask explicitly — either way, Claude calls it and hands you a sign-in link. Open it, or open
-   `~/.privacyfence/settings_url` yourself. (`privacyfence.log` redacts this link's code, so don't
-   look for it there. The Start Menu shortcut points at the bare, cookie-authenticated URL, so it
-   only works once you're already signed in via one of the above — not as the first way in.)
-5. That link lands on Settings' Connectors page: install the organization configuration provided
+4. Open PrivacyFence's tray icon and choose **Open Settings**. (Ask Claude to set up PrivacyFence
+   and it will tell you the same thing — see the macOS steps above for why it cannot hand you a
+   link itself. The Start Menu shortcut points at the bare, cookie-authenticated URL, so it only
+   works once you are already signed in — not as the first way in.)
+5. Settings opens on its Connectors page: install the organization configuration provided
    by your IT administrator, if any, and authenticate the connectors you want.
 
 Stable releases are Authenticode-signed; pre-release (alpha/beta/rc) builds might not be, depending
@@ -353,12 +350,11 @@ either way — the migration moves live connector tokens.
    used on macOS and Windows doesn't apply here — instead, point an HTTP-capable client (Claude
    Code, for example) directly at the daemon's local, token-authenticated `/mcp` endpoint. See
    [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#mcp-endpoint) for connection details.
-5. Ask that client to set up PrivacyFence. PrivacyFence's `initialize` response already tells it
-   to check `privacyfence_status` before its first governed action, so you often don't even need
-   to ask explicitly — either way, it calls that tool and hands you a sign-in link. Open it, or
-   open `~/.privacyfence/settings_url` yourself (`privacyfence.log` redacts this link's code, so
-   don't look for it there).
-6. That link lands on Settings' Connectors page: install the organization configuration provided
+5. Open **PrivacyFence** from your applications menu and choose its **Open Settings** action.
+   (Linux has no tray icon — see ADR 0002 decision 4 — so the menu entry is the way in. Asking
+   your MCP client instead gets you pointed back here: PrivacyFence does not issue a sign-in link
+   to the program it governs.)
+6. Settings opens on its Connectors page: install the organization configuration provided
    by your IT administrator, if any, and authenticate the connectors you want.
 
 The package ships a self-contained PyInstaller build of the daemon — no `python3-*` packages
@@ -436,13 +432,12 @@ There's nothing to install on your own machine:
    `https://pf.your-org.example.com/mcp` as an MCP server — no `.mcpb`, no token to copy.
 3. The first time it connects, Claude's own OAuth sign-in redirects you to your organization's
    identity provider. Sign in there the same way you sign in to everything else at your org.
-4. From `https://pf.your-org.example.com/connect` (reached via that same sign-in — no
-   `privacyfence_get_sign_in_link`-style tool needed, since there's no one-time link in this mode
-   to begin with), authenticate the connectors you want.
+4. From `https://pf.your-org.example.com/connect` (reached via that same sign-in — there is no
+   one-time link in this mode to begin with), authenticate the connectors you want.
 
-Organization mode has no local `/settings` surface and no bootstrap-link concept at all — asking
-Claude for a sign-in link (above) errors on purpose here, since sign-in is always through your
-IdP. See the [org mode setup guide](https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md) for the full deployment
+Organization mode has no local `/settings` surface and no bootstrap-link concept at all — the
+companion app's own Open Settings item (above) has nothing to open here, since sign-in is always
+through your IdP. See the [org mode setup guide](https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md) for the full deployment
 walkthrough.
 
 ---

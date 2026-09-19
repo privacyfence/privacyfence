@@ -61,6 +61,21 @@ auto_accept_grants:
 _FAKE_CONNECTED = ["gmail", "drive", "slack", "calendar"]
 
 
+def _sign_in_url(server, path: str) -> str:
+    """A one-time sign-in link for this in-process server.
+
+    ``WebServer.mint_bootstrap_url()`` used to hand one back; the
+    self-approval plan's Phase 2 removed it along with the discovery files it
+    wrote (web/server.py). Minting now belongs to the control channel, and an
+    *attested* mint needs a companion process to call back to -- which this
+    script has no reason to start, so it mints from the store directly, the
+    same way the daemon's own bootstrap middleware consumes from it.
+    """
+    from privacyfence.web.session_auth import PROVENANCE_HUMAN
+
+    return f"{server.base_url}{path}?bootstrap={server.bootstrap.mint(provenance=PROVENANCE_HUMAN)}"
+
+
 def _build_server(tmp_dir: Path, port: int):
     from privacyfence import daemon_main, settings_controller as sc
     from privacyfence.web.server import WebServer
@@ -101,7 +116,7 @@ def _run(chromium_path: str | None) -> None:
             browser = p.chromium.launch(**launch_kwargs)
             page = browser.new_page(viewport={"width": 1000, "height": 720})
 
-            page.goto(server.mint_bootstrap_url("/settings"))
+            page.goto(_sign_in_url(server, "/settings"))
             page.wait_for_selector("#app")
             page.click("[data-nav='connectors']")
             page.wait_for_timeout(200)

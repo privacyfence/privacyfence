@@ -76,6 +76,8 @@ from .session_auth import LocalSessionStore
 from .session_auth import authenticated as _session_authenticated
 from .session_auth import check_csrf as _csrf_matches
 from .session_auth import check_origin as _origin_ok
+from .session_auth import human_session_required_json as _human_session_required_json
+from .session_auth import is_human_session as _is_human_session
 from .session_auth import unauthorized_html as _unauthorized_response
 
 # Only an *approving* decision needs step-up -- same as
@@ -240,6 +242,7 @@ def create_app(
     step_up: StepUpConfig | None = None,
     step_up_origin: str = "",
     any_connector_authenticated: Callable[[], bool] | None = None,
+    require_human_session: bool = False,
 ) -> Starlette:
     """Build the Starlette app serving the approval surface. ``sessions``
     (SEC-06, see session_auth.py's own module docstring) is the local-mode
@@ -273,6 +276,28 @@ def create_app(
     ``build_app`` is the one real (non-test) caller that passes them,
     using the same ``StepUpConfig`` it already resolves for web/
     routes_security.py's own ``/security`` mount.
+
+    ``require_human_session`` (the self-approval plan's Phase 2) refuses an
+    approving decision -- ``_STEP_UP_RESULTS``/``_BATCH_STEP_UP_RESULTS``,
+    the same two this module already scopes step-up to, since denying leaks
+    nothing -- taken by a session web/session_auth.py cannot attribute to a
+    person. Independent of ``step_up`` and asked first: a passkey answers
+    "is this the enrolled human", provenance answers "did a human ask for
+    this session at all", and an install with no passkey enrolled still
+    wants the second question asked.
+
+    Default off, and web/server.py turns it on for exactly one kind of
+    install: a privilege-separated one. That is not a softening -- it is
+    where the guarantee is real. Separation is what puts ``authority/`` out
+    of the agent's reach, and ADR 0003 makes it mandatory for every packaged
+    install (decision 6: an unseparated packaged daemon refuses to serve)
+    while guaranteeing the companion that mints an attested session is
+    installed and running (decisions 3-5). On an unseparated build-from-
+    source install neither holds: there is no companion to mint through, and
+    an agent that can rewrite the credential store directly (ADR 0002
+    decision 6) gains nothing from a session check anyway. Same line
+    ``StepUpConfig.from_local_config()`` already draws when it refuses
+    ``require_passkey`` on an unseparated non-packaged install.
 
     ``any_connector_authenticated`` picks the approvals page's empty state
     (approval_list_html's own ``_empty_state_html``): "Nothing is waiting"
@@ -512,6 +537,13 @@ def create_app(
         if not isinstance(result, str):
             result = str(int(result))
 
+        if require_human_session and result in _STEP_UP_RESULTS and not _is_human_session(request, sessions):
+            # Ahead of the step-up ceremony below, not after it: there is no
+            # point walking somebody through a passkey prompt for a decision
+            # this session could not have released whatever the answer was.
+            body, status = _human_session_required_json("approve a decision")
+            return JSONResponse(body, status_code=status)
+
         if step_up is not None and step_up.enabled and result in _STEP_UP_RESULTS:
             approval = web_ui.deferred_registry.get(approval_id)
             if approval is not None and webauthn_stepup.is_step_up_required(
@@ -640,6 +672,14 @@ def create_app(
         raw_batch_id = payload.get("batch_id")
         batch_id = raw_batch_id if isinstance(raw_batch_id, str) and raw_batch_id else uuid.uuid4().hex
         batch_id_verified = False
+
+        if (
+            require_human_session
+            and any(result in _BATCH_STEP_UP_RESULTS for _id, result in parsed)
+            and not _is_human_session(request, sessions)
+        ):
+            body, status = _human_session_required_json("approve a decision")
+            return JSONResponse(body, status_code=status)
 
         if step_up is not None and step_up.enabled and _batch_needs_step_up(parsed, registry):
             if step_up.batch == "per_item":
