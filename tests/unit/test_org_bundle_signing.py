@@ -123,6 +123,47 @@ class TestVerifyAndMaybePin:
         assert obs.load_pinned_public_key(tmp_path) is None  # never pinned on a failed self-check
 
 
+class TestWouldPinNewKey:
+    """F5 of the self-approval review: a pure duplicate of verify_and_
+    maybe_pin's own "first signed bundle" branch condition, with no disk
+    side effect -- see that function's own docstring for why it's kept
+    deliberately independent rather than sharing a helper."""
+
+    def test_true_for_a_fresh_signed_bundle(self, tmp_path):
+        signed, _ = _signed({"org_name": "Acme"})
+        assert obs.would_pin_new_key(signed, tmp_path) is True
+        # Read-only -- checking must not itself pin anything.
+        assert obs.load_pinned_public_key(tmp_path) is None
+
+    def test_false_for_an_unsigned_bundle(self, tmp_path):
+        assert obs.would_pin_new_key({"org_name": "Acme"}, tmp_path) is False
+
+    def test_false_once_a_key_is_already_pinned(self, tmp_path):
+        signed, _ = _signed({"org_name": "Acme"})
+        obs.verify_and_maybe_pin(signed, tmp_path)
+
+        assert obs.would_pin_new_key(signed, tmp_path) is False
+
+    def test_false_for_a_self_signed_bundle_with_an_invalid_signature(self, tmp_path):
+        signed, _ = _signed({"org_name": "Acme"})
+        signed["signature"] = base64.b64encode(b"\x00" * 64).decode("ascii")
+        assert obs.would_pin_new_key(signed, tmp_path) is False
+
+    def test_false_for_garbage_signing_public_key(self, tmp_path):
+        bundle = {"signature": base64.b64encode(b"x" * 64).decode(), "signing_public_key": "not-base64!!"}
+        assert obs.would_pin_new_key(bundle, tmp_path) is False
+
+    def test_false_for_a_signature_with_no_embedded_key_at_all(self, tmp_path):
+        bundle = {"signature": base64.b64encode(b"x" * 64).decode()}
+        assert obs.would_pin_new_key(bundle, tmp_path) is False
+
+    def test_matches_verify_and_maybe_pins_own_newly_pinned_flag(self, tmp_path):
+        signed, _ = _signed({"org_name": "Acme"})
+        predicted = obs.would_pin_new_key(signed, tmp_path)
+        trust = obs.verify_and_maybe_pin(signed, tmp_path)
+        assert predicted == trust.newly_pinned
+
+
 class TestPinnedPublicKeyFile:
     @pytest.mark.skipif(
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
@@ -136,6 +177,14 @@ class TestPinnedPublicKeyFile:
         path = obs.pinned_public_key_path(tmp_path)
         assert path.exists()
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    def test_a_corrupted_pin_file_is_treated_as_unpinned(self, tmp_path):
+        # load_pinned_public_key's own fail-closed-to-"nothing pinned"
+        # path -- a truncated write, a hand-edit, or disk corruption
+        # leaves this file present but not valid base64; it must not
+        # raise, and must not be mistaken for a real pinned key.
+        obs.pinned_public_key_path(tmp_path).write_text("not valid base64!!", encoding="utf-8")
+        assert obs.load_pinned_public_key(tmp_path) is None
 
     def test_deleting_the_pin_file_allows_a_new_key_to_be_trusted(self, tmp_path):
         first, _ = _signed({"org_name": "Acme"})

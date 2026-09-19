@@ -700,6 +700,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   0002](docs/adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6's own
   integrity-strong/confidentiality-weak asymmetry rather than as a new claim. No behavior changes
   with this entry.
+- **The self-approval review's Phase 3: the settings surface outside the generic dispatcher is now
+  gated too.** `POST /api/settings/org_config/upload` had its own route (a multipart upload, not a
+  JSON action) and, for that reason alone, bypassed both the passkey step-up check and the
+  human-session check every `_SENSITIVE_ACTIONS` entry already goes through — even though an
+  uploaded organization config bundle can rewrite the PII policy, every auto-accept rule, and every
+  connector's OAuth client config in one shot. It now needs the same fresh WebAuthn assertion
+  (`step_up.require_passkey`) and the same human-attributable session (`require_human_session`) as
+  any other sensitive settings change, bound to that exact upload's bytes so a completed ceremony
+  can't be replayed to install a different file. Installing the *first* signed bundle an install has
+  ever seen also pins its signing key going forward (trust-on-first-use) — this route now asks for
+  an explicit confirmation before that one-way pin happens, rather than letting it happen silently as
+  a side effect of an upload; `install_org_config_bytes` itself, and `daemon_main.load_org_config`'s
+  own hand-edited-file path, still pin unconditionally, since placing a file on disk directly already
+  needs access an HTTP request from an agent doesn't have.
+- `toggle_connector` — classified non-sensitive on the reasoning that "an agent that already has
+  connector access gains nothing new by flipping it" — only actually held for the disable direction:
+  the same ungated action re-enabled a connector a human had deliberately switched off, which is
+  exactly access the agent didn't already have. It's now two actions, `enable_connector` (sensitive,
+  gated the same way as any other `_SENSITIVE_ACTIONS` entry) and `disable_connector` (not, same as
+  before).
+- `TestSensitiveActionsCoverAllAllowedActions`'s ratchet only ever covered the generic
+  `POST /api/settings/{action}` dispatcher's own action names — exactly how `org_config_upload`
+  bypassed it above by having a route of its own. A new `TestBespokeRoutesAreClassified` walks the
+  actual `Route` objects `web/routes_settings.py`'s `build_routes()` returns and fails the moment a
+  future bespoke POST route lands with no matching entry in `_BESPOKE_SENSITIVE_ROUTE_PATHS`/
+  `_BESPOKE_EXEMPT_ROUTE_PATHS`, the same way the existing ratchet already fails on an unclassified
+  `_ALLOWED_ACTIONS` entry.
 
 ### Added
 

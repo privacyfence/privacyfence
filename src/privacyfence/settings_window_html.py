@@ -720,7 +720,13 @@ _JS = r"""
           '" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' ' + esc(c.label) + '" ' +
           (authDisabled ? '' : dataAttr('authenticate_connector', { connector: c.key })) + '>' + esc(c.auth_label) + '</div>';
       }
-      html += toggleHtml(c.enabled, 'toggle_connector', { connector: c.key }, false, c.label + ' enabled');
+      // F6 of the self-approval review: directional, not a single
+      // toggle_connector -- re-enabling a connector is gated
+      // (_SENSITIVE_ACTIONS) differently from disabling one (see
+      // web/routes_settings.py's own classification comment), so the
+      // action this click sends has to match which direction the very
+      // next click will actually take.
+      html += toggleHtml(c.enabled, c.enabled ? 'disable_connector' : 'enable_connector', { connector: c.key }, false, c.label + ' enabled');
       html += '</div>';
     });
     html += '</div>';

@@ -56,6 +56,25 @@ verified and, on success, actually runs the action.
 in this module's test file for why a derived set would silently swallow a
 future action nobody classified either way.
 
+**Self-approval review, Phase 3 (F5/F6):** the sensitive-action net above
+only ever covered the generic dispatcher. ``org_config_upload`` had its own
+route and bypassed both ``_needs_step_up`` and ``require_human_session``
+entirely, even though an uploaded bundle can rewrite the PII policy, every
+auto-accept rule and every connector's OAuth client config in one shot
+(F5) -- it's now gated the same two ways, by hand, inside its own route
+function, plus an explicit ``confirm_pin`` round trip before a first signed
+bundle's key gets pinned (``SettingsController.would_pin_new_org_signing_
+key``), rather than letting that TOFU pin happen as a side effect of an
+upload. ``toggle_connector`` was classified non-sensitive in both
+directions, but the classification comment's own reasoning -- "an agent
+that already has connector access gains nothing new" -- only holds for
+*disabling* one; it's now split into ``enable_connector`` (sensitive) and
+``disable_connector`` (not), see ``SettingsController.enable_connector``'s
+own docstring (F6). ``_BESPOKE_SENSITIVE_ROUTE_PATHS``/``_BESPOKE_EXEMPT_
+ROUTE_PATHS`` below widen ``TestSensitiveActionsCoverAllAllowedActions``'s
+own ratchet from action names to actual ``Route`` objects, so the next
+route added here can't repeat org_config_upload's mistake by existing.
+
 **B9:** ``enable_step_up`` (SettingsController's own new method) is the one
 ``_ALLOWED_ACTIONS`` entry that can turn ``step_up.require_passkey`` on in
 the first place -- previously only a hand edit of ``config/settings.yaml``
@@ -128,7 +147,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "toggle_pii_detection", "toggle_pii_category",
     "toggle_update_check", "toggle_update_check_beta", "check_for_updates_now",
     "skip_update", "remind_later_update",
-    "toggle_connector", "refresh_connectors", "authenticate_connector",
+    "enable_connector", "disable_connector", "refresh_connectors", "authenticate_connector",
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
     "update_rule_row", "add_rule_row", "remove_rule_row",
     "toggle_grant_capability", "add_grant_row", "update_grant_row", "remove_grant_row",
@@ -165,15 +184,64 @@ _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     # enable_step_up itself enforces instead. See that method's own
     # docstring.
     "enable_step_up",
+    # F6 of the self-approval review: re-enabling a connector a human
+    # deliberately switched off is access an agent did not already have
+    # -- unlike disable_connector below, this is not a no-op change of
+    # nothing.
+    "enable_connector",
 })
 
 _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "toggle_update_check", "toggle_update_check_beta", "check_for_updates_now",
     "skip_update", "remind_later_update",
-    "toggle_connector", "refresh_connectors", "authenticate_connector",
+    # F6: an agent that already has connector access gains nothing new by
+    # disabling one -- see SettingsController.enable_connector's own
+    # docstring for the asymmetry with the sensitive direction above.
+    "disable_connector", "refresh_connectors", "authenticate_connector",
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
     "set_log_level", "set_notifications_detail",
 })
+
+# ---------------------------------------------------------------------------- #
+# F5/3.3 of the self-approval review: _SENSITIVE_ACTIONS/_NON_SENSITIVE_ACTIONS
+# above only ever covered the generic POST /api/settings/{action}
+# dispatcher -- org_config_upload had a route of its own (module docstring's
+# own list of why: a multipart upload, not a JSON action) and, for that
+# reason alone, never passed through either _needs_step_up or
+# require_human_session at all, regardless of how much policy an uploaded
+# bundle could rewrite (F5). Every path in _BESPOKE_SENSITIVE_ROUTE_PATHS is
+# wired through the same _needs_step_up-shaped/require_human_session-shaped
+# gates as a _SENSITIVE_ACTIONS action, by hand, inside its own route
+# function -- request shapes differ too much (multipart vs. JSON) to share
+# settings_action's own dispatch loop.
+#
+# Two things consume these sets, deliberately both: build_routes() below
+# asserts every bespoke POST route it constructs is in one of them --
+# a real, load-bearing invariant checked every time this app is built, not
+# only under pytest -- and TestBespokeRoutesAreClassified re-asserts the
+# same thing against the actual Route objects it gets back, as a named,
+# always-collected regression test rather than only an assert a test run
+# could otherwise skip past. Either one alone would leave a future bespoke
+# POST route free to land unclassified -- the assert here catches it at
+# runtime (this call already raises on an unclassified path, before the app
+# ever serves it), the test catches it at review/CI time -- the same way
+# TestSensitiveActionsCoverAllAllowedActions already fails the moment a new
+# _ALLOWED_ACTIONS entry lands unclassified.
+# ---------------------------------------------------------------------------- #
+
+_BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
+    "/api/settings/org_config/upload",
+})
+
+# Every other bespoke (non-generic-dispatch) route, and why it doesn't need
+# the same gates: quit_app carries its own §16.2.8 confirmation dialog and
+# doesn't change what gets gated at all; the rest are GETs, not mutations.
+_BESPOKE_EXEMPT_ROUTE_PATHS: dict[str, str] = {
+    "/api/settings/quit_app": "its own confirmed=true gate (§16.2.8) -- doesn't change what gets gated",
+    "/api/settings/audit_log/download": "a GET -- read-only export, no mutation",
+    "/settings": "a GET -- renders the page",
+    "/settings/connectors": "a GET -- renders the page",
+}
 
 
 class _BadAction(Exception):
@@ -278,13 +346,59 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "var fileInput = document.getElementById('pf-org-config-input');"
         "fileInput.addEventListener('change', function(){"
         "  if (!fileInput.files || !fileInput.files[0]) return;"
-        "  var fd = new FormData();"
-        "  fd.append('file', fileInput.files[0]);"
-        "  fd.append('csrf', CSRF);"
-        "  fetch('/api/settings/org_config/upload', {method:'POST', credentials:'same-origin', body: fd})"
-        "    .then(function(r){ return r.json(); })"
-        "    .then(function(state){ if (window.__pfRender) { window.__pfRender(state); } })"
-        "    .finally(function(){ fileInput.value = ''; });"
+        "  var file = fileInput.files[0];"
+        # F5/3.1: org_config_upload can now answer 409 (would pin a new
+        # signing key -- ask first) and 428/403 (step-up, same shape
+        # pfSettingsPost's own retry chain below already handles for JSON
+        # actions) instead of only ever succeeding or 401/400/403-on-
+        # cross-origin. attemptOrgUpload() re-POSTs the same file as a
+        # fresh FormData each round -- multipart has no way to resume a
+        # partially-approved request the way a JSON body's own retry does
+        # by copying `body`.
+        "  function attemptOrgUpload(confirmPin, assertion) {"
+        "    var fd = new FormData();"
+        "    fd.append('file', file);"
+        "    fd.append('csrf', CSRF);"
+        "    if (confirmPin) { fd.append('confirm_pin', 'true'); }"
+        "    if (assertion) { fd.append('webauthn_assertion', JSON.stringify(assertion)); }"
+        "    return fetch('/api/settings/org_config/upload', {method:'POST', credentials:'same-origin', body: fd})"
+        "      .then(function(r){"
+        "        if (r.status === 409) {"
+        "          return r.json().then(function(data){"
+        "            if (data.error === 'pin_confirmation_required' && window.confirm(data.detail + ' Continue?')) {"
+        "              return attemptOrgUpload(true, assertion);"
+        "            }"
+        "            return null;"
+        "          });"
+        "        }"
+        "        if (r.status === 428) {"
+        "          return r.json().then(function(data){"
+        "            if (data.webauthn_options && window.PublicKeyCredential) {"
+        "              return pfWebauthnGet(JSON.stringify(data.webauthn_options)).then(function(newAssertion){"
+        "                return attemptOrgUpload(confirmPin, newAssertion);"
+        "              }).catch(function(err){"
+        "                window.alert('This change needs your passkey, and the prompt failed: ' + err.message);"
+        "                return null;"
+        "              });"
+        "            }"
+        "            window.alert('This change needs a passkey, and none is available in this browser.');"
+        "            return null;"
+        "          });"
+        "        }"
+        "        if (r.status === 403) {"
+        "          return r.json().then(function(data){"
+        "            if (data.enroll_url) {"
+        "              window.alert('This change requires a passkey. Set one up at ' + data.enroll_url + '.');"
+        "            }"
+        "            return null;"
+        "          });"
+        "        }"
+        "        return r.json();"
+        "      });"
+        "  }"
+        "  attemptOrgUpload(false, null).then(function(state){"
+        "    if (state && window.__pfRender) { window.__pfRender(state); }"
+        "  }).finally(function(){ fileInput.value = ''; });"
         "});"
         "function pfSettingsPost(url, body) {"
         "  return fetch(url, {method:'POST', credentials:'same-origin',"
@@ -338,6 +452,31 @@ def _settings_bridge_shim(*, csrf: str, repo_url: str, nonce: str) -> str:
         "}};"
         "})();</script>"
     )
+
+
+def _is_confirmed(value: Any) -> bool:
+    """A multipart form field is always a string (or absent) -- there is
+    no JSON `true` to compare against the way quit_app's own `confirmed`
+    check gets to. Mirrors that check's intent: an explicit, affirmative
+    value only, never merely "present" (an empty string, e.g. a
+    same-named but unchecked form control, is not consent)."""
+    return isinstance(value, str) and value.lower() in ("true", "1", "on")
+
+
+def _parse_form_assertion(value: Any) -> dict[str, Any] | None:
+    """org_config_upload's webauthn_assertion arrives as a JSON-encoded
+    string form field (multipart has no native nested-object type the way
+    the generic dispatcher's JSON body does) -- parsed the same
+    permissive way settings_action's own JSON body already handles a
+    malformed/missing assertion: fall through to "no assertion", not a
+    500."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _action_fingerprint(action: str, body: dict[str, Any]) -> str:
@@ -576,6 +715,14 @@ def build_routes(
         # quit step did, intermittently, in CI.
         return JSONResponse({"status": "quitting"}, background=BackgroundTask(controller.quit_app))
 
+    def _org_config_step_up_active() -> bool:
+        # Unlike _needs_step_up(action) above, org_config_upload has no
+        # _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS membership to check -- it's
+        # the one path listed in _BESPOKE_SENSITIVE_ROUTE_PATHS, and it's
+        # unconditionally sensitive whenever step-up is actually in force
+        # (F5): there's no non-sensitive shape this upload could take.
+        return step_up is not None and step_up.enabled and step_up.require_passkey
+
     async def org_config_upload(request: Request) -> Response:
         if not _authenticated(request):
             return _unauthorized_response(request)
@@ -584,12 +731,56 @@ def build_routes(
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _origin_ok(request):
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        if require_human_session and not _is_human_session(request, sessions):
+            # Same rationale as settings_action's own check above: an
+            # organization config bundle can rewrite the PII policy, every
+            # auto-accept rule, and every connector's OAuth client config
+            # in one shot -- at least as much "what gets gated" as any
+            # single _SENSITIVE_ACTIONS entry.
+            body, status = _human_session_required_json("install an organization config bundle")
+            return JSONResponse(body, status_code=status)
         upload = form.get("file")
         if upload is None or not hasattr(upload, "read"):
             return JSONResponse({"error": "missing file"}, status_code=400)
         raw = await upload.read()
         if len(raw) > MAX_ORG_CONFIG_BYTES:
             return JSONResponse({"error": "file too large"}, status_code=400)
+        # F5: pinning a signing key for the first time is a one-way trust
+        # decision (every future bundle is refused until an administrator
+        # deletes the pinned key file by hand) -- controller.
+        # install_org_config_bytes still performs it unconditionally
+        # (daemon_main.load_org_config's own hand-edited-file path needs
+        # that), but this route, the only one reachable by an
+        # unsupervised local process, first asks for it explicitly rather
+        # than letting it happen as a side effect of an upload.
+        if controller.would_pin_new_org_signing_key(raw) and not _is_confirmed(form.get("confirm_pin")):
+            return JSONResponse(
+                {
+                    "error": "pin_confirmation_required",
+                    "detail": (
+                        "This is the first signed organization config bundle seen by this "
+                        "install. Installing it will trust and permanently pin its signing key "
+                        "for every future upload."
+                    ),
+                },
+                status_code=409,
+            )
+        if _org_config_step_up_active():
+            fingerprint_body = {"sha256": hashlib.sha256(raw).hexdigest()}
+            assertion = _parse_form_assertion(form.get("webauthn_assertion"))
+            if not isinstance(assertion, dict):
+                return _settings_step_up_response("org_config_upload", fingerprint_body)
+            expected_fp = _action_fingerprint("org_config_upload", fingerprint_body)
+            try:
+                step_up_decide.verify_step_up(
+                    LOCAL_PRINCIPAL, rp_id=step_up.rp_id, origin=step_up_origin.rstrip("/"),
+                    subject_key="org_config_upload", fingerprint=expected_fp, assertion=assertion,
+                    challenges=challenges,
+                )
+            except step_up_decide.StepUpExpired:
+                return JSONResponse({"error": "step_up_expired"}, status_code=400)
+            except WebAuthnError as exc:
+                return JSONResponse({"error": str(exc)}, status_code=401)
         controller.install_org_config_bytes(raw)
         return JSONResponse(_snapshot(controller))
 
@@ -606,7 +797,7 @@ def build_routes(
             headers={"Cache-Control": "no-store"},
         )
 
-    return [
+    routes: list[BaseRoute] = [
         Route("/settings", settings_page),
         Route("/settings/connectors", settings_connectors_page),
         Route("/api/settings/quit_app", quit_action, methods=["POST"]),
@@ -614,6 +805,27 @@ def build_routes(
         Route("/api/settings/audit_log/download", audit_log_download),
         Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]
+    for route in routes:
+        # isinstance, not getattr: every entry above is a plain Route (never
+        # a Mount/WebSocketRoute), and narrowing this way -- rather than
+        # getattr(route, "path", ...) -- is what gives mypy route.path/
+        # route.methods below as real attributes instead of BaseRoute's own,
+        # narrower interface.
+        if not isinstance(route, Route) or "POST" not in (route.methods or set()):
+            continue
+        if route.path == "/api/settings/{action}":
+            continue
+        # A real invariant, not a stripped-under-`-O` optimization: a bespoke
+        # POST route this function itself just built, with no matching
+        # _BESPOKE_SENSITIVE_ROUTE_PATHS/_BESPOKE_EXEMPT_ROUTE_PATHS entry,
+        # must never reach the app it's about to be mounted into.
+        assert route.path in _BESPOKE_SENSITIVE_ROUTE_PATHS or route.path in _BESPOKE_EXEMPT_ROUTE_PATHS, (  # nosec B101
+            f"{route.path} is a new bespoke POST route with no _BESPOKE_SENSITIVE_ROUTE_PATHS/"
+            "_BESPOKE_EXEMPT_ROUTE_PATHS classification (3.3 of the self-approval review) -- "
+            "add it to one of the two above before it can bypass _SENSITIVE_ACTIONS-shaped gating "
+            "the way org_config_upload used to (F5)"
+        )
+    return routes
 
 
 def create_app(

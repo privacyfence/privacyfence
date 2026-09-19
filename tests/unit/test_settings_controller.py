@@ -757,22 +757,82 @@ class TestOrgConfigInstallSigning:
         assert installed == first_bundle  # unchanged -- the bad update was never written
 
 
-class TestToggleConnector:
-    def test_flips_enabled_flag_and_refreshes(self, controller, monkeypatch):
+class TestWouldPinNewOrgSigningKey:
+    """F5 of the self-approval review: the read-only precheck web/
+    routes_settings.py's org_config_upload route uses to demand an
+    explicit confirmation before install_org_config_bytes above pins a
+    new key as a side effect."""
+
+    def test_true_for_a_first_signed_bundle(self, controller):
+        from privacyfence import org_bundle_signing
+
+        private_key, _ = org_bundle_signing.generate_keypair()
+        bundle = org_bundle_signing.sign_bundle({"version": 1, "org_name": "Acme"}, private_key)
+
+        assert controller.would_pin_new_org_signing_key(json.dumps(bundle).encode()) is True
+        # Read-only -- nothing pinned or installed by merely checking.
+        assert not org_bundle_signing.pinned_public_key_path(sc.org_dir()).exists()
+        assert not (sc.org_dir() / "org_config.json").exists()
+
+    def test_false_for_an_unsigned_bundle(self, controller):
+        assert controller.would_pin_new_org_signing_key(json.dumps({"version": 1}).encode()) is False
+
+    def test_false_once_a_key_is_already_pinned(self, controller):
+        from privacyfence import org_bundle_signing
+
+        private_key, _ = org_bundle_signing.generate_keypair()
+        bundle = org_bundle_signing.sign_bundle({"version": 1, "org_name": "Acme"}, private_key)
+        controller.install_org_config_bytes(json.dumps(bundle).encode())
+
+        assert controller.would_pin_new_org_signing_key(json.dumps(bundle).encode()) is False
+
+    def test_false_for_malformed_json(self, controller):
+        assert controller.would_pin_new_org_signing_key(b"not json") is False
+
+    def test_false_for_a_json_array_not_an_object(self, controller):
+        assert controller.would_pin_new_org_signing_key(b"[1, 2, 3]") is False
+
+
+class TestConnectorEnableDisable:
+    """F6 of the self-approval review: enable_connector/disable_connector
+    replace a single toggle_connector so web/routes_settings.py can gate
+    the two directions differently -- see enable_connector's own
+    docstring for why."""
+
+    def test_disable_connector_sets_it_false_and_refreshes(self, controller, monkeypatch):
         refresh_calls = []
         monkeypatch.setattr(controller, "refresh_connectors", lambda: refresh_calls.append(1) or controller.snapshot())
 
-        controller.toggle_connector("gmail")
+        controller.disable_connector("gmail")
 
         cfg = controller._load_config()
         assert cfg["connectors"]["gmail"]["enabled"] is False
         assert refresh_calls == [1]
 
-    def test_toggling_twice_re_enables(self, controller, monkeypatch):
+    def test_enable_connector_sets_it_true_and_refreshes(self, controller, monkeypatch):
+        refresh_calls = []
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: refresh_calls.append(1) or controller.snapshot())
+        controller.disable_connector("gmail")
+
+        controller.enable_connector("gmail")
+
+        cfg = controller._load_config()
+        assert cfg["connectors"]["gmail"]["enabled"] is True
+        assert refresh_calls == [1, 1]
+
+    def test_disable_is_idempotent(self, controller, monkeypatch):
         monkeypatch.setattr(controller, "refresh_connectors", lambda: controller.snapshot())
 
-        controller.toggle_connector("gmail")
-        controller.toggle_connector("gmail")
+        controller.disable_connector("gmail")
+        controller.disable_connector("gmail")
+
+        assert controller._load_config()["connectors"]["gmail"]["enabled"] is False
+
+    def test_enable_is_idempotent(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: controller.snapshot())
+
+        controller.enable_connector("gmail")
+        controller.enable_connector("gmail")
 
         assert controller._load_config()["connectors"]["gmail"]["enabled"] is True
 

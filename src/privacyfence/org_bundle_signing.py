@@ -160,6 +160,46 @@ class BundleTrust:
     newly_pinned: bool = False
 
 
+def would_pin_new_key(bundle: dict[str, Any], org_dir: Path) -> bool:
+    """A pure, disk-mutation-free duplicate of verify_and_maybe_pin's own
+    "first signed bundle this install has ever seen" branch condition --
+    True exactly when calling that function on the same arguments would
+    pin a new signing key as a side effect.
+
+    F5 of the self-approval review: settings_controller.
+    install_org_config_bytes's web caller (routes_settings.py's
+    org_config_upload) wants to ask a human for an explicit confirmation
+    before that TOFU pin happens, rather than letting it happen silently
+    as a side effect of an upload verify_and_maybe_pin would otherwise
+    perform unconditionally. daemon_main.load_org_config's own call
+    (hand-editing config on disk, not over HTTP) keeps pinning
+    unconditionally -- placing a file there already required the kind of
+    access an HTTP request from an agent does not have.
+
+    Deliberately a second copy of the condition rather than a shared
+    helper verify_and_maybe_pin also calls: this module already accepts
+    that kind of duplication for the sake of the two functions staying
+    independently readable (see the module docstring's own note on
+    scripts/build_org_bundle.py's canonicalization copy) -- keep this in
+    exact lockstep with verify_and_maybe_pin's pinning branch below, or a
+    caller ends up asking for confirmation a pin never follows, or
+    skipping it for one that happens anyway.
+    """
+    if load_pinned_public_key(org_dir) is not None:
+        return False
+    has_signature_fields = bool(bundle.get(SIGNATURE_FIELD)) or bool(bundle.get(SIGNING_PUBLIC_KEY_FIELD))
+    if not has_signature_fields:
+        return False
+    embedded_key_b64 = bundle.get(SIGNING_PUBLIC_KEY_FIELD)
+    if not isinstance(embedded_key_b64, str) or not embedded_key_b64:
+        return False
+    try:
+        embedded_key = base64.b64decode(embedded_key_b64, validate=True)
+    except ValueError:
+        return False
+    return len(embedded_key) == 32 and _verify_against(bundle, embedded_key)
+
+
 def verify_and_maybe_pin(bundle: dict[str, Any], org_dir: Path) -> BundleTrust:
     """The one trust decision every org_config.json load or install goes
     through. See module docstring for the TOFU model.
@@ -252,4 +292,5 @@ __all__ = [
     "sha256_hex",
     "sign_bundle",
     "verify_and_maybe_pin",
+    "would_pin_new_key",
 ]

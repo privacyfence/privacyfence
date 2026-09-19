@@ -1112,6 +1112,31 @@ class SettingsController:
 
         self.error = ""
 
+    def would_pin_new_org_signing_key(self, raw: bytes) -> bool:
+        """Read-only precheck for web/routes_settings.py's org_config_
+        upload route (F5 of the self-approval review): whether installing
+        ``raw`` would pin a new organization-config signing key as a side
+        effect of install_org_config_bytes above, so that route can
+        demand an explicit confirmation before calling it, rather than
+        letting the TOFU pin happen silently as a side effect of an
+        upload. Malformed input (not valid JSON, not a JSON object) never
+        needs confirmation here -- install_org_config_bytes's own
+        validation rejects it either way, with or without a confirmation.
+
+        Uses this controller's own module-level org_dir() rather than
+        importing paths.org_dir a second, independent way -- see org_
+        bundle_signing.py's own module docstring for why that would
+        silently diverge from what tests (and settings_controller's own
+        callers) monkeypatch.
+        """
+        try:
+            data = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        return org_bundle_signing.would_pin_new_key(data, org_dir())
+
     # ------------------------------------------------------------------ #
     # Connector actions
     # ------------------------------------------------------------------ #
@@ -1136,10 +1161,25 @@ class SettingsController:
             self.error = str(exc)
             return {}
 
-    def toggle_connector(self, connector: str) -> dict[str, Any]:
+    def enable_connector(self, connector: str) -> dict[str, Any]:
+        """F6 of the self-approval review: split out of a single
+        ``toggle_connector`` so the two directions can be gated
+        differently by web/routes_settings.py's _SENSITIVE_ACTIONS. An
+        agent that already has connector access gains nothing new by
+        *disabling* one (see disable_connector below and that module's
+        classification comment), but re-enabling one a human deliberately
+        switched off is exactly the access the agent did not have before
+        -- the same rationale toggle_grant_capability etc. are already
+        gated on."""
+        return self._set_connector_enabled(connector, True)
+
+    def disable_connector(self, connector: str) -> dict[str, Any]:
+        return self._set_connector_enabled(connector, False)
+
+    def _set_connector_enabled(self, connector: str, enabled: bool) -> dict[str, Any]:
         cfg = self._load_config()
         conn = cfg.setdefault("connectors", {}).setdefault(connector, {})
-        conn["enabled"] = not conn.get("enabled", True)
+        conn["enabled"] = enabled
         self._save_config(cfg)
         self.refresh_connectors()
         return self.snapshot()
