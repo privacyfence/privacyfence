@@ -8,7 +8,7 @@ from starlette.applications import Starlette
 from starlette.responses import RedirectResponse
 from starlette.testclient import TestClient
 
-from privacyfence import paths, webauthn_stepup as wa
+from privacyfence import paths, web_shell, webauthn_stepup as wa
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal
 from privacyfence.step_up_config import StepUpConfig
@@ -36,7 +36,9 @@ def _fake_data_dir(monkeypatch, tmp_path):
 def _app(*, step_up=None, sessions=None):
     """org mode's own wiring -- org_session's three functions bound to an
     ``OrgSessionStore``, and a redirect to ``/login`` when unauthenticated,
-    exactly what web/server.py's ``_build_org_app`` passes."""
+    exactly what web/server.py's ``_build_org_app`` passes -- including
+    ``nav_items=web_shell.ORG_NAV_ITEMS``, since that's what makes this page
+    carry the same persistent header/nav as /approvals/connect/settings."""
     sessions = sessions or org_session.OrgSessionStore()
     step_up = step_up or StepUpConfig(rp_id="pf.example.com", rp_name="PrivacyFence")
     routes = rs.build_routes(
@@ -48,6 +50,7 @@ def _app(*, step_up=None, sessions=None):
         ),
         session_cookie_name=org_session.SESSION_COOKIE,
         step_up=step_up, issuer_url=ISSUER,
+        nav_items=web_shell.ORG_NAV_ITEMS,
     )
     app = Starlette(routes=routes)
     return app, sessions
@@ -161,6 +164,28 @@ class TestSecurityPage:
         r = client.get("/security")
         assert 'href="/connect"' in r.text
 
+    def test_org_mode_carries_the_persistent_shell_nav_not_a_footer_link(self):
+        # web_shell.wrap()'d (web_shell.ORG_NAV_ITEMS) since the fix that
+        # made /approvals'/connect's/settings' shared header/nav survive
+        # navigating into /security too -- previously this page was a bare
+        # doctype+tokens.css document with a single "Back to connections"
+        # link at the bottom.
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/security")
+        assert 'class="pf-shell-nav-item active" href="/security"' in r.text
+        for href in ("/approvals", "/connect", "/settings"):
+            assert f'class="pf-shell-nav-item" href="{href}"' in r.text
+        assert "Back to connections" not in r.text
+
+    def test_org_mode_signed_in_principal_is_shown_in_the_shell_header(self):
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/security")
+        assert f'<div class="pf-shell-principal">{ALICE.email}</div>' in r.text
+
     def test_the_lead_names_what_the_configured_scope_actually_covers(self):
         for scope, expected in (
             ("writes", "Required to approve a write."),
@@ -173,12 +198,17 @@ class TestSecurityPage:
             assert expected in client.get("/security").text
 
     def test_local_mode_links_back_to_the_connectors_settings_tab(self):
+        # Local mode's caller passes no nav_items (it has no web_shell-
+        # wrapped page of its own to be consistent with -- module
+        # docstring), so this stays the small, unwrapped document it always
+        # was, with its own footer back_link intact.
         app, sessions = _local_app()
         client = _client(app)
         _signed_in_local(client, sessions)
         r = client.get("/security")
         assert 'href="/settings/connectors"' in r.text
         assert 'href="/connect"' not in r.text
+        assert 'class="pf-shell-nav"' not in r.text
 
 
 class TestRegisterOptions:

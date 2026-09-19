@@ -8,15 +8,25 @@ local mode's own decide-time check is #426 Phase 2 -- this module only ever
 registers or removes a credential, in either mode.
 
 Same posture as web/routes_connect.py (not a port of routes_settings.py's
-whole surface, a session-cookie CSRF model, not web_shell.wrap()'d) -- see
-that module's own docstring for the reasoning, which applies here
-unchanged. Mode-agnostic since #426 Phase 1: ``build_routes`` takes a
-principal/session resolver rather than an ``OrgSessionStore`` directly, so
-org mode passes ``org_session``'s functions and local mode passes web/
-session_auth.py's -- the two modules already have matching shapes
-(``authenticated``/``check_csrf``/``check_origin``) for exactly this reason
-(session_auth.py's own module docstring: "mirroring web/org_session.py's
-own real-session model").
+whole surface, a session-cookie CSRF model) -- see that module's own
+docstring for the reasoning, which applies here unchanged. Mode-agnostic
+since #426 Phase 1: ``build_routes`` takes a principal/session resolver
+rather than an ``OrgSessionStore`` directly, so org mode passes ``org_
+session``'s functions and local mode passes web/session_auth.py's -- the
+two modules already have matching shapes (``authenticated``/``check_csrf``/
+``check_origin``) for exactly this reason (session_auth.py's own module
+docstring: "mirroring web/org_session.py's own real-session model").
+
+``nav_items`` (optional, default ``None``) is the one place this module's
+two callers now genuinely differ: org mode's (web/server.py's
+``_build_org_app``) passes ``web_shell.ORG_NAV_ITEMS`` so this page carries
+the same persistent header/nav as ``/approvals``/``/connect``/``/settings``,
+replacing the plain ``back_link`` footer paragraph those three pages also
+used to be the only way back from. Local mode passes nothing -- it has no
+web_shell-wrapped page of its own to be consistent with (settings_window_
+html.py's Connectors tab is that mode's own equivalent, see ``back_link``
+below), so ``/security`` stays the small, unwrapped document it always was
+there, with its footer ``back_link`` intact.
 
 ``PF_WEBAUTHN_JS`` (the base64url <-> ArrayBuffer conversions and the two
 ``navigator.credentials`` wrapper calls) is defined here and imported by
@@ -62,7 +72,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from .. import webauthn_stepup
+from .. import web_shell, webauthn_stepup
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..principal import Principal
 from ..step_up_config import StepUpConfig
@@ -158,6 +168,7 @@ def build_routes(
     step_up: StepUpConfig,
     issuer_url: str,
     back_link: tuple[str, str] = ("/connect", "Back to connections"),
+    nav_items: tuple[tuple[str, str, str], ...] | None = None,
 ) -> list[Route]:
     """``resolve_principal``/``check_csrf``/``check_origin`` are the
     mode-specific half of this module (#426 Phase 1) -- org mode's caller
@@ -174,11 +185,15 @@ def build_routes(
     see either session module's own ``check_csrf`` docstring) -- reading it
     directly here rather than through another callable, since it's a bare
     string either way. ``back_link`` is an ``(href, label)`` pair for the
-    page's own footer link -- it defaults to org mode's ``/connect`` (routes_
+    page's own footer link, rendered only when ``nav_items`` is ``None``
+    (see module docstring) -- it defaults to org mode's ``/connect`` (routes_
     connect.py) since that was this module's only caller until #426 Phase 1;
     local mode's caller overrides it to ``/settings/connectors``, since it
     has no ``/connect`` route to link to (settings_window_html.py's
-    Connectors tab is that mode's own equivalent).
+    Connectors tab is that mode's own equivalent). ``nav_items`` is ``None``
+    unless the caller wants ``/security`` wrapped in web_shell.wrap()'s
+    persistent header/nav instead (module docstring) -- when given, it takes
+    over entirely from ``back_link``, which is then never rendered.
     """
     challenges = RegistrationChallengeStore()
     delete_challenges = StepUpChallengeStore()
@@ -228,7 +243,7 @@ def build_routes(
         creds = webauthn_stepup.list_credentials(principal)
         html = _render_security_page(
             principal=principal, creds=creds, csrf=session_id, step_up=step_up,
-            nonce=_csp_nonce_for(request), back_link=back_link,
+            nonce=_csp_nonce_for(request), back_link=back_link, nav_items=nav_items,
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -386,16 +401,18 @@ def build_routes(
 
 
 # --------------------------------------------------------------------- #
-# Page rendering -- same small, self-contained-document style as
-# web/routes_connect.py's own _render_connect_page (see that module's own
-# note on why this isn't web_shell.wrap()'d).
+# Page rendering -- org mode's caller (nav_items given) wraps this in
+# web_shell.wrap()'s persistent header/nav, same as routes_connect.py's own
+# _render_connect_page; local mode's (nav_items=None) stays the small,
+# self-contained document it always was -- see module docstring's own
+# ``nav_items`` paragraph and build_routes' docstring on ``back_link``.
 # --------------------------------------------------------------------- #
 
 _STYLE = """
-body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:640px;margin:0 auto;
-  padding:32px 20px 64px;color:#1b1b1f;background:#fff}
+#pf-security-page{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:640px;margin:0 auto;
+  padding:24px 20px 64px}
 h1{font-size:20px;margin:0 0 4px}
-p.lead{color:#555;margin-top:0}
+p.lead{color:var(--color-neutral-600, #555);margin-top:0}
 .flash{border-radius:8px;padding:10px 14px;margin:16px 0;font-size:14px}
 .flash.ok{background:#e6f4ea;color:#1e7e34}
 .flash.err{background:#fdecea;color:#a02a2a}
@@ -414,7 +431,7 @@ _PAGE_JS = """
 document.addEventListener('DOMContentLoaded', function () {
   var btn = document.getElementById('pf-add-passkey');
   var status = document.getElementById('pf-passkey-status');
-  var csrf = document.body.getAttribute('data-csrf');
+  var csrf = document.getElementById('pf-security-page').getAttribute('data-csrf');
   if (!btn) { return; }
   if (!window.PublicKeyCredential) {
     btn.disabled = true;
@@ -549,26 +566,44 @@ _SCOPE_NOTES = {
 
 def _render_security_page(
     *, principal: Principal, creds: list, csrf: str, step_up: StepUpConfig, nonce: str,
-    back_link: tuple[str, str],
+    back_link: tuple[str, str], nav_items: tuple[tuple[str, str, str], ...] | None = None,
 ) -> str:
-    who = _esc(principal.email or principal.display_name or principal.id)
+    who = principal.email or principal.display_name or principal.id
+    who_esc = _esc(who)
     rows = "".join(_credential_row_html(c) for c in creds)
-    body = f'<ul class="creds">{rows}</ul>' if creds else '<div class="empty">No passkeys added yet.</div>'
+    creds_html = f'<ul class="creds">{rows}</ul>' if creds else '<div class="empty">No passkeys added yet.</div>'
     scope_note = _SCOPE_NOTES.get(step_up.scope, _SCOPE_NOTES["writes"])
+    # Only rendered when there's no persistent nav to get back with (module
+    # docstring's own ``nav_items`` paragraph) -- with one, this link would
+    # just duplicate the nav's own "Connections"/"Settings" items.
+    back_link_html = (
+        "" if nav_items is not None else f'<p><a href="{_esc(back_link[0])}">{_esc(back_link[1])}</a></p>'
+    )
+    content = (
+        f'<div id="pf-security-page" data-csrf="{_esc(csrf)}">'
+        "<h1>Passkeys</h1>"
+        f'<p class="lead">Signed in as {who_esc}. A passkey (Face ID, Touch ID, fingerprint, or Windows Hello) proves it\'s '
+        f"really you before a write approval is released, even if someone else has your unlocked phone. {_esc(scope_note)}</p>"
+        f"{creds_html}"
+        '<p><button type="button" class="add" id="pf-add-passkey">Add a passkey</button>'
+        '<span id="pf-passkey-status" class="meta"></span></p>'
+        '<p>Lost every passkey enrolled here? <button type="button" class="remove" id="pf-use-recovery-code">Use your recovery code</button>'
+        '<span id="pf-recovery-status" class="meta"></span></p>'
+        f"{back_link_html}"
+        f'<script nonce="{nonce}">{_PAGE_JS}</script>'
+        "</div>"
+    )
+    if nav_items is not None:
+        return web_shell.wrap(
+            f'<style nonce="{nonce}">{_STYLE}</style>{content}',
+            title="PrivacyFence — Passkeys", active="passkeys", nonce=nonce,
+            nav_items=nav_items, principal_label=who, live_updates=False, notifications_enabled=False,
+        )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PrivacyFence -- Security</title><style nonce="{nonce}">{_STYLE}</style></head>
-<body data-csrf="{_esc(csrf)}">
-<h1>Passkeys</h1>
-<p class="lead">Signed in as {who}. A passkey (Face ID, Touch ID, fingerprint, or Windows Hello) proves it's
-really you before a write approval is released, even if someone else has your unlocked phone. {_esc(scope_note)}</p>
-{body}
-<p><button type="button" class="add" id="pf-add-passkey">Add a passkey</button>
-<span id="pf-passkey-status" class="meta"></span></p>
-<p>Lost every passkey enrolled here? <button type="button" class="remove" id="pf-use-recovery-code">Use your recovery code</button>
-<span id="pf-recovery-status" class="meta"></span></p>
-<p><a href="{_esc(back_link[0])}">{_esc(back_link[1])}</a></p>
-<script nonce="{nonce}">{_PAGE_JS}</script>
+<body>
+{content}
 </body></html>"""
 
 

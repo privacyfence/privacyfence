@@ -72,7 +72,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import atlassian_oauth, google_oauth, org_identity, paths, salesforce_client, slack_client, telegram_auth
+from .. import atlassian_oauth, google_oauth, org_identity, paths, salesforce_client, slack_client, telegram_auth, web_shell
 from ..app_credentials import telegram_app_credentials
 from ..calendar_client import SCOPES as _CALENDAR_SCOPES
 from ..connector_registry import ConnectorRegistry
@@ -533,31 +533,36 @@ def build_routes(
 
 
 # ---------------------------------------------------------------------------- #
-# Page rendering -- a small, self-contained document, deliberately not
-# web_shell.wrap()'d (see module docstring: that shell's live indicator
-# needs GET /api/state/stream, which org mode doesn't mount) and not built
-# from settings_window_html.py (which is a pure function of SettingsController.
-# snapshot()'s whole ~30-action surface, not a per-service connect list).
+# Page rendering -- shares web_shell.wrap()'s header/nav with /approvals and
+# /security/settings (web_shell.ORG_NAV_ITEMS) rather than being the fourth
+# self-contained document in the row: with each of those four pages building
+# its own doctype, the nav only ever existed on /approvals, so a signed-in
+# principal who followed a Connect/Reconnect button (or a bookmark) onto this
+# page, or /security, or /settings, lost every way back to the other three
+# short of editing the URL bar. Not built from settings_window_html.py (which
+# is a pure function of SettingsController.snapshot()'s whole ~30-action
+# surface, not a per-service connect list) -- only the shared shell changed,
+# not what this page is a view of.
 # ---------------------------------------------------------------------------- #
 
 _STYLE = """
-body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:640px;margin:0 auto;
-  padding:32px 20px 64px;color:#1b1b1f;background:#fff}
+.pf-connect{font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:640px;margin:0 auto;
+  padding:24px 20px 64px}
 h1{font-size:20px;margin:0 0 4px}
-p.lead{color:#555;margin-top:0}
+p.lead{color:var(--color-neutral-600);margin-top:0}
 .flash{border-radius:8px;padding:10px 14px;margin:16px 0;font-size:14px}
 .flash.ok{background:#e6f4ea;color:#1e7e34}
 .flash.err{background:#fdecea;color:#a02a2a}
 ul.services{list-style:none;padding:0;margin:24px 0}
-li.service{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid #eee}
+li.service{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-divider)}
 li.service:last-child{border-bottom:none}
 .name{font-weight:600}
 .badge{font-size:12px;padding:2px 8px;border-radius:999px;margin-left:8px}
 .badge.connected{background:#e6f4ea;color:#1e7e34}
-.badge.not-configured{background:#f1f1f3;color:#888}
+.badge.not-configured{background:var(--color-bg);color:var(--color-neutral-600)}
 a.connect-link{color:#fff;background:#2451c9;padding:6px 14px;border-radius:6px;text-decoration:none;font-size:14px}
 a.connect-link.reconnect{background:#555}
-.telegram-box{margin-top:8px;padding:14px;border:1px solid #eee;border-radius:8px}
+.telegram-box{margin-top:8px;padding:14px;border:1px solid var(--color-divider);border-radius:8px}
 .telegram-box input[type=text],.telegram-box input[type=password]{width:100%;box-sizing:border-box;padding:8px;
   margin:6px 0;border:1px solid #ccc;border-radius:6px;font-size:14px}
 .telegram-box button{padding:8px 16px;border:none;border-radius:6px;background:#2451c9;color:#fff;font-size:14px}
@@ -646,21 +651,23 @@ def _render_connect_page(
     google_rows = "".join(_service_row_html(principal, org_config, s) for s in ("gmail", "drive", "calendar", "contacts", "tasks"))
     other_rows = "".join(_service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence"))
     telegram_row = _telegram_box_html(principal, org_config, telegram_state, csrf)
-    who = _esc(principal.email or principal.display_name or principal.id)
+    who = principal.email or principal.display_name or principal.id
 
-    return f"""<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PrivacyFence -- Connect your accounts</title>
-<style nonce="{nonce}">{_STYLE}</style></head>
-<body>
-<h1>Connect your accounts</h1>
-<p class="lead">Signed in as {who}. Connecting a service lets PrivacyFence act on it for you, still gated by
-the same approval rules as everything else.</p>
-{_flash_html(flash_connected, flash_error)}
-<ul class="services">{google_rows}{other_rows}{telegram_row}</ul>
-<p style="text-align:center"><a href="/approvals">Approvals</a> &middot; <a href="/security">Passkeys</a> &middot; <a href="/settings">Settings</a></p>
-<form method="post" action="/logout"><button type="submit" class="cancel" style="cursor:pointer">Sign out</button></form>
-</body></html>"""
+    body = (
+        f'<style nonce="{nonce}">{_STYLE}</style>'
+        '<div class="pf-connect">'
+        "<h1>Connect your accounts</h1>"
+        f'<p class="lead">Signed in as {_esc(who)}. Connecting a service lets PrivacyFence act on it for you, still gated by '
+        "the same approval rules as everything else.</p>"
+        f"{_flash_html(flash_connected, flash_error)}"
+        f'<ul class="services">{google_rows}{other_rows}{telegram_row}</ul>'
+        '<form method="post" action="/logout"><button type="submit" class="cancel" style="cursor:pointer">Sign out</button></form>'
+        "</div>"
+    )
+    return web_shell.wrap(
+        body, title="PrivacyFence — Connect your accounts", active="connections", nonce=nonce,
+        nav_items=web_shell.ORG_NAV_ITEMS, principal_label=who, live_updates=False, notifications_enabled=False,
+    )
 
 
 __all__ = [

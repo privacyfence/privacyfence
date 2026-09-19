@@ -93,7 +93,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import paths, privilege_separation
+from .. import paths, privilege_separation, web_shell
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, principal_scope
@@ -824,6 +824,10 @@ def _build_org_app(
             ),
             session_cookie_name=org_session.SESSION_COOKIE,
             step_up=step_up, issuer_url=org.issuer_url,
+            # Persistent header/nav (web_shell.ORG_NAV_ITEMS), same shell
+            # /approvals/connect/settings all use -- see routes_security.py's
+            # own module docstring on ``nav_items``.
+            nav_items=web_shell.ORG_NAV_ITEMS,
         ))
     # #400: mounted unconditionally, same reasoning as /approvals above --
     # needs only org.sessions and the install-wide settings dict, both
