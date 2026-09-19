@@ -93,9 +93,12 @@ enrollment nobody asked for distinguishable from one a human made -- the
 
 **Tamper-evidence and recovery (#426 Phase 4)**: every enroll and remove
 here writes an audit entry (see ``_audit`` below), and ``register_verify``
-issues a one-time recovery code -- shown to the browser exactly once, in
-that same response -- whenever this principal doesn't currently have an
-unused one on file. ``recover_credential`` is the code's only consumer:
+issues a one-time recovery code whenever this principal doesn't currently
+have an unused one on file. Who shows it is ``deliver_recovery_code``'s
+answer (plan item 1.3, see ``build_routes``' own docstring): the browser,
+once, in that same response -- or, on a packaged local-mode install, the
+companion app on the human's own desktop, with nothing about it in the
+response at all. ``recover_credential`` is the code's only consumer:
 trading it in removes every credential this principal has enrolled, for
 the case webauthn_stepup.py's own module docstring describes (the only
 authenticator lost to a new machine or a wiped TPM, with no IdP in local
@@ -223,6 +226,7 @@ def build_routes(
     dev_unseparated_notice: str | None = None,
     nav_items: tuple[tuple[str, str, str], ...] | None = None,
     confirm_first_enrollment: Callable[[], tuple[bool, str]] | None = None,
+    deliver_recovery_code: Callable[[str], tuple[bool, str]] | None = None,
 ) -> list[Route]:
     """``resolve_principal``/``check_csrf``/``check_origin`` are the
     mode-specific half of this module (#426 Phase 1) -- org mode's caller
@@ -261,6 +265,23 @@ def build_routes(
     authentication, which a local-mode bootstrap cookie is not. Called off
     the event loop (``asyncio.to_thread``), since what it does is put a
     dialog in front of a human and wait.
+
+    ``deliver_recovery_code`` (plan item 1.3) is the third and last place
+    the two modes differ, and it is packaging-dependent rather than
+    mode-dependent. ``None`` -- org mode, and any local-mode install that is
+    not a packaged build -- keeps what this always did: the one-time
+    recovery code goes back in ``register_verify``'s own JSON body and
+    ``_PAGE_JS`` shows it. A packaged local-mode install passes web/
+    server.py's ``present_recovery_code``, which hands the code to the
+    companion to put on the human's own desktop instead, so a credential-
+    store reset token never travels in a response body a process holding a
+    ``pf_session`` can read (F7 of the review this plan comes from). It
+    returns ``(delivered, reason)``, and a ``False`` is load-bearing: the
+    code is only *stored* once somebody has been shown it, so a failed
+    delivery leaves the principal with no code rather than one nobody has.
+    Called off the event loop (``asyncio.to_thread``) for the same reason
+    ``confirm_first_enrollment`` is -- what it does is put a dialog in
+    front of a human.
 
     ``dev_unseparated_notice`` (ADR 0003 decision 7) is local mode's own
     ``privilege_separation.dev_unseparated_notice()`` result, shown verbatim
@@ -481,12 +502,26 @@ def build_routes(
         response: dict[str, Any] = {"status": "ok", "credential_id": saved.credential_id, "label": saved.label}
         # #426 Phase 4: issue a recovery code the moment there stops being
         # an unused one on file -- covers both the first-ever enrollment
-        # and an upgrade from before this feature existed. Returned exactly
-        # once, in this response only; _PAGE_JS is what actually shows it
-        # to the human -- see this module's own docstring on why it can
-        # never be recovered again after this.
+        # and an upgrade from before this feature existed. It is shown
+        # exactly once either way; what differs (plan item 1.3, see
+        # build_routes' docstring on deliver_recovery_code) is who shows it.
         if not webauthn_stepup.has_recovery_code(principal):
-            response["recovery_code"] = webauthn_stepup.generate_recovery_code(principal)
+            code = webauthn_stepup.mint_recovery_code()
+            if deliver_recovery_code is None:
+                webauthn_stepup.store_recovery_code(principal, code)
+                response["recovery_code"] = code
+            else:
+                delivered, reason = await asyncio.to_thread(deliver_recovery_code, code)
+                if delivered:
+                    # Stored only now. A code that reached nobody is not
+                    # this principal's recovery code -- see
+                    # webauthn_stepup.mint_recovery_code()'s own docstring.
+                    webauthn_stepup.store_recovery_code(principal, code)
+                    response["recovery_shown_by_companion"] = True
+                else:
+                    response["recovery_shown_by_companion"] = False
+                    response["recovery_detail"] = reason
+                    logger.warning("No recovery code was issued at enrollment: %s", reason)
         return JSONResponse(response)
 
     async def delete_credential(request: Request) -> Response:
@@ -676,6 +711,17 @@ document.addEventListener('DOMContentLoaded', function () {
           'Save this recovery code somewhere safe -- it will not be shown again.\\n\\n' +
           data.recovery_code +
           '\\n\\nIf you ever lose every passkey enrolled here, this code is the only way back in.'
+        );
+      }
+      // Plan item 1.3: on a packaged install the code is never in this
+      // response at all -- the companion put it on the desktop. Only the
+      // failure is worth a word here, since the success already happened
+      // somewhere the human was looking.
+      if (data.recovery_shown_by_companion === false) {
+        window.alert(
+          'Your passkey was added, but no recovery code could be issued:\\n\\n' +
+          (data.recovery_detail || 'the companion app did not show it') +
+          '\\n\\nAsk for one from the PrivacyFence companion once that is sorted out.'
         );
       }
       window.location.reload();

@@ -360,6 +360,45 @@ class TestIsStepUpRequired:
             assert wa.is_step_up_required(gate_kind="", pii_detected=True, scope=scope) is False
 
 
+class TestRecoveryCodeMintAndStore:
+    """Plan item 1.3 split ``generate_recovery_code`` in two so local mode
+    can mint a code, get it in front of a human, and only *then* make it the
+    one live code on file. What is tested is that the split is real: minting
+    alone changes nothing on disk."""
+
+    def test_minting_stores_nothing(self):
+        code = wa.mint_recovery_code()
+        assert code
+        assert wa.has_recovery_code(ALICE) is False
+        assert not (paths.authority_dir(ALICE) / wa.RECOVERY_CODE_FILE_NAME).exists()
+
+    def test_storing_makes_it_the_live_code(self):
+        code = wa.mint_recovery_code()
+        wa.store_recovery_code(ALICE, code)
+        assert wa.has_recovery_code(ALICE) is True
+        assert wa.consume_recovery_code(ALICE, code) is True
+
+    def test_storing_a_second_one_invalidates_the_first(self):
+        # What the companion's "New Recovery Code" action does, and what its
+        # confirmation dialog warns about in as many words.
+        first = wa.mint_recovery_code()
+        wa.store_recovery_code(ALICE, first)
+        second = wa.mint_recovery_code()
+        wa.store_recovery_code(ALICE, second)
+        assert wa.consume_recovery_code(ALICE, first) is False
+        assert wa.consume_recovery_code(ALICE, second) is True
+
+    def test_each_mint_is_distinct(self):
+        assert len({wa.mint_recovery_code() for _ in range(50)}) == 50
+
+    def test_generate_is_still_the_two_halves_in_one_call(self):
+        # Org mode still uses it: there is no companion there, and the
+        # browser that reached /security is IdP-authenticated.
+        code = wa.generate_recovery_code(ALICE)
+        assert wa.has_recovery_code(ALICE) is True
+        assert wa.consume_recovery_code(ALICE, code) is True
+
+
 class TestRecoveryCode:
     def test_no_code_generated_yet(self):
         assert wa.has_recovery_code(ALICE) is False

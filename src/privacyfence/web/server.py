@@ -93,7 +93,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import paths, privilege_separation, web_shell
+from .. import paths, privilege_separation, web_shell, webauthn_stepup
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, principal_scope
@@ -105,7 +105,13 @@ from . import routes_connect
 from . import routes_downloads
 from . import routes_org_identity
 from . import state_stream as _state_stream
-from .control_channel import WEB_BASE_URL_FILE_NAME, ControlChannelServer, request_enrollment_confirmation
+from .control_channel import (
+    WEB_BASE_URL_FILE_NAME,
+    ControlChannelServer,
+    request_enrollment_confirmation,
+    request_recovery_confirmation,
+    send_recovery_code,
+)
 from .csp import build_csp
 from .csp import new_nonce as _new_csp_nonce
 from .mcp_auth import load_or_create_mcp_token
@@ -208,6 +214,78 @@ def confirm_first_passkey_enrollment() -> tuple[bool, str]:
             f"{privilege_separation.DEV_ALLOW_UNSEPARATED_ENV}=1 for local development."
         )
     return confirmed, reason
+
+
+def present_recovery_code(code: str) -> tuple[bool, str]:
+    """Local mode's ``deliver_recovery_code`` (web/routes_security.py):
+    hand a freshly minted one-time recovery code to the companion, which
+    puts it in front of whoever is at this machine's own login session.
+
+    Wired only on a *packaged* build -- ``build_app`` below decides that --
+    for the same reason ``confirm_first_passkey_enrollment`` above honors a
+    dev escape hatch: ADR 0003 decisions 3-5 guarantee a companion on every
+    shipped install and nothing guarantees one for a source checkout, so a
+    checkout keeps the pre-1.3 behavior (the code comes back in the
+    response, and ``_PAGE_JS`` shows it) rather than being unable to issue
+    one at all.
+
+    Returns ``(shown, reason)`` straight through: the caller stores the
+    code only on a ``True``, so a companion that could not be reached costs
+    an enrollment its recovery code rather than leaving one on file that
+    nobody has.
+    """
+    return send_recovery_code(code)
+
+
+def reissue_local_recovery_code() -> tuple[bool, str]:
+    """The companion's ``RECOVERY`` command, from the daemon's side: confirm
+    with the human, mint, show, and only then store (plan item 1.3's
+    "re-presented by the companion" half).
+
+    This is the *only* way a second recovery code is ever produced, and it
+    deliberately produces a new one rather than reproducing the old: nothing
+    keeps the plaintext, by design -- ``webauthn_stepup`` stores a salted
+    hash and nothing else. The human gets a working code; whatever they
+    wrote down before stops working, which is what the confirmation dialog
+    says in as many words.
+
+    The confirmation is what makes this safe to expose on a channel the
+    agent shares (web/control_channel.py's own ``0660`` paragraph): the
+    reply carries no code, so triggering this learns an attacker nothing,
+    and the dialog means it cannot even invalidate the human's saved code
+    without somebody at the keyboard agreeing to it.
+    """
+    confirmed, reason = request_recovery_confirmation()
+    if not confirmed:
+        return False, reason or "the companion did not confirm a new recovery code"
+    code = webauthn_stepup.mint_recovery_code()
+    shown, reason = send_recovery_code(code)
+    if not shown:
+        return False, reason or "the companion could not show the recovery code"
+    webauthn_stepup.store_recovery_code(LOCAL_PRINCIPAL, code)
+    return True, ""
+
+
+def local_enrollment_state(step_up: StepUpConfig | None) -> str:
+    """The companion's ``ENROLLMENT`` command, from the daemon's side:
+    ``"pending"`` when this install requires a passkey and has none
+    enrolled, ``"ok"`` otherwise (plan item 1.2).
+
+    "Requires" is ``enabled and require_passkey`` together, the same
+    pairing every other consumer of this config treats as in force (see
+    ``webauthn_stepup.observe_step_up_requirement``) -- an install with
+    step-up off is not waiting for an enrollment, it is simply not using
+    one, and the companion must not nag about it.
+
+    Says nothing else on purpose. The credential store itself lives under
+    ``authority_dir()`` and is unreadable to the logged-in user on a
+    separated install, which is why the companion has to ask at all; the
+    answer it gets back is one of two words, both of which anybody looking
+    at the banner on ``/security`` could already read off the screen.
+    """
+    if step_up is None or not (step_up.enabled and step_up.require_passkey):
+        return "ok"
+    return "ok" if webauthn_stepup.has_credentials(LOCAL_PRINCIPAL) else "pending"
 
 
 def _write_mcp_url_file(url: str) -> None:
@@ -770,6 +848,13 @@ def build_app(
             # call below passes nothing -- see routes_security.py's
             # build_routes docstring on why the two differ here.
             confirm_first_enrollment=confirm_first_passkey_enrollment,
+            # Plan item 1.3: the companion shows the one-time recovery code
+            # instead of this response carrying it -- on a packaged build
+            # only, which is the only kind of install ADR 0003 guarantees a
+            # companion for. Everywhere else this stays None and the code
+            # comes back in the body exactly as it always did. See
+            # present_recovery_code() and routes_security.build_routes.
+            deliver_recovery_code=present_recovery_code if paths.is_bundled() else None,
         ))
 
     if state_stream is not None:
@@ -973,7 +1058,18 @@ class WebServer:
             self.sessions = LocalSessionStore()
             bootstrap = BootstrapStore()
             self.bootstrap = bootstrap
-            self.control_channel = ControlChannelServer(bootstrap=bootstrap, allow_quit=allow_quit)
+            self.control_channel = ControlChannelServer(
+                bootstrap=bootstrap, allow_quit=allow_quit,
+                # Plan items 1.2/1.3: the two questions the companion asks
+                # this daemon that only this daemon can answer -- whether a
+                # first enrollment is still outstanding, and "issue me a
+                # replacement recovery code". Bound to the same StepUpConfig
+                # every other consumer got (a LiveStepUpConfig on the real
+                # boot path, so this reads the current value rather than the
+                # one loaded at startup).
+                enrollment_state=lambda: local_enrollment_state(step_up),
+                reissue_recovery_code=reissue_local_recovery_code,
+            )
         # Every path mint_bootstrap_url() has actually written a discovery
         # file for -- stop() clears exactly these, never a hardcoded list,
         # since which paths get minted (just /approvals, or /approvals and

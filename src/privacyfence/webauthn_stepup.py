@@ -85,9 +85,20 @@ this module only tracks the state an entry needs to be written from:
   authenticator (a new machine, a wiped TPM) needs a sanctioned way back
   in that isn't "edit the config file from a shell" -- the very door the
   agent this feature defends against would also use. Generated once,
-  shown once (the caller must hand it to the browser in the same response
-  that generates it -- it is never recoverable again), stored only as a
-  salted hash.
+  shown once, never recoverable again, stored only as a salted hash.
+
+  *Where* it is shown once is mode-dependent as of plan item 1.3. Org mode
+  hands it to the browser in the same response that generates it
+  (``generate_recovery_code``), which is what this always did. Local mode
+  does not: a packaged local-mode install mints the code
+  (``mint_recovery_code``), has the companion put it in front of the human
+  on their own desktop (web/control_channel.py's ``SHOW RECOVERY``), and
+  only then makes it live (``store_recovery_code``) -- so a credential-
+  store reset token is never a value a process that merely holds a
+  ``pf_session`` can read out of an HTTP response body, and a code nobody
+  was shown never becomes the one code on file. The companion can also
+  issue a replacement later, which is the only way this is ever shown
+  twice: a new one, with the old invalidated.
 - **Requirement enable/disable tracking**
   (``observe_step_up_requirement``/``step_up_disabled_notice``) -- through
   #426 Phase 4 there was no UI to flip ``step_up.require_passkey`` at all
@@ -557,20 +568,43 @@ def has_recovery_code(principal: Principal) -> bool:
     return bool(raw) and not raw.get("used_at")
 
 
-def generate_recovery_code(principal: Principal) -> str:
-    """Generates and stores a fresh recovery code, returning the plaintext
-    once -- the caller must surface it to the human in this same response;
-    it is never retrievable again, only its salted SHA-256 hash is kept.
-    Overwrites (invalidates) any code already on file for this principal,
-    used or not -- there is only ever one live code per principal."""
-    raw_code = "-".join(
+def mint_recovery_code() -> str:
+    """A fresh recovery code's plaintext, stored nowhere -- the half of
+    ``generate_recovery_code`` below that has no side effect.
+
+    Split out for plan item 1.3's delivery order: local mode hands the code
+    to the companion to put on screen (web/control_channel.py's ``SHOW
+    RECOVERY``), and a code that reached nobody must not become the one
+    live code on file -- ``has_recovery_code`` would then be True forever
+    for a value no human has, and no later enrollment would issue another.
+    So the caller mints, delivers, and only then calls
+    ``store_recovery_code``. Nothing but the ordering changes: the stored
+    shape and the verification path are exactly what they were."""
+    return "-".join(
         secrets.token_hex(_RECOVERY_CODE_GROUP_CHARS // 2).upper() for _ in range(_RECOVERY_CODE_GROUPS)
     )
+
+
+def store_recovery_code(principal: Principal, code: str) -> None:
+    """Makes ``code`` this principal's one live recovery code, keeping only
+    its salted SHA-256 hash. Overwrites (invalidates) any code already on
+    file, used or not -- there is only ever one live code per principal."""
     salt = secrets.token_bytes(16)
-    digest = hashlib.sha256(salt + raw_code.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(salt + code.encode("utf-8")).hexdigest()
     atomic_write_json(_recovery_code_path(principal), {
         "salt": salt.hex(), "digest": digest, "created_at": time.time(), "used_at": None,
     })
+
+
+def generate_recovery_code(principal: Principal) -> str:
+    """Mint and store in one step, returning the plaintext once -- the
+    caller must surface it to the human in this same response; it is never
+    retrievable again. What org mode's enrollment still does, since it has
+    no companion to hand a code to and the browser that reached ``/security``
+    is IdP-authenticated (docs/security-and-compliance.md says so in the
+    same terms). Local mode uses the two halves above instead."""
+    raw_code = mint_recovery_code()
+    store_recovery_code(principal, raw_code)
     return raw_code
 
 
@@ -698,10 +732,12 @@ __all__ = [
     "generate_recovery_code",
     "has_credentials",
     "has_recovery_code",
+    "mint_recovery_code",
     "is_step_up_required",
     "list_credentials",
     "observe_step_up_requirement",
     "remove_credential",
     "step_up_disabled_notice",
+    "store_recovery_code",
     "verify_assertion",
 ]

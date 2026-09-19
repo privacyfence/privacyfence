@@ -1065,3 +1065,169 @@ class TestLocalModeWiresTheFirstEnrollmentGate:
         )
 
         assert passed["confirm_first_enrollment"] is srv.confirm_first_passkey_enrollment
+
+
+class TestLocalEnrollmentState:
+    """Plan item 1.2's daemon-side answer: the one question the companion
+    cannot answer for itself, because on a separated install the credential
+    store is unreadable to the logged-in user."""
+
+    def _server_module(self):
+        from privacyfence.web import server as srv
+
+        return srv
+
+    def test_pending_when_a_passkey_is_required_and_none_is_enrolled(self, monkeypatch):
+        from privacyfence.step_up_config import StepUpConfig
+
+        srv = self._server_module()
+        monkeypatch.setattr(srv.webauthn_stepup, "has_credentials", lambda principal: False)
+
+        state = srv.local_enrollment_state(StepUpConfig(enabled=True, require_passkey=True))
+
+        assert state == "pending"
+
+    def test_ok_once_something_is_enrolled(self, monkeypatch):
+        from privacyfence.step_up_config import StepUpConfig
+
+        srv = self._server_module()
+        monkeypatch.setattr(srv.webauthn_stepup, "has_credentials", lambda principal: True)
+
+        assert srv.local_enrollment_state(StepUpConfig(enabled=True, require_passkey=True)) == "ok"
+
+    def test_an_install_not_using_step_up_is_not_waiting_for_anything(self, monkeypatch):
+        # "Requires" is enabled *and* require_passkey together, the same
+        # pairing every other consumer treats as in force. An install with
+        # step-up off is not waiting for an enrollment, and the companion
+        # must not nag about one.
+        from privacyfence.step_up_config import StepUpConfig
+
+        srv = self._server_module()
+
+        def _unexpected(principal):
+            raise AssertionError("read the credential store for an install with step-up off")
+
+        monkeypatch.setattr(srv.webauthn_stepup, "has_credentials", _unexpected)
+
+        assert srv.local_enrollment_state(None) == "ok"
+        assert srv.local_enrollment_state(StepUpConfig()) == "ok"
+        assert srv.local_enrollment_state(StepUpConfig(enabled=True)) == "ok"
+        assert srv.local_enrollment_state(StepUpConfig(require_passkey=True)) == "ok"
+
+
+class TestRecoveryCodeDelivery:
+    """Plan item 1.3: a credential-store reset token stops being a value a
+    process holding a ``pf_session`` can read out of an HTTP response."""
+
+    def _server_module(self):
+        from privacyfence.web import server as srv
+
+        return srv
+
+    def test_present_recovery_code_hands_it_to_the_companion(self, monkeypatch):
+        srv = self._server_module()
+        sent = []
+        monkeypatch.setattr(srv, "send_recovery_code", lambda code: sent.append(code) or (True, ""))
+
+        assert srv.present_recovery_code("A1B2-C3D4-E5F6-1789") == (True, "")
+        assert sent == ["A1B2-C3D4-E5F6-1789"]
+
+    def test_a_reissue_confirms_then_shows_then_stores(self, monkeypatch, tmp_path):
+        from privacyfence import paths, webauthn_stepup
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        order = []
+        monkeypatch.setattr(
+            srv, "request_recovery_confirmation", lambda: order.append("confirm") or (True, ""),
+        )
+        shown = []
+        monkeypatch.setattr(
+            srv, "send_recovery_code",
+            lambda code: (order.append("show"), shown.append(code), (True, ""))[-1],
+        )
+
+        assert srv.reissue_local_recovery_code() == (True, "")
+        assert order == ["confirm", "show"]
+        assert webauthn_stepup.has_recovery_code(LOCAL_PRINCIPAL)
+        # And it is the code that was shown, not some other one.
+        assert webauthn_stepup.consume_recovery_code(LOCAL_PRINCIPAL, shown[0])
+
+    def test_a_denied_confirmation_stores_nothing(self, monkeypatch, tmp_path):
+        from privacyfence import paths, webauthn_stepup
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(srv, "request_recovery_confirmation", lambda: (False, "denied"))
+
+        def _unexpected(code):
+            raise AssertionError("showed a code after the confirmation was denied")
+
+        monkeypatch.setattr(srv, "send_recovery_code", _unexpected)
+
+        assert srv.reissue_local_recovery_code() == (False, "denied")
+        assert not webauthn_stepup.has_recovery_code(LOCAL_PRINCIPAL)
+
+    def test_a_code_nobody_could_be_shown_is_never_stored(self, monkeypatch, tmp_path):
+        # The whole reason minting and storing are two calls: a stored code
+        # nobody has would make has_recovery_code() true forever, and no
+        # later enrollment would ever issue another.
+        from privacyfence import paths, webauthn_stepup
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        srv = self._server_module()
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(srv, "request_recovery_confirmation", lambda: (True, ""))
+        monkeypatch.setattr(srv, "send_recovery_code", lambda code: (False, "no display"))
+
+        assert srv.reissue_local_recovery_code() == (False, "no display")
+        assert not webauthn_stepup.has_recovery_code(LOCAL_PRINCIPAL)
+
+    def test_build_app_wires_the_companion_delivery_on_a_packaged_build(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        from privacyfence.step_up_config import StepUpConfig
+        from privacyfence.web import routes_security, server as srv
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_bundled", lambda: True)
+        passed = {}
+        real_build_routes = routes_security.build_routes
+
+        def _spy(**kwargs):
+            passed.update(kwargs)
+            return real_build_routes(**kwargs)
+
+        monkeypatch.setattr(routes_security, "build_routes", _spy)
+        srv.build_app(
+            WebApprovalUI(), sessions=LocalSessionStore(),
+            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
+        )
+
+        assert passed["deliver_recovery_code"] is srv.present_recovery_code
+
+    def test_a_source_checkout_keeps_the_pre_1_3_behavior(self, tmp_path, monkeypatch):
+        # Nothing autostarts a companion for a checkout (ADR 0003 decisions
+        # 3-5 are the packaged installers' half), so routing the code through
+        # one there would mean a dev could never get a recovery code at all.
+        from privacyfence import paths
+        from privacyfence.step_up_config import StepUpConfig
+        from privacyfence.web import routes_security, server as srv
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_bundled", lambda: False)
+        passed = {}
+        real_build_routes = routes_security.build_routes
+
+        def _spy(**kwargs):
+            passed.update(kwargs)
+            return real_build_routes(**kwargs)
+
+        monkeypatch.setattr(routes_security, "build_routes", _spy)
+        srv.build_app(
+            WebApprovalUI(), sessions=LocalSessionStore(),
+            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
+        )
+
+        assert passed["deliver_recovery_code"] is None

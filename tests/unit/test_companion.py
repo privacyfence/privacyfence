@@ -252,7 +252,7 @@ class TestPendingSeparation:
 
         companion._start_pending_separation_check()
 
-        assert started[0]["target"] is companion._complete_pending_separation
+        assert started[0]["target"] is companion._first_run_checks
         assert started[0]["daemon"] is True
         assert started[-1] == "started"
 
@@ -360,3 +360,151 @@ class TestCompanionEndToEnd:
             assert opened == ["https://example.com/callback"]
         finally:
             server.stop()
+
+
+class TestRecoveryCodeAction:
+    """Plan item 1.3's "re-presented by the companion" half. The code itself
+    never travels back over this call -- the daemon calls back into this
+    process's own channel to put it on screen -- so all this action can do
+    is succeed or explain why it didn't."""
+
+    def test_asks_the_daemon_and_reports_success(self, monkeypatch):
+        asked = []
+        monkeypatch.setattr(companion, "request_recovery_code", lambda: asked.append("asked"))
+        assert companion._show_recovery_code() is True
+        assert asked == ["asked"]
+
+    def test_a_refusal_is_logged_not_raised(self, monkeypatch, caplog):
+        def _raise():
+            raise cc.ControlChannelError("issuing a new recovery code was denied")
+
+        monkeypatch.setattr(companion, "request_recovery_code", _raise)
+        with caplog.at_level("ERROR"):
+            assert companion._show_recovery_code() is False
+        assert "denied" in caplog.text
+
+    def test_no_daemon_running_is_a_plain_false(self, monkeypatch):
+        def _raise():
+            raise OSError("no such socket")
+
+        monkeypatch.setattr(companion, "request_recovery_code", _raise)
+        assert companion._show_recovery_code() is False
+
+    def test_the_action_is_dispatchable(self, monkeypatch):
+        monkeypatch.setattr(companion, "_show_recovery_code", lambda: True)
+        assert companion._run_action(companion.ACTION_RECOVERY_CODE) is True
+
+    def test_argparse_accepts_it(self, monkeypatch):
+        # The Linux Desktop Action for this (resources/linux/privacyfence-
+        # companion.desktop) runs exactly this argv.
+        seen = []
+        monkeypatch.setattr(companion, "_run_action", lambda action: seen.append(action) or True)
+        assert companion.main(["--action", "recovery-code"]) == 0
+        assert seen == [companion.ACTION_RECOVERY_CODE]
+
+
+class TestFirstEnrollmentOffer:
+    """Plan item 1.2: the other half of defaulting step-up on for packaged
+    installs. A fresh install requires a passkey it does not have, which is
+    a safe state (nothing is approved) but not a usable one, and nobody is
+    looking at a page they have no reason to open."""
+
+    def test_a_pending_enrollment_opens_the_security_page(self, monkeypatch, caplog):
+        monkeypatch.setattr(companion, "enrollment_state", lambda: "pending")
+        opened = []
+        monkeypatch.setattr(companion, "_open_path", lambda path: opened.append(path) or True)
+
+        with caplog.at_level("WARNING"):
+            companion._offer_first_enrollment()
+
+        assert opened == ["/security"]
+        # The log line has to stand on its own for anyone reading it without
+        # the browser tab in front of them.
+        assert "no approval can be released" in caplog.text
+
+    def test_an_install_with_a_passkey_opens_nothing(self, monkeypatch):
+        monkeypatch.setattr(companion, "enrollment_state", lambda: "ok")
+
+        def _unexpected(path):
+            raise AssertionError(f"opened {path} with nothing pending")
+
+        monkeypatch.setattr(companion, "_open_path", _unexpected)
+        companion._offer_first_enrollment()
+
+    def test_a_daemon_that_is_still_starting_is_retried(self, monkeypatch):
+        # A packaged install starts its daemon as a system service and this
+        # process from the user's own session: the two race at every login.
+        answers = [OSError("not yet"), OSError("not yet"), "pending"]
+        slept = []
+        monkeypatch.setattr(companion.time, "sleep", lambda seconds: slept.append(seconds))
+
+        def _state():
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        monkeypatch.setattr(companion, "enrollment_state", _state)
+        opened = []
+        monkeypatch.setattr(companion, "_open_path", lambda path: opened.append(path) or True)
+
+        companion._offer_first_enrollment()
+
+        assert opened == ["/security"]
+        assert slept == [companion._DAEMON_WAIT_SECONDS] * 2
+
+    def test_a_daemon_that_never_arrives_is_left_for_the_next_login(self, monkeypatch):
+        def _raise():
+            raise OSError("no such socket")
+
+        monkeypatch.setattr(companion.time, "sleep", lambda seconds: None)
+        monkeypatch.setattr(companion, "enrollment_state", _raise)
+
+        def _unexpected(path):
+            raise AssertionError(f"opened {path} with no daemon running")
+
+        monkeypatch.setattr(companion, "_open_path", _unexpected)
+        companion._offer_first_enrollment()
+
+    def test_a_daemon_that_cannot_answer_is_not_worth_a_browser_tab(self, monkeypatch):
+        # An older daemon, or one with no step-up config behind its control
+        # channel, answers ERROR. Nothing to act on from this side.
+        def _raise():
+            raise cc.ControlChannelError("enrollment state is not available on this install")
+
+        monkeypatch.setattr(companion, "enrollment_state", _raise)
+
+        def _unexpected(path):
+            raise AssertionError(f"opened {path} on an ERROR reply")
+
+        monkeypatch.setattr(companion, "_open_path", _unexpected)
+        companion._offer_first_enrollment()
+
+    def test_enrollment_is_not_offered_while_group_membership_is_pending(self, monkeypatch):
+        # Group membership is evaluated when a session is created, so until
+        # the human logs out and back in they cannot reach the web UI at all
+        # -- opening /security would be opening a page that cannot load.
+        monkeypatch.setattr(companion, "_complete_pending_separation", lambda: None)
+        monkeypatch.setattr(
+            companion.privilege_separation, "owner_membership_pending", lambda: True
+        )
+
+        def _unexpected():
+            raise AssertionError("asked about enrollment before the relog")
+
+        monkeypatch.setattr(companion, "_offer_first_enrollment", _unexpected)
+        companion._first_run_checks()
+
+    def test_separation_is_settled_before_enrollment_is_offered(self, monkeypatch):
+        order = []
+        monkeypatch.setattr(
+            companion, "_complete_pending_separation", lambda: order.append("separation"),
+        )
+        monkeypatch.setattr(
+            companion.privilege_separation, "owner_membership_pending", lambda: False
+        )
+        monkeypatch.setattr(companion, "_offer_first_enrollment", lambda: order.append("enrollment"))
+
+        companion._first_run_checks()
+
+        assert order == ["separation", "enrollment"]

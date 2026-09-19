@@ -122,8 +122,8 @@ serve local and org mode alike; only where the value is configured differs
 
 | `scope` | write | read flagged by `pii_detector.py` | any other read |
 | --- | --- | --- | --- |
-| `writes` (default) | passkey | — | — |
-| `writes_and_pii_reads` | passkey | passkey | — |
+| `writes` | passkey | — | — |
+| `writes_and_pii_reads` (default) | passkey | passkey | — |
 | `writes_and_reads` | passkey | passkey | passkey |
 
 Denying never needs step-up under any scope (denying discloses nothing), and neither does a bare
@@ -133,6 +133,14 @@ a passkey on one -- `writes_and_reads` widens what a *pending* approval costs to
 gets gated. Pick it over `writes_and_pii_reads` when the install would rather not depend on PII
 detection having flagged everything worth a second factor; the cost is a passkey prompt on every
 read a rule doesn't already cover.
+
+The default was `writes` through 4.1 and is `writes_and_pii_reads` from 4.2, in both modes. The
+narrower one was chosen when the adversary in view was a human at the keyboard; [ADR
+0003](adr/0003-separated-installs-only.md) adopts a different one — an agent with code execution
+on this machine — and against that adversary `writes` leaves every read releasable by a session
+alone, including one PrivacyFence itself flagged as carrying personal data. Exfiltration is the
+obvious thing such an agent wants. An install with `scope:` written out in `config/settings.yaml`
+or `org_config.json` keeps exactly what it set; only one that never expressed an opinion moves.
 
 **`step_up.require_passkey` (Phase 3) is what makes it a guarantee rather than an opt-in check.**
 With it on: an approving decision with nothing enrolled is hard-failed (`403`, naming `/security`)
@@ -151,6 +159,24 @@ starts with `require_passkey` on, it still starts (refusing to boot would remove
 passkey is added, and releases nothing in the meantime. Treat local-mode step-up as a real guarantee
 once `require_passkey` is on and a passkey is enrolled; with `enabled` alone it stays what it always
 was -- opt-in, evadable by simply not enrolling.
+
+**On a packaged install, `enabled` and `require_passkey` are both on by default** as of 4.2 (the
+DMG/`.pkg`, the Windows installer, the `.deb` -- `paths.is_bundled()`, which is the same predicate
+[ADR 0003](adr/0003-separated-installs-only.md)'s `enforce_separation()` is scoped to, so the
+builds that default on are exactly the builds that are privilege-separated or refuse to serve).
+A source checkout, an editable install and `pipx install privacyfence` all still default off:
+nothing separates those, and a passkey checked against a credential store the agent can write is a
+checkbox a local process ticks for itself ([ADR
+0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6). An explicit value in
+`config/settings.yaml` wins either way, in both directions, and an install seeded from a
+`settings.yaml.example` older than 4.2 has both keys written out as `false` -- so this reaches
+fresh installs rather than silently changing the posture of existing ones on upgrade.
+
+A fresh packaged install therefore comes up requiring a passkey it does not have yet, which is the
+banner-and-release-nothing state above. It is meant to last minutes: the companion app checks at
+its own next start, and opens `/security` with a session already minted so the human can enroll
+one. Nothing ships a configuration where `require_passkey` is on with nothing enrolled *and*
+nothing is trying to fix it.
 
 ### Enrolling a passkey is itself gated
 
@@ -272,10 +298,10 @@ this whole feature exists to close for an adversary, not merely to close for eve
 that door needs the service account or an elevation prompt, a sanctioned way back in stops being
 optional. `web/routes_security.py`'s enrollment flow (`register_verify`) issues a one-time recovery
 code — a 16-character, human-typeable string in four groups — the moment a principal doesn't
-currently have an unused one on file, most often their very first enrollment. It is shown to the
-browser exactly once, in that same response, and never again: only a salted SHA-256 hash of it is
-stored (`webauthn_stepup.py`'s own `generate_recovery_code`/`consume_recovery_code`), alongside the
-credential file itself, under the same service-owned root a separated install protects. Trading the
+currently have an unused one on file, most often their very first enrollment. Only a salted SHA-256
+hash of it is stored (`webauthn_stepup.py`'s own `store_recovery_code`/`consume_recovery_code`),
+alongside the credential file itself, under the same service-owned root a separated install
+protects. Trading the
 code in at `POST /security/recover` needs no WebAuthn ceremony — deliberately, since producing one is
 exactly what a locked-out human cannot do — only the still-valid session that got them to `/security`
 in the first place, which local mode's ordinary sign-in path (a bootstrap link) still provides even
@@ -283,8 +309,40 @@ with `require_passkey` on, since step-up gates *decisions*, not sign-in itself. 
 removes every credential enrolled for that principal, clearing the stuck state so a fresh passkey can
 be enrolled immediately afterward, and is itself audited (`webauthn_recovery_code_used`) whether or
 not the human goes on to enroll again. The code is single-use: spending it, correctly or not, never
-grants a second attempt at the same code, and a fresh one is only issued at the next successful
-enrollment.
+grants a second attempt at the same code. A fresh one is issued at the next successful enrollment
+that finds none on file — or, on a packaged install, whenever the companion is asked for one (see
+below).
+
+**Where the code is shown is not the same in both modes, as of 4.2.** In org mode it goes back to
+the browser in `register_verify`'s own response, once, exactly as it always did: there is no
+companion there, and the session that reached `/security` is an IdP authentication rather than a
+locally minted cookie.
+
+On a **packaged local-mode install** it never appears in that response at all. The daemon mints the
+code, hands it to the companion over the companion's own channel (`SHOW RECOVERY`, see
+`web/control_channel.py`), and the companion puts it in a dialog on the human's own desktop — and
+only *then* does the daemon store it. The ordering is the point twice over: a credential-store
+reset token stops being a value any local process holding a `pf_session` can read out of an HTTP
+body, and a code nobody could be shown never becomes the one code on file (which would otherwise
+leave the principal holding a recovery code that exists and cannot be produced, with no later
+enrollment issuing another). If the companion cannot be reached, the passkey is still enrolled, no
+code is issued, and `/security` says so with the companion's own reason.
+
+Because nothing keeps the plaintext, **re-presenting a code means issuing a new one**, and the
+companion is where that happens: "New Recovery Code…" on the macOS/Windows menu-bar item, or the
+matching entry in the Linux applications menu. It asks the daemon, the daemon asks the human to
+confirm through that same companion — issuing one invalidates whatever they wrote down before — and
+then shows the new code. The reply on the daemon's own control channel carries no code in either
+direction, which matters because that channel is `0660` group-shared with the logged-in user (and
+therefore the agent) on a separated install: a local process that speaks it can, at most, put a
+dialog on somebody's screen that they have to decline.
+
+A non-packaged local-mode install (a source checkout, an editable install, `pipx install
+privacyfence`) keeps the org-mode behavior — the code comes back in the response. Nothing
+autostarts a companion for those ([ADR 0003](adr/0003-separated-installs-only.md) decisions 3–5 are
+the packaged installers' half), so routing the code through one would mean never being able to
+issue a recovery code there at all. Those installs also default `require_passkey` off, so there is
+no recovery to be locked out of.
 
 ### The approval binder's single assertion
 
@@ -447,12 +505,15 @@ check that would be sound on macOS and weak on Linux, the design makes a session
 instead of *uncallable*: this phase takes the human-authority files away, and #426's passkey then
 makes possession of a session not enough to release an approval — but only once [privilege
 separation](#privilege-separation-macos-linux-and-windows) is active, `step_up.enabled` and
-`step_up.require_passkey` are both set, and a passkey is enrolled. None of those four is this
-deployment's default, so on a default install the session is still sufficient on its own: the agent
-can approve its own request. The consequence, stated rather than left to be discovered for an
-install that turns all four on: **integrity is the strong guarantee — the agent cannot approve its
-own request — while confidentiality of the review screen is the weaker one**, since an agent that
-reaches the web UI can still read what is pending. The control channel's socket accordingly lives in
+`step_up.require_passkey` are both set, and a passkey is enrolled. **On a packaged install as of
+4.2, all four are the default**: separation is mandatory or the daemon refuses to serve ([ADR
+0003](adr/0003-separated-installs-only.md)), both flags default on, and the companion walks the
+human through enrolling at its next start. Anywhere else — a source checkout, an editable install,
+`pipx install privacyfence` — none of the four is a default, and the session is still sufficient on
+its own: the agent can approve its own request. The consequence, stated rather than left to be
+discovered, for an install that has all four: **integrity is the strong guarantee — the agent
+cannot approve its own request — while confidentiality of the review screen is the weaker one**,
+since an agent that reaches the web UI can still read what is pending. The control channel's socket accordingly lives in
 a group-shared `<system root>/handoff` directory, not under `authority`, along with the agent's own
 `mcp_token` (which is the agent's credential and is meant to stay reachable). See
 [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 for the full
@@ -502,7 +563,7 @@ What bounds it instead: local mode only (it raises in org mode, which authentica
 
 Net effect: an MCP client can obtain a working session for the human-facing approval/settings surface without a human first approving that specific request. The justification this paragraph used to give — that such a client already holds equivalent-or-greater access via every other tool this daemon exposes — holds for connector reads and writes, which are themselves gated. It understates one case: a session also reaches the approval UI, so it can *release* a gated call rather than merely request one, and that is the product's central control rather than one more tool. This is not a weakness introduced by this tool — see [Local-mode trust boundary](#local-mode-trust-boundary), where a process running as the user mints the same session through the control channel without it — but it should not be described as a neutral consequence of existing trust either. Like every tool over `/mcp` (meta-tools included), it is advertised with the same uniform read-only/non-destructive annotations regardless of this real effect — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#meta-tools) for why those are MCP UI hints, not a security boundary, and [issue #46](https://github.com/privacyfence/privacyfence/issues/46) for the broader question of whether that uniform advertisement should change.
 
-**Revised, #426 Phase 4:** the paragraph above is still true of a session by itself, and stays true regardless of configuration — this tool has no `step_up` awareness of its own, and doesn't need any: minting a session was never the part step-up narrows. What changes is what that session is *sufficient for*, and only under two conditions together, neither of which is this deployment's default. With [privilege separation](#privilege-separation-macos-linux-and-windows) active (mandatory on a packaged install as of [ADR 0003](adr/0003-separated-installs-only.md); not guaranteed on a non-packaged one — see "The developer path" above) **and** `step_up.require_passkey` turned on in `config/settings.yaml` (opt-in everywhere — reachable from the Settings page once a passkey is enrolled, B9, or still by hand; see `step_up_config.py`'s own `LiveStepUpConfig` docstring), the credential store a step-up assertion is checked against is no longer writable by the same process minting the session, so that session alone can no longer release an approving decision on a gated write, nor change what a future write can reach through `_SENSITIVE_ACTIONS` (an always-allow rule, a grant, a relaxed default policy). It can still mint the session, still view what's pending, and still hold read access to the review screen — the confidentiality half [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 names as the weaker guarantee, left open on purpose. With either condition missing — no privilege separation, or `step_up.require_passkey` left off — the original paragraph's net effect stands unqualified: the session is enough on its own.
+**Revised, #426 Phase 4:** the paragraph above is still true of a session by itself, and stays true regardless of configuration — this tool has no `step_up` awareness of its own, and doesn't need any: minting a session was never the part step-up narrows. What changes is what that session is *sufficient for*, and only under two conditions together -- both of which a packaged install has by default as of 4.2, and neither of which a source checkout or a `pip`/`pipx` install has at all. With [privilege separation](#privilege-separation-macos-linux-and-windows) active (mandatory on a packaged install as of [ADR 0003](adr/0003-separated-installs-only.md); not guaranteed on a non-packaged one — see "The developer path" above) **and** `step_up.require_passkey` turned on in `config/settings.yaml` (on by default on a packaged install as of 4.2, opt-in everywhere else — reachable from the Settings page once a passkey is enrolled, B9, or still by hand; see `step_up_config.py`'s own `default_local_step_up`/`LiveStepUpConfig` docstrings), the credential store a step-up assertion is checked against is no longer writable by the same process minting the session, so that session alone can no longer release an approving decision on a gated write, nor change what a future write can reach through `_SENSITIVE_ACTIONS` (an always-allow rule, a grant, a relaxed default policy). It can still mint the session, still view what's pending, and still hold read access to the review screen — the confidentiality half [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision 6 names as the weaker guarantee, left open on purpose. With either condition missing — no privilege separation, or `step_up.require_passkey` left off — the original paragraph's net effect stands unqualified: the session is enough on its own.
 
 ### Local MCP
 

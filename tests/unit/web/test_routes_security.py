@@ -56,7 +56,10 @@ def _app(*, step_up=None, sessions=None):
     return app, sessions
 
 
-def _local_app(*, step_up=None, sessions=None, dev_unseparated_notice=None, confirm_first_enrollment=None):
+def _local_app(
+    *, step_up=None, sessions=None, dev_unseparated_notice=None, confirm_first_enrollment=None,
+    deliver_recovery_code=None,
+):
     """local mode's own wiring -- session_auth's three functions bound to a
     ``LocalSessionStore``, always resolving to ``LOCAL_PRINCIPAL``, exactly
     what web/server.py's local branch of ``build_app`` passes.
@@ -83,6 +86,11 @@ def _local_app(*, step_up=None, sessions=None, dev_unseparated_notice=None, conf
         back_link=("/settings/connectors", "Back to Connectors"),
         dev_unseparated_notice=dev_unseparated_notice,
         confirm_first_enrollment=confirm_first_enrollment or (lambda: (True, "")),
+        # Plan item 1.3. Unlike confirm_first_enrollment above this defaults
+        # to None, because that is what local mode's real wiring passes on
+        # anything but a packaged build (web/server.py's build_app) -- the
+        # companion path is driven by the tests that pass one.
+        deliver_recovery_code=deliver_recovery_code,
     )
     app = Starlette(routes=routes)
     return app, sessions
@@ -1315,3 +1323,104 @@ class TestRegisterVerifyRequiresAnAuthorizedCeremony:
         })
 
         assert "webauthn_enrollment_refused" in _audit_decisions(_fake_data_dir)
+
+
+# In-process ASGI TestClient, no real socket -- unit per testing-policy.md's
+# seven-layer taxonomy.
+@pytest.mark.unit
+class TestRecoveryCodeDeliveredByTheCompanion:
+    """Plan item 1.3: on a packaged local-mode install the one-time recovery
+    code never appears in this response at all -- the companion puts it on
+    the human's own desktop. F7 of the review this plan comes from: an agent
+    that reaches an enrollment otherwise receives a credential-store reset
+    token as a side effect.
+    """
+
+    def _register(self, client, session_id):
+        return _register_first_credential(client, session_id)
+
+    def test_the_code_is_not_in_the_response_body(self):
+        delivered = []
+        app, sessions = _local_app(
+            deliver_recovery_code=lambda code: delivered.append(code) or (True, ""),
+        )
+        client = _client(app)
+        session_id = _signed_in_local(client, sessions)
+
+        data = self._register(client, session_id)
+
+        assert "recovery_code" not in data
+        assert data["recovery_shown_by_companion"] is True
+        assert len(delivered) == 1
+        assert wa.has_recovery_code(LOCAL_PRINCIPAL) is True
+
+    def test_the_stored_code_is_the_one_the_human_was_shown(self):
+        delivered = []
+        app, sessions = _local_app(
+            deliver_recovery_code=lambda code: delivered.append(code) or (True, ""),
+        )
+        client = _client(app)
+        session_id = _signed_in_local(client, sessions)
+
+        self._register(client, session_id)
+
+        assert wa.consume_recovery_code(LOCAL_PRINCIPAL, delivered[0]) is True
+
+    def test_a_code_nobody_could_be_shown_is_not_stored(self):
+        # Otherwise has_recovery_code() would be true forever for a value no
+        # human has, and no later enrollment would ever issue another.
+        app, sessions = _local_app(
+            deliver_recovery_code=lambda code: (False, "start the companion app"),
+        )
+        client = _client(app)
+        session_id = _signed_in_local(client, sessions)
+
+        data = self._register(client, session_id)
+
+        assert wa.has_recovery_code(LOCAL_PRINCIPAL) is False
+        assert data["recovery_shown_by_companion"] is False
+        # The reason is shown to whoever is standing at /security, so it has
+        # to be the companion's own words rather than a generic failure.
+        assert data["recovery_detail"] == "start the companion app"
+
+    def test_the_passkey_itself_is_still_enrolled(self):
+        # A recovery code that could not be delivered must not cost the
+        # enrollment: the credential is the thing that was actually proven.
+        app, sessions = _local_app(deliver_recovery_code=lambda code: (False, "no display"))
+        client = _client(app)
+        session_id = _signed_in_local(client, sessions)
+
+        data = self._register(client, session_id)
+
+        assert data["status"] == "ok"
+        assert wa.has_credentials(LOCAL_PRINCIPAL) is True
+
+    def test_no_delivery_hook_keeps_the_pre_1_3_behavior(self):
+        # Org mode, and any local-mode install that is not a packaged build:
+        # the code comes back in the body and _PAGE_JS shows it.
+        app, sessions = _local_app()
+        client = _client(app)
+        session_id = _signed_in_local(client, sessions)
+
+        data = self._register(client, session_id)
+
+        assert data["recovery_code"]
+        assert "recovery_shown_by_companion" not in data
+        assert wa.has_recovery_code(LOCAL_PRINCIPAL) is True
+
+    def test_a_second_enrollment_asks_the_companion_for_nothing(self):
+        # Same rule as before: a code is issued only when there is no unused
+        # one on file, so an ordinary second passkey puts no dialog on
+        # anybody's desktop.
+        delivered = []
+        app, sessions = _local_app(
+            deliver_recovery_code=lambda code: delivered.append(code) or (True, ""),
+        )
+        client = _client(app)
+        session_id = _signed_in_local(client, sessions)
+        self._register(client, session_id)
+
+        r = _register_another_credential(client, session_id)
+
+        assert r.status_code == 200
+        assert len(delivered) == 1

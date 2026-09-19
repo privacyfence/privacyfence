@@ -140,6 +140,11 @@ MODULE_FLOORS: dict[str, float] = {
     # to let rot.
     "src/privacyfence/web/routes_security.py": 97.0,
     "src/privacyfence/webauthn_stepup.py": 98.0,
+    # Phase 1.1: this module decides whether a passkey is required at all --
+    # an install's single most consequential security default, and now a
+    # packaging-dependent one. Small enough that the overall floor would
+    # never notice it rotting, which is exactly what this list is for.
+    "src/privacyfence/step_up_config.py": 99.0,
     # #400: org mode's settings surface. It authorizes on Principal.is_admin
     # and, since C3e, rewrites the install-wide privacy/PII policy for every
     # principal -- the same class of thing as the fail-closed load path
@@ -158,15 +163,19 @@ MODULE_FLOORS: dict[str, float] = {
     # peer-uid check included -- was invisible to the gate. Raised from 61.0
     # by Phase 0's CONFIRM ENROLL command and the three platform dialogs
     # behind it: the POSIX-reachable half of all of that is tested, so the
-    # ratchet should hold it.
-    "src/privacyfence/web/control_channel.py": 66.0,
+    # ratchet should hold it. Raised again (66.0 -> 70.0) by Phase 1's
+    # ENROLLMENT/RECOVERY/SHOW RECOVERY commands and their own dialogs,
+    # same reasoning.
+    "src/privacyfence/web/control_channel.py": 70.0,
     # _run_tray() (macOS/Windows only, guarded on sys.platform) is nearly
     # all of what's uncovered -- the tray icon this Linux-only run has
     # nothing to drive. 83.0 reflects that split honestly rather than
     # padding it with a pragma; raised from 81.0 by ADR 0003 decision 3's
     # _complete_pending_separation(), which is new code this run does cover
-    # in full.
-    "src/privacyfence/companion.py": 83.0,
+    # in full. Raised again (83.0 -> 86.0) by Phase 1.2's first-run
+    # enrollment offer and 1.3's recovery-code action, both of which are
+    # ordinary dispatch this run drives end to end.
+    "src/privacyfence/companion.py": 86.0,
     # The SSE stream's own generator body (approvals_stream's event_source,
     # a poll loop no test here consumes to exhaustion) plus a couple of
     # decide()'s edge branches (the bare-index "choice" coercion, the plain

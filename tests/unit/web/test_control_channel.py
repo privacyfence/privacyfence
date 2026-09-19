@@ -458,6 +458,343 @@ class TestConfirmEnrollCommand:
             server.stop()
 
 
+class TestEnrollmentCommand:
+    """Plan item 1.2's daemon-side half: the one question the companion
+    cannot answer for itself, because on a separated install the credential
+    store lives under ``authority_dir()`` and the logged-in user cannot read
+    it."""
+
+    def _server(self, tmp_path, monkeypatch, **kwargs):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore(), **kwargs)
+        server.start()
+        return server
+
+    def test_reports_the_state_the_daemon_gives_it(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch, enrollment_state=lambda: "pending")
+        try:
+            assert _mint(server.address, message="ENROLLMENT\n") == "OK pending\n"
+        finally:
+            server.stop()
+
+    def test_an_install_with_nothing_to_answer_with_says_so(self, tmp_path, monkeypatch):
+        # A ControlChannelServer built with no step-up config behind it --
+        # every test that exercises MINT/QUIT alone. An ERROR line is the
+        # shape companion.py already knows how to shrug off.
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="ENROLLMENT\n").startswith("ERROR")
+        finally:
+            server.stop()
+
+    def test_the_client_reads_the_state_back(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        server = self._server(tmp_path, monkeypatch, enrollment_state=lambda: "ok")
+        try:
+            assert cc.enrollment_state(timeout=5.0) == "ok"
+        finally:
+            server.stop()
+
+    def test_the_client_raises_on_a_daemon_that_cannot_answer(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            with pytest.raises(cc.ControlChannelError):
+                cc.enrollment_state(timeout=5.0)
+        finally:
+            server.stop()
+
+
+class TestRecoveryCommand:
+    """Plan item 1.3, on the daemon's own channel. The property under test
+    is the one the whole item exists for: whatever happens, the reply on
+    this socket never carries a recovery code. This socket is ``0660``
+    group-shared with the agent on a separated install."""
+
+    def _server(self, tmp_path, monkeypatch, **kwargs):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore(), **kwargs)
+        server.start()
+        return server
+
+    def test_a_successful_issue_answers_a_bare_ok(self, tmp_path, monkeypatch):
+        issued = []
+        server = self._server(
+            tmp_path, monkeypatch,
+            reissue_recovery_code=lambda: (issued.append("asked"), (True, ""))[1],
+        )
+        try:
+            assert _mint(server.address, message="RECOVERY\n") == "OK\n"
+        finally:
+            server.stop()
+        assert issued == ["asked"]
+
+    def test_a_refusal_passes_the_reason_and_no_code(self, tmp_path, monkeypatch):
+        server = self._server(
+            tmp_path, monkeypatch,
+            reissue_recovery_code=lambda: (False, "issuing a new recovery code was denied"),
+        )
+        try:
+            reply = _mint(server.address, message="RECOVERY\n")
+        finally:
+            server.stop()
+        assert reply == "ERROR issuing a new recovery code was denied\n"
+
+    def test_an_install_with_no_recovery_path_says_so(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="RECOVERY\n").startswith("ERROR")
+        finally:
+            server.stop()
+
+    def test_the_client_returns_nothing_on_success(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch, reissue_recovery_code=lambda: (True, ""))
+        try:
+            assert cc.request_recovery_code(timeout=5.0) is None
+        finally:
+            server.stop()
+
+    def test_the_client_raises_with_the_daemon_s_own_reason(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch, reissue_recovery_code=lambda: (False, "nope"))
+        try:
+            with pytest.raises(cc.ControlChannelError) as exc_info:
+                cc.request_recovery_code(timeout=5.0)
+        finally:
+            server.stop()
+        assert "nope" in str(exc_info.value)
+
+
+class TestShowRecoveryCommand:
+    """The one command in this module that puts a value from the wire in
+    front of a human. What is tested is the gate that makes that acceptable:
+    one shape, checked in the dispatch, refused rather than displayed."""
+
+    def _server(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        server = cc.CompanionChannelServer()
+        server.start()
+        return server
+
+    def test_the_pattern_matches_what_webauthn_stepup_actually_mints(self):
+        # The pattern is restated in control_channel.py rather than imported,
+        # so that the companion process never pulls py_webauthn in for one
+        # regex -- which means something has to hold the two together.
+        from privacyfence import webauthn_stepup
+
+        for _ in range(20):
+            assert cc._RECOVERY_CODE_PATTERN.match(webauthn_stepup.mint_recovery_code())
+
+    def test_a_well_formed_code_is_shown(self, tmp_path, monkeypatch):
+        shown = []
+        monkeypatch.setattr(cc, "_message_linux", lambda message, *, timeout: shown.append(message) or True)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="SHOW RECOVERY A1B2-C3D4-E5F6-1789\n") == "OK\n"
+        finally:
+            server.stop()
+        assert len(shown) == 1
+        assert "A1B2-C3D4-E5F6-1789" in shown[0]
+        # Everything around the code is this module's own constant.
+        assert shown[0].startswith(cc._SHOW_RECOVERY_PREFIX)
+        assert shown[0].endswith(cc._SHOW_RECOVERY_SUFFIX)
+
+    @pytest.mark.parametrize("code", [
+        "",
+        "not-a-code",
+        "a1b2-c3d4-e5f6-1789",  # lowercase: not what is ever minted
+        "A1B2-C3D4-E5F6",  # three groups
+        "A1B2-C3D4-E5F6-1789-0000",  # five
+        "A1B2-C3D4-E5F6-1789 and now a sentence of my own",
+    ])
+    def test_anything_else_is_refused_without_a_dialog(self, tmp_path, monkeypatch, code):
+        def _never(message, *, timeout):
+            raise AssertionError(f"showed an unchecked string: {message!r}")
+
+        monkeypatch.setattr(cc, "_message_linux", _never)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            reply = _mint(server.address, message=f"SHOW RECOVERY {code}\n")
+        finally:
+            server.stop()
+        assert reply.startswith("ERROR")
+
+    def test_show_with_an_unknown_subject_is_an_unknown_command(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="SHOW SOMETHING\n").startswith("ERROR unknown command")
+            assert _mint(server.address, message="SHOW\n").startswith("ERROR unknown command")
+        finally:
+            server.stop()
+
+    def test_a_desktop_with_no_dialog_program_refuses_rather_than_lying(self, monkeypatch):
+        # Load-bearing: web/routes_security.py stores the code only once this
+        # says it was shown, so "could not show it" has to be distinguishable
+        # from "shown".
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "_LINUX_MESSAGE_COMMANDS", ())
+
+        reply = cc._show_recovery_code("A1B2-C3D4-E5F6-1789")
+
+        assert reply.startswith("ERROR")
+        assert "zenity" in reply or "kdialog" in reply
+
+    def test_the_daemon_side_client_reports_whether_it_was_shown(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cc, "_message_linux", lambda message, *, timeout: True)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert cc.send_recovery_code("A1B2-C3D4-E5F6-1789", timeout=5.0) == (True, "")
+        finally:
+            server.stop()
+
+    def test_the_daemon_side_client_reports_a_missing_companion(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+
+        shown, reason = cc.send_recovery_code("A1B2-C3D4-E5F6-1789", timeout=0.5)
+
+        assert shown is False
+        assert "companion" in reason
+
+
+class TestConfirmRecoveryCommand:
+    """Issuing a replacement code invalidates whatever the human wrote down,
+    so it is asked about first -- which is what keeps a local process that
+    speaks the daemon's own socket from doing it unnoticed."""
+
+    def _server(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        server = cc.CompanionChannelServer()
+        server.start()
+        return server
+
+    def test_an_allowed_dialog_confirms(self, tmp_path, monkeypatch):
+        asked = []
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: asked.append(prompt) or True)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert cc.request_recovery_confirmation(timeout=5.0) == (True, "")
+        finally:
+            server.stop()
+        # Its own prompt, not ENROLL's -- the two say different things about
+        # what is about to happen, and both are constants of this module.
+        assert asked == [cc._CONFIRM_RECOVERY_PROMPT]
+
+    def test_a_denied_dialog_refuses_with_its_own_reason(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: False)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            confirmed, reason = cc.request_recovery_confirmation(timeout=5.0)
+        finally:
+            server.stop()
+        assert confirmed is False
+        assert "recovery code" in reason
+
+    def test_no_companion_running_refuses_and_says_to_start_it(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+
+        confirmed, reason = cc.request_recovery_confirmation(timeout=0.5)
+
+        assert confirmed is False
+        assert "companion" in reason
+
+
+class TestMessageDialogs:
+    """The statement half of the dialog machinery -- ``_confirm_*``'s
+    counterpart, for SHOW RECOVERY. Same absolute-path rule, same "neither
+    program is a dependency" handling."""
+
+    def test_zenity_is_used_when_present(self, tmp_path, monkeypatch):
+        present = tmp_path / "zenity"
+        present.write_text("#!/bin/sh\nexit 0\n")
+        present.chmod(0o755)
+        argv_seen = []
+        monkeypatch.setattr(cc, "_LINUX_MESSAGE_COMMANDS", (
+            (str(present), lambda message: [str(present), message]),
+        ))
+        real_run = cc.subprocess.run
+
+        def _run(argv, **kwargs):
+            argv_seen.append(argv)
+            return real_run([str(present)], **kwargs)
+
+        monkeypatch.setattr(cc.subprocess, "run", _run)
+        assert cc._message_linux("hello", timeout=5.0) is True
+        assert argv_seen == [[str(present), "hello"]]
+
+    def test_a_nonzero_exit_is_not_shown(self, tmp_path, monkeypatch):
+        present = tmp_path / "kdialog"
+        present.write_text("#!/bin/sh\nexit 1\n")
+        present.chmod(0o755)
+        monkeypatch.setattr(cc, "_LINUX_MESSAGE_COMMANDS", ((str(present), lambda message: [str(present)]),))
+        assert cc._message_linux("hello", timeout=5.0) is False
+
+    def test_macos_shows_a_single_button_dialog(self, monkeypatch):
+        scripts = []
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+
+        def _run(argv, **kwargs):
+            scripts.append(argv[-1])
+            return _Result()
+
+        monkeypatch.setattr(cc.subprocess, "run", _run)
+        assert cc._message_macos("hello", timeout=1.0) is True
+        assert "buttons {\"OK\"}" in scripts[0]
+        # No cancel button: this states something, it does not ask.
+        assert "cancel button" not in scripts[0]
+
+    def test_a_timed_out_dialog_is_reported_not_assumed_shown(self, monkeypatch):
+        def _times_out(message, *, timeout):
+            raise cc.subprocess.TimeoutExpired(cmd="zenity", timeout=timeout)
+
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "_message_linux", _times_out)
+
+        assert cc._show_recovery_code("A1B2-C3D4-E5F6-1789").startswith("ERROR")
+
+    def test_an_exploding_dialog_is_reported_not_assumed_shown(self, monkeypatch):
+        def _explodes(message, *, timeout):
+            raise RuntimeError("no display")
+
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc, "_message_linux", _explodes)
+
+        assert cc._show_recovery_code("A1B2-C3D4-E5F6-1789").startswith("ERROR")
+
+    def test_each_platform_gets_its_own_pair_of_dialogs(self, monkeypatch):
+        seen = []
+        for name in ("_message_macos", "_message_windows", "_message_linux"):
+            monkeypatch.setattr(cc, name, (lambda n: lambda message, *, timeout: seen.append(n) or True)(name))
+        for platform in ("darwin", "win32", "linux"):
+            monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda p=platform: p)
+            assert cc._show_recovery_code("A1B2-C3D4-E5F6-1789") == "OK\n"
+        assert seen == ["_message_macos", "_message_windows", "_message_linux"]
+
+
 class TestRequestEnrollmentConfirmation:
     """The daemon's side of ``CONFIRM ENROLL``. Unlike ``request_open_url``,
     a missing companion is a refusal here rather than something to fall back

@@ -89,12 +89,42 @@ destructive to the OAuth flows that share the socket -- instead of being a
 side effect of holding a session. docs/security-and-compliance.md states that
 limit in the same terms; keep the two in agreement. See
 ``request_enrollment_confirmation()`` for the daemon's own side.
+
+Phase 1 of the self-approval hardening plan adds two more commands in each
+direction, and both exist for the same reason ``CONFIRM ENROLL`` does -- the
+companion is the only PrivacyFence process that runs where a human is:
+
+- ``ENROLLMENT`` (companion -> daemon) answers ``OK pending`` when this
+  install requires a passkey and has none enrolled, ``OK ok`` otherwise. It
+  is what lets the companion walk somebody through their first enrollment at
+  its own next start (plan item 1.2) instead of leaving a freshly installed,
+  passkey-required install sitting behind a banner nobody is looking at. The
+  credential store lives under ``authority_dir()`` and is unreadable to the
+  logged-in user on a separated install, so the companion cannot answer this
+  question for itself -- hence a command rather than a file check.
+- ``RECOVERY`` (companion -> daemon), and ``CONFIRM RECOVERY`` / ``SHOW
+  RECOVERY <code>`` (daemon -> companion), move the one-time recovery code
+  off the ``/security`` HTTP response body and onto the companion's own
+  dialog (plan item 1.3). ``RECOVERY``'s reply never carries the code -- it
+  is ``OK`` or ``ERROR <reason>`` and nothing else, so a local process that
+  speaks this socket learns only that a human was asked, never what they
+  were shown.
+
+``SHOW RECOVERY`` is the one command that puts a value *from the wire* in
+front of a human, which the rest of this module is careful never to do. It is
+allowed exactly one shape -- ``_RECOVERY_CODE_PATTERN``, the format
+``webauthn_stepup.generate_recovery_code()`` emits and nothing else -- and is
+embedded in a fixed sentence; a line that does not match that pattern is
+refused rather than displayed, so the "no arbitrary words in a PrivacyFence-
+branded dialog" rule the ``OPEN`` and ``CONFIRM`` commands state above still
+holds here.
 """
 from __future__ import annotations
 
 import contextlib
 import hashlib
 import logging
+import re
 import socket
 import subprocess  # nosec B404  # the companion's own zenity/kdialog/osascript dialog below -- fixed argv, no shell
 import tempfile
@@ -243,11 +273,44 @@ def companion_pipe_name() -> str:
     return companion_pipe_name_for(paths.data_dir())
 
 
-def _handle_daemon_request(bootstrap: BootstrapStore, *, allow_quit: bool, line: str) -> str:
+def _handle_daemon_request(
+    bootstrap: BootstrapStore,
+    *,
+    allow_quit: bool,
+    line: str,
+    enrollment_state: Callable[[], str] | None = None,
+    reissue_recovery_code: Callable[[], tuple[bool, str]] | None = None,
+) -> str:
+    """``enrollment_state``/``reissue_recovery_code`` are the daemon's own
+    answers to this channel's two Phase 1 commands (module docstring). Both
+    default to ``None`` -- "this install does not offer that" -- because
+    every caller that constructs a ``ControlChannelServer`` without a
+    ``StepUpConfig`` behind it (the tests that exercise ``MINT``/``QUIT``
+    alone, and any org-mode path, which has no control channel at all) has
+    nothing to answer them with, and a command that answers ``ERROR`` is a
+    better shape for that than one that raises.
+    """
     parts = line.strip().split(maxsplit=1)
     command = parts[0].upper() if parts else ""
     if command == "MINT":
         return f"OK {bootstrap.mint()}\n"
+    if command == "ENROLLMENT":
+        # Deliberately says nothing about *which* credentials exist, only
+        # whether this install is in the one state the companion acts on --
+        # a local process reading this socket learns nothing it could not
+        # already infer from the banner on every page.
+        if enrollment_state is None:
+            return "ERROR enrollment state is not available on this install\n"
+        return f"OK {enrollment_state()}\n"
+    if command == "RECOVERY":
+        # Blocks this accept loop for as long as the two companion dialogs
+        # are up (see CONFIRM_DIALOG_TIMEOUT_SECONDS) -- acceptable because
+        # the only client this channel has is the companion, and the
+        # companion is the process waiting on this very call.
+        if reissue_recovery_code is None:
+            return "ERROR recovery codes are not available on this install\n"
+        issued, reason = reissue_recovery_code()
+        return "OK\n" if issued else f"ERROR {reason}\n"
     if command == "QUIT":
         if privilege_separation.is_enabled():
             # #428 B4: this socket is 0660 group-shared with the companion
@@ -377,8 +440,38 @@ _CONFIRM_ENROLL_PROMPT = (
     "If you did not just click \u201cAdd a passkey\u201d on the PrivacyFence "
     "security page yourself, choose Deny."
 )
+_CONFIRM_RECOVERY_PROMPT = (
+    "Issue a new PrivacyFence recovery code?\n\n"
+    "A recovery code removes every passkey enrolled here, so you can enroll "
+    "a fresh one after losing the old authenticator. Issuing a new code "
+    "immediately stops the previous one from working.\n\n"
+    "If you did not just ask PrivacyFence for a recovery code yourself, "
+    "choose Deny."
+)
 _CONFIRM_ALLOW_LABEL = "Allow"
 _CONFIRM_DENY_LABEL = "Deny"
+
+# The one place a value off the wire reaches a dialog (module docstring).
+# The pattern is webauthn_stepup.generate_recovery_code()'s own output shape
+# -- four groups of four uppercase hex characters -- restated rather than
+# imported, because companion.py reaches this module and nothing else
+# (companion.py's own docstring on why it imports no daemon modules), and
+# importing webauthn_stepup here would pull py_webauthn into the companion
+# process for one regex. tests/unit/web/test_control_channel.py asserts the
+# two stay in agreement.
+_RECOVERY_CODE_PATTERN = re.compile(r"\A[0-9A-F]{4}(?:-[0-9A-F]{4}){3}\Z")
+_SHOW_RECOVERY_PREFIX = (
+    "Your PrivacyFence recovery code:\n\n"
+)
+_SHOW_RECOVERY_SUFFIX = (
+    "\n\nWrite it down somewhere safe. It is shown once, it will not be "
+    "shown again, and it is the only way back in if you lose every passkey "
+    "enrolled on this install -- using it removes them all so you can enroll "
+    "a new one.\n\n"
+    "PrivacyFence can issue a replacement from its menu at any time; doing "
+    "that stops this code from working."
+)
+_ACKNOWLEDGE_LABEL = "OK"
 
 # How long the dialog is left up. Deliberately shorter than the ~5 minutes a
 # WebAuthn registration challenge lives (webauthn_stepup.py's own
@@ -407,6 +500,17 @@ _LINUX_DIALOG_COMMANDS = (
     ("/usr/bin/kdialog", lambda prompt: [
         "/usr/bin/kdialog", f"--title={_CONFIRM_TITLE}", "--warningyesno", prompt,
         f"--yes-label={_CONFIRM_ALLOW_LABEL}", f"--no-label={_CONFIRM_DENY_LABEL}",
+    ]),
+)
+# The same two programs, asked to *state* something rather than ask it --
+# what SHOW RECOVERY needs. Same absolute-path rule and the same "neither is
+# a dependency, so absent is a distinct outcome" handling as above.
+_LINUX_MESSAGE_COMMANDS = (
+    ("/usr/bin/zenity", lambda message: [
+        "/usr/bin/zenity", "--info", "--no-markup", f"--title={_CONFIRM_TITLE}", f"--text={message}",
+    ]),
+    ("/usr/bin/kdialog", lambda message: [
+        "/usr/bin/kdialog", f"--title={_CONFIRM_TITLE}", "--msgbox", message,
     ]),
 )
 
@@ -486,6 +590,112 @@ def _confirm_linux(prompt: str, *, timeout: float) -> bool:
     )
 
 
+def _message_macos(message: str, *, timeout: float) -> bool:
+    script = (
+        f"display dialog {_applescript_quoted(message)} "
+        f"buttons {{{_applescript_quoted(_ACKNOWLEDGE_LABEL)}}} "
+        f"default button {_applescript_quoted(_ACKNOWLEDGE_LABEL)} "
+        f"with title {_applescript_quoted(_CONFIRM_TITLE)}"
+    )
+    result = subprocess.run(  # nosec B603  # fixed argv, no shell; `message` is pattern-checked, see _show_recovery_code
+        [_OSASCRIPT, "-e", script],
+        capture_output=True, text=True, timeout=timeout, check=False,
+    )
+    return result.returncode == 0
+
+
+def _message_windows(message: str, *, timeout: float) -> bool:  # noqa: ARG001 -- MessageBoxW has no timeout
+    """See ``_confirm_windows`` on why ``timeout`` is accepted and unused."""
+    import ctypes
+
+    mb_ok = 0x0
+    mb_iconinformation = 0x40
+    mb_setforeground = 0x10000
+    answer = ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined]  # Windows-only
+        0, message, _CONFIRM_TITLE, mb_ok | mb_iconinformation | mb_setforeground,
+    )
+    return answer != 0
+
+
+def _message_linux(message: str, *, timeout: float) -> bool:
+    """zenity or kdialog, same availability rule as ``_confirm_linux`` --
+    and the same distinct ``_NoDialogAvailable`` outcome, which matters more
+    here than there: a recovery code nobody could be shown must not be
+    stored as the live one (web/routes_security.py rolls it back), or the
+    install would hold a code that exists and cannot be produced."""
+    for executable, argv_for in _LINUX_MESSAGE_COMMANDS:
+        if not Path(executable).exists():
+            continue
+        result = subprocess.run(  # nosec B603  # fixed argv, no shell; `message` is pattern-checked
+            argv_for(message), capture_output=True, text=True, timeout=timeout, check=False,
+        )
+        return result.returncode == 0
+    raise _NoDialogAvailable(
+        "no dialog program found -- install zenity or kdialog so PrivacyFence can show you "
+        "your recovery code"
+    )
+
+
+def _dialog_for(kind: str):  # noqa: ANN201 -- one of this module's own module-level functions
+    """The platform's question dialog (``kind="confirm"``) or its statement
+    dialog (``kind="message"``). One lookup rather than two near-identical
+    if/elif ladders, and it is deliberately a function rather than a dict
+    literal: the tests (and this module's own dispatch) monkeypatch the
+    six functions by name, which a dict built at import time would have
+    captured before they could."""
+    if privilege_separation.current_platform() == "darwin":
+        return _confirm_macos if kind == "confirm" else _message_macos
+    if privilege_separation.current_platform() == "win32":
+        return _confirm_windows if kind == "confirm" else _message_windows
+    return _confirm_linux if kind == "confirm" else _message_linux
+
+
+def _ask_human(prompt: str, *, kind: str, what: str, denied: str) -> str:
+    """Put ``prompt`` in front of whoever is at this login session and
+    answer with the ``OK``/``ERROR`` line the daemon reads back. The shared
+    body of ``_confirm_first_enrollment()`` and ``_show_recovery_code()``
+    -- the two differ only in which dialog they need and what to say when
+    it does not happen, and every failure mode below is identical for both:
+    any way of not getting an answer is reported as one, with a reason a
+    human can act on, rather than as a silent yes or a bare False.
+
+    ``what`` names the subject in this process's own logs only; ``denied``
+    is the reason line sent back when the dialog ran and the answer was no
+    (for a statement dialog, when it could not be put on screen).
+    """
+    dialog = _dialog_for(kind)
+    try:
+        answered = dialog(prompt, timeout=CONFIRM_DIALOG_TIMEOUT_SECONDS)
+    except _NoDialogAvailable as exc:
+        logger.warning("Companion could not show a dialog about %s: %s", what, exc)
+        return f"ERROR {exc}\n"
+    except subprocess.TimeoutExpired:
+        logger.warning("Nobody answered the %s dialog within %ss.", what, CONFIRM_DIALOG_TIMEOUT_SECONDS)
+        return "ERROR nobody answered the confirmation dialog -- try again\n"
+    except Exception:
+        # Anything else -- a missing osascript, a desktop with no display, a
+        # ctypes failure on Windows -- is "could not ask", which is a refusal.
+        logger.exception("Companion could not show the %s dialog", what)
+        return "ERROR could not ask for confirmation on this desktop\n"
+    if not answered:
+        logger.warning("A dialog about %s was not accepted.", what)
+        return f"ERROR {denied}\n"
+    return "OK\n"
+
+
+def _show_recovery_code(code: str) -> str:
+    """``SHOW RECOVERY <code>``'s actual work. ``code`` has already been
+    checked against ``_RECOVERY_CODE_PATTERN`` by the dispatch below -- the
+    one value this module ever takes off the wire and puts on screen, and
+    the reason that check is in the dispatch rather than here is so no
+    future caller can reach this with an unchecked string."""
+    return _ask_human(
+        f"{_SHOW_RECOVERY_PREFIX}{code}{_SHOW_RECOVERY_SUFFIX}",
+        kind="message", what="a recovery code",
+        denied="the recovery code could not be shown on this desktop",
+    )
+
+
 def _confirm_first_enrollment() -> str:
     """``CONFIRM ENROLL``'s actual work: put this module's own fixed prompt
     in front of whoever is at this login session, and answer with the line
@@ -499,31 +709,24 @@ def _confirm_first_enrollment() -> str:
     because a first passkey has nothing to assert against, so failing it
     closed costs an enrollment and failing it open costs the guarantee.
     """
-    platform = privilege_separation.current_platform()
-    if platform == "darwin":
-        confirm = _confirm_macos
-    elif platform == "win32":
-        confirm = _confirm_windows
-    else:
-        confirm = _confirm_linux
-    try:
-        allowed = confirm(_CONFIRM_ENROLL_PROMPT, timeout=CONFIRM_DIALOG_TIMEOUT_SECONDS)
-    except _NoDialogAvailable as exc:
-        logger.warning("Companion could not ask about a first passkey enrollment: %s", exc)
-        return f"ERROR {exc}\n"
-    except subprocess.TimeoutExpired:
-        logger.warning("Nobody answered the first-passkey enrollment dialog within %ss.",
-                       CONFIRM_DIALOG_TIMEOUT_SECONDS)
-        return "ERROR nobody answered the confirmation dialog -- try again\n"
-    except Exception:
-        # Anything else -- a missing osascript, a desktop with no display, a
-        # ctypes failure on Windows -- is "could not ask", which is a refusal.
-        logger.exception("Companion could not show the first-passkey enrollment dialog")
-        return "ERROR could not ask for confirmation on this desktop\n"
-    if not allowed:
-        logger.warning("A first-passkey enrollment was denied at the confirmation dialog.")
-        return "ERROR enrollment was denied\n"
-    return "OK\n"
+    return _ask_human(
+        _CONFIRM_ENROLL_PROMPT, kind="confirm", what="a first passkey enrollment",
+        denied="enrollment was denied",
+    )
+
+
+def _confirm_recovery_reissue() -> str:
+    """``CONFIRM RECOVERY``'s own work -- the same dialog machinery asking a
+    different question. Issuing a recovery code is not an escalation on its
+    own (the code itself only ever reaches ``_show_recovery_code()``'s
+    dialog, never a reply on either channel), but it *invalidates* whatever
+    code the human already wrote down, so a local process that speaks this
+    socket must not be able to do it unnoticed. Failing closed here costs a
+    replacement code somebody can ask for again."""
+    return _ask_human(
+        _CONFIRM_RECOVERY_PROMPT, kind="confirm", what="issuing a new recovery code",
+        denied="issuing a new recovery code was denied",
+    )
 
 
 def _handle_companion_request(line: str) -> str:
@@ -550,10 +753,24 @@ def _handle_companion_request(line: str) -> str:
     if command == "CONFIRM":
         # One subject, spelled out rather than implied by a bare CONFIRM:
         # a later one is a new keyword here, never a change of meaning for
-        # a line an older daemon already sends.
-        if argument.upper() != "ENROLL":
+        # a line an older daemon already sends. RECOVERY is that later one.
+        if argument.upper() == "ENROLL":
+            return _confirm_first_enrollment()
+        if argument.upper() == "RECOVERY":
+            return _confirm_recovery_reissue()
+        return "ERROR unknown command\n"
+    if command == "SHOW":
+        subject, _, value = argument.partition(" ")
+        if subject.upper() != "RECOVERY":
             return "ERROR unknown command\n"
-        return _confirm_first_enrollment()
+        code = value.strip()
+        # The gate the module docstring promises: one shape, checked here so
+        # nothing downstream ever sees an unchecked string. A mismatch is a
+        # bug or an impostor, and either way there is nothing worth putting
+        # on screen -- so it is refused without echoing what was sent.
+        if not _RECOVERY_CODE_PATTERN.match(code):
+            return "ERROR malformed recovery code\n"
+        return _show_recovery_code(code)
     if command != "OPEN" or not argument:
         return "ERROR unknown command\n"
     url = argument
@@ -840,9 +1057,18 @@ class ControlChannelServer:
     ``allow_quit`` -- see ``_handle_daemon_request()``.
     """
 
-    def __init__(self, *, bootstrap: BootstrapStore, allow_quit: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        bootstrap: BootstrapStore,
+        allow_quit: bool = True,
+        enrollment_state: Callable[[], str] | None = None,
+        reissue_recovery_code: Callable[[], tuple[bool, str]] | None = None,
+    ) -> None:
         self._bootstrap = bootstrap
         self._allow_quit = allow_quit
+        self._enrollment_state = enrollment_state
+        self._reissue_recovery_code = reissue_recovery_code
         self._impl = _LineProtocolServer(
             handler=self._handle,
             socket_path=posix_socket_path,
@@ -851,7 +1077,11 @@ class ControlChannelServer:
         )
 
     def _handle(self, line: str) -> str:
-        return _handle_daemon_request(self._bootstrap, allow_quit=self._allow_quit, line=line)
+        return _handle_daemon_request(
+            self._bootstrap, allow_quit=self._allow_quit, line=line,
+            enrollment_state=self._enrollment_state,
+            reissue_recovery_code=self._reissue_recovery_code,
+        )
 
     @property
     def address(self) -> str | None:
@@ -1078,6 +1308,101 @@ def request_open_url(url: str, *, timeout: float = 2.0) -> bool:
     return reply.startswith("OK")
 
 
+def enrollment_state(*, timeout: float = 5.0) -> str:
+    """The companion's own side of ``ENROLLMENT`` (module docstring):
+    ``"pending"`` when this install requires a passkey and has none
+    enrolled, ``"ok"`` otherwise. Raises ``ControlChannelError`` on a reply
+    that is not a well-formed ``OK <state>``, and ``OSError`` (uncaught)
+    when no daemon is listening at all -- same contract as
+    ``mint_bootstrap_code()``, and the same reason: companion.py treats
+    "PrivacyFence is not running" as an ordinary case and catches it
+    itself."""
+    reply = _send_to_daemon("ENROLLMENT\n", timeout=timeout)
+    if not reply.startswith("OK "):
+        raise ControlChannelError(f"control channel enrollment query failed: {reply!r}")
+    return reply[len("OK "):].strip()
+
+
+def request_recovery_code(*, timeout: float = (CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0) * 2) -> None:
+    """The companion's own side of ``RECOVERY``: asks the daemon to issue a
+    replacement recovery code and show it here. Returns nothing on success
+    -- deliberately, because the code never travels back over this channel;
+    it reaches the human through the daemon's own ``SHOW RECOVERY`` call
+    into this same process (see the module docstring). Raises
+    ``ControlChannelError`` when the daemon declines, with the reason it
+    gave, and ``OSError`` when nothing is listening.
+
+    The default timeout covers *two* dialogs end to end (confirm, then
+    show), each bounded by ``CONFIRM_DIALOG_TIMEOUT_SECONDS`` on the side
+    that actually puts them up -- so an unanswered dialog is reported by the
+    process that knows why rather than guessed at from a socket timing
+    out here."""
+    reply = _send_to_daemon("RECOVERY\n", timeout=timeout)
+    if not reply.startswith("OK"):
+        reason = reply.strip()
+        if reason.upper().startswith("ERROR"):
+            reason = reason[len("ERROR"):].strip()
+        raise ControlChannelError(reason or "the daemon did not issue a recovery code")
+
+
+def _ask_companion(line: str, *, timeout: float, unreachable: str) -> tuple[bool, str]:
+    """Send one line to a running companion and normalize its answer to the
+    ``(ok, reason)`` pair every daemon-side caller here wants. Shared by
+    ``request_enrollment_confirmation()`` and ``send_recovery_code()``,
+    which differ only in the line and in what to say when no companion
+    answers -- see the former's docstring for why that case is a refusal
+    with an actionable reason rather than a soft failure to fall back
+    from."""
+    try:
+        if paths.is_windows():
+            reply = send_line_windows(companion_pipe_name(), line, timeout=timeout)
+        else:
+            reply = send_line_posix(companion_socket_path(), line, timeout=timeout)
+    except (OSError, ControlChannelError) as exc:
+        logger.warning("Could not reach the companion (%s): %s", line.strip(), exc)
+        return False, unreachable
+    if reply.startswith("OK"):
+        return True, ""
+    # The companion's own ERROR line already says why in words meant for a
+    # human -- passed through rather than restated, so a new reason there
+    # needs no matching change here.
+    reason = reply.strip()
+    if reason.upper().startswith("ERROR"):
+        reason = reason[len("ERROR"):].strip()
+    return False, reason
+
+
+_COMPANION_UNREACHABLE = (
+    "PrivacyFence could not reach its companion app. Start PrivacyFence's companion (the "
+    "menu-bar/tray icon, or the PrivacyFence entry in your applications menu) and try again."
+)
+
+
+def send_recovery_code(code: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0) -> tuple[bool, str]:
+    """Hand a freshly minted recovery code to a running companion to put in
+    front of the human (plan item 1.3). Returns ``(shown, reason)``; a
+    ``False`` here means the code reached nobody, and web/routes_security.py
+    treats that as "no code was issued" rather than storing one that cannot
+    be produced. Never call this with anything but a code straight from
+    ``webauthn_stepup``: the companion refuses a line that does not match
+    the format, which is the backstop, not the contract."""
+    return _ask_companion(
+        f"SHOW RECOVERY {code}\n", timeout=timeout, unreachable=_COMPANION_UNREACHABLE,
+    )
+
+
+def request_recovery_confirmation(
+    *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0,
+) -> tuple[bool, str]:
+    """Ask a running companion to confirm, with the human, that a
+    *replacement* recovery code should be issued -- see
+    ``_confirm_recovery_reissue()`` for why issuing one needs asking at
+    all."""
+    return _ask_companion(
+        "CONFIRM RECOVERY\n", timeout=timeout, unreachable=_COMPANION_UNREACHABLE,
+    )
+
+
 def request_enrollment_confirmation(
     *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0,
 ) -> tuple[bool, str]:
@@ -1102,26 +1427,16 @@ def request_enrollment_confirmation(
     that actually knows it (``_confirm_first_enrollment``) rather than
     guessed at from a socket timing out here.
     """
-    try:
-        if paths.is_windows():
-            reply = send_line_windows(companion_pipe_name(), "CONFIRM ENROLL\n", timeout=timeout)
-        else:
-            reply = send_line_posix(companion_socket_path(), "CONFIRM ENROLL\n", timeout=timeout)
-    except (OSError, ControlChannelError) as exc:
-        logger.warning("Could not reach the companion to confirm a first passkey enrollment: %s", exc)
-        return False, (
+    confirmed, reason = _ask_companion(
+        "CONFIRM ENROLL\n", timeout=timeout,
+        unreachable=(
             "PrivacyFence could not reach its companion app, which is what asks you to confirm "
             "a first passkey. Start PrivacyFence's companion (the menu-bar/tray icon, or the "
             "PrivacyFence entry in your applications menu) and try again."
-        )
-    if reply.startswith("OK"):
+        ),
+    )
+    if confirmed:
         return True, ""
-    # The companion's own ERROR line already says why in words meant for a
-    # human -- passed through rather than restated, so a new reason there
-    # needs no matching change here.
-    reason = reply.strip()
-    if reason.upper().startswith("ERROR"):
-        reason = reason[len("ERROR"):].strip()
     return False, reason or "the companion did not confirm this enrollment"
 
 
@@ -1137,6 +1452,7 @@ __all__ = [
     "companion_pipe_name_for",
     "companion_socket_path",
     "companion_socket_path_under",
+    "enrollment_state",
     "mint_bootstrap_code",
     "pipe_name_for",
     "posix_socket_path",
@@ -1144,8 +1460,11 @@ __all__ = [
     "request_enrollment_confirmation",
     "request_open_url",
     "request_quit",
+    "request_recovery_code",
+    "request_recovery_confirmation",
     "send_line_posix",
     "send_line_windows",
+    "send_recovery_code",
     "socket_path_under",
     "windows_pipe_name",
 ]
