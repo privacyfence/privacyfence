@@ -50,6 +50,117 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   step-up under any scope, and a read an auto-accept rule already covers never becomes an approval
   in the first place, so no scope asks for a passkey on one. `/security` now states which of the
   three is in force rather than assuming one of the first two.
+- The Windows installer now separates the install itself (ADR 0003 decision 4). Setup runs
+  `privilege-separation.ps1 enable` as a post-install step with its own elevated token, so a
+  Windows install ends up running the daemon under the dedicated `NT SERVICE\PrivacyFence`
+  account, with its policy, passkey store and audit key out of reach of the AI client it governs,
+  without anybody having to find out that script exists and type it into an elevated PowerShell.
+  Windows was the last shipped channel that produced an unseparated install by default. **If that
+  step fails, the install fails** — a PrivacyFence that cannot separate itself would still show the
+  same approval prompts, accept the same passkey enrollment and write the same audit log while
+  meaning something weaker by all three, so it is not installed at all. `enable`'s existing
+  refusals are unchanged, which puts a real cost on the table rather than hiding it: **somebody who
+  cannot elevate on their own machine can no longer install PrivacyFence on Windows.** The
+  non-elevated per-user install tier added in #407 (and preserved by ADR 0002 decision 5a) is
+  withdrawn; it could never be separated, because a Windows service runs whatever its `binPath`
+  names and an install directory the signed-in user can rewrite hands the agent a way to run its
+  own code *as* the service account. Uninstalling is unaffected, and
+  `privilege-separation.ps1 disable` still returns any install to the unseparated layout, data and
+  autostart task included.
+- The Windows installer's "Launch PrivacyFence now" checkbox on the Finish page is gone. On a
+  separated install the daemon is a Windows service that `enable` has already started, and a second
+  copy launched into the signed-in user's own session is refused outright by the startup identity
+  check rather than merely redundant — so the checkbox's only possible outcome was an error
+  dialog. The companion tray icon is started by its own scheduled task instead, and the Start Menu
+  entries for the settings page and the companion are unchanged.
+- Privilege separation no longer gives up when it cannot tell which human an install is for. ADR
+  0003 decision 3 splits `enable` into a machine half — creating the service account, moving and
+  re-owning the data directory, writing the marker, installing the service — and a per-user half,
+  which is only the two steps that need a person: adding them to the `_privacyfence` /
+  `privacyfence` / `PrivacyFenceUsers` group, and migrating whatever they had under
+  `~/.privacyfence` (`%LOCALAPPDATA%\PrivacyFence`). The machine half now always runs and always
+  fully separates the install, so an MDM push, an unattended `apt` upgrade, a root shell or a
+  `.pkg` installed with nobody at the console produces a separated install rather than the
+  unseparated one each of those used to fall back to. The per-user half is re-runnable on its own —
+  `enable --for-user <name>` (`enable -ForUser <name>` on Windows) — and `status` reports the
+  interim state as its own answer (`PENDING USER`) rather than as "not separated", because the
+  install *is* separated; what is outstanding is one group membership.
+- Installing the Debian/Ubuntu `.deb` now separates the install or fails, rather than separating it
+  where it can. ADR 0003 decision 5: `debian/postinst` used to end its one separation step with a
+  shell `|| true`, so anything that went wrong there left a package that reported itself installed
+  and a PrivacyFence whose central claim — the agent cannot approve its own request — did not hold.
+  That step is now two, with the two failure policies decision 3 made possible. The machine half
+  (`enable --machine-only`) runs on every `configure`, unconditionally, and a failure of it fails
+  the package install loudly, leaving dpkg with a half-configured package rather than a silently
+  unseparated one. The per-user half keeps its `$SUDO_USER` gate and keeps the right to defer, so an
+  unattended install — an MDM push, `unattended-upgrades`, a root shell — still succeeds *and* still
+  ends up separated, with only the group membership pending for the companion app to close at the
+  first real login session. Re-running the machine half also no longer clears the owner already
+  recorded on an install whose per-user half is closed, which is what every upgrade does now.
+- The companion app closes that pending half by itself. On start, an install that is separated but
+  whose current user is not in its service group gets one elevated `enable --for-user` — macOS'
+  own admin-password dialog, a UAC prompt on Windows, `pkexec` on Linux — after which it names the
+  one thing no password can do, which is logging out and back in for the new group membership to
+  reach the session. It prompts nobody on an unseparated install or on one that is already
+  complete, and where there is no way to ask for a password at all (a Linux desktop with no polkit
+  agent) it prints the single command to run instead of guessing. "Nobody was logged in at install
+  time" therefore stops meaning "this install is unprotected forever".
+- The macOS DMG is now the only macOS artifact, and it carries the `.pkg` rather than an app bundle
+  to drag (ADR 0003 decision 2). `scripts/build_dmg.sh` now builds the `.pkg` itself and puts it,
+  plus the `.mcpb`, on the disk image — nothing else: no `.app`, no `/Applications` symlink, so
+  there is no way to install macOS PrivacyFence except through the `.pkg`'s own root-context install
+  step. The standalone `.pkg` (`macos-arm64-pkg`) is retired; `macos-arm64` still resolves to the
+  DMG, so the download-KPI series is unaffected. The `.pkg`'s conclusion screen also stops telling
+  every reader to open the `.mcpb` "next to this installer", which used to be false for anyone who
+  had downloaded the standalone `.pkg`.
+- A packaged local-mode install that finds itself unseparated no longer serves anything (ADR 0003
+  decision 6). This is the backstop for the installs the entries above don't cover — a
+  pre-ADR-0003 DMG install upgrading in place, a restored backup, an install where `disable` was
+  run and forgotten. On startup, a packaged build attempts this platform's provisioning (the same
+  mechanism the install-time entries above describe) and, if it is still unseparated afterward,
+  refuses outright — no `/mcp`, no approvals — naming the one command that fixes it. The one-shot
+  marker that used to make a declined macOS admin-password prompt permanent is gone: a decline is
+  asked again on the next start rather than respected forever, since under this ADR a decline is not
+  a configuration, it is an unfinished install. `disable` keeps working — it is how you get your
+  data back out from under the service account, which Windows' documented uninstall order needs —
+  but stops being a way to keep a packaged daemon running; its own output says so. This refusal is
+  unconditional on a packaged build, with no developer override: source checkouts and `pip`/`pipx`
+  installs are not packaged builds and are not gated by it at all (ADR 0003 decision 7 — that is how
+  org mode is deployed and how the project is developed).
+- `step_up.require_passkey` now refuses to turn on for a local-mode install that isn't
+  privilege-separated, whether set by hand in `config/settings.yaml` or through the Settings page's
+  "turn on step-up" action (ADR 0003, "Why not gate the passkey instead"). A passkey checked against
+  a credential store the same account can rewrite was already named, in ADR 0002 decision 6, as
+  worse than not having the feature at all — this closes the one place that configuration was still
+  reachable. On a packaged install this is unreachable in practice, since the startup refusal above
+  already guarantees separation first; it exists for the source-checkout developer path, with the
+  same `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` escape hatch (a sibling of the existing
+  `PRIVACYFENCE_DEV_ALLOW_INSECURE_IDP`) as an explicit, logged opt-out for local development. A
+  non-packaged, unseparated install running with that variable set says so — in the daemon's
+  startup log and on `/security` — rather than silently claiming a protection it doesn't have.
+- `docs/security-and-compliance.md`, `docs/platform-support.md`, and the Quick Start install
+  instructions in `README.md` stop hedging "default-on for macOS/Linux, opt-in for Windows": every
+  packaged install on all three platforms now separates itself, unconditionally, as part of
+  installing. `pip`/`pipx install privacyfence` stops reading as an answer to "how do I install
+  PrivacyFence on my laptop" — it's how org mode is deployed and how the project is developed, and
+  it says so where it used to imply otherwise.
+- ADR 0003 (`docs/adr/0003-separated-installs-only.md`) decides that every local-mode install
+  PrivacyFence ships is privilege-separated, and that a distribution channel which cannot separate
+  itself at install time is not published. Today separation is effectively a user choice made by
+  file format and dialog box — a macOS DMG separates only if a bare admin-password prompt at first
+  daemon start is accepted, a Windows install never separates unless a command is typed by hand into
+  an elevated PowerShell, and a pip install has no installer hook at all — while an unseparated
+  install renders the same approval UI, accepts the same passkey enrollment and writes the same
+  audit log, none of which mean what they say when the daemon and the AI client share a uid. The
+  decision retires the macOS DMG in favor of the `.pkg` that already provisions separation as root
+  during the ordinary install, makes the Windows installer separate the install itself (retiring the
+  non-elevated per-user tier of issue #407, and superseding ADR 0002's decision 5a), stops the
+  `.deb`'s postinst from falling back to an opt-in install, splits provisioning into a machine half
+  that never needs to know who the human is and a re-runnable per-user half, and has a packaged
+  daemon that still finds itself unseparated refuse to serve rather than serve a guarantee it cannot
+  keep. Source checkouts and pip installs stay for development and org mode, behind an explicit
+  `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED` opt-out that says what it is. No behavior changes with this
+  entry — the ADR is the decision, and each platform's half lands in its own change.
 - ADR 0002 (`docs/adr/0002-local-mode-trust-boundary-and-companion-app.md`) records the architecture
   decision that follows from the statement above: local mode's trust boundary is the OS user
   account, and a minimal companion app (tray/menu-bar item — Open Approvals, Open Settings, Quit)
@@ -141,7 +252,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (materialized by the Service Control Manager with the service, its own SID, no password for
   anyone to store), the data directory moves from `%LOCALAPPDATA%\PrivacyFence` to
   `%ProgramData%\PrivacyFence`, and the Scheduled Task that used to start the daemon in your
-  session is disabled in favour of a new one that starts the companion tray app there instead. It
+  session is disabled in favor of a new one that starts the companion tray app there instead. It
   closes the same four things — the agent can no longer edit the always-allow rules and PII policy,
   forge a WebAuthn credential, read the audit log's HMAC key, or read the daemon's connector
   credentials — and the marker file, the three directories and the `handoff` contents are identical

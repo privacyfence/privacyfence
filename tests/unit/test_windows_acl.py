@@ -272,7 +272,7 @@ class TestImageProblems:
 
         assert len(problems) == 1
         assert "run code as that account" in problems[0]
-        assert "per-user install path cannot be separated" in problems[0]
+        assert "only administrators can write" in problems[0]
 
     def test_reading_the_install_is_fine(self):
         # Every account on the machine can read %ProgramFiles%, and nothing

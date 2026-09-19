@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  #428 Phase 4 (B5c): opt into -- or back out of -- running the PrivacyFence
+  #428 Phase 4 (B5c): provision -- or back out of -- running the PrivacyFence
   daemon under its own Windows account.
 
 .DESCRIPTION
@@ -28,23 +28,41 @@
   3. The install location is part of the boundary. A service runs whatever its
      binPath names, so a PrivacyFence the logged-in user can rewrite would let
      the agent run its own code *as the service account*. This script refuses to
-     enable against such an install, which is what settles #407's open question:
-     the non-elevated per-user install path cannot be separated. See
-     Assert-ImageProtected below.
+     enable against such an install -- see Assert-ImageProtected below. #407's
+     non-elevated per-user install tier was the case that made that refusal
+     reachable by an ordinary user; ADR 0003 decision 4 withdraws the tier
+     rather than the refusal, which stays as the check on every install
+     directory this is ever pointed at.
 
 .EXAMPLE
   # From an elevated PowerShell, against a real install:
   powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" enable
   ... status
   ... disable
+  ... enable -ForUser alice   # just the per-user half, for a second account
 
 .NOTES
   Step 4 moves live connector OAuth tokens. `disable` moves them back, but this
   is still the step to take a backup before: it is the one part of this that
   touches data you cannot re-mint from a config file.
 
-  Ships opt-in deliberately. #428 P4 does not default on for a platform until
-  that platform's opt-in has soaked through a full release cycle.
+  Adding the owner to $ServiceGroup and migrating their %LOCALAPPDATA% copy
+  are the only two steps here that need to know *which human* this install is
+  for, and ADR 0003 decision 3 splits them out for that reason: an MDM push or
+  a SYSTEM-context install resolves no owner account, and that used to leave
+  the whole install unseparated. It no longer does. `enable` with no
+  resolvable owner does everything an administrator can do alone and records
+  the group membership as pending; `enable -ForUser <name>` closes that half
+  later, idempotently, and is what the companion app runs by itself at the
+  first real sign-in.
+
+  No longer opt-in. ADR 0003 decision 4 has installer/privacyfence.iss run
+  `enable` itself, elevated, as a step of every install -- so on Windows this
+  script is normally something a human runs only to look at an install
+  (`status`) or to unwind one (`disable`), the same way the .deb's postinst
+  has run the Linux script since #428 D1. Running `enable` by hand still
+  works, and is the documented way to re-provision an install whose service,
+  ACLs or companion task have drifted.
 #>
 [CmdletBinding()]
 param(
@@ -58,6 +76,11 @@ param(
     # administrator account, or the data migration would look in the wrong
     # profile.
     [string] $User,
+
+    # enable only: run *just* the per-user half for this account, against an
+    # install the machine half has already separated (ADR 0003 decision 3).
+    # The POSIX scripts spell it `enable --for-user <name>`.
+    [string] $ForUser,
 
     [string] $DaemonExec,
     [string] $CompanionExec
@@ -118,6 +141,20 @@ if (Test-Path -LiteralPath $CheckoutTemplateDir) {
 $script:OwnerUser = $User
 $script:OwnerSid = $null
 $script:OwnerLocalAppData = $null
+# Whether Resolve-Owner actually found a human account, as opposed to leaving
+# $OwnerUser at whatever name it started from. The POSIX scripts express the
+# same thing by leaving $OWNER_USER empty, which they can because their owner
+# only ever comes from $SUDO_USER; here it defaults to the current identity,
+# so "resolved" has to be its own flag (ADR 0003 decision 3's machine half is
+# the caller that has to be able to tell).
+$script:OwnerResolved = $false
+
+# Windows' answer to the POSIX scripts' "root is never the owner" refusal.
+# An install provisioned from a SYSTEM context -- an MDM push, a deployment
+# tool, a service -- resolves one of these, and adding it to $ServiceGroup
+# would hand the handoff directory to every service on the machine while
+# recording a marker that claims a human owns this install.
+$NonHumanSids = @('S-1-5-18', 'S-1-5-19', 'S-1-5-20')
 
 function Write-Note { param([string] $Message) Write-Host "-> $Message" }
 function Write-Warn { param([string] $Message) Write-Warning $Message }
@@ -157,6 +194,10 @@ function Resolve-Owner {
         if ($Optional) { return }
         Stop-WithError "no such account: $($script:OwnerUser) -- pass -User <name>"
     }
+    if ($NonHumanSids -contains $script:OwnerSid) {
+        if ($Optional) { return }
+        Stop-WithError "-User must be a real sign-in account, not $($script:OwnerUser)"
+    }
     # The owner's own profile, resolved from the SID rather than from
     # $env:LOCALAPPDATA: an elevated shell running as a *different*
     # administrator would otherwise migrate that administrator's (empty) data
@@ -171,12 +212,29 @@ function Resolve-Owner {
     if (-not $profilePath) {
         if ($script:OwnerUser -eq ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name -split '\\')[-1]) {
             $script:OwnerLocalAppData = $env:LOCALAPPDATA
+            $script:OwnerResolved = $true
             return
         }
         if ($Optional) { return }
         Stop-WithError "could not resolve $($script:OwnerUser)'s user profile -- has that account ever signed in on this machine?"
     }
     $script:OwnerLocalAppData = Join-Path $profilePath 'AppData\Local'
+    $script:OwnerResolved = $true
+}
+
+function Get-MarkerOwnerUser {
+    # The one field of the marker `status` reads back. ConvertFrom-Json is in
+    # Windows PowerShell 5.1, so unlike the POSIX scripts this needs no
+    # line-oriented workaround -- but like them it must not throw on a marker
+    # a hand-edit has broken, since status is the thing you run to find that
+    # out.
+    $marker = Join-Path $SystemRoot $MarkerName
+    if (-not (Test-Path -LiteralPath $marker)) { return $null }
+    try {
+        return (Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json).owner_user
+    } catch {
+        return $null
+    }
 }
 
 function Get-LegacyDataDir {
@@ -261,11 +319,17 @@ function Assert-ImageProtected {
       #407, settled: a service runs whatever binPath names, so an install the
       logged-in user can rewrite turns privilege separation inside out -- the
       agent gains a way to run its own code *as the service account*, which is
-      strictly worse than the unseparated install it replaced. Windows is the
-      only platform where this is reachable: macOS and Linux put the daemon
-      under /Applications and /opt as a side effect of how they install
-      software at all, while privacyfence.iss offers a non-elevated per-user
-      install under %LOCALAPPDATA%\Programs (PrivilegesRequired=lowest).
+      strictly worse than the unseparated install it replaced.
+
+      This used to be a check on which install *tier* had been chosen:
+      privacyfence.iss offered a non-elevated per-user install under
+      %LOCALAPPDATA%\Programs, and that tier is what this refused. ADR 0003
+      decision 4 removed the tier -- Setup is PrivilegesRequired=admin and runs
+      this script itself, so a stock install lands under %ProgramFiles% and
+      never reaches the refusal below. What is left for it to catch is
+      everything else that can put a writable image under a service's binPath:
+      a -DaemonExec pointed at a copy somewhere in a profile, an install
+      directory whose ACL was relaxed afterwards, a hand-assembled build.
 
       Checked rather than documented, and checked again at every daemon start
       (privilege_separation.audit_layout -> windows_acl.image_problems) in case
@@ -285,10 +349,11 @@ The daemon would run this image as $ServiceAccount, so anything that can
 rewrite it -- including the AI agent this feature exists to contain -- could
 run its own code as that account. That is worse than no separation at all.
 
-This is what a non-elevated, per-user install looks like (#407): PrivacyFence
-installed under your own profile rather than under %ProgramFiles%. Re-run the
-PrivacyFence installer and let it elevate, so it installs per-machine, then run
-this again.
+A separated install has to live somewhere only administrators can write. The
+PrivacyFence installer puts one under %ProgramFiles% and runs this script
+itself; an install directory under a user profile, or one whose permissions
+have been relaxed since, is what this refuses. Re-run the PrivacyFence
+installer and accept its elevation prompt, keeping the offered location.
 "@
         }
     }
@@ -297,19 +362,27 @@ this again.
 # ── Account and group provisioning ───────────────────────────────────────────
 
 function New-ServiceGroup {
+    # The machine half: creating the group needs no human, and the ACLs
+    # Set-Layout writes name it whether or not anyone is in it yet.
     if (-not (Get-LocalGroup -Name $ServiceGroup -ErrorAction SilentlyContinue)) {
         Write-Note "creating the $ServiceGroup local group"
         New-LocalGroup -Name $ServiceGroup -Description 'May read PrivacyFence''s handoff directory (mcp_token and the daemon discovery files).' | Out-Null
     } else {
         Write-Note "local group $ServiceGroup already exists -- leaving it as it is"
     }
+    # Deliberately *not* adding $ServiceAccount to this group: a virtual
+    # service account has no group memberships, which is why every ACL below
+    # names the account and the group separately.
+}
+
+function Add-OwnerToServiceGroup {
+    # The per-user half (ADR 0003 decision 3). Idempotent: an owner already in
+    # the group is left alone, which is what makes -ForUser safe to re-run at
+    # every companion start.
     if (-not (Get-LocalGroupMember -Group $ServiceGroup -Member $script:OwnerUser -ErrorAction SilentlyContinue)) {
         Write-Note "adding $($script:OwnerUser) to $ServiceGroup"
         Add-LocalGroupMember -Group $ServiceGroup -Member $script:OwnerUser
     }
-    # Deliberately *not* adding $ServiceAccount to this group: a virtual
-    # service account has no group memberships, which is why every ACL below
-    # names the account and the group separately.
 }
 
 # ── Data migration ───────────────────────────────────────────────────────────
@@ -513,12 +586,19 @@ been broken: run '$PSCommandPath disable' to move your data back, and re-run
 function Write-Marker {
     $marker = Join-Path $SystemRoot $MarkerName
     Write-Note "writing $marker"
+    # Empty rather than absent when the machine half ran with no human to add
+    # (ADR 0003 decision 3): privilege_separation._parse_marker() requires the
+    # key and refuses the whole marker without it, and a refused marker is a
+    # startup failure by design -- so "" is the machine-readable spelling of
+    # "group membership pending", and is_enabled() stays true for it, because
+    # the install *is* separated. $OwnerUser itself still holds whatever
+    # identity this ran as, which is not the same thing as an owner.
     $payload = [ordered]@{
         version         = $MarkerVersion
         platform        = 'win32'
         service_account = $ServiceAccount
         service_group   = $ServiceGroup
-        owner_user      = $script:OwnerUser
+        owner_user      = $(if ($script:OwnerResolved) { $script:OwnerUser } else { '' })
         enabled_at      = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     }
     # -Encoding ascii, not the default: privilege_separation._parse_marker
@@ -648,7 +728,13 @@ function Uninstall-CompanionTask {
 function Invoke-Enable {
     Assert-Windows
     Assert-Administrator
-    Resolve-Owner
+    # Deliberately the optional resolution, not Resolve-Owner's own throw (ADR
+    # 0003 decision 3): with no human account to resolve -- an MDM push, a
+    # SYSTEM-context install -- this still separates the machine completely,
+    # and records the one step that genuinely needs a human (the group
+    # membership) as pending rather than abandoning the whole install to the
+    # unseparated layout the way it used to.
+    Resolve-Owner -Optional
     Resolve-Executables
     Assert-ImageProtected
 
@@ -660,6 +746,11 @@ function Invoke-Enable {
     Uninstall-DaemonService
 
     New-ServiceGroup
+    if ($script:OwnerResolved) {
+        Add-OwnerToServiceGroup
+    } else {
+        Write-Note "no owner account resolved -- leaving the $ServiceGroup membership pending"
+    }
     Move-Data
     Set-Layout
     Write-Marker
@@ -675,18 +766,79 @@ OK  PrivacyFence now runs as $ServiceAccount.
   Shared handoff   $SystemRoot\$HandoffDirName   (read-only to $ServiceGroup)
   Daemon           sc.exe query $ServiceName
   Companion        the PrivacyFence tray icon, started at sign-in
+"@
+
+    if ($script:OwnerResolved) {
+        Write-Host @"
 
   One thing left to do by hand: sign $($script:OwnerUser) out and back in.
   Windows puts group memberships in the logon token, so the session you are in
   right now still does not know it is in $ServiceGroup -- which means the
   companion app and your MCP client cannot read the handoff directory until you
   do. '... status' will tell you when it has taken.
+"@
+    } else {
+        Write-Host @"
+
+  Nobody is in $ServiceGroup yet: this ran with no human account to add, which
+  is the ordinary case for an MDM push or a SYSTEM-context install. The install
+  is separated regardless -- what is pending is one re-runnable step, which the
+  companion app takes by itself at the first real sign-in, or which you can
+  take now:
+
+    ... enable -ForUser <name>
+"@
+    }
+
+    Write-Host @"
 
   What this does and does not buy you is written down in
   docs/security-and-compliance.md's "Local-mode trust boundary" section. The
   short version: the agent can no longer rewrite your policy, forge a passkey
   or read the audit key -- and an agent that can get Administrator still
   defeats all of it, because Administrator defeats everything.
+"@
+}
+
+function Invoke-EnableForUser {
+    # ADR 0003 decision 3's per-user half, on its own: the two steps of
+    # `enable` that need to know which human this install is for. Runs against
+    # an install the machine half has already separated, and re-runs
+    # harmlessly against one that is already complete -- the group add is
+    # idempotent, there is nothing left to migrate once the %LOCALAPPDATA%
+    # copy is gone, and the ACLs and marker are rewritten to the same values.
+    #
+    # Deliberately no Resolve-Executables/Assert-ImageProtected: this installs
+    # no service and starts nothing, so a second user can be added to the
+    # group without the image having to pass a check that only governs what
+    # runs *as* the service account.
+    Assert-Windows
+    Assert-Administrator
+    Resolve-Owner
+
+    if (-not (Test-Path -LiteralPath (Join-Path $SystemRoot $MarkerName))) {
+        Stop-WithError "this install is not privilege-separated yet -- run '... enable' first"
+    }
+
+    Add-OwnerToServiceGroup
+    # Anything this human accumulated under %LOCALAPPDATA%\PrivacyFence before
+    # the machine half ran -- live connector OAuth tokens included -- still has
+    # to follow the service account, and it merges in carrying their own ACLs.
+    # So the layout is re-asserted rather than assumed, and the marker is
+    # rewritten with the owner it was missing.
+    Move-Data
+    Set-Layout
+    Write-Marker
+
+    Write-Host @"
+
+OK  $($script:OwnerUser) is now a member of $ServiceGroup.
+
+  One thing left to do by hand: sign $($script:OwnerUser) out and back in.
+  Windows puts group memberships in the logon token, so the session you are in
+  right now still does not know it is in $ServiceGroup -- which means the
+  companion app and your MCP client cannot read the handoff directory until you
+  do. '... status' will tell you when it has taken.
 "@
 }
 
@@ -770,6 +922,19 @@ function Invoke-Status {
     Write-Host "  marker:          $marker"
     Write-Host "  data directory:  $SystemRoot"
     $problems = 0
+    # Distinct from "OFF" above on purpose (ADR 0003 decision 3): this install
+    # *is* separated -- the machine half ran -- and what is outstanding is one
+    # re-runnable step. Reporting it as not separated would say the daemon and
+    # the agent share an account, which is exactly what is no longer true.
+    $markerOwner = Get-MarkerOwnerUser
+    if ($markerOwner) {
+        Write-Host "  owner:           $markerOwner"
+    } else {
+        Write-Host "  PENDING USER     no owner recorded -- nobody has been added to $ServiceGroup yet."
+        Write-Host '                   The companion app closes this at the first sign-in, or:'
+        Write-Host '                   ... enable -ForUser <name>'
+        $problems = 1
+    }
     $authority = Join-Path $SystemRoot $AuthorityDirName
     $handoff = Join-Path $SystemRoot $HandoffDirName
 
@@ -827,7 +992,7 @@ function Invoke-Status {
         }
     }
 
-    if ($script:OwnerUser) {
+    if ($script:OwnerResolved) {
         if (Get-LocalGroupMember -Group $ServiceGroup -Member $script:OwnerUser -ErrorAction SilentlyContinue) {
             Write-Host "  ok               $($script:OwnerUser) is a member of $ServiceGroup"
         } else {
@@ -875,7 +1040,17 @@ function Invoke-Status {
 }
 
 switch ($Command) {
-    'enable' { Invoke-Enable; exit 0 }
+    'enable' {
+        # -ForUser selects which half runs (ADR 0003 decision 3); it also
+        # names the account, so it feeds $OwnerUser the same way -User does.
+        if ($ForUser) {
+            $script:OwnerUser = $ForUser
+            Invoke-EnableForUser
+        } else {
+            Invoke-Enable
+        }
+        exit 0
+    }
     'disable' { Invoke-Disable; exit 0 }
     'status' {
         # Coerced through a variable and [int] rather than `exit

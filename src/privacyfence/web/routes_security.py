@@ -168,6 +168,7 @@ def build_routes(
     step_up: StepUpConfig,
     issuer_url: str,
     back_link: tuple[str, str] = ("/connect", "Back to connections"),
+    dev_unseparated_notice: str | None = None,
     nav_items: tuple[tuple[str, str, str], ...] | None = None,
 ) -> list[Route]:
     """``resolve_principal``/``check_csrf``/``check_origin`` are the
@@ -194,6 +195,13 @@ def build_routes(
     unless the caller wants ``/security`` wrapped in web_shell.wrap()'s
     persistent header/nav instead (module docstring) -- when given, it takes
     over entirely from ``back_link``, which is then never rendered.
+    ``dev_unseparated_notice`` (ADR 0003 decision 7) is local mode's own
+    ``privilege_separation.dev_unseparated_notice()`` result, shown verbatim
+    at the top of the page when not ``None``; org mode's caller leaves it
+    unset since that function is never non-``None`` there (org mode is never
+    a packaged build). The two are independent: local mode passes the notice
+    and no ``nav_items``, org mode the reverse, and the renderer places the
+    notice inside whichever of the two page shells it ends up using.
     """
     challenges = RegistrationChallengeStore()
     delete_challenges = StepUpChallengeStore()
@@ -244,6 +252,7 @@ def build_routes(
         html = _render_security_page(
             principal=principal, creds=creds, csrf=session_id, step_up=step_up,
             nonce=_csp_nonce_for(request), back_link=back_link, nav_items=nav_items,
+            dev_unseparated_notice=dev_unseparated_notice,
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -567,12 +576,20 @@ _SCOPE_NOTES = {
 def _render_security_page(
     *, principal: Principal, creds: list, csrf: str, step_up: StepUpConfig, nonce: str,
     back_link: tuple[str, str], nav_items: tuple[tuple[str, str, str], ...] | None = None,
+    dev_unseparated_notice: str | None = None,
 ) -> str:
     who = principal.email or principal.display_name or principal.id
     who_esc = _esc(who)
     rows = "".join(_credential_row_html(c) for c in creds)
     creds_html = f'<ul class="creds">{rows}</ul>' if creds else '<div class="empty">No passkeys added yet.</div>'
     scope_note = _SCOPE_NOTES.get(step_up.scope, _SCOPE_NOTES["writes"])
+    # ADR 0003 decision 7: shown at the top of the page body, so it lands
+    # inside whichever shell is used below -- web_shell.wrap()'s nav in org
+    # mode, the bare document in local mode, which is the only one that ever
+    # passes a non-None notice.
+    dev_notice_html = (
+        f'<p class="flash err">{_esc(dev_unseparated_notice)}</p>' if dev_unseparated_notice else ""
+    )
     # Only rendered when there's no persistent nav to get back with (module
     # docstring's own ``nav_items`` paragraph) -- with one, this link would
     # just duplicate the nav's own "Connections"/"Settings" items.
@@ -582,6 +599,7 @@ def _render_security_page(
     content = (
         f'<div id="pf-security-page" data-csrf="{_esc(csrf)}">'
         "<h1>Passkeys</h1>"
+        f"{dev_notice_html}"
         f'<p class="lead">Signed in as {who_esc}. A passkey (Face ID, Touch ID, fingerprint, or Windows Hello) proves it\'s '
         f"really you before a write approval is released, even if someone else has your unlocked phone. {_esc(scope_note)}</p>"
         f"{creds_html}"

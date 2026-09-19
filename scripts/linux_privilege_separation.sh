@@ -32,19 +32,47 @@
 #      daemon and an XDG autostart entry for the companion's control channel.
 #      That is ADR 0002's "startup wiring inverts", on this platform.
 #
+# Steps 2 and 3 are the only two that need to know *which human* this install
+# is for, and ADR 0003 decision 3 splits them out for that reason: an MDM
+# push, an unattended `apt` upgrade or a plain root shell resolves no owner
+# account, and that used to leave the whole install unseparated. It no longer
+# does. `enable` with no resolvable owner runs everything root can do alone
+# and records the group membership as pending; `enable --for-user <name>`
+# closes that half later, idempotently, and is what the companion app runs by
+# itself at the first real login session.
+#
 # Step 3 moves live connector OAuth tokens. `disable` moves them back, but this
 # is still the step to take a backup before: it is the one part of this that
 # touches data you cannot re-mint from a config file.
 #
-# Ships opt-in by hand via the three subcommands above. #428 D1 (4.1, moved up
-# from the original 4.2 plan) additionally auto-runs `enable --auto` from the
-# .deb's postinst on every install and upgrade -- see debian/postinst. `--auto`
-# is the same `enable`, made safe to run unattended: anywhere it would
-# otherwise die() on something a human would resolve interactively (no
-# resolvable owner, no installed executables, an unsupported init system), it
-# instead logs why and exits 0, leaving the install opt-in rather than failing
-# the package configure step it's called from. A human running this by hand
-# never wants that silent behavior, which is why --auto isn't the default.
+# Runnable by hand via the three subcommands above, and run for you by the
+# .deb's postinst on every install and upgrade -- which, since ADR 0003
+# decision 5, calls the two halves separately because they have two different
+# failure policies (see debian/postinst, which spells both out):
+#
+#   enable --machine-only     the machine half, and only it. Skips owner
+#                             resolution outright rather than taking whatever
+#                             $SUDO_USER happens to say, so the group add is
+#                             genuinely deferred to the per-user half instead
+#                             of riding along and taking the install down with
+#                             it when it fails. Loud: no --auto, and postinst
+#                             lets its failure fail the package install.
+#   enable --auto --for-user  the per-user half, deferrable. `--auto` is the
+#                             same `enable`, made safe to run unattended:
+#                             anywhere it would otherwise die() on something a
+#                             human would resolve interactively (no installed
+#                             executables, an unsupported init system, an
+#                             unresolvable account), it instead logs why and
+#                             exits 0 rather than failing the package configure
+#                             step it's called from. A human running this by
+#                             hand never wants that silent behavior, which is
+#                             why --auto isn't the default. It composes with
+#                             --for-user rather than selecting a command, which
+#                             is what lets the postinst pair it with exactly
+#                             the half that is still allowed to defer.
+#
+# #428 D1 (4.1, moved up from the original 4.2 plan) is where the postinst hook
+# came from; decision 5 is what took the `|| true` off the machine half of it.
 set -euo pipefail
 
 # ── Constants. Every one of these is also declared in
@@ -109,7 +137,19 @@ usage() {
 usage: sudo $0 {enable|disable|status} [options]
 
   --user <name>       the human account that owns this install
-                      (default: \$SUDO_USER, i.e. whoever ran sudo)
+                      (default: \$SUDO_USER, i.e. whoever ran sudo). With none
+                      resolvable, enable still separates the machine and
+                      leaves the group membership pending -- see --for-user.
+  --for-user <name>   enable only: run *just* the per-user half against an
+                      install the machine half has already separated -- add
+                      <name> to ${SERVICE_GROUP} and migrate their
+                      ~/.privacyfence. Idempotent, and what the companion app
+                      runs when it finds that membership still pending.
+  --machine-only      enable only: run *just* the machine half -- everything
+                      root can do with no human in sight -- and leave the
+                      group membership pending even if \$SUDO_USER would have
+                      resolved. The other side of --for-user, and what the
+                      .deb's postinst runs. Refuses --user/--for-user.
   --daemon-exec <p>   run this instead of ${DEFAULT_DAEMON_EXECUTABLE}
   --companion-exec <p> run this instead of ${DEFAULT_COMPANION_EXECUTABLE}
                       (both together let a source/venv install be separated:
@@ -124,6 +164,8 @@ USAGE
 }
 
 AUTO=0
+FOR_USER_ONLY=0
+MACHINE_ONLY=0
 
 require_linux() {
   [ "$(uname -s)" = "Linux" ] || die "this script is Linux-only (macOS is scripts/macos_privilege_separation.sh; Windows is scripts/windows_privilege_separation.ps1)"
@@ -204,12 +246,31 @@ add_owner_to_service_group() {
   usermod -aG "$SERVICE_GROUP" "$OWNER_USER"
 }
 
+# What `status` reads back to tell the pending state apart from "not
+# separated" (ADR 0003 decision 3).
+marker_owner_user() {
+  # Every writer of this file -- this script, macOS' own, the .pkg's
+  # postinstall, and PowerShell's ConvertTo-Json -- emits one key per line,
+  # so a line-oriented read is enough and keeps `status` free of a JSON
+  # parser it would otherwise have to carry for one string.
+  sed -n 's/.*"owner_user"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "${SYSTEM_ROOT}/${MARKER_NAME}" 2>/dev/null | head -n 1
+}
+
 # ── Data migration ────────────────────────────────────────────────────────────
 
 legacy_data_dir() { printf '%s/.privacyfence' "$OWNER_HOME"; }
 
 migrate_data() {
   local legacy
+  # The machine half (ADR 0003 decision 3) runs with no owner resolved, and a
+  # machine with no human account has no per-user data directory to move --
+  # so this reduces to creating the root the rest of `enable` provisions.
+  if [ -z "$OWNER_HOME" ]; then
+    note "no owner account resolved -- nothing to migrate, creating ${SYSTEM_ROOT} empty"
+    mkdir -p "$SYSTEM_ROOT"
+    return
+  fi
   legacy="$(legacy_data_dir)"
   if [ ! -d "$legacy" ]; then
     note "no existing ${legacy} to migrate -- starting the separated install empty"
@@ -303,7 +364,20 @@ apply_layout() {
 }
 
 write_marker() {
-  local marker="${SYSTEM_ROOT}/${MARKER_NAME}"
+  local marker="${SYSTEM_ROOT}/${MARKER_NAME}" recorded_owner="$OWNER_USER"
+  # The machine half only ever *adds* an owner to this file; it never clears
+  # one (ADR 0003 decisions 3 and 5). It runs with no owner resolved on every
+  # upgrade of an install whose per-user half is already closed -- an
+  # unattended `apt` upgrade, and every `dpkg -i` at all now that the .deb's
+  # postinst runs it as --machine-only. Writing "" over the name already
+  # recorded there would unrecord a human who is in ${SERVICE_GROUP} at that
+  # moment: `status` would report a complete install as PENDING USER, and the
+  # companion would re-run the per-user half at every login to fix nothing.
+  # `disable` is what removes the owner, by removing this file entirely.
+  if [ -z "$recorded_owner" ] && [ -f "$marker" ]; then
+    recorded_owner="$(marker_owner_user)"
+    [ -z "$recorded_owner" ] || note "keeping the owner already recorded in ${marker}: ${recorded_owner}"
+  fi
   note "writing ${marker}"
   cat > "$marker" <<MARKER
 {
@@ -311,7 +385,7 @@ write_marker() {
   "platform": "linux",
   "service_account": "${SERVICE_ACCOUNT}",
   "service_group": "${SERVICE_GROUP}",
-  "owner_user": "${OWNER_USER}",
+  "owner_user": "${recorded_owner}",
   "enabled_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 MARKER
@@ -392,16 +466,19 @@ stop_legacy_autostart() {
   elif [ -f "${LEGACY_AUTOSTART_PATH}.disabled" ] && ! autostart_entry_is_hidden "${LEGACY_AUTOSTART_PATH}.disabled"; then
     # Already renamed by a version of this script that predates B24's fix --
     # systemd's generator has been autostarting it under the renamed name
-    # this whole time. Heal it in place: `enable --auto` re-runs on every
-    # package upgrade (debian/postinst), so an existing separated install
-    # picks this up the next time it's upgraded, with no separate migration.
+    # this whole time. Heal it in place: the postinst's machine half re-runs
+    # on every package upgrade (debian/postinst), so an existing separated
+    # install picks this up the next time it's upgraded, with no separate
+    # migration.
     note "the disabled autostart entry (${LEGACY_AUTOSTART_PATH}.disabled) predates Hidden=true -- adding it"
     hide_autostart_entry "${LEGACY_AUTOSTART_PATH}.disabled"
   fi
   # The pip/pipx path's `--user` unit. Stopping it needs the owner's own
   # session bus, which exists only while they are logged in -- best-effort,
   # then move the unit file aside so it cannot come back at their next login
-  # regardless.
+  # regardless. Nothing to do with no owner resolved: a --user unit lives in
+  # a home directory, and the machine half has none to look in.
+  [ -n "$OWNER_HOME" ] || return 0
   local user_unit="${OWNER_HOME}/.config/systemd/user/${LEGACY_USER_UNIT}"
   if [ -f "$user_unit" ]; then
     note "disabling the old --user unit (${user_unit} -> .disabled)"
@@ -421,6 +498,11 @@ install_services() {
   systemctl enable --now "$DAEMON_UNIT"
 }
 
+daemon_unit_is_active() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  [ "$(systemctl is-active "$DAEMON_UNIT" 2>/dev/null || true)" = "active" ]
+}
+
 uninstall_services() {
   systemctl disable --now "$DAEMON_UNIT" >/dev/null 2>&1 || true
   rm -f "$DAEMON_UNIT_PATH" "$COMPANION_AUTOSTART_PATH"
@@ -433,7 +515,23 @@ cmd_enable() {
   require_linux
   require_systemd
   require_root
-  resolve_owner
+  # Deliberately the optional resolution, not resolve_owner()'s die() (ADR
+  # 0003 decision 3): with no owner account to resolve this still separates
+  # the machine completely, and records the one step that genuinely needs a
+  # human -- the group membership -- as pending rather than abandoning the
+  # whole install to the unseparated layout the way it used to.
+  #
+  # --machine-only goes one step further and declines to resolve an owner it
+  # *could* have (ADR 0003 decision 5). That is not the same thing as there
+  # being none: the .deb's postinst runs this half with $SUDO_USER sitting
+  # right there in its environment, and lets its failure fail the package
+  # install. Letting the group add ride along on that call would put the one
+  # step that is allowed to defer inside the one call that is not.
+  if [ "$MACHINE_ONLY" = "1" ]; then
+    note "machine half only -- leaving the ${SERVICE_GROUP} membership to 'enable --for-user'"
+  else
+    resolve_owner_optional
+  fi
   resolve_executables
 
   if [ -f "${SYSTEM_ROOT}/${MARKER_NAME}" ]; then
@@ -444,7 +542,11 @@ cmd_enable() {
   systemctl disable --now "$DAEMON_UNIT" >/dev/null 2>&1 || true
 
   create_service_account
-  add_owner_to_service_group
+  if [ -n "$OWNER_USER" ]; then
+    add_owner_to_service_group
+  else
+    note "no owner account resolved -- leaving the ${SERVICE_GROUP} membership pending"
+  fi
   migrate_data
   apply_layout
   write_marker
@@ -459,18 +561,96 @@ cmd_enable() {
   Shared handoff   ${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}   (2770, ${SERVICE_GROUP} group)
   Daemon           systemctl status ${DAEMON_UNIT}
   Logs             journalctl -u ${DAEMON_UNIT} -f
+DONE
+
+  if [ -n "$OWNER_USER" ]; then
+    cat <<DONE
 
   One thing left to do by hand: log ${OWNER_USER} out and back in. Group
   membership is evaluated when a session is created, so the session you are in
   right now still does not know it is in ${SERVICE_GROUP} -- which means the
   companion app and your MCP client cannot reach the handoff directory until
   you do. 'sudo $0 status' will tell you when it has taken.
+DONE
+  else
+    cat <<DONE
+
+  Nobody is in ${SERVICE_GROUP} yet: this ran with no human account to add,
+  which is the ordinary case for an MDM push or an unattended upgrade. The
+  install is separated regardless -- what is pending is one re-runnable step,
+  which the companion app takes by itself at the first real login session, or
+  which you can take now:
+
+    sudo $0 enable --for-user <name>
+DONE
+  fi
+
+  cat <<DONE
 
   What this does and does not buy you is written down in
   docs/security-and-compliance.md's "Local-mode trust boundary" section. The
   short version: the agent can no longer rewrite your policy, forge a passkey
   or read the audit key -- and an agent that can get root still defeats all
   of it, because root defeats everything.
+DONE
+}
+
+cmd_enable_for_user() {
+  # ADR 0003 decision 3's per-user half, on its own: the two steps of `enable`
+  # that need to know which human this install is for. Runs against an install
+  # the machine half has already separated, and re-runs harmlessly against one
+  # that is already complete -- `usermod -aG` is idempotent, there is nothing
+  # left to migrate once ~/.privacyfence is gone, and the layout and marker
+  # are rewritten to the same values.
+  #
+  # Deliberately no resolve_executables()/require_systemd(): this installs no
+  # services and starts nothing, so a source install whose executables have
+  # moved can still have a second user added to the group.
+  require_linux
+  require_root
+  resolve_owner
+
+  [ -f "${SYSTEM_ROOT}/${MARKER_NAME}" ] \
+    || die "this install is not privilege-separated yet -- run 'sudo $0 enable' first"
+
+  add_owner_to_service_group
+  # Anything this human accumulated under ~/.privacyfence before the machine
+  # half ran -- live connector OAuth tokens included -- still has to follow
+  # the service account, and it merges in owned by them at their own modes.
+  # So the layout is re-asserted rather than assumed, and the marker is
+  # rewritten with the owner it was missing.
+  #
+  # Unlike the machine half, this one routinely runs against an install whose
+  # daemon is already up and has been for a while: the .deb's postinst calls
+  # it moments after the machine half started privacyfence-daemon.service, and
+  # the companion calls it at a login session hours later. Merging a legacy
+  # ~/.privacyfence -- an sqlite audit log among it -- into a directory that
+  # daemon has open would corrupt whichever copy lost. So bounce the unit
+  # around the merge, and only around a merge: with nothing left to migrate,
+  # which is every run after the first, this costs nothing and does nothing.
+  local bounce=0
+  if [ -d "$(legacy_data_dir)" ] && daemon_unit_is_active; then
+    bounce=1
+    note "stopping ${DAEMON_UNIT} while $(legacy_data_dir) is merged into ${SYSTEM_ROOT}"
+    systemctl stop "$DAEMON_UNIT"
+  fi
+  migrate_data
+  apply_layout
+  write_marker
+  if [ "$bounce" = "1" ]; then
+    note "starting ${DAEMON_UNIT} again, now against the merged data directory"
+    systemctl start "$DAEMON_UNIT"
+  fi
+
+  cat <<DONE
+
+✓ ${OWNER_USER} is now a member of ${SERVICE_GROUP}.
+
+  One thing left to do by hand: log ${OWNER_USER} out and back in. Group
+  membership is evaluated when a session is created, so the session you are in
+  right now still does not know it is in ${SERVICE_GROUP} -- which means the
+  companion app and your MCP client cannot reach the handoff directory until
+  you do. 'sudo $0 status' will tell you when it has taken.
 DONE
 }
 
@@ -536,8 +716,14 @@ DONE
 resolve_owner_optional() {
   # status has to work on a machine where --user wasn't passed and SUDO_USER
   # isn't set (run without sudo, which status deliberately allows), so it
-  # can't use resolve_owner()'s own die().
+  # can't use resolve_owner()'s own die(). enable's machine half (ADR 0003
+  # decision 3) takes the same shape for the same reason.
   OWNER_USER="${OWNER_USER:-${SUDO_USER:-}}"
+  # `sudo` from a root login shell leaves SUDO_USER=root, and root is never
+  # the human an install belongs to -- resolve_owner() refuses it outright,
+  # and reaching a different answer here would have the machine half add root
+  # to the service group.
+  [ "$OWNER_USER" != "root" ] || OWNER_USER=""
   [ -n "$OWNER_USER" ] || return 0
   OWNER_UID="$(id -u "$OWNER_USER" 2>/dev/null || true)"
   OWNER_HOME="$(getent passwd "$OWNER_USER" 2>/dev/null | cut -d: -f6)"
@@ -559,6 +745,20 @@ cmd_status() {
   echo "  marker:          ${SYSTEM_ROOT}/${MARKER_NAME}"
   echo "  data directory:  ${SYSTEM_ROOT}"
   local problems=0
+  # Distinct from "OFF" above on purpose (ADR 0003 decision 3): this install
+  # *is* separated -- the machine half ran -- and what is outstanding is one
+  # re-runnable step. Reporting it as not separated would say the daemon and
+  # the agent share an account, which is exactly what is no longer true.
+  local marker_owner
+  marker_owner="$(marker_owner_user)"
+  if [ -n "$marker_owner" ]; then
+    echo "  owner:           ${marker_owner}"
+  else
+    echo "  PENDING USER     no owner recorded -- nobody has been added to ${SERVICE_GROUP} yet."
+    echo "                   The companion app closes this at the first login session, or:"
+    echo "                   sudo $0 enable --for-user <name>"
+    problems=1
+  fi
   _check_mode() {
     local path="$1" expected="$2" actual
     actual="$(stat -c '%a' "$path" 2>/dev/null || true)"
@@ -636,6 +836,8 @@ COMMAND="$1"; shift
 while [ $# -gt 0 ]; do
   case "$1" in
     --user) OWNER_USER="${2:-}"; shift 2 ;;
+    --for-user) OWNER_USER="${2:-}"; FOR_USER_ONLY=1; shift 2 ;;
+    --machine-only) MACHINE_ONLY=1; shift ;;
     --daemon-exec) DAEMON_EXECUTABLE="${2:-}"; shift 2 ;;
     --companion-exec) COMPANION_EXECUTABLE="${2:-}"; shift 2 ;;
     --auto) AUTO=1; shift ;;
@@ -644,8 +846,28 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# The two halves of ADR 0003 decision 3 are complements, not modifiers of one
+# another: naming a user and then asking for the half that deliberately has no
+# user is a caller that means one of the two and typed both. Refuse rather
+# than silently pick, since picking wrong here is the difference between an
+# install whose owner is in ${SERVICE_GROUP} and one whose owner is not.
+if [ "$MACHINE_ONLY" = "1" ] && { [ "$FOR_USER_ONLY" = "1" ] || [ -n "$OWNER_USER" ]; }; then
+  die "--machine-only is the half that has no owner -- it cannot be combined with --user/--for-user"
+fi
+
 case "$COMMAND" in
   enable)
+    # --for-user/--machine-only select which half runs; --auto is orthogonal
+    # and wraps whichever one it is. That is what lets the .deb's postinst
+    # spell ADR 0003 decision 5 as two calls with two different failure
+    # policies -- `enable --machine-only` unconditional and loud, `enable
+    # --auto --for-user` still allowed to defer -- rather than one call whose
+    # halves it cannot tell apart.
+    if [ "$FOR_USER_ONLY" = "1" ]; then
+      ENABLE_COMMAND=cmd_enable_for_user
+    else
+      ENABLE_COMMAND=cmd_enable
+    fi
     if [ "$AUTO" = "1" ]; then
       note "auto-enabling privilege separation (#428 D1, 4.1) -- see debian/postinst"
       # Run in a subshell: die() calls exit, and under set -euo pipefail an
@@ -654,12 +876,12 @@ case "$COMMAND" in
       # ends the subshell, and testing it in `if` is exempt from errexit, so
       # a resolve_owner()/resolve_executables()/cmd_enable failure lands here
       # instead of failing the package configure step.
-      if ! ( cmd_enable ); then
-        warn "auto-enable did not run to completion -- this install stays opt-in."
+      if ! ( "$ENABLE_COMMAND" ); then
+        warn "auto-enable did not run to completion."
         warn "rerun without --auto to see why, or once it's clear: sudo $0 enable"
       fi
     else
-      cmd_enable
+      "$ENABLE_COMMAND"
     fi
     ;;
   disable) cmd_disable ;;

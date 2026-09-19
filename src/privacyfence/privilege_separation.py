@@ -56,9 +56,11 @@ Two consequences are worth stating rather than leaving to be discovered:
 * A Windows service runs whatever image its ``binPath`` names, so the
   daemon's own executable becomes part of the boundary: an install the
   logged-in user can rewrite would let the agent run its own code *as the
-  service account*. That is why the non-elevated per-user install path
-  (#407) cannot be separated, and why ``audit_layout()`` re-checks the image
-  on every start -- see ``windows_acl.image_problems()``. macOS has the same
+  service account*. That is why ``enable`` refuses such an install outright
+  and why ``audit_layout()`` re-checks the image on every start -- see
+  ``windows_acl.image_problems()``. It is also why there is only one Windows
+  install tier: ADR 0003 decision 4 withdrew #407's non-elevated per-user
+  one, which by construction could never satisfy this. macOS has the same
   exposure by a different route: ``/Applications`` is ``root:admin
   drwxrwxr-x`` and a drag-installed ``.app`` is normally owned by the
   installing user, so nothing about a packaged macOS install makes the
@@ -115,10 +117,10 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import stat
 import subprocess  # nosec B404  # osascript elevation prompt below -- fixed argv, no shell, see that call site
 import sys
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -269,6 +271,12 @@ class PlatformLayout:
     #: once the daemon is a system service, only its service manager gets
     #: to stop it, not a line on a socket the agent shares a group with.
     stop_command: str
+    #: ADR 0003 decision 6: what ``enforce_separation()`` names when a
+    #: packaged, unseparated install refuses to serve -- the one command
+    #: that fixes it, in the elevated form a human would actually type
+    #: rather than ``installer`` verbatim (see that field's own docstring
+    #: for why the two differ).
+    enable_command: str
 
 
 # #428 P4 ships per platform (B5a/B5b/B5c) rather than as one "x3 platforms"
@@ -285,6 +293,7 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
         status_command="sudo scripts/macos_privilege_separation.sh status",
         start_command="sudo launchctl kickstart -k system/com.privacyfence.daemon",
         stop_command="sudo launchctl bootout system/com.privacyfence.daemon",
+        enable_command="sudo scripts/macos_privilege_separation.sh enable",
     ),
     "linux": PlatformLayout(
         system_root=LINUX_SYSTEM_ROOT,
@@ -294,6 +303,7 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
         status_command="sudo privacyfence-privilege-separation status",
         start_command="sudo systemctl restart privacyfence-daemon.service",
         stop_command="sudo systemctl stop privacyfence-daemon.service",
+        enable_command="sudo privacyfence-privilege-separation enable",
     ),
     "win32": PlatformLayout(
         system_root=WINDOWS_SYSTEM_ROOT,
@@ -319,6 +329,10 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
         ),
         start_command=f"sc.exe start {WINDOWS_SERVICE_NAME}",
         stop_command=f"sc.exe stop {WINDOWS_SERVICE_NAME}",
+        enable_command=(
+            'powershell -ExecutionPolicy Bypass -File '
+            '"$env:ProgramFiles\\PrivacyFence\\privilege-separation.ps1" enable   (from an elevated PowerShell)'
+        ),
     ),
 }
 
@@ -340,6 +354,16 @@ class Separation:
     platform: str
     service_account: str
     service_group: str
+    #: The human account this install was provisioned for, or ``""`` when
+    #: ADR 0003 decision 3's machine half ran with nobody to add to the
+    #: service group (an MDM push, an unattended ``apt`` upgrade, a ``.pkg``
+    #: installed at the login window). Empty rather than absent on purpose:
+    #: ``_parse_marker()`` below requires the key and refuses the whole
+    #: marker without it, and a refused marker is a startup failure by
+    #: design -- so ``""`` is the machine-readable spelling of "group
+    #: membership pending", and ``is_enabled()`` stays true for it, because
+    #: the install *is* separated. ``owner_membership_pending()`` is what
+    #: reads it that way, and ``companion.py`` is what closes it.
     owner_user: str
     enabled_at: str
     # Derived from where the marker itself was found rather than stored in
@@ -1012,8 +1036,17 @@ def _authority_owner_problem(state: Separation) -> str | None:
 # install that never ran the installer (an app bundle copied off another
 # machine, a source/pip run) still has nothing root-context behind it, and
 # nothing short of a human answering an admin password prompt can create a
-# system account or a LaunchDaemon. This is that prompt, asked once.
-AUTO_ENABLE_ATTEMPTED_MARKER_NAME = ".separation_auto_enable_attempted"
+# system account or a LaunchDaemon. This is that prompt.
+#
+# ADR 0003 decision 6 removed the one-shot marker this used to write
+# (``AUTO_ENABLE_ATTEMPTED_MARKER_NAME``): a decline used to be respected
+# forever, silently. Under decision 6 a decline is not a configuration, it is
+# an unfinished install, so this is asked again on every start that finds the
+# install still unseparated -- and, on a packaged build, ``enforce_
+# separation()`` below is what makes that matter: it is the thing that now
+# calls this synchronously (never on a background thread the way the old,
+# purely-cosmetic D1 prompt did) so it can act on the outcome rather than
+# fire-and-forget it.
 
 
 def _macos_installer_script_path() -> Path | None:
@@ -1042,6 +1075,30 @@ def _macos_installer_script_path() -> Path | None:
 _CODESIGN = "/usr/bin/codesign"
 
 
+def _posix_script_elevation_problem(script: Path) -> str | None:
+    """The POSIX half of #428 B2's check (see
+    ``_macos_auto_enable_script_problem()`` below for the whole argument):
+    ``script`` is safe to run as root only if root is the one account that
+    can rewrite it.
+
+    Its own function because ADR 0003 decision 3 gave the module a second
+    elevation -- the companion's ``enable --for-user`` -- which needs
+    exactly this and, on Linux, nothing else: there is no bundle signature
+    to check, and the script a Linux install elevates is the .deb's own
+    root-owned ``/usr/sbin/privacyfence-privilege-separation``.
+    """
+    try:
+        st = os.stat(script)
+    except OSError as exc:
+        return f"could not stat {script}: {exc}"
+    if st.st_uid != 0:
+        return f"{script} is owned by uid {st.st_uid}, not root"
+    mode = stat.S_IMODE(st.st_mode)
+    if mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return f"{script} is group- or world-writable (mode {mode:04o})"
+    return None
+
+
 def _macos_auto_enable_script_problem(script: Path) -> str | None:
     """#428 B2: whether ``script`` is safe to run as root via the admin
     prompt ``maybe_auto_enable_macos()`` is about to trigger.
@@ -1068,15 +1125,9 @@ def _macos_auto_enable_script_problem(script: Path) -> str | None:
     this sits directly in front of an elevation prompt and must never turn a
     transient error into one that runs anyway.
     """
-    try:
-        st = os.stat(script)
-    except OSError as exc:
-        return f"could not stat {script}: {exc}"
-    if st.st_uid != 0:
-        return f"{script} is owned by uid {st.st_uid}, not root"
-    mode = stat.S_IMODE(st.st_mode)
-    if mode & (stat.S_IWGRP | stat.S_IWOTH):
-        return f"{script} is group- or world-writable (mode {mode:04o})"
+    problem = _posix_script_elevation_problem(script)
+    if problem is not None:
+        return problem
 
     from . import paths
 
@@ -1106,34 +1157,30 @@ def _applescript_quoted(text: str) -> str:
 
 
 def maybe_auto_enable_macos() -> None:
-    """#428 D1 (4.1): on an unseparated macOS install, ask once -- via the
-    standard macOS admin-password dialog -- to run
+    """#428 D1 (4.1) / ADR 0003 decision 6: on an unseparated macOS install,
+    ask -- via the standard macOS admin-password dialog -- to run
     ``scripts/macos_privilege_separation.sh enable`` on this human's behalf.
 
-    Called from ``daemon_main.main()``, after ``check_runtime_identity()``
-    and only on the path that starts the persistent daemon. A no-op on every
-    other platform, on an already-separated install, and when the script
-    this needs isn't packaged into the running app (a test process, or a
-    source checkout run without ``scripts/`` next to it). Also a no-op --
-    logged, not raised -- when ``_macos_auto_enable_script_problem()`` finds
-    the resolved script is not something this prompt should run as root; see
-    that function for why (#428 B2). That check never passes for a source
-    checkout, which is deliberate: this prompt only ever runs a script the
-    installer itself shipped.
+    Called from ``enforce_separation()`` below, synchronously: decision 6's
+    gate has to know whether this took before it decides to refuse to serve,
+    which a fire-and-forget background thread cannot answer. A no-op on
+    every other platform, on an already-separated install, and when the
+    script this needs isn't packaged into the running app (a test process,
+    or a source checkout run without ``scripts/`` next to it). Also a no-op
+    -- logged, not raised -- when ``_macos_auto_enable_script_problem()``
+    finds the resolved script is not something this prompt should run as
+    root; see that function for why (#428 B2). That check never passes for a
+    source checkout, which is deliberate: this prompt only ever runs a
+    script the installer itself shipped.
 
-    Fires at most once per install: a marker file next to the (still
-    unseparated) data directory records the attempt regardless of whether
-    the human approves the prompt or cancels it, so a decline is respected
-    rather than repeated at the next daemon start. There is no UI to ask
-    again short of running the script by hand or deleting that marker --
-    same as every other platform, where opting in has only ever been that
-    one manual command.
+    Asked again on every start that finds the install still unseparated --
+    decision 6 retired the one-shot ``AUTO_ENABLE_ATTEMPTED_MARKER_NAME``
+    marker this used to write, because under this ADR a decline is not a
+    configuration, it is an unfinished install.
 
-    Runs the elevation prompt on a background thread so daemon startup never
-    blocks on a human answering (or ignoring) a password dialog, and treats
-    every failure as non-fatal: this is a convenience layered on top of the
-    opt-in path, never a replacement for it, and it must never take the
-    daemon down with it.
+    Every failure is non-fatal and logged rather than raised: the caller,
+    ``enforce_separation()``, is what turns "still unseparated after this"
+    into a refusal -- this function only ever attempts.
     """
     if current_platform() != "darwin":
         return
@@ -1146,25 +1193,7 @@ def maybe_auto_enable_macos() -> None:
     if problem is not None:
         logger.warning("skipping automatic privilege-separation enable: %s", problem)
         return
-
-    from . import paths
-
-    marker = paths.data_dir() / AUTO_ENABLE_ATTEMPTED_MARKER_NAME
-    if marker.exists():
-        return
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("attempted\n", encoding="utf-8")
-    except OSError:
-        logger.warning("could not write %s -- skipping the auto-enable prompt this run", marker, exc_info=True)
-        return
-
-    threading.Thread(
-        target=_run_auto_enable_macos,
-        args=(script,),
-        name="privilege-separation-auto-enable",
-        daemon=True,
-    ).start()
+    _run_auto_enable_macos(script)
 
 
 
@@ -1194,4 +1223,506 @@ def _run_auto_enable_macos(script: Path) -> None:
         logger.info("automatic privilege-separation enable did not complete: %s", result.stderr.strip())
         return
     reset_cache()
-    logger.info("privilege separation enabled automatically (#428 D1) -- restart the daemon to pick it up")
+    logger.info("privilege separation enabled automatically (#428 D1 / ADR 0003 decision 6)")
+
+
+# ── ADR 0003 decision 6: a packaged daemon that finds itself unseparated ────
+# does not serve ──────────────────────────────────────────────────────────────
+#
+# Decisions 2-5 cover the installs we ship: a .pkg, a Windows installer run
+# and a .deb postinst that each separate at install time. This is the
+# backstop for the installs that exist anyway -- a pre-4.2 DMG install
+# upgrading in place, a restored backup, a hand-copied .app, an install where
+# `disable` was run and forgotten. Called from daemon_main.main(), after
+# check_runtime_identity() and before the daemon opens /mcp or the approvals
+# UI to anything.
+#
+# Deliberately scoped to `paths.is_bundled()` -- a *packaged* build -- and
+# nothing else. That is also, by construction, "local mode and nothing else":
+# every packaged PrivacyFence build is one of the three desktop installers
+# this ADR's decisions 2/4/5 cover, and org mode is never shipped that way
+# (ADR 0002's "Out of scope" -- its daemon runs somewhere the agent has no
+# access at all, deployed from the wheel/sdist, see decision 7). A source
+# checkout or a `pip install` -- whether that is local-mode development or a
+# real org-mode deployment -- is unaffected here; decision 7's "say what they
+# are" obligation is met instead by step_up_config.py refusing
+# `require_passkey` on an unseparated local-mode install (the one place a
+# non-packaged build could otherwise claim a guarantee it does not hold).
+DEV_ALLOW_UNSEPARATED_ENV = "PRIVACYFENCE_DEV_ALLOW_UNSEPARATED"
+
+
+def dev_allows_unseparated() -> bool:
+    """The escape hatch decision 7 names for the developer path -- "a
+    sibling of ``PRIVACYFENCE_DEV_ALLOW_INSECURE_IDP``" (org_identity.py's
+    ``_dev_allows_insecure_idp()``, same spelling, same reasoning: never set
+    in a real deployment). Consulted by ``step_up_config.py`` when a
+    non-packaged install's ``config/settings.yaml`` asks for
+    ``require_passkey`` without being separated -- see that module's
+    ``from_local_config()``. ``enforce_separation()`` below does *not*
+    consult this: decision 6's refusal is unconditional on a packaged build,
+    with no developer override, because that is the one case where "an
+    install lying about its own guarantee" is a real shipped product rather
+    than a checkout somebody is actively working on."""
+    return os.environ.get(DEV_ALLOW_UNSEPARATED_ENV, "") not in ("", "0", "false", "False")
+
+
+def _windows_full_enable_argv(script: Path) -> list[str]:
+    """The elevated invocation of the *whole* ``enable`` (both halves) on
+    Windows -- ``enforce_separation()``'s own attempt, run when a packaged
+    build finds itself unseparated at all.
+
+    No ``-Auto`` here: unlike the POSIX scripts, ``windows_privilege_
+    separation.ps1`` has no such flag, and needs none -- UAC's elevation
+    prompt already runs as a real interactive session (unlike ``pkexec``, it
+    is never headless), so ``enable`` alone already resolves the current
+    user as the owner and completes both halves in one call with a real
+    (non-``--auto``) exit code. See ``PlatformLayout.enable_command`` for
+    the same command spelled out for a human to type by hand.
+    """
+    powershell = str(_windows_system32("WindowsPowerShell\\v1.0\\powershell.exe"))
+    inner = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "enable"]
+    arguments = ", ".join(_powershell_quoted(part) for part in inner)
+    return [
+        powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+        f"Start-Process -FilePath {_powershell_quoted(powershell)} -Verb RunAs -Wait "
+        f"-ArgumentList {arguments}",
+    ]
+
+
+def _run_full_auto_enable_non_macos() -> None:
+    """The Windows/Linux siblings of ``maybe_auto_enable_macos()`` --
+    dispatched from ``enforce_separation()`` only, never from a install path
+    that already knows its own owner (the Windows installer and the .deb's
+    postinst both call the provisioning script directly, elevated by their
+    own install-time context; this is specifically the backstop for an
+    install that has neither).
+
+    Best-effort and non-fatal like every other elevation attempt in this
+    module: every failure is logged, and the caller's own re-check of
+    ``is_enabled()`` -- not this function's return -- is what decides
+    whether to refuse.
+    """
+    platform = current_platform()
+    script = installer_script_path()
+    if script is None:
+        logger.warning("no privilege-separation provisioning script found for %s -- nothing to run", platform)
+        return
+    problem = _elevation_script_problem(script)
+    if problem is not None:
+        logger.warning("skipping automatic privilege-separation enable: %s", problem)
+        return
+    if platform == "win32":
+        argv = _windows_full_enable_argv(script)
+    else:
+        pkexec = shutil.which("pkexec")
+        if pkexec is None:
+            logger.warning(
+                "no pkexec on this system -- cannot prompt for a password to enable privilege "
+                "separation automatically. Run: sudo %s enable", script,
+            )
+            return
+        argv = [pkexec, str(script), "enable", "--auto"]
+    try:
+        result = subprocess.run(  # nosec B603  # fixed argv built above, no shell, quoted per layer
+            argv, capture_output=True, text=True, timeout=300, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        logger.warning("automatic privilege-separation enable did not run", exc_info=True)
+        return
+    if result.returncode != 0:
+        # A declined UAC/polkit prompt lands here and is an expected outcome,
+        # not a bug -- the same reading `_run_auto_enable_macos()` takes of
+        # osascript's own nonzero exit.
+        logger.info("automatic privilege-separation enable did not complete: %s", result.stderr.strip())
+        return
+    reset_cache()
+    logger.info("privilege separation enabled automatically (ADR 0003 decision 6)")
+
+
+def enforce_separation() -> None:
+    """ADR 0003 decision 6: a packaged local-mode daemon that finds itself
+    unseparated does not serve.
+
+    A no-op on anything but a packaged build (``paths.is_bundled()`` --
+    ``sys.frozen``/``_MEIPASS``, see this module's own docstring on why that
+    is, in practice, "local mode and nothing else") and on an
+    already-separated install. Otherwise: attempts this platform's
+    provisioning -- ``maybe_auto_enable_macos()`` on macOS, the Windows/Linux
+    equivalent above everywhere else -- and, if the install is *still*
+    unseparated afterwards, raises ``PrivilegeSeparationError`` naming the
+    one command that fixes it, the same fail-closed posture
+    ``check_runtime_identity()`` already takes and for the same reason: the
+    alternative failure is silent, and it does not degrade the product
+    visibly, it invalidates a guarantee the UI is still making.
+
+    No developer override here -- see ``dev_allows_unseparated()``'s own
+    docstring for why decision 6's refusal is unconditional on a packaged
+    build.
+    """
+    from . import paths
+
+    if not paths.is_bundled():
+        return
+    if is_enabled():
+        return
+    layout = platform_layout()
+    if layout is None:  # pragma: no cover -- SUPPORTED_PLATFORMS gates every packaged build
+        return
+    if current_platform() == "darwin":
+        maybe_auto_enable_macos()
+    else:
+        _run_full_auto_enable_non_macos()
+    if is_enabled():
+        return
+    raise PrivilegeSeparationError(
+        "This is a packaged PrivacyFence install, and it is not privilege-separated (#428 Phase "
+        "4 / ADR 0003 decision 6). The agent and the daemon would run under the same account, so "
+        "a local process could mint its own session and approve its own request -- the guarantee "
+        "the approvals UI claims would not actually hold. Refusing to start: no /mcp, no "
+        f"approvals. Run '{layout.enable_command}' to fix this, then restart PrivacyFence."
+    )
+
+
+def dev_unseparated_notice() -> str | None:
+    """ADR 0003 decision 7's disclosure: ``None`` unless this is a
+    non-packaged build running unseparated *with* the developer override set
+    (``dev_allows_unseparated()``) -- the one case that is actually running,
+    not refused, while still not privilege-separated. ``None`` on a
+    packaged build (which either separated or already refused to start --
+    ``enforce_separation()`` above), on an already-separated install, and on
+    a non-packaged build that hasn't set the override (nothing here claims
+    protection it doesn't have, so there's nothing to disclose beyond the
+    ordinary "step-up isn't on" notice ``step_up_config.off_notice()``
+    already gives).
+
+    Consulted from two places so neither can drift from the other: daemon_
+    main.py logs this at startup, and web/routes_security.py's local-mode
+    /security page shows it -- "says on /security and in the startup log
+    that this install's approvals are not protected against the client
+    they govern" (ADR 0003 decision 7's own wording).
+    """
+    from . import paths
+
+    if paths.is_bundled():
+        return None
+    if is_enabled():
+        return None
+    if not dev_allows_unseparated():
+        return None
+    return (
+        f"{DEV_ALLOW_UNSEPARATED_ENV} is set on this non-packaged install, which is not "
+        "privilege-separated -- approvals are NOT protected against the AI client they govern. "
+        "Never set this in a real deployment (ADR 0003 decision 7)."
+    )
+
+
+# ── ADR 0003 decision 3: the per-user half ───────────────────────────────────
+#
+# ``enable``'s machine half provisions everything root can do alone and records
+# ``owner_user: ""`` -- the marker's spelling of "group membership pending"
+# (see ``Separation.owner_user``). What is left is one re-runnable step per
+# human: adding them to the service group, and moving whatever they had under
+# ~/.privacyfence before the install. That step is exactly what the companion
+# app is in a position to take -- it is the one PrivacyFence process that runs
+# inside a real login session, as the person whose membership is missing -- so
+# this is the mechanism it drives. See ``companion.py``'s own call site for
+# when.
+
+
+def _parse_net_localgroup(output: str) -> frozenset[str]:
+    """The member names out of ``net localgroup <name>``'s report.
+
+    ``net.exe`` prints a header, a row of dashes, one member per line and a
+    localized "the command completed successfully" footer, so everything
+    after the dashes is a member except that last line -- which is left in
+    rather than matched against a localized string. It is harmless: the only
+    thing this set is ever asked is whether a *particular* account is in it,
+    and the answer for an account named after a sentence of English prose is
+    wrong in the safe direction (no prompt).
+    """
+    members: set[str] = set()
+    after_separator = False
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped and set(stripped) == {"-"}:
+            after_separator = True
+            continue
+        if after_separator and stripped:
+            # ``DOMAIN\alice`` and ``alice`` are the two spellings net.exe
+            # uses; ``current_user_name()`` answers with the account half.
+            members.add(stripped.rsplit("\\", 1)[-1])
+    return frozenset(members)
+
+
+def _windows_system32(name: str) -> Path:
+    """An absolute path to one of Windows' own tools, for the same bandit
+    B607 reason ``_OSASCRIPT`` is absolute: a partial executable name is
+    resolved against a PATH this process does not control."""
+    return Path(os.environ.get("SystemRoot", "C:\\Windows")) / "System32" / name
+
+
+def _windows_local_group_members(group: str) -> frozenset[str] | None:
+    """``group``'s recorded members, read with ``net localgroup``.
+
+    Not pywin32: ``windows_acl`` needs it for security descriptors and this
+    does not, and a build without it still has to be able to answer this --
+    the alternative is a companion that prompts for a password at every
+    start on exactly the installs where it cannot check first.
+    """
+    try:
+        result = subprocess.run(  # nosec B603  # fixed argv, no shell; `group` is a module constant
+            [str(_windows_system32("net.exe")), "localgroup", group],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        logger.debug("Could not read the %s local group", group, exc_info=True)
+        return None
+    if result.returncode != 0:
+        return None
+    return _parse_net_localgroup(result.stdout)
+
+
+def service_group_members(group: str) -> frozenset[str] | None:
+    """Who is *recorded* as a member of ``group``, or None where that cannot
+    be read at all.
+
+    Recorded rather than live on purpose. Group membership is evaluated when
+    a session is created on all three platforms, so a session that predates
+    ``enable`` does not carry it and never will until the human logs out and
+    back in -- reading this process's own token (``os.getgroups()``,
+    ``whoami /groups``) would therefore have the companion re-run an
+    elevated command at every start until they did, prompting for a password
+    to fix something no password can fix.
+
+    Only supplementary membership is read, because that is the only kind the
+    installers ever grant: ``usermod -aG``, ``dseditgroup -o edit -a`` and
+    ``Add-LocalGroupMember`` all add a human to a system group that is
+    nobody's primary.
+    """
+    if current_platform() == "win32":
+        return _windows_local_group_members(group)
+    import grp
+
+    try:
+        return frozenset(grp.getgrnam(group).gr_mem)
+    except KeyError:
+        # No such group: the machine half creates it, so this is an install
+        # whose marker outlived its provisioning (a restored backup, a
+        # half-removed install). Not something a per-user re-run can fix.
+        return None
+
+
+def owner_membership_pending() -> bool:
+    """Whether this install is separated but the account running this process
+    is still outside its service group -- decision 3's "pending" state.
+
+    False on an unseparated install: there is no group to be outside of, and
+    an install with no separation at all is a different problem with a
+    different answer (ADR 0003 decision 6's daemon-side gate).
+    """
+    state = separation()
+    if state is None:
+        return False
+    members = service_group_members(state.service_group)
+    if members is None:
+        # The group could not be read. The marker is the one thing every
+        # platform writes the same way, so fall back to it: an empty
+        # owner_user is pending by construction, and a filled-in one means
+        # *some* human was added -- guessing it was not this one, on a
+        # platform we just failed to interrogate, would prompt at every start.
+        return not state.owner_user
+    user = current_user_name()
+    return not any(accounts_equal(member, user) for member in members)
+
+
+#: Where ``scripts/build_deb.sh`` installs the Linux provisioning script, and
+#: the name ``PLATFORM_LAYOUTS["linux"].status_command`` quotes. Its own
+#: constant rather than a literal inside ``installer_script_path()`` so a test
+#: can point it somewhere that exists -- on a runner of any OS, which a
+#: hardcoded POSIX path cannot be.
+LINUX_PACKAGED_INSTALLER = Path("/usr/sbin/privacyfence-privilege-separation")
+
+
+def _checkout_script_path(name: str) -> Path:
+    return Path(__file__).resolve().parents[2] / "scripts" / name
+
+
+def _first_existing(*candidates: Path) -> Path | None:
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def installer_script_path() -> Path | None:
+    """This platform's provisioning script, for *this* running process --
+    the packaged copy each installer lays down, or the repo-relative one a
+    source checkout has. None when neither is there.
+
+    The packaged copy is the one that matters: ``_elevation_script_problem()``
+    refuses a checkout below, deliberately, so that the only thing this
+    module ever runs as root is a script an installer shipped.
+    """
+    platform = current_platform()
+    if platform == "darwin":
+        return _macos_installer_script_path()
+    if platform == "linux":
+        return _first_existing(
+            LINUX_PACKAGED_INSTALLER,
+            _checkout_script_path("linux_privilege_separation.sh"),
+        )
+    if platform == "win32":
+        # ``installer/privacyfence.iss`` renames it on the way into {app},
+        # which is the directory a frozen build's own executable sits in.
+        return _first_existing(
+            Path(sys.executable).parent / "privilege-separation.ps1",
+            _checkout_script_path("windows_privilege_separation.ps1"),
+        )
+    return None  # pragma: no cover -- SUPPORTED_PLATFORMS gates every caller
+
+
+def _windows_script_elevation_problem(script: Path) -> str | None:
+    """#428 B2's check, in the one idiom Windows has for it. There is no uid
+    to compare, so the question is the one ``windows_acl.image_problems()``
+    asks of the daemon's own image and for the same reason: whether anything
+    outside SYSTEM and Administrators can rewrite what is about to run
+    elevated."""
+    from . import windows_acl
+
+    aces = windows_acl.read_dacl(script)
+    if aces is None:
+        return f"could not read {script}'s ACL"
+    writable = sorted(
+        {ace.trustee for ace in aces if ace.grants_write() and not windows_acl.is_trusted(ace.trustee)}
+    )
+    if writable:
+        return f"{script} is writable by {', '.join(writable)}"
+    return None
+
+
+def _elevation_script_problem(script: Path) -> str | None:
+    platform = current_platform()
+    if platform == "darwin":
+        return _macos_auto_enable_script_problem(script)
+    if platform == "win32":
+        return _windows_script_elevation_problem(script)
+    return _posix_script_elevation_problem(script)
+
+
+def _powershell_quoted(text: str) -> str:
+    """Escape ``text`` for a single-quoted PowerShell string literal, where
+    doubling the quote is the whole of the escaping rule and nothing else --
+    backslashes included -- means anything."""
+    return "'" + text.replace("'", "''") + "'"
+
+
+def per_user_command_text(script: Path, user: str) -> str:
+    """The one command a human would type to do this by hand -- what gets
+    logged wherever this module cannot ask for a password itself."""
+    if current_platform() == "win32":
+        return (
+            f'powershell -ExecutionPolicy Bypass -File "{script}" enable -ForUser {user}'
+            "   (from an elevated PowerShell)"
+        )
+    return f"sudo {shlex.quote(str(script))} enable --for-user {shlex.quote(user)}"
+
+
+def _per_user_argv(script: Path, user: str) -> list[str] | None:
+    """The elevated invocation of ``enable --for-user``, or None where this
+    platform has no way to ask for the password from a login session.
+
+    Three different mechanisms because the platforms genuinely differ, not
+    because three felt thorough: macOS has one system dialog for exactly
+    this and ``maybe_auto_enable_macos()`` already uses it, Windows has UAC
+    and nothing else, and Linux has whatever the desktop installed -- which
+    is usually polkit and is sometimes nothing at all. The None case is that
+    last one, and it is the reason this returns rather than guessing: a
+    ``sudo`` with no askpass in a systemd-started process hangs on a
+    password prompt nobody can see.
+    """
+    platform = current_platform()
+    if platform == "darwin":
+        # Deliberately not ``--auto``, which ``maybe_auto_enable_macos()``
+        # does pass: that mode exits 0 on every failure path, which is right
+        # for a prompt nobody asked for and wrong here, where a failure has
+        # to reach the caller rather than be reported to the human as a
+        # completed step they should now log out for.
+        command = f"{shlex.quote(str(script))} enable --for-user {shlex.quote(user)}"
+        return [
+            _OSASCRIPT, "-e",
+            f"do shell script {_applescript_quoted(command)} with administrator privileges",
+        ]
+    if platform == "win32":
+        powershell = str(_windows_system32("WindowsPowerShell\\v1.0\\powershell.exe"))
+        inner = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "enable", "-ForUser", user]
+        # -Verb RunAs is UAC: it re-launches elevated, which is why this
+        # cannot simply be the inner argv. -Wait so the return code below is
+        # the script's own rather than the launcher's.
+        arguments = ", ".join(_powershell_quoted(part) for part in inner)
+        return [
+            powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+            f"Start-Process -FilePath {_powershell_quoted(powershell)} -Verb RunAs -Wait "
+            f"-ArgumentList {arguments}",
+        ]
+    pkexec = shutil.which("pkexec")
+    if pkexec is None:
+        return None
+    return [pkexec, str(script), "enable", "--for-user", user]
+
+
+def complete_per_user_separation(user: str | None = None) -> bool:
+    """Run this platform's ``enable --for-user`` elevated, for ``user``
+    (default: whoever is running this process), and report whether it took.
+
+    Every failure is logged rather than raised, and every one of them names
+    the command that would have done it by hand: this runs from the
+    companion's own start, where there is nothing useful to propagate an
+    exception to and where the worst outcome is a person who never finds out
+    their install is a group membership short of working.
+    """
+    state = separation()
+    if state is None:
+        return False
+    account = user or current_user_name()
+    if not account:  # pragma: no cover -- current_user_name() falls back to the uid
+        return False
+    script = installer_script_path()
+    if script is None:
+        logger.warning(
+            "%s is not in the %s group and this install has no provisioning script to run "
+            "-- see docs/platform-support.md.", account, state.service_group,
+        )
+        return False
+    problem = _elevation_script_problem(script)
+    if problem is not None:
+        logger.warning(
+            "not completing privilege separation for %s: %s. Run it by hand instead: %s",
+            account, problem, per_user_command_text(script, account),
+        )
+        return False
+    argv = _per_user_argv(script, account)
+    if argv is None:
+        logger.warning(
+            "%s is not in the %s group yet and there is no way to ask for a password from "
+            "here (no pkexec). Run: %s",
+            account, state.service_group, per_user_command_text(script, account),
+        )
+        return False
+    try:
+        result = subprocess.run(  # nosec B603  # fixed argv built above, no shell, quoted per layer
+            argv, capture_output=True, text=True, timeout=300, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        logger.warning("could not complete privilege separation for %s", account, exc_info=True)
+        return False
+    if result.returncode != 0:
+        # A declined password dialog lands here and is an expected outcome,
+        # not a bug -- the same reading `_run_auto_enable_macos()` takes of
+        # osascript's own nonzero exit.
+        logger.info(
+            "privilege separation was not completed for %s: %s. Run it by hand: %s",
+            account, result.stderr.strip(), per_user_command_text(script, account),
+        )
+        return False
+    reset_cache()
+    return True

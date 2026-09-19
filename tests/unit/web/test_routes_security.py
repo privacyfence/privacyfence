@@ -56,7 +56,7 @@ def _app(*, step_up=None, sessions=None):
     return app, sessions
 
 
-def _local_app(*, step_up=None, sessions=None):
+def _local_app(*, step_up=None, sessions=None, dev_unseparated_notice=None):
     """local mode's own wiring -- session_auth's three functions bound to a
     ``LocalSessionStore``, always resolving to ``LOCAL_PRINCIPAL``, exactly
     what web/server.py's local branch of ``build_app`` passes."""
@@ -74,6 +74,7 @@ def _local_app(*, step_up=None, sessions=None):
         # Local mode has no /connect route (that's routes_connect.py's
         # org-mode-only surface) -- matches web/server.py's actual wiring.
         back_link=("/settings/connectors", "Back to Connectors"),
+        dev_unseparated_notice=dev_unseparated_notice,
     )
     app = Starlette(routes=routes)
     return app, sessions
@@ -209,6 +210,25 @@ class TestSecurityPage:
         assert 'href="/settings/connectors"' in r.text
         assert 'href="/connect"' not in r.text
         assert 'class="pf-shell-nav"' not in r.text
+
+    def test_no_dev_unseparated_notice_by_default(self):
+        app, sessions = _local_app()
+        client = _client(app)
+        _signed_in_local(client, sessions)
+        r = client.get("/security")
+        assert "DEV_ALLOW_UNSEPARATED" not in r.text
+
+    def test_shows_the_dev_unseparated_notice_when_given_one(self):
+        # ADR 0003 decision 7's /security half -- daemon_main.py's startup
+        # log carries the same fact, see privilege_separation.
+        # dev_unseparated_notice()'s own docstring.
+        app, sessions = _local_app(
+            dev_unseparated_notice="PRIVACYFENCE_DEV_ALLOW_UNSEPARATED is set -- not protected",
+        )
+        client = _client(app)
+        _signed_in_local(client, sessions)
+        r = client.get("/security")
+        assert "not protected" in r.text
 
 
 class TestRegisterOptions:
