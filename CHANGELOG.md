@@ -583,6 +583,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Org mode's top navigation bar stays put across every page, not just `/approvals`.**
+  `/connect`, `/security`, and `/settings` (and `/settings/privacy`) were each their own bare
+  document, so following a Connect/Reconnect button, a passkey prompt, or a settings link off
+  `/approvals` dropped the header/nav entirely, leaving only a plain centred link or two at the
+  bottom of the page as a way back. All four now share `web_shell.wrap()`'s persistent
+  header/nav (`web_shell.ORG_NAV_ITEMS`), and the old footer links back to Approvals/
+  Connections/Passkeys/Settings are gone — the nav is the one way back now. Local mode's
+  `/security` is unaffected: it has no web_shell-wrapped page of its own to be consistent with,
+  so it keeps its small, unwrapped document and its own "Back to Connectors" footer link.
 - **Approval cards and confirmation dialogs are readable on a phone.** Neither document declared a
   `<meta name="viewport">`, so iOS and Android laid it out in their default ~980px viewport and
   scaled the result down to fit: 13px body text rendered near 5px, Deny and Allow once were roughly

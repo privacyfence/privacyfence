@@ -117,6 +117,26 @@ class TestConnectPage:
         assert 'href="/security"' in r.text
         assert 'href="/settings"' in r.text
 
+    def test_the_way_back_is_the_persistent_shell_nav_not_a_footer(self):
+        # web_shell.wrap() (web_shell.ORG_NAV_ITEMS) replaced the old
+        # centred one-line footer that only ever rendered here -- the same
+        # header/nav now carries across /approvals, /connect, /security and
+        # /settings, so it survives navigating into any of them rather than
+        # disappearing the moment you leave /approvals.
+        app, sessions, _registry = _app()
+        session_id, _principal = _signed_in(sessions)
+        r = _client(app).get("/connect", cookies={org_session.SESSION_COOKIE: session_id})
+        assert 'class="pf-shell-nav-item active" href="/connect"' in r.text
+        for href in ("/approvals", "/security", "/settings"):
+            assert f'class="pf-shell-nav-item" href="{href}"' in r.text
+        assert '<p style="text-align:center">' not in r.text
+
+    def test_signed_in_principal_is_shown_in_the_shell_header(self):
+        app, sessions, _registry = _app()
+        session_id, principal = _signed_in(sessions, "alice")
+        r = _client(app).get("/connect", cookies={org_session.SESSION_COOKIE: session_id})
+        assert f'<div class="pf-shell-principal">{principal.email}</div>' in r.text
+
 
 # ---------------------------------------------------------------------------- #
 # /oauth/start/{service}
