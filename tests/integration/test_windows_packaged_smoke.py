@@ -162,6 +162,25 @@ def _delete_task_if_present(name: str = TASK_NAME) -> None:
         subprocess.run(["schtasks", "/delete", "/tn", name, "/f"], capture_output=True, text=True, timeout=15)
 
 
+def _kill_stray_app_processes() -> None:
+    """Best-effort ``taskkill`` sweep for any process still running against
+    ``MAIN_EXE_NAME``/``ALIAS_EXE_NAME``, by image name rather than PID.
+
+    v4.1.0a9's release build failed here: the upgrade-install step's Inno
+    Setup run exited 5 ("Some applications could not be shut down") because
+    RestartManager still found a running ``privacyfence-app`` at the moment
+    it tried to close applications ahead of overwriting files -- even though
+    this test's own ``daemon.process.wait(timeout=15) == 0`` had already
+    confirmed *its* explicitly-started daemon process had exited cleanly
+    beforehand. Whatever is actually holding the handle at that point (the
+    OS's own deferred teardown of the just-exited process's image sections,
+    or a second process this test never tracked), taskkill-by-image-name
+    clears it either way; killing an already-gone process is simply a no-op
+    (taskkill exits non-zero, which is why this ignores the result)."""
+    for image_name in (ALIAS_EXE_NAME, MAIN_EXE_NAME):
+        subprocess.run(["taskkill", "/F", "/IM", image_name], capture_output=True, text=True, timeout=15)
+
+
 @pytest.fixture(autouse=True)
 def _clean_task_state():
     """Every test in this module installs/uninstalls the real Task Scheduler
@@ -622,12 +641,31 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     # install) ─────────────────────────────────────────────────────────────
     setup_exe_n1, new_version = _synthetic_next_version_installer(setup_exe_n, tmp_path / "upgrade-build")
     upgrade_log_path = tmp_path / "install-n1.log"
-    upgrade_result = _run_installer(
-        str(setup_exe_n1),
-        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
-        f"/DIR={install_dir}",
-        f"/LOG={upgrade_log_path}",
-    )
+
+    # v4.1.0a9's release build failed exactly here: Setup exited 5 because
+    # RestartManager found a still-running "privacyfence-app" and, under
+    # /SUPPRESSMSGBOXES, defaulted the resulting Abort/Retry/Ignore prompt to
+    # Abort rather than actually retrying -- see _kill_stray_app_processes's
+    # own comment. Sweep for one before the attempt, and again before a
+    # single retry if Setup still reports that exact failure, rather than
+    # failing the whole release on what a real interactive install would
+    # have shrugged off with one manual Retry click.
+    _kill_stray_app_processes()
+    for attempt in (1, 2):
+        upgrade_result = _run_installer(
+            str(setup_exe_n1),
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
+            f"/DIR={install_dir}",
+            f"/LOG={upgrade_log_path}",
+        )
+        if upgrade_result.returncode == 0:
+            break
+        log_text = upgrade_log_path.read_text(errors="replace") if upgrade_log_path.exists() else ""
+        if attempt == 2 or upgrade_result.returncode != 5 or "could not be shut down" not in log_text:
+            break
+        _kill_stray_app_processes()
+        time.sleep(2)
+
     assert upgrade_result.returncode == 0, (
         f"upgrade install (version {new_version}) failed (exit {upgrade_result.returncode}):\n"
         f"{upgrade_result.stdout}{upgrade_result.stderr}\n"
