@@ -222,7 +222,7 @@ async def test_shim_proxies_a_real_initialize_and_tool_call_over_mcp(
             result = await session.call_tool(
                 "contract_test_echo", {"message": "hello through the shim"}
             )
-            assert result.isError is not True
-            assert result.structuredContent == {"echoed": {"message": "hello through the shim"}}
+            assert result.is_error is not True
+            assert result.structured_content == {"echoed": {"message": "hello through the shim"}}
 
     assert running_mcp_server.calls == [("contract_test_echo", {"message": "hello through the shim"})]

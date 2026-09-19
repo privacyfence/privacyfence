@@ -26,7 +26,7 @@ from __future__ import annotations
 import contextlib
 import json
 
-import httpx
+import httpx2
 import pytest
 from mcp import ClientSession, types
 from mcp.client.streamable_http import streamable_http_client
@@ -127,38 +127,38 @@ class TestToMcpTool:
         read_tool = mcp_tools.to_mcp_tool(ToolSpec(name="r", description="d", read_only=True))
         write_tool = mcp_tools.to_mcp_tool(ToolSpec(name="w", description="d", read_only=False))
         for tool in (read_tool, write_tool):
-            assert tool.annotations.readOnlyHint is True
-            assert tool.annotations.destructiveHint is False
-            assert tool.annotations.idempotentHint is True
+            assert tool.annotations.read_only_hint is True
+            assert tool.annotations.destructive_hint is False
+            assert tool.annotations.idempotent_hint is True
 
     def test_input_schema_matches_tool_input_schema_directly(self):
         spec = ToolSpec(name="t", description="d", params=[ToolParam("x", "int", required=True)])
         tool = mcp_tools.to_mcp_tool(spec)
-        assert tool.inputSchema == mcp_tools.tool_input_schema(spec)
+        assert tool.input_schema == mcp_tools.tool_input_schema(spec)
 
 
 class TestCallToolResult:
     def test_none_becomes_empty_content(self):
         result = mcp_tools.to_call_tool_result(None)
         assert result.content == []
-        assert result.structuredContent is None
+        assert result.structured_content is None
 
     def test_a_plain_string_becomes_text_content_with_no_structured_content(self):
         result = mcp_tools.to_call_tool_result("hello")
         assert len(result.content) == 1
         assert result.content[0].text == "hello"
-        assert result.structuredContent is None
+        assert result.structured_content is None
 
     def test_a_dict_becomes_both_text_and_structured_content(self):
         value = {"a": 1, "b": "two"}
         result = mcp_tools.to_call_tool_result(value)
         assert json.loads(result.content[0].text) == value
-        assert result.structuredContent == value
+        assert result.structured_content == value
 
     def test_a_non_dict_json_value_becomes_text_only_no_structured_content(self):
         result = mcp_tools.to_call_tool_result([1, 2, 3])
         assert json.loads(result.content[0].text) == [1, 2, 3]
-        assert result.structuredContent is None
+        assert result.structured_content is None
 
     def test_a_non_json_native_value_is_rendered_via_str_fallback(self):
         # json.dumps(..., default=str) -- anything that isn't natively
@@ -170,7 +170,7 @@ class TestCallToolResult:
 
 def test_error_result_sets_is_error_and_carries_the_message():
     result = mcp_tools.error_result("boom")
-    assert result.isError is True
+    assert result.is_error is True
     assert result.content[0].text == "boom"
 
 
@@ -197,21 +197,21 @@ class TestMetaToolManifest:
         # status poll on approvals another gated call already created (and
         # already carries its own reason) -- there's no new action or
         # disclosure here for a reason to explain.
-        assert "reason" in tool.inputSchema["properties"]
-        assert "reason" in tool.inputSchema.get("required", [])
+        assert "reason" in tool.input_schema["properties"]
+        assert "reason" in tool.input_schema.get("required", [])
 
     def test_propose_rule_change_requires_target_and_operation_as_enums(self):
-        schema = mcp_tools.PROPOSE_RULE_CHANGE_TOOL.inputSchema
+        schema = mcp_tools.PROPOSE_RULE_CHANGE_TOOL.input_schema
         assert schema["properties"]["target"]["enum"] == ["rule", "grant"]
         assert schema["properties"]["operation"]["enum"] == ["add", "update", "remove"]
         assert set(schema["required"]) == {"target", "operation", "reason"}
 
     def test_check_policy_requires_connector_tool_and_reason(self):
-        schema = mcp_tools.CHECK_POLICY_TOOL.inputSchema
+        schema = mcp_tools.CHECK_POLICY_TOOL.input_schema
         assert set(schema["required"]) == {"connector", "tool", "reason"}
 
     def test_await_approval_requires_only_approval_ids(self):
-        schema = mcp_tools.AWAIT_APPROVAL_TOOL.inputSchema
+        schema = mcp_tools.AWAIT_APPROVAL_TOOL.input_schema
         assert schema["required"] == ["approval_ids"]
         assert schema["properties"]["approval_ids"]["type"] == "array"
 
@@ -231,13 +231,43 @@ class TestMetaToolManifest:
         # issue #396 Phase 2: the one meta-tool guaranteed to exist even
         # with zero connectors -- no params of its own beyond the shared
         # audited "reason", same posture as list_rules.
-        schema = mcp_tools.PRIVACYFENCE_STATUS_TOOL.inputSchema
+        schema = mcp_tools.PRIVACYFENCE_STATUS_TOOL.input_schema
         assert schema["required"] == ["reason"]
         assert set(schema["properties"]) == {"reason"}
 
     def test_status_tool_is_in_the_meta_tool_manifest(self):
         assert mcp_tools.PRIVACYFENCE_STATUS_TOOL in mcp_tools.META_TOOLS
         assert mcp_tools.PRIVACYFENCE_STATUS_TOOL.name in mcp_tools.META_TOOL_NAMES
+
+    def test_check_policy_documents_matched_rule_id_in_its_description(self):
+        # P7: check_policy's contract gained a field: no schema to assert against (it's part of
+        # the free-form result dict), so the description is the one place this is documented.
+        assert "matched_rule_id" in mcp_tools.CHECK_POLICY_TOOL.description
+
+    def test_list_policy_and_propose_policy_change_are_in_the_meta_tool_manifest(self):
+        assert mcp_tools.LIST_POLICY_TOOL in mcp_tools.META_TOOLS
+        assert mcp_tools.PROPOSE_POLICY_CHANGE_TOOL in mcp_tools.META_TOOLS
+
+    def test_propose_policy_change_requires_only_operation_and_reason(self):
+        # rule_id/group/value/verbs are each conditionally required depending on operation --
+        # gate.propose_policy_change enforces that at call time (ValueError before any popup),
+        # not the schema, the same posture propose_rule_change's own operation_key/rule_name/... vs
+        # connector/config_key/... split already takes.
+        schema = mcp_tools.PROPOSE_POLICY_CHANGE_TOOL.input_schema
+        assert schema["properties"]["operation"]["enum"] == ["add", "update", "remove"]
+        assert set(schema["required"]) == {"operation", "reason"}
+        assert schema["properties"]["value"]["type"] == "array"
+        assert schema["properties"]["verbs"]["type"] == "array"
+
+    def test_list_policy_requires_only_reason(self):
+        schema = mcp_tools.LIST_POLICY_TOOL.input_schema
+        assert schema["required"] == ["reason"]
+
+    def test_old_tool_descriptions_point_at_their_replacements(self):
+        assert "privacyfence_list_policy" in mcp_tools.LIST_RULES_TOOL.description
+        assert "DEPRECATED" in mcp_tools.LIST_RULES_TOOL.description
+        assert "privacyfence_propose_policy_change" in mcp_tools.PROPOSE_RULE_CHANGE_TOOL.description
+        assert "DEPRECATED" in mcp_tools.PROPOSE_RULE_CHANGE_TOOL.description
 
 
 # --------------------------------------------------------------------------- #
@@ -251,14 +281,14 @@ TOKEN = "mcp-tools-test-token"
 @contextlib.asynccontextmanager
 async def _connected_session(dispatcher: McpDispatcher, *, token: str = TOKEN):
     app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
-    transport = httpx.ASGITransport(app=app)
+    transport = httpx2.ASGITransport(app=app)
     async with mcp_lifespan(session_manager):
-        async with httpx.AsyncClient(
+        async with httpx2.AsyncClient(
             transport=transport, base_url="http://testserver", headers={"Authorization": f"Bearer {token}"},
         ) as http_client:
             async with streamable_http_client(
                 "http://testserver/mcp", http_client=http_client,
-            ) as (read, write, _get_session_id):
+            ) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     yield session
@@ -281,7 +311,7 @@ class TestBeginUnattendedSessionRefusedWhenDisabled:
         dispatcher = _dispatcher({})  # unattended_sessions_enabled defaults False
         async with _connected_session(dispatcher) as session:
             result = await session.call_tool("privacyfence_begin_unattended_session", {"reason": "scheduled run"})
-        assert result.isError is True
+        assert result.is_error is True
         assert "disabled" in result.content[0].text
         assert "organization config" in result.content[0].text
 
@@ -317,7 +347,7 @@ class TestProposeRuleChangeDeniedWhenUnattended:
                 "target": "rule", "operation": "add", "reason": "trust this sender",
                 "operation_key": "gmail.read_message", "rule_name": "i_am_sender",
             })
-        assert result.isError is True
+        assert result.is_error is True
         assert "unattended session" in result.content[0].text
         assert self._popup_calls == []
         assert "i_am_sender" not in self._config_path.read_text(encoding="utf-8")
@@ -331,9 +361,11 @@ class TestProposeRuleChangeDeniedWhenUnattended:
                 "target": "rule", "operation": "add", "reason": "trust this sender",
                 "operation_key": "gmail.read_message", "rule_name": "i_am_sender",
             })
-        assert result.isError is False
-        assert result.structuredContent["confirmed"] is True
-        assert self._popup_calls == ["Add auto-accept rule 'i_am_sender' to 'gmail.read_message'"]
+        assert result.is_error is False
+        assert result.structured_content["confirmed"] is True
+        # P9: propose_rule_change translates its v1-shaped request into a v2 rule and confirms
+        # with policy.describe's own sentence rendering, not the raw operation_key/rule_name.
+        assert self._popup_calls == ["Add auto-accept rule: Gmail - sender: allow read"]
 
 
 class TestStatusOverRealTransport:
@@ -350,9 +382,9 @@ class TestStatusOverRealTransport:
         async with _connected_session(dispatcher) as session:
             result = await session.call_tool("privacyfence_status", {"reason": "checking setup"})
 
-        assert result.isError is False
-        assert result.structuredContent["next_step"] == "open_privacyfence_companion"
-        assert result.structuredContent["sign_in_url"] is None
+        assert result.is_error is False
+        assert result.structured_content["next_step"] == "open_privacyfence_companion"
+        assert result.structured_content["sign_in_url"] is None
 
     async def test_the_retired_tool_is_not_callable_at_all(self):
         dispatcher = _dispatcher({})
@@ -363,16 +395,32 @@ class TestStatusOverRealTransport:
             )
 
         assert not any(t.name == "privacyfence_get_sign_in_link" for t in listed.tools)
-        assert result.isError is True
+        assert result.is_error is True
 
 
 class TestListAutoAcceptRulesDisclosureIsAudited:
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path):
+        # P9: the v1 auto_accept_rules/auto_accept_grants sections are no longer read by anything
+        # live -- privacyfence_list_auto_accept_rules is a deprecated alias of privacyfence_list_policy
+        # now, so the fixture config has to be a real v2 auto_accept: rule for it to show up at all.
+        from privacyfence.policy.store import rule_id_for
+
         init_audit_logger(str(tmp_path))
         self._audit_dir = tmp_path
         config_path = tmp_path / "settings.yaml"
-        config_path.write_text("auto_accept_rules: {gmail.read_message: [{rule: i_am_sender}]}\n", encoding="utf-8")
+        self._rule_id = rule_id_for("i_am_sender", [], ())
+        config_path.write_text(
+            "auto_accept:\n"
+            "  version: 2\n"
+            "  rules:\n"
+            f"    - id: {self._rule_id}\n"
+            "      predicate: i_am_sender\n"
+            "      value: []\n"
+            "      operations: [gmail.read_message]\n"
+            "      conditions: []\n",
+            encoding="utf-8",
+        )
         auto_accept.init_config_path(str(config_path))
 
     async def test_listing_the_rules_writes_an_audit_entry_naming_the_disclosure(self):
@@ -381,12 +429,16 @@ class TestListAutoAcceptRulesDisclosureIsAudited:
             result = await session.call_tool(
                 "privacyfence_list_auto_accept_rules", {"reason": "checking before a scheduled run"},
             )
-        assert result.isError is False
-        assert result.structuredContent["auto_accept_rules"]["gmail.read_message"] == [{"rule": "i_am_sender"}]
+        assert result.is_error is False
+        rules = result.structured_content["rules"]
+        assert len(rules) == 1
+        assert rules[0]["id"] == self._rule_id
+        assert rules[0]["operations"] == ["gmail.read_message"]
 
         entries = _read_audit_entries(self._audit_dir)
         assert len(entries) == 1
-        assert entries[0]["decision"] == "rules_listed"
+        # P9: list_rules now returns exactly what list_policy does, decision name included.
+        assert entries[0]["decision"] == "policy_listed"
         assert entries[0]["claude_reason"] == "checking before a scheduled run"
 
     async def test_every_call_gets_its_own_audit_entry_not_deduped(self):
@@ -400,3 +452,53 @@ class TestListAutoAcceptRulesDisclosureIsAudited:
             await session.call_tool("privacyfence_list_auto_accept_rules", {"reason": "second check"})
         entries = _read_audit_entries(self._audit_dir)
         assert [e["claude_reason"] for e in entries] == ["first check", "second check"]
+
+
+class TestListAndProposePolicyOverRealTransport:
+    """P7's two new meta-tools, driven end to end the same way
+    TestListAutoAcceptRulesDisclosureIsAudited above proves the older pair's wiring."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, tmp_path, monkeypatch):
+        from privacyfence import gate
+        init_audit_logger(str(tmp_path))
+        self._audit_dir = tmp_path
+        config_path = tmp_path / "settings.yaml"
+        config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        auto_accept.init_config_path(str(config_path))
+        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description: True)
+
+    async def test_list_policy_starts_empty_with_a_real_scope_catalogue(self):
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("privacyfence_list_policy", {"reason": "checking"})
+        assert result.is_error is False
+        assert result.structured_content["rules"] == []
+        assert any(g["id"] == "drive.folder" for g in result.structured_content["scope_groups"])
+
+        entries = _read_audit_entries(self._audit_dir)
+        assert entries[0]["decision"] == "policy_listed"
+
+    async def test_propose_then_list_round_trips_the_rule_by_id(self):
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            propose_result = await session.call_tool("privacyfence_propose_policy_change", {
+                "operation": "add", "reason": "Trusting the sandbox folder.",
+                "group": "drive.folder", "value": ["folder1"], "verbs": ["read"],
+            })
+            assert propose_result.is_error is False
+            rule_id = propose_result.structured_content["rule_ids"][0]
+
+            list_result = await session.call_tool("privacyfence_list_policy", {"reason": "checking"})
+        rows = list_result.structured_content["rules"]
+        assert [row["id"] for row in rows] == [rule_id]
+
+    async def test_a_verb_the_group_cannot_govern_is_a_tool_error_not_a_popup(self):
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool("privacyfence_propose_policy_change", {
+                "operation": "add", "reason": "x",
+                "group": "drive.folder", "value": ["folder1"], "verbs": ["send"],
+            })
+        assert result.is_error is True
+        assert "cannot govern" in result.content[0].text

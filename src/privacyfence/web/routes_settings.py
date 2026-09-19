@@ -149,8 +149,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "skip_update", "remind_later_update",
     "enable_connector", "disable_connector", "refresh_connectors", "authenticate_connector",
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
-    "update_rule_row", "add_rule_row", "remove_rule_row",
-    "toggle_grant_capability", "add_grant_row", "update_grant_row", "remove_grant_row",
+    "add_policy_rule", "remove_policy_rule",
     "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
     "set_log_level", "set_notifications_detail", "enable_step_up",
 })
@@ -169,8 +168,7 @@ _ALLOWED_ACTIONS: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------- #
 
 _SENSITIVE_ACTIONS: frozenset[str] = frozenset({
-    "update_rule_row", "add_rule_row", "remove_rule_row",
-    "toggle_grant_capability", "add_grant_row", "update_grant_row", "remove_grant_row",
+    "add_policy_rule", "remove_policy_rule",
     "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
     "toggle_pii_detection", "toggle_pii_category",
     # B9: changes *what gets gated* the same way every other entry here
@@ -272,11 +270,11 @@ def _coerce(value: Any, annotation: Any) -> Any:
 def _call_action(controller: SettingsController, action: str, payload: dict[str, Any]) -> Any:
     """Real per-action argument validation (§16.2.5's own "not a copy of
     the pyobjc workaround"): every parameter's type comes from
-    SettingsController's own annotations (update_rule_row(op_key: str, idx:
-    int, ...), etc.) rather than a single hardcoded "idx is always an int"
-    special case -- a wrong type on *any* parameter of *any* allowed action
-    is rejected the same way, not just the one the native dispatcher
-    happened to guard."""
+    SettingsController's own annotations (remove_policy_rule(rule_id: str),
+    etc.) rather than a single hardcoded "idx is always an int" special
+    case -- a wrong type on *any* parameter of *any* allowed action is
+    rejected the same way, not just the one the native dispatcher happened
+    to guard."""
     method = getattr(controller, action)
     sig = inspect.signature(method)
     # settings_controller.py is `from __future__ import annotations`, so
@@ -483,8 +481,8 @@ def _action_fingerprint(action: str, body: dict[str, Any]) -> str:
     """The settings-action counterpart of webauthn_stepup.decision_
     fingerprint -- binds a step-up ceremony to *this exact action and
     payload* rather than merely "some sensitive action", so a WebAuthn
-    assertion obtained for e.g. ``remove_grant_row`` can't be replayed to
-    authorize a differently-shaped ``add_rule_row`` (or the same action with
+    assertion obtained for e.g. ``remove_policy_rule`` can't be replayed to
+    authorize a differently-shaped ``add_policy_rule`` (or the same action with
     different arguments). ``body`` must already have ``csrf``/
     ``webauthn_assertion`` stripped -- neither is part of what a human
     approved by completing the ceremony, and including the assertion itself
@@ -593,6 +591,8 @@ def build_routes(
             notifications_enabled=general.get("notifications_enabled", notifications_enabled),
             notifications_detail=general.get("notifications_detail", notifications_detail),
             banner_html=_banner_html(),
+            dismissible_notice_html=controller.policy_v2_migration_notice_html(),
+            dismissible_notice_key="pf_policy_v2_migration_dismissed",
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 

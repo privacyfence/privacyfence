@@ -30,12 +30,40 @@ from typing import Any, Callable, Hashable
 
 from ..approvals import PendingApprovalRegistry, is_pending_result
 from ..audit_log import AuditEntry, current_week, get_audit_logger
-from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_auto_accept_evaluator, get_current_config
+from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_v2_rules
 from ..connector import Connector
-from ..gate import propose_rule_change, reason_scope, unattended_scope
+from ..gate import preflight_auto_accept, propose_policy_change, propose_rule_change, reason_scope, unattended_scope
+from ..policy import catalogue as policy_catalogue
+from ..policy import describe as policy_describe
+from ..policy import propose as policy_propose
+from ..policy import registry as policy_registry
 from ..principal import current_principal
 
 logger = logging.getLogger(__name__)
+
+
+def _policy_rule_row(rule) -> dict:
+    """One ``privacyfence_list_policy`` rule row -- the same fields
+    ``settings_controller.SettingsController._auto_accept_state`` renders for the Auto-accept
+    Settings page (P6), minus that method's own name-resolution machinery (a friendly display name
+    for an opaque id like a Drive folder), which is a web-page-only affordance the bridge has no use
+    for: a model reading ``covered_tools``/``sentence`` already gets the width of the rule, and raw
+    ids are exactly what it would pass back into ``privacyfence_propose_policy_change`` anyway."""
+    connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
+    return {
+        "id": rule.id,
+        "sentence": policy_describe.rule_sentence(rule),
+        "connector": connectors_of_rule[0] if connectors_of_rule else "",
+        "scope_type": policy_describe.scope_type_of(rule),
+        "value": rule.value,
+        "operations": sorted(rule.operations),
+        "verbs": [
+            {"verb": verb.value, "family": policy_registry.VERB_FAMILY[verb].value}
+            for verb in policy_describe.rule_verbs(rule)
+        ],
+        "conditions": [[name, value] for name, value in rule.conditions],
+        "covered_tools": sorted(policy_describe.covered_tools(rule)),
+    }
 
 
 class McpDispatcher:
@@ -273,15 +301,15 @@ class McpDispatcher:
 
         if gate == "auto":
             result = {
-                "gate": "auto", "verdict": "auto_accept", "matched_rule": None,
+                "gate": "auto", "verdict": "auto_accept", "matched_rule": None, "matched_rule_id": None,
                 "reason": "Unconditionally auto-accepted -- never reaches the review gate.",
                 "pii_gate_may_apply": False,
             }
         else:
             operation_key = TOOL_TO_OPERATION.get(tool, f"{connector_name}.{tool}")
             my_email = getattr(connector, "my_email", "")
-            verdict, matched_rule, reason = get_auto_accept_evaluator().preflight_from_args(
-                operation_key, args, my_email
+            verdict, matched_rule, matched_rule_id, reason = preflight_auto_accept(
+                operation_key, args, my_email,
             )
             if gate == "review":
                 reason += (
@@ -291,6 +319,7 @@ class McpDispatcher:
                 )
             result = {
                 "gate": gate, "verdict": verdict, "matched_rule": matched_rule or None,
+                "matched_rule_id": matched_rule_id or None,
                 "reason": reason, "pii_gate_may_apply": gate == "review",
             }
 
@@ -319,15 +348,26 @@ class McpDispatcher:
             logger.warning("Audit log write failed for policy check: %s", exc)
 
     def list_rules(self, claude_reason: str = "") -> dict:
-        # Forces this principal's ConnectorRegistry entry (and the
-        # auto_accept.init_config_path() call daemon_main.py's per-
-        # principal factory makes as a side effect of building it) to
-        # exist first -- same reasoning as propose_rule_change above:
-        # get_current_config() raises "auto_accept config path not
-        # initialized" without it, for a principal whose first-ever MCP
-        # call in this process is this one.
+        """``privacyfence_list_auto_accept_rules``'s handler -- deprecated alias of
+        ``list_policy`` below (P9). Through P8 this returned a raw read of the v1
+        ``auto_accept_rules``/``auto_accept_grants`` config sections; now that every rule lives in
+        the v2 ``auto_accept:`` section regardless of which surface created it, there is no longer
+        a separate v1 view to show -- reading the old sections directly would show stale content
+        (whatever they held before the one-time migration folded them into v2), not what actually
+        auto-accepts. Returns exactly what ``list_policy`` does."""
+        return self.list_policy(claude_reason)
+
+    def list_policy(self, claude_reason: str = "") -> dict:
+        """privacyfence_list_policy's handler (P7 of the policy v2 redesign): the on-disk v2
+        ``auto_accept:`` section, sentence-rendered the same way ``settings_controller.
+        SettingsController._auto_accept_state`` renders it for the Auto-accept Settings page, plus
+        the scope catalogue ``privacyfence_propose_policy_change``'s ``group``/``verbs`` validate
+        against -- so a model can discover a real rule id and a real (group, verbs) pair before
+        proposing anything, the same "list before you propose" contract ``list_rules``/
+        ``propose_rule_change`` above already have."""
         _ = self.connectors
-        result = get_current_config()
+        rule_rows = sorted((_policy_rule_row(rule) for rule in get_policy_v2_rules()), key=lambda row: row["sentence"])
+        result = {"rules": rule_rows, "scope_groups": policy_catalogue.scope_catalogue()}
         try:
             get_audit_logger().record(AuditEntry(
                 timestamp=datetime.now(timezone.utc).isoformat(),
@@ -336,17 +376,32 @@ class McpDispatcher:
                 connector="",
                 tool="",
                 tool_name="",
-                summary="Listed current auto-accept rules/grants",
+                summary="Listed current policy rules",
                 sender="",
-                decision="rules_listed",
+                decision="policy_listed",
                 auto_accept_rule="",
                 latency_seconds=0.0,
                 pii_detected=False,
                 claude_reason=claude_reason,
             ))
         except Exception as exc:
-            logger.warning("Audit log write failed for list_rules: %s", exc)
+            logger.warning("Audit log write failed for list_policy: %s", exc)
         return result
+
+    async def propose_policy_change(self, session_key: Hashable, params: dict) -> dict:
+        """privacyfence_propose_policy_change's handler -- same ``unattended_scope``/
+        ``ConnectorRegistry``-bootstrap reasoning as ``propose_rule_change`` above applies here too:
+        see that method's own comment."""
+        _ = self.connectors
+        with unattended_scope(session_key in self._unattended_sessions):
+            return await propose_policy_change(
+                operation=params["operation"],
+                reason=params.get("reason", ""),
+                rule_id=params.get("rule_id", ""),
+                group=params.get("group", ""),
+                value=params.get("value"),
+                verbs=params.get("verbs"),
+            )
 
     def status(self, claude_reason: str = "") -> dict:
         """privacyfence_status's handler (issue #396 Phase 2): the one

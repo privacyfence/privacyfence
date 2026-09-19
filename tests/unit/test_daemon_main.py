@@ -32,6 +32,7 @@ from privacyfence import daemon_main, org_mode
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.connectors.telegram import TelegramConnector
 from privacyfence.paths import data_dir
+from privacyfence.policy import store as policy_store
 from privacyfence.safe_errors import GENERIC_PUBLIC_MESSAGE
 
 
@@ -2371,7 +2372,6 @@ class TestRunApp:
         """
         connectors = [] if connectors is None else connectors
         monkeypatch.setattr(daemon_main, "init_config_path", lambda path: None)
-        monkeypatch.setattr(daemon_main, "reload_rules", lambda rules: None)
         fake_audit_logger = MagicMock()
         monkeypatch.setattr(daemon_main, "init_audit_logger", lambda path, **kwargs: fake_audit_logger)
         monkeypatch.setattr(daemon_main, "load_org_config", lambda: {})
@@ -2642,17 +2642,17 @@ class TestRunApp:
         assert release_calls == [1]
 
     def test_migrations_run_persist_and_log_then_reload_sees_new_keys(self, monkeypatch, tmp_path, caplog):
-        # Real migrate_rules_to_grants/migrate_telegram_search_operation_key
-        # (not mocked, unlike _patch_common's other collaborators) so this
-        # covers the actual persist-to-disk branch: a grant-eligible
-        # auto_accept_rules block (full match across drive.folders' one
-        # target) plus a legacy telegram.search_messages entry, both of
-        # which should be migrated and written back to config_path.
+        # Real migrate_telegram_search_operation_key/policy_compat.migrate_to_policy_v2 (not
+        # mocked, unlike _patch_common's other collaborators) so this covers the actual
+        # persist-to-disk branch: a v1 auto_accept_rules block spanning three operations under the
+        # same (predicate, value) -- migrate_rules_to_grants' old connector-scoped-grants folding
+        # is gone (P9): migrate_to_policy_v2 now folds auto_accept_rules straight into the v2
+        # auto_accept: section itself, merging same-(predicate, value) entries across operations
+        # (policy.store.merge_rules) -- plus a legacy telegram.search_messages entry, both of which
+        # should be migrated and written back to config_path.
         monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
         monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
         self._patch_common(monkeypatch)
-        reloaded = []
-        monkeypatch.setattr(daemon_main, "reload_rules", lambda rules: reloaded.append(rules))
 
         config_path = str(tmp_path / "settings.yaml")
         config = {
@@ -2669,16 +2669,103 @@ class TestRunApp:
 
         assert result == 0
         on_disk = yaml.safe_load(open(config_path, encoding="utf-8"))
-        assert on_disk["auto_accept_grants"]["drive"]["folders"] == [{"id": "F1", "read": True}]
         assert "telegram.search_messages" not in on_disk.get("auto_accept_rules", {})
         assert on_disk["auto_accept_rules"]["telegram.read_chat_messages"] == [
             {"rule": "no_media_attachments"}
         ]
-        assert "migrated to connector-scoped grants" in caplog.text
         assert "telegram.search_messages rules" in caplog.text
-        # reload_rules() ran against the post-migration config, not the
-        # pre-migration one Claude/the caller originally passed in.
-        assert len(reloaded) == 1
+        # P4 of the policy v2 redesign: the same real config also carries a v1 drive/sheets rule
+        # repeated across three operations, so this run's policy-v2 migration should have folded
+        # them into one merged v2 rule and written a v2 section too.
+        assert on_disk[policy_store.MIGRATED_TO_POLICY_V2_MARKER] is True
+        v2_rules = {rule["predicate"]: rule for rule in on_disk[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"]}
+        assert v2_rules["approved_folder"]["value"] == ["F1"]
+        assert sorted(v2_rules["approved_folder"]["operations"]) == [
+            "drive.download_file", "drive.read_file_contents", "sheets.read_values",
+        ]
+        assert "policy v2 on-disk format" in caplog.text
+        # set_policy_v2_store_rules() ran against the post-migration config, not the pre-migration
+        # one the caller originally passed in -- the in-memory store gate.py evaluates against
+        # reflects the same merged rule set that landed on disk.
+        from privacyfence import auto_accept
+        hot_predicates = {rule.predicate for rule in auto_accept.get_policy_v2_store_rules()}
+        assert hot_predicates == {"approved_folder", "always_allow"}
+
+    def test_policy_v2_migration_backs_up_the_original_file_first(self, monkeypatch, tmp_path, caplog):
+        # Real migrate_to_policy_v2 (not mocked): the on-disk file exists
+        # before run_app() touches it (unlike
+        # test_migrations_run_persist_and_log_then_reload_sees_new_keys,
+        # which never writes config_path ahead of time), so this covers the
+        # actual shutil.copy2 branch and asserts the .bak this migration's
+        # own P4 scope specifically calls for holds the pre-migration bytes.
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+
+        config_path = tmp_path / "settings.yaml"
+        config = {
+            "auto_accept_rules": {
+                "gmail.read_message": [{"rule": "shared_drive_exclusion", "value": None}],
+            }
+        }
+        original_text = yaml.safe_dump(config, default_flow_style=False, allow_unicode=True)
+        config_path.write_text(original_text, encoding="utf-8")
+
+        with caplog.at_level(logging.INFO):
+            result = daemon_main.run_app(config, str(config_path))
+
+        assert result == 0
+        backup_path = tmp_path / "settings.yaml.bak"
+        assert backup_path.exists()
+        assert yaml.safe_load(backup_path.read_text(encoding="utf-8")) == config
+        on_disk = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert on_disk[policy_store.MIGRATED_TO_POLICY_V2_MARKER] is True
+        assert on_disk["auto_accept_rules"] == config["auto_accept_rules"]
+        assert f"backed up to {config_path}.bak" in caplog.text
+
+    def test_policy_v2_migration_is_skipped_once_marker_is_already_set(self, monkeypatch, tmp_path, caplog):
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+
+        config_path = tmp_path / "settings.yaml"
+        config = {policy_store.MIGRATED_TO_POLICY_V2_MARKER: True}
+        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+        with caplog.at_level(logging.INFO):
+            result = daemon_main.run_app(dict(config), str(config_path))
+
+        assert result == 0
+        assert not (tmp_path / "settings.yaml.bak").exists()
+        assert "policy v2 on-disk format" not in caplog.text
+
+    def test_persist_failure_after_migrations_is_logged_not_raised(self, monkeypatch, tmp_path, caplog):
+        # Real migrations (telegram-key rename + policy v2 both fire), but the actual write fails
+        # -- must be logged and swallowed, exactly like the pre-P4 single-migration persist
+        # failure this mirrors, never propagated to crash startup.
+        monkeypatch.setattr(daemon_main, "_acquire_instance_lock", lambda: True)
+        monkeypatch.setattr(daemon_main, "_release_instance_lock", lambda: None)
+        self._patch_common(monkeypatch)
+        monkeypatch.setattr(
+            daemon_main, "atomic_write_text",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")),
+        )
+
+        config_path = tmp_path / "settings.yaml"
+        config = {
+            "auto_accept_rules": {
+                "drive.read_file_contents": [{"rule": "approved_folder", "value": ["F1"]}],
+                "drive.download_file": [{"rule": "approved_folder", "value": ["F1"]}],
+                "sheets.read_values": [{"rule": "approved_folder", "value": ["F1"]}],
+            },
+        }
+        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+        with caplog.at_level(logging.WARNING):
+            result = daemon_main.run_app(config, str(config_path))
+
+        assert result == 0
+        assert "Could not persist auto-accept config migration" in caplog.text
 
     def test_stale_rule_suggestion_priority_key_is_silently_ignored(self, monkeypatch, tmp_path, caplog):
         # Issue #151 retired the settings.yaml-configurable
@@ -3064,6 +3151,7 @@ class TestLoadPrincipalSettings:
 
     def test_registers_the_principals_own_config_path(self, tmp_path, monkeypatch):
         from privacyfence import auto_accept
+        from privacyfence.policy.engine import PolicyRule
         from privacyfence.principal import Principal, principal_scope
 
         self._seed(tmp_path, monkeypatch, "alice", {})
@@ -3071,17 +3159,27 @@ class TestLoadPrincipalSettings:
         with principal_scope(Principal(id="alice")):
             daemon_main._load_principal_settings()
             # Would raise "auto_accept config path not initialized" without it.
-            auto_accept.add_auto_accept_rule("gmail.send", "always_allow", None)
-            assert auto_accept.get_current_config()["auto_accept_rules"]["gmail.send"]
+            rule = PolicyRule(
+                id="ignored-merge-recomputes-it", predicate="always_allow", value=None,
+                operations=frozenset({"gmail.send_message"}),
+            )
+            assert auto_accept.add_policy_v2_rules([rule]) is True
+            assert any(
+                r.predicate == "always_allow" and "gmail.send_message" in r.operations
+                for r in auto_accept.get_policy_v2_rules()
+            )
 
     def test_seeds_the_evaluator_so_configured_rules_actually_apply(self, tmp_path, monkeypatch):
         """The real bug: settings.yaml on disk said contacts.edit had a rule,
-        privacyfence_list_auto_accept_rules (get_current_config, read from
-        disk) agreed, but the evaluator gate.py and
-        privacyfence_check_policy both consult had an empty rule set -- so
-        the rule was silently inert and every call went to a human.
+        privacyfence_list_policy (get_policy_v2_rules, read from disk) agreed, but the hot-reloaded
+        store gate.py and privacyfence_check_policy both consult (get_policy_v2_store_rules) had an
+        empty rule set -- so the rule was silently inert and every call went to a human. P9 folded
+        the v1 -> v2 migration into this same function (_migrate_settings_to_policy_v2), so this
+        now also covers a hand-edited v1 auto_accept_rules block never reaching the evaluator at
+        all for a principal other than the launcher's.
         """
         from privacyfence import auto_accept
+        from privacyfence.policy.engine import preflight
         from privacyfence.principal import Principal, principal_scope
 
         self._seed(
@@ -3091,22 +3189,20 @@ class TestLoadPrincipalSettings:
 
         with principal_scope(Principal(id="alice")):
             daemon_main._load_principal_settings()
-            evaluator = auto_accept.get_auto_accept_evaluator()
+            rules = auto_accept.get_policy_v2_store_rules()
 
             # A name-only edit matches the configured rule...
-            verdict, matched_rule, _ = evaluator.preflight_from_args(
-                "contacts.edit", {"display_name": "QA Contact"},
-            )
-            assert (verdict, matched_rule) == ("auto_accept", "no_contact_info_change")
+            verdict, matched_rule, _ = preflight(rules, "contacts.edit", {"display_name": "QA Contact"})
+            assert verdict == "auto_accept"
+            assert matched_rule
 
             # ...and the rule still discriminates: changing contact info does not.
-            verdict, _, _ = evaluator.preflight_from_args(
-                "contacts.edit", {"emails": ["qa@example.invalid"]},
-            )
+            verdict, _, _ = preflight(rules, "contacts.edit", {"emails": ["qa@example.invalid"]})
             assert verdict == "requires_review"
 
     def test_one_principals_rules_do_not_leak_into_anothers_evaluator(self, tmp_path, monkeypatch):
         from privacyfence import auto_accept
+        from privacyfence.policy.engine import preflight
         from privacyfence.principal import Principal, principal_scope
 
         self._seed(
@@ -3117,37 +3213,50 @@ class TestLoadPrincipalSettings:
 
         with principal_scope(Principal(id="alice")):
             daemon_main._load_principal_settings()
-            alice_verdict, _, _ = auto_accept.get_auto_accept_evaluator().preflight_from_args(
-                "contacts.edit", {"display_name": "QA Contact"},
+            alice_verdict, _, _ = preflight(
+                auto_accept.get_policy_v2_store_rules(), "contacts.edit", {"display_name": "QA Contact"},
             )
 
         with principal_scope(Principal(id="bob")):
             daemon_main._load_principal_settings()
-            bob_verdict, _, _ = auto_accept.get_auto_accept_evaluator().preflight_from_args(
-                "contacts.edit", {"display_name": "QA Contact"},
+            bob_verdict, _, _ = preflight(
+                auto_accept.get_policy_v2_store_rules(), "contacts.edit", {"display_name": "QA Contact"},
             )
 
         assert alice_verdict == "auto_accept"
         assert bob_verdict == "requires_review"
 
-    def test_registers_the_principals_own_policy_engine_version(self, tmp_path, monkeypatch):
-        """P3 of the policy v2 redesign: the same class of silent-inert bug the two tests above
-        cover for auto-accept rules -- without init_policy_engine_version() here, every org
-        principal's policy.engine setting would stay at its dataclass default ("v1") regardless
-        of what that principal's own settings.yaml said."""
-        from privacyfence import auto_accept, paths
+    def test_registers_the_principals_own_migrated_v2_rules(self, tmp_path, monkeypatch):
+        """P9: without ``_migrate_settings_to_policy_v2()``/``set_policy_v2_store_rules()`` here,
+        every org principal whose settings.yaml still carried a hand-edited v1
+        ``auto_accept_rules`` section (never migrated, since only ``run_app()`` used to run this
+        migration) would find those rules silently inert forever -- P9 retired the v1 evaluator
+        that used to read them directly. Distinct from
+        ``test_seeds_the_evaluator_so_configured_rules_actually_apply`` above: this asserts the
+        on-disk side effect (the migration actually persisted a v2 ``auto_accept:`` section for
+        this principal's own settings.yaml), not just that the in-memory store got populated."""
+        from privacyfence import auto_accept
         from privacyfence.principal import Principal, principal_scope
 
-        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        config_dir = tmp_path / "users" / "alice" / "config"
-        config_dir.mkdir(parents=True)
-        (config_dir / "settings.yaml").write_text(
-            yaml.safe_dump({"policy": {"engine": "v2"}}), encoding="utf-8",
+        self._seed(
+            tmp_path, monkeypatch, "alice",
+            {"contacts.edit": [{"rule": "no_contact_info_change"}]},
         )
+        # _seed() writes to the pre-#428 legacy location -- authority_dir() migrates it into
+        # <principal>/authority/config/settings.yaml the first time this principal's authority
+        # path is resolved (here, inside _load_principal_settings() below), so that's where the
+        # migrated content actually lands.
+        settings_path = tmp_path / "users" / "alice" / "authority" / "config" / "settings.yaml"
 
         with principal_scope(Principal(id="alice")):
             daemon_main._load_principal_settings()
-            assert auto_accept.get_policy_engine_version() == "v2"
+
+            on_disk = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+            assert on_disk[policy_store.MIGRATED_TO_POLICY_V2_MARKER] is True
+            assert on_disk[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"]
+            # And the same migrated rule set is what's hot-reloaded, not just what's on disk.
+            hot_predicates = {rule.predicate for rule in auto_accept.get_policy_v2_store_rules()}
+            assert "always_allow" in hot_predicates
 
     def test_populates_the_privacy_filter_registry_for_the_principal(self, tmp_path, monkeypatch):
         """#400 Phase 0: before this fix, privacy_filter._REGISTRY kept its

@@ -49,25 +49,20 @@ def _make_state(**overrides):
              "authed": False, "enabled": True, "busy": False, "has_org": False, "auth_label": "Authenticate…"},
         ],
         "telegram_auth": {"step": None, "error": ""},
-        "rules": {
-            "connectors": [{"key": "gmail", "label": "Gmail", "count": 1}, {"key": "drive", "label": "Drive", "count": 0}],
-            "sections_by_connector": {
-                "gmail": [{"op_key": "gmail.read_message", "title": "Read message",
-                           "rows": [{"rule_type": "i_am_sender", "value": ""}]}],
-                "drive": [],
-            },
-            "grants_by_connector": {
-                "gmail": [],
-                "drive": [],
-            },
-            "drive_grant_summary_by_connector": {
-                "gmail": None,
-                "drive": None,
-            },
-            "grant_hint_by_connector": {
-                "gmail": None,
-                "drive": "Don't have the ID handy? Ask Claude — e.g. “What's the Drive folder ID for the Q3 Reports folder?” — then paste it into the Resource ID field above.",
-            },
+        "auto_accept": {
+            "rules": [
+                {"id": "r-abc123", "sentence": "Gmail - sender: allow read", "connector": "gmail",
+                 "connector_label": "Gmail", "scope_type": "gmail.sender", "value": "", "value_ids": [],
+                 "verbs": [{"verb": "read", "family": "read"}], "covered_tools": ["gmail_get_message"],
+                 "match_count": 0, "last_matched": "", "never_matched": True},
+            ],
+            "scope_groups": [
+                {"id": "drive.folder", "label": "Drive — folder", "connector": "drive", "needs_value": True,
+                 "value_hint": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms", "verbs": ["read", "download"]},
+                {"id": "gmail.sender", "label": "Gmail — sender", "connector": "gmail", "needs_value": False,
+                 "value_hint": "", "verbs": ["read", "download", "archive"]},
+            ],
+            "connectors": ["drive", "gmail"],
         },
         "privacy": {
             "groups": [{"key": "privacy", "label": "Gmail"}, {"key": "calendar", "label": "Calendar"}],
@@ -176,7 +171,7 @@ class TestToggleTemplate:
             # present as source text regardless of any connector's actual
             # state (see settings_window_html.py's renderConnectors).
             "enable_connector", "disable_connector",
-            "toggle_calendar_free_busy", "toggle_grant_capability",
+            "toggle_calendar_free_busy",
         ):
             assert f"'{action}'" in html, f"missing toggle wiring for {action}"
 
@@ -233,54 +228,67 @@ class TestWelcomeBanner:
         assert "organization config bundle" in html
 
 
-class TestRulesAndGrantsTemplate:
+class TestAutoAcceptTemplate:
+    """P6 of the policy v2 redesign: the single filterable Auto-accept page, replacing the old
+    per-connector Trusted-*/parallel-rule-row/Sheets-Docs-pointer-page surface (see git history for
+    this class's own pre-P6 shape, TestRulesAndGrantsTemplate)."""
+
     def test_rule_row_fields_wired(self):
         html = build_html(_make_state())
-        assert "data-rule-field" in html
-        assert "update_rule_row" in html
-        assert "add_rule_row" in html
-        assert "remove_rule_row" in html
+        assert "renderAutoAccept" in html
+        assert "remove_policy_rule" in html
+        assert "data-aa-expand" in html
 
-    def test_grant_row_fields_wired(self):
+    def test_add_rule_form_fields_wired(self):
         html = build_html(_make_state())
-        assert "data-grant-field" in html
-        assert "update_grant_row" in html
-        assert "add_grant_row" in html
-        assert "remove_grant_row" in html
+        assert "add_policy_rule" in html
+        assert "data-aa-group-select" in html
+        assert "data-aa-value" in html
+        assert "data-aa-verb-toggle" in html
+        assert "data-aa-add" in html
 
-    def test_rules_search_input_present(self):
+    def test_filter_bar_wired(self):
         html = build_html(_make_state())
-        assert "data-rules-search" in html
+        assert "data-aa-search" in html
+        assert "data-aa-connector-filter" in html
+        assert "data-aa-family-filter" in html
 
-    def test_drive_grant_summary_wired(self):
-        # Sheets/Docs pages aren't real connectors and have no grant section
-        # of their own (see settings_controller.py's DRIVE_GRANT_SUMMARY_GROUPS)
-        # -- renderRules reads the read-only "Governed by Drive" summary off
-        # state.rules.drive_grant_summary_by_connector and its "Manage in
-        # Drive ->" link reuses the same data-rules-nav="drive" mechanism the
-        # connector subnav tabs already dispatch through, not a new action.
+    def test_scope_groups_and_rules_fields_referenced(self):
         html = build_html(_make_state())
-        assert "drive_grant_summary_by_connector" in html
-        assert 'data-rules-nav="drive"' in html
+        assert "scope_groups" in html
+        assert "covered_tools" in html
 
-    def test_grant_hint_field_referenced(self):
-        # Bottom-of-page "ask Claude for the ID" tip (settings_controller.py's
-        # _grant_id_hint) -- tool-specific per connector, sourced from
-        # state.rules.grant_hint_by_connector rather than hardcoded here.
+    def test_usage_fields_wired(self):
+        # P8 (rule attribution and staleness): every row's match count/last-matched/never-matched
+        # trio is read and rendered, with a distinct class for a rule that has never fired.
         html = build_html(_make_state())
-        assert "grant_hint_by_connector" in html
-        assert "pf-grant-hint" in html
+        assert "match_count" in html
+        assert "never_matched" in html
+        assert "pf-aa-usage" in html
+        assert "pf-aa-usage-stale" in html
 
     def test_copy_id_attribute_wired(self):
-        # Right-click a grant row to copy its resource ID (see
-        # copyToClipboard/onContextMenu) -- eases reusing the same
-        # folder/channel/chat ID across multiple grant rows, since the
-        # "Name" field only ever shows a resolved/hand-typed display name,
-        # never the raw ID.
+        # Right-click a rule row to copy its raw value ids (see
+        # copyToClipboard/onContextMenu) -- the "value" field may show a
+        # resolved display name instead of the id/key a user would want to
+        # paste elsewhere.
         html = build_html(_make_state())
         assert "data-copy-id" in html
         assert "onContextMenu" in html
         assert "copyToClipboard" in html
+
+    def test_old_rule_and_grant_row_actions_are_gone(self):
+        # add_rule_row/remove_rule_row/remove_grant_row still exist as SettingsController methods
+        # (see their own docstring), but only web/routes_org_settings.py's separate org-mode page
+        # -- a different module, with its own HTML template -- ever reaches them; this module's
+        # own JS bridge (build_html's output) must never reference any of the seven again.
+        html = build_html(_make_state())
+        for stale in (
+            "update_rule_row", "add_rule_row", "remove_rule_row",
+            "toggle_grant_capability", "add_grant_row", "update_grant_row", "remove_grant_row",
+            "data-rule-field", "data-grant-field", "data-rules-search", "data-rules-nav",
+        ):
+            assert stale not in html, stale
 
 
 class TestPrivacySegmentedControl:

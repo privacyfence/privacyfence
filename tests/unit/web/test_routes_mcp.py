@@ -3,7 +3,9 @@ the wire-protocol/auth layer sitting on top of McpDispatcher (see
 test_mcp_dispatch.py for the dispatch logic itself).
 
 Drives the real ASGI app with the official `mcp` Python client over an
-in-process ASGI transport (httpx.ASGITransport) -- no real socket. This is
+in-process ASGI transport (httpx2.ASGITransport -- mcp 2.x's client
+transports are written against httpx2, see pyproject.toml's test extra) --
+no real socket. This is
 the in-process equivalent of what P0 validated by hand and of what
 tests/integration/test_bridge_daemon_contract.py does for the bridge, but
 for /mcp directly and without spawning a real process.
@@ -11,15 +13,17 @@ for /mcp directly and without spawning a real process.
 from __future__ import annotations
 
 import contextlib
+from types import SimpleNamespace
 
 import anyio
 import httpx
+import httpx2
 import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
-from mcp.server.session import ServerSession
+from mcp.server.connection import Connection
 
 from privacyfence.connector import Connector, ToolParam, ToolSpec
 from privacyfence.principal import LOCAL_PRINCIPAL, current_principal
@@ -91,15 +95,15 @@ async def _connected_session(
         app, session_manager = build_mcp_asgi_app(dispatcher, verifier=verifier)
     else:
         app, session_manager = build_mcp_asgi_app(dispatcher, token=token)
-    transport = httpx.ASGITransport(app=app)
+    transport = httpx2.ASGITransport(app=app)
 
     async with mcp_lifespan(session_manager):
-        async with httpx.AsyncClient(
+        async with httpx2.AsyncClient(
             transport=transport, base_url="http://testserver", headers={"Authorization": f"Bearer {token}"},
         ) as http_client:
             async with streamable_http_client(
                 "http://testserver/mcp", http_client=http_client,
-            ) as (read, write, _get_session_id):
+            ) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     yield session
@@ -177,13 +181,13 @@ class TestServerInstructions:
         dispatcher = _dispatcher()
         app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
         async with mcp_lifespan(session_manager):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
                 headers={"Authorization": f"Bearer {TOKEN}"},
             ) as http_client:
                 async with streamable_http_client(
                     "http://testserver/mcp", http_client=http_client,
-                ) as (read, write, _get_session_id):
+                ) as (read, write):
                     async with ClientSession(read, write) as session:
                         result = await session.initialize()
         assert result.instructions == SERVER_INSTRUCTIONS
@@ -194,32 +198,32 @@ class TestServerInstructions:
 
 
 class TestToolsListChangedCapability:
-    """Issue #396 Part C: StreamableHTTPSessionManager always calls
-    Server.create_initialization_options() with no arguments (confirmed
-    against mcp==1.30.0, Phase 0's own spike), so NotificationOptions()'s
-    own tools_changed=False default is what a real client would see without
-    _PrivacyFenceServer's override -- this is what proves that override
-    actually reaches a real initialize() response."""
+    """Issue #396 Part C: StreamableHTTPSessionManager drives every session
+    with ``init_options=None``, so the runner answering initialize falls back
+    to Server.create_initialization_options() with no arguments, and
+    NotificationOptions()'s own tools_changed=False default is what a real
+    client would see without _PrivacyFenceServer's override -- this is what
+    proves that override actually reaches a real initialize() response."""
 
     async def test_initialize_result_advertises_tools_list_changed(self):
         dispatcher = _dispatcher()
         app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
         async with mcp_lifespan(session_manager):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
                 headers={"Authorization": f"Bearer {TOKEN}"},
             ) as http_client:
                 async with streamable_http_client(
                     "http://testserver/mcp", http_client=http_client,
-                ) as (read, write, _get_session_id):
+                ) as (read, write):
                     async with ClientSession(read, write) as session:
                         result = await session.initialize()
         assert result.capabilities.tools is not None
-        assert result.capabilities.tools.listChanged is True
+        assert result.capabilities.tools.list_changed is True
 
     async def test_build_mcp_server_wires_a_tools_changed_broadcaster(self):
         # build_mcp_server (called by build_mcp_asgi_app above) is the one
-        # place that actually owns the live-ServerSession registry
+        # place that actually owns the live-Connection registry
         # notify_tools_changed() needs -- confirm it registers itself on
         # the dispatcher rather than leaving notify_tools_changed() a
         # permanent no-op.
@@ -243,29 +247,29 @@ class TestToolsListChangedCapability:
         # tests/integration/test_mcp_daemon_contract.py proves, over a real
         # socket where a persistent server-push stream is unambiguous. This
         # unit-level test instead confirms the piece that's actually this
-        # module's own responsibility: the captured ServerSession's
+        # module's own responsibility: the captured Connection's
         # send_tool_list_changed() is awaited at all once
         # notify_tools_changed() fires.
         calls = []
 
-        async def _record(self):
+        async def _record(self, **_kwargs):
             calls.append(self)
 
-        monkeypatch.setattr(ServerSession, "send_tool_list_changed", _record)
+        monkeypatch.setattr(Connection, "send_tool_list_changed", _record)
 
         dispatcher = _dispatcher()
         app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
         async with mcp_lifespan(session_manager):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
                 headers={"Authorization": f"Bearer {TOKEN}"},
             ) as http_client:
                 async with streamable_http_client(
                     "http://testserver/mcp", http_client=http_client,
-                ) as (read, write, _get_session_id):
+                ) as (read, write):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
-                        # Captures this session's live ServerSession
+                        # Captures this session's live Connection
                         # server-side (see build_mcp_server's own comment).
                         await session.list_tools()
 
@@ -282,21 +286,21 @@ class TestToolsListChangedCapability:
         # A session that's gone stale/closing must not take the whole
         # broadcast down with it -- _send_tool_list_changed's own try/except
         # is what this proves.
-        async def _raise(self):
+        async def _raise(self, **_kwargs):
             raise RuntimeError("session is closing")
 
-        monkeypatch.setattr(ServerSession, "send_tool_list_changed", _raise)
+        monkeypatch.setattr(Connection, "send_tool_list_changed", _raise)
 
         dispatcher = _dispatcher()
         app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
         async with mcp_lifespan(session_manager):
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://testserver",
+            async with httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app), base_url="http://testserver",
                 headers={"Authorization": f"Bearer {TOKEN}"},
             ) as http_client:
                 async with streamable_http_client(
                     "http://testserver/mcp", http_client=http_client,
-                ) as (read, write, _get_session_id):
+                ) as (read, write):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
                         await session.list_tools()
@@ -325,8 +329,8 @@ class TestListTools:
         async with _connected_session(dispatcher) as session:
             result = await session.list_tools()
         tool = next(t for t in result.tools if t.name == "echo_say")
-        assert tool.annotations.readOnlyHint is True
-        assert tool.annotations.destructiveHint is False
+        assert tool.annotations.read_only_hint is True
+        assert tool.annotations.destructive_hint is False
 
     async def test_reflects_a_live_connector_set_change_between_calls(self):
         store: dict[str, Connector] = {}
@@ -399,8 +403,8 @@ class TestCallConnectorTool:
         dispatcher = _dispatcher({"echo": connector})
         async with _connected_session(dispatcher) as session:
             result = await session.call_tool("echo_say", {"message": "hi"})
-        assert result.isError is False
-        assert result.structuredContent == {"echoed": {"message": "hi"}}
+        assert result.is_error is False
+        assert result.structured_content == {"echoed": {"message": "hi"}}
         assert connector.calls == [("echo_say", {"message": "hi"})]
 
     async def test_reason_is_popped_before_reaching_the_connector(self):
@@ -414,7 +418,7 @@ class TestCallConnectorTool:
         dispatcher = _dispatcher({"echo": EchoConnector()})
         async with _connected_session(dispatcher) as session:
             result = await session.call_tool("not_a_real_tool", {})
-        assert result.isError is True
+        assert result.is_error is True
 
     async def test_connector_exception_is_a_tool_error(self):
         class BoomConnector(EchoConnector):
@@ -424,7 +428,7 @@ class TestCallConnectorTool:
         dispatcher = _dispatcher({"echo": BoomConnector()})
         async with _connected_session(dispatcher) as session:
             result = await session.call_tool("echo_say", {"message": "hi"})
-        assert result.isError is True
+        assert result.is_error is True
         assert "boom" in result.content[0].text
 
     async def test_two_calls_in_one_session_share_dedupe_state(self):
@@ -457,22 +461,22 @@ class TestMetaTools:
                 "privacyfence_check_policy",
                 {"connector": "echo", "tool": "gmail_list_messages", "reason": "planning"},
             )
-        assert result.isError is False
-        assert result.structuredContent["gate"] == "auto"
+        assert result.is_error is False
+        assert result.structured_content["gate"] == "auto"
 
     async def test_begin_and_end_unattended_session_round_trip(self):
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
         async with _connected_session(dispatcher) as session:
             begin = await session.call_tool("privacyfence_begin_unattended_session", {"reason": "scheduled"})
-            assert begin.structuredContent == {"unattended": True}
+            assert begin.structured_content == {"unattended": True}
             end = await session.call_tool("privacyfence_end_unattended_session", {"reason": "done"})
-            assert end.structuredContent == {"unattended": False}
+            assert end.structured_content == {"unattended": False}
 
     async def test_begin_unattended_session_disabled_is_a_tool_error(self):
         dispatcher = _dispatcher({})  # unattended_sessions_enabled defaults False
         async with _connected_session(dispatcher) as session:
             result = await session.call_tool("privacyfence_begin_unattended_session", {"reason": "x"})
-        assert result.isError is True
+        assert result.is_error is True
         assert "disabled" in result.content[0].text
 
     async def test_status_round_trips(self):
@@ -484,9 +488,9 @@ class TestMetaTools:
         dispatcher = _dispatcher({"echo": EchoConnector()})
         async with _connected_session(dispatcher) as session:
             result = await session.call_tool("privacyfence_status", {"reason": "planning"})
-        assert result.isError is False
-        assert result.structuredContent["mode"] == "local"
-        assert result.structuredContent["setup_complete"] is True
+        assert result.is_error is False
+        assert result.structured_content["mode"] == "local"
+        assert result.structured_content["setup_complete"] is True
 
     async def test_await_approval_round_trips_to_the_registry(self):
         # P3: privacyfence_await_approval, reaching the same registry a real
@@ -499,8 +503,8 @@ class TestMetaTools:
             result = await session.call_tool(
                 "privacyfence_await_approval", {"approval_ids": ["a1"], "timeout_seconds": 1},
             )
-        assert result.isError is False
-        assert result.structuredContent == {"a1": "unknown"}
+        assert result.is_error is False
+        assert result.structured_content == {"a1": "unknown"}
 
 
 # --------------------------------------------------------------------------- #
@@ -514,25 +518,68 @@ class TestSessionCleanup:
     async def test_ending_the_session_clears_its_unattended_flag(self):
         dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
         app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx2.ASGITransport(app=app)
 
         async with mcp_lifespan(session_manager):
-            async with httpx.AsyncClient(
+            async with httpx2.AsyncClient(
                 transport=transport, base_url="http://testserver", headers={"Authorization": f"Bearer {TOKEN}"},
             ) as http_client:
                 async with streamable_http_client(
                     "http://testserver/mcp", http_client=http_client,
-                ) as (read, write, _get_session_id):
+                ) as (read, write):
                     async with ClientSession(read, write) as session:
                         await session.initialize()
                         await session.call_tool("privacyfence_begin_unattended_session", {"reason": "x"})
                         assert dispatcher.unattended_session_count() == 1
                 # streamable_http_client's own __aexit__ sends the DELETE
                 # that terminates this Streamable HTTP session -- awaited
-                # above, so by the time we're back here the per-session
-                # lifespan's `finally` (routes_mcp.py's _session_lifespan)
-                # has already run.
+                # above, so by the time we're back here the per-connection
+                # cleanup routes_mcp.py's build_mcp_server pushes onto
+                # Connection.exit_stack has already run.
         assert dispatcher.unattended_session_count() == 0
+
+
+class TestSessionIdentityDegradedPaths:
+    """Where a session's identity comes from under mcp 2.x, on the paths this
+    daemon's own wiring never takes: a request that carries no
+    ``Mcp-Session-Id`` header, and a request whose ``Connection`` this module
+    can't reach (see ``_connection_of``'s own docstring -- a future SDK rename
+    must cost /mcp its notifications and its cleanup, not its ability to
+    answer). Every other test here covers the normal path, where the header
+    is present and the connection is reachable."""
+
+    @staticmethod
+    def _ctx(*, headers: dict | None, connection):
+        request = SimpleNamespace(headers=headers) if headers is not None else None
+        return SimpleNamespace(request=request, session=SimpleNamespace(_connection=connection))
+
+    def test_the_transports_session_id_header_is_the_key(self):
+        ctx = self._ctx(headers={"mcp-session-id": "from-the-header"}, connection=None)
+        assert rm._session_key(ctx) == "from-the-header"
+
+    def test_falls_back_to_the_connections_own_session_id(self):
+        # No HTTP request attached to the message at all (stdio's shape),
+        # but the connection the SDK built for it knows its own id.
+        connection = Connection(object(), protocol_version="2025-06-18", session_id="from-the-connection")
+        assert rm._session_key(self._ctx(headers=None, connection=connection)) == "from-the-connection"
+
+    def test_a_request_with_no_session_id_anywhere_still_gets_one_stable_key(self):
+        assert rm._session_key(self._ctx(headers={}, connection=None)) == rm._SESSIONLESS_KEY
+
+    async def test_an_unreachable_connection_costs_notifications_not_the_tool_call(self, monkeypatch):
+        # The degradation _connection_of promises, driven end to end: with no
+        # Connection to register, nothing is tracked for the broadcast and
+        # nothing is pushed onto an exit stack -- and a real client still
+        # lists and calls tools over the same session.
+        monkeypatch.setattr(rm, "_connection_of", lambda ctx: None)
+        connector = EchoConnector()
+        dispatcher = _dispatcher({"echo": connector})
+        async with _connected_session(dispatcher) as session:
+            tools = await session.list_tools()
+            result = await session.call_tool("echo_say", {"message": "hi", "reason": "test"})
+        assert "echo_say" in {t.name for t in tools.tools}
+        assert result.is_error is False
+        dispatcher.notify_tools_changed()  # nothing registered -- must not raise
 
 
 # --------------------------------------------------------------------------- #

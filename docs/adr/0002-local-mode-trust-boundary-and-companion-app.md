@@ -19,6 +19,12 @@ turning the default on does not by itself satisfy that; see
 to show on a real machine. Supersedes [ADR 0001](0001-remove-macos-native-extra.md) in part — see
 "Relationship to ADR 0001" below.
 
+**Superseded in part by [ADR 0003](0003-separated-installs-only.md), 2026-09-18.** Decisions 1–4
+and 6 stand unchanged and are what ADR 0003 enforces. What it withdraws is decision 5a's answer —
+"two install tiers", the non-elevated Windows per-user path kept — and, with it, the premise every
+"opt-in"/"default-on but declinable" wording below rests on: separation stops being something an
+install may be without. The macOS DMG and D1's declinable first-start prompt go with it; see
+ADR 0003 decisions 2 and 6.
 **Amended by #428 D2, 2026-09-18: macOS gets an install-time path to D1, not just the runtime
 one.** D1's own macOS mechanism is the daemon's first-start `osascript ... with administrator
 privileges` prompt — the only automatic path available to a DMG, which runs nothing as root at

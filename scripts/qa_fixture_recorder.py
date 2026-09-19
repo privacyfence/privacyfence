@@ -1582,12 +1582,12 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 #     read-only from PrivacyFence's side (see CONNECTOR_CHECKS above); there
 #     is nothing to create in the first place.
 #
-# None of calendar_client.py/confluence_client.py/jira_client.py/
-# tasks_client.py expose a delete_*() method at all, and no connectors/*.py
-# registers a delete tool for any provider -- a deliberate product-safety
-# choice that nothing MCP-reachable ever deletes a user's real data. Cleanup here
-# reaches past that boundary on purpose for calendar/jira/tasks, the same
-# way RawCapture/RawCaptureExecute above reach into each client's internal
+# confluence_client.py/jira_client.py/tasks_client.py still expose no
+# delete_*() method, and no connectors/*.py registers a delete tool for
+# either provider -- a deliberate product-safety choice that nothing
+# MCP-reachable deletes a user's real Jira/Tasks/Confluence data. Cleanup
+# here reaches past that boundary on purpose for jira/tasks, the same way
+# RawCapture/RawCaptureExecute above reach into each client's internal
 # request/service choke point: this script already runs with real QA-account
 # credentials nothing else in this codebase is trusted with, and only ever
 # touches the one object it just created itself this run (a fresh uuid4
@@ -1598,6 +1598,13 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 # -- broadening what that shared app can do just so this script can clean up
 # after itself was considered and rejected. lifecycle_confluence() verifies
 # create/get/update only and leaves the page behind; see its own docstring.
+#
+# Calendar is no longer in that "reaches past the boundary" group: issue
+# #415 added a real, gated (popup-approved) calendar_delete_event tool and
+# CalendarClient.delete_event(), so lifecycle_calendar() below now cleans up
+# through the same client method a real MCP call would use, not a raw
+# events().delete() service call the way it (and jira/tasks, which still
+# have no such method) still have to.
 # ---------------------------------------------------------------------------- #
 
 LIFECYCLE_TAG = "[QATEST-LIFECYCLE]"
@@ -1783,8 +1790,13 @@ def lifecycle_calendar(manifest: dict[str, Any]) -> LifecycleResult:
         ok, note = False, str(exc)
     finally:
         if event_id:
+            # Cleans up through the same client method a real
+            # calendar_delete_event MCP call would use (default scope=
+            # "this") -- see this section's own module comment above for
+            # why calendar no longer needs the raw events().delete()
+            # service call jira/tasks still do.
             delete_note = _attempt_delete(
-                lambda: client._get_service().events().delete(calendarId=calendar_id, eventId=event_id).execute(),
+                lambda: client.delete_event(calendar_id, event_id),
                 request_desc=f"calendar_id={calendar_id!r}, event_id={event_id!r}",
             )
             if delete_note:
@@ -1805,7 +1817,94 @@ def lifecycle_calendar(manifest: dict[str, Any]) -> LifecycleResult:
                 )
                 if confirm_note:
                     note = f"{note}; {confirm_note}" if note else confirm_note
+
+    # Issue #415's own round trip, a second and independent check alongside
+    # the plain event above -- see _lifecycle_calendar_recurrence's own
+    # docstring for why it's split out and what it does and doesn't cover.
+    # Its own cleanup failure folds into cleanup_ok (same meaning as the
+    # plain event's: "something this run created didn't get cleaned up"),
+    # never into ok -- ok stays "the create/read/update assertions
+    # passed", exactly as it already means for the plain event above.
+    recurrence_ok, recurrence_cleanup_ok, recurrence_note = _lifecycle_calendar_recurrence(
+        client, calendar_id, suffix,
+    )
+    ok = ok and recurrence_ok
+    cleanup_ok = _combine_cleanup_ok(cleanup_ok, recurrence_cleanup_ok)
+    note = f"{note}; {recurrence_note}" if note else recurrence_note
+
     return LifecycleResult("calendar", ok, note, cleanup_ok)
+
+
+def _combine_cleanup_ok(a: bool | None, b: bool | None) -> bool | None:
+    """Combine two LifecycleResult-style tri-state cleanup verdicts -- used
+    where one lifecycle check (lifecycle_calendar) creates and cleans up
+    more than one object and has to report a single verdict. A real
+    failure (False) always wins over a success (True), which in turn wins
+    over "nothing was ever created" (None) -- only None+None stays None.
+    """
+    if a is False or b is False:
+        return False
+    if a is True or b is True:
+        return True
+    return None
+
+
+def _lifecycle_calendar_recurrence(
+    client: CalendarClient, calendar_id: str, suffix: str,
+) -> tuple[bool, bool | None, str]:
+    """Create a short recurring series, verify the Calendar API actually
+    returns the recurrence rule back on both create and a fresh get, then
+    clean up through delete_event(scope="all"). Returns (ok, cleanup_ok,
+    note) -- the same three-way shape as LifecycleResult's own fields, for
+    lifecycle_calendar to fold into its single returned result via
+    _combine_cleanup_ok.
+
+    The freshly-created event's own id *is* the series master (there's no
+    separate instance id to redirect from yet), so this only exercises
+    create_event's recurrence param and delete_event's direct-delete path
+    -- the this/following/all instance-redirect and series-splitting logic
+    is already covered, branch by branch, by test_calendar_client.py's
+    mocked-service unit tests; this live check's job is catching real
+    provider-shape drift (e.g. Calendar starting to reject or reshape the
+    recurrence field), not re-proving logic the unit tests already own.
+    Unlike the plain event above, cleanup here is a bare _attempt_delete
+    with no _confirm_deleted follow-up: the eventually-consistent-delete
+    behavior it guards against is a property of the Calendar API itself,
+    already proven (and retried) by the plain event's own cleanup just
+    above, sharing the same account and the same delete_event() code path.
+    """
+    title = f"{LIFECYCLE_TAG} recurring calendar event {suffix}"
+    start = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=1)
+    end = start + datetime.timedelta(minutes=30)
+    event_id = ""
+    ok, note, cleanup_ok = False, "", None
+    try:
+        created = client.create_event(
+            calendar_id, title, start.isoformat(), end.isoformat(),
+            description=f"{LIFECYCLE_TAG} created by qa_fixture_recorder.py --lifecycle; safe to delete.",
+            recurrence="RRULE:FREQ=DAILY;COUNT=2",
+        )
+        event_id = created.id
+        if not event_id:
+            raise CalendarClientError("create_event (recurring) returned no id")
+        if not created.recurrence:
+            raise CalendarClientError("create_event (recurring) did not return a recurrence rule")
+        fetched = client.get_event(calendar_id, event_id)
+        if not fetched.recurrence:
+            raise CalendarClientError("get_event after create did not reflect the recurrence rule")
+        ok, note = True, "recurring create/get verified"
+    except Exception as exc:  # noqa: BLE001 - a failure here is itself the finding
+        ok, note = False, f"recurring event check failed: {exc}"
+    finally:
+        if event_id:
+            delete_note = _attempt_delete(
+                lambda: client.delete_event(calendar_id, event_id, scope="all"),
+                request_desc=f"calendar_id={calendar_id!r}, event_id={event_id!r}, scope=all",
+            )
+            cleanup_ok = not delete_note
+            if delete_note:
+                note = f"{note}; recurring event cleanup: {delete_note}" if note else delete_note
+    return ok, cleanup_ok, note
 
 
 def lifecycle_confluence(manifest: dict[str, Any]) -> LifecycleResult:

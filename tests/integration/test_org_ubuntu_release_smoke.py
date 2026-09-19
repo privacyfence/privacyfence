@@ -207,7 +207,7 @@ if not os.environ.get("PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS"):
 mcp_client = pytest.importorskip(
     "mcp", reason="mcp (Python MCP client) not installed -- pip install -e '.[test]'"
 )
-import httpx  # noqa: E402
+import httpx2  # noqa: E402
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
@@ -682,8 +682,8 @@ class TestRunningOrgModeService:
         users_dir = self.home / ".privacyfence" / "users"
         assert not users_dir.exists() or not any(users_dir.iterdir())
 
-        async with httpx.AsyncClient(headers={"Host": ISSUER_HOST, "Authorization": f"Bearer {access_token}"}) as hc:
-            async with streamable_http_client(f"http://127.0.0.1:{self.port}/mcp", http_client=hc) as (r, w, _sid):
+        async with httpx2.AsyncClient(headers={"Host": ISSUER_HOST, "Authorization": f"Bearer {access_token}"}) as hc:
+            async with streamable_http_client(f"http://127.0.0.1:{self.port}/mcp", http_client=hc) as (r, w):
                 async with ClientSession(r, w) as session:
                     await session.initialize()
                     # There are zero connectors in this synthetic config
@@ -699,7 +699,7 @@ class TestRunningOrgModeService:
                     # "Unknown tool" result that comes back is expected,
                     # not a bug.
                     result = await session.call_tool("smoke_test_nonexistent_tool", {})
-                    assert result.isError
+                    assert result.is_error
 
         expected_dir = users_dir / safe_principal_id("carol")
         assert expected_dir.is_dir(), (
@@ -738,10 +738,10 @@ class TestRunningOrgModeService:
         bob_cookie = _complete_browser_login(self.client, self.idp, sub="bob")
 
         async def propose() -> Any:
-            async with httpx.AsyncClient(
+            async with httpx2.AsyncClient(
                 headers={"Host": ISSUER_HOST, "Authorization": f"Bearer {access_token}"},
             ) as hc:
-                async with streamable_http_client(f"http://127.0.0.1:{self.port}/mcp", http_client=hc) as (r, w, _sid):
+                async with streamable_http_client(f"http://127.0.0.1:{self.port}/mcp", http_client=hc) as (r, w):
                     async with ClientSession(r, w) as session:
                         await session.initialize()
                         return await session.call_tool("privacyfence_propose_auto_accept_rule_change", {
@@ -798,8 +798,12 @@ class TestRunningOrgModeService:
             if not propose_task.done():
                 propose_task.cancel()
 
-        assert not result.isError, result.content
-        assert "trusted_sender_domain" in result.content[0].text
+        assert not result.is_error, result.content
+        # P9 of the policy v2 redesign: propose_rule_change's confirmed-response no longer echoes
+        # the v1 rule_name verbatim -- it reports the v2 rule's own human-readable sentence instead
+        # (policy.describe.rule_sentence), which names the scope ("sender domain example.com") and
+        # the verb, not the v1 predicate string.
+        assert "Gmail - sender domain example.com: allow read" in result.content[0].text
 
         # Audit-principal correctness: the decision this call made landed
         # under carol's own per-principal audit log directory (audit_log.py's
@@ -936,10 +940,10 @@ class TestCleanShutdownAndRestart:
 
         async def _propose_and_decide_rule(client: LoopbackClient, access_token: str, carol_cookie: str) -> None:
             async def propose():
-                async with httpx.AsyncClient(
+                async with httpx2.AsyncClient(
                     headers={"Host": ISSUER_HOST, "Authorization": f"Bearer {access_token}"},
                 ) as hc:
-                    async with streamable_http_client(f"http://127.0.0.1:{port}/mcp", http_client=hc) as (r, w, _sid):
+                    async with streamable_http_client(f"http://127.0.0.1:{port}/mcp", http_client=hc) as (r, w):
                         async with ClientSession(r, w) as session:
                             await session.initialize()
                             return await session.call_tool("privacyfence_propose_auto_accept_rule_change", {
@@ -963,7 +967,7 @@ class TestCleanShutdownAndRestart:
             )
             assert decide.status_code == 200, decide.text
             result = await asyncio.wait_for(propose_task, timeout=10)
-            assert not result.isError, result.content
+            assert not result.is_error, result.content
 
         with _daemon(installed_privacyfence, home=home) as (proc, log_path):
             _wait_until_ready(proc, "127.0.0.1", port, log_path)
@@ -997,10 +1001,10 @@ class TestCleanShutdownAndRestart:
             access_token2 = _mcp_bearer_token_for(client2, mock_idp, sub="carol")
 
             async def _list_rules() -> Any:
-                async with httpx.AsyncClient(
+                async with httpx2.AsyncClient(
                     headers={"Host": ISSUER_HOST, "Authorization": f"Bearer {access_token2}"},
                 ) as hc:
-                    async with streamable_http_client(f"http://127.0.0.1:{port}/mcp", http_client=hc) as (r, w, _sid):
+                    async with streamable_http_client(f"http://127.0.0.1:{port}/mcp", http_client=hc) as (r, w):
                         async with ClientSession(r, w) as session:
                             await session.initialize()
                             return await session.call_tool(
@@ -1008,8 +1012,11 @@ class TestCleanShutdownAndRestart:
                             )
 
             result = asyncio.run(_list_rules())
-            assert not result.isError, result.content
-            assert "trusted_sender_domain" in result.content[0].text
+            assert not result.is_error, result.content
+            # P9: privacyfence_list_auto_accept_rules is a deprecated alias of privacyfence_list_policy
+            # now -- it reports the v2 rule's own sentence/scope_type, not the v1 rule_name string.
+            assert "Gmail - sender domain example.com: allow read" in result.content[0].text
+            assert "gmail.sender_domain" in result.content[0].text
 
         # The audit trail grew, in the *same* weekly file, rather than
         # being reset or rotated by the restart -- SEC-23's append-only

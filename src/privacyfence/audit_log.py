@@ -62,7 +62,8 @@ logger = logging.getLogger(__name__)
 #   2 -- SEC-23: + schema_version, event_id, deployment_id,
 #        security_config_hash, prev_hash, entry_hash
 #   3 -- approval binder Phase 2: + decided_via, batch_id
-CURRENT_SCHEMA_VERSION = 3
+#   4 -- policy v2 redesign P8 (rule attribution and staleness): + rule_id
+CURRENT_SCHEMA_VERSION = 4
 
 # The hash chain's own root -- what the very first entry this install ever
 # records (or the first one after a chain-state file goes missing, e.g. a
@@ -101,11 +102,14 @@ class AuditEntry:
     sender: str
     decision: str           # "approved" | "rejected" | "auto_accepted" | "accepted_via_accept_all" |
                             # "accepted_via_temp_session" | "denied_unattended" | "policy_check" |
-                            # "rules_listed" | "cancelled" | "org_config_startup" |
+                            # "rules_listed" | "policy_listed" | "cancelled" | "org_config_startup" |
                             # "unattended_session_started" | "unattended_session_ended" |
                             # "rule_changed_via_bridge_proposal" | "rule_removed_via_bridge_proposal" |
                             # "grant_changed_via_bridge_proposal" | "grant_removed_via_bridge_proposal" |
-                            # "bridge_proposal_no_op" | "error" |
+                            # "bridge_proposal_no_op" |
+                            # "policy_rule_changed_via_bridge_proposal" |
+                            # "policy_rule_removed_via_bridge_proposal" |
+                            # "policy_bridge_proposal_no_op" | "error" |
                             # "approval_pending" | "expired" |
                             # "webauthn_credential_enrolled" | "webauthn_credential_removed" |
                             # "webauthn_enrollment_refused" | "webauthn_recovery_code_used" |
@@ -233,6 +237,23 @@ class AuditEntry:
                             #  proposed removing a rule/grant value that was already gone. Distinct
                             #  from "rejected" (the human said no) and from the four decisions above
                             #  (a real change happened) -- confirmed and yet a no-op is its own case)
+                            # ("policy_listed": web/mcp_dispatch.py's McpDispatcher.list_policy (P7
+                            #  of the policy v2 redesign) -- privacyfence_list_policy's own
+                            #  disclosure of the current v2 auto_accept: rule set, kept distinct from
+                            #  "rules_listed" (privacyfence_list_auto_accept_rules' older v1
+                            #  auto_accept_rules/auto_accept_grants disclosure) since they list two
+                            #  different config sections, not two names for the same event)
+                            # ("policy_rule_changed_via_bridge_proposal"/
+                            #  "policy_rule_removed_via_bridge_proposal"/"policy_bridge_proposal_no_op":
+                            #  gate.py's propose_policy_change() (P7) -- the v2-store counterpart of
+                            #  "rule_changed_via_bridge_proposal"/"rule_removed_via_bridge_proposal"/
+                            #  "bridge_proposal_no_op" above, kept as distinct decision strings
+                            #  (rather than reused) because they persist into a different config
+                            #  section (the on-disk v2 auto_accept: section, never v1's
+                            #  auto_accept_rules) -- same reasoning as "policy_listed" above, and the
+                            #  same "don't rename what's already written into someone's audit
+                            #  history" principle the note on "rule_changed_via_bridge_proposal" above
+                            #  already gives for keeping its own legacy "bridge_proposal" vocabulary)
     auto_accept_rule: str   # rule name if auto_accepted, else ""
     latency_seconds: float
     pii_detected: bool = False  # True if pii_detector.py flagged the content before this decision
@@ -293,6 +314,23 @@ class AuditEntry:
                               # ordinary single-decide entry, and for every entry recorded before
                               # this field existed. See approvals.PendingApproval.decided_via's own
                               # docstring for how a decision gets stamped with it.
+    rule_id: str = ""       # P8 (policy v2 redesign) -- the on-disk v2 auto_accept: rule's own
+                              # stable, content-derived id (policy.store.rule_id_for_rule) that
+                              # matched, when this decision is "auto_accepted" and the match
+                              # resolves unambiguously to exactly one rule row. Distinct from
+                              # auto_accept_rule above: that field is a rule *name*, which (per F9)
+                              # can be the same string for several different grants/rules and so
+                              # can never answer "which rule let this through" on its own; this
+                              # field is what AuditLogger.rule_usage() below groups by to get a
+                              # per-rule match count and last-matched date for the Auto-accept
+                              # Settings page. Left "" -- fail closed, never guessed -- for every
+                              # non-"auto_accepted" decision, for an entry recorded before this
+                              # field existed, for the in-memory "session_temp_accept" grace-window
+                              # pseudo-match (not a stored rule row at all), and for a real
+                              # auto-accept where the v1 and v2 engines disagree on which rule
+                              # matched (logged separately at WARNING by gate.py's
+                              # _evaluate_auto_accept -- the audit log must never attribute a
+                              # decision to a row it isn't certain about).
     batch_id: str = ""       # The server-minted id of the batch this decision was submitted as part
                               # of, when decided_via == "binder" -- "" otherwise. Lets a reviewer (or
                               # a compliance report) group every audit entry a single passkey
@@ -634,8 +672,10 @@ class AuditLogger:
             # Appended for the same reason as the SEC-23 block above: existing
             # column indices stay stable.
             "Decided Via", "Batch ID",
+            # P8 (policy v2 redesign): appended last, same reason again.
+            "Rule ID",
         ]
-        COL_WIDTHS = [22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22, 14, 30]
+        COL_WIDTHS = [22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22, 14, 30, 14]
 
         hdr_font  = Font(bold=True, color="FFFFFF")
         hdr_fill  = PatternFill("solid", fgColor="2D4A6B")
@@ -650,12 +690,16 @@ class AuditLogger:
             "denied_unattended":     PatternFill("solid", fgColor="FFD8A8"),
             "policy_check":          PatternFill("solid", fgColor="F1F3F5"),
             "rules_listed":          PatternFill("solid", fgColor="F1F3F5"),
+            "policy_listed":         PatternFill("solid", fgColor="F1F3F5"),
             "org_config_startup":    PatternFill("solid", fgColor="F1F3F5"),
             "rule_changed_via_bridge_proposal":   PatternFill("solid", fgColor="FFF3CD"),
             "rule_removed_via_bridge_proposal":   PatternFill("solid", fgColor="FFF3CD"),
             "grant_changed_via_bridge_proposal":  PatternFill("solid", fgColor="FFF3CD"),
             "grant_removed_via_bridge_proposal":  PatternFill("solid", fgColor="FFF3CD"),
             "bridge_proposal_no_op": PatternFill("solid", fgColor="F1F3F5"),
+            "policy_rule_changed_via_bridge_proposal": PatternFill("solid", fgColor="FFF3CD"),
+            "policy_rule_removed_via_bridge_proposal": PatternFill("solid", fgColor="FFF3CD"),
+            "policy_bridge_proposal_no_op": PatternFill("solid", fgColor="F1F3F5"),
             "error":                 PatternFill("solid", fgColor="FF6B6B"),
             "cancelled":             PatternFill("solid", fgColor="E9ECEF"),
             "approval_pending":      PatternFill("solid", fgColor="E7F0FF"),
@@ -681,6 +725,7 @@ class AuditLogger:
                 entry.event_id or "", entry.deployment_id or "",
                 entry.security_config_hash or "", entry.entry_hash or "",
                 entry.decided_via or "", _excel_literal(entry.batch_id or ""),
+                entry.rule_id or "",
             ])
             fill = decision_fills.get(entry.decision, PatternFill())
             for col in range(1, len(HEADERS) + 1):
@@ -795,6 +840,46 @@ class AuditLogger:
                 ):
                     count += 1
         return count
+
+    def rule_usage(self) -> dict[str, dict[str, Any]]:
+        """Per-rule usage, for the Auto-accept Settings page's "Matched 42x, last 3 days ago" /
+        "never matched" line (P8, resolving F9): ``{rule_id: {"count": int, "last_matched":
+        <ISO-8601 timestamp string>}}``, built from every ``"auto_accepted"`` decision this
+        install has ever recorded whose ``rule_id`` resolved to a real row (see AuditEntry.
+        rule_id's own docstring for when that's empty).
+
+        Scans every week file, not just the two ``recent_entries()`` keeps warm -- staleness is a
+        lifetime question ("has this rule matched even once since it was created?"), not a
+        "what just happened" one, so a rule that matched constantly last year and never since must
+        still show its real last-matched date rather than "never" the moment it ages out of a
+        recency window. Same "one malformed line must not break the read" posture as every other
+        reader in this class (``recent_entries``, ``recent_matches``): a bad line is skipped, not
+        raised.
+
+        ``timestamp`` strings compare correctly with plain ``>`` because every one of them is
+        ``datetime.now(timezone.utc).isoformat()`` (gate.py's own ``_audit``) -- fixed-width,
+        same offset, so lexical order is chronological order.
+        """
+        usage: dict[str, dict[str, Any]] = {}
+        for jsonl in sorted(self._log_dir.glob("*.jsonl")):
+            with open(jsonl, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    rule_id = data.get("rule_id") or ""
+                    if not rule_id or data.get("decision") != "auto_accepted":
+                        continue
+                    timestamp = data.get("timestamp") or ""
+                    entry = usage.setdefault(rule_id, {"count": 0, "last_matched": ""})
+                    entry["count"] += 1
+                    if timestamp > entry["last_matched"]:
+                        entry["last_matched"] = timestamp
+        return usage
 
 
 def _load_or_create_chain_key(path: Path) -> bytes:

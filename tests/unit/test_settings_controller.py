@@ -6,10 +6,14 @@ grant/PII/privacy/connector/audit/org-config tests (see git history) --
 same behavior, now exercised through SettingsController's methods instead of
 PrivacyFenceMenuBar's. Native-picker-specific tests (_osascript_pick-driven
 rule/policy selection, the old int-value/list-value rumps.Window prompts)
-were dropped rather than ported, since the Auto-accept Rules page now edits
-rule_type via an in-webview dropdown (RULES_BY_OPERATION-constrained, not a
-native AppKit picker) and value as plain text (see settings_controller.py's
-own docstring on why) -- there is no native picker left to test.
+were dropped rather than ported -- there is no native picker left to test.
+The webview-dropdown rule editor #120 replaced them with (rule_type from a
+RULES_BY_OPERATION-constrained <select>, value as plain text) is itself gone
+as of the policy v2 redesign's P6 (see TestAddPolicyRule/TestRemovePolicyRule
+below for its replacement, and settings_controller.py's own "Auto-accept
+(policy v2)" section docstring); RULES_BY_OPERATION/RULES_LIST_VALUE/
+RULES_INT_VALUE survive only because org mode's own separate settings
+surface (web/routes_org_settings.py) still reads them.
 
 Also covers the cross-thread AppHelper.callAfter marshaling contract
 (_run_async/on_change) that used to live in test_menu_bar.py's "P6" module
@@ -43,7 +47,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from privacyfence import auto_accept, daemon_main, org_mode, resource_names, settings_controller as sc, update_checker
-from privacyfence import resource_grants as rg
+from privacyfence.auto_accept import ReviewContext
+from privacyfence.policy import engine as policy_engine
+from privacyfence.policy import propose as policy_propose
+from privacyfence.policy import store as policy_store
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -158,7 +165,7 @@ class TestOnChangeMarshaling:
         bg_done = threading.Event()
 
         def background_thread_body():
-            auto_accept.reload_rules({"gmail.read_message": [{"rule": "i_am_sender"}]})
+            auto_accept.notify_rules_changed()
             bg_done.set()
 
         try:
@@ -324,15 +331,15 @@ class TestConfigHelpers:
 
     def test_save_and_reload_persists_and_triggers_rule_reload(self, controller, monkeypatch):
         reload_calls = []
-        monkeypatch.setattr(sc, "reload_rules", lambda rules: reload_calls.append(rules))
+        monkeypatch.setattr(sc, "notify_rules_changed", lambda: reload_calls.append(True))
 
         controller._save_and_reload({"auto_accept_rules": {"gmail.read_message": [{"rule": "i_am_sender"}]}})
 
-        assert reload_calls == [{"gmail.read_message": [{"rule": "i_am_sender"}]}]
+        assert reload_calls == [True]
         assert controller._load_config()["auto_accept_rules"] == {"gmail.read_message": [{"rule": "i_am_sender"}]}
 
     def test_save_and_reload_swallows_reload_failures(self, controller, monkeypatch):
-        monkeypatch.setattr(sc, "reload_rules", lambda rules: (_ for _ in ()).throw(RuntimeError("boom")))
+        monkeypatch.setattr(sc, "notify_rules_changed", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
 
         controller._save_and_reload({})  # must not raise
 
@@ -365,27 +372,15 @@ class TestShortId:
         assert "…" in result
 
 
-class TestParseFormatRuleValue:
-    def test_list_value_rule_splits_on_comma(self):
-        assert sc._parse_rule_value("trusted_sender_domain", "a.com, b.com") == ["a.com", "b.com"]
-
-    def test_int_value_rule_parses_integer(self):
-        assert sc._parse_rule_value("age_threshold_days", "30") == 30
-
-    def test_int_value_rule_non_numeric_kept_as_typed(self):
-        assert sc._parse_rule_value("age_threshold_days", "not-a-number") == "not-a-number"
-
-    def test_unknown_rule_kept_as_plain_string(self):
-        assert sc._parse_rule_value("some_future_rule", "hello") == "hello"
+class TestParseValueList:
+    def test_splits_on_comma(self):
+        assert sc._parse_value_list("a.com, b.com") == ["a.com", "b.com"]
 
     def test_empty_text_is_none(self):
-        assert sc._parse_rule_value("trusted_sender_domain", "   ") is None
+        assert sc._parse_value_list("   ") is None
 
-    def test_format_round_trips_list(self):
-        assert sc._format_rule_value("trusted_sender_domain", ["a.com", "b.com"]) == "a.com, b.com"
-
-    def test_format_none_is_empty_string(self):
-        assert sc._format_rule_value("i_am_sender", None) == ""
+    def test_blank_entries_are_dropped(self):
+        assert sc._parse_value_list("a.com, , b.com,") == ["a.com", "b.com"]
 
 
 class TestPiiDetection:
@@ -1551,213 +1546,257 @@ class TestTelegramAuthSnapshotState:
             assert "secret-hash" not in serialized
 
 
-class TestRuleRows:
-    def _seed(self, controller, op_key, rules):
+class TestPolicyScopeCatalogue:
+    """P6 of the policy v2 redesign: the Auto-accept page's "add a rule" scope picker -- one entry
+    per policy.propose.SCOPES_BY_GROUP widening group, plus sc._POLICY_EXTRA_SCOPES."""
+
+    def test_covers_every_propose_group_and_every_extra(self):
+        ids = {entry["id"] for entry in sc._policy_scope_catalogue()}
+        assert set(policy_propose.SCOPES_BY_GROUP) <= ids
+        assert set(sc._POLICY_EXTRA_SCOPES) <= ids
+
+    def test_apps_script_entry_needs_a_value_and_offers_read_and_update(self):
+        entry = next(e for e in sc._policy_scope_catalogue() if e["id"] == "apps_script.project")
+        assert entry["needs_value"] is True
+        assert set(entry["verbs"]) == {"read", "update"}
+        assert entry["connector"] == "apps_script"
+
+    def test_gmail_and_slack_unconditional_extras_need_no_value(self):
+        by_id = {e["id"]: e for e in sc._policy_scope_catalogue()}
+        assert by_id["gmail.configure"]["needs_value"] is False
+        assert by_id["gmail.configure"]["verbs"] == ["configure"]
+        assert by_id["slack.share_anything"]["needs_value"] is False
+        assert by_id["slack.share_anything"]["verbs"] == ["share"]
+
+    def test_drive_folder_entry_unions_verbs_across_every_predicate_in_the_group(self):
+        entry = next(e for e in sc._policy_scope_catalogue() if e["id"] == "drive.folder")
+        # approved_folder (read/download) + approved_sandbox_folder (update/format/restructure/
+        # comment/delete) + parent_folder_allowlist (create) + move_within_approved_folders (move).
+        assert set(entry["verbs"]) == {
+            "read", "download", "update", "format", "restructure", "comment", "delete", "create", "move",
+        }
+
+
+class TestAddPolicyRule:
+    """P6: add_policy_rule is the Auto-accept page's one writer, straight to the on-disk v2
+    ``auto_accept:`` section -- never through v1's auto_accept_rules/auto_accept_grants."""
+
+    def test_adds_a_scope_rule_to_the_v2_section(self, controller):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read", "download"])
+
+        rules = state["auto_accept"]["rules"]
+        assert len(rules) == 1
+        assert rules[0]["connector"] == "drive"
+        assert {v["verb"] for v in rules[0]["verbs"]} == {"read", "download"}
+        assert "FOLDER1" in rules[0]["value"]
+
         cfg = controller._load_config()
-        cfg.setdefault("auto_accept_rules", {})[op_key] = rules
+        assert cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] is True
+        assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["predicate"] == "approved_folder"
+        # Never *populates* the v1 sections -- a v2-only add writes nothing under auto_accept_rules.
+        assert not cfg.get("auto_accept_rules")
+
+    def test_adding_more_verbs_for_the_same_value_widens_the_existing_row(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["download"])
+
+        rules = state["auto_accept"]["rules"]
+        assert len(rules) == 1
+        assert {v["verb"] for v in rules[0]["verbs"]} == {"read", "download"}
+
+    def test_each_of_the_six_previously_unreachable_operations_becomes_addable(self, controller):
+        state = controller.add_policy_rule("apps_script.project", "SCRIPT1", ["read", "update"])
+        tools = {t for row in state["auto_accept"]["rules"] for t in row["covered_tools"]}
+        assert {"apps_script_get_content", "apps_script_get_execution_log", "apps_script_write_content"} <= tools
+
+        state = controller.add_policy_rule("gmail.configure", "", ["configure"])
+        tools = {t for row in state["auto_accept"]["rules"] for t in row["covered_tools"]}
+        assert "gmail_create_filter" in tools
+
+        state = controller.add_policy_rule("slack.share_anything", "", ["share"])
+        tools = {t for row in state["auto_accept"]["rules"] for t in row["covered_tools"]}
+        assert "slack_create_group_chat" in tools
+
+    def test_apps_script_rule_with_no_value_is_not_written(self, controller):
+        state = controller.add_policy_rule("apps_script.project", "", ["read"])
+        assert state["auto_accept"]["rules"] == []
+        assert policy_store.AUTO_ACCEPT_CONFIG_KEY not in controller._load_config()
+
+    def test_unknown_group_is_a_no_op(self, controller):
+        state = controller.add_policy_rule("not.a.real.group", "X", ["read"])
+        assert state["auto_accept"]["rules"] == []
+
+    def test_unknown_verb_for_a_known_group_is_dropped_silently(self, controller):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read", "not-a-verb"])
+        rules = state["auto_accept"]["rules"]
+        assert len(rules) == 1
+        assert {v["verb"] for v in rules[0]["verbs"]} == {"read"}
+
+    def test_verb_the_group_does_not_govern_is_a_no_op(self, controller):
+        # "share" is not among gmail.sender_domain's own verbs (read/download/archive).
+        state = controller.add_policy_rule("gmail.sender_domain", "acme.com", ["share"])
+        assert state["auto_accept"]["rules"] == []
+
+    def test_engine_actually_matches_a_rule_written_here(self, controller):
+        controller.add_policy_rule("apps_script.project", "SCRIPT1", ["read"])
+        cfg = controller._load_config()
+        rules = policy_store.compile_rules_from_config(cfg)
+        ctx = ReviewContext(connector="apps_script", tool="apps_script_get_content",
+                             args={"script_id": "SCRIPT1"}, raw_data=None, my_email="")
+        matched, rule_id = policy_engine.evaluate(rules, "apps_script.read_content", ctx)
+        assert matched is True
+        assert rule_id == rules[0].id
+
+
+class TestRemovePolicyRule:
+    def test_removes_by_id(self, controller):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        rule_id = state["auto_accept"]["rules"][0]["id"]
+
+        state = controller.remove_policy_rule(rule_id)
+
+        assert state["auto_accept"]["rules"] == []
+        assert controller._load_config()[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"] == []
+
+    def test_unknown_id_is_a_no_op(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        before = controller._load_config()
+
+        controller.remove_policy_rule("r-does-not-exist")
+
+        assert controller._load_config() == before
+
+
+class TestAutoAcceptRuleUsage:
+    """P8 (rule attribution and staleness): each Auto-accept row's own match_count/last_matched/
+    never_matched, from the audit log's rule_id field (see AuditEntry.rule_id's own docstring)."""
+
+    def _record(self, controller, **overrides):
+        from privacyfence.audit_log import AuditEntry, AuditLogger, current_week
+
+        log_dir = sc.authority_root(sc.data_dir()) / "logs" / "audit"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        defaults = dict(
+            timestamp="2026-07-06T12:00:00+00:00", week=current_week(), request_id="",
+            connector="drive", tool="drive_write_file", tool_name="Write Drive file",
+            summary="s", sender="", decision="auto_accepted", auto_accept_rule="approved_folder",
+            latency_seconds=1.0,
+        )
+        defaults.update(overrides)
+        AuditLogger(str(log_dir)).record(AuditEntry(**defaults))
+
+    def test_never_matched_rule_reports_zero_and_no_last_matched(self, controller):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        row = state["auto_accept"]["rules"][0]
+        assert row["match_count"] == 0
+        assert row["last_matched"] == ""
+        assert row["never_matched"] is True
+
+    def test_matched_rule_reports_count_and_last_matched(self, controller):
+        state = controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        rule_id = state["auto_accept"]["rules"][0]["id"]
+        self._record(controller, rule_id=rule_id)
+        self._record(controller, rule_id=rule_id, timestamp="2026-07-07T12:00:00+00:00")
+
+        state = controller.snapshot()
+        row = state["auto_accept"]["rules"][0]
+        assert row["match_count"] == 2
+        assert row["never_matched"] is False
+        assert row["last_matched"] != ""
+
+    def test_usage_for_a_different_rule_id_does_not_leak_across_rows(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        self._record(controller, rule_id="r-some-other-rule")
+
+        state = controller.snapshot()
+        row = state["auto_accept"]["rules"][0]
+        assert row["match_count"] == 0
+        assert row["never_matched"] is True
+
+    def test_entries_with_no_rule_id_do_not_count_as_a_match(self, controller):
+        controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
+        self._record(controller, rule_id="")
+
+        state = controller.snapshot()
+        row = state["auto_accept"]["rules"][0]
+        assert row["never_matched"] is True
+
+
+class TestPolicyV2MigrationNotice:
+    """P4 of the policy v2 redesign's Settings banner: policy_v2_migration_notice_html() -- see
+    settings_controller.py's own docstring on it for why this is the dismissible-notice mechanism
+    (web_shell.wrap's dismissible_notice_html), not the persistent banner."""
+
+    def _seed(self, controller, *, migrated, rules):
+        cfg = controller._load_config()
+        if migrated:
+            cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] = True
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = {"version": 2, "rules": rules}
         controller._save_config(cfg)
 
-    def test_add_rule_row_appends_an_empty_row(self, controller):
-        controller.add_rule_row("gmail.read_message")
-
-        rules = controller._load_config()["auto_accept_rules"]["gmail.read_message"]
-        assert rules == [{"rule": ""}]
-
-    def test_update_rule_type_field(self, controller):
-        self._seed(controller, "gmail.read_message", [{"rule": ""}])
-
-        controller.update_rule_row("gmail.read_message", 0, "rule_type", "i_am_sender")
-
-        rules = controller._load_config()["auto_accept_rules"]["gmail.read_message"]
-        assert rules[0]["rule"] == "i_am_sender"
-
-    def test_update_value_field_for_list_rule_splits_on_comma(self, controller):
-        self._seed(controller, "gmail.read_message", [{"rule": "trusted_sender_domain"}])
-
-        controller.update_rule_row("gmail.read_message", 0, "value", "a.com, b.com")
-
-        rules = controller._load_config()["auto_accept_rules"]["gmail.read_message"]
-        assert rules[0]["value"] == ["a.com", "b.com"]
-
-    def test_update_value_field_for_int_rule_parses_integer(self, controller):
-        self._seed(controller, "gmail.read_message", [{"rule": "age_threshold_days"}])
-
-        controller.update_rule_row("gmail.read_message", 0, "value", "30")
-
-        rules = controller._load_config()["auto_accept_rules"]["gmail.read_message"]
-        assert rules[0]["value"] == 30
-
-    def test_clearing_value_field_removes_the_value_key(self, controller):
-        self._seed(controller, "gmail.read_message", [{"rule": "age_threshold_days", "value": 30}])
-
-        controller.update_rule_row("gmail.read_message", 0, "value", "")
-
-        rules = controller._load_config()["auto_accept_rules"]["gmail.read_message"]
-        assert "value" not in rules[0]
-
-    def test_update_out_of_range_index_is_a_no_op(self, controller):
-        self._seed(controller, "gmail.read_message", [{"rule": "i_am_sender"}])
-        before = controller._load_config()
-
-        controller.update_rule_row("gmail.read_message", 9, "rule_type", "x")
-
-        assert controller._load_config() == before
-
-    def test_remove_rule_row(self, controller):
-        self._seed(controller, "gmail.read_message", [{"rule": "i_am_sender"}, {"rule": "trusted_sender_domain"}])
-
-        controller.remove_rule_row("gmail.read_message", 0)
-
-        rules = controller._load_config()["auto_accept_rules"]["gmail.read_message"]
-        assert rules == [{"rule": "trusted_sender_domain"}]
-
-    def test_removing_last_rule_drops_the_operation_key(self, controller):
-        self._seed(controller, "gmail.read_message", [{"rule": "i_am_sender"}])
-
-        controller.remove_rule_row("gmail.read_message", 0)
-
-        assert "gmail.read_message" not in controller._load_config().get("auto_accept_rules", {})
-
-    def test_remove_out_of_range_index_is_a_no_op(self, controller):
-        self._seed(controller, "gmail.read_message", [{"rule": "i_am_sender"}])
-        before = controller._load_config()
-
-        controller.remove_rule_row("gmail.read_message", 9)
-
-        assert controller._load_config() == before
-
-    def test_grant_compiled_entries_are_excluded_from_rows(self, controller):
-        self._seed(controller, "drive.read_file_contents", [{"rule": "approved_folder", "_grant": True}])
-
-        state = controller._rules_state(controller._load_config())
-        read_file = next(s for s in state["sections_by_connector"]["drive"] if s["op_key"] == "drive.read_file_contents")
-        assert read_file["rows"] == []
-
-
-class TestGrantRows:
-    def test_add_grant_row_appends_an_empty_entry(self, controller):
-        controller.add_grant_row("drive", "sandbox_folders")
-
-        entries = controller._load_config()["auto_accept_grants"]["drive"]["sandbox_folders"]
-        assert entries == [{"id": ""}]
-
-    def test_update_id_field_extracts_from_pasted_url(self, controller):
-        controller.add_grant_row("drive", "sandbox_folders")
-
-        controller.update_grant_row(
-            "drive", "sandbox_folders", 0, "id",
-            "https://drive.google.com/drive/folders/FOLDER9",
+    def test_no_notice_before_migration_even_with_a_destructive_rule_present(self, controller):
+        self._seed(
+            controller, migrated=False,
+            rules=[{"id": "r1", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]}],
         )
+        assert controller.policy_v2_migration_notice_html() is None
 
-        entries = controller._load_config()["auto_accept_grants"]["drive"]["sandbox_folders"]
-        assert entries[0]["id"] == "FOLDER9"
+    def test_no_notice_after_migration_when_nothing_is_destructive_or_send(self, controller):
+        self._seed(
+            controller, migrated=True,
+            rules=[{"id": "r1", "predicate": "approved_folder", "value": ["F1"],
+                     "operations": ["drive.read_file_contents"]}],
+        )
+        assert controller.policy_v2_migration_notice_html() is None
 
-    def test_update_name_field(self, controller):
-        controller.add_grant_row("drive", "sandbox_folders")
+    def test_notice_lists_destructive_rule_after_migration(self, controller):
+        self._seed(
+            controller, migrated=True,
+            rules=[{"id": "r-delete", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]}],
+        )
+        notice = controller.policy_v2_migration_notice_html()
+        assert notice is not None
+        assert "r-delete" in notice
+        assert "1 existing rule" in notice
 
-        controller.update_grant_row("drive", "sandbox_folders", 0, "name", "Scratch")
+    def test_notice_lists_send_rule_after_migration(self, controller):
+        self._seed(
+            controller, migrated=True,
+            rules=[{"id": "r-send", "predicate": "always_allow", "operations": ["slack.send_message"]}],
+        )
+        notice = controller.policy_v2_migration_notice_html()
+        assert notice is not None
+        assert "r-send" in notice
 
-        entries = controller._load_config()["auto_accept_grants"]["drive"]["sandbox_folders"]
-        assert entries[0]["name"] == "Scratch"
-
-    def test_duplicate_id_is_rejected(self, controller):
-        controller._save_config({"auto_accept_grants": {"drive": {"sandbox_folders": [{"id": "F1"}]}}})
-        controller.add_grant_row("drive", "sandbox_folders")
-
-        controller.update_grant_row("drive", "sandbox_folders", 1, "id", "F1")
-
-        entries = controller._load_config()["auto_accept_grants"]["drive"]["sandbox_folders"]
-        assert entries[1]["id"] == ""
-        assert controller.error
-
-    def test_toggle_capability_on_and_off(self, controller):
-        controller._save_config({"auto_accept_grants": {"drive": {"sandbox_folders": [{"id": "F1", "write": False}]}}})
-
-        controller.toggle_grant_capability("drive", "sandbox_folders", 0, "write")
-        assert controller._load_config()["auto_accept_grants"]["drive"]["sandbox_folders"][0]["write"] is True
-
-        controller.toggle_grant_capability("drive", "sandbox_folders", 0, "write")
-        assert controller._load_config()["auto_accept_grants"]["drive"]["sandbox_folders"][0]["write"] is False
-
-    def test_toggle_capability_unknown_resource_type_is_a_no_op(self, controller):
-        before = controller._load_config()
-
-        controller.toggle_grant_capability("nope", "nope", 0, "write")
-
-        assert controller._load_config() == before
-
-    def test_remove_grant_row(self, controller):
-        controller._save_config({"auto_accept_grants": {"drive": {"sandbox_folders": [{"id": "F1"}]}}})
-
-        controller.remove_grant_row("drive", "sandbox_folders", 0)
-
-        assert not controller._load_config().get("auto_accept_grants", {}).get("drive", {}).get("sandbox_folders")
-
-    def test_remove_out_of_range_index_is_a_no_op(self, controller):
-        controller._save_config({"auto_accept_grants": {"drive": {"sandbox_folders": [{"id": "F1"}]}}})
-        before = controller._load_config()
-
-        controller.remove_grant_row("drive", "sandbox_folders", 9)
-
-        assert controller._load_config() == before
-
-    def test_resolve_names_async_kicks_off_when_client_available(self, controller, monkeypatch):
-        recorded = []
-        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
-        client = SimpleNamespace(get_file_metadata=lambda file_id: SimpleNamespace(name="Scratch"))
-        controller._connector_objs = {"drive": SimpleNamespace(client=client)}
-        controller.add_grant_row("drive", "sandbox_folders")
-
-        controller.update_grant_row("drive", "sandbox_folders", 0, "id", "F1")
-
-        assert wait_until(lambda: recorded)
-        _drain_run_async(recorded)
-
-        assert controller._resolver.cached_name(sc.grant_resource_type("drive", "sandbox_folders"), "F1") == "Scratch"
+    def test_notice_html_escapes_rule_id(self, controller):
+        self._seed(
+            controller, migrated=True,
+            rules=[{"id": "<script>bad</script>", "predicate": "always_allow",
+                     "operations": ["sheets.delete_dimensions"]}],
+        )
+        notice = controller.policy_v2_migration_notice_html()
+        assert "<script>bad</script>" not in notice
+        assert "&lt;script&gt;" in notice
 
 
-class TestDriveGrantSummary:
-    """Sheets and Docs aren't real connectors (see RULES_MENU_GROUPS' own
-    comment in settings_controller.py) but silently ride Drive's Trusted/
-    Sandbox Folder grants -- this read-only summary is how the Rules page
-    surfaces that instead of leaving Sheets/Docs looking ungoverned."""
+class TestResolvedRuleValue:
+    """P6: rule values resolve through the same cached-name machinery the old grant rows used,
+    reusing RULE_NAME_TO_RESOURCE_TYPE for a predicate whose value is an opaque resource id."""
 
-    def test_absent_for_non_sheets_docs_connectors(self, controller):
-        state = controller._rules_state(controller._load_config())
-        summary = state["drive_grant_summary_by_connector"]
-        assert summary["drive"] is None
-        assert summary["gmail"] is None
+    def test_resolves_a_cached_name(self, controller):
+        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_sandbox_folder"]
+        controller._resolver._disk[resource_names._cache_key(rt, "F1")] = "Scratch"
+        state = controller.add_policy_rule("drive.folder", "F1", ["update"])
+        assert "Scratch" in state["auto_accept"]["rules"][0]["value"]
 
-    def test_present_for_sheets_and_docs(self, controller):
-        state = controller._rules_state(controller._load_config())
-        summary = state["drive_grant_summary_by_connector"]
-        for cname in ("sheets", "docs"):
-            assert summary[cname]["title"] == "Governed by Drive"
-            labels = [row["label"] for row in summary[cname]["rows"]]
-            assert labels == ["Trusted Folders — read auto-accept", "Sandbox Folders — write auto-accept"]
+    def test_falls_back_to_a_short_id_when_uncached(self, controller):
+        long_id = "1" * 40
+        state = controller.add_policy_rule("drive.folder", long_id, ["update"])
+        assert state["auto_accept"]["rules"][0]["value"] == sc._short_id(long_id)
 
-    def test_shows_none_configured_when_no_grants(self, controller):
-        state = controller._rules_state(controller._load_config())
-        rows = state["drive_grant_summary_by_connector"]["sheets"]["rows"]
-        assert [row["value"] for row in rows] == ["(none configured)", "(none configured)"]
-
-    def test_shows_granted_folder_name_falling_back_to_a_short_id(self, controller):
-        controller._save_config({"auto_accept_grants": {"drive": {
-            "folders": [{"id": "FOLDER_READ_1", "read": True}],
-            "sandbox_folders": [{"id": "FOLDER_WRITE_1", "name": "Scratch", "write": True}],
-        }}})
-
-        state = controller._rules_state(controller._load_config())
-        rows = state["drive_grant_summary_by_connector"]["docs"]["rows"]
-        assert sc._short_id("FOLDER_READ_1") in rows[0]["value"]
-        assert "Scratch" in rows[1]["value"]
-
-    def test_sheets_and_docs_share_the_same_summary_data(self, controller):
-        controller._save_config({"auto_accept_grants": {"drive": {"folders": [{"id": "F1", "read": True}]}}})
-
-        state = controller._rules_state(controller._load_config())
-        summary = state["drive_grant_summary_by_connector"]
-        assert summary["sheets"]["rows"] == summary["docs"]["rows"]
+    def test_predicate_with_no_resource_type_shows_the_raw_value(self, controller):
+        state = controller.add_policy_rule("gmail.sender_domain", "acme.com", ["read"])
+        assert state["auto_accept"]["rules"][0]["value"] == "acme.com"
 
 
 class TestPrivacyFilter:
@@ -1882,41 +1921,28 @@ class TestSnapshotStructure:
     def test_snapshot_has_one_key_per_page(self, controller):
         state = controller.snapshot()
         assert set(state) == {
-            "error", "general", "connectors", "telegram_auth", "rules", "privacy", "audit", "about",
+            "error", "general", "connectors", "telegram_auth", "auto_accept", "privacy", "audit", "about",
         }
 
     def test_connectors_cover_all_connectors(self, controller):
         state = controller.snapshot()
         assert {c["key"] for c in state["connectors"]} == set(sc.ALL_CONNECTORS)
 
-    def test_rules_connectors_cover_rules_menu_groups(self, controller):
+    def test_auto_accept_state_has_rules_scope_groups_and_connectors(self, controller):
         state = controller.snapshot()
-        assert {c["key"] for c in state["rules"]["connectors"]} == set(sc.RULES_MENU_GROUPS)
+        auto_accept_state = state["auto_accept"]
+        assert set(auto_accept_state) == {"rules", "scope_groups", "connectors"}
+        assert auto_accept_state["rules"] == []
+        assert auto_accept_state["scope_groups"]
+        # Sheets/Docs tools ride Drive's own scope, so "drive" -- not "sheets"/"docs" -- is the
+        # connector a drive.folder-scoped rule's own catalogue entry reports.
+        assert "drive" in auto_accept_state["connectors"]
+        assert "sheets" not in auto_accept_state["connectors"]
 
     def test_privacy_groups_include_calendar_and_the_six_category_groups(self, controller):
         state = controller.snapshot()
         keys = {g["key"] for g in state["privacy"]["groups"]}
         assert keys == set(sc.PRIVACY_GROUP_LABELS) | {"calendar"}
-
-    def test_sheets_and_docs_are_distinct_from_drive(self, controller):
-        # Regression: same bug class as the pre-#120 menu -- "sheets"/"docs"
-        # ride on Drive's OAuth grant but have their own operation-key
-        # namespace and must not be silently dropped or merged into drive's
-        # bucket.
-        state = controller.snapshot()
-        sheets_titles = {s["title"] for s in state["rules"]["sections_by_connector"]["sheets"]}
-        docs_titles = {s["title"] for s in state["rules"]["sections_by_connector"]["docs"]}
-        drive_titles = {s["title"] for s in state["rules"]["sections_by_connector"]["drive"]}
-        assert sheets_titles and docs_titles
-        assert not (drive_titles & sheets_titles)
-        assert not (drive_titles & docs_titles)
-
-    def test_tasks_gets_a_grant_section_and_its_write_operations(self, controller):
-        state = controller.snapshot()
-        grant_titles = {g["title"] for g in state["rules"]["grants_by_connector"]["tasks"]}
-        rule_titles = {s["title"] for s in state["rules"]["sections_by_connector"]["tasks"]}
-        assert "Trusted Task Lists" in grant_titles
-        assert rule_titles == {"Create task", "Update task", "Complete task", "Uncomplete task", "Move task"}
 
 
 class TestConnectorsStateBlockedBy:
@@ -2046,52 +2072,36 @@ class TestStatusConnectors:
         assert self._row(controller, "slack")["blocked_by"] == "not_authenticated"
 
 
-class TestGrantIdHint:
-    """Bottom-of-page "ask Claude for the ID" tip (settings_controller.py's
-    _grant_id_hint) -- there's no live "+ Add..." picker by resource name
-    (issue #167, decided not to build), so this is the UI's answer to "how do
-    I even get a folder/channel/chat ID to paste into a grant row"."""
-
-    def test_every_connector_with_a_grant_resource_type_gets_a_hint(self, controller):
-        state = controller.snapshot()
-        hints = state["rules"]["grant_hint_by_connector"]
-        for rt in rg.GRANT_RESOURCE_TYPES:
-            assert hints.get(rt.connector), f"no hint for {rt.connector!r}"
-
-    def test_connectors_with_no_grant_resource_type_get_no_hint(self, controller):
-        # gmail/contacts trust by attribute (sender domain, label...), not by
-        # a resource ID a grant row could hold; sheets/docs aren't real
-        # connectors and have no grant section of their own (see
-        # settings_controller.DRIVE_GRANT_SUMMARY_GROUPS) -- none of the four
-        # has anything to ask Claude for here.
-        state = controller.snapshot()
-        hints = state["rules"]["grant_hint_by_connector"]
-        for cname in ("gmail", "contacts", "sheets", "docs"):
-            assert hints.get(cname) is None
-
-    def test_hint_is_tool_specific(self, controller):
-        state = controller.snapshot()
-        hints = state["rules"]["grant_hint_by_connector"]
-        assert "Drive folder ID" in hints["drive"]
-        assert "channel ID" in hints["slack"]
-        assert "chat ID" in hints["telegram"]
-        assert hints["drive"] != hints["slack"]
-
-
 class TestRuleUiCompleteness:
-    """Structural checks tying the settings window's rule UI to auto_accept's
-    rule engine -- see test_menu_bar.py's pre-#120 version of this class for
+    """Structural checks tying org mode's per-principal rule UI to auto_accept's
+    v1 rule engine -- see test_menu_bar.py's pre-#120 version of this class for
     the original regressions these caught (calendar.set_visibility/
     non_private_event never reachable from the UI, "docs" missing from
-    RULES_MENU_GROUPS)."""
+    RULES_MENU_GROUPS).
+
+    P6 replaced the local settings window's per-connector Rules page with one
+    filterable Auto-accept page driven by the v2 catalogue, so the nav-group
+    reachability check that used to live here (every OPERATION_LABELS prefix
+    present in RULES_MENU_GROUPS) went with the table it guarded. The v2
+    equivalents are tests/unit/policy/test_catalogue.py's
+    test_covers_every_propose_group_and_every_extra and test_registry.py's
+    coverage of the six formerly-ungovernable operation keys. RULES_BY_OPERATION
+    and OPERATION_LABELS themselves survive for web/routes_org_settings.py,
+    which still renders v1 rules, so these checks still have a subject."""
 
     @staticmethod
     def _all_rule_names() -> set[str]:
-        return {
-            name[len("_rule_"):]
-            for name in vars(auto_accept.AutoAcceptEvaluator)
-            if name.startswith("_rule_") and callable(getattr(auto_accept.AutoAcceptEvaluator, name))
-        }
+        """Every v1 predicate name ``policy.compat.compile_rule_entry`` (the migration's own v1
+        -> v2 compiler, and P9's sole remaining reader of v1 rule names, now that
+        ``AutoAcceptEvaluator`` is gone) actually recognizes: every v2 scope selector's own id,
+        plus every legacy name a ``ConditionSelector.replaces`` maps onto one -- see that module's
+        own docstring for why a v1 predicate is always exactly one or the other."""
+        from privacyfence.policy import conditions, scopes
+
+        names = set(scopes.SCOPE_SELECTORS)
+        for selector in conditions.CONDITION_SELECTORS.values():
+            names.update(selector.replaces)
+        return names
 
     @staticmethod
     def _rules_by_operation_names() -> set[str]:
@@ -2113,11 +2123,6 @@ class TestRuleUiCompleteness:
     def test_every_rules_by_operation_key_has_a_label(self):
         unlabeled = set(sc.RULES_BY_OPERATION) - set(sc.OPERATION_LABELS)
         assert unlabeled == set()
-
-    def test_every_operation_labels_connector_prefix_is_in_rules_menu_groups(self):
-        prefixes = {op_key.split(".", 1)[0] for op_key in sc.OPERATION_LABELS}
-        missing = prefixes - set(sc.RULES_MENU_GROUPS)
-        assert missing == set()
 
 
 class TestAnyConnectorAuthenticated:

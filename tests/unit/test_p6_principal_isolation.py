@@ -19,13 +19,14 @@ import yaml
 
 from privacyfence import audit_log, auto_accept, paths, pii_detector, privacy_filter, resource_names
 from privacyfence.audit_log import AuditEntry, current_week
+from privacyfence.policy.engine import PolicyRule
+from privacyfence.policy.resource_registry import resource_type
 from privacyfence.principal import LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
-from privacyfence.resource_grants import resource_type
 
 
 def _settings_path(tmp_path, name: str) -> str:
     path = tmp_path / f"{name}.yaml"
-    path.write_text(yaml.safe_dump({"auto_accept_rules": {}, "auto_accept_grants": {}}))
+    path.write_text(yaml.safe_dump({"auto_accept": {}}))
     return str(path)
 
 
@@ -35,23 +36,31 @@ class TestAutoAcceptIsolation:
 
         with principal_scope(alice):
             auto_accept.init_config_path(_settings_path(tmp_path, "alice"))
-            auto_accept.add_auto_accept_rule("gmail.send", "always_to_domain", "example.com")
-            alice_cfg = auto_accept.get_current_config()
+            auto_accept.add_policy_v2_rules([
+                PolicyRule(
+                    id="r-always-allow-send", predicate="always_allow", value=None,
+                    operations=frozenset({"gmail.send_message"}),
+                ),
+            ])
+            alice_rules = auto_accept.get_policy_v2_store_rules()
 
         with principal_scope(bob):
             auto_accept.init_config_path(_settings_path(tmp_path, "bob"))
-            bob_cfg = auto_accept.get_current_config()
+            bob_rules = auto_accept.get_policy_v2_store_rules()
 
-        assert alice_cfg["auto_accept_rules"]  # alice's rule is there
-        assert bob_cfg["auto_accept_rules"] == {}  # bob never saw it
+        assert alice_rules  # alice's rule is there
+        assert bob_rules == []  # bob never saw it
 
-    def test_two_principals_get_different_evaluator_instances(self):
+    def test_two_principals_get_different_state_instances(self):
+        # Stands in for the pre-P9 "different AutoAcceptEvaluator instances" check: what's
+        # per-principal now is the _AutoAcceptState the registry hands back (config path,
+        # temp-accept store, hot-reloaded v2 rule cache, listeners), not a rule-engine object.
         alice, bob = Principal(id="alice"), Principal(id="bob")
         with principal_scope(alice):
-            alice_eval = auto_accept.get_auto_accept_evaluator()
+            alice_state = auto_accept._REGISTRY.get()
         with principal_scope(bob):
-            bob_eval = auto_accept.get_auto_accept_evaluator()
-        assert alice_eval is not bob_eval
+            bob_state = auto_accept._REGISTRY.get()
+        assert alice_state is not bob_state
 
     def test_rules_changed_listeners_do_not_cross_principals(self):
         alice, bob = Principal(id="alice"), Principal(id="bob")
@@ -59,11 +68,11 @@ class TestAutoAcceptIsolation:
 
         with principal_scope(alice):
             auto_accept.add_rules_changed_listener(lambda: fired.__setitem__("alice", fired["alice"] + 1))
-            auto_accept.reload_rules({})
+            auto_accept.notify_rules_changed()
         with principal_scope(bob):
             auto_accept.add_rules_changed_listener(lambda: fired.__setitem__("bob", fired["bob"] + 1))
-            auto_accept.reload_rules({})
-            auto_accept.reload_rules({})
+            auto_accept.notify_rules_changed()
+            auto_accept.notify_rules_changed()
 
         assert fired == {"alice": 1, "bob": 2}
 
@@ -71,9 +80,9 @@ class TestAutoAcceptIsolation:
         # The whole point of default=LOCAL_PRINCIPAL (principal.py): calling
         # an accessor with no principal_scope() open must be indistinguishable
         # from calling it inside principal_scope(LOCAL_PRINCIPAL).
-        outside = auto_accept.get_auto_accept_evaluator()
+        outside = auto_accept._REGISTRY.get()
         with principal_scope(LOCAL_PRINCIPAL):
-            inside = auto_accept.get_auto_accept_evaluator()
+            inside = auto_accept._REGISTRY.get()
         assert outside is inside
 
 

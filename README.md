@@ -117,9 +117,9 @@ An embedded, local-only web page (PrivacyFence Settings) provides access to:
 - Connector authentication and status
 - The local audit log
 
-Auto-accept rules and trusted-resource grants are managed from a single searchable page, organized by connector:
+Every auto-accept rule, across every connector, is managed from a single filterable list -- each rule reads as a plain-language sentence, shows exactly which tools it unblocks, and can be added or removed without leaving the page:
 
-<img src="https://raw.githubusercontent.com/privacyfence/privacyfence/main/docs/images/screenshots/settings-auto-accept-rules.png" alt="PrivacyFence Settings, Auto-accept Rules page, showing a sidebar of connectors and a searchable list of that connector's grants and rules" width="700">
+<img src="https://raw.githubusercontent.com/privacyfence/privacyfence/main/docs/images/screenshots/settings-auto-accept-rules.png" alt="PrivacyFence Settings, Auto-accept page, showing a filterable list of rules rendered as plain-language sentences with verb chips, and an add-a-rule form" width="700">
 
 ---
 

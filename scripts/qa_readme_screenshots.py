@@ -36,24 +36,39 @@ OUT_DIR = Path(__file__).resolve().parent.parent / "docs" / "images" / "screensh
 
 # Representative, fake-but-plausible state -- enough for the two screenshots
 # to show a populated, real-looking page rather than every field empty.
+# Seeded directly in the v2 auto_accept: schema (policy.store) -- this script
+# builds SettingsController directly rather than going through daemon_main.
+# run_app()'s own startup path, so a v1-only seed would never actually reach
+# the migration step and the Auto-accept page's own screenshot would render
+# empty.
 _SETTINGS_YAML = """\
 connectors: {}
 pii_detection:
   enabled: true
-auto_accept_rules:
-  gmail.read_message:
-    - rule: i_am_sender
-    - rule: trusted_sender_domain
+migrated_to_policy_v2: true
+auto_accept:
+  version: 2
+  rules:
+    - id: r-gmail-sender
+      predicate: i_am_sender
+      value: null
+      operations: [gmail.read_message]
+      conditions: []
+    - id: r-gmail-domain
+      predicate: trusted_sender_domain
       value: ["example.com", "partner.example.org"]
-  gmail.archive_message:
-    - rule: label_match
+      operations: [gmail.read_message]
+      conditions: []
+    - id: r-gmail-label
+      predicate: label_match
       value: ["Newsletters"]
-auto_accept_grants:
-  drive:
-    folders:
-      - id: "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"
-        name: "Shared Reports"
-        read: true
+      operations: [gmail.archive_message]
+      conditions: []
+    - id: r-drive-folder
+      predicate: approved_folder
+      value: ["1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms"]
+      operations: [drive.read_file_contents, drive.download_file]
+      conditions: []
 """
 
 # Connectors shown as "connected" -- SettingsController marks a connector
@@ -124,7 +139,7 @@ def _run(chromium_path: str | None) -> None:
             page.locator("#app").screenshot(path=str(path))
             print(f"wrote {path}")
 
-            page.click("[data-nav='rules']")
+            page.click("[data-nav='auto_accept']")
             page.wait_for_timeout(200)
             path = OUT_DIR / "settings-auto-accept-rules.png"
             page.locator("#app").screenshot(path=str(path))

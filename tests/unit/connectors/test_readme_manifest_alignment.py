@@ -42,8 +42,9 @@ CONNECTOR_CLASSES = [
 README_PATH = Path(__file__).resolve().parents[3] / "docs" / "TECHNICAL_REFERENCE.md"
 
 # Matches only rows of the 5-column privacy-matrix tables
-# (`Tool | Dir | Gate | Cowork preview | Details popup`), not the 2-column
-# auto-accept-rules tables (`Rule | Matches when...`) further down the file.
+# (`Tool | Dir | Gate | Cowork preview | Details popup`), not the differently-shaped
+# tables in the "## Auto-accept" section (scope catalogue, conditions, verbs) further
+# down the file.
 _ROW_RE = re.compile(r"^\|\s*`([a-z0-9_]+)`\s*\|\s*(read|write)\s*\|\s*(auto|review|popup)\s*\|", re.MULTILINE)
 
 # Matches a tool="..." kwarg followed (non-greedily, across the rest of that
@@ -57,7 +58,7 @@ _SRC_TOOL_GATE_RE = re.compile(r'tool="(?P<tool>\w+)",.*?gate="(?P<gate>review|p
 def _readme_privacy_matrix() -> dict[str, tuple[str, str]]:
     text = README_PATH.read_text(encoding="utf-8")
     start = text.index("## Connectors & privacy matrix")
-    end = text.index("## Auto-accept rules")
+    end = text.index("## Auto-accept")
     section = text[start:end]
     return {tool: (direction, gate) for tool, direction, gate in _ROW_RE.findall(section)}
 
