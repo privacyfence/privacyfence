@@ -158,6 +158,7 @@ jobs:
           VERSION="$(python3 -m setuptools_scm)"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python3 scripts/r2_release.py check-tag --tag "$GITHUB_REF_NAME" --version "$VERSION"
             CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
           else
             CHANNEL="n/a (not a tag push)"

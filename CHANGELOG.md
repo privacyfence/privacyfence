@@ -679,6 +679,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dependencies (`mcp-types`, `httpx2`, `httpcore2`, `truststore`), all hash-pinned. See
   issue #250.
 
+- **macOS ships one download, and it installs through the installer.** The DMG now carries
+  `PrivacyFence.pkg` and `PrivacyFence.mcpb` side by side and nothing else — no
+  `PrivacyFenceApp.app` to drag out, no `/Applications` symlink. Mount it, double-click the
+  installer, then double-click the extension. The `.pkg` (#428 D2) is no longer published as a
+  separate artifact at all: not on the GitHub Release, not in the R2 release archive, and not as a
+  second macOS card on [privacyfence.eu/download](https://privacyfence.eu/download/) — releasing
+  the DMG releases it.
+
+  Two things this fixes. The installer's own conclusion screen has always told the user to open the
+  `.mcpb` "next to this installer", which was untrue for anyone who downloaded the standalone
+  `.pkg`: there was no `.mcpb` next to it. It is true now, and the wording says where to look.
+  And dragging the app bundle out of the old DMG was a second install path that skipped the
+  installer entirely, leaving privilege separation (#428 D1/D2) to the daemon's own admin-password
+  prompt at some later, unrelated moment instead of the install the user was already answering a
+  password for. That prompt still exists for an install that bypassed the installer — a bundle
+  copied off another machine, a source run — but it is no longer where a download leads.
+
+  Packaging mechanics: `scripts/build_dmg.sh` now calls `scripts/build_pkg.sh` itself (the `.pkg`
+  has to exist before the image that carries it), so `build.yml` has one macOS build step rather
+  than two, and passes the "Developer ID Installer" identity as `SIGN_IDENTITY_INSTALLER` rather
+  than as a second, differently-scoped `SIGN_IDENTITY`. `scripts/r2_release.py` drops the
+  `macos-arm64-pkg` artifact id along with its "optional installer" carve-out: all three installers
+  it still knows (DMG, `-setup.exe`, `.deb`) are mandatory for a release to reach `latest`.
+
 ### Fixed
 
 - **Approval cards and confirmation dialogs are readable on a phone.** Neither document declared a

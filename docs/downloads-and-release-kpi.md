@@ -157,13 +157,14 @@ Four properties worth knowing before changing any of it:
 - **Uploads are immutable.** Identical bytes under an existing key are skipped (so re-running a
   partly-failed release job is safe); different bytes hard-fail rather than silently replacing
   something people may already have downloaded.
-- **Not every installer is mandatory.** `scripts/r2_release.py`'s `_INSTALLERS` marks each
-  recognized filename pattern required or optional; only the required ones (`REQUIRED_ARTIFACT_IDS`)
-  gate `latest.json`. The macOS `.pkg` (#428 D2) is the one optional entry today — an additional,
-  fully-automated-install option alongside the DMG, not a replacement for it — so a problem building
-  or signing it can never stall the DMG/`.exe`/`.deb` from reaching "latest" the way a missing
-  *mandatory* installer does. An optional installer still enters the manifest (and is downloadable
-  and counted) whenever it is actually present.
+- **One installer per platform, all of them mandatory.** `scripts/r2_release.py`'s `_INSTALLERS`
+  recognizes exactly three filename patterns — the DMG, the `-setup.exe` and the `.deb` — and every
+  one of them (`REQUIRED_ARTIFACT_IDS`) gates `latest.json`. The macOS `.pkg` (#428 D2) used to be
+  a fourth, deliberately optional entry, back when it was a second macOS download alongside a
+  drag-install DMG; it now ships *inside* the DMG (`scripts/build_dmg.sh`) and is never uploaded on
+  its own, so it is no longer an artifact this manifest, the Worker or the KPI knows about at all.
+  A `.pkg` reaching this prefix by accident would not be served or counted — `classify_installer()`
+  returns `None` for one, which is asserted directly in `tests/unit/test_r2_release.py`.
 
 `promote()` refuses to point a channel at a version with no manifest. `finalize` always writes the
 manifest first, so this never fires on that path — but `promote` exists to be run by hand, and by

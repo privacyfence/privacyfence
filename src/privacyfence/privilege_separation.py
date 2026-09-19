@@ -1006,10 +1006,13 @@ def _authority_owner_problem(state: Separation) -> str | None:
 # nothing here touches it -- SUPPORTED_PLATFORMS still gates everything else
 # in this module the same way it always has.
 #
-# macOS has no package-manager postinst to lean on the way the .deb does: a
-# DMG install is a drag to /Applications, nothing runs as root at install
-# time, and nothing short of a human answering an admin password prompt can
-# create a system account or a LaunchDaemon. This is that prompt, asked once.
+# macOS's own package-manager-equivalent hook is the .pkg's postinstall (#428
+# D2), which the DMG now carries and which every ordinary macOS install goes
+# through -- so this prompt is the fallback rather than the usual path: an
+# install that never ran the installer (an app bundle copied off another
+# machine, a source/pip run) still has nothing root-context behind it, and
+# nothing short of a human answering an admin password prompt can create a
+# system account or a LaunchDaemon. This is that prompt, asked once.
 AUTO_ENABLE_ATTEMPTED_MARKER_NAME = ".separation_auto_enable_attempted"
 
 
