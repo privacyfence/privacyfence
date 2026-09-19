@@ -50,6 +50,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   step-up under any scope, and a read an auto-accept rule already covers never becomes an approval
   in the first place, so no scope asks for a passkey on one. `/security` now states which of the
   three is in force rather than assuming one of the first two.
+- The Windows installer now separates the install itself (ADR 0003 decision 4). Setup runs
+  `privilege-separation.ps1 enable` as a post-install step with its own elevated token, so a
+  Windows install ends up running the daemon under the dedicated `NT SERVICE\PrivacyFence`
+  account, with its policy, passkey store and audit key out of reach of the AI client it governs,
+  without anybody having to find out that script exists and type it into an elevated PowerShell.
+  Windows was the last shipped channel that produced an unseparated install by default. **If that
+  step fails, the install fails** — a PrivacyFence that cannot separate itself would still show the
+  same approval prompts, accept the same passkey enrollment and write the same audit log while
+  meaning something weaker by all three, so it is not installed at all. `enable`'s existing
+  refusals are unchanged, which puts a real cost on the table rather than hiding it: **somebody who
+  cannot elevate on their own machine can no longer install PrivacyFence on Windows.** The
+  non-elevated per-user install tier added in #407 (and preserved by ADR 0002 decision 5a) is
+  withdrawn; it could never be separated, because a Windows service runs whatever its `binPath`
+  names and an install directory the signed-in user can rewrite hands the agent a way to run its
+  own code *as* the service account. Uninstalling is unaffected, and
+  `privilege-separation.ps1 disable` still returns any install to the unseparated layout, data and
+  autostart task included.
+- The Windows installer's "Launch PrivacyFence now" checkbox on the Finish page is gone. On a
+  separated install the daemon is a Windows service that `enable` has already started, and a second
+  copy launched into the signed-in user's own session is refused outright by the startup identity
+  check rather than merely redundant — so the checkbox's only possible outcome was an error
+  dialog. The companion tray icon is started by its own scheduled task instead, and the Start Menu
+  entries for the settings page and the companion are unchanged.
 - Privilege separation no longer gives up when it cannot tell which human an install is for. ADR
   0003 decision 3 splits `enable` into a machine half — creating the service account, moving and
   re-owning the data directory, writing the marker, installing the service — and a per-user half,

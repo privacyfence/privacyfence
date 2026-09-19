@@ -56,9 +56,11 @@ Two consequences are worth stating rather than leaving to be discovered:
 * A Windows service runs whatever image its ``binPath`` names, so the
   daemon's own executable becomes part of the boundary: an install the
   logged-in user can rewrite would let the agent run its own code *as the
-  service account*. That is why the non-elevated per-user install path
-  (#407) cannot be separated, and why ``audit_layout()`` re-checks the image
-  on every start -- see ``windows_acl.image_problems()``. macOS has the same
+  service account*. That is why ``enable`` refuses such an install outright
+  and why ``audit_layout()`` re-checks the image on every start -- see
+  ``windows_acl.image_problems()``. It is also why there is only one Windows
+  install tier: ADR 0003 decision 4 withdrew #407's non-elevated per-user
+  one, which by construction could never satisfy this. macOS has the same
   exposure by a different route: ``/Applications`` is ``root:admin
   drwxrwxr-x`` and a drag-installed ``.app`` is normally owned by the
   installing user, so nothing about a packaged macOS install makes the

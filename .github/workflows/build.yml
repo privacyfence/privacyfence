@@ -402,7 +402,10 @@ jobs:
       # artifact -- not a source checkout, not a dev install -- gets exercised at all on Windows.
       # A real silent install (schtasks-registered autostart task included), the real installed
       # daemon started and driven through a daemon/MCP/approval/audit round trip, then a real
-      # silent uninstall with both package removal and untouched-user-state checked. A failure
+      # silent uninstall with both package removal and untouched-user-state checked. Since ADR
+      # 0003 decision 4 it also asserts what that silent install now does to itself: a separated
+      # install -- service, ACLs, group membership, companion task -- with no `enable` call from
+      # the test, and a failed separation failing Setup rather than shipping quietly. A failure
       # here fails this job before the installer reaches R2/GitHub Releases below.
       - name: Run packaged installer smoke test (Phase 6.2)
         run: pytest tests/integration/test_windows_packaged_smoke.py -v

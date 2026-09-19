@@ -131,10 +131,13 @@ The installer:
 - creates a Start Menu entry for the settings UI;
 - creates a Task Scheduler entry for user-session startup;
 - creates a Start Menu entry for the companion app;
-- installs the opt-in privilege-separation tool as `privilege-separation.ps1` next to the
-  application, with the companion autostart task template it renders (see below — installing it
-  changes nothing until it is run);
-- starts PrivacyFence after installation;
+- installs the privilege-separation tool as `privilege-separation.ps1` next to the
+  application, with the companion autostart task template it renders (see below);
+- **runs `privilege-separation.ps1 enable` itself**, with its own elevated token, as a post-install
+  step — ADR 0003 decision 4. That is what starts the daemon (as its service) and the companion,
+  and it is also why the Task Scheduler entry above is registered and then left *disabled*: it is
+  the unseparated install's autostart, which `privilege-separation.ps1 disable` hands back. A
+  failure of this step fails the install;
 - removes the scheduled task, the companion task and the privilege-separation service on uninstall;
 - preserves the user's PrivacyFence state directory on uninstall.
 
