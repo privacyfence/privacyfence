@@ -1889,6 +1889,76 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
 
 # ---------------------------------------------------------------------------- #
+# --print-sign-in-link
+# ---------------------------------------------------------------------------- #
+
+def run_print_sign_in_link() -> int:
+    """The break-glass way in: a sign-in link printed in the human's own
+    terminal, never handed to the agent (the self-approval plan's Phase 2,
+    which retires ``privacyfence_get_sign_in_link`` -- the tool that used to
+    hand exactly this credential to the party it governs).
+
+    The ordinary way into the web UI is the companion's own Open Approvals
+    item. This exists for when that is not reachable: an SSH session, a
+    desktop whose applications menu nobody has open, a tray icon that failed
+    to start. It asks the daemon for a link that can *approve*
+    (``MINT CONSOLE``), which the daemon grants only once the companion has
+    put its own dialog in front of whoever is at the login session -- the
+    command runs as the same OS user the agent does, so what makes the
+    resulting session attributable to a person is that a person clicked
+    Allow, not that the request arrived from a terminal.
+
+    If nothing confirms it, this still prints a link, and says what that link
+    is: an unattested session, which signs the reader in to *see* what is
+    pending but not to release it (web/session_auth.py's
+    ``PROVENANCE_UNATTESTED``). That beats printing nothing -- the reader may
+    well be locked out precisely because no companion is running, and
+    starting one is easier from inside the UI than from a refusal.
+
+    The URL goes to stdout alone, so ``privacyfence-app --print-sign-in-link``
+    can be piped into a browser command; everything else goes to stderr.
+    """
+    # Deferred, like every other web/ import in this module: this command is
+    # a one-shot client that never starts a server, and control_channel.py is
+    # the one web module with no rendering or ASGI weight behind it.
+    from .web import control_channel
+
+    base_url = control_channel.read_base_url()
+    if base_url is None:
+        print(
+            "PrivacyFence does not appear to be running in local mode -- there is no sign-in link "
+            "to mint. (Organization mode signs in through its own /login page instead.)",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        code = control_channel.mint_console_bootstrap_code()
+    except OSError as exc:
+        print(f"Could not reach PrivacyFence's control channel: {exc}", file=sys.stderr)
+        return 1
+    except control_channel.ControlChannelError as exc:
+        print(f"This link was not confirmed: {exc}", file=sys.stderr)
+        try:
+            code = control_channel.mint_bootstrap_code()
+        except (OSError, control_channel.ControlChannelError) as fallback_exc:
+            print(f"Could not mint a sign-in link at all: {fallback_exc}", file=sys.stderr)
+            return 1
+        print(
+            "Printing a view-only link instead: it will show you what is waiting, but approving "
+            "from it will be refused. Start PrivacyFence's companion app and run this again for "
+            "one that can approve.",
+            file=sys.stderr,
+        )
+    print(f"{base_url}/approvals?bootstrap={code}")
+    print(
+        "Open this on this machine within a few minutes -- it is consumed by the first visit, "
+        "successful or not. Settings is one click away in the page's own navigation.",
+        file=sys.stderr,
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------- #
 # Argument parsing
 # ---------------------------------------------------------------------------- #
 
@@ -1911,6 +1981,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--salesforce-oauth", action="store_true")
     parser.add_argument("--atlassian-oauth", action="store_true")
     parser.add_argument("--telegram-setup", action="store_true")
+    # The self-approval plan's Phase 2 break-glass path -- see
+    # run_print_sign_in_link() for what it does and what it deliberately does
+    # not claim. Documented in --help rather than hidden: it is what the
+    # not-authorized page and the docs now point a locked-out human at, in
+    # place of asking their agent for a link.
+    parser.add_argument(
+        "--print-sign-in-link", action="store_true",
+        help=(
+            "Print a one-time sign-in link for PrivacyFence's own web UI and exit. Run this "
+            "yourself, in your own terminal -- PrivacyFence's companion app confirms it with you "
+            "before the link is allowed to approve anything."
+        ),
+    )
     # #428 Phase 4 (B5c): how the Windows Service Control Manager starts the
     # daemon on a privilege-separated install -- see windows_service.py for
     # why Windows needs an argv flag where macOS and Linux needed only a
@@ -1940,6 +2023,15 @@ def main(argv: list[str] | None = None) -> int:
         from . import windows_service
 
         return windows_service.run_service()
+
+    # Before check_runtime_identity() below, deliberately: this invocation is
+    # the *human's*, run from their own shell as their own account, and on a
+    # separated install that check refuses exactly that account (it exists to
+    # stop the daemon starting as the wrong user). It is also a pure client
+    # of the control channel -- no config, no logging setup, nothing out of
+    # the authority directory it could not read anyway.
+    if args.print_sign_in_link:
+        return run_print_sign_in_link()
 
     # #428 Phase 4, before load_config() below -- which is the first thing
     # that would read settings.yaml out of the (now service-account-owned)

@@ -558,6 +558,8 @@ The local browser UI is not authenticated by a reusable token in the URL. The da
 
 Mutating requests require the authenticated session, same-origin checks, and CSRF validation. Session/bootstrap secrets are not intended for logging or propagation into connector data.
 
+The ordinary way a human reaches that exchange is the companion app's own **Open Approvals**/**Open Settings** items. `privacyfence-app --print-sign-in-link` is the break-glass alternative, for a session the companion's menu is not reachable from (an SSH login, a desktop whose applications menu nobody has open, a tray icon that failed to start): it prints one link, to stdout alone so it can be piped, and asks the companion to confirm with the human at the login session first — the command runs as the same OS user the agent does, so what makes the resulting session `human` (see [A session is not a human](#a-session-is-not-a-human)) is that a person clicked Allow, not that the request came from a terminal. If nothing confirms it, it prints an `unattested` link instead and says so: enough to see what is pending, not to release it.
+
 ### MCP-issued sign-in links
 
 `privacyfence_get_sign_in_link` is a meta-tool, available over `/mcp` like every connector tool, that mints a fresh bootstrap link for this same local web UI (`/approvals` or `/settings`) and returns it to the calling MCP client. It is dispatched directly rather than through the gated-call path every connector tool uses — deliberately: the human approval that path would require lives behind the very UI a locked-out user is trying to reach, so gating this tool on that UI would be circular.

@@ -53,6 +53,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a companion nor an `authority/` boundary and is unchanged. See
   `docs/security-and-compliance.md`'s "A session is not a human", including what this deliberately
   does *not* claim about telling the companion apart from the agent.
+- **New: `privacyfence-app --print-sign-in-link`, a way back into the web UI that never routes a
+  credential through the agent.** Run it yourself, in your own terminal: PrivacyFence's companion
+  app confirms it with you before the link it prints is allowed to approve anything. If nothing
+  confirms it, it still prints a link and says what that link is — a view-only session — rather than
+  leaving you with nothing when the reason you are locked out may well be that no companion is
+  running. This is the break-glass path that replaces asking your AI client for a sign-in link.
 - **Enrolling a passkey now needs proof of its own, in both deployment modes.** Removing your *last*
   enrolled credential has always demanded a fresh assertion with it, because letting a session alone
   un-enroll would silently turn a "mandatory" install back into an unenforced one. Adding one had
