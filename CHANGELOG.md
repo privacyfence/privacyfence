@@ -62,6 +62,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `enable --for-user <name>` (`enable -ForUser <name>` on Windows) — and `status` reports the
   interim state as its own answer (`PENDING USER`) rather than as "not separated", because the
   install *is* separated; what is outstanding is one group membership.
+- Installing the Debian/Ubuntu `.deb` now separates the install or fails, rather than separating it
+  where it can. ADR 0003 decision 5: `debian/postinst` used to end its one separation step with a
+  shell `|| true`, so anything that went wrong there left a package that reported itself installed
+  and a PrivacyFence whose central claim — the agent cannot approve its own request — did not hold.
+  That step is now two, with the two failure policies decision 3 made possible. The machine half
+  (`enable --machine-only`) runs on every `configure`, unconditionally, and a failure of it fails
+  the package install loudly, leaving dpkg with a half-configured package rather than a silently
+  unseparated one. The per-user half keeps its `$SUDO_USER` gate and keeps the right to defer, so an
+  unattended install — an MDM push, `unattended-upgrades`, a root shell — still succeeds *and* still
+  ends up separated, with only the group membership pending for the companion app to close at the
+  first real login session. Re-running the machine half also no longer clears the owner already
+  recorded on an install whose per-user half is closed, which is what every upgrade does now.
 - The companion app closes that pending half by itself. On start, an install that is separated but
   whose current user is not in its service group gets one elevated `enable --for-user` — macOS'
   own admin-password dialog, a UAC prompt on Windows, `pkexec` on Linux — after which it names the

@@ -50,9 +50,10 @@ it **by default** as of D1 (4.1); Windows remains opt-in, per that subsection. E
 rest of this section describes the un-separated install — still what a Windows install is unless
 `enable` is run by hand, still reachable on any platform via `... disable`, and still what a macOS
 install that bypassed the `.pkg` inside the DMG is until its one admin-password prompt is answered
-(the `.pkg` itself, #428 D2, answers this at install time instead — see that subsection) or a Linux
-install is until `enable --auto` can resolve who owns it (see that subsection for when it can't); that subsection says
-exactly which of these statements a separated install changes and which it leaves standing.
+(the `.pkg` itself, #428 D2, answers this at install time instead — see that subsection). A
+Debian/Ubuntu `.deb` install is no longer among them: since ADR 0003 decision 5 its `postinst`
+separates the machine unconditionally or fails the install. That subsection says exactly which
+of these statements a separated install changes and which it leaves standing.
 
 A local process running as the signed-in user can:
 
@@ -256,18 +257,25 @@ so the daemon leaves your session and the companion app enters it:
 All three still ship the manual `enable`/`disable`/`status` subcommands above; the migration moves
 live connector OAuth tokens, so take a backup first if running one by hand. `... disable` reverses
 it on any platform. **macOS and Linux now turn this on by default as of #428 D1 (4.1)**, rather than
-waiting out the originally-planned soak period: the `.deb`'s `postinst` runs `enable --auto` itself,
-root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)); an
-install that is just a copied app bundle has no equivalent package-manager hook, so the daemon's
+waiting out the originally-planned soak period: the `.deb`'s `postinst` separates the install
+itself, root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)).
+Since ADR 0003 decision 5 the machine half of that — the system account, the data directory, the
+marker, the systemd unit — is unconditional and carries no `|| true`, so an install that could not
+separate itself fails the package install loudly rather than quietly becoming one that isn't; the
+per-user half (the group membership) keeps its `$SUDO_USER` gate and keeps the right to defer, so
+an unattended install with no session behind it still ends up separated, with that one
+re-runnable step pending. An install that is just a copied app bundle has no equivalent
+package-manager hook, so the daemon's
 own startup asks once, via the standard admin-password dialog, the first time it finds itself
 unseparated (`privilege_separation.maybe_auto_enable_macos()`). #428 D2 (4.1) gives macOS a
 root-context install-time hook of its own — `scripts/build_pkg.sh`'s signed `.pkg`, whose own
 `installer/macos/pkg/postinstall` script runs `enable --auto` itself while the package install is
 still running, the same shape as the `.deb`'s `postinst`. That `.pkg` is what the downloaded DMG
-carries, so it is the ordinary macOS path now and the runtime dialog is the fallback. `--auto` (used by all three
-triggers now, never by a human directly) is the same `enable`, made safe to run unattended: anywhere
-it can't safely tell who owns the install or find the daemon's executables, it logs why and leaves
-the install opt-in rather than guessing or failing a package install. **Windows stays opt-in** — D1
+carries, so it is the ordinary macOS path now and the runtime dialog is the fallback. `--auto`
+(used by the unattended triggers, never by a human directly, and on Linux now only by the half
+that is allowed to defer) is the same `enable`, made safe to run unattended: anywhere it can't
+safely tell who owns the install or find the daemon's executables, it logs why and exits 0 rather
+than guessing or failing the step it was called from. **Windows stays opt-in** — D1
 does not extend to it, on top of the install-tier and mandatory-companion requirements below, which
 raise the bar for an unattended default beyond what the two POSIX platforms needed.
 
