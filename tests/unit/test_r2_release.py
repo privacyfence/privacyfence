@@ -209,7 +209,6 @@ def _seed_release(client, version="4.3.0", channel="stable", *, installers=("dmg
     prefix = f"releases/{channel}/{version}/"
     names = {
         "dmg": f"PrivacyFence-{version}.dmg",
-        "pkg": f"PrivacyFence-{version}.pkg",
         "exe": f"PrivacyFence-{version}-setup.exe",
         "deb": f"privacyfence_{version}_amd64.deb",
     }
@@ -229,7 +228,6 @@ class TestClassifyInstaller:
         [
             ("PrivacyFence-4.3.0.dmg", ("macos-arm64", "macos", "arm64")),
             ("PrivacyFence-4.2.0b1.dmg", ("macos-arm64", "macos", "arm64")),
-            ("PrivacyFence-4.3.0.pkg", ("macos-arm64-pkg", "macos", "arm64")),
             ("PrivacyFence-4.3.0-setup.exe", ("windows-x64", "windows", "x64")),
             ("privacyfence_4.3.0_amd64.deb", ("linux-x64", "linux", "x64")),
         ],
@@ -253,6 +251,12 @@ class TestClassifyInstaller:
         # These stay in R2 but must never enter the manifest: the Worker counts every artifact it
         # serves, so listing them here would silently inflate the installer-download KPI.
         assert r2_release.classify_installer(filename) is None
+
+    def test_macos_pkg_is_not_a_downloadable_artifact(self):
+        # The .pkg (#428 D2) ships *inside* the DMG now (scripts/build_dmg.sh), so build.yml
+        # never uploads one -- and if a stray one ever reached this prefix, it must not become a
+        # second macOS download the Worker serves and counts alongside the DMG that contains it.
+        assert r2_release.classify_installer("PrivacyFence-4.3.0.pkg") is None
 
 
 class TestUploadImmutability:
@@ -331,28 +335,18 @@ class TestFinalize:
         assert fake_s3.objects["releases/stable/latest.json"]["Body"] == b'{"version": "4.2.0"}'
         assert "releases/stable/4.3.0/manifest.json" not in fake_s3.objects
 
-    def test_missing_pkg_does_not_block_latest(self, fake_s3):
-        # #428 D2: unlike dmg/exe/deb, the .pkg is not in REQUIRED_ARTIFACT_IDS -- a release with
-        # no .pkg at all (the default _seed_release set) must still finalize and reach "latest".
-        _seed_release(fake_s3)  # dmg, exe, deb -- no pkg
+    def test_one_installer_per_platform_is_the_whole_required_set(self, fake_s3):
+        # Three downloads, one per platform -- the macOS `.pkg` is not a fourth (it rides inside
+        # the DMG, see classify_installer's own test above), so a complete release is exactly
+        # these three and every one of them is mandatory.
+        _seed_release(fake_s3)
 
         manifest = r2_release.finalize("4.3.0")
 
         assert {artifact["id"] for artifact in manifest["artifacts"]} == {"macos-arm64", "windows-x64", "linux-x64"}
+        assert r2_release.REQUIRED_ARTIFACT_IDS == {"macos-arm64", "windows-x64", "linux-x64"}
         pointer = json.loads(fake_s3.objects["releases/stable/latest.json"]["Body"])
         assert pointer == {"version": "4.3.0", "manifest": "releases/stable/4.3.0/manifest.json"}
-
-    def test_pkg_is_included_when_present_but_still_optional(self, fake_s3):
-        _seed_release(fake_s3, installers=("dmg", "exe", "deb", "pkg"))
-
-        manifest = r2_release.finalize("4.3.0")
-
-        ids = {artifact["id"] for artifact in manifest["artifacts"]}
-        assert ids == {"macos-arm64", "macos-arm64-pkg", "windows-x64", "linux-x64"}
-        pkg_artifact = next(a for a in manifest["artifacts"] if a["id"] == "macos-arm64-pkg")
-        assert pkg_artifact["filename"] == "PrivacyFence-4.3.0.pkg"
-        assert pkg_artifact["platform"] == "macos"
-        assert "macos-arm64-pkg" not in r2_release.REQUIRED_ARTIFACT_IDS
 
     def test_object_without_recorded_digest_is_refused(self, fake_s3):
         prefix = _seed_release(fake_s3)

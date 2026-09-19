@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
-# Build PrivacyFence.dmg — a drag-to-install macOS disk image.
+# Build PrivacyFence.dmg — the macOS disk image, and the only macOS artifact
+# that ships.
 #
-# The DMG is the single distributable: it carries both halves of PrivacyFence
-# so the user flow is "mount the DMG, drag PrivacyFenceApp.app to Applications,
-# double-click PrivacyFence.mcpb to install the Claude extension" — no separate
-# downloads.
+# It is a carrier, not a drag-install image: it holds PrivacyFence.pkg (built
+# here by scripts/build_pkg.sh, see step 7) and PrivacyFence.mcpb, and nothing
+# else — no PrivacyFenceApp.app, no /Applications drop link. The user flow is
+# "mount the DMG, double-click PrivacyFence.pkg, then double-click
+# PrivacyFence.mcpb", both steps in the same window.
+#
+# That replaces an earlier layout where the DMG carried the .app plus an
+# /Applications symlink and the .pkg shipped as a *separate* download beside
+# it. Two problems, both fixed by this: dragging the .app installed a copy
+# that had to ask for an administrator password later, at some unrelated
+# moment, to provision privilege separation (#428 D1's runtime prompt), where
+# the .pkg does it during the install the user is already answering a password
+# for (#428 D2); and the .pkg's own conclusion screen told the user to open
+# the .mcpb "next to this installer", which was simply untrue for a standalone
+# .pkg download — there was no .mcpb next to it. One download, one install
+# path, and the sentence is now true.
 #
 # Prerequisites (needed only on your build machine, not end-user machines):
 #   pip install -e .        # PrivacyFence itself, so VERSION below can read
@@ -18,7 +31,17 @@
 # Usage:
 #   ./scripts/build_dmg.sh [--sign "Developer ID Application: Your Name (TEAMID)"]
 #
-# Output: dist/PrivacyFence-<version>.dmg
+# --sign takes the "Developer ID Application" identity, which signs the .app.
+# The .pkg inside the DMG needs a "Developer ID Installer" identity instead --
+# a different certificate type Apple issues separately -- so that one is passed
+# through the environment as SIGN_IDENTITY_INSTALLER and handed to
+# scripts/build_pkg.sh at step 7. Leaving it unset just builds an unsigned
+# .pkg inside an otherwise signed DMG, same as it always did when the .pkg was
+# built as its own CI step.
+#
+# Output: dist/PrivacyFence-<version>.dmg (carrying dist/PrivacyFence-<version>.pkg
+# and dist/PrivacyFence-<version>.mcpb, both of which stay in dist/ too -- they
+# are inputs to this image, not separately released artifacts)
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -157,29 +180,51 @@ fi
 echo "→ Building PrivacyFence's Claude Desktop extension…"
 bash scripts/build_mcpb.sh
 MCPB_SHIM_PATH="dist/${PRODUCT_NAME}-${VERSION}.mcpb"
-MCPB_SHIM_DMG_NAME="${PRODUCT_NAME}.mcpb"   # stable name inside the DMG (no version)
+MCPB_DMG_NAME="${PRODUCT_NAME}.mcpb"   # stable name inside the DMG (no version)
 
-# ── 7. Package into DMG ───────────────────────────────────────────────────────
+# ── 7. Build the installer package (.pkg) ─────────────────────────────────────
+# The DMG's payload, not a sibling artifact -- see this script's own header.
+# scripts/build_pkg.sh packages the .app built above (it never runs PyInstaller
+# itself), and signs/notarizes with SIGN_IDENTITY_INSTALLER if it's set, which
+# it reads from the environment rather than from a --sign argument here: this
+# script's own SIGN_IDENTITY is the wrong certificate type for productsign and
+# must not leak into it. MCPB_DMG_NAME tells its conclusion screen what the
+# extension is actually called on the image it will be opened from.
+echo "→ Building the installer package…"
+MCPB_DMG_NAME="$MCPB_DMG_NAME" bash scripts/build_pkg.sh
+PKG_PATH="dist/${PRODUCT_NAME}-${VERSION}.pkg"
+PKG_DMG_NAME="${PRODUCT_NAME}.pkg"     # stable name inside the DMG (no version)
+
+# ── 8. Package into DMG ───────────────────────────────────────────────────────
+# Both files are staged into a source folder rather than passed as --add-file:
+# create-dmg sizes the image from its source folder, so an *empty* source folder
+# plus two --add-file arguments produces an image with no room to copy them into.
 echo "→ Building DMG…"
 rm -f "$DMG_PATH"
+DMG_ROOT="build/dmg-root"
+rm -rf "$DMG_ROOT"
+mkdir -p "$DMG_ROOT"
+cp -p "$PKG_PATH" "${DMG_ROOT}/${PKG_DMG_NAME}"
+cp -p "$MCPB_SHIM_PATH" "${DMG_ROOT}/${MCPB_DMG_NAME}"
 
 create-dmg \
   --volname "${PRODUCT_NAME}" \
   --volicon "$ICNS_PATH" \
   --window-pos 200 120 \
-  --window-size 600 480 \
+  --window-size 600 400 \
   --icon-size 128 \
-  --icon "${APP_NAME}.app" 150 140 \
-  --hide-extension "${APP_NAME}.app" \
-  --app-drop-link 450 140 \
-  --add-file "${MCPB_SHIM_DMG_NAME}" "$MCPB_SHIM_PATH" 300 340 \
+  --icon "${PKG_DMG_NAME}" 170 170 \
+  --icon "${MCPB_DMG_NAME}" 430 170 \
   --no-internet-enable \
   "$DMG_PATH" \
-  "dist/${APP_NAME}.app"
+  "$DMG_ROOT"
 
-# ── 8. Optional notarization ──────────────────────────────────────────────────
+# ── 9. Optional notarization ──────────────────────────────────────────────────
 # Set NOTARIZE_PROFILE to a name registered via `xcrun notarytool store-credentials`
-# to submit the signed DMG to Apple and staple the resulting ticket.
+# to submit the signed DMG to Apple and staple the resulting ticket. The .pkg
+# inside it was already notarized and stapled on its own by step 7 -- stapling
+# the image does not staple what it carries, and Gatekeeper checks the .pkg when
+# the user double-clicks it out of the mounted image.
 if [ -n "$SIGN_IDENTITY" ] && [ -n "${NOTARIZE_PROFILE:-}" ]; then
   echo "→ Submitting for notarization…"
   xcrun notarytool submit "$DMG_PATH" \
