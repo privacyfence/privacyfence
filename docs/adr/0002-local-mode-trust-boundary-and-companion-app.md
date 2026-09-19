@@ -374,6 +374,11 @@ Native approval or settings windows; notification popups; any change to org mode
 approval decision off the device entirely (a paired-phone push is the stronger long-term answer and
 deserves its own issue, not a line in this one).
 
+**Amendment (2026-09-19):** that last item's own issue is
+[ADR 0005](0005-moving-the-approval-decision-off-the-device.md) — proposed, not accepted. This
+sentence turned out to be the first of three deferrals written in the same words; see that ADR's
+Status section for the other two and for what has changed since.
+
 ## Verification
 
 - `pyproject.toml` stays authoritative for declared dependencies: the companion's entry is

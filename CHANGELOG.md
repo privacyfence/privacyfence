@@ -751,6 +751,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- ADR 0005 (`docs/adr/0005-moving-the-approval-decision-off-the-device.md`) asks, and does not yet
+  answer, whether local mode's approving decision should be rendered and answered on a device the
+  agent does not run on. **Proposed, not accepted — no behavior changes with this entry.** It is
+  written now because the same question had been deferred in one line three times (ADR 0002's *Out
+  of scope*, ADR 0003's, and this release's self-approval hardening work), each time to "its own
+  issue" that was never opened, and because the hardening that shipped in this release is what
+  makes the question answerable: with the credential store behind a uid boundary, enrollment gated,
+  the passkey on by default and sessions carrying a provenance, the same-machine gate is about as
+  strong as a same-machine gate gets — which is the position from which its ceiling can be measured
+  rather than guessed at. The ADR states that ceiling plainly (an adversary running as you can be
+  present for any proof you give, including the render of the sentence your passkey signs), weighs
+  a paired phone over push against a second device on the local network against a display-carrying
+  hardware authenticator against doing nothing more, recommends the LAN option, and lists what
+  would have to be true before any of it could be accepted. Nothing in the shipped hardening is
+  wasted either way: an install with no second device keeps exactly what it has today.
+
 - Policy v2 redesign, P3: a new `policy/engine.py`/`policy/compat.py` evaluator for auto-accept
   rules, built on the P1 tool registry and P2 scope/condition selectors, now runs alongside the
   existing `AutoAcceptEvaluator` on every gated call (`gate.py`, shadow mode). Nothing on disk

@@ -380,6 +380,15 @@ existed.
 - **Moving the approval decision off the device.** Still the stronger long-term answer, still its
   own issue.
 
+  **Amendment (2026-09-19): that issue is now
+  [ADR 0005](0005-moving-the-approval-decision-off-the-device.md), proposed rather than accepted.**
+  Written because this bullet is the second of three places the answer was deferred in one line
+  (ADR 0002's own *Out of scope* is the first, the self-approval review's Phase 4.3 the third) and
+  the issue it kept pointing at was never opened. What changed is not the answer but what the
+  question is worth asking about: with decision 1 shipped and the review's Phases 0–3 on top of it,
+  the same-machine gate is about as strong as a same-machine gate gets, which is the position from
+  which its ceiling can actually be measured rather than guessed at.
+
 ## Verification
 
 - No release artifact list, workflow, manifest or download-page entry names a `.dmg` for a version
@@ -401,4 +410,5 @@ existed.
 - [#426](https://github.com/privacyfence/privacyfence/issues/426) — the local-mode passkey, and the reason "optional hardening" expired as a premise
 - [#407](https://github.com/privacyfence/privacyfence/issues/407) — the Windows per-user install tier this retires
 - [#410](https://github.com/privacyfence/privacyfence/issues/410) — why `PrivilegesRequired` is already `admin`
+- [ADR 0005](0005-moving-the-approval-decision-off-the-device.md) — the *Out of scope* item above, reopened
 - `docs/platform-support.md`, `docs/security-and-compliance.md` — the shipped-behavior statements that change with this
