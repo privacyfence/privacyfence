@@ -14,6 +14,8 @@ import sys
 
 import pytest
 
+from types import SimpleNamespace
+
 from privacyfence import companion
 from privacyfence.web import control_channel as cc
 from privacyfence.web.session_auth import BootstrapStore
@@ -141,6 +143,130 @@ class TestMainArgvDispatch:
         with pytest.raises(SystemExit) as exc_info:
             companion.main(["--serve", "--action", "quit"])
         assert exc_info.value.code == 2
+
+
+class _SilentChannel:
+    address = "/run/user/1000/privacyfence/companion.sock"
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+
+class TestPendingSeparation:
+    """ADR 0003 decision 3's second half. The companion is the only
+    PrivacyFence process running inside a real login session as the person
+    whose group membership is missing, which is what makes "nobody was
+    logged in at install time" a pending step rather than a permanent one."""
+
+    @pytest.fixture
+    def never_elevates(self, monkeypatch):
+        def _unexpected(user=None):
+            raise AssertionError("elevated with nothing pending")
+
+        monkeypatch.setattr(
+            companion.privilege_separation, "complete_per_user_separation", _unexpected
+        )
+
+    def test_an_install_with_nothing_pending_prompts_nobody(self, monkeypatch, never_elevates):
+        # The ordinary case at every companion start after the first -- so it
+        # has to cost nothing and, above all, must not elevate.
+        monkeypatch.setattr(
+            companion.privilege_separation, "separation",
+            lambda: SimpleNamespace(service_group="privacyfence"),
+        )
+        monkeypatch.setattr(
+            companion.privilege_separation, "owner_membership_pending", lambda: False
+        )
+
+        assert companion._complete_pending_separation() is None
+
+    def test_an_unseparated_install_prompts_nobody(self, monkeypatch, never_elevates):
+        # Decision 6's problem, not this one's: there is no group to join and
+        # no marker to complete, so there is nothing here to ask about.
+        monkeypatch.setattr(companion.privilege_separation, "separation", lambda: None)
+        monkeypatch.setattr(
+            companion.privilege_separation, "owner_membership_pending", lambda: True
+        )
+
+        assert companion._complete_pending_separation() is None
+
+    def test_a_pending_install_is_completed_and_the_next_step_named(self, monkeypatch, caplog):
+        monkeypatch.setattr(
+            companion.privilege_separation, "owner_membership_pending", lambda: True
+        )
+        monkeypatch.setattr(
+            companion.privilege_separation, "complete_per_user_separation", lambda: True
+        )
+        monkeypatch.setattr(companion.privilege_separation, "current_user_name", lambda: "alice")
+        monkeypatch.setattr(
+            companion.privilege_separation, "separation",
+            lambda: SimpleNamespace(service_group="privacyfence"),
+        )
+
+        with caplog.at_level("WARNING"):
+            companion._complete_pending_separation()
+
+        # The one step no elevation can take: group membership is evaluated
+        # when a session is created, so this session will never see it.
+        assert "log out and back in" in caplog.text
+        assert "alice" in caplog.text
+        assert "privacyfence" in caplog.text
+
+    def test_a_declined_prompt_says_nothing_more(self, monkeypatch, caplog):
+        # privilege_separation has already logged why and what to type; a
+        # second line here telling somebody who just cancelled to log out
+        # would be wrong as well as noisy.
+        monkeypatch.setattr(
+            companion.privilege_separation, "separation",
+            lambda: SimpleNamespace(service_group="privacyfence"),
+        )
+        monkeypatch.setattr(
+            companion.privilege_separation, "owner_membership_pending", lambda: True
+        )
+        monkeypatch.setattr(
+            companion.privilege_separation, "complete_per_user_separation", lambda: False
+        )
+
+        with caplog.at_level("WARNING"):
+            companion._complete_pending_separation()
+
+        assert "log out and back in" not in caplog.text
+
+    def test_the_check_runs_off_the_startup_path(self, monkeypatch):
+        # A password dialog nobody answers must not hold up the tray icon
+        # appearing or the companion channel binding -- the same reason
+        # maybe_auto_enable_macos() uses a thread.
+        started = []
+
+        class _Thread:
+            def __init__(self, **kwargs):
+                started.append(kwargs)
+
+            def start(self):
+                started.append("started")
+
+        monkeypatch.setattr(companion.threading, "Thread", _Thread)
+
+        companion._start_pending_separation_check()
+
+        assert started[0]["target"] is companion._complete_pending_separation
+        assert started[0]["daemon"] is True
+        assert started[-1] == "started"
+
+    def test_serve_starts_the_check(self, monkeypatch):
+        # --serve is what a separated Linux install autostarts, which makes
+        # it the shape that has to carry this.
+        calls = []
+        monkeypatch.setattr(
+            companion, "_start_pending_separation_check", lambda: calls.append(True)
+        )
+        monkeypatch.setattr(companion, "CompanionChannelServer", _SilentChannel)
+
+        assert companion._run_serve(wait=lambda: None) == 0
+        assert calls == [True]
 
 
 @pytest.mark.skipif(

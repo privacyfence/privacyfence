@@ -156,9 +156,11 @@ MODULE_FLOORS: dict[str, float] = {
     "src/privacyfence/web/control_channel.py": 61.0,
     # _run_tray() (macOS/Windows only, guarded on sys.platform) is nearly
     # all of what's uncovered -- the tray icon this Linux-only run has
-    # nothing to drive. 81.0 reflects that split honestly rather than
-    # padding it with a pragma.
-    "src/privacyfence/companion.py": 81.0,
+    # nothing to drive. 83.0 reflects that split honestly rather than
+    # padding it with a pragma; raised from 81.0 by ADR 0003 decision 3's
+    # _complete_pending_separation(), which is new code this run does cover
+    # in full.
+    "src/privacyfence/companion.py": 83.0,
     # The SSE stream's own generator body (approvals_stream's event_source,
     # a poll loop no test here consumes to exhaustion) plus a couple of
     # decide()'s edge branches (the bare-index "choice" coercion, the plain
