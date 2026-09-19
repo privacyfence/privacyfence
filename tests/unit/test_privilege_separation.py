@@ -43,8 +43,10 @@ import os
 import re
 import shlex
 import stat
+import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -2239,3 +2241,699 @@ class TestWindowsChannelTrustees:
             pytest.skip("this is the POSIX branch")
 
         assert privilege_separation.windows_channel_trustees() == ()
+
+
+class TestMachineHalfMarker:
+    """ADR 0003 decision 3's marker compatibility, which is the trap in that
+    phase: the machine half has to record *something* for ``owner_user``, and
+    ``_parse_marker()`` refuses a marker missing the key outright while
+    ``check_runtime_identity()`` turns a refused marker into a startup
+    failure by design. So it records ``""`` and ``MARKER_VERSION`` stays at
+    1 -- bumping it would make a 4.1 daemon, or any rollback, refuse to start
+    against a 4.2-provisioned install."""
+
+    @pytest.fixture(autouse=True)
+    def _under_tmp(self, platform_name, monkeypatch, tmp_path):
+        self.platform = platform_name
+        self.root = tmp_path / "PrivacyFence"
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(self.root))
+        privilege_separation.reset_cache()
+        yield
+        privilege_separation.reset_cache()
+
+    def test_an_empty_owner_still_parses(self):
+        _write_marker(self.root, self.platform, owner_user="")
+
+        state = privilege_separation.separation()
+
+        assert state is not None
+        assert state.owner_user == ""
+        assert state.service_account == service_account_of(self.platform)
+
+    def test_an_empty_owner_is_still_a_separated_install(self):
+        # The whole point of the split: what is pending is one group
+        # membership, not the separation. Reading this as "not separated"
+        # would send paths.py back to the agent-writable data directory.
+        _write_marker(self.root, self.platform, owner_user="")
+
+        assert privilege_separation.is_enabled() is True
+        assert privilege_separation.data_dir_override() == self.root
+
+    def test_an_absent_owner_is_still_refused(self):
+        # The distinction the machine half depends on: "" is a value, a
+        # missing key is a marker this build cannot interpret.
+        payload = _marker_payload(self.platform)
+        del payload["owner_user"]
+        self.root.mkdir(parents=True, exist_ok=True)
+        (self.root / privilege_separation.MARKER_FILE_NAME).write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.separation() is None
+
+    def test_the_marker_version_has_not_moved(self):
+        # Asserted as a literal on purpose: every other check in this file
+        # compares the scripts against MARKER_VERSION, so all of them would
+        # follow a bump silently. This is the one that would not.
+        assert privilege_separation.MARKER_VERSION == 1
+
+
+class TestEnableSplitContract:
+    """ADR 0003 decision 3, as the three provisioning scripts spell it."""
+
+    SCRIPTS = {platform: INSTALLERS[platform].read_text(encoding="utf-8") for platform in PLATFORMS}
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_the_posix_scripts_have_a_per_user_half(self, platform):
+        script = self.SCRIPTS[platform]
+        assert "cmd_enable_for_user()" in script
+        assert "--for-user)" in script
+        assert "FOR_USER_ONLY=1" in script
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_the_posix_machine_half_never_dies_on_an_unresolved_owner(self, platform):
+        # resolve_owner() die()s on one; resolve_owner_optional() is the shape
+        # status already carried, and is what cmd_enable takes now. A drift
+        # back to the strict one is the single change that would restore the
+        # "leaves the install opt-in" fallback this decision removes.
+        body = re.search(
+            r"^cmd_enable\(\) \{\n(.*?)^\}", self.SCRIPTS[platform], re.MULTILINE | re.DOTALL
+        )
+        assert body is not None
+        assert "resolve_owner_optional" in body.group(1)
+        assert re.search(r"^\s+resolve_owner$", body.group(1), re.MULTILINE) is None
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_the_posix_group_add_is_the_only_conditional_step(self, platform):
+        # Everything root can do alone runs unconditionally; the group
+        # membership is the one step behind an owner check.
+        body = re.search(
+            r"^cmd_enable\(\) \{\n(.*?)^\}", self.SCRIPTS[platform], re.MULTILINE | re.DOTALL
+        ).group(1)
+        assert re.search(
+            r'if \[ -n "\$OWNER_USER" \]; then\n\s+add_owner_to_service_group', body
+        )
+        for step in ("create_service_account", "migrate_data", "apply_layout", "write_marker"):
+            assert re.search(rf"^  {step}$", body, re.MULTILINE), step
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_the_posix_machine_half_has_nothing_to_migrate(self, platform):
+        # With no owner there is no home directory to read, so migrate_data
+        # reduces to creating the root -- the path it already had for "no
+        # existing ~/.privacyfence".
+        body = re.search(
+            r"^migrate_data\(\) \{\n(.*?)^\}", self.SCRIPTS[platform], re.MULTILINE | re.DOTALL
+        ).group(1)
+        assert re.search(r'if \[ -z "\$OWNER_HOME" \]; then', body)
+        assert 'mkdir -p "$SYSTEM_ROOT"' in body
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_the_posix_scripts_report_the_pending_state_distinctly(self, platform):
+        # Otherwise there is nothing for a human -- or the companion -- to
+        # read: "PENDING USER" is separated-with-a-step-left, which is not
+        # the same answer as "OFF".
+        script = self.SCRIPTS[platform]
+        assert "PENDING USER" in script
+        assert "marker_owner_user()" in script
+
+    def test_the_windows_script_has_a_per_user_half(self):
+        script = self.SCRIPTS["win32"]
+        assert "function Invoke-EnableForUser {" in script
+        assert "[string] $ForUser," in script
+        assert "Invoke-EnableForUser" in script.split("switch ($Command) {", 1)[1]
+
+    def test_the_windows_machine_half_never_throws_on_an_unresolved_owner(self):
+        body = re.search(
+            r"^function Invoke-Enable \{\n(.*?)^\}", self.SCRIPTS["win32"], re.MULTILINE | re.DOTALL
+        )
+        assert body is not None
+        assert "Resolve-Owner -Optional" in body.group(1)
+        assert re.search(r"^\s+Resolve-Owner$", body.group(1), re.MULTILINE) is None
+        assert re.search(
+            r"if \(\$script:OwnerResolved\) \{\n\s+Add-OwnerToServiceGroup", body.group(1)
+        )
+
+    def test_the_windows_group_creation_and_the_group_add_are_two_steps(self):
+        # New-ServiceGroup used to do both, which is exactly what made the
+        # machine half impossible on this platform.
+        body = re.search(
+            r"^function New-ServiceGroup \{\n(.*?)^\}", self.SCRIPTS["win32"], re.MULTILINE | re.DOTALL
+        ).group(1)
+        assert "Add-LocalGroupMember" not in body
+        assert "function Add-OwnerToServiceGroup {" in self.SCRIPTS["win32"]
+
+    def test_the_windows_marker_records_an_empty_owner_when_none_resolved(self):
+        assert (
+            "owner_user      = $(if ($script:OwnerResolved) { $script:OwnerUser } else { '' })"
+            in self.SCRIPTS["win32"]
+        )
+
+    def test_the_windows_script_reports_the_pending_state_distinctly(self):
+        assert "PENDING USER" in self.SCRIPTS["win32"]
+        assert "function Get-MarkerOwnerUser {" in self.SCRIPTS["win32"]
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1"
+    )
+    def test_the_posix_scripts_really_parse_the_flag(self, platform):
+        # The one assertion in this class that is not a read of the source:
+        # an option the `case` doesn't know dies at "unknown option" before
+        # any subcommand runs, and that is a parse failure no grep would
+        # catch. Whichever of the two refusals this reaches -- "run this with
+        # sudo" on Linux, "macOS-only" on the other -- is past the parser.
+        result = subprocess.run(
+            ["bash", str(INSTALLERS[platform]), "enable", "--for-user", "alice"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+
+        assert result.returncode != 0
+        assert "unknown option" not in result.stderr
+
+    def test_the_pkg_postinstall_provisions_without_a_console_user(self):
+        # The .pkg's own half of decision 3: "nobody is logged in" used to
+        # exit 0 before running anything, which is the fallback the ADR's
+        # Context table names first.
+        postinstall = (REPO_ROOT / "installer" / "macos" / "pkg" / "postinstall").read_text(
+            encoding="utf-8"
+        )
+
+        assert 'CONSOLE_USER=""' in postinstall
+        assert '"$SEPARATION_SCRIPT" enable --auto --app "$APP_PATH"' in postinstall
+
+
+_NET_LOCALGROUP_OUTPUT = """\
+Alias name     PrivacyFenceUsers
+Comment        May read PrivacyFence's handoff directory.
+
+Members
+
+-------------------------------------------------------------------------------
+DESKTOP-7Q1\\alice
+bob
+The command completed successfully.
+
+"""
+
+
+class TestServiceGroupMembers:
+    """ADR 0003 decision 3's read side. Deliberately the *recorded*
+    membership rather than this process's own token -- see the function's
+    own docstring for why reading the token would prompt at every start
+    until the human logged out."""
+
+    @staticmethod
+    def _fake_grp(monkeypatch, getgrnam):
+        # Injected into sys.modules rather than monkeypatched onto the real
+        # module: ``grp`` is POSIX-only and this file is collected on Windows
+        # too, where importing it at all is a ModuleNotFoundError. The code
+        # under test imports it inside the function, after its own platform
+        # check, so the injected module is what it picks up -- which keeps
+        # the POSIX branch covered on every runner rather than skipped on one.
+        monkeypatch.setitem(sys.modules, "grp", SimpleNamespace(getgrnam=getgrnam))
+
+    def test_posix_reads_the_group_file(self, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        self._fake_grp(monkeypatch, lambda name: SimpleNamespace(gr_mem=["alice", "bob"]))
+
+        assert privilege_separation.service_group_members("privacyfence") == {"alice", "bob"}
+
+    def test_posix_answers_none_for_a_group_that_does_not_exist(self, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+
+        def _missing(name):
+            raise KeyError(name)
+
+        self._fake_grp(monkeypatch, _missing)
+
+        assert privilege_separation.service_group_members("privacyfence") is None
+
+    def test_windows_reads_net_localgroup(self, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        calls = []
+
+        def _run(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 0, _NET_LOCALGROUP_OUTPUT, "")
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", _run)
+
+        members = privilege_separation.service_group_members("PrivacyFenceUsers")
+
+        assert calls[0][1:] == ["localgroup", "PrivacyFenceUsers"]
+        # Resolved against %SystemRoot%, not left as a bare "net": bandit
+        # B607's own reason, and the same one _OSASCRIPT is absolute for.
+        assert calls[0][0].endswith("System32/net.exe") or calls[0][0].endswith("System32\\net.exe")
+        assert {"alice", "bob"} <= members
+
+    def test_windows_answers_none_when_net_fails(self, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(
+            privilege_separation.subprocess, "run",
+            lambda argv, **kwargs: subprocess.CompletedProcess(argv, 2, "", "not found"),
+        )
+
+        assert privilege_separation.service_group_members("PrivacyFenceUsers") is None
+
+    def test_windows_answers_none_when_net_cannot_run(self, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+
+        def _boom(argv, **kwargs):
+            raise OSError("no net.exe")
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", _boom)
+
+        assert privilege_separation.service_group_members("PrivacyFenceUsers") is None
+
+    def test_the_domain_qualifier_is_stripped(self):
+        # current_user_name() answers with the account half on Windows
+        # (windows_acl.current_account_name()), so a DOMAIN\ prefix left on
+        # would never match and would prompt forever.
+        assert "alice" in privilege_separation._parse_net_localgroup(_NET_LOCALGROUP_OUTPUT)
+
+    def test_nothing_before_the_separator_is_a_member(self):
+        parsed = privilege_separation._parse_net_localgroup(_NET_LOCALGROUP_OUTPUT)
+
+        assert "Alias name     PrivacyFenceUsers" not in parsed
+        assert "Members" not in parsed
+
+
+class TestOwnerMembershipPending:
+    def test_an_unseparated_install_is_never_pending(self, platform_name, monkeypatch, tmp_path):
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.owner_membership_pending() is False
+
+    def test_a_user_in_the_group_is_not_pending(self, separated, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "alice")
+        monkeypatch.setattr(
+            privilege_separation, "service_group_members", lambda group: frozenset({"alice"})
+        )
+
+        assert privilege_separation.owner_membership_pending() is False
+
+    def test_a_user_outside_the_group_is_pending(self, separated, monkeypatch):
+        # Even though the marker names *somebody*: a second human on a shared
+        # machine needs the same re-runnable step the first one got.
+        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "bob")
+        monkeypatch.setattr(
+            privilege_separation, "service_group_members", lambda group: frozenset({"alice"})
+        )
+
+        assert privilege_separation.owner_membership_pending() is True
+
+    def test_an_unreadable_group_falls_back_to_an_empty_marker_owner(
+        self, platform_name, monkeypatch, tmp_path
+    ):
+        root = tmp_path / "PrivacyFence"
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
+        _write_marker(root, platform_name, owner_user="")
+        monkeypatch.setattr(privilege_separation, "service_group_members", lambda group: None)
+
+        assert privilege_separation.owner_membership_pending() is True
+
+    def test_an_unreadable_group_with_a_named_owner_is_not_pending(
+        self, platform_name, monkeypatch, tmp_path
+    ):
+        # The safe direction: guessing "pending" on a platform we just failed
+        # to interrogate would put a password dialog in front of somebody at
+        # every single companion start.
+        root = tmp_path / "PrivacyFence"
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
+        _write_marker(root, platform_name, owner_user="alice")
+        monkeypatch.setattr(privilege_separation, "service_group_members", lambda group: None)
+
+        assert privilege_separation.owner_membership_pending() is False
+
+
+class TestInstallerScriptResolution:
+    def test_macos_defers_to_the_bundled_resolver(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        script = tmp_path / "macos_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(privilege_separation, "_macos_installer_script_path", lambda: script)
+
+        assert privilege_separation.installer_script_path() == script
+
+    def test_linux_prefers_what_the_deb_installs(self, monkeypatch, tmp_path):
+        # Relocated rather than asserted at its real path: /usr/sbin is not a
+        # place a test may write, and on the Windows runner this file is also
+        # collected on it is not even a path that can exist.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        packaged = tmp_path / "privacyfence-privilege-separation"
+        packaged.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(privilege_separation, "LINUX_PACKAGED_INSTALLER", packaged)
+
+        assert privilege_separation.installer_script_path() == packaged
+
+    def test_the_packaged_linux_path_is_the_one_the_deb_writes(self):
+        # The constant above is only a test seam if it still names what
+        # build_deb.sh actually installs -- and what the status command in
+        # PLATFORM_LAYOUTS quotes at a human reading a daemon log.
+        build_deb = (REPO_ROOT / "scripts" / "build_deb.sh").read_text(encoding="utf-8")
+
+        assert privilege_separation.LINUX_PACKAGED_INSTALLER.as_posix() == (
+            "/usr/sbin/privacyfence-privilege-separation"
+        )
+        assert f'{privilege_separation.LINUX_PACKAGED_INSTALLER.as_posix()}"' in build_deb
+
+    def test_linux_falls_back_to_the_checkout(self, monkeypatch, tmp_path):
+        # The packaged path is pointed at nothing explicitly rather than left
+        # to be absent: on a developer's own Debian box the .deb really is
+        # installed, and the fallback is what this test is about.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(
+            privilege_separation, "LINUX_PACKAGED_INSTALLER", tmp_path / "not-installed"
+        )
+
+        assert privilege_separation.installer_script_path() == INSTALLERS["linux"]
+
+    def test_windows_looks_next_to_the_running_executable(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        app = tmp_path / "privacyfence-app.exe"
+        app.write_text("", encoding="utf-8")
+        (tmp_path / "privilege-separation.ps1").write_text("", encoding="utf-8")
+        monkeypatch.setattr(privilege_separation.sys, "executable", str(app))
+
+        assert privilege_separation.installer_script_path() == tmp_path / "privilege-separation.ps1"
+
+    def test_windows_falls_back_to_the_checkout(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(privilege_separation.sys, "executable", str(tmp_path / "python"))
+
+        assert privilege_separation.installer_script_path() == INSTALLERS["win32"]
+
+    def test_none_when_nothing_is_on_disk(self, monkeypatch, tmp_path):
+        # A pip install on a machine with no .deb and no checkout next to the
+        # package -- which is the case decision 6's gate later has to be able
+        # to report rather than crash on.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(
+            privilege_separation, "_checkout_script_path", lambda name: tmp_path / name
+        )
+        monkeypatch.setattr(
+            privilege_separation, "LINUX_PACKAGED_INSTALLER", tmp_path / "not-installed"
+        )
+
+        assert privilege_separation.installer_script_path() is None
+
+    def test_the_first_candidate_that_exists_wins(self, tmp_path):
+        present = tmp_path / "present"
+        present.write_text("", encoding="utf-8")
+
+        assert privilege_separation._first_existing(tmp_path / "absent", present) == present
+        assert privilege_separation._first_existing(tmp_path / "absent") is None
+
+
+class TestElevationScriptProblem:
+    """#428 B2, now guarding a second elevation. The rule it encodes is the
+    same one: the only thing this module ever runs as root is a script an
+    installer shipped, never one the account being separated from can
+    rewrite."""
+
+    def test_posix_refuses_a_script_this_account_owns(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        script = tmp_path / "linux_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        # Faked rather than read off disk: the uid this test needs is "not
+        # root", and CI's own runner is sometimes exactly root.
+        monkeypatch.setattr(
+            privilege_separation.os, "stat",
+            lambda path: os.stat_result((0o100755, 0, 0, 1, 501, 0, 0, 0, 0, 0)),
+        )
+
+        problem = privilege_separation._elevation_script_problem(script)
+
+        assert problem is not None
+        assert "not root" in problem
+
+    def test_posix_refuses_a_script_that_is_not_there(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+
+        problem = privilege_separation._elevation_script_problem(tmp_path / "gone.sh")
+
+        assert problem is not None
+        assert "could not stat" in problem
+
+    def test_posix_accepts_a_root_owned_unwritable_script(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        script = tmp_path / "linux_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(
+            privilege_separation.os, "stat",
+            lambda path: os.stat_result((0o100755, 0, 0, 1, 0, 0, 0, 0, 0, 0)),
+        )
+
+        assert privilege_separation._elevation_script_problem(script) is None
+
+    def test_posix_refuses_a_group_writable_script(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        script = tmp_path / "linux_privilege_separation.sh"
+        script.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(
+            privilege_separation.os, "stat",
+            lambda path: os.stat_result((0o100775, 0, 0, 1, 0, 0, 0, 0, 0, 0)),
+        )
+
+        problem = privilege_separation._elevation_script_problem(script)
+
+        assert problem is not None
+        assert "group- or world-writable" in problem
+
+    def test_macos_still_checks_the_bundle_signature(self, monkeypatch, tmp_path):
+        # The refactor that gave Linux the POSIX half must not have cost
+        # macOS the codesign half.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        called = []
+        monkeypatch.setattr(
+            privilege_separation, "_macos_auto_enable_script_problem",
+            lambda script: called.append(script) or "nope",
+        )
+
+        assert privilege_separation._elevation_script_problem(tmp_path / "x") == "nope"
+        assert called == [tmp_path / "x"]
+
+    def test_windows_refuses_an_acl_it_cannot_read(self, monkeypatch, tmp_path):
+        # read_dacl() answers None off Windows and on a path with no
+        # descriptor to read, and "could not check" has to read as "do not
+        # elevate" in front of a UAC prompt.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+
+        problem = privilege_separation._elevation_script_problem(tmp_path / "x.ps1")
+
+        assert problem is not None
+        assert "could not read" in problem
+
+    def test_windows_refuses_a_user_writable_script(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(
+            windows_acl, "read_dacl",
+            lambda path: [windows_acl.Ace(trustee="DESKTOP-7Q1\\alice", mask=0x1F01FF)],
+        )
+
+        problem = privilege_separation._elevation_script_problem(tmp_path / "x.ps1")
+
+        assert problem is not None
+        assert "alice" in problem
+
+    def test_windows_accepts_an_administrators_only_script(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(
+            windows_acl, "read_dacl",
+            lambda path: [
+                windows_acl.Ace(trustee="BUILTIN\\Administrators", mask=0x1F01FF),
+                windows_acl.Ace(trustee="BUILTIN\\Users", mask=0x1200A9),
+            ],
+        )
+
+        assert privilege_separation._elevation_script_problem(tmp_path / "x.ps1") is None
+
+
+class TestPerUserElevationCommand:
+    def test_macos_reuses_the_admin_prompt(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        script = tmp_path / "macos_privilege_separation.sh"
+
+        argv = privilege_separation._per_user_argv(script, "alice")
+
+        assert argv[0] == privilege_separation._OSASCRIPT
+        assert "with administrator privileges" in argv[-1]
+        assert "enable --for-user alice" in argv[-1]
+        # Not --auto, which maybe_auto_enable_macos() does pass: that mode
+        # exits 0 on every failure path, which would report a separation
+        # that did not happen as one the human should now log out for.
+        assert "--auto" not in argv[-1]
+
+    def test_macos_quotes_a_hostile_account_name(self, monkeypatch, tmp_path):
+        # Two layers, neither substituting for the other: shlex for the shell
+        # `do shell script` runs, then AppleScript's own string escaping on
+        # top of it. Asserted by peeling both back off and checking the argv
+        # the shell would actually see -- one argument, not three.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        script = tmp_path / "s.sh"
+        hostile = 'a"; rm -rf /; #'
+
+        argv = privilege_separation._per_user_argv(script, hostile)
+
+        literal = argv[-1][len('do shell script "'):-len('" with administrator privileges')]
+        command = re.sub(r"\\(.)", r"\1", literal)
+        assert shlex.split(command) == [str(script), "enable", "--for-user", hostile]
+
+    def test_windows_elevates_through_uac(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+
+        argv = privilege_separation._per_user_argv(tmp_path / "privilege-separation.ps1", "alice")
+
+        assert argv[0].endswith("powershell.exe")
+        command = argv[-1]
+        assert "-Verb RunAs" in command
+        # -Wait, or the return code below would be the launcher's rather than
+        # the script's, and every decline would read as a success.
+        assert "-Wait" in command
+        assert "'enable', '-ForUser', 'alice'" in command
+
+    def test_windows_doubles_a_quote_in_an_account_name(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+
+        argv = privilege_separation._per_user_argv(tmp_path / "s.ps1", "al'ice")
+
+        assert "'al''ice'" in argv[-1]
+
+    def test_powershell_quoting_doubles_only_the_quote(self):
+        # Backslashes are literal in a single-quoted PowerShell string, so
+        # escaping them the way shlex would corrupts every path here.
+        assert privilege_separation._powershell_quoted("C:\\x\\y") == "'C:\\x\\y'"
+
+    def test_linux_uses_pkexec(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(privilege_separation.shutil, "which", lambda name: "/usr/bin/pkexec")
+
+        argv = privilege_separation._per_user_argv(tmp_path / "s.sh", "alice")
+
+        assert argv == ["/usr/bin/pkexec", str(tmp_path / "s.sh"), "enable", "--for-user", "alice"]
+
+    def test_linux_declines_to_guess_without_pkexec(self, monkeypatch, tmp_path):
+        # A bare `sudo` from an XDG-autostarted process hangs on a password
+        # prompt nobody can see, which is worse than saying so.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(privilege_separation.shutil, "which", lambda name: None)
+
+        assert privilege_separation._per_user_argv(tmp_path / "s.sh", "alice") is None
+
+    @pytest.mark.parametrize("platform,expected", [("linux", "sudo"), ("darwin", "sudo"), ("win32", "powershell")])
+    def test_the_typed_command_matches_the_platform(self, monkeypatch, tmp_path, platform, expected):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: platform)
+
+        text = privilege_separation.per_user_command_text(tmp_path / "s", "alice")
+
+        assert text.startswith(expected)
+        assert "alice" in text
+
+
+class TestCompletePerUserSeparation:
+    @pytest.fixture
+    def script(self, tmp_path, monkeypatch):
+        path = tmp_path / "privilege-separation"
+        path.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(privilege_separation, "installer_script_path", lambda: path)
+        monkeypatch.setattr(privilege_separation, "_elevation_script_problem", lambda s: None)
+        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "alice")
+        return path
+
+    def test_does_nothing_on_an_unseparated_install(self, platform_name, monkeypatch, tmp_path):
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.complete_per_user_separation() is False
+
+    def test_reports_a_missing_provisioning_script(self, separated, monkeypatch, caplog):
+        monkeypatch.setattr(privilege_separation, "installer_script_path", lambda: None)
+        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "alice")
+
+        with caplog.at_level("WARNING"):
+            assert privilege_separation.complete_per_user_separation() is False
+        assert "alice" in caplog.text
+
+    def test_refuses_a_script_that_fails_its_safety_check(self, separated, script, monkeypatch, caplog):
+        monkeypatch.setattr(
+            privilege_separation, "_elevation_script_problem", lambda s: "owned by uid 501"
+        )
+
+        with caplog.at_level("WARNING"):
+            assert privilege_separation.complete_per_user_separation() is False
+        assert "owned by uid 501" in caplog.text
+        # And still names what to type, rather than leaving a dead end.
+        assert "enable" in caplog.text
+
+    def test_names_the_command_when_it_cannot_ask_for_a_password(
+        self, separated, script, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: None)
+
+        with caplog.at_level("WARNING"):
+            assert privilege_separation.complete_per_user_separation() is False
+        assert "enable" in caplog.text
+
+    def test_runs_the_elevated_command_for_this_account(self, separated, script, monkeypatch):
+        calls = []
+
+        def _run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: ["x", u])
+        monkeypatch.setattr(privilege_separation.subprocess, "run", _run)
+
+        assert privilege_separation.complete_per_user_separation() is True
+        assert calls[0][0] == ["x", "alice"]
+        # Bounded, like every other elevation here: a dialog nobody answers
+        # must not pin a thread forever.
+        assert calls[0][1]["timeout"] == 300
+
+    def test_an_explicit_user_wins_over_this_process(self, separated, script, monkeypatch):
+        seen = []
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: seen.append(u) or ["x"])
+        monkeypatch.setattr(
+            privilege_separation.subprocess, "run",
+            lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""),
+        )
+
+        assert privilege_separation.complete_per_user_separation("bob") is True
+        assert seen == ["bob"]
+
+    def test_a_declined_prompt_is_not_a_crash(self, separated, script, monkeypatch, caplog):
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: ["x"])
+        monkeypatch.setattr(
+            privilege_separation.subprocess, "run",
+            lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, "", "User cancelled."),
+        )
+
+        with caplog.at_level("INFO"):
+            assert privilege_separation.complete_per_user_separation() is False
+        assert "User cancelled." in caplog.text
+
+    def test_a_subprocess_failure_is_swallowed(self, separated, script, monkeypatch):
+        def _boom(argv, **kwargs):
+            raise OSError("no such binary")
+
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: ["x"])
+        monkeypatch.setattr(privilege_separation.subprocess, "run", _boom)
+
+        assert privilege_separation.complete_per_user_separation() is False
+
+    def test_success_drops_the_cached_marker(self, separated, script, monkeypatch):
+        # The marker on disk has just been rewritten with this owner in it,
+        # so a cached parse from before would still read as pending.
+        privilege_separation.separation()
+        reset = []
+        monkeypatch.setattr(privilege_separation, "reset_cache", lambda: reset.append(True))
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: ["x"])
+        monkeypatch.setattr(
+            privilege_separation.subprocess, "run",
+            lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""),
+        )
+
+        assert privilege_separation.complete_per_user_separation() is True
+        assert reset == [True]

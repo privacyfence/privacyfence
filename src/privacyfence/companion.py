@@ -48,6 +48,16 @@ LaunchAgent running the tray) and Linux (an XDG autostart entry running
 ``--serve``). On an install that has not opted into privilege separation
 the daemon still autostarts itself exactly as before, and running this
 entry point is opt-in.
+
+ADR 0003 decision 3 gives this process one job it did not have before, and
+it is the reason that decision works at all: ``enable``'s machine half can
+now separate an install with no human in sight -- an MDM push, an unattended
+``apt`` upgrade, a ``.pkg`` run at the login window -- and record the group
+membership as pending. This is the process that closes it. It is the only
+PrivacyFence process that runs inside a real login session, as the person
+whose membership is missing, so "nobody was logged in at install time" stops
+meaning "this install is unprotected forever" and starts meaning "the
+companion resolves this by existing". See ``_complete_pending_separation()``.
 """
 from __future__ import annotations
 
@@ -59,6 +69,7 @@ import webbrowser
 from typing import Callable
 from pathlib import Path
 
+from . import privilege_separation
 from .std_streams import ensure_std_streams
 from .web.control_channel import (
     CompanionChannelServer,
@@ -128,6 +139,55 @@ def _run_action(action: str) -> bool:
     raise ValueError(f"Unknown companion action: {action!r}")  # pragma: no cover -- argparse restricts choices
 
 
+def _complete_pending_separation() -> None:
+    """ADR 0003 decision 3's second half: if this install is separated but
+    this session's account is not in its service group yet, ask for the
+    password once and close that.
+
+    A no-op -- prompting nobody -- on an unseparated install and on one that
+    is already complete, which is the ordinary case at every companion start
+    after the first. ``privilege_separation`` itself logs every way this can
+    fail to run, each time naming the one command that does it by hand; what
+    is left here is the step no command can take, which is the human logging
+    out and back in.
+
+    Called once per companion process, and a companion process is one per
+    login session, which is the granularity decision 3 actually wants: group
+    membership is evaluated when a session is created, so a second attempt
+    inside the same session could not observe its own result anyway.
+    """
+    # Read once, up front: the elevated command below rewrites the marker and
+    # drops the cache, so asking again afterwards could answer None on an
+    # install somebody ran `disable` against in between -- and the group to
+    # name in the message is the one this decision was pending on.
+    state = privilege_separation.separation()
+    if state is None or not privilege_separation.owner_membership_pending():
+        return
+    if not privilege_separation.complete_per_user_separation():
+        return
+    logger.warning(
+        "Added %s to the %s group. Group membership is evaluated when a session is created, "
+        "so log out and back in before the approvals page or your MCP client can reach "
+        "PrivacyFence.",
+        privilege_separation.current_user_name(), state.service_group,
+    )
+
+
+def _start_pending_separation_check() -> None:
+    """Runs ``_complete_pending_separation()`` off the startup path.
+
+    Its own thread for the same reason ``maybe_auto_enable_macos()`` uses
+    one: what it may do is put a system password dialog in front of a human,
+    and the tray icon appearing (or the companion channel binding) must not
+    wait on somebody answering, or ignoring, that dialog.
+    """
+    threading.Thread(
+        target=_complete_pending_separation,
+        name="privacyfence-separation-for-user",
+        daemon=True,
+    ).start()
+
+
 def _run_tray() -> int:
     """macOS/Windows only -- a persistent process with a tray/menu-bar icon
     and this process's own ``CompanionChannelServer`` (decision 5), both
@@ -138,6 +198,7 @@ def _run_tray() -> int:
     import pystray
     from PIL import Image
 
+    _start_pending_separation_check()
     channel = CompanionChannelServer()
     channel.start()
 
@@ -187,6 +248,7 @@ def _run_serve(wait: Callable[[], None] | None = None) -> int:
     terminal. ``wait`` is injectable for the test that has to get back out
     of here.
     """
+    _start_pending_separation_check()
     channel = CompanionChannelServer()
     channel.start()
     if channel.address is None:

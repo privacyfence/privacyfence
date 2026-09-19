@@ -37,6 +37,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- Privilege separation no longer gives up when it cannot tell which human an install is for. ADR
+  0003 decision 3 splits `enable` into a machine half — creating the service account, moving and
+  re-owning the data directory, writing the marker, installing the service — and a per-user half,
+  which is only the two steps that need a person: adding them to the `_privacyfence` /
+  `privacyfence` / `PrivacyFenceUsers` group, and migrating whatever they had under
+  `~/.privacyfence` (`%LOCALAPPDATA%\PrivacyFence`). The machine half now always runs and always
+  fully separates the install, so an MDM push, an unattended `apt` upgrade, a root shell or a
+  `.pkg` installed with nobody at the console produces a separated install rather than the
+  unseparated one each of those used to fall back to. The per-user half is re-runnable on its own —
+  `enable --for-user <name>` (`enable -ForUser <name>` on Windows) — and `status` reports the
+  interim state as its own answer (`PENDING USER`) rather than as "not separated", because the
+  install *is* separated; what is outstanding is one group membership.
+- The companion app closes that pending half by itself. On start, an install that is separated but
+  whose current user is not in its service group gets one elevated `enable --for-user` — macOS'
+  own admin-password dialog, a UAC prompt on Windows, `pkexec` on Linux — after which it names the
+  one thing no password can do, which is logging out and back in for the new group membership to
+  reach the session. It prompts nobody on an unseparated install or on one that is already
+  complete, and where there is no way to ask for a password at all (a Linux desktop with no polkit
+  agent) it prints the single command to run instead of guessing. "Nobody was logged in at install
+  time" therefore stops meaning "this install is unprotected forever".
 - ADR 0003 (`docs/adr/0003-separated-installs-only.md`) decides that every local-mode install
   PrivacyFence ships is privilege-separated, and that a distribution channel which cannot separate
   itself at install time is not published. Today separation is effectively a user choice made by
