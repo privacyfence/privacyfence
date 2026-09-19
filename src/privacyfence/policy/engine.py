@@ -16,11 +16,13 @@ to whichever store the caller passes in (``is_temp_accepted``), rather than re-i
 v2-authoritative gate.py and its v1 shadow keep sharing one grace-window store instead of drifting the
 moment a user clicks "Allow once" (see ``auto_accept.AutoAcceptEvaluator.is_temp_accepted``).
 
-For P3, ``gate.py`` runs this alongside the old evaluator for one release (shadow mode) rather than
-replacing it outright -- see the redesign proposal's "Safety net": both engines run on every real
-call, the old one decides by default, and a disagreement is logged at ``WARNING``, never at the
-content level. ``policy_engine_config.PolicyEngineConfig`` is the switch that makes this engine
-authoritative instead.
+P3 ran this alongside the old evaluator for one release (shadow mode) rather than replacing it
+outright -- both engines on every real call, the old one deciding by default, a disagreement logged
+at ``WARNING`` and never at the content level -- behind a ``policy.engine: v1 | v2`` switch. P9
+([ADR 0004](../../../docs/adr/0004-retire-the-v1-auto-accept-config-model.md)) ended that: the old
+evaluator, the switch and its config module are gone, and this engine is the only one. What is left
+of the safety net is the equivalence harness that proved the migration behaviour-preserving
+(``policy/compat.py`` and ``tests/unit/policy/_v1_reference.py``).
 """
 from __future__ import annotations
 

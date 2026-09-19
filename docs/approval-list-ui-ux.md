@@ -112,8 +112,11 @@ Both modes render through `web_shell.wrap`: one header, one nav, one palette, on
 differs is passed in, not forked:
 
 - **nav items** — local mode has Approvals and Settings; org mode has Approvals, Connections,
-  Passkeys and Settings, since `/connect` and `/security` have no local-mode equivalent and org
-  mode's `/settings` is its own much smaller surface.
+  Passkeys and Settings. `/connect` genuinely has no local-mode equivalent (that mode's Connectors
+  section of `/settings` is it), and org mode's `/settings` is its own much smaller surface.
+  `/security` is a different case: it *is* mounted in local mode, it is simply not in that mode's
+  nav — it is reached from the require-a-passkey banner, from the companion's own first-run
+  enrollment prompt, or directly.
 - **principal label** — org mode names the signed-in principal in the header. Its entire
   authorization model is per-principal and the page otherwise never says whose queue is on screen.
   Local mode has exactly one principal and renders nothing.

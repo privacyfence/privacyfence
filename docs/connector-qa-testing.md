@@ -63,7 +63,7 @@ For each operation verify:
 `tests/unit/test_gate.py` is the primary, deterministic proof for gate-state coverage, already
 cross-checked against the full gate/policy matrix (auto→allowed, review→Allow/Deny,
 review+PII→Proceed/Cancel, popup/write→Allow/Deny, "Always allow"→proposed rule, matching/
-non-matching rule or resource grant, unattended allowed/forbidden) and confirmed exhaustive. This
+non-matching auto-accept rule, unattended allowed/forbidden) and confirmed exhaustive. This
 tier is **no longer required as routine release proof
 for gate-state coverage itself** — don't re-verify the generic auto/review/popup/PII/unattended
 state machine here.

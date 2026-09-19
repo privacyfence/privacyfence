@@ -9,10 +9,13 @@ accepted today. In particular:
 
 - `gmail.create_filter`, `gmail.update_filter`, `slack.create_group_chat`,
   `apps_script.read_content`, `apps_script.write_content` and `apps_script.read_execution_log`
-  have no entry in `settings_controller.RULES_BY_OPERATION`/`OPERATION_LABELS` and no capability in
-  `resource_grants.GRANT_RESOURCE_TYPES` -- there is no way to configure auto-accept for them
-  today. They get a verb and a scope subject here like every other governed tool, which is what
-  makes them configurable once a later phase's engine reads this registry instead of those tables.
+  were the three operation groups v1 had no way to configure at all (F5): no entry in the
+  per-operation rule tables, and no capability in the grant model either. They get a verb and a
+  scope subject here like every other governed tool, which is what made them configurable once the
+  engine read this registry instead of those tables. As of P9 that is no longer future tense --
+  `policy/catalogue.py` offers `apps_script.project` (read), `gmail.configure` (configure) and
+  `slack.share_anything` (share), and P7's write-time validation is what keeps a rule naming a verb
+  its scope cannot govern from being stored under any of them.
 - Three operation keys are shared by tools that perform two different verbs:
   `calendar.create_modify_event` (create vs. update), `slack.read_messages` and
   `telegram.read_chat_messages` (read vs. search, depending on whether the call returns one

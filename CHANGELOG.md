@@ -933,6 +933,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The documentation sweep [ADR 0003](docs/adr/0003-separated-installs-only.md) decision 7 started
+  is re-run now that the hedges it removed have been replaced by shipped guarantees rather than
+  intended ones, and now that the policy v2 redesign has merged back. Corrected, against the
+  source in each case: `platform-support.md` said installing the `.deb` "does not turn any of this
+  on" and that a package install "never runs" privilege separation, which `debian/postinst` has
+  done unconditionally, and fatally on failure, since decision 5; `README.md` called separation
+  "on by default" on macOS and Windows where it is mandatory, said a declined macOS admin prompt
+  "won't ask again" where decision 6 retired that marker and now asks at every start, and said
+  `disable` was simply "reversible" without noting that a packaged install then refuses to serve;
+  `TECHNICAL_REFERENCE.md` described the Windows layout as what happens when an install "has opted
+  into" separation, and described the two deprecated MCP aliases as reading and writing the v1
+  `auto_accept_rules`/`auto_accept_grants` sections, which nothing has done since P9 (only their
+  *request* shape is v1 — both go to the v2 section now); `approval-list-ui-ux.md` gave the wrong
+  reason for `/security` not being in local mode's nav (it is mounted there, just not in the nav);
+  and `coding-and-testing-guidelines.md`, `connector-qa-testing.md` and
+  `claude-knowledge-boundary.md` still listed resource grants as a thing a test or a review has to
+  account for. `scripts/build_org_bundle.py --help` still advertised `writes` as the default
+  step-up scope, the last place in the repo asserting the pre-4.2 default.
+- `TECHNICAL_REFERENCE.md` regains the "Web surfaces (`/approvals`, `/settings`)" section, which
+  documents `web.mcp.enabled`, `web.settings.enabled`/`allow_quit`, `GET /settings/connectors`, the
+  shared shell and SSE channel, and the settings dispatcher's allowlist. It was a subsection of
+  "Auto-accept grants" for historical reasons only, and went out with that section when P6 rewrote
+  the auto-accept chapter — taking the only description of those config keys with it. Restored at
+  the top level where it belongs, with the bespoke-route classification the self-approval review's
+  Phase 3 added folded in.
+- `docs/README.md`'s architecture-decision index, which stopped at ADR 0002, now lists ADR 0003,
+  0004 and 0005.
 - **The MCP server now runs on the official Python SDK's 2.x API** (`mcp>=2.2,<3.0`, up from
   `mcp>=1.28,<2.0`). A deliberate migration rather than a widened range: mcp 2.0 rewrote the
   low-level server surface `/mcp` is built on, so the old pin could not simply be raised.

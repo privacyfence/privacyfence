@@ -312,7 +312,7 @@ Prefer tests that assert observable contracts rather than implementation trivia.
 - returned result/error;
 - approval state/decision;
 - audit entry;
-- rule/grant side effect when applicable.
+- auto-accept rule side effect when applicable.
 
 Use parameterization where multiple connector/tool states share the same invariant.
 
