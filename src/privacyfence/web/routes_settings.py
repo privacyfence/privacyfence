@@ -209,17 +209,24 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
 # own list of why: a multipart upload, not a JSON action) and, for that
 # reason alone, never passed through either _needs_step_up or
 # require_human_session at all, regardless of how much policy an uploaded
-# bundle could rewrite (F5). TestBespokeRoutesAreClassified below walks the
-# actual Route objects build_routes() returns -- not a hand-maintained list
-# of paths someone has to remember to update -- and fails the moment a new
-# POST route lands here without a matching entry in one of the two sets
-# below, the same way TestSensitiveActionsCoverAllAllowedActions already
-# fails the moment a new _ALLOWED_ACTIONS entry lands unclassified. Every
-# path in _BESPOKE_SENSITIVE_ROUTE_PATHS is wired through the same
-# _needs_step_up-shaped/require_human_session-shaped gates as a
-# _SENSITIVE_ACTIONS action, by hand, inside its own route function --
-# request shapes differ too much (multipart vs. JSON) to share
+# bundle could rewrite (F5). Every path in _BESPOKE_SENSITIVE_ROUTE_PATHS is
+# wired through the same _needs_step_up-shaped/require_human_session-shaped
+# gates as a _SENSITIVE_ACTIONS action, by hand, inside its own route
+# function -- request shapes differ too much (multipart vs. JSON) to share
 # settings_action's own dispatch loop.
+#
+# Two things consume these sets, deliberately both: build_routes() below
+# asserts every bespoke POST route it constructs is in one of them --
+# a real, load-bearing invariant checked every time this app is built, not
+# only under pytest -- and TestBespokeRoutesAreClassified re-asserts the
+# same thing against the actual Route objects it gets back, as a named,
+# always-collected regression test rather than only an assert a test run
+# could otherwise skip past. Either one alone would leave a future bespoke
+# POST route free to land unclassified -- the assert here catches it at
+# runtime (this call already raises on an unclassified path, before the app
+# ever serves it), the test catches it at review/CI time -- the same way
+# TestSensitiveActionsCoverAllAllowedActions already fails the moment a new
+# _ALLOWED_ACTIONS entry lands unclassified.
 # ---------------------------------------------------------------------------- #
 
 _BESPOKE_SENSITIVE_ROUTE_PATHS: frozenset[str] = frozenset({
@@ -790,7 +797,7 @@ def build_routes(
             headers={"Cache-Control": "no-store"},
         )
 
-    return [
+    routes: list[BaseRoute] = [
         Route("/settings", settings_page),
         Route("/settings/connectors", settings_connectors_page),
         Route("/api/settings/quit_app", quit_action, methods=["POST"]),
@@ -798,6 +805,20 @@ def build_routes(
         Route("/api/settings/audit_log/download", audit_log_download),
         Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]
+    for route in routes:
+        if "POST" not in (getattr(route, "methods", None) or set()) or route.path == "/api/settings/{action}":
+            continue
+        # nosec B101 -- a real invariant, not a stripped-under-`-O` optimization:
+        # a bespoke POST route this function itself just built, with no
+        # matching _BESPOKE_SENSITIVE_ROUTE_PATHS/_BESPOKE_EXEMPT_ROUTE_PATHS
+        # entry, must never reach the app it's about to be mounted into.
+        assert route.path in _BESPOKE_SENSITIVE_ROUTE_PATHS or route.path in _BESPOKE_EXEMPT_ROUTE_PATHS, (
+            f"{route.path} is a new bespoke POST route with no _BESPOKE_SENSITIVE_ROUTE_PATHS/"
+            "_BESPOKE_EXEMPT_ROUTE_PATHS classification (3.3 of the self-approval review) -- "
+            "add it to one of the two above before it can bypass _SENSITIVE_ACTIONS-shaped gating "
+            "the way org_config_upload used to (F5)"
+        )
+    return routes
 
 
 def create_app(
