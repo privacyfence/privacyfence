@@ -2,8 +2,11 @@
 
 ## Status
 
-Accepted; not yet implemented. This ADR is the decision — the work it commits to is enumerated
-under "Consequences", and each platform's half lands in its own PR.
+Accepted; implemented. Decisions 2 and 3 landed in #547 (`4d28549`, `c8caba0`, `f2ad715`),
+decisions 4 and 5 in #549/#550 (Windows installer, `.deb` postinst), and decisions 6 and 7 in the
+PR that added this Status update. Two amendment notes below (under decision 2 and under decision
+6) record where what shipped differs from what this ADR originally wrote — an ADR is a record, so
+those are notes on the decision rather than edits to it.
 
 Supersedes [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md) decision 5a's answer
 ("two install tiers", the non-elevated Windows per-user path kept), and retires the macOS DMG and
@@ -97,6 +100,28 @@ only macOS artifact.
 Release keeps its files and keeps working; the Worker keeps serving them from those releases' own
 manifests. We stop producing new ones; we do not rewrite what we already shipped.
 
+> **Amendment (2026-09-19, `f2ad715`):** what shipped is the inverse spelling of this decision's
+> text, with the same effect. The DMG was **not** withdrawn and the `.pkg` did **not** take over
+> the `macos-arm64` artifact id — instead `scripts/build_dmg.sh` now calls `scripts/build_pkg.sh`
+> itself and builds the DMG as a *carrier*: it holds `PrivacyFence.pkg` and `PrivacyFence.mcpb` and
+> nothing else, no app bundle and no `/Applications` symlink. The `.pkg` is no longer published on
+> its own anywhere (`macos-arm64-pkg` was deleted outright, not kept as an alias for a cycle as
+> planned below).
+>
+> This still satisfies what decision 2 actually needs: the object this decision objects to is the
+> *drag-install path*, not the disk image as a format. With no `.app` on the image there is no way
+> to install macOS PrivacyFence except through the `.pkg`'s own root-context install step, which is
+> exactly what "the DMG is withdrawn" below was trying to buy. It also fixed something this ADR
+> hadn't noticed: the `.pkg`'s conclusion screen used to tell the user to open the `.mcpb` "next to
+> this installer", which was false for anyone who had downloaded the standalone `.pkg`.
+>
+> Two consequences of the original text are therefore moot rather than done: there is no download-
+> KPI series break to record in `docs/downloads-and-release-kpi.md` (the `macos-arm64` id never
+> changed hands), and there is no `macos-arm64-pkg` alias to retire on a later cycle (it never
+> existed post-`f2ad715`). The rest of this decision's reasoning — one macOS artifact, no drag
+> install, `test_macos_packaged_smoke.py` asserting the DMG's own layout with
+> `test_macos_pkg_smoke.py` covering the `.pkg` inside it — holds as written.
+
 ### 3. Provisioning splits into a machine half and a per-user half
 
 Two of the fallbacks in the table above — the `.pkg`'s "nobody is logged in at the console" and the
@@ -186,6 +211,28 @@ Two consequences of this that are decisions in their own right:
   out from under the service account — which is exactly what Windows' documented
   "`disable` before uninstalling" order needs — and after it the daemon will not start. Its output
   says so.
+
+> **Amendment (2026-09-19):** two implementation choices this decision's text left implicit, made
+> explicit here because a later reader will otherwise reasonably guess differently.
+>
+> First, `maybe_auto_enable_macos()` is no longer backgrounded on its own thread the way #428 D1
+> shipped it. This gate has to *know* whether the attempt took before deciding to refuse, which a
+> fire-and-forget thread cannot answer — so the attempt (macOS's `osascript` prompt included) now
+> runs synchronously, on the daemon's own startup path, reusing the same 300-second timeout the
+> threaded version already had. A packaged, unseparated install can therefore block on a password
+> dialog for up to five minutes before either continuing or refusing; that is the cost of "attempt,
+> then decide" being one sequence rather than two.
+>
+> Second, "a non-packaged one runs unseparated only with an explicit opt-out" (decision 7, below)
+> is implemented as *not* a second daemon-startup refusal. Gating daemon startup itself on
+> `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED` for every non-packaged run would also gate every org-mode
+> deployment (the wheel/sdist is org mode's *only* deployment path — decision 7's own next
+> paragraph), which decision 1's "Out of scope" explicitly leaves untouched. What the var actually
+> gates is `step_up_config.py`'s `from_local_config()`: a non-packaged, unseparated local-mode
+> install refuses `require_passkey: true` unless separated or this var is set — the concrete case
+> the "Why not gate the passkey instead" rationale (below) says to keep regardless. This is the one
+> place a non-packaged build could otherwise present a guarantee it does not hold, which is what
+> decision 7's "say what they are" is actually about.
 
 ### 7. Source checkouts and pip installs stay, and say what they are
 

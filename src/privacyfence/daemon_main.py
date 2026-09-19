@@ -2017,13 +2017,29 @@ def main(argv: list[str] | None = None) -> int:
                 return run_atlassian_oauth(org_config)
             if args.telegram_setup:
                 return run_telegram_setup()
-        # #428 D1 (4.1): only on the path that actually starts the persistent
-        # daemon, not any of the one-shot CLI invocations above -- an admin
-        # password dialog popping up during `--gmail-oauth` would be a
-        # surprising thing for a scripted/headless call to trigger. A no-op
-        # everywhere but an unseparated macOS install; see that function's
-        # own docstring for what it does and why it only ever asks once.
-        privilege_separation.maybe_auto_enable_macos()
+        # ADR 0003 decision 6: only on the path that actually starts the
+        # persistent daemon, not any of the one-shot CLI invocations above --
+        # an admin password dialog popping up during `--gmail-oauth` would be
+        # a surprising thing for a scripted/headless call to trigger, and
+        # there is nothing to refuse yet on a one-shot command. A no-op
+        # everywhere but a packaged, unseparated install; see that function's
+        # own docstring for what it attempts and why it refuses to serve
+        # (raising PrivilegeSeparationError, caught below) if the attempt
+        # doesn't take. This is also what now calls maybe_auto_enable_macos()
+        # -- synchronously, so it can act on the outcome -- rather than
+        # main() calling that directly.
+        try:
+            privilege_separation.enforce_separation()
+        except privilege_separation.PrivilegeSeparationError as exc:
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            return 1
+        # ADR 0003 decision 7's startup-log half of the developer-path
+        # disclosure -- see privilege_separation.dev_unseparated_notice()'s
+        # own docstring; the /security page half is
+        # web/routes_security.py's local-mode call site.
+        dev_notice = privilege_separation.dev_unseparated_notice()
+        if dev_notice is not None:
+            logger.warning(dev_notice)
         return run_app(config, args.config)
     except Exception as exc:
         logger.error("Fatal error: %s", exc, exc_info=True)

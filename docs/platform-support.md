@@ -6,9 +6,9 @@ PrivacyFence local mode is packaged for macOS, Windows, and Debian/Ubuntu Linux.
 
 | Platform | Distribution | Startup model | Release automation |
 |---|---|---|---|
-| macOS | one signed/notarized DMG, carrying the `.pkg` installer (which holds the PyInstaller app bundle) and the MCPB side by side | installed by the `.pkg`, which provisions (default-on, see below) a LaunchDaemon under a dedicated account at install time; the packaged app/LaunchAgent path and D1's runtime prompt remain for an install that bypassed the installer | `.github/workflows/build.yml` on `macos-latest` |
-| Windows | Inno Setup installer containing the PyInstaller executable and MCPB | Task Scheduler entry created by the installer, or an opt-in Windows service under a virtual service account (see below) | `.github/workflows/build.yml` on `windows-latest` |
-| Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | XDG autostart desktop entry, or (default-on, see below) a system systemd unit under a dedicated account | `.github/workflows/build.yml` on `ubuntu-latest` |
+| macOS | one signed/notarized DMG, carrying the `.pkg` installer (which holds the PyInstaller app bundle) and the MCPB side by side | installed by the `.pkg`, which provisions a LaunchDaemon under a dedicated account at install time, mandatorily (see below); D1's runtime prompt is the fallback for an install that reached a running state some other way, not a second shipped path | `.github/workflows/build.yml` on `macos-latest` |
+| Windows | Inno Setup installer containing the PyInstaller executable and MCPB | the installer separates the install as part of installing (see below): a Windows service under a virtual service account runs the daemon, a Task Scheduler entry runs the companion | `.github/workflows/build.yml` on `windows-latest` |
+| Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | `postinst` separates the install unconditionally on every install and upgrade (see below): a system systemd unit under a dedicated account runs the daemon, an XDG autostart desktop entry runs the companion | `.github/workflows/build.yml` on `ubuntu-latest` |
 | Linux Python install | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
 | Linux org mode | Python/system service behind the configured reverse proxy and identity provider | operator-managed service | release smoke coverage in the build/test suite |
 
@@ -32,7 +32,7 @@ buys, and `scripts/build_dmg.sh`'s own header for the two problems the old layou
 
 The packaged application keeps user state outside the application bundle. The release workflow signs and notarizes the app/DMG when the required signing credentials are configured.
 
-### Privilege separation (default-on)
+### Privilege separation (mandatory)
 
 Without this, the daemon starts in the logged-in user's session — the LaunchAgent path above —
 which is also the session the AI client it governs runs in. `scripts/macos_privilege_separation.sh
@@ -43,12 +43,18 @@ account, and inverts the startup wiring — a **LaunchDaemon**
 all, while a **LaunchAgent** (`installer/macos/com.privacyfence.companion.plist.tmpl`) runs the
 companion app in each user session so a human still has a way in.
 
-#428 D1 (4.1) turns this on automatically rather than requiring that command by hand: since a DMG
-install has no package-manager postinstall hook to run it as root, the daemon's own startup asks
-once, via the standard macOS admin-password dialog, the first time it finds itself unseparated
-(`privilege_separation.maybe_auto_enable_macos()`, called from `daemon_main.main()`). Declining that
-prompt is respected — it is not asked again — and running `enable` by hand always remains available,
-as does `disable` to opt back out.
+The `.pkg` below runs this itself, as root, during the install — the ordinary macOS path, since
+[ADR 0003](adr/0003-separated-installs-only.md) decision 2 left nothing else to install macOS
+PrivacyFence from. The admin-password dialog (`privilege_separation.maybe_auto_enable_macos()`,
+called from `daemon_main.main()`) is the fallback for an install that reached a running state some
+other way — a copied app bundle, an in-place upgrade from before this ADR — and is asked again on
+every start it finds itself still unseparated, not just once: ADR 0003 decision 6 retired the
+one-shot marker that used to make a decline permanent, because under that ADR a decline is not a
+configuration, it is an unfinished install. `enable`/`disable`/`status` remain available by hand for
+inspecting or reversing an install either way — but see ADR 0003 decision 6 below: a **packaged**
+build that ends up unseparated anyway refuses to serve, so `disable` stops being a way to keep
+running PrivacyFence and becomes only the way to get your data back out from under the service
+account first.
 
 Three parts of the layout matter to anything that has to find PrivacyFence's files:
 
@@ -64,10 +70,10 @@ effect. `src/privacyfence/privilege_separation.py` resolves all of it from a mar
 installer writes, and the MCPB shim (`mcpb/shim/src/protocol.ts`) reads the same marker so Claude
 Desktop keeps finding the daemon. `… status` audits the result; `… disable` reverses it.
 
-Ships default-on as of #428 D1 (4.1) — the manual `enable`/`disable`/`status` subcommands above still
-exist, and `disable` remains the way to opt back out; the migration moves live connector OAuth
-tokens. Linux has the same thing (below); Windows also has privilege separation now (below) but
-stays opt-in — D1 does not extend to it.
+Mandatory on every packaged install as of [ADR 0003](adr/0003-separated-installs-only.md) — the
+manual `enable`/`disable`/`status` subcommands above still exist for inspecting or reversing an
+install by hand; the migration moves live connector OAuth tokens. Linux and Windows separate too
+(below), the same ADR making all three mandatory rather than leaving any of them opt-in.
 See [`security-and-compliance.md`](security-and-compliance.md#privilege-separation-macos-linux-and-windows) for
 what the separation does and does not buy.
 
@@ -91,10 +97,14 @@ explaining what it does, rather than a bare system dialog.
 
 Since Apple's installer runs package scripts with no login session and no `$SUDO_USER`, the
 postinstall script resolves the human to provision this for from the logged-in console account
-(`stat -f '%Su' /dev/console`) instead — the same thing Finder/`who` would show. If nobody is
-logged in at install time, or the daemon's bundled `macos_privilege_separation.sh` can't be found,
-it logs why and leaves the install opt-in (the daemon's own D1 prompt still offers this later) --
-it never fails the package install itself over this.
+(`stat -f '%Su' /dev/console`) instead — the same thing Finder/`who` would show. Since
+[ADR 0003](adr/0003-separated-installs-only.md) decision 3, "nobody logged in" no longer means "the
+install stays unseparated": `enable`'s machine half — the service account, the data directory, the
+marker, the LaunchDaemon — runs regardless, and only the one per-person step (the group membership)
+is left pending, closed by the companion the first time a real login session starts one. If the
+daemon's bundled `macos_privilege_separation.sh` can't be found at all, the postinstall logs why and
+leaves the daemon's own runtime prompt to offer this later — it never fails the package install
+itself over this.
 
 A pkg-installed `.app` lands root:wheel-owned by `pkgbuild`'s own default ownership -- but
 `/Applications` itself is always `root:admin`, so that alone was found not to satisfy
@@ -143,19 +153,23 @@ The installer:
 
 Optional signing is configured through `CODESIGNTOOL_DIR`, `ES_USERNAME`, `ES_PASSWORD`, `ES_CREDENTIAL_ID`, and `ES_TOTP_SECRET` — see `scripts/build_installer.ps1`'s header comment. Signing goes through SSL.com's eSigner CodeSignTool rather than a local Authenticode `.pfx`, since CA/B Forum's 2023 key-storage rules mean code-signing private keys can no longer be exported to a portable `.pfx` at all.
 
-### Privilege separation (opt-in)
+### Privilege separation (mandatory)
 
 The same change as macOS's and Linux's, in Windows' own primitives, and the one platform where
-those primitives are genuinely different rather than differently spelled. By default the daemon
+those primitives are genuinely different rather than differently spelled. Without it, the daemon
 starts in the logged-in user's session — the Scheduled Task above — which is also the session the AI
-client it governs runs in. From an **elevated** PowerShell:
+client it governs runs in; per [ADR 0003](adr/0003-separated-installs-only.md) decision 4 the
+installer now runs this itself, elevated, as an install step, so an ordinary install never ends up
+in that state. The same command remains available for inspecting or re-running it by hand, from an
+**elevated** PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" enable
 ```
 
 (A source checkout runs the same file as `scripts/windows_privilege_separation.ps1`; `... status`
-audits the result, `... disable` reverses it.)
+audits the result, `... disable` reverses it — and, per ADR 0003 decision 6, stops being a way to
+keep the daemon running on a packaged build: it refuses to serve once it finds no marker.)
 
 That creates a **virtual service account** (`NT SERVICE\PrivacyFence` — materialized by the Service
 Control Manager along with the service, with its own SID and no password anyone has to manage, in
@@ -205,10 +219,14 @@ Two Windows-only requirements, both enforced rather than documented:
 - **A per-machine install.** A service runs whatever its `binPath` names, so an install the
   logged-in user can rewrite would let the agent run its own code *as the service account*. `enable`
   reads the install directory's ACL and refuses if anything but `SYSTEM`/`Administrators` can write
-  it, which rules out the non-elevated per-user install path
-  ([#407](https://github.com/privacyfence/privacyfence/issues/407)) — the open question ADR 0002
-  carried, settled as two install tiers with separation available only on the elevated one. The
-  daemon re-checks its own image on every start.
+  it, which rules out a non-elevated per-user install outright — [#407](https://github.com/privacyfence/privacyfence/issues/407)
+  added that path and [ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md) decision
+  5a preserved it as a second, unseparated tier; [ADR 0003](adr/0003-separated-installs-only.md)
+  decision 4 withdrew it outright rather than leaving it opt-in. There is one Windows install tier
+  now: the elevated, per-machine install under `%ProgramFiles%` the installer above already
+  requires (`PrivilegesRequired=admin`, set since [#410](https://github.com/privacyfence/privacyfence/issues/410)
+  for the unrelated reason that a non-elevated install could never register its own autostart task).
+  The daemon re-checks its own image on every start.
 - **The companion.** A service runs in session 0 and cannot reach the desktop, so
   `oauth_loopback.run_browser_oauth()` has no browser to open for Slack/Salesforce/Atlassian. The
   companion's control channel is what opens those pages (ADR 0002 decision 5), so `enable` refuses
@@ -240,7 +258,7 @@ The XDG desktop autostart path is separate from the repository's `privacyfence.s
 
 Package removal does not delete per-user PrivacyFence state from the user's home directory.
 
-### Privilege separation (default-on)
+### Privilege separation (mandatory)
 
 The same change as macOS's, above, in Linux's own idioms. Without it, the daemon starts in the
 logged-in user's session — either of the two startup paths above — which is also the session the AI
@@ -274,8 +292,12 @@ that do not need the same things:
   `PENDING USER` (distinct from `OFF`) and which the companion app closes at the first real login
   session.
 
-A pip/pipx source install has no such postinst hook and stays opt-in via the manual command above.
-`... disable` remains how to turn it back off either way.
+A pip/pipx source install has no such postinst hook and is not a packaged build in [ADR
+0003](adr/0003-separated-installs-only.md) decision 6's sense (that decision's own "Out of scope" —
+it is how the project is developed and how org mode is deployed), so it stays opt-in via the manual
+command above. `... disable` remains how to turn it back off on any install — and, per ADR 0003
+decision 6, stops being a way to keep a **packaged** daemon running: it refuses to serve once it
+finds no marker.
 
 Both pre-Phase-4 startup paths are moved aside rather than left in place: `/etc/xdg/autostart/
 privacyfence.desktop` and the `--user` unit each become `.disabled`, because either would start a
@@ -529,13 +551,16 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   confirm `disable` restores the previous layout with connector tokens intact — is a manual check,
   and belongs with the other per-platform human checks in
   [`release-testing.md`](release-testing.md). **This manual real-machine verification still has not
-  run against a release build.** #428 D1 (4.1) turns privilege separation on by default on macOS and
-  Linux anyway (Windows stays opt-in), ahead of it and ahead of the soak-through-a-release-cycle
-  criterion this section originally argued for — an explicit override of that plan, not a claim that
-  the gap above has closed. The automated coverage this bullet describes is unchanged either way;
-  running the manual checks against the first 4.1 release this ships in is now more urgent, not
-  less, precisely because the default now turns it on for people who never asked for it by name on
-  those two platforms.
+  run against a release build.** #428 D1 (4.1) turned privilege separation on by default on macOS
+  and Linux (Windows stayed opt-in at the time), ahead of the soak-through-a-release-cycle criterion
+  this section originally argued for — an explicit override of that plan, not a claim that the gap
+  above had closed. [ADR 0003](adr/0003-separated-installs-only.md) has since removed the "opt-in"
+  half of that sentence entirely: every packaged install on all three platforms separates now, and a
+  packaged build that ends up unseparated anyway refuses to serve (decision 6) rather than running
+  degraded. The automated coverage this bullet describes is unchanged either way; running the manual
+  checks against a real release build is now more urgent than when this was written, precisely
+  because there is no platform left where an unseparated install is the documented default a person
+  might have knowingly chosen.
   **The `.pkg` installer (#428 D2, above) is what a macOS download now installs through -- the
   daemon's own runtime prompt is the fallback for an install that bypassed it -- and it has its own
   real-CI coverage** (`test_macos_pkg_install.py`, in this same `macos-graphical-
@@ -573,8 +598,11 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   **Windows carries two more.** The service host itself (`src/privacyfence/windows_service.py`) is
   only ever exercised by the SCM, so "the daemon comes up as `NT SERVICE\PrivacyFence` rather than
   dying with error 1053" is a manual check and nothing else; and the refusal to separate a
-  user-writable install ([#407](https://github.com/privacyfence/privacyfence/issues/407)) is
-  asserted as a rule (`windows_acl.image_problems`, and the `.ps1`'s own `Assert-ImageProtected`)
-  but never run against a real per-user install, since CI builds only one install tier.
+  user-writable install — the check that used to matter for the non-elevated per-user tier
+  [#407](https://github.com/privacyfence/privacyfence/issues/407) added and [ADR
+  0003](adr/0003-separated-installs-only.md) decision 4 later withdrew — is asserted as a rule
+  (`windows_acl.image_problems`, and the `.ps1`'s own `Assert-ImageProtected`) but never run against
+  a real install directed at a user-writable location (a manual `/DIR=` override), since CI only
+  ever builds and installs to the one supported, per-machine location.
   A connector OAuth flow completing on a separated Linux install is therefore the specific thing
   the manual check has to exercise, not just the daemon coming up.

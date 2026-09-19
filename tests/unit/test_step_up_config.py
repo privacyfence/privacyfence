@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from privacyfence import org_mode, step_up_config
+from privacyfence import org_mode, privilege_separation, step_up_config
 
 
 class TestStepUpConfigFromOrgConfig:
@@ -93,7 +93,12 @@ class TestStepUpConfigFromLocalConfig:
         config = step_up_config.StepUpConfig.from_local_config({"step_up": {"rp_id": "pf.local"}})
         assert config.rp_id == "pf.local"
 
-    def test_enabled_scope_and_require_passkey(self):
+    def test_enabled_scope_and_require_passkey(self, monkeypatch):
+        # require_passkey needs a separated install (ADR 0003, "Why not gate
+        # the passkey instead") or the developer escape hatch -- this test is
+        # about scope/require_passkey parsing, not about that gate, so use
+        # the latter rather than standing up a fake separated layout.
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
         config = step_up_config.StepUpConfig.from_local_config({
             "step_up": {"enabled": True, "scope": "writes_and_pii_reads", "require_passkey": True},
         })
@@ -129,6 +134,48 @@ class TestStepUpConfigFromLocalConfig:
         config = step_up_config.StepUpConfig.from_local_config({"step_up": "nonsense"})
         assert config.rp_id == "localhost"
         assert config.enabled is False
+
+
+class TestRequirePasskeyNeedsSeparation:
+    """ADR 0003, "Why not gate the passkey instead, and leave the installs
+    alone": kept anyway as a consequence of decision 1 -- unreachable on a
+    shipped install (enforce_separation() already refused to start a
+    packaged, unseparated one before this is ever parsed), and it catches
+    exactly the developer path: a non-packaged local-mode checkout with
+    require_passkey: true but no service account behind it."""
+
+    def test_refuses_when_unseparated_and_no_override(self):
+        with pytest.raises(org_mode.ConfigurationError, match="not privilege-separated"):
+            step_up_config.StepUpConfig.from_local_config(
+                {"step_up": {"enabled": True, "require_passkey": True}},
+            )
+
+    def test_allowed_when_unseparated_but_dev_override_set(self, monkeypatch):
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "1")
+        config = step_up_config.StepUpConfig.from_local_config(
+            {"step_up": {"enabled": True, "require_passkey": True}},
+        )
+        assert config.require_passkey is True
+
+    def test_dev_override_of_0_does_not_count(self, monkeypatch):
+        monkeypatch.setenv(privilege_separation.DEV_ALLOW_UNSEPARATED_ENV, "0")
+        with pytest.raises(org_mode.ConfigurationError):
+            step_up_config.StepUpConfig.from_local_config(
+                {"step_up": {"enabled": True, "require_passkey": True}},
+            )
+
+    def test_allowed_when_actually_separated(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        config = step_up_config.StepUpConfig.from_local_config(
+            {"step_up": {"enabled": True, "require_passkey": True}},
+        )
+        assert config.require_passkey is True
+
+    def test_false_require_passkey_never_needs_separation(self):
+        config = step_up_config.StepUpConfig.from_local_config(
+            {"step_up": {"enabled": True, "require_passkey": False}},
+        )
+        assert config.require_passkey is False
 
 
 class TestLocalEnrollmentBanner:

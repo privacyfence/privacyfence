@@ -92,6 +92,45 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   complete, and where there is no way to ask for a password at all (a Linux desktop with no polkit
   agent) it prints the single command to run instead of guessing. "Nobody was logged in at install
   time" therefore stops meaning "this install is unprotected forever".
+- The macOS DMG is now the only macOS artifact, and it carries the `.pkg` rather than an app bundle
+  to drag (ADR 0003 decision 2). `scripts/build_dmg.sh` now builds the `.pkg` itself and puts it,
+  plus the `.mcpb`, on the disk image — nothing else: no `.app`, no `/Applications` symlink, so
+  there is no way to install macOS PrivacyFence except through the `.pkg`'s own root-context install
+  step. The standalone `.pkg` (`macos-arm64-pkg`) is retired; `macos-arm64` still resolves to the
+  DMG, so the download-KPI series is unaffected. The `.pkg`'s conclusion screen also stops telling
+  every reader to open the `.mcpb` "next to this installer", which used to be false for anyone who
+  had downloaded the standalone `.pkg`.
+- A packaged local-mode install that finds itself unseparated no longer serves anything (ADR 0003
+  decision 6). This is the backstop for the installs the entries above don't cover — a
+  pre-ADR-0003 DMG install upgrading in place, a restored backup, an install where `disable` was
+  run and forgotten. On startup, a packaged build attempts this platform's provisioning (the same
+  mechanism the install-time entries above describe) and, if it is still unseparated afterward,
+  refuses outright — no `/mcp`, no approvals — naming the one command that fixes it. The one-shot
+  marker that used to make a declined macOS admin-password prompt permanent is gone: a decline is
+  asked again on the next start rather than respected forever, since under this ADR a decline is not
+  a configuration, it is an unfinished install. `disable` keeps working — it is how you get your
+  data back out from under the service account, which Windows' documented uninstall order needs —
+  but stops being a way to keep a packaged daemon running; its own output says so. This refusal is
+  unconditional on a packaged build, with no developer override: source checkouts and `pip`/`pipx`
+  installs are not packaged builds and are not gated by it at all (ADR 0003 decision 7 — that is how
+  org mode is deployed and how the project is developed).
+- `step_up.require_passkey` now refuses to turn on for a local-mode install that isn't
+  privilege-separated, whether set by hand in `config/settings.yaml` or through the Settings page's
+  "turn on step-up" action (ADR 0003, "Why not gate the passkey instead"). A passkey checked against
+  a credential store the same account can rewrite was already named, in ADR 0002 decision 6, as
+  worse than not having the feature at all — this closes the one place that configuration was still
+  reachable. On a packaged install this is unreachable in practice, since the startup refusal above
+  already guarantees separation first; it exists for the source-checkout developer path, with the
+  same `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` escape hatch (a sibling of the existing
+  `PRIVACYFENCE_DEV_ALLOW_INSECURE_IDP`) as an explicit, logged opt-out for local development. A
+  non-packaged, unseparated install running with that variable set says so — in the daemon's
+  startup log and on `/security` — rather than silently claiming a protection it doesn't have.
+- `docs/security-and-compliance.md`, `docs/platform-support.md`, and the Quick Start install
+  instructions in `README.md` stop hedging "default-on for macOS/Linux, opt-in for Windows": every
+  packaged install on all three platforms now separates itself, unconditionally, as part of
+  installing. `pip`/`pipx install privacyfence` stops reading as an answer to "how do I install
+  PrivacyFence on my laptop" — it's how org mode is deployed and how the project is developed, and
+  it says so where it used to imply otherwise.
 - ADR 0003 (`docs/adr/0003-separated-installs-only.md`) decides that every local-mode install
   PrivacyFence ships is privilege-separated, and that a distribution channel which cannot separate
   itself at install time is not published. Today separation is effectively a user choice made by
