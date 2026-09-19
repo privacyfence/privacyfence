@@ -324,6 +324,36 @@ describe("ensureDaemonRunning", () => {
       cleanup();
     }
   });
+
+  it("survives a spawn failure (missing/corrupted binary) instead of crashing the process", async () => {
+    // Reproduces privacyfence/privacyfence#431's failure mode: a Finder
+    // upgrade interrupted mid-drag (or a Gatekeeper-quarantined bundle) can
+    // leave findDaemonCmd() pointing at a binary that no longer runs. Before
+    // the fix, spawn()'s async ENOENT surfaced as an unhandled 'error' event
+    // on the child process, which Node rethrows as an uncaught exception --
+    // killing this whole shim process well before the ShimExitError timeout
+    // below ever had a chance to fire. If that regressed, this test would
+    // itself crash the test runner rather than observing a rejection.
+    const { mcpUrlFile, cleanup } = makeTempMcpFiles();
+    try {
+      await assert.rejects(
+        ensureDaemonRunning({
+          mcpUrlFile,
+          findCmd: () => ["/definitely/does/not/exist/privacyfence-app"],
+          connectTimeoutMs: 150,
+          connectIntervalMs: 20,
+        }),
+        (err: unknown) => {
+          assert.ok(err instanceof ShimExitError);
+          assert.equal(err.code, 1);
+          assert.match(err.message, /did not start/);
+          return true;
+        }
+      );
+    } finally {
+      cleanup();
+    }
+  });
 });
 
 describe("waitForDaemonPatiently", () => {

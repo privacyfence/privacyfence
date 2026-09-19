@@ -301,6 +301,19 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
     detached: true, // detach from our process group
   });
   child.unref();
+  // Without this, a spawn failure (ENOENT for a missing/relocated binary,
+  // EACCES/ENOEXEC for a partially-copied .app left behind by a Finder
+  // upgrade that was interrupted mid-drag -- see privacyfence/privacyfence#431
+  // -- or a corrupted/quarantined bundle) emits an unhandled 'error' on the
+  // ChildProcess EventEmitter, which Node rethrows as an uncaught exception
+  // and kills this whole shim process before waitForConnectable below (or
+  // waitForDaemonPatiently's retry loop, which exists precisely for a slow
+  // daemon start) ever gets a chance to run. Logging and falling through
+  // instead turns that crash into the same "did not start in time" path a
+  // merely-slow daemon already takes.
+  child.on("error", (err) => {
+    console.error(`Failed to launch the PrivacyFence daemon (${cmd}): ${err.message}`);
+  });
 
   await waitForConnectable(mcpUrlFile, connectTimeoutMs, connectIntervalMs);
 }
