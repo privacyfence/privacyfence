@@ -64,6 +64,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   did not already have the service — which is every fresh install. Creating the service is now the
   step before `Set-Layout`, and *starting* it is a separate step after the marker is written, so the
   daemon still never runs until the ACLs that contain it are in place.
+- **A fresh Windows install could not complete, part three.** With the ordering above fixed, the
+  `sc.exe create` call it unblocked turned out never to have worked either: it passed
+  `password=` as an empty string, and Windows PowerShell 5.1 silently *drops* empty arguments on
+  their way to a native executable. `sc.exe` therefore read `start=` as the password's value and
+  rejected the leftover `auto` with exit 1639. The pair is gone — a virtual service account has no
+  password, and omitting the option is how that is said.
 - **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
   `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
   `windows-latest` runner that module refuses to load inside the installer's own

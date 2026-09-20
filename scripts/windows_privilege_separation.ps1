@@ -721,11 +721,20 @@ function Install-DaemonService {
     # The spaces after each `=` are sc.exe's own (genuinely strange) syntax,
     # not a typo: the separator is "name= value", and "name=value" is parsed
     # as a positional argument instead.
+    #
+    # No `password=` pair, and it must stay that way. A virtual service
+    # account has no password -- omitting the option is how that is said --
+    # and passing `'password=', ''` to say it was actively harmful: Windows
+    # PowerShell 5.1 *drops* an empty-string argument on its way to a native
+    # executable (the bug PSNativeCommandArgumentPassing was added to fix, in
+    # 7.1). sc.exe therefore received "password= start= auto", read `start=`
+    # as the password's value, and rejected the leftover `auto` with exit
+    # 1639 and a usage dump -- which is what a fresh Windows install had been
+    # dying on, once the ordering fix let anything reach this line at all.
     Invoke-Sc @(
         'create', $ServiceName,
         'binPath=', "`"$($script:DaemonExec)`" --windows-service",
         'obj=', $ServiceAccount,
-        'password=', '',
         'start=', 'auto',
         'DisplayName=', 'PrivacyFence'
     ) | Out-Null
