@@ -2255,7 +2255,56 @@ class TestWindowsServiceHost:
         script = INSTALLERS["win32"].read_text(encoding="utf-8")
 
         assert "--windows-service" in script
-        assert "'obj=', $ServiceAccount" in script
+        assert "'obj=', (ConvertTo-CommandLineToken $ServiceAccount)" in script
+
+    def test_the_service_is_created_from_a_command_line_this_script_builds(self):
+        # `sc create`'s binPath= value is `"<path>" --windows-service`: one
+        # argument, with quotes inside it, because the SCM runs ImagePath as
+        # a command line and an unquoted `C:\Program Files\...` there is the
+        # unquoted-service-path hijack. Windows PowerShell 5.1's native
+        # argument binder cannot carry such an argument -- it wraps the whole
+        # thing in another pair of quotes without escaping the inner ones, so
+        # sc.exe receives `C:\Program` as the binPath and
+        # `Files\PrivacyFence\privacyfence-app.exe --windows-service` as an
+        # option it has never heard of, and answers exit 1639. That is why
+        # this one call builds its own command line instead of handing
+        # Invoke-Sc an array, and why nothing may quietly hand it back.
+        script = INSTALLERS["win32"].read_text(encoding="utf-8")
+
+        create = re.search(
+            r"Invoke-NativeCommandLine -FilePath 'sc\.exe' -CommandLine \(@\((.*?)\) -join ' '\)",
+            script,
+            re.DOTALL,
+        )
+        assert create is not None, (
+            "`sc create` no longer goes through Invoke-NativeCommandLine -- an argument array "
+            "cannot carry binPath='s embedded quotes under Windows PowerShell 5.1"
+        )
+        assert "'create'" in create.group(1)
+        assert "ConvertTo-CommandLineToken" in create.group(1)
+        # Invoke-Sc, the array-based path, must not be the thing that creates
+        # the service again.
+        assert "Invoke-Sc @(\n        'create'" not in script
+
+    def test_the_command_line_quoter_escapes_embedded_quotes(self):
+        # The rule CommandLineToArgvW parses back: a quote inside a token is
+        # \", and the backslashes immediately before a quote (or at the end of
+        # the token) double so they stay literal instead of escaping it.
+        script = INSTALLERS["win32"].read_text(encoding="utf-8")
+
+        assert "function ConvertTo-CommandLineToken" in script
+        assert r"""[regex]::Replace($Value, '(\\*)"', '$1$1\"')""" in script
+        assert r"""[regex]::Replace($escaped, '(\\+)$', '$1$1')""" in script
+
+    def test_the_command_line_runner_drains_both_pipes(self):
+        # A child filling one pipe while this waits on the other never exits,
+        # and sc.exe's usage dump on a bad command line -- the output the
+        # error message exists to carry -- is exactly that kind of output.
+        script = INSTALLERS["win32"].read_text(encoding="utf-8")
+
+        assert "$process.StandardOutput.ReadToEndAsync()" in script
+        assert "$process.StandardError.ReadToEndAsync()" in script
+        assert script.index("ReadToEndAsync") < script.index("$process.WaitForExit()")
 
     def test_the_module_imports_without_pywin32(self):
         # Deliberate: the ServiceFramework subclass is built inside a

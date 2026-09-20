@@ -110,6 +110,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   their way to a native executable. `sc.exe` therefore read `start=` as the password's value and
   rejected the leftover `auto` with exit 1639. The pair is gone — a virtual service account has no
   password, and omitting the option is how that is said.
+- **A fresh Windows install could not complete, part four — and this one only ever failed on a real
+  one.** With the empty `password=` gone, the same `sc.exe create` call still died with exit 1639
+  and a usage dump, for a reason that had been invisible to every CI run: its `binPath=` value is
+  `"<path>" --windows-service`, a single argument with quotes *inside* it, and Windows PowerShell
+  5.1's native-argument binder re-quotes such an argument without escaping the quotes already there.
+  Where the path has no space — a test runner's scratch directory — the mangled result still parses
+  back as one argument and the service is created, so the packaged Windows tests passed. Where it
+  does — `C:\Program Files\PrivacyFence`, i.e. every real install — `sc.exe` read `binPath=` as
+  `C:\Program` and rejected `Files\PrivacyFence\privacyfence-app.exe --windows-service` as an
+  option it had never heard of. The call now builds its own command line and hands it to
+  `CreateProcess` verbatim, which is the one spelling that means the same thing under PowerShell 5.1
+  and 7; the quoting matters beyond this failure, since the Service Control Manager runs `ImagePath`
+  as a command line and an unquoted path with a space in it is the classic service-path hijack. The
+  packaged Windows tests now install into a directory whose name has a space in it, so the
+  difference between CI and a real install stops being the thing that hides a defect.
 - **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
   `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
   `windows-latest` runner that module refuses to load inside the installer's own
