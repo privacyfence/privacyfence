@@ -283,6 +283,10 @@ warnings, no manual quarantine step. Pre-release (alpha/beta/rc) builds might no
 signing/notarization credential availability at build time. Full installation details are in
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
 
+**Upgrading is the same as installing:** download the newer DMG and re-run `PrivacyFence.pkg`.
+The installer restarts the daemon on the new build as part of the install — there's nothing to
+quit first, and no separate upgrade procedure.
+
 **Privilege separation is mandatory on a packaged install:** without it, PrivacyFence's daemon runs
 as you — and so does the AI client it governs, which is why that client could otherwise read and
 rewrite the policy deciding what it's allowed to do. The installer in step 2 moves the daemon to an

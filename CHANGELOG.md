@@ -35,6 +35,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Documented that upgrading PrivacyFence on macOS is just re-running `PrivacyFence.pkg` — the
+  installer restarts the daemon on the new build itself, so there's no need to quit anything
+  first. (`README.md`, `docs/TECHNICAL_REFERENCE.md`)
+
 ## [4.1.0] — 2026-09-20
 
 ### Security

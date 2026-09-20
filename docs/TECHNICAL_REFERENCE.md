@@ -830,6 +830,12 @@ Current packaging paths are documented in [`platform-support.md`](platform-suppo
 - Debian/Ubuntu self-contained `.deb` for local desktop mode;
 - Python package/system-service path for Linux/server deployments.
 
+On macOS, upgrading is the install path re-run: the `.pkg`'s `postinstall` script always calls
+`macos_privilege_separation.sh enable --auto`, whose `cmd_enable` re-stages the trusted app image
+and `launchctl bootout`s/`bootstrap`s the LaunchDaemon unconditionally, so re-running the installer
+on top of a running daemon restarts it onto the new build rather than needing it quit first. See
+`platform-support.md`'s "`.pkg` installer (#428 D2)" section for the full mechanism.
+
 ### Windows
 
 `installer/privacyfence.iss` (built by `scripts/build_installer.ps1`) installs the PyInstaller
