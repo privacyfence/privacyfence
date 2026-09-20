@@ -140,7 +140,14 @@ right after the install in the fixture below, the same way
 ``enable --auto`` since #428 D1, and this module goes on testing what it has
 always tested. The separated-by-default install is asserted in
 ``test_windows_packaged_smoke.py``'s own
-``test_windows_install_separates_with_no_manual_enable``.
+``test_windows_install_separates_with_no_manual_enable`` -- against the
+installer's own default directory, not this module's ``/DIR=``-overridden
+one. Whether the two are supposed to behave the same is exactly what
+privacyfence/privacyfence#561 is still open on: this module's own install has,
+at least once, come out of that same installer-run ``enable`` with no marker
+to show for it despite Setup reporting success, so the disable call below
+tolerates either starting state (``require_separated=False``) rather than
+assuming this install got separated.
 
 Skipped entirely unless running on real Windows, elevated (installing
 machine-wide and managing a Task Scheduler task needs it), with a just-built
@@ -647,7 +654,14 @@ def _installed(_real_home_state, tmp_path):
     # Back to the unseparated install this module is about -- and before the
     # task assertion below, since `enable` leaves that task *disabled* and
     # `disable` is what re-enables it. See the module docstring.
-    _disable_installer_enabled_privilege_separation(INSTALL_DIR)
+    #
+    # require_separated=False: privacyfence/privacyfence#561 -- a `/DIR=`-
+    # overridden install has come out of the installer's own `enable` call
+    # with no privilege-separation.json to show for it, despite Setup itself
+    # reporting success, so `disable` refusing to undo a separation that
+    # never happened must not fail this fixture. See
+    # `_disable_installer_enabled_privilege_separation`'s own docstring.
+    _disable_installer_enabled_privilege_separation(INSTALL_DIR, require_separated=False)
     # Seeded only now, not before the install: `enable` *moves* this profile's
     # data directory under %ProgramData% and `disable` moves it back, so a
     # settings.yaml written beforehand would make its round trip part of this

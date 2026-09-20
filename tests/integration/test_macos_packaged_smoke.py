@@ -28,43 +28,62 @@ the packaged app:
    ``PrivacyFence.pkg`` on it (``pkgutil --expand-full``) and take
    ``PrivacyFenceApp.app`` out of the payload ``installer(8)`` would have
    written to ``/Applications`` -- minus actually writing to a shared
-   runner's ``/Applications``, which direct execution of the bundle's own
-   binary doesn't require (see ``running_packaged_daemon`` below). The real
-   ``sudo installer -pkg`` install, postinstall script and all, is
-   ``test_macos_pkg_install.py``'s job in the weekly
-   ``macos-graphical-session.yml`` run, deliberately not this job's -- see
-   that module's own docstring.
-2. **Start the daemon**: run the frozen binary directly (not via
-   ``open``/Finder -- that's what would invoke Gatekeeper, which a bundle
-   built and immediately run on this same machine was never quarantined
-   for in the first place) with an isolated ``$HOME``, then mint a
-   bootstrap link the same way a human with filesystem access to this
-   machine but no daemon-log line handy would (through the #428 Phase 2
-   control channel -- a real Unix domain socket against this daemon's own
-   data directory, via ``tests.control_channel_client`` -- see
-   ``running_packaged_daemon`` below for why this, and not scraping the
-   daemon's own stdout, is the only reliable way to get one: SEC-10's
-   ``SecretRedactingFormatter`` redacts a ``bootstrap=<value>`` substring
-   from every log line on principle, the startup line included).
+   runner's ``/Applications``. The real ``sudo installer -pkg`` install,
+   postinstall script and all, is ``test_macos_pkg_install.py``'s job in the
+   weekly ``macos-graphical-session.yml`` run, deliberately not this job's --
+   see that module's own docstring.
+2. **Separate and start the daemon**: ``sudo scripts/macos_privilege_
+   separation.sh enable --app <this copy> --user <this CI account>`` --
+   the real elevated call the .pkg's own postinstall makes, run by hand
+   here for the same reason ``test_macos_graphical_session_autostart.py``
+   already does it this way (that module's own docstring). ADR 0003
+   decision 6 (``privilege_separation.enforce_separation()``) makes a
+   packaged daemon refuse to serve at all once unseparated has no meaning
+   left to fall back on -- see this module's own "Real-daemon helpers"
+   section below for what running against the real, separated
+   ``system/com.privacyfence.daemon`` LaunchDaemon means for the rest of
+   this module, in place of the directly-Popen'd, deliberately-unseparated
+   process this used to start against a scratch ``$HOME``. Mints a
+   bootstrap link the same way a human with root but no daemon-log line
+   handy would (through the #428 Phase 2 control channel -- a real Unix
+   domain socket against the daemon's own, now root-owned, data
+   directory), as root: SEC-10's ``SecretRedactingFormatter`` redacts a
+   ``bootstrap=<value>`` substring from every log line on principle, and
+   separately, a currently-running process never picks up the ``${SERVICE_
+   GROUP}`` membership ``enable`` just granted this account -- only a
+   fresh login does (same reasoning ``test_macos_graphical_session_
+   autostart.py``'s own sudo-everything posture already documents).
 3. **Connect via the MCP shim**: build and spawn the real
    ``mcpb/shim/dist/shim.js`` (same artifact Claude Desktop would run) over
-   real stdio, exactly like test_shim_mcp_contract.py, pointed at the
-   already-running daemon via the same ``$HOME``.
+   real stdio, exactly like test_shim_mcp_contract.py -- via
+   ``sudo -u <this account> -g ${SERVICE_GROUP}``, the same "simulate the
+   fresh login this group membership is actually waiting on" substitution
+   step 2 needs for its own reads, since the shim reads ``mcp_url``/
+   ``mcp_token`` straight off the group-shared ``handoff/`` directory
+   itself (``mcpb/shim/src/protocol.ts``'s own ``privilegeSeparationRoot()``).
 4. **Open the approval UI**: a real headless-Chromium page follows the
-   bootstrap link (SEC-06), landing signed in on ``/approvals``.
+   bootstrap link (SEC-06), landing signed in on ``/approvals`` -- an
+   ordinary HTTP client, so none of the group-membership plumbing above
+   applies to it.
 5. **One synthetic Allow/Deny round trip**: call
    ``privacyfence_propose_auto_accept_rule_change`` (the one meta-tool that
    always opens a confirmation popup, so this needs no connector OAuth setup
    at all) over MCP, click "Confirm" on the real served card from the real
    browser, and assert the MCP call the whole time was blocked on returns
    the confirmed result once that happens.
-6. **State lives outside the package**: delete the installed
-   ``PrivacyFenceApp.app`` -- the actual "uninstall" gesture on macOS (drag
-   to Trash; there's no installer/uninstaller pair the way Windows/Linux
-   have) -- and confirm the rule change from step 5 is still on disk under
-   ``$HOME/.privacyfence``, the same "user state survives package removal"
-   property ``test_deb_packaged_lifecycle.py``/``test_windows_packaged_
-   smoke.py`` assert for their own platforms' removal gesture.
+6. **State lives outside the package, twice over**: delete the *original*
+   scratch copy handed to ``enable --app`` (``installed_app``) and confirm
+   the rule change from step 5 is still reachable -- proving the daemon
+   runs from its own root-owned, ``enable``-staged copy
+   (``/Library/PrivacyFence/image``), wholly independent of the path it was
+   pointed at, not just independent of ``$HOME`` the way an unseparated
+   install's daemon would be. Then run the real uninstall gesture --
+   ``disable`` -- and confirm the same state is now where a plain drag-to-
+   Trash removal would actually find it: back under ``$HOME/.privacyfence``,
+   the same "user state survives package removal" property
+   ``test_deb_packaged_lifecycle.py``'s own ``dpkg -r``/``-P`` and
+   ``test_windows_packaged_smoke.py``'s silent uninstall assert for their
+   own platforms' removal gesture -- ``disable`` is macOS's.
 7. **Signature/notarization**: when the DMG was built with ``--sign``/
    ``NOTARIZE_PROFILE`` (as ``build.yml``'s release job always does; a local
    unsigned dev build is legitimate and skips this instead of failing it),
@@ -80,22 +99,24 @@ the packaged app:
    see that fixture's own docstring for why.
 8. **Upgrade in place** (deliberately not built in the same PR as steps 1-7): install
    version N, apply real state through the daemon's own MCP surface,
-   replace the bundle with a synthetically-relabeled version N+1 at the
-   same ``$HOME`` (step 6 already established that "installing" a new
-   version here is just replacing the ``.app`` bundle wholesale), and
-   confirm the state survived and the new bundle still starts and serves.
-   Its own MCP round trip is the lighter direct-``/mcp``-plus-HTTP-decide
-   substitution ``test_deb_packaged_lifecycle.py``/``test_windows_packaged_
-   smoke.py`` already use for their own scenarios, not steps 3-5's real
-   shim/browser -- the shim artifact itself is already proven by steps 1-5;
-   this step's own job is proving state survival across a bundle swap.
+   replace the bundle with a synthetically-relabeled version N+1 (``enable
+   --app`` run a second time against the new copy -- idempotent, and what
+   re-stages ``TRUSTED_IMAGE_DIR`` and restarts the LaunchDaemon against
+   it, per that script's own ``cmd_enable`` comment), and confirm the state
+   survived and the new bundle still starts and serves. Its own MCP round
+   trip is the lighter direct-``/mcp``-plus-HTTP-decide substitution
+   ``test_deb_packaged_lifecycle.py``/``test_windows_packaged_smoke.py``
+   already use for their own scenarios, not steps 3-5's real shim/browser --
+   the shim artifact itself is already proven by steps 1-5; this step's own
+   job is proving state survival across a bundle swap.
 
 Skipped entirely unless running on real macOS with a just-built DMG on disk
 (this only makes sense as a step in ``.github/workflows/build.yml``'s
 ``build`` job, right after ``scripts/build_dmg.sh`` -- see that workflow's
-"Run packaged smoke test" step) and Node/the ``mcp``/``playwright`` test
-extras available -- never runs as part of the ordinary ``pytest`` invocation
-in tests.yml's ubuntu-latest job.
+"Run packaged smoke test" step), Node/the ``mcp``/``playwright`` test
+extras available, and passwordless sudo (steps 2/3/6/8 above all need real
+root) -- never runs as part of the ordinary ``pytest`` invocation in
+tests.yml's ubuntu-latest job.
 """
 from __future__ import annotations
 
@@ -103,7 +124,7 @@ import asyncio
 import atexit
 import contextlib
 import functools
-import os
+import getpass
 import platform
 import plistlib
 import re
@@ -112,14 +133,12 @@ import socket
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 import httpx2
 import pytest
-import yaml
 
 mcp_client = pytest.importorskip(
     "mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'"
@@ -135,18 +154,45 @@ pytest.importorskip(
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-from tests.control_channel_client import mint_bootstrap_code_posix, resolve_posix_socket_path  # noqa: E402
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIM_DIR = REPO_ROOT / "mcpb" / "shim"
 SHIM_ENTRY = SHIM_DIR / "dist" / "shim.js"
 DIST_DIR = REPO_ROOT / "dist"
-SETTINGS_EXAMPLE = REPO_ROOT / "src" / "privacyfence" / "resources" / "settings.yaml.example"
+PRIVILEGE_SEPARATION_SCRIPT = REPO_ROOT / "scripts" / "macos_privilege_separation.sh"
 MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
+DAEMON_LABEL = "com.privacyfence.daemon"
+SERVICE_GROUP = "privacyfence"
+
+# ADR 0003 decision 6 made a packaged daemon refuse to serve at all unless
+# genuinely separated -- see this module's own "Real-daemon helpers" section
+# for what that means here. Spelled out independently rather than imported
+# from privilege_separation.py, same "don't let the test and the app drift
+# together silently" reasoning test_deb_packaged_lifecycle.py's own
+# constants give (this module has never imported the `privacyfence` package
+# at all, for the same reason -- it tests the frozen binary from outside).
+MACOS_SYSTEM_ROOT = Path("/Library/Application Support/PrivacyFence")
+AUTHORITY_DIR = MACOS_SYSTEM_ROOT / "authority"
+HANDOFF_DIR = MACOS_SYSTEM_ROOT / "handoff"
+CONTROL_SOCKET = AUTHORITY_DIR / "control.sock"
+SEPARATED_SETTINGS_PATH = AUTHORITY_DIR / "config" / "settings.yaml"
+SEPARATED_MCP_TOKEN_PATH = HANDOFF_DIR / MCP_TOKEN_FILE_NAME
+SEPARATED_WEB_BASE_URL_PATH = HANDOFF_DIR / "web_base_url"
+PRIVILEGE_SEPARATION_MARKER = MACOS_SYSTEM_ROOT / "privilege-separation.json"
 
 
 def _built_dmgs() -> list[Path]:
     return sorted(DIST_DIR.glob("PrivacyFence-*.dmg")) if DIST_DIR.is_dir() else []
+
+
+def _can_sudo() -> bool:
+    """Same passwordless-sudo probe ``test_macos_graphical_session_
+    autostart.py``'s own ``_can_sudo()`` makes, for the same reason: real
+    privilege separation needs root, and this fails fast rather than
+    hanging on a password prompt nothing in CI will ever answer."""
+    try:
+        return subprocess.run(["sudo", "-n", "true"], capture_output=True, timeout=5).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 pytestmark = [
@@ -164,48 +210,19 @@ pytestmark = [
     ),
     pytest.mark.skipif(shutil.which("node") is None, reason="Node not on PATH -- this test spawns the real shim"),
     pytest.mark.skipif(shutil.which("pkgutil") is None, reason="pkgutil not on PATH -- needed to unpack the DMG's .pkg"),
+    pytest.mark.skipif(
+        not _can_sudo(),
+        reason="enabling real privilege separation needs root -- run as root or with passwordless sudo",
+    ),
     # DMG mount/copy + a real PyInstaller cold start + npm install/build (first run per session)
-    # + a real headless-browser round trip is comfortably slower than pure-Python socket tests --
-    # same reasoning as test_shim_mcp_contract.py's own inflated timeout for the same npm-install
-    # cost, plus this test's own daemon startup and browser work on top.
-    pytest.mark.timeout(300),
+    # + a real `enable` (system account creation, data-layout provisioning, two real launchd
+    # bootstraps -- test_macos_graphical_session_autostart.py's own timeout(240) covers `enable`
+    # alone) + a real headless-browser round trip is comfortably slower than pure-Python socket
+    # tests -- same reasoning as test_shim_mcp_contract.py's own inflated timeout for the
+    # npm-install cost, plus this test's own daemon startup and browser work on top.
+    pytest.mark.timeout(360),
     pytest.mark.packaged,
 ]
-
-
-def _wait_until_connectable(
-    host: str, port: int, proc: subprocess.Popen, log_path: Path, timeout: float = 30.0,
-) -> None:
-    """Waits for the daemon's own web port to start answering.
-
-    ``proc``/``log_path`` are checked on every poll for the same reason
-    ``_wait_for_file`` below checks them: a daemon that died on startup
-    never opens the port either, and without this the two cases are
-    indistinguishable -- a real CI failure here spent the full ``timeout``
-    and then reported only "never became connectable", with the reason
-    (the process was gone within a second, and had said why on its own
-    stdout) nowhere in the failure message. This is the first thing
-    ``_running_daemon_at`` waits on, so it is also the first place that
-    distinction is available to make.
-    """
-    deadline = time.monotonic() + timeout
-    last_exc: OSError | None = None
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise AssertionError(
-                f"daemon exited early (code {proc.poll()}) instead of serving {host}:{port} -- log:\n"
-                f"{log_path.read_text(errors='replace')}"
-            )
-        try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return
-        except OSError as exc:
-            last_exc = exc
-            time.sleep(0.1)
-    raise TimeoutError(
-        f"{host}:{port} never became connectable within {timeout}s -- log:\n"
-        f"{log_path.read_text(errors='replace')}"
-    ) from last_exc
 
 
 @contextlib.contextmanager
@@ -323,168 +340,194 @@ def installed_app() -> Path:
         shutil.rmtree(install_dir, ignore_errors=True)
 
 
-@dataclass
+# --------------------------------------------------------------------------- #
+# Real-daemon helpers.
+#
+# Before ADR 0003 decision 6 (4bcafc0/776128f, landed after v4.1.0a10 -- the
+# last tag this module's own daemon-lifecycle helpers were green against),
+# this module ran the packaged binary directly against a scratch,
+# deliberately-unseparated $HOME for a fast round trip -- privilege_
+# separation.maybe_auto_enable_macos() was best-effort and non-fatal, so an
+# unseparated daemon still served. Decision 6 retired that outright: a
+# packaged daemon that finds itself unseparated now refuses to serve at all
+# (privilege_separation.enforce_separation()), unconditionally, with no
+# override for a test harness or anything else. So this module now runs the
+# real elevated `enable` call test_macos_graphical_session_autostart.py
+# already established the pattern for, and talks to the real, separated
+# system/com.privacyfence.daemon LaunchDaemon that leaves running.
+#
+# Its files are root-owned (settings.yaml/the control socket under
+# authority/, 0700; mcp_token/web_base_url under handoff/, 2770 group
+# ${SERVICE_GROUP}) -- and even though this CI account was just added to
+# ${SERVICE_GROUP} by `enable`, a process already running when that happens
+# never picks it up, only a fresh login does (same reasoning
+# test_macos_graphical_session_autostart.py's own sudo-everything posture
+# already documents for the identical problem on this same account). So
+# every read below goes through `sudo -n`, and the Node shim -- the one
+# thing in this module that reads those files as a plain, non-sudo child
+# process, because that is what the real Claude Desktop does -- is spawned
+# via `sudo -u <this account> -g ${SERVICE_GROUP}` instead: the same "fresh
+# login" `enable`'s own printed note says this account is waiting on,
+# simulated rather than skipped, since nothing in CI can actually log back
+# in.
+# --------------------------------------------------------------------------- #
+
+def _sudo_capture(*args: str, timeout: float = 15) -> subprocess.CompletedProcess:
+    return subprocess.run(["sudo", "-n", *args], capture_output=True, text=True, timeout=timeout)
+
+
+def _sudo_run(*args: str, check: bool = True, timeout: float = 90) -> subprocess.CompletedProcess:
+    result = _sudo_capture(*args, timeout=timeout)
+    if check:
+        assert result.returncode == 0, f"sudo {' '.join(args)} failed:\n{result.stdout}{result.stderr}"
+    return result
+
+
+def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
+    """``sudo -n cat`` -- see this section's own module comment. ``None``
+    (not an exception) when the file does not exist yet, the same "not
+    there" signal a direct ``.exists()`` would give a poll loop, which is
+    this helper's main caller."""
+    result = _sudo_capture("cat", str(path), timeout=timeout)
+    return result.stdout if result.returncode == 0 else None
+
+
+def _sudo_mint_bootstrap_code(socket_path: Path, *, timeout: float = 5.0) -> str:
+    """Speaks the control channel's own one-line ``MINT`` protocol
+    (tests/control_channel_client.py's ``mint_bootstrap_code_posix()``,
+    which this can't call directly -- it has to run as root) via a small
+    stdlib-only inline script instead -- same technique
+    test_deb_packaged_lifecycle.py's own identically-named helper uses."""
+    script = (
+        "import socket,sys\n"
+        f"s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        f"s.settimeout({timeout})\n"
+        f"s.connect({str(socket_path)!r})\n"
+        "s.sendall(b'MINT\\n')\n"
+        "sys.stdout.write(s.recv(4096).decode('utf-8'))\n"
+    )
+    result = _sudo_capture("python3", "-c", script, timeout=timeout + 5)
+    assert result.returncode == 0, f"minting a bootstrap code as root failed:\n{result.stdout}{result.stderr}"
+    reply = result.stdout
+    assert reply.startswith("OK "), f"control channel mint failed: {reply!r}"
+    return reply[len("OK "):].strip()
+
+
+def _launchctl_print(domain: str) -> str | None:
+    result = _sudo_capture("launchctl", "print", domain)
+    return result.stdout if result.returncode == 0 else None
+
+
+def _wait_for_running(domain: str, *, timeout: float) -> str:
+    """Polls ``launchctl print <domain>`` until it reports a real pid --
+    same helper test_macos_graphical_session_autostart.py already uses."""
+    deadline = time.monotonic() + timeout
+    last: str | None = None
+    while time.monotonic() < deadline:
+        last = _launchctl_print(domain)
+        if last is not None:
+            match = re.search(r"^\s*pid\s*=\s*(\d+)", last, re.MULTILINE)
+            if match:
+                return match.group(1)
+        time.sleep(0.2)
+    raise AssertionError(f"{domain} never reported a running pid within {timeout}s:\n{last}")
+
+
+def _enable_separation(app_path: Path, *, user: str, timeout: float = 120.0) -> None:
+    _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "enable", "--app", str(app_path), "--user", user, timeout=timeout)
+
+
+def _disable_if_separated(*, user: str) -> None:
+    if _sudo_capture("test", "-e", str(PRIVILEGE_SEPARATION_MARKER)).returncode == 0:
+        _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "disable", "--user", user, check=False, timeout=60)
+
+
 class RunningDaemon:
-    process: subprocess.Popen
-    home: Path
-    base_url: str
-    bootstrap_url: str
-    mcp_token: str
+    """The real, launchd-managed ``system/com.privacyfence.daemon`` -- not
+    something this module owns a ``subprocess.Popen`` handle for any more,
+    see this section's own module comment."""
+
+    def __init__(self, base_url: str, bootstrap_url: str, mcp_token: str):
+        self.base_url = base_url
+        self.bootstrap_url = bootstrap_url
+        self.mcp_token = mcp_token
 
     @property
     def mcp_url(self) -> str:
         return f"{self.base_url}/mcp"
 
 
-def _wait_for_file(path: Path, proc: subprocess.Popen, log_path: Path, timeout: float = 30.0) -> str:
-    """Polls for a file the daemon writes early in its own startup (the web/
-    MCP token files, ``load_or_create_token()``/``web/mcp_auth.py``) --
-    these are written before the server starts accepting connections, but
-    poll rather than assume either is already flushed to disk the instant
-    the socket answers. ``log_path`` is the daemon's own redirected stdout/stderr, embedded in
-    either failure message below -- same shape
-    test_windows_packaged_smoke.py's identically-named helper already
-    uses, and (unlike the in-memory buffer this replaced) still readable
-    after the fact from wherever ``log_path`` lives under this test's own
-    ``tmp_path``, not just from the exception message itself."""
+def _wait_for_real_daemon(*, timeout: float = 30.0) -> RunningDaemon:
+    """Waits for the real ``system/com.privacyfence.daemon`` LaunchDaemon
+    ``enable`` just (re)started to actually come up, and returns a
+    ``RunningDaemon`` for it -- same technique (and same reasoning) as
+    test_deb_packaged_lifecycle.py's own ``_wait_for_real_daemon()``:
+    ``web_base_url`` (web/control_channel.py's own
+    ``WEB_BASE_URL_FILE_NAME``) is the daemon's own way of telling the
+    companion its port, and is cleared on ``WebServer.stop()``, which is
+    what lets this tell "not up yet" apart from "still the previous boot's
+    value" the second time this module calls it."""
+    _wait_for_running(f"system/{DAEMON_LABEL}", timeout=timeout)
+
     deadline = time.monotonic() + timeout
+    base_url = None
     while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise AssertionError(
-                f"daemon exited early (code {proc.poll()}) instead of starting -- log:\n"
-                f"{log_path.read_text(errors='replace')}"
-            )
-        if path.exists():
-            content = path.read_text(encoding="utf-8").strip()
-            if content:
-                return content
-        time.sleep(0.1)
-    raise AssertionError(f"{path} never appeared within {timeout}s -- log:\n{log_path.read_text(errors='replace')}")
+        base_url = _sudo_read_text(SEPARATED_WEB_BASE_URL_PATH, timeout=5)
+        if base_url and base_url.strip():
+            base_url = base_url.strip()
+            break
+        base_url = None
+        time.sleep(0.2)
+    assert base_url, (
+        f"{SEPARATED_WEB_BASE_URL_PATH} never appeared within {timeout}s -- "
+        f"{_launchctl_print(f'system/{DAEMON_LABEL}')}"
+    )
 
-
-def _wait_for_path(path: Path, proc: subprocess.Popen, log_path: Path, timeout: float = 30.0) -> None:
-    """Like ``_wait_for_file()`` but for a path with no meaningful text
-    content of its own -- the control channel's Unix domain socket, in
-    particular, whose ``read_text()`` wouldn't return anything sensible."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise AssertionError(
-                f"daemon exited early (code {proc.poll()}) instead of starting -- log:\n"
-                f"{log_path.read_text(errors='replace')}"
-            )
-        if path.exists():
-            return
-        time.sleep(0.1)
-    raise AssertionError(f"{path} never appeared within {timeout}s -- log:\n{log_path.read_text(errors='replace')}")
-
-
-@contextlib.contextmanager
-def _running_daemon_at(exe: Path, home: Path):
-    """Launches the real frozen daemon binary directly at ``exe`` -- not via
-    ``open``/Finder, which is what would invoke Gatekeeper; a bundle built
-    and run immediately on this same machine was never quarantined in the
-    first place, so a direct exec is both sufficient and (see
-    ``test_packaged_app_signature_and_notarization`` for the one place this
-    module actually checks Gatekeeper's own verdict) the deliberately
-    separate question. ``home`` is used as ``$HOME``
-    (``paths.data_dir()`` resolves through ``Path.home()`` for a bundled
-    app -- see paths.py); if ``settings.yaml`` doesn't already exist there
-    it's seeded from ``SETTINGS_EXAMPLE``, and either way gets a real free
-    port (so repeated boots -- one $HOME, two bundle versions -- never
-    collide) and update checks disabled (this tier makes no real outbound
-    network calls). Existing content otherwise survives untouched: this is
-    what lets ``test_macos_upgrade_preserves_user_state`` boot the same
-    ``$HOME`` twice, against two different bundle copies, and still find the
-    first boot's state on the second.
-
-    Mints its bootstrap URL through the #428 Phase 2 control channel (a real
-    Unix domain socket against this daemon's own data directory, via
-    ``tests.control_channel_client``) rather than scraping the daemon's own
-    startup log line for one: SEC-10's ``SecretRedactingFormatter``
-    (safe_errors.py) redacts any ``bootstrap=<value>`` substring out of
-    every log line -- ``bootstrap`` is literally in its key-name allowlist
-    -- so the one line that would otherwise carry it never actually does.
-    Minting a fresh code through the same channel a human with only
-    filesystem access (no live log line) would use is both correct in the
-    same way and the only thing that actually works here. ``mcp_token`` is
-    read straight off disk (no minting channel needed for it -- it's the
-    daemon's own persistent MCP bearer token, web/mcp_auth.py), for callers
-    that talk to ``/mcp`` directly instead of through the real Node shim
-    (the shim resolves its own copy from the same file, from inside the
-    spawned process, so the primary round-trip test below never needs this
-    field itself)."""
-    assert exe.is_file(), f"{exe} missing -- PyInstaller output layout changed?"
-
-    home.mkdir(parents=True, exist_ok=True)
-    # #428 Phase 1: settings.yaml lives under an authority/ subdirectory of
-    # data_dir(), same as the control channel's socket below -- not
-    # data_dir() itself.
-    config_dir = home / ".privacyfence" / "authority" / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    settings_path = config_dir / "settings.yaml"
-    if settings_path.exists():
-        settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
-    else:
-        settings = yaml.safe_load(SETTINGS_EXAMPLE.read_text(encoding="utf-8")) or {}
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        port = s.getsockname()[1]
-    settings.setdefault("web", {})["port"] = port
-    settings.setdefault("update_check", {})["enabled"] = False
-    settings_path.write_text(yaml.safe_dump(settings), encoding="utf-8")
-    base_url = f"http://localhost:{port}"  # WebServer.base_url's own construction, host defaults to "localhost"
-
-    env = {**os.environ, "HOME": str(home)}
-    # Redirected straight to a file under `home`, not `subprocess.PIPE` read
-    # on a background thread -- the same daemon.log convention every other
-    # packaged/system module in this repo already uses, which is what lets
-    # tests/diagnostics.py find and capture it on a failing test without
-    # this module needing any capture code of its own.
-    log_path = home / "daemon.log"
-    log_fh = open(log_path, "wb")
-    proc = subprocess.Popen([str(exe)], env=env, stdout=log_fh, stderr=subprocess.STDOUT)
-
-    try:
-        _wait_until_connectable("localhost", port, proc, log_path)
-
-        data_dir = home / ".privacyfence"
-        _wait_for_path(resolve_posix_socket_path(data_dir), proc, log_path)
-        mcp_token = _wait_for_file(data_dir / MCP_TOKEN_FILE_NAME, proc, log_path)
-
-        code = mint_bootstrap_code_posix(resolve_posix_socket_path(data_dir))
-        bootstrap_url = f"{base_url}/approvals?bootstrap={code}"
-
-        yield RunningDaemon(
-            process=proc, home=home, base_url=base_url, bootstrap_url=bootstrap_url,
-            mcp_token=mcp_token,
-        )
-    finally:
-        proc.terminate()
+    parts = urlsplit(base_url)
+    remaining = max(1.0, deadline - time.monotonic())
+    deadline2 = time.monotonic() + remaining
+    last_exc: OSError | None = None
+    while time.monotonic() < deadline2:
         try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=5)
-        log_fh.close()
+            with socket.create_connection((parts.hostname or "localhost", parts.port), timeout=0.2):
+                break
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(0.1)
+    else:
+        raise TimeoutError(f"{base_url} never became connectable within {remaining}s") from last_exc
+
+    mcp_token = None
+    while time.monotonic() < deadline:
+        mcp_token = _sudo_read_text(SEPARATED_MCP_TOKEN_PATH, timeout=5)
+        if mcp_token and mcp_token.strip():
+            mcp_token = mcp_token.strip()
+            break
+        mcp_token = None
+        time.sleep(0.2)
+    assert mcp_token, f"{SEPARATED_MCP_TOKEN_PATH} never appeared within {timeout}s"
+
+    code = _sudo_mint_bootstrap_code(CONTROL_SOCKET)
+    bootstrap_url = f"{base_url}/approvals?bootstrap={code}"
+    return RunningDaemon(base_url, bootstrap_url, mcp_token)
 
 
 @pytest.fixture
-def running_packaged_daemon(installed_app, tmp_path):
-    """The primary round-trip test's own daemon: ``installed_app``'s exe, a
-    fresh scratch ``$HOME`` per test. Thin wrapper around
-    ``_running_daemon_at`` -- see that function's own docstring for the
-    actual mechanism. ``home`` lives under this test's own ``tmp_path``,
-    not a bare ``tempfile.mkdtemp()`` this fixture used to manually ``shutil.rmtree()``
-    on the way out -- pytest already owns ``tmp_path``'s own lifecycle
-    (rotated, not deleted immediately), which is what lets a failing test's
-    ``daemon.log`` still be there afterward for tests/diagnostics.py to
-    capture, same as ``test_macos_upgrade_preserves_user_state``'s own
-    ``home`` already does."""
-    exe = installed_app / "Contents" / "MacOS" / "PrivacyFenceApp"
-    home = tmp_path / "home"
-    with _running_daemon_at(exe, home) as daemon:
-        yield daemon
+def running_packaged_daemon(installed_app):
+    """The primary round-trip test's own daemon: real privilege separation
+    against ``installed_app``'s own scratch copy (``enable`` stages its own
+    root-owned copy under ``/Library/PrivacyFence/image`` -- see this
+    module's own docstring §2/§6 for why handing it a plain, user-owned
+    copy is exactly the right, least-privileged input, not a shortcut),
+    undone again on the way out regardless of what the test itself already
+    did to it (``_disable_if_separated`` is idempotent -- a no-op once
+    nothing is separated any more)."""
+    user = getpass.getuser()
+    _enable_separation(installed_app, user=user)
+    try:
+        yield _wait_for_real_daemon()
+    finally:
+        _disable_if_separated(user=user)
 
 
 @pytest.fixture(scope="module")
@@ -559,9 +602,19 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     """The one end-to-end assertion this whole module exists for: the real
     ``.mcpb`` shim, talking to the real packaged daemon started from the
     real DMG, round-trips a gated meta-tool call through a real human
-    decision made by clicking a real button in a real browser."""
+    decision made by clicking a real button in a real browser.
+
+    Spawned via ``sudo -u <this account> -g ${SERVICE_GROUP}``, not a plain
+    ``node`` child -- see this module's own "Real-daemon helpers" section
+    for why a process spawned by this same still-running test session never
+    picks up the group membership ``enable`` just granted it. No ``HOME``
+    override: the shim's own ``privilegeSeparationRoot()``
+    (``mcpb/shim/src/protocol.ts``) already prefers the real, marker-named
+    system root over anything ``$HOME``-relative once separation is on,
+    which it now always is by the time this fixture yields."""
+    user = getpass.getuser()
     params = StdioServerParameters(
-        command="node", args=[str(built_shim_entry)], env={"HOME": str(running_packaged_daemon.home)},
+        command="sudo", args=["-n", "-u", user, "-g", SERVICE_GROUP, "node", str(built_shim_entry)],
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -601,28 +654,46 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
 
     # Confirms the round trip actually reached persisted state, not just a
     # confirmed-but-inert in-memory result.
-    settings_path = running_packaged_daemon.home / ".privacyfence" / "authority" / "config" / "settings.yaml"
-    assert "trusted_sender_domain" in settings_path.read_text(encoding="utf-8")
+    settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+    assert settings_text and "trusted_sender_domain" in settings_text, settings_text
 
-    # ── State lives outside the package (module docstring, §6) ───────────
-    # macOS has no installer/uninstaller pair -- "uninstalling" is deleting
-    # the .app bundle, same as dragging it to the Trash. That must never
-    # touch $HOME/.privacyfence, the same "user state survives package
-    # removal" property test_deb_packaged_lifecycle.py's `dpkg -r`/`dpkg -P`
-    # and test_windows_packaged_smoke.py's silent uninstall each assert for
-    # their own platform's removal gesture. The daemon process is still
-    # running from this bundle's own binary at this point -- removing the
-    # files out from under an already-exec'd process is ordinary POSIX
-    # unlink semantics, not an error, on macOS. This deletes the shared
-    # `installed_app` fixture's own copy, not a throwaway one -- deliberately,
-    # to prove deletion of the *exact* running bundle is safe -- which is
-    # exactly why `test_packaged_app_signature_and_notarization` below no
-    # longer depends on `installed_app` still existing afterward (see that
-    # test's own `signed_app_copy` fixture).
+    # ── State lives outside the package, twice over (module docstring, §6) ──
+    # First: delete the *original* scratch copy `enable --app` was pointed
+    # at, not the copy the daemon actually runs from any more (`enable`
+    # stages its own root-owned copy under /Library/PrivacyFence/image --
+    # see this module's own "Real-daemon helpers" section). The daemon
+    # keeps running and the state above stays reachable regardless --
+    # proving independence from the *original* bundle path, a stronger
+    # claim than plain $HOME-independence would be on an unseparated
+    # install. This deletes the shared `installed_app` fixture's own copy,
+    # not a throwaway one -- deliberately, which is exactly why
+    # `test_packaged_app_signature_and_notarization` below no longer
+    # depends on `installed_app` still existing afterward (see that test's
+    # own `signed_app_copy` fixture).
     shutil.rmtree(installed_app)
     assert not installed_app.exists()
-    assert settings_path.exists(), "deleting PrivacyFenceApp.app must never touch $HOME/.privacyfence state"
-    assert "trusted_sender_domain" in settings_path.read_text(encoding="utf-8")
+    settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+    assert settings_text and "trusted_sender_domain" in settings_text, (
+        "deleting the original --app copy must not affect the daemon's own staged copy"
+    )
+
+    # Second: the real uninstall gesture. macOS has no installer/uninstaller
+    # pair -- "uninstalling" a separated install is `disable`, which moves
+    # state back into $HOME the same deliberate way debian/prerm's own
+    # `disable` call does for the .deb (test_deb_packaged_lifecycle.py's own
+    # Test 1) -- the "user state survives package removal" property
+    # test_windows_packaged_smoke.py's silent uninstall also asserts, for
+    # its own platform's removal gesture.
+    user = getpass.getuser()
+    restored_settings_path = Path.home() / ".privacyfence" / "authority" / "config" / "settings.yaml"
+    try:
+        _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "disable", "--user", user)
+        assert restored_settings_path.exists(), (
+            f"`disable` should have restored state to {restored_settings_path}"
+        )
+        assert "trusted_sender_domain" in restored_settings_path.read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(Path.home() / ".privacyfence", ignore_errors=True)
 
 
 @pytest.fixture
@@ -744,12 +815,14 @@ def _bump_bundle_version(app_path: Path) -> str:
     # that is not a warning -- the kernel refuses to exec a binary whose
     # signature does not validate at all, so the relabeled bundle died on the
     # spot and the test saw only its web port never opening. Re-signing ad hoc
-    # ("-") puts a valid signature back on the modified bundle, which is all a
-    # direct exec needs (``_running_daemon_at``'s own docstring covers why
-    # Gatekeeper is deliberately not in the picture here; this bundle is
-    # synthetic and its Developer ID provenance is not what this test is
-    # about -- ``test_packaged_app_signature_and_notarization`` checks that,
-    # against the real unmodified bundle).
+    # ("-") puts a valid signature back on the modified bundle, which is all
+    # the kernel needs to exec it at all, whether that's a direct exec or
+    # (this module's own daemon fixtures) launchd loading a LaunchDaemon
+    # plist that points at it -- Gatekeeper is deliberately not in the
+    # picture here either way, since this bundle is synthetic and its
+    # Developer ID provenance is not what this test is about --
+    # ``test_packaged_app_signature_and_notarization`` checks that, against
+    # the real unmodified bundle.
     subprocess.run(
         ["codesign", "--force", "--sign", "-", str(app_path)],
         check=True, capture_output=True, text=True,
@@ -788,8 +861,8 @@ async def _propose_trusted_sender_rule(mcp_url: str, mcp_token: str, *, value: l
 
 async def _resolve_pending_card(base_url: str, bootstrap_url: str) -> None:
     """Bootstraps a real session cookie via the real ``?bootstrap=`` exchange
-    (same endpoint ``_running_daemon_at`` itself already minted the code
-    for), polls ``/approvals`` for the one pending card the concurrently-
+    (same endpoint ``_wait_for_real_daemon()`` itself already minted the
+    code for), polls ``/approvals`` for the one pending card the concurrently-
     running MCP call above just opened, then resolves it via a direct HTTP
     POST to the real decide route -- ``test_deb_packaged_lifecycle.py``'s
     own helper of the same name, adapted to a bootstrap *URL* (this module's
@@ -826,63 +899,74 @@ async def _resolve_pending_card(base_url: str, bootstrap_url: str) -> None:
         assert decide_resp.json() == {"status": "ok"}
 
 
-@pytest.mark.timeout(300)   # builds a second bundle copy *and* boots the daemon twice -- the
-                             # module's default timeout=300 already assumes one boot plus a real
-                             # browser round trip, so this needs the same headroom for the second one.
-async def test_macos_upgrade_preserves_user_state(tmp_path):
+@pytest.mark.timeout(420)   # builds a second bundle copy *and* boots the daemon twice via two
+                             # real, elevated `enable` calls -- the module's own timeout=360
+                             # already assumes one `enable` plus a real browser round trip, so
+                             # this needs the same headroom again for the second `enable`.
+async def test_macos_upgrade_preserves_user_state():
     """Phase 6 item 20 -- deliberately not built in the same PR as this
     module's own 6.1 gap-closing work: install version N, use it to create
     real on-disk state (an applied auto-accept rule, via the real MCP round
     trip -- not a hand-written settings.yaml), replace it with a
-    synthetically-relabeled version N+1 at the same ``$HOME``, and confirm
-    the state survived and the new bundle still starts and serves. Own,
-    independent bundle copies throughout (``_copy_app_from_dmg``) -- see
-    ``signed_app_copy``'s own docstring for why this module doesn't share
-    mutable fixture state like that across tests.
+    synthetically-relabeled version N+1, and confirm the state survived and
+    the new bundle still starts and serves. Own, independent bundle copies
+    throughout (``_copy_app_from_dmg``) -- see ``signed_app_copy``'s own
+    docstring for why this module doesn't share mutable fixture state like
+    that across tests.
+
+    Both "installs" below are the same real, elevated ``enable --app``
+    ``running_packaged_daemon`` uses -- ``cmd_enable``'s own ``launchctl
+    bootout`` runs unconditionally, before it restages ``TRUSTED_IMAGE_DIR``
+    from whichever bundle it was just pointed at, so calling it a second
+    time against ``app_n1`` is what "installs" the new version in place,
+    with no separate stop step needed first.
     """
     install_dir = Path(tempfile.mkdtemp(prefix="pf-dmg-upgrade-"))
-    home = tmp_path / "home"
+    user = getpass.getuser()
     try:
         # ── Install version N; create real on-disk state through the real
-        # MCP/approval round trip ─────────────────────────────────────────
+        # separated daemon and a real MCP/approval round trip ─────────────
         app_n = _copy_app_from_dmg(install_dir)
-        exe_n = app_n / "Contents" / "MacOS" / "PrivacyFenceApp"
-        with _running_daemon_at(exe_n, home) as daemon:
-            propose_task = asyncio.create_task(
-                _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["preupgrade.example.com"])
-            )
-            await _resolve_pending_card(daemon.base_url, daemon.bootstrap_url)
-            result = await propose_task
-            assert result.is_error is not True, getattr(result, "content", result)
-            assert result.structured_content["changed"] is True
+        _enable_separation(app_n, user=user)
+        daemon = _wait_for_real_daemon()
+        propose_task = asyncio.create_task(
+            _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["preupgrade.example.com"])
+        )
+        await _resolve_pending_card(daemon.base_url, daemon.bootstrap_url)
+        result = await propose_task
+        assert result.is_error is not True, getattr(result, "content", result)
+        assert result.structured_content["changed"] is True
 
-        settings_path = home / ".privacyfence" / "authority" / "config" / "settings.yaml"
-        assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
+        settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+        assert settings_text and "preupgrade.example.com" in settings_text, settings_text
 
         # ── "Install" a synthetically-relabeled version N+1 -- delete the
-        # old bundle and put a fresh copy in its place (module docstring
-        # §6: this is the macOS install/uninstall gesture; a real second
-        # PyInstaller build would multiply this module's already-heavy
-        # setup cost for no additional coverage -- see
+        # old bundle and put a fresh copy in its place (module docstring §8;
+        # a real second PyInstaller build would multiply this module's
+        # already-heavy setup cost for no additional coverage -- see
         # _bump_bundle_version's own docstring) ───────────────────────────
         shutil.rmtree(app_n)
         app_n1 = _copy_app_from_dmg(install_dir)
         new_version = _bump_bundle_version(app_n1)
-        exe_n1 = app_n1 / "Contents" / "MacOS" / "PrivacyFenceApp"
 
         with open(app_n1 / "Contents" / "Info.plist", "rb") as f:
             info = plistlib.load(f)
         assert info["CFBundleShortVersionString"] == new_version
 
+        _enable_separation(app_n1, user=user)
+        daemon = _wait_for_real_daemon()
+
         # ── State survived the upgrade untouched ──────────────────────────
-        assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
+        settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+        assert settings_text and "preupgrade.example.com" in settings_text, settings_text
 
         # ── The upgraded bundle still starts and serves, without
         # clobbering the state it just inherited ─────────────────────────
-        with _running_daemon_at(exe_n1, home) as daemon:
-            resp = httpx.get(daemon.bootstrap_url, follow_redirects=True, timeout=10)
-            assert resp.status_code == 200, resp.text
+        resp = httpx.get(daemon.bootstrap_url, follow_redirects=True, timeout=10)
+        assert resp.status_code == 200, resp.text
 
-        assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
+        settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+        assert settings_text and "preupgrade.example.com" in settings_text, settings_text
     finally:
+        _disable_if_separated(user=user)
         shutil.rmtree(install_dir, ignore_errors=True)

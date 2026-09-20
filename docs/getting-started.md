@@ -351,6 +351,8 @@ concept — every session is an identity-provider authentication. Deploying it i
 
 ## Where to go next
 
+- [Migration guide](migration-guide.md) — already running PrivacyFence 4.0 or earlier? Start there
+  instead — a plain package upgrade doesn't turn on all of the hardening below by itself.
 - [Technical reference](TECHNICAL_REFERENCE.md) — the MCP endpoint, meta-tools, approval model,
   configuration, packaging details.
 - [Platform support](platform-support.md) — what each platform's packaging does, and its known open

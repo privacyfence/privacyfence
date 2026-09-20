@@ -56,12 +56,18 @@ not just whether it does:
   app's own control channel (``privacyfence-companion --serve``, ADR 0002
   decision 5b), not the daemon -- the daemon has no desktop session of its
   own to autostart into any more.
-- **Unseparated**: still what a bare ``pip``/``pipx`` install gets today
-  (nothing there ever runs ``enable`` at all -- that hook is ``debian/
-  postinst``'s alone), and still reachable from a ``.deb`` install by
-  running ``disable``. This is the pre-D1 mechanism this module always
-  tested: the daemon's own XDG autostart entry starts the daemon directly
-  in the login session.
+- **Unseparated**: still reachable from a ``.deb`` install by running
+  ``disable`` -- but, on a *packaged* build, no longer the pre-D1 mechanism
+  this module used to test end to end. ADR 0003 decision 6
+  (``privilege_separation.enforce_separation()``) scopes its refusal to
+  ``paths.is_bundled()``, which this ``.deb``'s PyInstaller binary is (a
+  bare ``pip``/``pipx`` install is not, so decision 6 does not change what
+  that install gets -- nothing there ever runs ``enable`` at all, since that
+  hook is ``debian/postinst``'s alone). So the daemon's own XDG autostart
+  entry still starts the real packaged binary directly in the login
+  session, and that process still runs -- it now refuses to serve rather
+  than opening ``/mcp``/the approvals UI, which is what this module's own
+  test now asserts (privacyfence#560).
 
 Both are exercised below as separate tests.
 
@@ -98,7 +104,6 @@ does block a release, this tier is too heavy to gate every PR or release on.
 """
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import getpass
 import os
@@ -110,11 +115,11 @@ import time
 from pathlib import Path
 from typing import Callable
 
-import httpx
 import pytest
 
 pytest.importorskip("mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'")
 
+from privacyfence import privilege_separation  # noqa: E402
 from privacyfence.privilege_separation import (  # noqa: E402
     HANDOFF_DIR_NAME,
     LINUX_SYSTEM_ROOT,
@@ -132,17 +137,12 @@ from tests.integration.test_deb_packaged_lifecycle import (  # noqa: E402
     MCP_TOKEN_FILE_NAME,
     OPT_DIR,
     AUTOSTART_DESKTOP_FILE,
-    _bootstrap_session,
     _built_debs,
     _can_install_packages,
     _dpkg,
     _free_port,
     _prepare_home,
-    _propose_trusted_sender_rule,
     _purge_if_present,
-    _quit,
-    _resolve_pending_card,
-    _wait_until_connectable,
 )
 
 # #428 D1 -- the separated layout's own root and marker, on this platform.
@@ -296,17 +296,6 @@ def _wait_for_path(path: Path, *, timeout: float, what: str) -> None:
             return
         time.sleep(0.1)
     raise AssertionError(f"{what} ({path}) never appeared within {timeout}s")
-
-
-def _wait_for_path_content(path: Path, *, timeout: float) -> str:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if path.exists():
-            content = path.read_text(encoding="utf-8").strip()
-            if content:
-                return content
-        time.sleep(0.1)
-    raise AssertionError(f"{path} never appeared/populated within {timeout}s")
 
 
 def _wait_for_unit_property(systemctl_user, unit: str, prop: str, expected: str, *, timeout: float) -> None:
@@ -662,17 +651,24 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
 
 
 # --------------------------------------------------------------------------- #
-# Test 2 -- the unseparated path: still what a bare pip/pipx install gets
-# today (nothing there ever runs `enable` at all), and reachable from a
-# .deb install by running `disable` -- the pre-D1 mechanism this module
-# always tested, where the daemon's own XDG autostart entry starts the
+# Test 2 -- the unseparated path, reachable from a .deb install by running
+# `disable`. Before ADR 0003 decision 6 this was the pre-D1 mechanism the
+# module tested end to end: the daemon's own XDG autostart entry starts the
 # daemon directly in the login session, which then serves a real daemon/
-# MCP/approval/audit round trip (Phase 3's own contract shape), and "Quit
-# PrivacyFence" stops the real systemd unit, not just the process.
+# MCP/approval/audit round trip. Decision 6 retired that outcome for a
+# *packaged* build (`privilege_separation.enforce_separation()`, scoped to
+# `paths.is_bundled()` -- true of this .deb's PyInstaller binary): the real
+# packaged binary still starts via the same autostart entry, but now exits
+# straight back out with `PrivilegeSeparationError` before opening /mcp or
+# the approvals UI, rather than serving. This asserts exactly that refusal.
+# See privacyfence#560 -- the daemon/MCP/approval/audit round trip this test
+# used to prove is still covered for a *separated* install by the first test
+# in this module (the only shape a packaged build can now legitimately be
+# left in without an admin fixing it).
 # --------------------------------------------------------------------------- #
 
 @_needs_deb_login_session
-async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_state):
+async def test_deb_autostart_refuses_to_serve_when_unseparated(_real_home_state):
     home = _real_home_state
     user = _current_user()
     uid = os.getuid()
@@ -683,17 +679,17 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     # Pre-seed the real $HOME's settings.yaml the same way _prepare_home
     # does for every other packaged/system test -- a real free port, update
     # checks off (this tier makes no real outbound network calls) -- but
-    # against the *real* $HOME, before the daemon's own first boot, exactly
-    # what a real first login would find already in place from an earlier
-    # "Authenticate..." session.
+    # against the *real* $HOME, before the daemon's own first (attempted)
+    # boot, exactly what a real first login would find already in place
+    # from an earlier "Authenticate..." session.
     _prepare_home(home, port=port)
 
     # ── Install, then explicitly undo #428 D1's now-automatic privilege
-    # separation -- this pins the pre-D1 mechanism, which is *also* still
-    # exactly what a bare pip/pipx install gets today: nothing there ever
-    # runs `enable` at all, since that hook is debian/postinst's
-    # alone. See the first test in this module for the new, separated-by-
-    # default path a plain `.deb` install now takes if left alone. ───────
+    # separation -- reachable today only via `disable`; nothing about a bare
+    # pip/pipx install changes here (that install is never bundled, so
+    # decision 6's refusal below is scoped away from it entirely -- see the
+    # first test in this module for the new, separated-by-default path a
+    # plain `.deb` install now takes if left alone). ─────────────────────
     _dpkg("-i", str(deb_path))
     subprocess.run(
         ["sudo", "-n", "privacyfence-privilege-separation", "disable", "--user", user],
@@ -729,6 +725,9 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
 
     _trigger_graphical_session_target(user_env)
 
+    # ── The real packaged binary really does start (this much is unchanged
+    # from before decision 6): confirmed the same way as the separated
+    # test's own daemon check, not just "systemd thinks it ran". ─────────
     _wait_for_unit_property(systemctl_user, unit, "ActiveState", "active", timeout=20)
     main_pid = systemctl_user("show", unit, "-p", "MainPID", "--value").stdout.strip()
     assert main_pid and main_pid != "0", (
@@ -738,38 +737,34 @@ async def test_deb_autostart_activates_daemon_via_real_login_session(_real_home_
     expected_exe = str(OPT_DIR / "PrivacyFenceApp")
     assert exe_link == expected_exe, f"systemd started {exe_link!r}, not the packaged binary at {expected_exe!r}"
 
-    _wait_for_path(resolve_posix_socket_path(home / ".privacyfence"), timeout=20, what="control channel socket")
-    mcp_token = _wait_for_path_content(home / ".privacyfence" / MCP_TOKEN_FILE_NAME, timeout=20)
-    _wait_until_connectable("localhost", port)
+    # ── ...and then decision 6 refuses it: no pkexec/policykit agent is
+    # installed on this runner (see linux-graphical-session.yml's own
+    # package list), so enforce_separation()'s own elevation attempt is a
+    # fast no-op and PrivilegeSeparationError follows immediately --
+    # daemon_main.main() prints it and returns 1, which a Type=simple unit
+    # with no Restart= (systemd-xdg-autostart-generator's own default)
+    # reports as "failed", not "inactive". ───────────────────────────────
+    _wait_for_unit_property(systemctl_user, unit, "ActiveState", "failed", timeout=20)
 
-    base_url = f"http://localhost:{port}"
-    mcp_url = f"{base_url}/mcp"
+    # The refusal happens before the daemon opens /mcp or the approvals UI
+    # -- no control channel, ever, not just "not yet" the way a slow boot
+    # would look. This is the exact assertion issue #560 was filed over:
+    # the pre-decision-6 version of this test expected a working socket
+    # here and failed instead, because that expectation no longer holds for
+    # a packaged build.
+    assert not resolve_posix_socket_path(home / ".privacyfence").exists(), (
+        "a packaged, unseparated install must never open its control channel (ADR 0003 decision "
+        "6) -- ActiveState went to 'failed' without ever serving /mcp/approvals"
+    )
 
-    # ── Phase 3's own daemon/MCP/approval/audit contract shape, against a
-    # daemon that this test never itself started a process for ───────────
-    async with httpx.AsyncClient(base_url=base_url, follow_redirects=True) as web_client:
-        session_id = await _bootstrap_session(web_client, home / ".privacyfence")
-        assert (await web_client.get("/settings")).status_code == 200
-
-        allow_task = asyncio.create_task(
-            _propose_trusted_sender_rule(mcp_url, mcp_token, value=["autostart.example.com"])
-        )
-        await _resolve_pending_card(web_client, session_id, decision="confirm")
-        allow_result = await allow_task
-        assert allow_result.is_error is not True, getattr(allow_result, "content", allow_result)
-        assert allow_result.structured_content["changed"] is True
-
-        await _quit(web_client, session_id)
-
-    # ── Graceful shutdown propagates back to systemd: the unit deactivates
-    # and the real process is actually gone -- not just unreachable over
-    # HTTP -- proving "Quit PrivacyFence" stops the real systemd-managed
-    # service, not merely the daemon's own event loop. ────────────────────
-    _wait_for_unit_property(systemctl_user, unit, "ActiveState", "inactive", timeout=20)
-    assert not Path(f"/proc/{main_pid}").exists(), f"pid {main_pid} still alive after Quit PrivacyFence"
-
-    settings_path = home / ".privacyfence" / "authority" / "config" / "settings.yaml"
-    assert "autostart.example.com" in settings_path.read_text(encoding="utf-8")
+    journal = subprocess.run(
+        ["journalctl", "--user", "-u", unit, "--no-pager"], capture_output=True, text=True,
+    ).stdout
+    assert "Refusing to start: no /mcp, no approvals" in journal, (
+        f"{unit}'s log doesn't show ADR 0003 decision 6's refusal:\n{journal}"
+    )
+    enable_command = privilege_separation.platform_layout().enable_command
+    assert enable_command in journal, f"{unit}'s log doesn't name the fix ({enable_command!r}):\n{journal}"
 
 
 # --------------------------------------------------------------------------- #
