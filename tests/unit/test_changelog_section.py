@@ -253,9 +253,16 @@ class TestRealChangelog:
 
     def test_every_section_names_a_real_tag(self):
         # A section for a version that was never tagged would produce a release body for a release
-        # that doesn't exist -- a mistyped heading is otherwise invisible until tag day. 4.0.0 is
-        # the one legitimate exception: this file documents it ahead of its own tag, which is the
-        # whole point of writing the notes before the release is cut.
+        # that doesn't exist -- a mistyped heading is otherwise invisible until tag day. The one
+        # legitimate exception is the newest section: the whole point of writing the notes before
+        # the release is cut (see CLAUDE.md) is that its own tag doesn't exist yet at PR-review
+        # time. Sections are ordered newest-first (test_sections_are_ordered_newest_version_first),
+        # so that's structurally "whichever real version heads the list" rather than a version
+        # string hand-maintained here release after release -- a stale, never-tagged heading
+        # anywhere *behind* the front is still a real bug and still caught. A typo in the newest
+        # heading itself isn't caught here, but isn't silent either: scripts/changelog_section.py
+        # fails the actual release build at the render step when the tag it's given finds no
+        # matching section.
         try:
             listed = subprocess.run(
                 ["git", "tag", "--list"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
@@ -265,11 +272,11 @@ class TestRealChangelog:
         tags = set(listed.split())
         if not tags:  # pragma: no cover -- a tagless checkout (shallow clone, source tarball)
             pytest.skip("no tags in this checkout")
-        missing = [
-            version
-            for version in changelog_section.known_versions(REAL_TEXT)
-            if version not in ("Unreleased", "4.0.0") and f"v{version}" not in tags
-        ]
+        released = [v for v in changelog_section.known_versions(REAL_TEXT) if v != "Unreleased"]
+        if not released:  # pragma: no cover -- a changelog with no release sections at all
+            pytest.skip("no release sections in this changelog")
+        _, *older = released
+        missing = [version for version in older if f"v{version}" not in tags]
         assert missing == []
 
     def test_no_version_has_two_sections(self):
