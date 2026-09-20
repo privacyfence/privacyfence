@@ -123,8 +123,15 @@ class TestTrusteeMatching:
     def test_forward_slashes_normalize(self):
         assert windows_acl.trustee_matches("NT SERVICE/PrivacyFence", ACCOUNT) is True
 
-    @pytest.mark.parametrize("trustee", ["NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators"])
+    @pytest.mark.parametrize(
+        "trustee",
+        ["NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators", "NT SERVICE\\TrustedInstaller"],
+    )
     def test_system_and_administrators_are_trusted(self, trustee):
+        # TrustedInstaller belongs alongside SYSTEM/Administrators here: it
+        # is what *grants* %ProgramFiles% its default write access, not an
+        # untrusted principal holding it -- see TRUSTED_TRUSTEES' own
+        # docstring.
         assert windows_acl.is_trusted(trustee) is True
 
     @pytest.mark.parametrize(
@@ -278,6 +285,19 @@ class TestImageProblems:
         # Every account on the machine can read %ProgramFiles%, and nothing
         # about privilege separation changes that -- only writing matters.
         aces = [windows_acl.Ace("BUILTIN\\Users", windows_acl.FILE_GENERIC_READ_EXECUTE)]
+
+        assert windows_acl.image_problems(PATH, aces, service_account=ACCOUNT) == []
+
+    def test_trustedinstaller_write_is_not_reported(self):
+        # The regression this guards: %ProgramFiles% is owned by, and
+        # inherits a full-control grant to, NT SERVICE\TrustedInstaller by
+        # default on a stock Windows install -- that is what makes
+        # %ProgramFiles% write-protected from an ordinary Administrator
+        # token in the first place, not a gap in the protection. Before
+        # TrustedInstaller was added to TRUSTED_TRUSTEES, this exact ACE
+        # made every install into the installer's own default location fail
+        # Assert-ImageProtected/image_problems.
+        aces = [windows_acl.Ace("NT SERVICE\\TrustedInstaller", windows_acl.FILE_ALL_ACCESS)]
 
         assert windows_acl.image_problems(PATH, aces, service_account=ACCOUNT) == []
 

@@ -37,6 +37,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The Windows installer's Finish page could fail with "Internal error: CallSpawnServer: Unexpected
+  response: $0" after a real install had already fully succeeded.** The two Finish-page `[Run]`
+  entries that open the bundled `.mcpb` (or show it in File Explorer when Claude Desktop has no
+  `.mcpb` association) relied on `postinstall`'s default `runasoriginaluser` behavior — and because
+  `PrivilegesRequired=admin` means Setup always runs elevated, that makes Setup spawn a helper
+  process under the original, pre-UAC-prompt user's token to open the file non-elevated. On a real
+  install that spawn failed outright instead of falling back, well after the files, privilege
+  separation, service and companion task had already been provisioned — an alarming dialog over a
+  step that was purely a convenience. Both entries now carry `runascurrentuser`, which skips that
+  fragile path and opens the file with Setup's own already-elevated token instead.
+- **The Windows installer refused to separate a completely ordinary install under `%ProgramFiles%`.**
+  `Assert-ImageProtected` (`scripts/windows_privilege_separation.ps1`) and its daemon-startup
+  counterpart `windows_acl.image_problems()` treat any write grant on the install directory as a
+  hole an AI agent could use to run code as the service account — correct for a real one, but
+  `%ProgramFiles%` is owned by, and inherits a full-control grant to, `NT SERVICE\TrustedInstaller`
+  by default; that grant is *what* makes `%ProgramFiles%` write-protected from an ordinary
+  Administrator token, not an instance of the weakness the check exists to catch. Neither check's
+  trusted-identity list included it, so every install into the location the installer itself offers
+  — and the failure dialog then told the user to keep — failed with "PrivacyFence could not set up
+  privilege separation" naming `NT SERVICE\TrustedInstaller` as the writer. TrustedInstaller is now
+  trusted alongside `SYSTEM`/`Administrators` in both the `.ps1`'s `Test-TrustedIdentity` and
+  `windows_acl.TRUSTED_TRUSTEES`.
 - **The packaged-artifact smoke tests now exercise the install a user actually gets, so a release
   build can pass again.** Three consecutive pre-release tags (`v4.1.0b1`/`b2`/`b3`) were lost to
   these tests being behind the product on three separate counts, each one hidden until the one in

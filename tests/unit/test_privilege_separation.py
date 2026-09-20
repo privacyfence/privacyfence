@@ -1706,6 +1706,27 @@ class TestWindowsInstallerContract:
         assert "privilege-separation.ps1" in self.LAYOUT.status_command
         assert "status" in self.LAYOUT.status_command
 
+    def test_the_finish_page_mcpb_entries_run_as_the_current_user(self):
+        # A real install hit "Internal error: CallSpawnServer: Unexpected
+        # response: $0" on Finish-page click. `postinstall` alone defaults to
+        # `runasoriginaluser`, and since PrivilegesRequired=admin means Setup
+        # always runs elevated, that makes Setup spawn a helper under the
+        # pre-UAC-prompt user's token to open the .mcpb (or, for the fallback
+        # entry, explorer.exe) non-elevated -- a mechanism that failed
+        # outright here instead of falling back, well after the real install
+        # work (files, privilege separation, service, companion task) had
+        # already succeeded. `runascurrentuser` skips that spawn and runs
+        # with Setup's own already-elevated token instead.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+        run_section = inno.split("[Run]", 1)[1].split("[UninstallRun]", 1)[0]
+
+        mcpb_entries = [
+            line for line in run_section.splitlines()
+            if "Flags:" in line and "postinstall" in line
+        ]
+        assert len(mcpb_entries) == 2
+        assert all("runascurrentuser" in line for line in mcpb_entries)
+
     def test_the_installer_ships_the_template_the_script_renders(self):
         # The script resolves a checkout layout first and its own directory
         # second; a real install has only the latter, so a template missing
@@ -1842,6 +1863,22 @@ class TestWindowsInstallerContract:
         # way to run its own code as the service account.
         assert "function Assert-ImageProtected" in self.SCRIPT
         assert "Assert-ImageProtected" in self.SCRIPT.split("function Invoke-Enable", 1)[1]
+
+    def test_trustedinstaller_is_a_trusted_identity(self):
+        # The regression a real Windows install hit: %ProgramFiles% is owned
+        # by, and inherits a full-control grant to, NT SERVICE\TrustedInstaller
+        # by default -- that is what makes %ProgramFiles% write-protected from
+        # an ordinary Administrator token, not a gap in it. Without this SID
+        # on Test-TrustedIdentity's list, Assert-ImageProtected refused every
+        # install into the installer's own offered default location with
+        # "... is writable by 'NT SERVICE\\TrustedInstaller'". Matches
+        # windows_acl.TRUSTED_TRUSTEES, which the daemon's own startup audit
+        # checks the same install against.
+        test_trusted_identity = self.SCRIPT.split(
+            "function Test-TrustedIdentity", 1,
+        )[1].split("\nfunction ", 1)[0]
+
+        assert "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464" in test_trusted_identity
 
     def test_takes_ownership_of_the_migrated_tree(self):
         # The hole a real platform-windows run exposed: Move-Data moves the

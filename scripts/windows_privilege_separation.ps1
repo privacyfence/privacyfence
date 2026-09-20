@@ -367,7 +367,26 @@ function Test-TrustedIdentity {
     # and the account that provisioned the install, and issue #428's "Honest
     # limits" already concedes that a local Administrator defeats the design by
     # taking ownership. Matched by SID so this holds on a non-English Windows.
-    foreach ($wellKnown in @('S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-547')) {
+    #
+    # NT SERVICE\TrustedInstaller (S-1-5-80-956008885-3418522649-1831038044-
+    # 1853292631-2271478464 -- an "NT SERVICE" SID, computed the same
+    # deterministic way $ServiceAccount's own is, so it is this exact string
+    # on every Windows machine) belongs on this list for the same reason: it
+    # is what *grants* the write access this check exists to catch, not an
+    # instance of it. TrustedInstaller, not Administrators, owns
+    # %ProgramFiles% out of the box and is the only principal with
+    # unconditional write there -- that is what stops an ordinary
+    # Administrator token from touching a protected system folder without an
+    # explicit takeover, i.e. it is Windows' version of "only administrators
+    # can write here", not a hole in it. Before this was added, every install
+    # into the installer's own offered default location failed
+    # Assert-ImageProtected with "... is writable by 'NT
+    # SERVICE\TrustedInstaller'" -- the separation step refusing the one
+    # install layout its own error message tells the user to keep.
+    foreach ($wellKnown in @(
+        'S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-547',
+        'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    )) {
         try {
             $name = (New-Object System.Security.Principal.SecurityIdentifier($wellKnown)).Translate([System.Security.Principal.NTAccount]).Value
         } catch {
