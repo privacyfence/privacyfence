@@ -324,7 +324,7 @@ def _run_separation_script(install_dir: Path, *args: str, check: bool = True) ->
     return result
 
 
-def _disable_installer_enabled_privilege_separation(install_dir: Path) -> None:
+def _disable_installer_enabled_privilege_separation(install_dir: Path, *, require_separated: bool = True) -> None:
     """Undoes ADR 0003 decision 4's installer-run ``enable``, which fires on
     every silent install *and* every upgrade over one.
 
@@ -341,7 +341,20 @@ def _disable_installer_enabled_privilege_separation(install_dir: Path) -> None:
 
     Must be re-run after every install in those tests, the upgrade-in-place one
     included: ``enable`` runs on an upgrade too, not just a first install.
+
+    ``require_separated=False`` is for a caller that cannot assume the install
+    it just made got separated at all -- privacyfence/privacyfence#561: a
+    ``/DIR=``-overridden install has, at least once, come out of
+    ``CurStepChanged(ssPostInstall)``'s own ``enable`` call with no
+    ``MARKER_PATH`` to show for it despite Setup itself reporting success, and
+    ``disable`` refusing an install it did not separate is correct -- the bug
+    that filed #561 was this fixture calling `disable` unconditionally and
+    taking the whole module down on that refusal, not the refusal itself. With
+    this flag, a missing marker is treated the same as an install this
+    function has nothing to undo, rather than a failure.
     """
+    if not require_separated and not MARKER_PATH.exists():
+        return
     _run_separation_script(install_dir, "disable")
     assert not MARKER_PATH.exists(), f"{MARKER_PATH} survived `disable`"
 
