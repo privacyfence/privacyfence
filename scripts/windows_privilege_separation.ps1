@@ -98,7 +98,25 @@ $ErrorActionPreference = 'Stop'
 # windows-latest runner. Importing it explicitly up front, before any of
 # this script's own Get-Acl calls, removes the dependency on autoload
 # working at all rather than papering over one failure at a time.
-Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+#
+# -ErrorAction Stop alone turned out not to be enough: on the very runner
+# image the above was seen on, a *different* v4.1.0b2 run hit the opposite
+# problem from the same line -- Import-Module threw "The member
+# 'AuditToString' is already present" (FullyQualifiedErrorId
+# FormatXmlUpdateException) instead of CommandNotFoundException. That is
+# Update-TypeData refusing a second registration of the same type-data
+# members, which only happens when Microsoft.PowerShell.Security's
+# format/type data was already loaded by the time this line runs -- i.e.
+# autoload silently succeeded after all on that runner, and this explicit
+# import is redundant rather than needed. Both are "Get-Acl is safe to call
+# now" outcomes; only a duplicate-registration error is swallowed; anything
+# else (Get-Acl genuinely unavailable) still stops the script, which is the
+# whole reason for importing explicitly at all.
+try {
+    Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+} catch {
+    if ($_.FullyQualifiedErrorId -notlike 'FormatXmlUpdateException,*') { throw }
+}
 
 # ── Constants. Every one of these is also declared in
 #    src/privacyfence/privilege_separation.py, and

@@ -152,6 +152,13 @@ PACKAGE_NAME = "privacyfence"
 DAEMON_BIN = Path("/usr/bin/privacyfence-app")
 OPT_DIR = Path("/opt/privacyfence")
 AUTOSTART_DESKTOP_FILE = Path("/etc/xdg/autostart/privacyfence.desktop")
+# scripts/linux_privilege_separation.sh's stop_legacy_autostart() renames
+# AUTOSTART_DESKTOP_FILE to this (and marks it Hidden=true) as part of the
+# machine half of `enable` -- which, since ADR 0003 decision 5, postinst
+# runs unconditionally on every install. So a freshly `dpkg -i`'d package
+# never leaves AUTOSTART_DESKTOP_FILE itself on disk; disable (prerm's own
+# `remove` case, see cmd_disable's restore step) is what renames it back.
+AUTOSTART_DESKTOP_DISABLED_FILE = Path(f"{AUTOSTART_DESKTOP_FILE}.disabled")
 
 # ADR 0003 decisions 3 and 5, as the postinst leaves them on disk. Spelled out
 # here rather than imported from privilege_separation: this module asserts what
@@ -185,6 +192,19 @@ SEPARATED_MCP_TOKEN_PATH = HANDOFF_DIR / MCP_TOKEN_FILE_NAME
 # docstring), which is what lets _wait_for_real_daemon() tell "not up yet"
 # apart from "still the previous boot's value" across a quit/restart.
 SEPARATED_WEB_BASE_URL_PATH = HANDOFF_DIR / "web_base_url"
+# Under HANDOFF_DIR, not AUTHORITY_DIR: paths.control_socket_dir() (which
+# web/control_channel.py's posix_socket_path() binds to) relocates the
+# socket to the handoff directory once privilege separation is enabled,
+# because a separated AUTHORITY_DIR is 0700 under the daemon's own service
+# account and the companion -- running as the human, not root -- has to
+# still be able to connect (see control_socket_dir()'s own docstring).
+# AUTHORITY_DIR/control.sock is only where it binds on an *unseparated*
+# install -- resolve_posix_socket_path() (tests/control_channel_client.py)
+# always assumes that unseparated layout, which is right for every other
+# caller it has (a directly-spawned, never-separated subprocess) but wrong
+# for SYSTEM_ROOT here, so _bootstrap_session() uses this instead of that
+# helper whenever it's minting against the real separated daemon.
+SEPARATED_CONTROL_SOCKET_PATH = HANDOFF_DIR / "control.sock"
 
 
 def _built_debs() -> list[Path]:
@@ -593,7 +613,13 @@ async def _bootstrap_session(
     # genuinely-unseparated ``$HOME`` instead, where a direct, unprivileged
     # connect is exactly correct (and the only thing that works -- nothing
     # there is root-owned).
-    socket_path = resolve_posix_socket_path(data_dir)
+    #
+    # Not resolve_posix_socket_path() for the SYSTEM_ROOT case: that helper
+    # always assumes an unseparated layout (authority_dir()/control.sock),
+    # right for the sibling module's scratch daemon but wrong here -- a
+    # separated install binds the socket under handoff_dir() instead (see
+    # SEPARATED_CONTROL_SOCKET_PATH's own comment).
+    socket_path = SEPARATED_CONTROL_SOCKET_PATH if data_dir == SYSTEM_ROOT else resolve_posix_socket_path(data_dir)
     code = _sudo_mint_bootstrap_code(socket_path) if data_dir == SYSTEM_ROOT else mint_bootstrap_code_posix(socket_path)
     exchange_resp = await web_client.get(path, params={"bootstrap": code})
     assert exchange_resp.status_code == 200, exchange_resp.text
@@ -758,16 +784,30 @@ async def test_deb_install_validate_scenario_remove_purge_lifecycle():
     assert DAEMON_BIN.is_file(), f"{DAEMON_BIN} missing after dpkg -i"
     assert os.access(DAEMON_BIN, os.X_OK), f"{DAEMON_BIN} is not executable after dpkg -i"
     assert (OPT_DIR / "PrivacyFenceApp").is_file()
-    assert AUTOSTART_DESKTOP_FILE.is_file()
+    # Not AUTOSTART_DESKTOP_FILE itself: postinst's machine half separates
+    # every install unconditionally (ADR 0003 decision 5), which renames the
+    # conffile to AUTOSTART_DESKTOP_DISABLED_FILE before this dpkg -i even
+    # returns -- see that constant's own comment. The plain name only comes
+    # back once `disable` runs, which the remove step below exercises.
+    assert not AUTOSTART_DESKTOP_FILE.exists(), (
+        f"{AUTOSTART_DESKTOP_FILE} should already be renamed away by the auto-separation "
+        "a fresh dpkg -i triggers"
+    )
+    assert AUTOSTART_DESKTOP_DISABLED_FILE.is_file()
 
     status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True, check=True)
     assert "Status: install ok installed" in status.stdout
 
-    # ── Validate the autostart entry (P7.1) ─────────────────────────────
+    # ── Validate the autostart entry (P7.1) -- the disabled copy, which is
+    # what's actually on disk right after an install (see above); its
+    # Hidden=true line is what stop_legacy_autostart() added, still a
+    # syntactically valid .desktop file ─────────────────────────────────
     validate = subprocess.run(
-        ["desktop-file-validate", str(AUTOSTART_DESKTOP_FILE)], capture_output=True, text=True,
+        ["desktop-file-validate", str(AUTOSTART_DESKTOP_DISABLED_FILE)], capture_output=True, text=True,
     )
-    assert validate.returncode == 0, f"{AUTOSTART_DESKTOP_FILE} failed validation:\n{validate.stdout}{validate.stderr}"
+    assert validate.returncode == 0, (
+        f"{AUTOSTART_DESKTOP_DISABLED_FILE} failed validation:\n{validate.stdout}{validate.stderr}"
+    )
 
     # ── The real, already-running privacyfence-daemon.service; run the
     # Phase 3 scenario against it ─────────────────────────────────────────
