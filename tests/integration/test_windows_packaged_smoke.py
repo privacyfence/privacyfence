@@ -233,6 +233,40 @@ def _delete_task_if_present(name: str = TASK_NAME) -> None:
         subprocess.run(["schtasks", "/delete", "/tn", name, "/f"], capture_output=True, text=True, timeout=15)
 
 
+def _stop_daemon_service(*, timeout: float = 60.0) -> None:
+    """``sc stop`` the real service and wait for it to actually reach STOPPED.
+
+    Not ``taskkill``, and the difference is the whole point:
+    Install-DaemonService configures failure actions (``sc failure ... actions=
+    restart/5000/restart/10000/restart/30000``), so a service process that dies
+    *unexpectedly* is restarted by the SCM within five seconds. Killing it by
+    image name therefore buys about five seconds -- which is exactly what Inno
+    Setup's own four one-second DeleteFile retries were losing to:
+
+        _internal\\PIL\\_imaging.cp312-win_amd64.pyd
+        DeleteFile: The existing file appears to be in use (5). Retrying.
+        ... DeleteFile failed; code 5. Access is denied.
+
+    A clean stop is not an unexpected termination, so the SCM leaves it
+    stopped, and every ``_internal`` DLL the daemon had mapped is released for
+    good. A no-op when the service does not exist (``sc query`` exits
+    non-zero), which is the unseparated case and every test that never
+    installed."""
+    if subprocess.run(
+        ["sc.exe", "query", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
+    ).returncode != 0:
+        return
+    subprocess.run(["sc.exe", "stop", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            ["sc.exe", "query", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0 or "STOPPED" in result.stdout:
+            return
+        time.sleep(0.5)
+
+
 def _kill_stray_app_processes() -> None:
     """Best-effort ``taskkill`` sweep for any process still running against
     ``MAIN_EXE_NAME``/``ALIAS_EXE_NAME``, by image name rather than PID.
@@ -253,7 +287,12 @@ def _kill_stray_app_processes() -> None:
     what RestartManager now names ("an application using one of our files:
     PrivacyFenceCompanion"). It could not appear here before, because until
     the Windows ``enable`` was fixed no install ever got far enough to start
-    a companion at all."""
+    a companion at all.
+
+    The daemon is stopped rather than killed, and before the sweep: on a
+    separated install it is a *service*, and the SCM restarts a killed one
+    within five seconds. See _stop_daemon_service()."""
+    _stop_daemon_service()
     for image_name in (ALIAS_EXE_NAME, MAIN_EXE_NAME, COMPANION_EXE_NAME):
         subprocess.run(["taskkill", "/F", "/IM", image_name], capture_output=True, text=True, timeout=15)
 
