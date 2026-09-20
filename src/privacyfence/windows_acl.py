@@ -118,7 +118,20 @@ _TRAVERSE_BITS = FILE_EXECUTE | GENERIC_EXECUTE | GENERIC_ALL
 
 # Never reported by the checks below -- see this module's own docstring for
 # why each one is here rather than merely unmentioned.
-TRUSTED_TRUSTEES = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators")
+#
+# NT SERVICE\TrustedInstaller belongs here for the same reason SYSTEM and
+# Administrators do: it is what *grants* write access to a protected system
+# folder, not an instance of an untrusted one holding it. TrustedInstaller,
+# not Administrators, owns %ProgramFiles% by default and is the one
+# principal with unconditional write there -- that is what stops an
+# ordinary Administrator token from touching it without first taking
+# ownership, i.e. it is this design's guarantee working as intended, not a
+# hole in it. Without this, image_problems() (and the .ps1's own
+# Assert-ImageProtected, which mirrors this list under its own name) flagged
+# every install into the installer's own default location as unprotected --
+# "... is writable by 'NT SERVICE\\TrustedInstaller'" -- which is the one
+# layout the installer's own error message tells the user to keep.
+TRUSTED_TRUSTEES = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\Administrators", "NT SERVICE\\TrustedInstaller")
 
 # S-1-3-4. Not a principal at all: an ACE naming it grants its rights to
 # whoever currently *owns* the object, whoever that turns out to be. Windows

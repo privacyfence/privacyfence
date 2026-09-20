@@ -1843,6 +1843,22 @@ class TestWindowsInstallerContract:
         assert "function Assert-ImageProtected" in self.SCRIPT
         assert "Assert-ImageProtected" in self.SCRIPT.split("function Invoke-Enable", 1)[1]
 
+    def test_trustedinstaller_is_a_trusted_identity(self):
+        # The regression a real Windows install hit: %ProgramFiles% is owned
+        # by, and inherits a full-control grant to, NT SERVICE\TrustedInstaller
+        # by default -- that is what makes %ProgramFiles% write-protected from
+        # an ordinary Administrator token, not a gap in it. Without this SID
+        # on Test-TrustedIdentity's list, Assert-ImageProtected refused every
+        # install into the installer's own offered default location with
+        # "... is writable by 'NT SERVICE\\TrustedInstaller'". Matches
+        # windows_acl.TRUSTED_TRUSTEES, which the daemon's own startup audit
+        # checks the same install against.
+        test_trusted_identity = self.SCRIPT.split(
+            "function Test-TrustedIdentity", 1,
+        )[1].split("\nfunction ", 1)[0]
+
+        assert "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464" in test_trusted_identity
+
     def test_takes_ownership_of_the_migrated_tree(self):
         # The hole a real platform-windows run exposed: Move-Data moves the
         # data directory out of %LOCALAPPDATA%, and a move preserves
