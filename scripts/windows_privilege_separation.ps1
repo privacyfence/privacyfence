@@ -89,6 +89,17 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# installer/privacyfence.iss's SeparateInstall (and this script's own callers
+# generally) run this with -NoProfile, which skips the profile scripts that
+# would otherwise trigger Windows PowerShell's module autoload for a cmdlet
+# like Get-Acl on some runner images -- seen for real as "the 'Get-Acl'
+# command was found in the module 'Microsoft.PowerShell.Security', but the
+# module could not be loaded" on an otherwise-unmodified GitHub Actions
+# windows-latest runner. Importing it explicitly up front, before any of
+# this script's own Get-Acl calls, removes the dependency on autoload
+# working at all rather than papering over one failure at a time.
+Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+
 # ── Constants. Every one of these is also declared in
 #    src/privacyfence/privilege_separation.py, and
 #    tests/unit/test_privilege_separation.py asserts the two agree -- this

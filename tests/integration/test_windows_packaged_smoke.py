@@ -324,7 +324,7 @@ def _run_separation_script(install_dir: Path, *args: str, check: bool = True) ->
     return result
 
 
-def _disable_installer_enabled_privilege_separation(install_dir: Path) -> None:
+def _disable_installer_enabled_privilege_separation(install_dir: Path, *, require_separated: bool = True) -> None:
     """Undoes ADR 0003 decision 4's installer-run ``enable``, which fires on
     every silent install *and* every upgrade over one.
 
@@ -341,7 +341,20 @@ def _disable_installer_enabled_privilege_separation(install_dir: Path) -> None:
 
     Must be re-run after every install in those tests, the upgrade-in-place one
     included: ``enable`` runs on an upgrade too, not just a first install.
+
+    ``require_separated=False`` is for a caller that cannot assume the install
+    it just made got separated at all -- privacyfence/privacyfence#561: a
+    ``/DIR=``-overridden install has, at least once, come out of
+    ``CurStepChanged(ssPostInstall)``'s own ``enable`` call with no
+    ``MARKER_PATH`` to show for it despite Setup itself reporting success, and
+    ``disable`` refusing an install it did not separate is correct -- the bug
+    that filed #561 was this fixture calling `disable` unconditionally and
+    taking the whole module down on that refusal, not the refusal itself. With
+    this flag, a missing marker is treated the same as an install this
+    function has nothing to undo, rather than a failure.
     """
+    if not require_separated and not MARKER_PATH.exists():
+        return
     _run_separation_script(install_dir, "disable")
     assert not MARKER_PATH.exists(), f"{MARKER_PATH} survived `disable`"
 
@@ -1096,15 +1109,21 @@ def test_windows_install_fails_when_the_image_is_user_writable(tmp_path):
     )
     install_log = log_path.read_text(errors="replace") if log_path.exists() else ""
 
-    assert result.returncode != 0, (
-        "Setup reported success for an install it could not privilege-separate\n"
-        f"---- install log ----\n{install_log}"
-    )
-    # The exit code alone would not distinguish this from Setup falling over
-    # for some unrelated reason, and the reason is the point: the log carries
-    # `enable`'s own refusal, captured by SeparateInstall through cmd.exe.
+    # Not a returncode assertion, deliberately: Inno Setup's Pascal Scripting
+    # only lets Abort()/RaiseException change Setup's own exit code when
+    # raised from InitializeSetup, InitializeWizard or
+    # CurStepChanged(ssInstall) (see that function's own reference entry) --
+    # SeparateInstall's RaiseException runs from CurStepChanged(ssPostInstall),
+    # after Setup's exit-code table (codes 3/4/7/8) already considers "the
+    # actual installation process" finished, so Setup reports 0 here no
+    # matter how loudly [Code] refuses to register the service. See
+    # privacyfence.iss's own CurStepChanged(ssPostInstall) comment. The
+    # install log and the absence of any separation artifact are what
+    # actually distinguish this from a real success, which is what the rest
+    # of this test checks instead.
     assert "SeparateInstall" in install_log, (
-        f"nothing in the install log says the separation step ran:\n{install_log}"
+        f"nothing in the install log says the separation step ran:\n{install_log}\n"
+        f"---- setup.exe stdout/stderr (exit {result.returncode}) ----\n{result.stdout}{result.stderr}"
     )
     assert "refusing to enable" in install_log, (
         f"the install log does not carry `enable`'s own refusal:\n{install_log}"
