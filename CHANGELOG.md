@@ -61,6 +61,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pipe is ACL'd to the service account and `PrivacyFenceUsers`, and Windows puts group membership in
   the logon token, so a CI job — which cannot sign out and back in — cannot open that pipe however
   elevated it is. That half stays covered on the separated path by the Linux and macOS modules.
+  The upgrade scenario also sweeps `PrivacyFenceCompanion.exe` before re-running Setup: a separated
+  install has a companion running, and RestartManager names it when it cannot close the files an
+  upgrade needs to overwrite — which no install had ever got far enough to start before.
 - **A fresh Windows install could not complete at all.** `privilege-separation.ps1` created its
   `PrivacyFenceUsers` group with an 85-character `-Description`; `New-LocalGroup` validates that
   parameter against a 48-character limit and *fails* rather than truncating, so the separation step

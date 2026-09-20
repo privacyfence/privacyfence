@@ -174,6 +174,7 @@ SETTINGS_EXAMPLE = REPO_ROOT / "src" / "privacyfence" / "resources" / "settings.
 TASK_NAME = "PrivacyFence"  # installer/privacyfence.iss's #define TaskName
 MAIN_EXE_NAME = "PrivacyFenceApp.exe"
 ALIAS_EXE_NAME = "privacyfence-app.exe"  # what the Task Scheduler task/mcpb shim both look for
+COMPANION_EXE_NAME = "PrivacyFenceCompanion.exe"  # installer/privacyfence.iss's #define CompanionExeName
 
 MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
 
@@ -240,14 +241,20 @@ def _kill_stray_app_processes() -> None:
     Setup run exited 5 ("Some applications could not be shut down") because
     RestartManager still found a running ``privacyfence-app`` at the moment
     it tried to close applications ahead of overwriting files -- even though
-    this test's own ``daemon.process.wait(timeout=15) == 0`` had already
-    confirmed *its* explicitly-started daemon process had exited cleanly
-    beforehand. Whatever is actually holding the handle at that point (the
-    OS's own deferred teardown of the just-exited process's image sections,
-    or a second process this test never tracked), taskkill-by-image-name
-    clears it either way; killing an already-gone process is simply a no-op
-    (taskkill exits non-zero, which is why this ignores the result)."""
-    for image_name in (ALIAS_EXE_NAME, MAIN_EXE_NAME):
+    this test's own daemon had already been confirmed exited beforehand.
+    Whatever is actually holding the handle at that point (the OS's own
+    deferred teardown of the just-exited process's image sections, or a
+    second process this test never tracked), taskkill-by-image-name clears it
+    either way; killing an already-gone process is simply a no-op (taskkill
+    exits non-zero, which is why this ignores the result).
+
+    ``COMPANION_EXE_NAME`` is in the sweep because a *separated* install has
+    one running: ``Install-CompanionTask`` registers and starts it, and it is
+    what RestartManager now names ("an application using one of our files:
+    PrivacyFenceCompanion"). It could not appear here before, because until
+    the Windows ``enable`` was fixed no install ever got far enough to start
+    a companion at all."""
+    for image_name in (ALIAS_EXE_NAME, MAIN_EXE_NAME, COMPANION_EXE_NAME):
         subprocess.run(["taskkill", "/F", "/IM", image_name], capture_output=True, text=True, timeout=15)
 
 
