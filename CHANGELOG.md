@@ -56,15 +56,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   installation with it. Every machine that did not already have the group was affected, from
   `35e263f` (2026-09-16) onwards. It was invisible until now because the `Get-Acl` failure below
   stopped the same script a few lines earlier, so nothing had ever reached this line.
-- **A fresh Windows install could not complete, part two.** `Invoke-Enable` deletes the
-  `PrivacyFence` service before rewriting the data directory's ACLs and re-creates it afterwards,
-  but those ACLs granted the daemon's own virtual account by name — and `NT SERVICE\PrivacyFence`
-  only resolves while the service exists. So `icacls` failed with *"No mapping between account
-  names and security IDs was done"* (error 1332) on every machine that did not already have the
-  service, which is every fresh install. The grants now name the account by SID, resolved with
-  `sc.exe showsid`, exactly as the script already does for SYSTEM, Administrators and Users — and
-  for the same reason, since a service SID is derived from the service name and so answers for a
-  service that does not exist yet.
+- **A fresh Windows install could not complete, part two.** `Invoke-Enable` wrote the data
+  directory's ACLs *before* creating the `PrivacyFence` service — and `sc create obj= "NT
+  SERVICE\PrivacyFence"` is what brings that virtual account into existence in the first place.
+  Until it exists there is nothing for `icacls` to grant, by name or by SID alike, so it failed with
+  *"No mapping between account names and security IDs was done"* (error 1332) on every machine that
+  did not already have the service — which is every fresh install. Creating the service is now the
+  step before `Set-Layout`, and *starting* it is a separate step after the marker is written, so the
+  daemon still never runs until the ACLs that contain it are in place.
 - **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
   `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
   `windows-latest` runner that module refuses to load inside the installer's own

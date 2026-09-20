@@ -576,59 +576,8 @@ function Invoke-Icacls {
     }
 }
 
-function Get-ServiceAccountSid {
-    <#
-      .SYNOPSIS
-      ``$ServiceAccount``'s SID, in the ``*S-1-...`` form icacls takes.
-
-      .DESCRIPTION
-      The same reason every built-in principal above is a SID rather than a
-      name, plus one specific to this account: icacls has to *resolve*
-      whatever it is handed, and "NT SERVICE\PrivacyFence" only resolves
-      while the service exists. Invoke-Enable deliberately deletes the
-      service (Uninstall-DaemonService) before Set-Layout rewrites the ACLs
-      and re-creates it afterwards, so at the moment those grants run there
-      is nothing for the SCM to resolve the name against -- and on a machine
-      that never had the service, there never was. icacls then fails with
-
-        NT SERVICE\PrivacyFence: No mapping between account names and
-        security IDs was done. (exit 1332)
-
-      and, correctly, takes the whole install down with it. That is what a
-      fresh Windows install had been doing.
-
-      `sc.exe showsid` is the supported way out, and it works precisely
-      because a service SID is *derived* from the service name -- the same
-      property that makes creating the service enough to bring the account
-      into existence (see $ServiceAccount's own comment). So it answers for a
-      service that does not exist yet, which is exactly the case here.
-    #>
-    # Through Invoke-Sc/Invoke-Native like every other external command here
-    # -- see Invoke-Native's own docstring for why a bare `2>&1` capture under
-    # $ErrorActionPreference = 'Stop' is a trap.
-    # -IgnoreFailure, then the regex decides: whether sc.exe returns 0 for a
-    # service that does not exist is not worth betting the install on, and
-    # the SID either appears in the output or it does not.
-    $output = Invoke-Sc @('showsid', $ServiceName) -IgnoreFailure
-    $match = [regex]::Match($output, '(?im)^\s*SERVICE SID:\s*(S-1-[0-9-]+)\s*$')
-    if (-not $match.Success) {
-        Stop-WithError @"
-could not determine the SID for the $ServiceAccount account.
-
-'sc.exe showsid $ServiceName' returned:
-$output
-"@
-    }
-    return "*$($match.Groups[1].Value)"
-}
-
 function Set-Layout {
     Write-Note "re-owning $SystemRoot to $ServiceAccount and rewriting its ACLs"
-    # Resolved once, up front: every grant below names the service account by
-    # SID rather than by name, because the service does not exist at this
-    # point in Invoke-Enable and the name would not resolve. See
-    # Get-ServiceAccountSid.
-    $serviceSid = Get-ServiceAccountSid
     $authority = Join-Path $SystemRoot $AuthorityDirName
     $handoff = Join-Path $SystemRoot $HandoffDirName
     foreach ($dir in @($authority, $handoff, (Join-Path $SystemRoot 'logs'))) {
@@ -685,14 +634,14 @@ been broken: run '$PSCommandPath disable' to move your data back, and re-run
     # POSIX 0711: traversable so a user-session process can reach handoff\,
     # never listable, so nothing can enumerate what else is in here.
     Invoke-Icacls @($SystemRoot, '/inheritance:r', '/q')
-    Invoke-Icacls @($SystemRoot, '/grant:r', "${serviceSid}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", '/q')
+    Invoke-Icacls @($SystemRoot, '/grant:r', "${ServiceAccount}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", '/q')
     Invoke-Icacls @($SystemRoot, '/grant', "${SidUsers}:(X)", '/q')
 
     # authority\: policy the agent may not edit, #426's WebAuthn store, the
     # audit log and its HMAC key. The service account and nothing else -- this
     # is the whole of what Phase 4 claims, on every platform.
     Invoke-Icacls @($authority, '/inheritance:r', '/q')
-    Invoke-Icacls @($authority, '/grant:r', "${serviceSid}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", '/q')
+    Invoke-Icacls @($authority, '/grant:r', "${ServiceAccount}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", '/q')
 
     # handoff\: read-only to the group, which is where Windows ends up
     # *tighter* than POSIX rather than looser. The POSIX layout has to give the
@@ -701,7 +650,7 @@ been broken: run '$PSCommandPath disable' to move your data back, and re-run
     # pipes, so nothing in the user's session ever creates anything in this
     # directory -- it only reads mcp_token and the discovery files.
     Invoke-Icacls @($handoff, '/inheritance:r', '/q')
-    Invoke-Icacls @($handoff, '/grant:r', "${serviceSid}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", "${ServiceGroup}:(OI)(CI)(RX)", '/q')
+    Invoke-Icacls @($handoff, '/grant:r', "${ServiceAccount}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", "${ServiceGroup}:(OI)(CI)(RX)", '/q')
     # Files carried in from %LOCALAPPDATA% keep the ACL they had there -- a
     # move preserves the security descriptor, unlike a create, which inherits.
     # mcp_token in particular is reused across restarts and would otherwise
@@ -715,9 +664,6 @@ been broken: run '$PSCommandPath disable' to move your data back, and re-run
 function Write-Marker {
     $marker = Join-Path $SystemRoot $MarkerName
     Write-Note "writing $marker"
-    # By SID, for the same reason Set-Layout's own grants are: this still runs
-    # before Install-DaemonService creates the service.
-    $serviceSid = Get-ServiceAccountSid
     # Empty rather than absent when the machine half ran with no human to add
     # (ADR 0003 decision 3): privilege_separation._parse_marker() requires the
     # key and refuses the whole marker without it, and a refused marker is a
@@ -745,7 +691,7 @@ function Write-Marker {
     # resolve the *un*separated directory for the companion and the agent. It
     # holds account and directory names, not secrets.
     Invoke-Icacls @($marker, '/inheritance:r', '/q')
-    Invoke-Icacls @($marker, '/grant:r', "${serviceSid}:(F)", "${SidSystem}:(F)", "${SidAdministrators}:(F)", "${SidUsers}:(R)", '/q')
+    Invoke-Icacls @($marker, '/grant:r', "${ServiceAccount}:(F)", "${SidSystem}:(F)", "${SidAdministrators}:(F)", "${SidUsers}:(R)", '/q')
 }
 
 # ── Service and Scheduled Task wiring ────────────────────────────────────────
@@ -788,6 +734,26 @@ function Install-DaemonService {
     # standing in for before there was a service manager involved: three
     # restarts with a widening delay, and the counter resets after a day.
     Invoke-Sc @('failure', $ServiceName, 'reset=', '86400', 'actions=', 'restart/5000/restart/10000/restart/30000') | Out-Null
+}
+
+function Start-DaemonService {
+    <#
+      Split from Install-DaemonService above so Invoke-Enable can create the
+      service *before* Set-Layout and start it only after Write-Marker.
+
+      Creating it early is not a preference: `sc create obj= "NT SERVICE\..."`
+      is what materializes the virtual account (see Install-DaemonService's own
+      comment), and until it exists icacls cannot grant it anything -- by name
+      or by SID. Both spellings fail identically with "No mapping between
+      account names and security IDs was done" (exit 1332), which is what a
+      fresh Windows install had been dying on.
+
+      Starting it late is the other half, and the reason this is a split rather
+      than simply moving the whole function up: the daemon must not be running
+      while Set-Layout is still moving its data and rewriting the ACLs that
+      contain it.
+    #>
+    Write-Note "starting the $ServiceName service"
     Invoke-Sc @('start', $ServiceName) | Out-Null
 }
 
@@ -884,10 +850,15 @@ function Invoke-Enable {
         Write-Note "no owner account resolved -- leaving the $ServiceGroup membership pending"
     }
     Move-Data
+    # Before Set-Layout, not after: this is what brings NT SERVICE\PrivacyFence
+    # into existence, and Set-Layout's grants cannot name an account that does
+    # not exist yet. It does not start the service -- Start-DaemonService below
+    # does that, once the ACLs are in place. See Start-DaemonService.
+    Install-DaemonService
     Set-Layout
     Write-Marker
-    Install-DaemonService
     Install-CompanionTask
+    Start-DaemonService
 
     Write-Host @"
 
