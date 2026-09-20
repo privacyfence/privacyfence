@@ -60,7 +60,7 @@ Run only checks that automation cannot judge reliably:
   can rewrite;
 - perform focused exploratory connector QA using [`connector-qa-testing.md`](connector-qa-testing.md) for a new connector, a major connector rewrite, or an unexplained provider regression.
 
-A signed Windows release specifically must not ship without the Windows-specific bullet above having actually been run against that release build — this is the human QA pass [privacyfence/privacyfence#121](https://github.com/privacyfence/privacyfence/issues/121) is gated on closing until.
+A signed Windows release specifically must not ship without the Windows-specific bullet above having actually been run against that release build. Whether that manual real-machine verification has been done yet is tracked in [`platform-support.md`](platform-support.md)'s "Known open items" section, not here.
 
 Do not repeat the full automated unit/integration/browser/provider matrix manually just because a release is being cut.
 
