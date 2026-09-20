@@ -133,6 +133,7 @@ from urllib.parse import urlsplit
 import httpx
 import httpx2
 import pytest
+import yaml
 
 mcp_client = pytest.importorskip(
     "mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'"
@@ -140,10 +141,12 @@ mcp_client = pytest.importorskip(
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
+from tests.control_channel_client import mint_bootstrap_code_posix, resolve_posix_socket_path  # noqa: E402
 from tests.diagnostics import failure_dir, suite_name_for  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = REPO_ROOT / "dist"
+SETTINGS_EXAMPLE = REPO_ROOT / "src" / "privacyfence" / "resources" / "settings.yaml.example"
 
 PACKAGE_NAME = "privacyfence"
 DAEMON_BIN = Path("/usr/bin/privacyfence-app")
@@ -171,7 +174,6 @@ DAEMON_UNIT_NAME = DAEMON_SYSTEM_UNIT_FILE.name
 # == SYSTEM_ROOT once the marker exists -- privilege_separation.separation()).
 AUTHORITY_DIR = SYSTEM_ROOT / "authority"
 HANDOFF_DIR = SYSTEM_ROOT / "handoff"
-CONTROL_SOCKET = AUTHORITY_DIR / "control.sock"
 SEPARATED_SETTINGS_PATH = AUTHORITY_DIR / "config" / "settings.yaml"
 SEPARATED_AUDIT_DIR = AUTHORITY_DIR / "logs" / "audit"
 
@@ -419,6 +421,45 @@ def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None
     raise TimeoutError(f"{host}:{port} never became connectable") from last_exc
 
 
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _prepare_home(home: Path, *, port: int) -> None:
+    """Pre-seeds (or re-seeds only the harness-convenience bits of) an
+    isolated ``$HOME``'s ``settings.yaml``: a real free port and update
+    checks disabled (this tier makes no real outbound network calls). If
+    ``settings.yaml`` already exists, its existing content is loaded and
+    only those two fields are overwritten, never replaced wholesale.
+
+    Neither test in this module calls this any more -- ADR 0003 decision 6
+    retired the "run the packaged binary directly against a scratch,
+    unseparated $HOME" technique this was for (see this module's own
+    "Real-daemon helpers" section) -- but the *unseparated* path it seeds
+    is still a real, current product scenario elsewhere: a bare ``pip``/
+    ``pipx`` install, or a ``.deb`` install with `disable` run against it.
+    test_linux_graphical_session_autostart.py's own "unseparated path" test
+    pins exactly that scenario, importing this function (and ``_free_port``
+    below) to do it -- kept here, not there, so the two modules' own
+    ``$HOME``-seeding stays byte-identical rather than drifting into two
+    copies."""
+    # #428 Phase 1: settings.yaml lives under an authority/ subdirectory of
+    # data_dir(), same as the control channel's socket below -- not
+    # data_dir() itself.
+    config_dir = home / ".privacyfence" / "authority" / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    settings_path = config_dir / "settings.yaml"
+    if settings_path.exists():
+        settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+    else:
+        settings = yaml.safe_load(SETTINGS_EXAMPLE.read_text(encoding="utf-8")) or {}
+    settings.setdefault("web", {})["port"] = port
+    settings.setdefault("update_check", {})["enabled"] = False
+    settings_path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+
+
 def _sudo_capture(*args: str, timeout: float = 15) -> subprocess.CompletedProcess:
     return subprocess.run(["sudo", "-n", *args], capture_output=True, text=True, timeout=timeout)
 
@@ -537,14 +578,23 @@ def _wait_for_daemon_unit_stopped(*, timeout: float = 15.0) -> None:
 # meta-tool that needs no connector (see module docstring's point 3).
 # --------------------------------------------------------------------------- #
 
-async def _bootstrap_session(web_client: httpx.AsyncClient, *, path: str = "/settings") -> str:
+async def _bootstrap_session(
+    web_client: httpx.AsyncClient, data_dir: Path = SYSTEM_ROOT, *, path: str = "/settings",
+) -> str:
     # #428 Phase 2: minted through the control channel (a real Unix domain
     # socket against this daemon's own data directory), not a bearer-
     # authenticated HTTP route -- see tests.control_channel_client's own
-    # module docstring. As root (_sudo_mint_bootstrap_code), not a direct
-    # in-process connect -- see this module's own "Real-daemon helpers"
-    # section for why.
-    code = _sudo_mint_bootstrap_code(CONTROL_SOCKET)
+    # module docstring. Defaults to the real separated system root (this
+    # module's own two tests never pass anything else any more -- see the
+    # "Real-daemon helpers" section for why they mint as root instead of
+    # connecting directly). ``data_dir`` stays a parameter, not hardcoded,
+    # because test_linux_graphical_session_autostart.py's own "unseparated
+    # path" test imports this function and calls it against a scratch,
+    # genuinely-unseparated ``$HOME`` instead, where a direct, unprivileged
+    # connect is exactly correct (and the only thing that works -- nothing
+    # there is root-owned).
+    socket_path = resolve_posix_socket_path(data_dir)
+    code = _sudo_mint_bootstrap_code(socket_path) if data_dir == SYSTEM_ROOT else mint_bootstrap_code_posix(socket_path)
     exchange_resp = await web_client.get(path, params={"bootstrap": code})
     assert exchange_resp.status_code == 200, exchange_resp.text
     session_id = web_client.cookies.get("pf_session")
