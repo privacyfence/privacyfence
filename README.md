@@ -248,6 +248,10 @@ then authenticate from there.** The platform-specific steps below are that shape
 installer. Centrally managed ("organization mode") deployments follow a different shape — see
 [Organization mode](#organization-mode-centrally-managed-deployment) below.
 
+For a fuller walkthrough of the same installs — every click and command, what you should see after
+each one, how to connect Claude Code instead of Claude Desktop, and what to do when a step doesn't
+work — see [Getting started](https://github.com/privacyfence/privacyfence/blob/main/docs/getting-started.md).
+
 ### Install on macOS
 
 1. Download the latest `PrivacyFence-<version>.dmg` from [privacyfence.eu/download](https://privacyfence.eu/download/).
@@ -466,6 +470,7 @@ walkthrough.
 
 ## Documentation
 
+- [Getting started](https://github.com/privacyfence/privacyfence/blob/main/docs/getting-started.md) — step-by-step install, AI-client setup, and first-run checks for macOS, Windows, and Debian/Ubuntu
 - [Changelog](https://github.com/privacyfence/privacyfence/blob/main/CHANGELOG.md) — what changed in each release, newest first, including how to upgrade from 3.x
 - [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md) — review model, connectors, policies, installation, configuration, and implementation notes
 - [Security, Privacy & Compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md) — deployment model, data handling, organizational controls, GDPR, and EU AI Act positioning

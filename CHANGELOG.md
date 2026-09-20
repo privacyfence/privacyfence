@@ -751,6 +751,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A step-by-step install guide, one section per platform**
+  (`docs/getting-started.md`). The README's Quick start already had the shape of each install, but
+  it interleaves each step with the reasoning behind it — why privilege separation is mandatory,
+  why PrivacyFence will not hand a sign-in link to the AI client it governs — which is the right
+  thing for a README and the wrong thing to follow with an installer already open. The new guide is
+  the same three installs written as instructions: what to download, what to double-click, what you
+  should see after each step, when to log out and back in and why, how to install
+  `PrivacyFence.mcpb` into Claude Desktop (including the Windows case where no `.mcpb` file
+  association exists and the installer offers File Explorer instead), how to point Claude Code at
+  the daemon's `/mcp` endpoint with the `mcp_url`/`mcp_token` handoff files on each platform, and
+  the shared first-run steps — enrolling the passkey a packaged install approves nothing without,
+  installing an organization configuration bundle, authenticating connectors, and answering a first
+  approval. It ends with per-platform "is it working?" checks and a symptom/cause table for the
+  failures that actually strand a new install: no tray icon, a client that sees no tools, a
+  *Permission denied* on `mcp_token` that means nobody logged out and back in, and the Linux
+  `zenity`/`kdialog` gap that refuses a first passkey enrollment. Linked from the README's Quick
+  start and Documentation list, and from `docs/README.md`'s Start here.
+
 - ADR 0005 (`docs/adr/0005-moving-the-approval-decision-off-the-device.md`) asks, and does not yet
   answer, whether local mode's approving decision should be rendered and answered on a device the
   agent does not run on. **Proposed, not accepted — no behavior changes with this entry.** It is
