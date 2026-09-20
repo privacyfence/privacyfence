@@ -35,6 +35,72 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The packaged-artifact smoke tests now exercise the install a user actually gets, so a release
+  build can pass again.** Three consecutive pre-release tags (`v4.1.0b1`/`b2`/`b3`) were lost to
+  these tests being behind the product on three separate counts, each one hidden until the one in
+  front of it was fixed. They now stand in for the companion to mint a session PrivacyFence can
+  attribute to a person (`MINT COMPANION`, the attested shape the self-approval review's Phase 2
+  made a precondition for confirming an auto-accept rule), and they enroll a passkey through the
+  real `/security` routes before approving anything — which is what a fresh DMG/`.pkg`/`.deb`
+  install has demanded since `step_up.require_passkey` started defaulting on for packaged builds.
+  The macOS browser scenario does both through a real Chromium with a virtual authenticator, so the
+  registration and assertion ceremonies are now covered end to end against the packaged binary
+  rather than only in unit tests. No product behaviour changes: the gates were right, the tests
+  were asserting the behaviour that preceded them.
+- **The Windows packaged-artifact tests were asserting a lifecycle the product no longer allows.**
+  Two of them installed, undid the installer's own privilege separation, and drove a packaged daemon
+  against an isolated `%LOCALAPPDATA%`. ADR 0003 decision 6 ended that: a packaged daemon that finds
+  itself unseparated auto-enables separation and otherwise refuses to serve, deliberately with no
+  developer override. While the Windows `enable` was broken the auto-enable always failed and those
+  tests kept working by accident; once it started succeeding it re-separated the machine mid-test and
+  the spawned daemon collided with the real service over the control channel's named pipe. Both now
+  run against the real service the installer starts, like the `.deb` and `.pkg` modules already did.
+  Their approval round trip is *not* reproduced there and is left as follow-up: the control channel's
+  pipe is ACL'd to the service account and `PrivacyFenceUsers`, and Windows puts group membership in
+  the logon token, so a CI job — which cannot sign out and back in — cannot open that pipe however
+  elevated it is. That half stays covered on the separated path by the Linux and macOS modules.
+  The upgrade scenario also sweeps `PrivacyFenceCompanion.exe` before re-running Setup: a separated
+  install has a companion running, and RestartManager names it when it cannot close the files an
+  upgrade needs to overwrite — which no install had ever got far enough to start before. It also
+  `sc stop`s the daemon service rather than killing it: the service's own failure actions restart a
+  killed one within five seconds, which is less time than Setup spends retrying the `_internal` DLLs
+  the daemon holds open.
+- **A fresh Windows install could not complete at all.** `privilege-separation.ps1` created its
+  `PrivacyFenceUsers` group with an 85-character `-Description`; `New-LocalGroup` validates that
+  parameter against a 48-character limit and *fails* rather than truncating, so the separation step
+  aborted and — correctly, since an install that cannot separate is not installed — took the whole
+  installation with it. Every machine that did not already have the group was affected, from
+  `35e263f` (2026-09-16) onwards. It was invisible until now because the `Get-Acl` failure below
+  stopped the same script a few lines earlier, so nothing had ever reached this line.
+- **A fresh Windows install could not complete, part two.** `Invoke-Enable` wrote the data
+  directory's ACLs *before* creating the `PrivacyFence` service — and `sc create obj= "NT
+  SERVICE\PrivacyFence"` is what brings that virtual account into existence in the first place.
+  Until it exists there is nothing for `icacls` to grant, by name or by SID alike, so it failed with
+  *"No mapping between account names and security IDs was done"* (error 1332) on every machine that
+  did not already have the service — which is every fresh install. Creating the service is now the
+  step before `Set-Layout`, and *starting* it is a separate step after the marker is written, so the
+  daemon still never runs until the ACLs that contain it are in place.
+- **A fresh Windows install could not complete, part three.** With the ordering above fixed, the
+  `sc.exe create` call it unblocked turned out never to have worked either: it passed
+  `password=` as an empty string, and Windows PowerShell 5.1 silently *drops* empty arguments on
+  their way to a native executable. `sc.exe` therefore read `start=` as the password's value and
+  rejected the leftover `auto` with exit 1639. The pair is gone — a virtual service account has no
+  password, and omitting the option is how that is said.
+- **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
+  `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
+  `windows-latest` runner that module refuses to load inside the installer's own
+  `powershell -File` invocation — failing the install outright, which is the correct response to a
+  separation step that cannot verify its own work but not a correct thing for the step to be unable
+  to do. Two previous attempts worked around the module load and were each overtaken by the next
+  shape of the same failure. It now reads owners and access rules through the .NET methods on the
+  object `Get-Item` already returns, which need no module import at all.
+- The `.deb` lifecycle test validated the installed autostart entry by pointing
+  `desktop-file-validate` at `privacyfence.desktop.disabled` — the name auto-separation leaves
+  behind — which that tool rejects on the filename alone, before reading the contents. It now
+  validates a correctly-named copy, so the check tests the file again rather than the rename.
+
 ### Changed
 
 - Documented that upgrading PrivacyFence on macOS is just re-running `PrivacyFence.pkg` — the

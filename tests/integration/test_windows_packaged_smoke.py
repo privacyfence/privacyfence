@@ -142,6 +142,7 @@ import socket
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import httpx2
@@ -173,6 +174,7 @@ SETTINGS_EXAMPLE = REPO_ROOT / "src" / "privacyfence" / "resources" / "settings.
 TASK_NAME = "PrivacyFence"  # installer/privacyfence.iss's #define TaskName
 MAIN_EXE_NAME = "PrivacyFenceApp.exe"
 ALIAS_EXE_NAME = "privacyfence-app.exe"  # what the Task Scheduler task/mcpb shim both look for
+COMPANION_EXE_NAME = "PrivacyFenceCompanion.exe"  # installer/privacyfence.iss's #define CompanionExeName
 
 MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
 
@@ -180,6 +182,16 @@ MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
 # into {app} under this name; [Code]'s SeparateInstall runs it from there.
 SEPARATION_SCRIPT_NAME = "privilege-separation.ps1"
 MARKER_PATH = WINDOWS_SYSTEM_ROOT / MARKER_FILE_NAME
+
+# The separated layout's own files, as `enable` leaves them on disk. Readable
+# directly rather than through an elevation shim, unlike the POSIX modules'
+# `sudo` reads: Set-Layout grants Administrators full control of the whole
+# tree, and every test in this module already runs elevated (the installer
+# needs it -- see this module's own docstring).
+SEPARATED_HANDOFF_DIR = WINDOWS_SYSTEM_ROOT / "handoff"
+SEPARATED_MCP_TOKEN_PATH = SEPARATED_HANDOFF_DIR / MCP_TOKEN_FILE_NAME
+SEPARATED_WEB_BASE_URL_PATH = SEPARATED_HANDOFF_DIR / "web_base_url"
+SEPARATED_SETTINGS_PATH = WINDOWS_SYSTEM_ROOT / "authority" / "config" / "settings.yaml"
 
 
 def _built_installers() -> list[Path]:
@@ -221,6 +233,40 @@ def _delete_task_if_present(name: str = TASK_NAME) -> None:
         subprocess.run(["schtasks", "/delete", "/tn", name, "/f"], capture_output=True, text=True, timeout=15)
 
 
+def _stop_daemon_service(*, timeout: float = 60.0) -> None:
+    """``sc stop`` the real service and wait for it to actually reach STOPPED.
+
+    Not ``taskkill``, and the difference is the whole point:
+    Install-DaemonService configures failure actions (``sc failure ... actions=
+    restart/5000/restart/10000/restart/30000``), so a service process that dies
+    *unexpectedly* is restarted by the SCM within five seconds. Killing it by
+    image name therefore buys about five seconds -- which is exactly what Inno
+    Setup's own four one-second DeleteFile retries were losing to:
+
+        _internal\\PIL\\_imaging.cp312-win_amd64.pyd
+        DeleteFile: The existing file appears to be in use (5). Retrying.
+        ... DeleteFile failed; code 5. Access is denied.
+
+    A clean stop is not an unexpected termination, so the SCM leaves it
+    stopped, and every ``_internal`` DLL the daemon had mapped is released for
+    good. A no-op when the service does not exist (``sc query`` exits
+    non-zero), which is the unseparated case and every test that never
+    installed."""
+    if subprocess.run(
+        ["sc.exe", "query", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
+    ).returncode != 0:
+        return
+    subprocess.run(["sc.exe", "stop", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30)
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = subprocess.run(
+            ["sc.exe", "query", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0 or "STOPPED" in result.stdout:
+            return
+        time.sleep(0.5)
+
+
 def _kill_stray_app_processes() -> None:
     """Best-effort ``taskkill`` sweep for any process still running against
     ``MAIN_EXE_NAME``/``ALIAS_EXE_NAME``, by image name rather than PID.
@@ -229,14 +275,25 @@ def _kill_stray_app_processes() -> None:
     Setup run exited 5 ("Some applications could not be shut down") because
     RestartManager still found a running ``privacyfence-app`` at the moment
     it tried to close applications ahead of overwriting files -- even though
-    this test's own ``daemon.process.wait(timeout=15) == 0`` had already
-    confirmed *its* explicitly-started daemon process had exited cleanly
-    beforehand. Whatever is actually holding the handle at that point (the
-    OS's own deferred teardown of the just-exited process's image sections,
-    or a second process this test never tracked), taskkill-by-image-name
-    clears it either way; killing an already-gone process is simply a no-op
-    (taskkill exits non-zero, which is why this ignores the result)."""
-    for image_name in (ALIAS_EXE_NAME, MAIN_EXE_NAME):
+    this test's own daemon had already been confirmed exited beforehand.
+    Whatever is actually holding the handle at that point (the OS's own
+    deferred teardown of the just-exited process's image sections, or a
+    second process this test never tracked), taskkill-by-image-name clears it
+    either way; killing an already-gone process is simply a no-op (taskkill
+    exits non-zero, which is why this ignores the result).
+
+    ``COMPANION_EXE_NAME`` is in the sweep because a *separated* install has
+    one running: ``Install-CompanionTask`` registers and starts it, and it is
+    what RestartManager now names ("an application using one of our files:
+    PrivacyFenceCompanion"). It could not appear here before, because until
+    the Windows ``enable`` was fixed no install ever got far enough to start
+    a companion at all.
+
+    The daemon is stopped rather than killed, and before the sweep: on a
+    separated install it is a *service*, and the SCM restarts a killed one
+    within five seconds. See _stop_daemon_service()."""
+    _stop_daemon_service()
+    for image_name in (ALIAS_EXE_NAME, MAIN_EXE_NAME, COMPANION_EXE_NAME):
         subprocess.run(["taskkill", "/F", "/IM", image_name], capture_output=True, text=True, timeout=15)
 
 
@@ -357,6 +414,80 @@ def _disable_installer_enabled_privilege_separation(install_dir: Path, *, requir
         return
     _run_separation_script(install_dir, "disable")
     assert not MARKER_PATH.exists(), f"{MARKER_PATH} survived `disable`"
+
+
+def _service_is_running(name: str = WINDOWS_SERVICE_NAME) -> bool:
+    result = subprocess.run(["sc.exe", "query", name], capture_output=True, text=True, timeout=30)
+    return result.returncode == 0 and "RUNNING" in result.stdout
+
+
+def _wait_for_separated_service(*, timeout: float = 90.0) -> tuple[str, str]:
+    """Waits for the real ``PrivacyFence`` service the installer just created
+    and started, and returns its ``(base_url, mcp_token)``.
+
+    ``web_base_url`` is the daemon's own way of telling the companion which
+    port it bound (web/control_channel.py's WEB_BASE_URL_FILE_NAME), and it is
+    cleared on WebServer.stop(), so its presence means *this* boot is serving
+    rather than that some earlier one left a file behind."""
+    deadline = time.monotonic() + timeout
+    base_url = None
+    while time.monotonic() < deadline:
+        if _service_is_running() and SEPARATED_WEB_BASE_URL_PATH.exists():
+            candidate = SEPARATED_WEB_BASE_URL_PATH.read_text(encoding="utf-8").strip()
+            if candidate:
+                base_url = candidate
+                break
+        time.sleep(0.25)
+    assert base_url, (
+        f"the {WINDOWS_SERVICE_NAME} service never reported a web_base_url within {timeout}s "
+        f"(running={_service_is_running()}, config=\n{_service_config()})"
+    )
+    mcp_token = None
+    while time.monotonic() < deadline:
+        if SEPARATED_MCP_TOKEN_PATH.exists():
+            candidate = SEPARATED_MCP_TOKEN_PATH.read_text(encoding="utf-8").strip()
+            if candidate:
+                mcp_token = candidate
+                break
+        time.sleep(0.25)
+    assert mcp_token, f"{SEPARATED_MCP_TOKEN_PATH} never appeared within {timeout}s"
+    parts = urlsplit(base_url)
+    _wait_until_connectable(parts.hostname or "localhost", parts.port or 80, timeout=30.0)
+    return base_url, mcp_token
+
+
+async def _assert_separated_service_serves_mcp(base_url: str, mcp_token: str) -> None:
+    """The real service's own /mcp surface, over the token it wrote to the
+    handoff directory -- the furthest this module can take a separated install
+    from inside a CI job, and why it stops there:
+
+    An approval round trip needs a session PrivacyFence can attribute to a
+    person, which means minting over the daemon's control channel. That pipe's
+    DACL (web/control_channel.py's _current_user_security_attributes) names the
+    service account and ``PrivacyFenceUsers`` -- not Administrators -- and
+    while `enable` does add the installing human to that group, Windows puts
+    group memberships in the *logon token*: the script says so itself ("sign
+    out and back in ... the session you are in right now still does not know it
+    is in PrivacyFenceUsers"). A CI job has no sign-out, so this process cannot
+    open that pipe however elevated it is.
+
+    So the approval half of the round trip is covered on the separated path by
+    test_deb_packaged_lifecycle.py and test_macos_packaged_smoke.py, which have
+    a `sudo` that really does change identity, and what stays here is what only
+    Windows can answer: the installer produced a service that runs, binds, and
+    serves MCP as its own account. Reproducing the approval round trip here
+    needs a helper launched with a freshly-built token (a one-shot scheduled
+    task would do it) and is deliberately left as follow-up rather than guessed
+    at."""
+    headers = {"Authorization": f"Bearer {mcp_token}"}
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(f"{base_url}/mcp", http_client=http_client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tools = await session.list_tools()
+                names = {tool.name for tool in tools.tools}
+    assert "privacyfence_check_policy" in names, names
+    assert "privacyfence_propose_auto_accept_rule_change" in names, names
 
 
 def _service_config(name: str = WINDOWS_SERVICE_NAME) -> str | None:
@@ -722,7 +853,6 @@ def _run_installer(*args: str, timeout: float = 120.0) -> subprocess.CompletedPr
 async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     setup_exe = _built_installers()[-1]
     install_dir = _admin_only_writable_dir(tmp_path / "install")
-    home = tmp_path / "home"
     log_path = tmp_path / "install.log"
 
     # ── Install ──────────────────────────────────────────────────────────
@@ -746,11 +876,18 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
         f"---- install log ----\n{log_path.read_text(errors='replace') if log_path.exists() else '(missing)'}"
     )
 
-    # Back to the unseparated lifecycle this module's scenarios are about --
-    # see the module docstring, and test_windows_install_separates_with_no_
-    # manual_enable below for the separated one.
-    _disable_installer_enabled_privilege_separation(install_dir)
-
+    # No `disable` here any more. This scenario used to undo the install's own
+    # separation and drive an alias exe against an isolated %LOCALAPPDATA%,
+    # which ADR 0003 decision 6 has since made impossible: a packaged daemon
+    # that finds itself unseparated auto-enables separation and, failing that,
+    # refuses to serve -- deliberately with no developer override (see
+    # privilege_separation.dev_allows_unseparated()'s own docstring). While
+    # `enable` was broken on Windows that auto-enable always failed and this
+    # scenario kept working by accident; once it started succeeding, it
+    # re-separated the machine mid-test and the spawned daemon collided with
+    # the real service over the control channel's named pipe. So this now runs
+    # the same lifecycle the .deb and .pkg modules do: against the real service
+    # the installer itself started.
     main_exe = install_dir / MAIN_EXE_NAME
     alias_exe = install_dir / ALIAS_EXE_NAME
     assert main_exe.is_file(), f"{main_exe} missing after silent install"
@@ -760,12 +897,18 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     # ── Validate the autostart entry (installer/privacyfence.iss's [Run]) ──
     assert _task_exists(), f"Task Scheduler task {TASK_NAME!r} missing after install"
 
-    # ── Start the real installed daemon; run the Phase 3 scenario ────────
-    with _running_daemon(alias_exe, home) as daemon:
-        await _run_daemon_mcp_approval_audit_scenario(daemon)
+    # ── The service the install created is actually serving ──────────────
+    base_url, mcp_token = _wait_for_separated_service()
+    await _assert_separated_service_serves_mcp(base_url, mcp_token)
+    # Written by the daemon itself under the separated root, not by this test
+    # -- the config it migrates to the policy v2 on-disk format at first boot.
+    assert SEPARATED_SETTINGS_PATH.is_file(), (
+        f"{SEPARATED_SETTINGS_PATH} missing -- the service never wrote its own authority config"
+    )
 
-    settings_path = _data_dir(home) / "authority" / "config" / "settings.yaml"
-    assert "allowed.example.com" in settings_path.read_text(encoding="utf-8")
+    # ── `disable` before uninstalling, the documented order (and what
+    # test_windows_install_separates_with_no_manual_enable asserts in full) ──
+    _disable_installer_enabled_privilege_separation(install_dir)
 
     # ── Uninstall (silent) ─────────────────────────────────────────────────
     uninstaller = install_dir / "unins000.exe"
@@ -790,11 +933,19 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     # [UninstallRun]) ──────────────────────────────────────────────────────
     assert not _task_exists(), f"Task Scheduler task {TASK_NAME!r} should be gone after uninstall"
 
-    # ── User state under the isolated %LOCALAPPDATA% is untouched
-    # (installer/privacyfence.iss's own [UninstallDelete] comment: the
-    # installer never reaches into %LOCALAPPDATA%\PrivacyFence) ────────────
-    assert settings_path.exists(), "uninstall must never touch %LOCALAPPDATA%\\PrivacyFence"
-    assert "allowed.example.com" in settings_path.read_text(encoding="utf-8")
+    # ── User state is untouched (installer/privacyfence.iss's own
+    # [UninstallDelete] comment: the installer never reaches into the user's
+    # own PrivacyFence directory). `disable` above moved the separated root
+    # back under the owner's real %LOCALAPPDATA%, which is where the data this
+    # install accumulated now lives -- and where the uninstaller must have
+    # left it. ──────────────────────────────────────────────────────────────
+    restored_settings = (
+        Path(os.environ["LOCALAPPDATA"]) / "PrivacyFence" / "authority" / "config" / "settings.yaml"
+    )
+    assert restored_settings.is_file(), (
+        f"{restored_settings} is gone -- uninstall must never delete the user's own data, and "
+        "`disable` is what put it back here"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -864,7 +1015,6 @@ def _synthetic_next_version_installer(setup_exe: Path, output_dir: Path) -> tupl
 async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     setup_exe_n = _built_installers()[-1]
     install_dir = _admin_only_writable_dir(tmp_path / "install")
-    home = tmp_path / "home"
 
     # ── Install version N; create real on-disk state the app itself
     # applied (an auto-accept rule confirmed through the real MCP/approval
@@ -878,25 +1028,20 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     assert install_result.returncode == 0, (
         f"installer failed (exit {install_result.returncode}):\n{install_result.stdout}{install_result.stderr}"
     )
-    _disable_installer_enabled_privilege_separation(install_dir)
     alias_exe = install_dir / ALIAS_EXE_NAME
 
-    with _running_daemon(alias_exe, home) as daemon:
-        async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
-            session_id = await _bootstrap_session(web_client, _data_dir(daemon.home))
-            propose_task = asyncio.create_task(
-                _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["preupgrade.example.com"])
-            )
-            await _resolve_pending_card(web_client, session_id, decision="confirm")
-            propose_result = await propose_task
-            assert propose_result.is_error is not True, getattr(propose_result, "content", propose_result)
-            assert propose_result.structured_content["changed"] is True
-
-            await _quit(web_client, session_id)
-        assert daemon.process.wait(timeout=15) == 0
-
-    settings_path = _data_dir(home) / "authority" / "config" / "settings.yaml"
-    assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
+    # Against the real service, for the reason test 1 above spells out: ADR
+    # 0003 decision 6 leaves no unseparated lifecycle for a packaged daemon to
+    # run. The state this preserves across the upgrade is therefore state the
+    # *service* wrote for itself under the separated root -- its MCP token and
+    # its own migrated authority config -- rather than a rule this test drove
+    # through an approval round trip it can no longer reach from here.
+    base_url, mcp_token_before = _wait_for_separated_service()
+    await _assert_separated_service_serves_mcp(base_url, mcp_token_before)
+    assert SEPARATED_SETTINGS_PATH.is_file(), (
+        f"{SEPARATED_SETTINGS_PATH} missing -- the service never wrote its own authority config"
+    )
+    settings_before = SEPARATED_SETTINGS_PATH.read_text(encoding="utf-8")
 
     # ── Build and silently install a synthetically-bumped version N+1 over
     # it, at the same install directory (installer/privacyfence.iss's fixed
@@ -935,10 +1080,6 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
         f"---- install log ----\n"
         f"{upgrade_log_path.read_text(errors='replace') if upgrade_log_path.exists() else '(missing)'}"
     )
-    # `enable` runs on an upgrade too -- installer/privacyfence.iss's
-    # CurStepChanged(ssPostInstall) makes no distinction -- so this is not a
-    # first-install-only step.
-    _disable_installer_enabled_privilege_separation(install_dir)
     assert alias_exe.is_file(), f"{alias_exe} missing after upgrade install"
 
     # ── The autostart task is still registered -- installer/privacyfence.iss's
@@ -946,22 +1087,21 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     # included, not just a first install ──────────────────────────────────
     assert _task_exists(), f"Task Scheduler task {TASK_NAME!r} should still be registered after an upgrade install"
 
-    # ── State survived the upgrade untouched (the same isolated
-    # %LOCALAPPDATA% the installer itself never reaches into) ─────────────
-    assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
+    # ── The upgraded build starts and serves, and the state it inherited is
+    # byte-for-byte what the previous one left. `enable` runs on an upgrade
+    # too (installer/privacyfence.iss's CurStepChanged makes no distinction),
+    # so this is the *upgraded* service answering. ───────────────────────────
+    base_url_after, mcp_token_after = _wait_for_separated_service()
+    await _assert_separated_service_serves_mcp(base_url_after, mcp_token_after)
+    assert SEPARATED_SETTINGS_PATH.read_text(encoding="utf-8") == settings_before, (
+        "the upgrade rewrote the authority config it should have inherited untouched"
+    )
+    assert mcp_token_after == mcp_token_before, (
+        "the upgrade minted a new MCP token -- every configured client would stop working"
+    )
 
-    # ── The upgraded binary still starts and serves, without clobbering the
-    # state it just inherited ─────────────────────────────────────────────
-    with _running_daemon(alias_exe, home) as daemon:
-        async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
-            session_id = await _bootstrap_session(web_client, _data_dir(daemon.home))
-            assert (await web_client.get("/settings")).status_code == 200
-            await _quit(web_client, session_id)
-        assert daemon.process.wait(timeout=15) == 0
-
-    assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
-
-    # ── Cleanup: silent uninstall, same as test 1 ────────────────────────
+    # ── Cleanup: `disable` then silent uninstall, same order as test 1 ────
+    _disable_installer_enabled_privilege_separation(install_dir)
     uninstaller = install_dir / "unins000.exe"
     assert uninstaller.is_file(), f"{uninstaller} missing -- was the upgrade install actually silent/complete?"
     uninstall_result = _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
