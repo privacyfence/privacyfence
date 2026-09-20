@@ -35,128 +35,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- **The Windows installer's Finish page could fail with "Internal error: CallSpawnServer: Unexpected
-  response: $0" after a real install had already fully succeeded.** The two Finish-page `[Run]`
-  entries that open the bundled `.mcpb` (or show it in File Explorer when Claude Desktop has no
-  `.mcpb` association) relied on `postinstall`'s default `runasoriginaluser` behavior — and because
-  `PrivilegesRequired=admin` means Setup always runs elevated, that makes Setup spawn a helper
-  process under the original, pre-UAC-prompt user's token to open the file non-elevated. On a real
-  install that spawn failed outright instead of falling back, well after the files, privilege
-  separation, service and companion task had already been provisioned — an alarming dialog over a
-  step that was purely a convenience. Both entries now carry `runascurrentuser`, which skips that
-  fragile path and opens the file with Setup's own already-elevated token instead.
-- **The Windows installer refused to separate a completely ordinary install under `%ProgramFiles%`.**
-  `Assert-ImageProtected` (`scripts/windows_privilege_separation.ps1`) and its daemon-startup
-  counterpart `windows_acl.image_problems()` treat any write grant on the install directory as a
-  hole an AI agent could use to run code as the service account — correct for a real one, but
-  `%ProgramFiles%` is owned by, and inherits a full-control grant to, `NT SERVICE\TrustedInstaller`
-  by default; that grant is *what* makes `%ProgramFiles%` write-protected from an ordinary
-  Administrator token, not an instance of the weakness the check exists to catch. Neither check's
-  trusted-identity list included it, so every install into the location the installer itself offers
-  — and the failure dialog then told the user to keep — failed with "PrivacyFence could not set up
-  privilege separation" naming `NT SERVICE\TrustedInstaller` as the writer. TrustedInstaller is now
-  trusted alongside `SYSTEM`/`Administrators` in both the `.ps1`'s `Test-TrustedIdentity` and
-  `windows_acl.TRUSTED_TRUSTEES`.
-- **The packaged-artifact smoke tests now exercise the install a user actually gets, so a release
-  build can pass again.** Three consecutive pre-release tags (`v4.1.0b1`/`b2`/`b3`) were lost to
-  these tests being behind the product on three separate counts, each one hidden until the one in
-  front of it was fixed. They now stand in for the companion to mint a session PrivacyFence can
-  attribute to a person (`MINT COMPANION`, the attested shape the self-approval review's Phase 2
-  made a precondition for confirming an auto-accept rule), and they enroll a passkey through the
-  real `/security` routes before approving anything — which is what a fresh DMG/`.pkg`/`.deb`
-  install has demanded since `step_up.require_passkey` started defaulting on for packaged builds.
-  The macOS browser scenario does both through a real Chromium with a virtual authenticator, so the
-  registration and assertion ceremonies are now covered end to end against the packaged binary
-  rather than only in unit tests. No product behaviour changes: the gates were right, the tests
-  were asserting the behaviour that preceded them.
-- **The Windows packaged-artifact tests were asserting a lifecycle the product no longer allows.**
-  Two of them installed, undid the installer's own privilege separation, and drove a packaged daemon
-  against an isolated `%LOCALAPPDATA%`. ADR 0003 decision 6 ended that: a packaged daemon that finds
-  itself unseparated auto-enables separation and otherwise refuses to serve, deliberately with no
-  developer override. While the Windows `enable` was broken the auto-enable always failed and those
-  tests kept working by accident; once it started succeeding it re-separated the machine mid-test and
-  the spawned daemon collided with the real service over the control channel's named pipe. Both now
-  run against the real service the installer starts, like the `.deb` and `.pkg` modules already did.
-  Their approval round trip is *not* reproduced there and is left as follow-up: the control channel's
-  pipe is ACL'd to the service account and `PrivacyFenceUsers`, and Windows puts group membership in
-  the logon token, so a CI job — which cannot sign out and back in — cannot open that pipe however
-  elevated it is. That half stays covered on the separated path by the Linux and macOS modules.
-  The upgrade scenario also sweeps `PrivacyFenceCompanion.exe` before re-running Setup: a separated
-  install has a companion running, and RestartManager names it when it cannot close the files an
-  upgrade needs to overwrite — which no install had ever got far enough to start before. It also
-  `sc stop`s the daemon service rather than killing it: the service's own failure actions restart a
-  killed one within five seconds, which is less time than Setup spends retrying the `_internal` DLLs
-  the daemon holds open.
-- **A fresh Windows install could not complete at all.** `privilege-separation.ps1` created its
-  `PrivacyFenceUsers` group with an 85-character `-Description`; `New-LocalGroup` validates that
-  parameter against a 48-character limit and *fails* rather than truncating, so the separation step
-  aborted and — correctly, since an install that cannot separate is not installed — took the whole
-  installation with it. Every machine that did not already have the group was affected, from
-  `35e263f` (2026-09-16) onwards. It was invisible until now because the `Get-Acl` failure below
-  stopped the same script a few lines earlier, so nothing had ever reached this line.
-- **A fresh Windows install could not complete, part two.** `Invoke-Enable` wrote the data
-  directory's ACLs *before* creating the `PrivacyFence` service — and `sc create obj= "NT
-  SERVICE\PrivacyFence"` is what brings that virtual account into existence in the first place.
-  Until it exists there is nothing for `icacls` to grant, by name or by SID alike, so it failed with
-  *"No mapping between account names and security IDs was done"* (error 1332) on every machine that
-  did not already have the service — which is every fresh install. Creating the service is now the
-  step before `Set-Layout`, and *starting* it is a separate step after the marker is written, so the
-  daemon still never runs until the ACLs that contain it are in place.
-- **A fresh Windows install could not complete, part three.** With the ordering above fixed, the
-  `sc.exe create` call it unblocked turned out never to have worked either: it passed
-  `password=` as an empty string, and Windows PowerShell 5.1 silently *drops* empty arguments on
-  their way to a native executable. `sc.exe` therefore read `start=` as the password's value and
-  rejected the leftover `auto` with exit 1639. The pair is gone — a virtual service account has no
-  password, and omitting the option is how that is said.
-- **A fresh Windows install could not complete, part four — and this one only ever failed on a real
-  one.** With the empty `password=` gone, the same `sc.exe create` call still died with exit 1639
-  and a usage dump, for a reason that had been invisible to every CI run: its `binPath=` value is
-  `"<path>" --windows-service`, a single argument with quotes *inside* it, and Windows PowerShell
-  5.1's native-argument binder re-quotes such an argument without escaping the quotes already there.
-  Where the path has no space — a test runner's scratch directory — the mangled result still parses
-  back as one argument and the service is created, so the packaged Windows tests passed. Where it
-  does — `C:\Program Files\PrivacyFence`, i.e. every real install — `sc.exe` read `binPath=` as
-  `C:\Program` and rejected `Files\PrivacyFence\privacyfence-app.exe --windows-service` as an
-  option it had never heard of. The call now builds its own command line and hands it to
-  `CreateProcess` verbatim, which is the one spelling that means the same thing under PowerShell 5.1
-  and 7; the quoting matters beyond this failure, since the Service Control Manager runs `ImagePath`
-  as a command line and an unquoted path with a space in it is the classic service-path hijack. The
-  packaged Windows tests now install into a directory whose name has a space in it, so the
-  difference between CI and a real install stops being the thing that hides a defect.
-- **An unseparated Windows install asked for the same UAC approval every five minutes, and could
-  never act on it.** `enforce_separation()`'s backstop (ADR 0003 decision 6) elevates by having
-  PowerShell `Start-Process -Verb RunAs` a second PowerShell that runs `privilege-separation.ps1
-  enable` — and it passed that inner invocation as an `-ArgumentList` *array*. `Start-Process` joins
-  such an array with plain spaces and quotes nothing, so the elevated process received
-  `-File C:\Program Files\PrivacyFence\privilege-separation.ps1`, read `C:\Program` as the script
-  to run, and exited nonzero — after the user had already approved the prompt. The daemon's own
-  autostart task repeats every five minutes, so on the default install location that became a UAC
-  prompt returning every five minutes that could not possibly accomplish anything. The inner command
-  line is now built with the same quoting the elevated PowerShell parses it back out with, in one
-  helper both Windows elevation paths share. Declining still re-asks at the next start, which is
-  decision 6's deliberate posture (a decline is an unfinished install, not a setting) — the
-  difference is that approving it now works.
-- **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
-  `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
-  `windows-latest` runner that module refuses to load inside the installer's own
-  `powershell -File` invocation — failing the install outright, which is the correct response to a
-  separation step that cannot verify its own work but not a correct thing for the step to be unable
-  to do. Two previous attempts worked around the module load and were each overtaken by the next
-  shape of the same failure. It now reads owners and access rules through the .NET methods on the
-  object `Get-Item` already returns, which need no module import at all.
-- The `.deb` lifecycle test validated the installed autostart entry by pointing
-  `desktop-file-validate` at `privacyfence.desktop.disabled` — the name auto-separation leaves
-  behind — which that tool rejects on the filename alone, before reading the contents. It now
-  validates a correctly-named copy, so the check tests the file again rather than the rename.
-
-### Changed
-
-- Documented that upgrading PrivacyFence on macOS is just re-running `PrivacyFence.pkg` — the
-  installer restarts the daemon on the new build itself, so there's no need to quit anything
-  first. (`README.md`, `docs/TECHNICAL_REFERENCE.md`)
-
 ## [4.1.0] — 2026-09-20
 
 ### Security
@@ -1145,6 +1023,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   than as a second, differently-scoped `SIGN_IDENTITY`. `scripts/r2_release.py` drops the
   `macos-arm64-pkg` artifact id along with its "optional installer" carve-out: all three installers
   it still knows (DMG, `-setup.exe`, `.deb`) are mandatory for a release to reach `latest`.
+- Documented that upgrading PrivacyFence on macOS is just re-running `PrivacyFence.pkg` — the
+  installer restarts the daemon on the new build itself, so there's no need to quit anything
+  first. (`README.md`, `docs/TECHNICAL_REFERENCE.md`)
 
 ### Fixed
 
@@ -1460,6 +1341,119 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   than the "did not start in time" message the working retry path already produces for a merely
   slow one. The child's `error` event is now handled (logged, not rethrown), so a bad spawn falls
   through to the same timeout/retry machinery a slow one already takes.
+- **The Windows installer's Finish page could fail with "Internal error: CallSpawnServer: Unexpected
+  response: $0" after a real install had already fully succeeded.** The two Finish-page `[Run]`
+  entries that open the bundled `.mcpb` (or show it in File Explorer when Claude Desktop has no
+  `.mcpb` association) relied on `postinstall`'s default `runasoriginaluser` behavior — and because
+  `PrivilegesRequired=admin` means Setup always runs elevated, that makes Setup spawn a helper
+  process under the original, pre-UAC-prompt user's token to open the file non-elevated. On a real
+  install that spawn failed outright instead of falling back, well after the files, privilege
+  separation, service and companion task had already been provisioned — an alarming dialog over a
+  step that was purely a convenience. Both entries now carry `runascurrentuser`, which skips that
+  fragile path and opens the file with Setup's own already-elevated token instead.
+- **The Windows installer refused to separate a completely ordinary install under `%ProgramFiles%`.**
+  `Assert-ImageProtected` (`scripts/windows_privilege_separation.ps1`) and its daemon-startup
+  counterpart `windows_acl.image_problems()` treat any write grant on the install directory as a
+  hole an AI agent could use to run code as the service account — correct for a real one, but
+  `%ProgramFiles%` is owned by, and inherits a full-control grant to, `NT SERVICE\TrustedInstaller`
+  by default; that grant is *what* makes `%ProgramFiles%` write-protected from an ordinary
+  Administrator token, not an instance of the weakness the check exists to catch. Neither check's
+  trusted-identity list included it, so every install into the location the installer itself offers
+  — and the failure dialog then told the user to keep — failed with "PrivacyFence could not set up
+  privilege separation" naming `NT SERVICE\TrustedInstaller` as the writer. TrustedInstaller is now
+  trusted alongside `SYSTEM`/`Administrators` in both the `.ps1`'s `Test-TrustedIdentity` and
+  `windows_acl.TRUSTED_TRUSTEES`.
+- **The packaged-artifact smoke tests now exercise the install a user actually gets, so a release
+  build can pass again.** Three consecutive pre-release tags (`v4.1.0b1`/`b2`/`b3`) were lost to
+  these tests being behind the product on three separate counts, each one hidden until the one in
+  front of it was fixed. They now stand in for the companion to mint a session PrivacyFence can
+  attribute to a person (`MINT COMPANION`, the attested shape the self-approval review's Phase 2
+  made a precondition for confirming an auto-accept rule), and they enroll a passkey through the
+  real `/security` routes before approving anything — which is what a fresh DMG/`.pkg`/`.deb`
+  install has demanded since `step_up.require_passkey` started defaulting on for packaged builds.
+  The macOS browser scenario does both through a real Chromium with a virtual authenticator, so the
+  registration and assertion ceremonies are now covered end to end against the packaged binary
+  rather than only in unit tests. No product behaviour changes: the gates were right, the tests
+  were asserting the behaviour that preceded them.
+- **The Windows packaged-artifact tests were asserting a lifecycle the product no longer allows.**
+  Two of them installed, undid the installer's own privilege separation, and drove a packaged daemon
+  against an isolated `%LOCALAPPDATA%`. ADR 0003 decision 6 ended that: a packaged daemon that finds
+  itself unseparated auto-enables separation and otherwise refuses to serve, deliberately with no
+  developer override. While the Windows `enable` was broken the auto-enable always failed and those
+  tests kept working by accident; once it started succeeding it re-separated the machine mid-test and
+  the spawned daemon collided with the real service over the control channel's named pipe. Both now
+  run against the real service the installer starts, like the `.deb` and `.pkg` modules already did.
+  Their approval round trip is *not* reproduced there and is left as follow-up: the control channel's
+  pipe is ACL'd to the service account and `PrivacyFenceUsers`, and Windows puts group membership in
+  the logon token, so a CI job — which cannot sign out and back in — cannot open that pipe however
+  elevated it is. That half stays covered on the separated path by the Linux and macOS modules.
+  The upgrade scenario also sweeps `PrivacyFenceCompanion.exe` before re-running Setup: a separated
+  install has a companion running, and RestartManager names it when it cannot close the files an
+  upgrade needs to overwrite — which no install had ever got far enough to start before. It also
+  `sc stop`s the daemon service rather than killing it: the service's own failure actions restart a
+  killed one within five seconds, which is less time than Setup spends retrying the `_internal` DLLs
+  the daemon holds open.
+- **A fresh Windows install could not complete at all.** `privilege-separation.ps1` created its
+  `PrivacyFenceUsers` group with an 85-character `-Description`; `New-LocalGroup` validates that
+  parameter against a 48-character limit and *fails* rather than truncating, so the separation step
+  aborted and — correctly, since an install that cannot separate is not installed — took the whole
+  installation with it. Every machine that did not already have the group was affected, from
+  `35e263f` (2026-09-16) onwards. It was invisible until now because the `Get-Acl` failure below
+  stopped the same script a few lines earlier, so nothing had ever reached this line.
+- **A fresh Windows install could not complete, part two.** `Invoke-Enable` wrote the data
+  directory's ACLs *before* creating the `PrivacyFence` service — and `sc create obj= "NT
+  SERVICE\PrivacyFence"` is what brings that virtual account into existence in the first place.
+  Until it exists there is nothing for `icacls` to grant, by name or by SID alike, so it failed with
+  *"No mapping between account names and security IDs was done"* (error 1332) on every machine that
+  did not already have the service — which is every fresh install. Creating the service is now the
+  step before `Set-Layout`, and *starting* it is a separate step after the marker is written, so the
+  daemon still never runs until the ACLs that contain it are in place.
+- **A fresh Windows install could not complete, part three.** With the ordering above fixed, the
+  `sc.exe create` call it unblocked turned out never to have worked either: it passed
+  `password=` as an empty string, and Windows PowerShell 5.1 silently *drops* empty arguments on
+  their way to a native executable. `sc.exe` therefore read `start=` as the password's value and
+  rejected the leftover `auto` with exit 1639. The pair is gone — a virtual service account has no
+  password, and omitting the option is how that is said.
+- **A fresh Windows install could not complete, part four — and this one only ever failed on a real
+  one.** With the empty `password=` gone, the same `sc.exe create` call still died with exit 1639
+  and a usage dump, for a reason that had been invisible to every CI run: its `binPath=` value is
+  `"<path>" --windows-service`, a single argument with quotes *inside* it, and Windows PowerShell
+  5.1's native-argument binder re-quotes such an argument without escaping the quotes already there.
+  Where the path has no space — a test runner's scratch directory — the mangled result still parses
+  back as one argument and the service is created, so the packaged Windows tests passed. Where it
+  does — `C:\Program Files\PrivacyFence`, i.e. every real install — `sc.exe` read `binPath=` as
+  `C:\Program` and rejected `Files\PrivacyFence\privacyfence-app.exe --windows-service` as an
+  option it had never heard of. The call now builds its own command line and hands it to
+  `CreateProcess` verbatim, which is the one spelling that means the same thing under PowerShell 5.1
+  and 7; the quoting matters beyond this failure, since the Service Control Manager runs `ImagePath`
+  as a command line and an unquoted path with a space in it is the classic service-path hijack. The
+  packaged Windows tests now install into a directory whose name has a space in it, so the
+  difference between CI and a real install stops being the thing that hides a defect.
+- **An unseparated Windows install asked for the same UAC approval every five minutes, and could
+  never act on it.** `enforce_separation()`'s backstop (ADR 0003 decision 6) elevates by having
+  PowerShell `Start-Process -Verb RunAs` a second PowerShell that runs `privilege-separation.ps1
+  enable` — and it passed that inner invocation as an `-ArgumentList` *array*. `Start-Process` joins
+  such an array with plain spaces and quotes nothing, so the elevated process received
+  `-File C:\Program Files\PrivacyFence\privilege-separation.ps1`, read `C:\Program` as the script
+  to run, and exited nonzero — after the user had already approved the prompt. The daemon's own
+  autostart task repeats every five minutes, so on the default install location that became a UAC
+  prompt returning every five minutes that could not possibly accomplish anything. The inner command
+  line is now built with the same quoting the elevated PowerShell parses it back out with, in one
+  helper both Windows elevation paths share. Declining still re-asks at the next start, which is
+  decision 6's deliberate posture (a decline is an unfinished install, not a setting) — the
+  difference is that approving it now works.
+- **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
+  `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
+  `windows-latest` runner that module refuses to load inside the installer's own
+  `powershell -File` invocation — failing the install outright, which is the correct response to a
+  separation step that cannot verify its own work but not a correct thing for the step to be unable
+  to do. Two previous attempts worked around the module load and were each overtaken by the next
+  shape of the same failure. It now reads owners and access rules through the .NET methods on the
+  object `Get-Item` already returns, which need no module import at all.
+- The `.deb` lifecycle test validated the installed autostart entry by pointing
+  `desktop-file-validate` at `privacyfence.desktop.disabled` — the name auto-separation leaves
+  behind — which that tool rejects on the filename alone, before reading the contents. It now
+  validates a correctly-named copy, so the check tests the file again rather than the rename.
 
 ## [4.0.0] — 2026-09-18
 
