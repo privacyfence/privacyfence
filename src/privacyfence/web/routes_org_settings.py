@@ -7,12 +7,26 @@ why porting that dispatcher wholesale is the wrong shape for org mode, and
 (#400 C3b) and wiring ``Principal.is_admin`` (#400 C3c) still left undone:
 a route that actually consumes both.
 
-``GET /settings`` -- every signed-in principal's own auto-accept rules and
-resource grants (``auto_accept.py``/``resource_grants.py``), read-only except
-for adding or removing a rule row and removing a grant row: an admin has no
-more mutation power here over another principal's rules than that principal
-does over their own, since every mutation is always scoped to
-``current_principal()``, never a path parameter naming someone else's id.
+``GET /settings`` -- every signed-in principal's own auto-accept rules
+(``policy/store.py``'s on-disk v2 ``auto_accept:`` section, the same schema
+local mode's Auto-accept Settings page and the MCP bridge write), read-only
+except for adding or removing a rule: an admin has no more mutation power
+here over another principal's rules than that principal does over their own,
+since every mutation is always scoped to ``current_principal()``, never a
+path parameter naming someone else's id.
+
+Through P8 of the policy v2 redesign this page instead read/wrote v1's
+``auto_accept_rules``/``auto_accept_grants`` directly (``auto_accept.py``/
+``resource_grants.py``), entirely unaffected by P6's local-mode rewrite --
+its own comment said so explicitly. P9 retired both v1 sections as anything
+live evaluates, so this page now writes exactly what local Settings and the
+MCP bridge do (``auto_accept.add_policy_v2_rules``/``remove_policy_v2_rule``),
+via the same scope+verb catalogue (``policy/catalogue.py``) those two
+surfaces already share -- one config section, one grammar, one writer,
+across every surface this redesign named plus this one. The "Trusted
+resources" (grants) section is gone with it: a grant was always just a
+resource-scoped rule with extra indirection, and every resource type it
+covered is a ``policy/scopes.py`` scope now.
 
 ``GET /settings/privacy`` -- admin-only (``Principal.is_admin``, #400 C3c),
 the install-wide PII/privacy policy: which ``privacy``/``drive_privacy``/...
@@ -45,7 +59,6 @@ one org-mode page a signed-in principal can navigate into and get stuck on.
 from __future__ import annotations
 
 import html
-import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -55,19 +68,14 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-from .. import auto_accept, pii_detector, resource_grants
+from .. import auto_accept, pii_detector
 from ..audit_log import AuditEntry, current_week, get_audit_logger
+from ..policy import catalogue as policy_catalogue
+from ..policy import describe as policy_describe
 from ..principal import Principal, principal_scope
 from ..privacy_filter import VALID_POLICIES, PrivacyFilterConfigError
 from ..privacy_filter import _parse_group as _parse_privacy_group
-from ..settings_controller import (
-    OPERATION_LABELS,
-    PRIVACY_CATEGORY_LABELS,
-    PRIVACY_GROUP_LABELS,
-    RULES_BY_OPERATION,
-    RULES_INT_VALUE,
-    RULES_LIST_VALUE,
-)
+from ..settings_controller import PRIVACY_CATEGORY_LABELS, PRIVACY_GROUP_LABELS
 from .. import web_shell
 from . import org_install_policy, org_session
 from .csp import nonce_for as _csp_nonce_for
@@ -127,140 +135,81 @@ def _record_settings_audit(principal: Principal, summary: str) -> None:
         logger.warning("Audit log write failed for a settings change: %s", exc)
 
 
-def _rules_rows(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+def _rule_rows(rules: list) -> list[dict[str, Any]]:
+    """One row per v2 rule -- the same fields local mode's Auto-accept page renders
+    (``settings_controller.SettingsController._auto_accept_state``), minus the resolved-display-name
+    machinery (a web-page-only affordance whose caches are keyed per this page's own connectors,
+    which org mode's stateless-per-request rendering has no equivalent of)."""
     rows: list[dict[str, Any]] = []
-    for op_key, entries in sorted((cfg.get("auto_accept_rules") or {}).items()):
-        for entry in entries:
-            rows.append({
-                "op_key": op_key,
-                "op_label": OPERATION_LABELS.get(op_key, op_key),
-                "rule": entry.get("rule", ""),
-                "value": entry.get("value"),
-            })
+    for rule in sorted(rules, key=policy_describe.rule_sentence):
+        rows.append({
+            "id": rule.id,
+            "sentence": policy_describe.rule_sentence(rule),
+            "covered_tools": policy_describe.covered_tools(rule),
+        })
     return rows
 
 
-def _grant_rows(cfg: dict[str, Any]) -> list[dict[str, Any]]:
-    grants_cfg = cfg.get("auto_accept_grants") or {}
-    rows: list[dict[str, Any]] = []
-    for rt in resource_grants.GRANT_RESOURCE_TYPES:
-        for entry in resource_grants.get_grant_entries(grants_cfg, rt):
-            enabled = [cap.label for key, cap in rt.capabilities.items() if entry.get(key)]
-            rows.append({
-                "connector": rt.connector,
-                "config_key": rt.config_key,
-                "label": rt.label,
-                "resource_id": rt.id_of(entry),
-                "name": entry.get("name") or rt.id_of(entry),
-                "tab": entry.get("tab") or "",
-                "capabilities": ", ".join(enabled) if enabled else "(none enabled)",
-            })
-    return rows
-
-
-def _rule_type_label(rule_name: str) -> str:
-    # Same "replace underscores, capitalize the first letter" shape
-    # settings_window_html.py's own client-side ruleTypeLabel() uses for the
-    # local-mode picker -- kept in sync by eye rather than shared code since
-    # one is Python building a <select> server-side and the other is JS
-    # building one in the browser, but a reviewer should see the same label
-    # for the same rule name on either surface.
-    s = rule_name.replace("_", " ")
-    return s[:1].upper() + s[1:]
-
-
-def _parse_rule_value_field(rule_name: str, raw_text: str) -> Any:
-    # settings_controller._parse_rule_value's own logic, against the same
-    # RULES_LIST_VALUE/RULES_INT_VALUE registry -- duplicated rather than
-    # imported since that function is private to settings_controller.py and
-    # this is a handful of lines, not a shared algorithm worth coupling two
-    # modules over. Empty text means "boolean rule, no value", matching that
-    # function's own docstring.
-    raw_text = (raw_text or "").strip()
-    if not raw_text:
-        return None
-    if rule_name in RULES_LIST_VALUE:
-        return [v.strip() for v in raw_text.split(",") if v.strip()]
-    if rule_name in RULES_INT_VALUE:
-        try:
-            return int(raw_text)
-        except ValueError:
-            return raw_text
-    return raw_text
+def _parse_value_field(raw_text: str) -> list[str] | None:
+    """The "value" field (a comma-separated list of resource ids/keys/domains) -> a v2 rule value,
+    or ``None`` for a value-less scope's empty field -- same shape
+    ``settings_controller._parse_value_list`` uses for the identical form on local mode's page."""
+    values = [v.strip() for v in (raw_text or "").split(",") if v.strip()]
+    return values or None
 
 
 def _add_rule_form_html(csrf_esc: str) -> str:
-    # One <select> with an <optgroup> per operation rather than a
-    # connector-nav sidebar like settings_window_html.py's local-mode
-    # picker -- this page is plain server-rendered forms with no JS (see
-    # module docstring: "reuse routes_org_approvals.py's minimal
-    # doctype+tokens.css shell"), so there is no client-side way to filter a
-    # second <select>'s options by a first one's choice. Grouping by
-    # operation keeps the ~135 (operation, rule type) pairs navigable
-    # without needing one.
-    optgroups = []
-    for op_key, rule_names in RULES_BY_OPERATION.items():
-        op_label = html.escape(OPERATION_LABELS.get(op_key, op_key), quote=True)
+    # One <select> whose options are (scope group, verb) pairs rather than a separate verb picker
+    # -- this page is plain server-rendered forms with no JS (see module docstring: "reuse
+    # routes_org_approvals.py's minimal doctype+tokens.css shell"), so there is no client-side way
+    # to filter a second <select>'s options by a first one's choice, the same reason the v1-era
+    # version of this form combined operation and rule name into one option value. Adding more than
+    # one verb to the same scope is a second submission, same as adding a second scope value is.
+    optgroups: dict[str, list[str]] = {}
+    for entry in policy_catalogue.scope_catalogue():
         options = "".join(
-            f"<option value=\"{html.escape(op_key, quote=True)}|{html.escape(rule_name, quote=True)}\">"
-            f"{html.escape(_rule_type_label(rule_name))}</option>"
-            for rule_name in rule_names
+            f"<option value=\"{html.escape(entry['id'], quote=True)}|{html.escape(verb, quote=True)}\">"
+            f"{html.escape(entry['label'])} — allow {html.escape(verb)}</option>"
+            for verb in entry["verbs"]
         )
-        optgroups.append(f"<optgroup label=\"{op_label}\">{options}</optgroup>")
+        optgroups.setdefault(entry["connector"], []).append(options)
+    grouped = "".join(
+        f"<optgroup label=\"{html.escape(connector.replace('_', ' ').title(), quote=True)}\">"
+        f"{''.join(options)}</optgroup>"
+        for connector, options in sorted(optgroups.items())
+    )
     return (
         "<form class=\"pf-set\" method=\"post\" action=\"/api/settings/rules/add\">"
         f"<input type=\"hidden\" name=\"csrf\" value=\"{csrf_esc}\">"
-        "<select name=\"rule_choice\" required aria-label=\"Operation and rule type\">"
-        "<option value=\"\">Select an operation and rule type…</option>"
-        + "".join(optgroups) +
+        "<select name=\"rule_choice\" required aria-label=\"Scope and verb\">"
+        "<option value=\"\">Select a scope and verb…</option>"
+        + grouped +
         "</select> "
         "<input type=\"text\" name=\"value\" "
-        "placeholder=\"Value -- comma-separated list, a number, or leave blank\" "
+        "placeholder=\"Value -- comma-separated list, or leave blank for a value-less scope\" "
         "aria-label=\"Rule value\"> "
         "<button type=\"submit\">Add rule</button>"
         "</form>"
     )
 
 
-def _render_settings_page(cfg: dict[str, Any], *, principal: Principal, csrf: str) -> str:
-    rule_rows = _rules_rows(cfg)
-    grant_rows = _grant_rows(cfg)
+def _render_settings_page(rules: list, *, principal: Principal, csrf: str) -> str:
+    rule_rows = _rule_rows(rules)
     csrf_esc = html.escape(csrf, quote=True)
 
     rules_html = "<p class=\"pf-empty\">No auto-accept rules configured.</p>"
     if rule_rows:
         body_rows = "".join(
-            f"<tr><td>{html.escape(r['op_label'])}</td><td>{html.escape(str(r['rule']))}</td>"
-            f"<td>{html.escape(json.dumps(r['value']) if r['value'] is not None else '')}</td><td>"
+            f"<tr><td>{html.escape(r['sentence'])}</td>"
+            f"<td>{len(r['covered_tools'])} tool{'' if len(r['covered_tools']) == 1 else 's'}</td><td>"
             f"<form class=\"pf-remove\" method=\"post\" action=\"/api/settings/rules/remove\">"
             f"<input type=\"hidden\" name=\"csrf\" value=\"{csrf_esc}\">"
-            f"<input type=\"hidden\" name=\"op_key\" value=\"{html.escape(r['op_key'], quote=True)}\">"
-            f"<input type=\"hidden\" name=\"rule\" value=\"{html.escape(str(r['rule']), quote=True)}\">"
-            f"<input type=\"hidden\" name=\"value\" value=\"{html.escape(json.dumps(r['value']), quote=True)}\">"
+            f"<input type=\"hidden\" name=\"rule_id\" value=\"{html.escape(r['id'], quote=True)}\">"
             f"<button class=\"pf-remove\" type=\"submit\">Remove</button></form></td></tr>"
             for r in rule_rows
         )
         rules_html = (
-            "<table><thead><tr><th>Operation</th><th>Rule</th><th>Value</th><th></th></tr></thead>"
-            f"<tbody>{body_rows}</tbody></table>"
-        )
-
-    grants_html = "<p class=\"pf-empty\">No trusted resources configured.</p>"
-    if grant_rows:
-        body_rows = "".join(
-            f"<tr><td>{html.escape(g['label'])}</td><td>{html.escape(g['name'])}</td>"
-            f"<td>{html.escape(g['capabilities'])}</td><td>"
-            f"<form class=\"pf-remove\" method=\"post\" action=\"/api/settings/grants/remove\">"
-            f"<input type=\"hidden\" name=\"csrf\" value=\"{csrf_esc}\">"
-            f"<input type=\"hidden\" name=\"connector\" value=\"{html.escape(g['connector'], quote=True)}\">"
-            f"<input type=\"hidden\" name=\"config_key\" value=\"{html.escape(g['config_key'], quote=True)}\">"
-            f"<input type=\"hidden\" name=\"resource_id\" value=\"{html.escape(g['resource_id'], quote=True)}\">"
-            f"<input type=\"hidden\" name=\"tab\" value=\"{html.escape(g['tab'], quote=True)}\">"
-            f"<button class=\"pf-remove\" type=\"submit\">Remove</button></form></td></tr>"
-            for g in grant_rows
-        )
-        grants_html = (
-            "<table><thead><tr><th>Type</th><th>Resource</th><th>Capabilities</th><th></th></tr></thead>"
+            "<table><thead><tr><th>Rule</th><th>Unblocks</th><th></th></tr></thead>"
             f"<tbody>{body_rows}</tbody></table>"
         )
 
@@ -274,7 +223,6 @@ def _render_settings_page(cfg: dict[str, Any], *, principal: Principal, csrf: st
         f"<p>Signed in as {html.escape(principal.email or principal.id)}.</p>"
         f"{admin_link}"
         f"<h2>Auto-accept rules</h2>{rules_html}{_add_rule_form_html(csrf_esc)}"
-        f"<h2>Trusted resources</h2>{grants_html}"
     )
 
 
@@ -449,12 +397,12 @@ def _render_privacy_page(
         "<p>This is the server's own <code>config/settings.yaml</code>. It is install-wide: "
         "there is no per-user override, and a change here applies to every principal "
         "immediately -- no daemon restart. See <a href=\"/settings\">Settings</a> for "
-        "auto-accept rules and trusted resources, which are per-principal.</p>"
+        "auto-accept rules, which are per-principal.</p>"
         if editable else
         "<p>Read-only: this daemon was started without a path to the "
         "<code>config/settings.yaml</code> these values came from, so there is nothing here "
         "to write back to. Change it on the server and restart the daemon. See "
-        "<a href=\"/settings\">Settings</a> for auto-accept rules and trusted resources instead, "
+        "<a href=\"/settings\">Settings</a> for auto-accept rules instead, "
         "which are per-principal.</p>"
     )
     return (
@@ -510,9 +458,9 @@ def build_routes(
         # change and this module's own test fixtures already use.
         with principal_scope(principal):
             _ensure_principal_settings_loaded()
-            cfg = auto_accept.get_current_config()
+            rules = auto_accept.get_policy_v2_rules()
         session_id = request.cookies.get(org_session.SESSION_COOKIE, "")
-        body = _render_settings_page(cfg, principal=principal, csrf=session_id)
+        body = _render_settings_page(rules, principal=principal, csrf=session_id)
         return HTMLResponse(
             _page(
                 "Settings", body, nonce=_csp_nonce_for(request),
@@ -548,18 +496,12 @@ def build_routes(
         )
 
     async def add_rule(request: Request) -> Response:
-        """The counterpart of ``remove_rule`` below, wiring up
-        ``add_rule_row`` -- previously stuck in ``org_settings_scope.
-        PER_PRINCIPAL_ACTIONS_UNROUTED`` because nothing on this end
-        consumed it (see that module's docstring). Same shape as
-        ``remove_rule``: authenticate, CSRF, origin, ``is_action_permitted``,
-        act scoped to ``current_principal()``, audit. ``rule_choice`` (an
-        ``"{op_key}|{rule_name}"`` pair, the ``_add_rule_form_html`` select's
-        own option values) is validated against ``RULES_BY_OPERATION`` --
-        the same fixed menu local mode's own picker constrains its dropdown
-        to -- so this route can never hand ``auto_accept.add_auto_accept_
-        rule`` a rule name the evaluator wouldn't recognize for that
-        operation.
+        """The counterpart of ``remove_rule`` below. Same shape: authenticate, CSRF, origin,
+        ``is_action_permitted``, act scoped to ``current_principal()``, audit. ``rule_choice`` (a
+        ``"{group}|{verb}"`` pair, the ``_add_rule_form_html`` select's own option values) is
+        validated against ``policy.catalogue.scope_catalogue()`` -- the same fixed menu local
+        mode's own picker constrains its dropdown to -- so this route can never hand
+        ``auto_accept.add_policy_v2_rules`` a scope/verb combination the engine wouldn't recognize.
         """
         principal = _current_principal(request)
         if principal is None:
@@ -569,18 +511,21 @@ def build_routes(
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not org_session.check_origin(request):
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-        if not is_action_permitted("add_rule_row", principal):
+        if not is_action_permitted("add_policy_rule", principal):
             return JSONResponse({"error": "forbidden"}, status_code=403)
-        op_key, _, rule_name = str(form.get("rule_choice", "")).partition("|")
-        if rule_name not in RULES_BY_OPERATION.get(op_key, ()):
-            return JSONResponse({"error": "unknown operation/rule type"}, status_code=400)
-        value = _parse_rule_value_field(rule_name, str(form.get("value", "")))
+        group, _, verb_name = str(form.get("rule_choice", "")).partition("|")
+        verb_enums = policy_catalogue.parse_verbs([verb_name])
+        value = _parse_value_field(str(form.get("value", "")))
+        new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
+        if not new_rules:
+            return JSONResponse({"error": "unknown scope/verb combination"}, status_code=400)
         with principal_scope(principal):
             _ensure_principal_settings_loaded()
-            auto_accept.add_auto_accept_rule(op_key, rule_name, value)
-            _record_settings_audit(
-                principal, f"Added auto-accept rule {rule_name!r} for {op_key!r} (principal={principal.id})",
-            )
+            if auto_accept.add_policy_v2_rules(new_rules):
+                _record_settings_audit(
+                    principal, f"Added auto-accept rule ({group!r}, allow {verb_name!r}) "
+                    f"(principal={principal.id})",
+                )
         return RedirectResponse("/settings", status_code=303, headers={"Cache-Control": "no-store"})
 
     async def remove_rule(request: Request) -> Response:
@@ -592,61 +537,24 @@ def build_routes(
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not org_session.check_origin(request):
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-        if not is_action_permitted("remove_rule_row", principal):
+        if not is_action_permitted("remove_policy_rule", principal):
             return JSONResponse({"error": "forbidden"}, status_code=403)
-        op_key = str(form.get("op_key", ""))
-        rule_name = str(form.get("rule", ""))
-        try:
-            value = json.loads(str(form.get("value", "null")))
-        except json.JSONDecodeError:
-            return JSONResponse({"error": "malformed value"}, status_code=400)
+        rule_id = str(form.get("rule_id", ""))
         with principal_scope(principal):
             _ensure_principal_settings_loaded()
-            removed = auto_accept.remove_auto_accept_rule(op_key, rule_name, value)
-            if removed:
+            if auto_accept.remove_policy_v2_rule(rule_id):
                 _record_settings_audit(
-                    principal, f"Removed auto-accept rule {rule_name!r} for {op_key!r} "
-                    f"(principal={principal.id})",
-                )
-        return RedirectResponse("/settings", status_code=303, headers={"Cache-Control": "no-store"})
-
-    async def remove_grant(request: Request) -> Response:
-        principal = _current_principal(request)
-        if principal is None:
-            return RedirectResponse("/login?next=/settings", status_code=302, headers={"Cache-Control": "no-store"})
-        form = await request.form()
-        if not org_session.check_csrf(request, form.get("csrf")):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        if not org_session.check_origin(request):
-            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-        if not is_action_permitted("remove_grant_row", principal):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
-        connector = str(form.get("connector", ""))
-        config_key = str(form.get("config_key", ""))
-        resource_id = str(form.get("resource_id", ""))
-        tab = str(form.get("tab", "")) or None
-        rt = resource_grants.resource_type(connector, config_key)
-        if rt is None:
-            return JSONResponse({"error": "unknown resource type"}, status_code=404)
-        with principal_scope(principal):
-            _ensure_principal_settings_loaded()
-            removed = auto_accept.mutate_grants(
-                lambda cfg: resource_grants.apply_grant_removal(cfg, rt, resource_id, tab)
-            )
-            if removed:
-                _record_settings_audit(
-                    principal, f"Removed trusted {rt.singular} {resource_id!r} from {rt.label} "
-                    f"(principal={principal.id})",
+                    principal, f"Removed auto-accept rule {rule_id!r} (principal={principal.id})",
                 )
         return RedirectResponse("/settings", status_code=303, headers={"Cache-Control": "no-store"})
 
     async def _apply_install_wide(request: Request, allowed: frozenset[str]) -> Response:
         """The shared body of both install-wide write routes (#400 C3e).
 
-        The gate order matters and mirrors ``remove_rule``/``remove_grant``
-        above exactly: authenticated, then CSRF, then origin, then
-        authorization. ``is_action_permitted`` is the only thing here that
-        consults ``principal.is_admin`` -- the page's own 403 above governs
+        The gate order matters and mirrors ``remove_rule`` above exactly:
+        authenticated, then CSRF, then origin, then authorization.
+        ``is_action_permitted`` is the only thing here that consults
+        ``principal.is_admin`` -- the page's own 403 above governs
         *rendering*, this governs *doing*, and a route that trusted the
         former would be one hand-written POST away from letting any
         signed-in principal rewrite the whole org's privacy policy.
@@ -705,7 +613,6 @@ def build_routes(
         Route("/settings/privacy", privacy_page),
         Route("/api/settings/rules/add", add_rule, methods=["POST"]),
         Route("/api/settings/rules/remove", remove_rule, methods=["POST"]),
-        Route("/api/settings/grants/remove", remove_grant, methods=["POST"]),
         Route("/api/settings/privacy/policy", set_privacy_policy, methods=["POST"]),
         Route("/api/settings/privacy/pii", set_pii_policy, methods=["POST"]),
     ]

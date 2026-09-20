@@ -1590,6 +1590,7 @@ class TestFixturePresence:
 class _FakeCalendarClient:
     def __init__(self):
         self.events: dict[str, str] = {}
+        self.event_recurrence: dict[str, list[str]] = {}
         self._cancelled_ids: set[str] = set()
         self._n = 0
         self.delete_should_fail = False
@@ -1600,18 +1601,26 @@ class _FakeCalendarClient:
         # with status "cancelled" instead of ever 404ing.
         self.delete_leaves_a_cancelled_ghost = False
 
-    def create_event(self, calendar_id, title, start_time, end_time, description=""):
+    def create_event(self, calendar_id, title, start_time, end_time, description="", recurrence=""):
         self._n += 1
         event_id = f"evt{self._n}"
         self.events[event_id] = title
-        return SimpleNamespace(id=event_id, title=title)
+        recurrence_lines = [line.strip() for line in recurrence.splitlines() if line.strip()]
+        self.event_recurrence[event_id] = recurrence_lines
+        return SimpleNamespace(id=event_id, title=title, recurrence=recurrence_lines)
 
     def get_event(self, calendar_id, event_id):
         if event_id in self._cancelled_ids:
-            return SimpleNamespace(id=event_id, title=self.events.get(event_id, ""), status="cancelled")
+            return SimpleNamespace(
+                id=event_id, title=self.events.get(event_id, ""), status="cancelled",
+                recurrence=self.event_recurrence.get(event_id, []),
+            )
         if event_id not in self.events:
             raise recorder.CalendarClientError(f"event {event_id} not found")
-        return SimpleNamespace(id=event_id, title=self.events[event_id], status="confirmed")
+        return SimpleNamespace(
+            id=event_id, title=self.events[event_id], status="confirmed",
+            recurrence=self.event_recurrence.get(event_id, []),
+        )
 
     def update_event(self, calendar_id, event_id, title=None):
         if event_id not in self.events:
@@ -1620,16 +1629,19 @@ class _FakeCalendarClient:
             self.events[event_id] = title
         return SimpleNamespace(id=event_id, title=self.events[event_id])
 
+    def delete_event(self, calendar_id, event_id, scope="this", send_updates=""):
+        # lifecycle_calendar/_lifecycle_calendar_recurrence both clean up
+        # through this now (see qa_fixture_recorder.py's own comment on why
+        # calendar no longer needs the raw events().delete() bypass jira/
+        # tasks still do) -- scope/send_updates are accepted but unused
+        # here since this fake never has more than one event in a "series".
+        self._do_delete(event_id)
+
     def _get_service(self):
-        service = MagicMock()
-
-        def _delete(calendarId, eventId):
-            req = MagicMock()
-            req.execute.side_effect = lambda: self._do_delete(eventId)
-            return req
-
-        service.events.return_value.delete.side_effect = _delete
-        return service
+        # Only reached by lifecycle_calendar's raw_refetch diagnostic
+        # (DEBUG-level only, off in these tests) -- delete_event above is
+        # what production now calls for cleanup, not this.
+        return MagicMock()
 
     def _do_delete(self, event_id):
         if self.delete_should_fail:
@@ -1638,6 +1650,7 @@ class _FakeCalendarClient:
             self._cancelled_ids.add(event_id)
         elif not self.delete_leaves_it:
             self.events.pop(event_id, None)
+            self.event_recurrence.pop(event_id, None)
 
 
 class TestDeleteDiagnosticLogging:
@@ -1776,6 +1789,22 @@ class TestConfirmDeletedIsDeleted:
         assert ok and note == ""
 
 
+class TestCombineCleanupOk:
+    def test_either_false_wins(self):
+        assert recorder._combine_cleanup_ok(False, True) is False
+        assert recorder._combine_cleanup_ok(True, False) is False
+        assert recorder._combine_cleanup_ok(False, None) is False
+        assert recorder._combine_cleanup_ok(False, False) is False
+
+    def test_true_wins_over_none(self):
+        assert recorder._combine_cleanup_ok(True, None) is True
+        assert recorder._combine_cleanup_ok(None, True) is True
+        assert recorder._combine_cleanup_ok(True, True) is True
+
+    def test_both_none_stays_none(self):
+        assert recorder._combine_cleanup_ok(None, None) is None
+
+
 class TestLifecycleCalendar:
     def test_happy_path_creates_updates_and_cleans_up(self, monkeypatch):
         fake = _FakeCalendarClient()
@@ -1862,6 +1891,63 @@ class TestLifecycleCalendar:
 
         assert not result.ok
         assert result.cleanup_ok is None  # nothing was ever created
+
+    def test_recurring_event_is_also_created_and_cleaned_up(self, monkeypatch):
+        # Issue #415's own round trip, alongside the plain event above.
+        fake = _FakeCalendarClient()
+        monkeypatch.setattr(recorder, "_build_calendar_client", lambda: fake)
+
+        result = recorder.lifecycle_calendar(manifest={})
+
+        assert result.ok
+        assert result.cleanup_ok is True
+        assert fake._n == 2  # the plain event and the recurring one
+        assert not fake.events
+        assert not fake.event_recurrence
+        assert "recurring create/get verified" in result.note
+
+    def test_recurring_create_failure_fails_ok_independently_of_the_plain_event(self, monkeypatch):
+        fake = _FakeCalendarClient()
+        real_create = fake.create_event
+
+        def _create_event(calendar_id, title, start_time, end_time, description="", recurrence=""):
+            if recurrence:
+                raise recorder.CalendarClientError("simulated recurring create failure")
+            return real_create(calendar_id, title, start_time, end_time, description=description)
+
+        fake.create_event = _create_event
+        monkeypatch.setattr(recorder, "_build_calendar_client", lambda: fake)
+
+        result = recorder.lifecycle_calendar(manifest={})
+
+        assert not result.ok
+        assert "recurring event check failed" in result.note
+        # The plain event's own create/get/update/cleanup sequence still
+        # passed and cleaned up fine -- the recurring failure is reported
+        # via ok, not cleanup_ok, since nothing recurring was ever created
+        # to fail to clean up.
+        assert result.cleanup_ok is True
+        assert not fake.events
+
+    def test_recurring_cleanup_failure_is_reported_via_cleanup_ok_not_ok(self, monkeypatch):
+        fake = _FakeCalendarClient()
+        real_delete = fake.delete_event
+
+        def _delete_event(calendar_id, event_id, scope="this", send_updates=""):
+            if scope == "all":
+                raise RuntimeError("simulated recurring cleanup failure")
+            real_delete(calendar_id, event_id, scope=scope, send_updates=send_updates)
+
+        fake.delete_event = _delete_event
+        monkeypatch.setattr(recorder, "_build_calendar_client", lambda: fake)
+
+        result = recorder.lifecycle_calendar(manifest={})
+
+        # The create/read/update/get sequences themselves all passed for
+        # both events -- only the recurring event's own cleanup failed.
+        assert result.ok
+        assert result.cleanup_ok is False
+        assert "recurring event cleanup" in result.note
 
 
 class _FakeConfluenceClient:

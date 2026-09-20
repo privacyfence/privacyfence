@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import contextlib
 
-import httpx
+import httpx2
 import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
@@ -73,15 +73,15 @@ class BoomConnector(Connector):
 async def _session_calling(exc_factory):
     dispatcher = McpDispatcher(lambda: {"boom": BoomConnector(exc_factory)})
     app, session_manager = build_mcp_asgi_app(dispatcher, token=TOKEN)
-    transport = httpx.ASGITransport(app=app)
+    transport = httpx2.ASGITransport(app=app)
 
     async with mcp_lifespan(session_manager):
-        async with httpx.AsyncClient(
+        async with httpx2.AsyncClient(
             transport=transport, base_url="http://testserver", headers={"Authorization": f"Bearer {TOKEN}"},
         ) as http_client:
             async with streamable_http_client(
                 "http://testserver/mcp", http_client=http_client,
-            ) as (read, write, _get_session_id):
+            ) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     yield session
@@ -134,7 +134,7 @@ class TestFakeSecretsNeverReachTheMcpResult:
     async def test_secret_is_absent_from_the_tool_error_result(self, exc_factory, secret):
         async with _session_calling(exc_factory) as session:
             result = await session.call_tool("boom_call", {})
-        assert result.isError is True
+        assert result.is_error is True
         text = result.content[0].text
         assert secret not in text
 
@@ -161,7 +161,7 @@ class TestAllowlistedExceptionsStillReachTheClient:
     async def test_value_error_message_passes_through(self):
         async with _session_calling(lambda: ValueError("attachments: no such file: '/tmp/report.pdf'")) as session:
             result = await session.call_tool("boom_call", {})
-        assert result.isError is True
+        assert result.is_error is True
         assert "no such file" in result.content[0].text
 
     async def test_gate_denied_error_message_passes_through(self):
@@ -171,5 +171,5 @@ class TestAllowlistedExceptionsStillReachTheClient:
         # failure -- see safe_errors.py's module docstring).
         async with _session_calling(lambda: GateDeniedError("Request denied by user")) as session:
             result = await session.call_tool("boom_call", {})
-        assert result.isError is True
+        assert result.is_error is True
         assert "Request denied by user" in result.content[0].text

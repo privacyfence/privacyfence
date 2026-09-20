@@ -365,11 +365,19 @@ a headless or stripped-down install may ship neither, in which case a first enro
 a message naming them. macOS (`osascript`) and Windows (`MessageBoxW`) have no equivalent gap — both
 are part of the OS.
 
-Installing the `.deb` does not turn any of this on. What it adds is the tool and its two
-templates; the systemd unit and the companion autostart entry are written only by `enable`, and a
-package install or upgrade never runs it. Everything about a default install — the daemon in your
-own session, started by the XDG autostart entry, with state in `~/.privacyfence` — is exactly as it
-was.
+Installing the `.deb` turns all of this on, and that is the whole of ADR 0003 decision 5.
+`debian/postinst` runs `enable --machine-only` on every `configure` — every install and every
+upgrade — unconditionally, and **a failure of that step fails the package install**, leaving dpkg
+with a half-configured package rather than a silently unseparated PrivacyFence. So the system
+systemd unit and the companion autostart entry are written by the package itself, the data
+directory is `/var/lib/privacyfence` under the service account, and the two pre-separation startup
+paths are moved aside, all without anybody having to know this tool exists.
+
+The per-user half — adding the installing user to the `privacyfence` group — runs second, still
+gated on `$SUDO_USER` resolving to a real account and still allowed to defer: an unattended `apt`
+upgrade or a root shell has nobody to add, and that leaves the install separated with one group
+membership outstanding (`status` reports `PENDING USER`, not "not separated"). The companion closes
+it at the next login, or `enable --for-user <name>` does by hand.
 
 ## Architecture and CPU constraints
 

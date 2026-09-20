@@ -26,6 +26,7 @@ import time
 import uuid
 
 import httpx
+import httpx2
 import pytest
 
 mcp_client = pytest.importorskip(
@@ -145,8 +146,8 @@ def running_deferred_server(tmp_path, monkeypatch):
 
 async def _call_gated_tool(server: WebServer, message: str):
     headers = {"Authorization": f"Bearer {server.mcp_token}"}
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write, _get_session_id):
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(server.mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await session.call_tool(
@@ -180,9 +181,9 @@ async def test_deferred_approval_round_trip_accept(running_deferred_server):
     connector, server = running_deferred_server
 
     first = await _call_gated_tool(server, "hello from the round trip test")
-    assert first.isError is not True
-    assert first.structuredContent["status"] == "approval_pending"
-    approval_id = first.structuredContent["approval_id"]
+    assert first.is_error is not True
+    assert first.structured_content["status"] == "approval_pending"
+    approval_id = first.structured_content["approval_id"]
     assert approval_id
 
     response = await _decide(server, approval_id, "accept")
@@ -190,8 +191,8 @@ async def test_deferred_approval_round_trip_accept(running_deferred_server):
     assert response.json() == {"status": "ok"}
 
     second = await _call_gated_tool(server, "hello from the round trip test")
-    assert second.isError is not True
-    assert second.structuredContent == {"message": "hello from the round trip test"}
+    assert second.is_error is not True
+    assert second.structured_content == {"message": "hello from the round trip test"}
 
     # Both MCP calls reached the connector (dedupe never short-circuits a
     # pending result -- see mcp_dispatch.py's own comment on that), but
@@ -217,14 +218,14 @@ async def test_deferred_approval_round_trip_deny(running_deferred_server):
     connector, server = running_deferred_server
 
     first = await _call_gated_tool(server, "please deny me")
-    assert first.structuredContent["status"] == "approval_pending"
-    approval_id = first.structuredContent["approval_id"]
+    assert first.structured_content["status"] == "approval_pending"
+    approval_id = first.structured_content["approval_id"]
 
     response = await _decide(server, approval_id, "deny")
     assert response.status_code == 200, response.text
 
     second = await _call_gated_tool(server, "please deny me")
-    assert second.isError is True
+    assert second.is_error is True
 
     assert len(connector.calls) == 2
     assert not (await _wait_and_list_pending(server))

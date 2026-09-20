@@ -7,7 +7,7 @@ falls back to the last-known name rather than losing it.
 """
 from __future__ import annotations
 
-from privacyfence import resource_grants as rg
+from privacyfence.policy import resource_registry as rg
 from privacyfence import resource_names as rn
 
 

@@ -285,9 +285,11 @@ def build_parser() -> argparse.ArgumentParser:
         # this script is stdlib-only on purpose (see the module docstring),
         # so it runs with no PrivacyFence install. Keep the two in sync.
         "--step-up-scope", choices=["writes", "writes_and_pii_reads", "writes_and_reads"], default=None,
-        help="Default: writes. \"writes_and_pii_reads\" additionally requires step-up before a "
-             "read that detected personal data, not just a write; \"writes_and_reads\" requires it "
-             "before every gated read, flagged or not.",
+        help="Default: writes_and_pii_reads (StepUpConfig's own DEFAULT_STEP_UP_SCOPE -- an "
+             "unset scope here leaves the key out of the bundle rather than pinning one). "
+             "\"writes_and_pii_reads\" requires step-up before a "
+             "read that detected personal data as well as before a write; \"writes\" narrows it to "
+             "writes only; \"writes_and_reads\" requires it before every gated read, flagged or not.",
     )
     step_up.add_argument(
         "--step-up-rp-id", metavar="DOMAIN",

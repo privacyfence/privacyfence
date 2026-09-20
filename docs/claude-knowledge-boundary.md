@@ -67,6 +67,7 @@ The boundary is implemented across:
 - `src/privacyfence/card_builder.py`
 - `src/privacyfence/web_approval_ui.py`
 - connector/tool implementations under `src/privacyfence/connectors/`
-- org principal/session/resource-grant modules
+- the policy store and its evaluator (`src/privacyfence/policy/`)
+- org principal/session modules (`src/privacyfence/principal.py`, `src/privacyfence/web/org_session.py`)
 
 Tests should assert both the allowed result and the negative property that protected data is absent on denied/pending paths.

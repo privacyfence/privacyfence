@@ -40,7 +40,7 @@ class TestSingletonAccessors:
             def show_pii_confirmation_popup(self, categories):
                 raise NotImplementedError
 
-            def show_rule_confirmation_popup(self, description):
+            def show_rule_confirmation_popup(self, description, *, sensitive=False):
                 raise NotImplementedError
 
         fake = FakeApprovalUI()
@@ -72,7 +72,7 @@ class TestDeferredRegistry:
             def show_pii_confirmation_popup(self, categories):
                 raise NotImplementedError
 
-            def show_rule_confirmation_popup(self, description):
+            def show_rule_confirmation_popup(self, description, *, sensitive=False):
                 raise NotImplementedError
 
         assert FakeApprovalUI().deferred_registry is None
@@ -90,7 +90,7 @@ class TestDeferredRegistry:
             def show_pii_confirmation_popup(self, categories):
                 raise NotImplementedError
 
-            def show_rule_confirmation_popup(self, description):
+            def show_rule_confirmation_popup(self, description, *, sensitive=False):
                 raise NotImplementedError
 
             @property

@@ -37,10 +37,13 @@ Two scope types the redesign proposal's §04 catalogue adds -- `drive.file` and
 ungovernable, F5; no existing rule ever names one specific file by id rather than a folder). They
 get a selector here too, under `NEW_SCOPE_SELECTORS` rather than `SCOPE_SELECTORS`, since there is
 no old `_rule_*` counterpart for `test_scopes.py` to check them against -- their own tests just
-exercise `matches()` directly.
+exercise `matches()` directly. P6 adds two more to the same table for the same reason,
+`gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that make
+`gmail.create_filter`/`update_filter`/`slack.create_group_chat` (F5's remaining three operation
+keys) configurable from the Auto-accept Settings page; see their own comment below for why they
+are not simply more `always_allow` rules.
 
-Nothing outside `tests/` consumes this module yet -- see the redesign proposal's P3 for the engine
-that will.
+``policy.engine.evaluate``/``preflight`` are what consume this module in production, since P3.
 """
 from __future__ import annotations
 
@@ -530,6 +533,22 @@ def _apps_script_project_matches(value: Any, ctx: ReviewContext) -> bool:
     return ctx.args.get("script_id", "") in allowed
 
 
+# P6: the two remaining F5 operation groups -- `gmail.create_filter`/`update_filter` and
+# `slack.create_group_chat` -- have no resource identity to scope to at all (propose.py's own
+# module docstring already explains why: a filter's/group chat's *subject* is "the account"/"the
+# audience", not an item any `ScopeSelector` here can name). They are honestly-unconditional scopes
+# in the same D4 sense `always_allow` is -- but deliberately their own predicates, distinct from
+# `always_allow`, rather than reusing it: `always_allow` already carries three `PROPOSABLE_SCOPES`
+# entries (Gmail drafting, two calendar conditions) whose declared verbs (`draft`, `read`) would
+# make `describe.rule_verbs` wrongly filter a `configure`/`share` rule down to nothing (it credits a
+# rule only with the verbs its predicate's own catalogue entries declare, once that predicate has
+# any). A predicate with no catalogue entry at all is credited with every verb its operations
+# actually carry instead, which is what these two need. `policy_engine.evaluate`'s own matching
+# behaviour is identical to `always_allow`'s either way (unconditional `True`).
+def _anything_matches(_value: Any, _ctx: ReviewContext) -> bool:
+    return True
+
+
 NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "drive.file": ScopeSelector(
         predicate="drive.file", scope_type="drive.file", kind=ScopeKind.IDENTITY,
@@ -538,5 +557,13 @@ NEW_SCOPE_SELECTORS: dict[str, ScopeSelector] = {
     "apps_script.project": ScopeSelector(
         predicate="apps_script.project", scope_type="apps_script.project", kind=ScopeKind.IDENTITY,
         resolves_from=ResolvesFrom.ARGS, matches=_apps_script_project_matches,
+    ),
+    "gmail.anything": ScopeSelector(
+        predicate="gmail.anything", scope_type="gmail.anything", kind=ScopeKind.ATTRIBUTE,
+        resolves_from=ResolvesFrom.ARGS, matches=_anything_matches,
+    ),
+    "slack.anything": ScopeSelector(
+        predicate="slack.anything", scope_type="slack.anything", kind=ScopeKind.ATTRIBUTE,
+        resolves_from=ResolvesFrom.ARGS, matches=_anything_matches,
     ),
 }

@@ -36,6 +36,8 @@ from privacyfence.web.routes_settings import (
     _BESPOKE_SENSITIVE_ROUTE_PATHS,
     _NON_SENSITIVE_ACTIONS,
     _SENSITIVE_ACTIONS,
+    _BadAction,
+    _coerce,
     build_routes,
     create_app,
 )
@@ -154,6 +156,29 @@ class TestSettingsPage:
         after = c.get("/settings")
         assert 'NOTIFICATIONS_DETAIL = "detailed"' in after.text
 
+    def test_policy_v2_migration_notice_renders_as_a_dismissible_notice(self, controller, client, sessions):
+        # P4 of the policy v2 redesign: settings_page wires
+        # controller.policy_v2_migration_notice_html() into web_shell.wrap's
+        # dismissible_notice_html, not the persistent banner_html strip --
+        # see settings_controller.py's own docstring on why. pf-shell-notice
+        # is that mechanism's own container id/class (web_shell.py); a
+        # config with no v2 migration marker at all must render neither.
+        _authed(client, sessions)
+        assert 'id="pf-shell-notice"' not in client.get("/settings").text
+
+        cfg = controller._load_config()
+        cfg["migrated_to_policy_v2"] = True
+        cfg["auto_accept"] = {
+            "version": 2,
+            "rules": [{"id": "r-delete", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]}],
+        }
+        controller._save_config(cfg)
+
+        r = client.get("/settings")
+        assert 'id="pf-shell-notice"' in r.text
+        assert "r-delete" in r.text
+        assert 'data-dismiss-key="pf_policy_v2_migration_dismissed"' in r.text
+
 
 class TestConnectorsPage:
     """GET /settings/connectors -- issue #396 Part C's first-run
@@ -217,29 +242,36 @@ class TestActionDispatch:
         assert r.status_code == 200
         assert r.json()["general"]["pii_enabled"] is False
 
-    def test_action_with_arguments_coerces_idx_to_int(self, client, controller, sessions):
-        controller.add_rule_row("gmail.read_message")
+    def test_action_with_arguments_dispatches_str_and_list_arguments(self, client, sessions):
         csrf = _authed(client, sessions)
         r = client.post(
-            "/api/settings/update_rule_row",
-            json={"op_key": "gmail.read_message", "idx": "0", "field": "rule_type", "value": "i_am_sender", "csrf": csrf},
+            "/api/settings/add_policy_rule",
+            json={"group": "gmail.sender_domain", "value": "acme.com", "verbs": ["read"], "csrf": csrf},
         )
         assert r.status_code == 200
-        rows = r.json()["rules"]["sections_by_connector"]["gmail"][0]["rows"]
-        assert rows[0]["rule_type"] == "i_am_sender"
+        rules = r.json()["auto_accept"]["rules"]
+        assert any(row["connector"] == "gmail" for row in rules)
 
-    def test_bad_idx_type_is_400_not_500(self, client, sessions):
+    def test_bad_argument_type_is_400_not_500(self, client, sessions):
         csrf = _authed(client, sessions)
         r = client.post(
-            "/api/settings/update_rule_row",
-            json={"op_key": "gmail.read_message", "idx": "not-a-number", "field": "value", "value": "x", "csrf": csrf},
+            "/api/settings/add_policy_rule",
+            json={"group": 123, "value": "acme.com", "verbs": ["read"], "csrf": csrf},
         )
         assert r.status_code == 400
 
     def test_missing_required_argument_is_400(self, client, sessions):
         csrf = _authed(client, sessions)
-        r = client.post("/api/settings/update_rule_row", json={"csrf": csrf})
+        r = client.post("/api/settings/add_policy_rule", json={"csrf": csrf})
         assert r.status_code == 400
+
+    def test_coerce_parses_int_arguments_and_rejects_non_numeric(self):
+        assert _coerce("30", int) == 30
+        assert _coerce(30, int) == 30
+        with pytest.raises(_BadAction):
+            _coerce("not-a-number", int)
+        with pytest.raises(_BadAction):
+            _coerce(True, int)  # bool is a subclass of int but not a valid idx
 
     def test_connector_icons_are_augmented(self, client, sessions):
         csrf = _authed(client, sessions)

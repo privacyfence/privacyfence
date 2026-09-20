@@ -74,6 +74,13 @@ EFFECT_BY_TOOL: dict[str, str] = {
     "calendar_set_event_visibility":
         "Who can see the event's details changes. The event itself is not moved or deleted.",
     "calendar_set_event_color": "The event's colour changes in your calendar. Nothing else changes.",
+    # "Applies to" in the preview already names the scope for a recurring event
+    # ('this'/'following'/'all', see connectors/calendar.py's _SCOPE_LABELS); this
+    # sentence carries the half the preview does not -- that none of it comes back,
+    # and that deleting is itself a message to the attendees.
+    "calendar_delete_event":
+        "The event is deleted for everyone and cannot be restored from here. Its attendees "
+        "may be notified that it was cancelled.",
 
     # ── Google Contacts ──────────────────────────────────────────────────
     "contacts_create": "A new contact is saved to your address book.",

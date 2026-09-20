@@ -39,10 +39,12 @@ def block_on_card(registry: PendingApprovalRegistry, html: str, approval=None) -
     return result, card.chosen_index_result
 
 
-def block_on_confirm(registry: PendingApprovalRegistry, html: str) -> bool:
+def block_on_confirm(registry: PendingApprovalRegistry, html: str, *, sensitive: bool = False) -> bool:
     """Register a confirmation dialog, block until answered, and return
-    whether it was confirmed (vs. cancelled/denied)."""
-    card = registry.register_confirm()
+    whether it was confirmed (vs. cancelled/denied). ``sensitive`` is passed
+    straight through to ``PendingApprovalRegistry.register_confirm``, whose
+    docstring says what it costs the caller who sets it."""
+    card = registry.register_confirm(sensitive=sensitive)
     registry.set_html(card.id, html)
     card.event.wait()
     return card.result == CONFIRM_RESULTS[0]  # "confirm"

@@ -6,7 +6,7 @@ web settings page (when ``web.settings.enabled`` is set) as the only way to
 drive this controller interactively -- editing ``config/settings.yaml`` by
 hand remains the headless path either way. This module itself was already
 headless-first before that (see docs/coding-and-testing-guidelines.md's
-"stay dependency-light" pattern also used by resource_grants.py/
+"stay dependency-light" pattern also used by policy/resource_registry.py/
 privacy_filter.py) and needed no AppKit/PyObjC imports of its own to begin
 with -- ``rumps``/``dialog_window``/``PyObjCTools.AppHelper`` were the
 native host's own dependencies, imported here only to marshal callbacks onto
@@ -26,6 +26,7 @@ flows, grant name resolution) runs on a background thread via
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -42,7 +43,8 @@ from .app_credentials import telegram_app_credentials
 from .approval_ui import get_approval_ui
 from .audit_log import AuditEntry, AuditLogger, compute_security_config_hash, current_week, get_audit_logger
 from .auto_accept import (
-    reload_rules,
+    notify_rules_changed,
+    set_policy_v2_store_rules,
     set_rules_changed_listener,
 )
 from .calendar_client import CalendarClient
@@ -51,19 +53,21 @@ from .drive_client import DriveClient
 from .gmail_client import GmailClient
 from .paths import authority_root, data_dir, org_dir
 from .pii_detector import set_pii_category_enabled, set_pii_detection_enabled
+from .policy import catalogue as policy_catalogue
+from .policy import describe as policy_describe
+from .policy import propose as policy_propose
+from .policy import registry as policy_registry
+from .policy import store as policy_store
+from .policy.engine import PolicyRule
 from .principal import LOCAL_PRINCIPAL
 from .privacy_filter import _parse_group as _parse_privacy_group
 from .privacy_filter import _VALID_POLICIES as PRIVACY_POLICIES
 from .privacy_filter import init_privacy_filter
 from .privacy_filter import PrivacyFilterConfigError
-from .resource_grants import (
+from .policy.resource_registry import (
     GRANT_RESOURCE_TYPES,
     GrantResourceType,
-    build_effective_rules,
-    get_grant_entries,
     resource_type as grant_resource_type,
-    resource_types_for_connector,
-    set_grant_entries,
 )
 from .resource_names import get_resolver
 from .secure_files import atomic_write_json, atomic_write_text
@@ -122,6 +126,7 @@ OPERATION_LABELS: dict[str, str] = {
     "calendar.create_modify_event":"Calendar – Create/modify event",
     "calendar.set_visibility":     "Calendar – Set event visibility",
     "calendar.set_color":          "Calendar – Set event color",
+    "calendar.delete_event":       "Calendar – Delete event",
     "calendar.out_of_office":      "Calendar – Create out-of-office",
     "calendar.working_location":   "Calendar – Set working location",
     "salesforce.read_record":      "Salesforce – Read record",
@@ -183,6 +188,7 @@ RULES_BY_OPERATION: dict[str, list[str]] = {
     "calendar.create_modify_event": ["i_am_organizer", "no_external_attendees", "personal_calendar"],
     "calendar.set_visibility":      ["i_am_organizer", "no_external_attendees", "personal_calendar"],
     "calendar.set_color":           ["i_am_organizer", "no_external_attendees", "personal_calendar"],
+    "calendar.delete_event":        ["i_am_organizer", "no_external_attendees", "personal_calendar"],
     "calendar.out_of_office":       ["always_allow"],
     "calendar.working_location":    ["always_allow"],
     "salesforce.read_record":       ["approved_object_types"],
@@ -235,32 +241,6 @@ ALL_CONNECTORS: list[str] = [
 # read off a pending-approval row.
 NOTIFICATIONS_DETAIL_LEVELS: tuple[str, ...] = ("minimal", "standard", "detailed")
 
-# Top-level groups shown in the Auto-accept Rules page specifically --
-# distinct from ALL_CONNECTORS because "sheets" and "docs" aren't connectors
-# (neither has a separate auth, org-config section, or entry in
-# GOOGLE_CONNECTORS/_GOOGLE_CLIENTS/ORG_CONFIG_SERVICE -- both ride on
-# Drive's OAuth grant), but their rules live under their own "sheets.*"/
-# "docs.*" operation keys (see TOOL_TO_OPERATION in auto_accept.py) rather
-# than nested under "drive.*", so the connector-prefix grouping below needs
-# them listed here, or the whole bucket is silently dropped (never
-# iterated, so never rendered).
-RULES_MENU_GROUPS: list[str] = [
-    "gmail", "drive", "sheets", "docs", "contacts", "calendar", "tasks",
-    "slack", "jira", "confluence", "salesforce", "telegram",
-]
-
-# Sheets and Docs pages have no grant section of their own -- neither is a
-# real connector (see RULES_MENU_GROUPS' own comment above), so
-# resource_types_for_connector("sheets"/"docs") is always empty -- even
-# though a folder granted Drive's Trusted Folders "read" or Sandbox Folders
-# "write" capability silently covers rows on both of these pages too
-# (sheets.read_values; every sheets.*/docs.* write -- see
-# resource_grants.DRIVE_FOLDER_READ_TARGETS/DRIVE_SANDBOX_WRITE_TARGETS).
-# _rules_state's drive_grant_summary_by_connector carries a read-only
-# pointer back to Drive for exactly these two pages, so that's discoverable
-# without already knowing to go check Drive's own page.
-DRIVE_GRANT_SUMMARY_GROUPS: tuple[str, ...] = ("sheets", "docs")
-
 # Connectors authenticated via a shared Google OAuth client (org bundle's
 # "google" section).
 GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks"}
@@ -293,61 +273,6 @@ _GOOGLE_CLIENTS: dict[str, type] = {
     "contacts": ContactsClient,
     "tasks": TasksClient,
 }
-
-RULE_HINTS: dict[str, str] = {
-    "trusted_sender_domain": "domain1.com, domain2.com",
-    "label_match":           "INBOX, UNREAD",
-    "age_threshold_days":    "30",
-    "send_to_myself":        "U0123456789",
-    "approved_channel":      "C0123456789, C9876543210",
-    "approved_channel_all_results": "C0123456789, C9876543210",
-    "approved_recipient":    "U0123456789",
-    "personal_calendar":     "primary",
-    "time_window_days":      "14",
-    "approved_object_types": "Account, Contact, Opportunity",
-    "approved_report_ids":   "00O000000000001",
-    "file_type_allowlist":   "application/vnd.google-apps.document, text/plain",
-    "approved_folder":       "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
-    "approved_sandbox_folder": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
-    "approved_recipient_domain": "domain1.com, domain2.com",
-    "label_name_allowlist": "Newsletters, Receipts",
-    "parent_folder_allowlist": "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms",
-    "approved_project_keys": "MYPROJ, OTHERPROJ",
-    "approved_space_keys":   "TEAM, DOCS",
-    "approved_chats":        "123456789, -100987654321",
-    "approved_chats_all_results": "123456789, -100987654321",
-    "approved_task_list":    "MDAwMDAwMDAwMDAwMDAwMDAwMDA6MDow",
-}
-
-# Tool-specific example prompts shown at the bottom of a connector's Rules
-# page, for every connector with at least one grantable resource type (see
-# resource_grants.GRANT_RESOURCE_TYPES) -- there's no live "+ Add..." picker
-# by resource name (issue #167 -- decided not to build one), so a grant row
-# only ever accepts the resource's raw ID/key. This nudges the user toward
-# the fastest way to get one: asking Claude, who already has read access.
-GRANT_ID_HINT_EXAMPLES: dict[str, str] = {
-    "drive": "“What's the Drive folder ID for the Q3 Reports folder?”",
-    "tasks": "“What's the ID of my Groceries task list?”",
-    "slack": "“What's the channel ID for #general?”",
-    "telegram": "“What's the chat ID for my conversation with Alice?”",
-    "jira": "“What's the project key for the Engineering project?”",
-    "confluence": "“What's the space key for the Engineering space?”",
-    "calendar": "“What's the calendar ID for my Work calendar?”",
-    "salesforce": "“What's the report ID for the Pipeline report?”",
-}
-
-
-def _grant_id_hint(cname: str) -> str | None:
-    """Bottom-of-page hint for `cname`'s Rules page, or None for a connector
-    (or Sheets/Docs, see RULES_MENU_GROUPS) with no grantable resource type
-    at all -- gmail/contacts trust by attribute (sender domain, label...),
-    not by a resource ID a grant row could hold, so there's nothing to ask
-    Claude for here."""
-    example = GRANT_ID_HINT_EXAMPLES.get(cname)
-    if not example:
-        return None
-    return f"Don't have the ID handy? Ask Claude — e.g. {example} — then paste it into the Resource ID field above."
-
 
 # Display metadata for the Privacy Filter page -- mirrors the group/category
 # schema documented in resources/settings.yaml.example and enforced by
@@ -393,17 +318,6 @@ PRIVACY_CATEGORY_LABELS: dict[str, dict[str, str]] = {
         "search_excerpt": "Search result excerpt",
         "attachments": "Attachment metadata",
     },
-}
-
-# Rule names configured through a Trusted-resource grant (see
-# resource_grants.py), not hand-authored -- a compiled entry under one of
-# these names is a pointer back to the grant, not something the Rules page's
-# text-input rows edit directly (see _rules_state's `_grant` skip).
-GRANT_COVERED_RULE_NAMES: set[str] = {
-    rule_name
-    for rt in GRANT_RESOURCE_TYPES
-    for capability in rt.capabilities.values()
-    for _op_key, rule_name in capability.targets
 }
 
 # Rule names whose value is the same kind of opaque resource ID a grant entry
@@ -457,6 +371,40 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
     if not google.get("client_id") or not google.get("client_secret"):
         return {}
     return {"installed": google}
+
+
+# ---------------------------------------------------------------------------- #
+# Auto-accept (policy v2) -- P6 of the policy v2 redesign's Settings surface: one filterable rule
+# list, sentence-rendered by policy.describe, replacing the per-connector Trusted-*/parallel-rule-
+# row/Sheets-Docs-pointer-page surface this module used to carry (see this file's git history for
+# what stood here through P5). Every rule this page writes lands directly in the on-disk v2
+# ``auto_accept:`` section (policy.store) -- "one config section, one grammar, one writer", the
+# redesign proposal's own top-of-page framing -- never through v1's ``auto_accept_rules``/
+# ``auto_accept_grants``, which stay exactly as the approval popup's own "Always allow" flow
+# (gate.py, still v1-backed pending a later phase's rewiring) and org mode's own separate rule-
+# authoring page (web/routes_org_settings.py, out of this redesign's scope per its own D6 --- see
+# that module's docstring) already leave them: both keep reading RULES_BY_OPERATION/RULES_LIST_
+# VALUE/RULES_INT_VALUE/OPERATION_LABELS below exactly as before.
+#
+# gate.py's _evaluate_auto_accept checks a rule written here unconditionally, regardless of which
+# engine ``policy.engine`` names authoritative -- see auto_accept.set_policy_v2_store_rules's own
+# docstring for why: a v2-only rule (in particular, anything using one of the three P6-only
+# predicates below) has no v1 shadow to be gated behind.
+# ---------------------------------------------------------------------------- #
+
+
+# The catalogue itself moved to policy/catalogue.py at P7, so the bridge's
+# privacyfence_propose_policy_change can share it instead of re-deriving it a second time (see that
+# module's own docstring). Re-exported here under their original, private spellings so every
+# existing caller/test in this file keeps working unchanged -- which is only these four. P7's
+# original block carried three more (``_PolicyExtraScope``, ``_POLICY_VALUE_HINTS``,
+# ``_extra_operations_for``); nothing referenced them under either spelling, so they were aliases
+# kept for callers that had already moved. Import them from ``policy/catalogue.py`` directly if
+# one ever needs them again, rather than re-adding a private alias here.
+_POLICY_EXTRA_SCOPES = policy_catalogue.EXTRA_SCOPES
+_policy_scope_catalogue = policy_catalogue.scope_catalogue
+_parse_verbs = policy_catalogue.parse_verbs
+_rules_for_catalogue_entry = policy_catalogue.rules_for_catalogue_entry
 
 
 # ---------------------------------------------------------------------------- #
@@ -550,34 +498,16 @@ def _run_async(work: Callable[[], Any], on_done: Callable[[bool, Any], None]) ->
     threading.Thread(target=_runner, daemon=True).start()
 
 
-def _parse_rule_value(rule_name: str, raw_text: str) -> Any:
-    """Text-input value -> stored config value, per the rule's known shape
-    (RULES_LIST_VALUE/RULES_INT_VALUE), or the plain string as-typed for an
-    unrecognized rule name. Empty text means "boolean rule, no value"."""
-    raw_text = (raw_text or "").strip()
-    if not raw_text:
-        return None
-    if rule_name in RULES_LIST_VALUE:
-        return [v.strip() for v in raw_text.split(",") if v.strip()]
-    if rule_name in RULES_INT_VALUE:
-        try:
-            return int(raw_text)
-        except ValueError:
-            # Left as typed rather than rejected outright -- the evaluator's
-            # own rule matching simply won't match a non-numeric value for
-            # an int-value rule, which is a softer failure than blocking the
-            # keystroke; see this module's docstring on text-input commit
-            # semantics (commit on blur/Enter, not per-keystroke).
-            return raw_text
-    return raw_text
-
-
-def _format_rule_value(rule_name: str, value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, list):
-        return ", ".join(str(v) for v in value)
-    return str(value)
+def _parse_value_list(raw_text: str) -> list[str] | None:
+    """The Auto-accept page's "value" field (a comma-separated list of resource ids/keys/domains)
+    -> a v2 rule value, or ``None`` for a value-less scope's empty field. Every v2 identity/valued-
+    attribute scope this page can write (``policy.propose.SCOPES_BY_GROUP`` plus the P6 extras --
+    see ``_policy_scope_catalogue``) takes a plain list of strings; there is no int-valued scope in
+    that catalogue the way v1's ``age_threshold_days``/``time_window_days`` condition rules were,
+    since this page writes scopes, not conditions (see this module's own Auto-accept section
+    docstring)."""
+    values = [v.strip() for v in (raw_text or "").split(",") if v.strip()]
+    return values or None
 
 
 def _relative_time(timestamp: str) -> str:
@@ -724,6 +654,36 @@ class SettingsController:
         -- see step_up_config.py's own ``LiveStepUpConfig`` docstring."""
         self._step_up = step_up
 
+    def policy_v2_migration_notice_html(self) -> str | None:
+        """P4 of the policy v2 redesign's Settings banner: ``None`` unless this install's config
+        has actually been migrated to the v2 on-disk ``auto_accept:`` schema (``policy.store.
+        MIGRATED_TO_POLICY_V2_MARKER``) *and* at least one migrated rule's expansion now names a
+        destructive (``delete``) or send (``send``/``draft``/``share``) verb -- e.g. F4's sandbox-
+        folder "Write" grant, which today silently includes ``sheets.delete_dimensions``. Those are
+        exactly the rules whose real reach a v1 config never spelled out to the user in those terms.
+
+        web/routes_settings.py renders this as ``web_shell.wrap()``'s ``dismissible_notice_html``,
+        not the persistent ``banner_html`` strip -- like ``step_up_config.StepUpConfig.off_notice``,
+        this is advisory rather than a live problem: once a person has seen which of their existing
+        rules this covers, it should not keep reappearing while nothing about those rules changes.
+        """
+        cfg = self._load_config()
+        if not cfg.get(policy_store.MIGRATED_TO_POLICY_V2_MARKER):
+            return None
+        flagged = policy_store.destructive_or_send_rules(cfg)
+        if not flagged:
+            return None
+        items = "".join(
+            f"<li><code>{html.escape(rule.id)}</code> "
+            f"({html.escape(', '.join(OPERATION_LABELS.get(op, op) for op in sorted(rule.operations)))})</li>"
+            for rule in flagged
+        )
+        return (
+            "Your auto-accept rules were migrated to the new format. "
+            f"{len(flagged)} existing rule(s) allow a <b>destructive</b> or <b>send</b> action "
+            f"without review: <ul>{items}</ul> Review them under Rules."
+        )
+
     def set_connectors_changed_listener(self, callback: Callable[[], None] | None) -> None:
         """``callback`` is ``McpDispatcher.notify_tools_changed`` in
         production (issue #396 Part C) -- called, on the main thread, right
@@ -743,7 +703,7 @@ class SettingsController:
     # ------------------------------------------------------------------ #
 
     def _on_rules_changed(self) -> None:
-        """Fired by auto_accept.reload_rules(), possibly from the web
+        """Fired by auto_accept.notify_rules_changed(), possibly from the web
         server's own asyncio thread -- marshal the state push onto the
         main thread."""
         call_on_main(self._push_snapshot)
@@ -808,9 +768,8 @@ class SettingsController:
     def _save_and_reload(self, cfg: dict) -> None:
         self._save_config(cfg)
         try:
-            # Triggers _on_rules_changed() -> a snapshot push, so callers
-            # don't need a separate explicit push after this.
-            reload_rules(build_effective_rules(cfg))
+            # Triggers a snapshot push, so callers don't need a separate explicit push after this.
+            notify_rules_changed()
         except Exception as exc:
             logger.warning("Rule hot-reload failed: %s", exc)
 
@@ -1508,131 +1467,61 @@ class SettingsController:
         return self.snapshot()
 
     # ------------------------------------------------------------------ #
-    # Rule actions (Auto-accept Rules page -- rule_type is a dropdown
-    # constrained to RULES_BY_OPERATION[op_key], value is a plain text field,
-    # per the design; see this module's docstring/the PR report for why
-    # this no longer goes through a native picker the way menu_bar.py's
-    # pre-#120 _add_rule/_add_rule_value did)
+    # Auto-accept (policy v2) -- P6 of the policy v2 redesign. See this
+    # module's own "Auto-accept (policy v2)" section, above, for the
+    # catalogue (_policy_scope_catalogue/_POLICY_EXTRA_SCOPES/
+    # _rules_for_catalogue_entry) these two actions build on.
     # ------------------------------------------------------------------ #
 
-    def update_rule_row(self, op_key: str, idx: int, field: str, value: str) -> dict[str, Any]:
-        cfg = self._load_config()
-        rules = cfg.get("auto_accept_rules", {}).get(op_key, [])
-        if idx >= len(rules):
+    def add_policy_rule(self, group: str, value: str, verbs: list) -> dict[str, Any]:
+        """The Auto-accept page's "Add rule" form. ``group`` is one of ``_policy_scope_catalogue()``'s
+        own ids; ``verbs`` is whichever of that group's own verb checkboxes were checked, as their
+        v2 verb strings. Additive only, like every other rule here: a submission that names a
+        ``(predicate, value)`` an existing rule already carries widens that rule's own operations
+        rather than creating a duplicate row (``policy.store.merge_rules``) -- which is also how
+        "add more verbs to an existing rule" works from this same form, no separate edit action
+        needed. Silently does nothing for an unrecognized group, a group none of the requested verbs
+        govern, or (for the one valued P6 extra, ``apps_script.project``) a value-needing scope
+        submitted with none -- see ``_rules_for_catalogue_entry``'s own docstring.
+        """
+        verb_enums = _parse_verbs(verbs)
+        if not verb_enums:
             return self.snapshot()
-        rule = dict(rules[idx])
-        if field == "rule_type":
-            rule["rule"] = (value or "").strip()
-        elif field == "value":
-            parsed = _parse_rule_value(rule.get("rule", ""), value)
-            if parsed is None:
-                rule.pop("value", None)
-            else:
-                rule["value"] = parsed
-        rules[idx] = rule
-        cfg.setdefault("auto_accept_rules", {})[op_key] = rules
-        self._save_and_reload(cfg)
-        return self.snapshot()
-
-    def add_rule_row(self, op_key: str) -> dict[str, Any]:
-        cfg = self._load_config()
-        rules = cfg.setdefault("auto_accept_rules", {}).setdefault(op_key, [])
-        rules.append({"rule": ""})
-        self._save_and_reload(cfg)
-        return self.snapshot()
-
-    def remove_rule_row(self, op_key: str, idx: int) -> dict[str, Any]:
-        cfg = self._load_config()
-        rules = cfg.get("auto_accept_rules", {}).get(op_key, [])
-        if idx >= len(rules):
-            return self.snapshot()
-        rules.pop(idx)
-        if rules:
-            cfg["auto_accept_rules"][op_key] = rules
-        else:
-            cfg.get("auto_accept_rules", {}).pop(op_key, None)
-        self._save_and_reload(cfg)
-        return self.snapshot()
-
-    # ------------------------------------------------------------------ #
-    # Grant actions (Trusted <Resource> rows -- see resource_grants.py)
-    # ------------------------------------------------------------------ #
-
-    def toggle_grant_capability(
-        self, connector: str, config_key: str, idx: int, cap: str
-    ) -> dict[str, Any]:
-        rt = grant_resource_type(connector, config_key)
-        if rt is None:
+        new_rules = _rules_for_catalogue_entry(group, _parse_value_list(value), verb_enums)
+        if not new_rules:
             return self.snapshot()
         cfg = self._load_config()
-        grants_cfg = cfg.setdefault("auto_accept_grants", {})
-        entries = get_grant_entries(grants_cfg, rt)
-        if idx >= len(entries):
-            return self.snapshot()
-        entries[idx][cap] = not entries[idx].get(cap, False)
-        set_grant_entries(grants_cfg, rt, entries)
-        self._save_and_reload(cfg)
+        existing = policy_store.compile_rules_from_config(cfg)
+        merged = policy_store.merge_rules(existing + new_rules)
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(merged)
+        cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] = True
+        self._save_and_reload_policy_v2(cfg)
         return self.snapshot()
 
-    def add_grant_row(self, connector: str, config_key: str) -> dict[str, Any]:
-        rt = grant_resource_type(connector, config_key)
-        if rt is None:
-            return self.snapshot()
+    def remove_policy_rule(self, rule_id: str) -> dict[str, Any]:
+        """Removes the rule with this stable id from the on-disk v2 ``auto_accept:`` section
+        entirely -- narrowing (rather than adding a rule) is always a remove-and-re-add-narrower
+        here, the same "additive only" posture the redesign proposal's §03 gives the whole model, not
+        a smaller-scoped edit action of its own."""
         cfg = self._load_config()
-        grants_cfg = cfg.setdefault("auto_accept_grants", {})
-        entries = get_grant_entries(grants_cfg, rt)
-        entries.append({rt.id_field: ""})
-        set_grant_entries(grants_cfg, rt, entries)
-        self._save_and_reload(cfg)
+        existing = policy_store.compile_rules_from_config(cfg)
+        remaining = [rule for rule in existing if rule.id != rule_id]
+        if len(remaining) == len(existing):
+            return self.snapshot()
+        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(remaining)
+        self._save_and_reload_policy_v2(cfg)
         return self.snapshot()
 
-    def update_grant_row(
-        self, connector: str, config_key: str, idx: int, field: str, value: str
-    ) -> dict[str, Any]:
-        rt = grant_resource_type(connector, config_key)
-        if rt is None:
-            return self.snapshot()
-        cfg = self._load_config()
-        grants_cfg = cfg.setdefault("auto_accept_grants", {})
-        entries = get_grant_entries(grants_cfg, rt)
-        if idx >= len(entries):
-            return self.snapshot()
-
-        if field == "id":
-            resource_id = _extract_drive_id(value) or (value or "").strip()
-            if resource_id and any(
-                i != idx and rt.id_of(e) == resource_id for i, e in enumerate(entries)
-            ):
-                self.error = f"That {rt.singular} ({_short_id(resource_id)}) is already trusted."
-                return self.snapshot()
-            entries[idx][rt.id_field] = resource_id
-            self.error = ""
-        elif field == "name":
-            entries[idx]["name"] = (value or "").strip()
-
-        set_grant_entries(grants_cfg, rt, entries)
+    def _save_and_reload_policy_v2(self, cfg: dict[str, Any]) -> None:
+        """Persist ``cfg`` and hot-reload the v2 rule cache (``set_policy_v2_store_rules``) plus
+        fire the rules-changed listener broadcast (``notify_rules_changed``, via
+        ``_save_and_reload``) that pushes a fresh snapshot to every open tab and re-checks any
+        pending approval."""
         self._save_and_reload(cfg)
-
-        if field == "id":
-            resource_id = rt.id_of(entries[idx])
-            client = self._client_for(connector)
-            if resource_id and client is not None:
-                self._resolve_names_async(rt, [resource_id], client)
-        return self.snapshot()
-
-    def remove_grant_row(self, connector: str, config_key: str, idx: int) -> dict[str, Any]:
-        rt = grant_resource_type(connector, config_key)
-        if rt is None:
-            return self.snapshot()
-        cfg = self._load_config()
-        grants_cfg = cfg.setdefault("auto_accept_grants", {})
-        entries = get_grant_entries(grants_cfg, rt)
-        if idx >= len(entries):
-            return self.snapshot()
-        entries.pop(idx)
-        set_grant_entries(grants_cfg, rt, entries)
-        self._save_and_reload(cfg)
-        return self.snapshot()
+        try:
+            set_policy_v2_store_rules(policy_store.compile_rules_from_config(cfg))
+        except Exception as exc:
+            logger.warning("Policy v2 store hot-reload failed: %s", exc)
 
     def _resolve_names_async(
         self, rt: GrantResourceType, resource_ids: list[str], client: Any | None
@@ -1764,7 +1653,7 @@ class SettingsController:
             "general": self._general_state(cfg),
             "connectors": self._connectors_state(cfg, org_config),
             "telegram_auth": self._telegram_auth_state(),
-            "rules": self._rules_state(cfg),
+            "auto_accept": self._auto_accept_state(cfg),
             "privacy": self._privacy_state(cfg),
             "audit": self._audit_state(cfg),
             "about": self._about_state(),
@@ -1887,130 +1776,75 @@ class SettingsController:
             for row in self._connectors_state(cfg, org_config)
         ]
 
-    def _rules_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
-        rules_cfg: dict[str, list[dict]] = cfg.get("auto_accept_rules", {}) or {}
-        grants_cfg: dict[str, Any] = cfg.get("auto_accept_grants", {}) or {}
-        ops_by_connector: dict[str, list[str]] = {}
-        for op_key in OPERATION_LABELS:
-            ops_by_connector.setdefault(op_key.split(".", 1)[0], []).append(op_key)
+    def _auto_accept_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
+        """State for the Auto-accept page (P6): every rule in the on-disk v2 ``auto_accept:``
+        section, sentence-rendered, plus the "add a rule" scope catalogue -- one filterable list,
+        replacing the per-connector Trusted-*/parallel-rule-row/Sheets-Docs-pointer-page surface
+        this method used to build (``_rules_state``/``_drive_grant_summary``/``_grant_entry_label``,
+        through P5).
 
-        connectors = []
-        sections_by_connector: dict[str, list[dict[str, Any]]] = {}
-        grants_by_connector: dict[str, list[dict[str, Any]]] = {}
-        drive_grant_summary_by_connector: dict[str, dict[str, Any] | None] = {}
-        grant_hint_by_connector: dict[str, str | None] = {}
+        P8 adds each row's own usage: ``match_count``/``last_matched`` (a relative-time string,
+        via ``_relative_time``, empty when the rule has never matched) and ``never_matched``,
+        from ``AuditLogger.rule_usage()`` grouped by the same ``rule.id`` this row is keyed on --
+        gate.py's ``_evaluate_auto_accept`` stamps every "auto_accepted" audit entry's ``rule_id``
+        with exactly this id when (and only when) it can attribute the decision to one row (see
+        that field's own docstring), so a count here is never a guess. Reads straight off this
+        principal's own ``logs/audit/`` directory, the same way ``_audit_state`` builds "Recent
+        decisions" -- not the process-wide ``get_audit_logger()`` singleton, which may be a
+        different principal's logger by the time this renders (P6, org mode)."""
+        rules = policy_store.compile_rules_from_config(cfg)
+        catalogue = _policy_scope_catalogue()
+        log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
+        usage = AuditLogger(str(log_dir)).rule_usage() if log_dir.exists() else {}
 
-        for cname in RULES_MENU_GROUPS:
-            resource_types = resource_types_for_connector(cname)
-            op_keys = ops_by_connector.get(cname, [])
-            client = self._client_for(cname)
+        rule_rows: list[dict[str, Any]] = []
+        for rule in rules:
+            connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
+            connector = connectors_of_rule[0] if connectors_of_rule else ""
+            rule_usage = usage.get(rule.id) or {}
+            rule_rows.append({
+                "id": rule.id,
+                "sentence": policy_describe.rule_sentence(rule),
+                "connector": connector,
+                "connector_label": policy_describe.connector_label(connector) if connector else "",
+                "scope_type": policy_describe.scope_type_of(rule),
+                "value": self._resolved_rule_value(rule),
+                # Raw (unresolved) value, for the page's right-click-to-copy affordance -- the
+                # resolved "value" field above may show a friendly name instead of the id/key a
+                # user would actually want to paste elsewhere.
+                "value_ids": [str(v) for v in rule.value] if isinstance(rule.value, list) else (
+                    [str(rule.value)] if rule.value else []
+                ),
+                "verbs": [
+                    {"verb": verb.value, "family": policy_registry.VERB_FAMILY[verb].value}
+                    for verb in policy_describe.rule_verbs(rule)
+                ],
+                "covered_tools": list(policy_describe.covered_tools(rule)),
+                "match_count": rule_usage.get("count", 0),
+                "last_matched": _relative_time(rule_usage["last_matched"]) if rule_usage else "",
+                "never_matched": not rule_usage,
+            })
+        rule_rows.sort(key=lambda row: row["sentence"])
 
-            drive_grant_summary_by_connector[cname] = (
-                self._drive_grant_summary(grants_cfg) if cname in DRIVE_GRANT_SUMMARY_GROUPS else None
-            )
-            grant_hint_by_connector[cname] = _grant_id_hint(cname) if resource_types else None
+        connectors = sorted({row["connector"] for row in rule_rows if row["connector"]}
+                             | {entry["connector"] for entry in catalogue})
+        return {"rules": rule_rows, "scope_groups": catalogue, "connectors": connectors}
 
-            grant_sections = []
-            for rt in resource_types:
-                entries = get_grant_entries(grants_cfg, rt)
-                rows = []
-                for entry in entries:
-                    resource_id = rt.id_of(entry)
-                    name = entry.get("name") or self._resolver.cached_name(rt, resource_id)
-                    rows.append({
-                        "name": name or "",
-                        "id": resource_id,
-                        "caps": {cap_key: bool(entry.get(cap_key)) for cap_key in rt.capabilities},
-                    })
-                grant_sections.append({
-                    "config_key": rt.config_key,
-                    "title": rt.label,
-                    "add_label": f"Add {rt.singular}…",
-                    "cap_keys": list(rt.capabilities.keys()),
-                    "cap_labels": {k: v.label for k, v in rt.capabilities.items()},
-                    "rows": rows,
-                })
-                self._resolve_names_async(rt, [rt.id_of(e) for e in entries], client)
-            grants_by_connector[cname] = grant_sections
-
-            rule_sections = []
-            for op_key in op_keys:
-                label = OPERATION_LABELS[op_key]
-                short_label = label.split(" – ", 1)[1] if " – " in label else label
-                op_rules = rules_cfg.get(op_key) or []
-                rows = [
-                    {"rule_type": r.get("rule", ""), "value": _format_rule_value(r.get("rule", ""), r.get("value"))}
-                    for r in op_rules
-                    if not r.get("_grant")
-                ]
-                rule_sections.append({
-                    "op_key": op_key,
-                    "title": short_label,
-                    "rows": rows,
-                    # Valid rule names for this operation -- drives the rule-type
-                    # dropdown client-side (renderRules' ruleTypeLabel()) instead of
-                    # a free-text field the user had to already know the rule name
-                    # to fill in correctly.
-                    "rule_type_options": RULES_BY_OPERATION.get(op_key, []),
-                })
-            sections_by_connector[cname] = rule_sections
-
-            count = sum(len(get_grant_entries(grants_cfg, rt)) for rt in resource_types)
-            count += sum(len(rules_cfg.get(op_key) or []) for op_key in op_keys)
-            connectors.append({"key": cname, "label": cname.capitalize(), "count": count})
-
-        return {
-            "connectors": connectors,
-            "sections_by_connector": sections_by_connector,
-            "grants_by_connector": grants_by_connector,
-            "drive_grant_summary_by_connector": drive_grant_summary_by_connector,
-            "grant_hint_by_connector": grant_hint_by_connector,
-        }
-
-    def _drive_grant_summary(self, grants_cfg: dict[str, Any]) -> dict[str, Any]:
-        """Read-only pointer to Drive's Trusted/Sandbox Folder grants, shown
-        at the top of the Sheets and Docs pages (see DRIVE_GRANT_SUMMARY_GROUPS'
-        own comment for why those two pages need it). No checkboxes and no
-        Remove action here -- the one editable copy of these grants stays on
-        the Drive page; this is purely so a reviewer auditing Sheets or Docs
-        alone isn't left assuming nothing governs the writes/reads they're
-        looking at.
-        """
-        client = self._client_for("drive")
-        rows = []
-        for config_key, cap_key, cap_label in (
-            ("folders", "read", "Trusted Folders — read auto-accept"),
-            ("sandbox_folders", "write", "Sandbox Folders — write auto-accept"),
-        ):
-            rt = grant_resource_type("drive", config_key)
-            entries = [e for e in get_grant_entries(grants_cfg, rt) if e.get(cap_key)]
-            names = (
-                ", ".join(self._grant_entry_label(rt, e, client) for e in entries)
-                if entries else "(none configured)"
-            )
-            rows.append({"label": cap_label, "value": names})
-        return {"title": "Governed by Drive", "rows": rows, "link_label": "Manage in Drive →"}
-
-    def _grant_entry_label(
-        self, rt: GrantResourceType, entry: dict[str, Any], client: Any | None
-    ) -> str:
-        """Display label for one grant entry: a hand-set/cached name, else a
-        shortened id, plus a "still resolving"/"connect X" hint while no name
-        is available yet. Used by the read-only Drive grant summary shown on
-        the Sheets/Docs pages (_drive_grant_summary above) -- the main grant
-        rows rendered by the webview keep name/id as separate editable fields
-        (see the rows.append() above), so they don't go through this."""
-        resource_id = rt.id_of(entry)
-        name = entry.get("name") or self._resolver.cached_name(rt, resource_id)
-        label = name or _short_id(resource_id)
-        if entry.get("tab"):
-            label += f" — {entry['tab']}"
-        if name is None:
-            label += (
-                "  (resolving…)" if client is not None
-                else f"  (connect {rt.connector.capitalize()} to see its name)"
-            )
-        return label
+    def _resolved_rule_value(self, rule: PolicyRule) -> str:
+        """A rule's own value, as a comma-separated display string, resolving each id through the
+        same cached-name machinery the old grant rows used (``RULE_NAME_TO_RESOURCE_TYPE``,
+        ``resource_names.py``) wherever the predicate names an opaque resource id -- a Drive folder,
+        a Jira project key, and so on -- rather than showing the raw id, kicking off a background
+        resolve for anything not cached yet (``_resolve_names_async``)."""
+        values = rule.value if isinstance(rule.value, list) else ([rule.value] if rule.value else [])
+        if not values:
+            return ""
+        str_values = [str(v) for v in values]
+        rt = RULE_NAME_TO_RESOURCE_TYPE.get(rule.predicate)
+        if rt is None:
+            return ", ".join(str_values)
+        self._resolve_names_async(rt, str_values, self._client_for(rt.connector))
+        return ", ".join(self._resolver.cached_name(rt, v) or _short_id(v) for v in str_values)
 
     def _privacy_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
         groups = [{"key": g, "label": label} for g, label in PRIVACY_GROUP_LABELS.items()]

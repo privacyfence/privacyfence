@@ -114,6 +114,7 @@ import time
 from pathlib import Path
 
 import httpx
+import httpx2
 import pytest
 import yaml
 
@@ -439,8 +440,8 @@ async def _propose_trusted_sender_rule(mcp_url: str, mcp_token: str, *, value: l
     reasoning as every other MCP helper in this repo's system/packaged
     tests."""
     headers = {"Authorization": f"Bearer {mcp_token}"}
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write, _sid):
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await session.call_tool(
@@ -512,8 +513,8 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
 
         # -- tools/list: the real MCP surface, no connector configured -----
         headers = {"Authorization": f"Bearer {daemon.mcp_token}"}
-        async with httpx.AsyncClient(headers=headers) as http_client:
-            async with streamable_http_client(daemon.mcp_url, http_client=http_client) as (read, write, _sid):
+        async with httpx2.AsyncClient(headers=headers) as http_client:
+            async with streamable_http_client(daemon.mcp_url, http_client=http_client) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     tools = await session.list_tools()
@@ -527,10 +528,12 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         )
         await _resolve_pending_card(web_client, session_id, decision="confirm")
         allow_result = await allow_task
-        assert allow_result.isError is not True, getattr(allow_result, "content", allow_result)
-        assert allow_result.structuredContent["confirmed"] is True
-        assert allow_result.structuredContent["changed"] is True
-        assert "trusted_sender_domain" in allow_result.structuredContent["description"]
+        assert allow_result.is_error is not True, getattr(allow_result, "content", allow_result)
+        assert allow_result.structured_content["confirmed"] is True
+        assert allow_result.structured_content["changed"] is True
+        # P9 of the policy v2 redesign: the confirmed-response description is the v2 rule's own
+        # human-readable sentence now, not an echo of the v1 rule_name string.
+        assert "Gmail - sender domain allowed.example.com: allow read" in allow_result.structured_content["description"]
 
         # -- Deny round trip ----------------------------------------------------
         deny_task = asyncio.create_task(
@@ -538,7 +541,7 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         )
         await _resolve_pending_card(web_client, session_id, decision="cancel")
         deny_result = await deny_task
-        assert deny_result.isError is True
+        assert deny_result.is_error is True
 
         # -- Audit log confirms both real decisions ------------------------------
         audit_dir = daemon.home / ".privacyfence" / "authority" / "logs" / "audit"
@@ -681,8 +684,8 @@ async def test_upgrade_in_place_preserves_user_state(tmp_path):
             )
             await _resolve_pending_card(web_client, session_id, decision="confirm")
             result = await propose_task
-            assert result.isError is not True, getattr(result, "content", result)
-            assert result.structuredContent["changed"] is True
+            assert result.is_error is not True, getattr(result, "content", result)
+            assert result.structured_content["changed"] is True
 
             await _quit(web_client, session_id)
         assert daemon.process.wait(timeout=15) == 0

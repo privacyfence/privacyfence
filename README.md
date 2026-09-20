@@ -117,9 +117,9 @@ An embedded, local-only web page (PrivacyFence Settings) provides access to:
 - Connector authentication and status
 - The local audit log
 
-Auto-accept rules and trusted-resource grants are managed from a single searchable page, organized by connector:
+Every auto-accept rule, across every connector, is managed from a single filterable list -- each rule reads as a plain-language sentence, shows exactly which tools it unblocks, and can be added or removed without leaving the page:
 
-<img src="https://raw.githubusercontent.com/privacyfence/privacyfence/main/docs/images/screenshots/settings-auto-accept-rules.png" alt="PrivacyFence Settings, Auto-accept Rules page, showing a sidebar of connectors and a searchable list of that connector's grants and rules" width="700">
+<img src="https://raw.githubusercontent.com/privacyfence/privacyfence/main/docs/images/screenshots/settings-auto-accept-rules.png" alt="PrivacyFence Settings, Auto-accept page, showing a filterable list of rules rendered as plain-language sentences with verb chips, and an add-a-rule form" width="700">
 
 ---
 
@@ -266,22 +266,32 @@ installer. Centrally managed ("organization mode") deployments follow a differen
    link — PrivacyFence does not issue one to the program it governs.)
 5. Settings opens on its Connectors page: install the organization configuration provided
    by your IT administrator, if any, and authenticate the connectors you want.
+6. **Add a passkey when the companion asks.** A packaged install requires one before it will
+   release any approval, and a fresh one has none yet — so until you add it, PrivacyFence approves
+   nothing and every page says so. The companion opens the Passkeys page for you at each start
+   until one is enrolled; you can also reach it at `/security` from that banner. Write down the
+   one-time recovery code it shows you: it is the only way back from a lost authenticator, local
+   mode has no IdP to fall back on, and the companion can issue a fresh one later but never
+   re-show that one.
 
 Stable releases are code-signed and notarized by Apple, so this just works — no Gatekeeper
 warnings, no manual quarantine step. Pre-release (alpha/beta/rc) builds might not be, depending on
 signing/notarization credential availability at build time. Full installation details are in
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
 
-**Privilege separation is on by default:** without it, PrivacyFence's daemon runs as you — and so
-does the AI client it governs, which is why that client could otherwise read and rewrite the policy
-deciding what it's allowed to do. The installer in step 2 moves the daemon to an account of its own
-— which takes the policy, the audit key and the connector credentials out of its reach — and starts
-a menu-bar companion so you still have a way in, all while it already has the administrator
-password you gave it. (If you install some other way, by copying the app bundle from another
-machine say, the daemon asks you once itself, via the standard admin-password dialog, the first
-time it starts unseparated; decline once and it won't ask again.) Run
-`sudo ./scripts/macos_privilege_separation.sh enable` any time afterward if you change your mind
-(`... disable` reverses it). Reversible either way, and worth reading
+**Privilege separation is mandatory on a packaged install:** without it, PrivacyFence's daemon runs
+as you — and so does the AI client it governs, which is why that client could otherwise read and
+rewrite the policy deciding what it's allowed to do. The installer in step 2 moves the daemon to an
+account of its own — which takes the policy, the audit key and the connector credentials out of its
+reach — and starts a menu-bar companion so you still have a way in, all while it already has the
+administrator password you gave it. (If you install some other way, by copying the app bundle from
+another machine say, the daemon asks for it itself, via the standard admin-password dialog, every
+time it starts and finds the install unseparated — a decline is an unfinished install, not a
+setting, and a packaged build that stays unseparated refuses to serve at all rather than serve a
+guarantee it cannot keep.) Run
+`sudo ./scripts/macos_privilege_separation.sh enable` any time afterward if you need to re-run it
+by hand (`... disable` reverses the layout, but on a packaged install it stops being a way to keep
+the daemon running — it refuses to serve once it finds no marker). Worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
 before you run it by hand — the migration moves live connector tokens.
 
@@ -317,23 +327,32 @@ before you run it by hand — the migration moves live connector tokens.
    works once you are already signed in — not as the first way in.)
 5. Settings opens on its Connectors page: install the organization configuration provided
    by your IT administrator, if any, and authenticate the connectors you want.
+6. **Add a passkey when the companion asks.** A packaged install requires one before it will
+   release any approval, and a fresh one has none yet — so until you add it, PrivacyFence approves
+   nothing and every page says so. The companion opens the Passkeys page for you at each start
+   until one is enrolled; you can also reach it at `/security` from that banner. Write down the
+   one-time recovery code it shows you: it is the only way back from a lost authenticator, local
+   mode has no IdP to fall back on, and the companion can issue a fresh one later but never
+   re-show that one.
 
 Stable releases are Authenticode-signed; pre-release (alpha/beta/rc) builds might not be, depending
 on signing certificate availability at build time. Full installation details, including what
 uninstalling does and doesn't remove, are in
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging).
 
-**Privilege separation is on by default:** without it, PrivacyFence's daemon runs as you — and so
-does the AI client it governs, which is why that client could otherwise read and rewrite the policy
-deciding what it's allowed to do. The installer in step 2 moves the daemon to a Windows service
+**Privilege separation is mandatory on a packaged install:** without it, PrivacyFence's daemon runs
+as you — and so does the AI client it governs, which is why that client could otherwise read and
+rewrite the policy deciding what it's allowed to do. The installer in step 2 moves the daemon to a
+Windows service
 running under a virtual account of its own — which takes the policy, the audit key and the
 connector credentials out of that client's reach — and starts a tray companion so you still have a
 way in, all while it already has the administrator rights it needs to do that. One thing differs
 from macOS and Linux: your data directory moves to `%ProgramData%\PrivacyFence\`, so run `…
 disable` *before* uninstalling if you ever want it back under your own account. The same command,
 `powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" enable`
-from an elevated PowerShell, remains available for inspecting or re-running it by hand. Reversible,
-and worth reading
+from an elevated PowerShell, remains available for inspecting or re-running it by hand. `…
+disable` reverses the layout, but on a packaged install it stops being a way to keep the daemon
+running — it refuses to serve once it finds no marker. Worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
 either way — the migration moves live connector tokens.
 
@@ -356,6 +375,9 @@ either way — the migration moves live connector tokens.
    to the program it governs.)
 6. Settings opens on its Connectors page: install the organization configuration provided
    by your IT administrator, if any, and authenticate the connectors you want.
+7. **Add a passkey when the companion asks** — same as the macOS steps above, and for the same
+   reason: a packaged install releases no approval until one is enrolled. Keep the one-time
+   recovery code it shows you.
 
 The package ships a self-contained PyInstaller build of the daemon — no `python3-*` packages
 required beyond what a normal Debian/Ubuntu desktop already has. `apt remove`/`dpkg -r` leaves
@@ -452,7 +474,7 @@ walkthrough.
 - [Salesforce setup](https://github.com/privacyfence/privacyfence/blob/main/docs/salesforce-setup.md)
 - [Atlassian setup](https://github.com/privacyfence/privacyfence/blob/main/docs/atlassian-setup.md)
 - [Telegram setup](https://github.com/privacyfence/privacyfence/blob/main/docs/telegram-setup.md)
-- [Org mode setup guide](https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md) — Ubuntu server, Caddy, Google identity (ahead of the Linux headless entrypoint landing — see the guide's own status note)
+- [Org mode setup guide](https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-setup-guide.md) — Ubuntu server, Caddy, Google identity
 - [Org mode operational readiness](https://github.com/privacyfence/privacyfence/blob/main/docs/org-mode-operational-readiness.md) — support/readiness level, backup/restore, upgrade/rollback, persisted-state compatibility, restart and single-daemon availability behaviour
 - [Connector QA testing](https://github.com/privacyfence/privacyfence/blob/main/docs/connector-qa-testing.md)
 - [Release testing](https://github.com/privacyfence/privacyfence/blob/main/docs/release-testing.md)

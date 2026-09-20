@@ -9,7 +9,7 @@ files under this module ("evaluate(), preflight(), temp-accept window").
 """
 from __future__ import annotations
 
-from privacyfence.policy.engine import PolicyRule, evaluate, preflight
+from privacyfence.policy.engine import PolicyRule, evaluate, find_matching_rule, preflight
 
 from ...helpers import make_ctx
 
@@ -99,6 +99,39 @@ class TestEvaluateTempAccept:
     def test_missing_is_temp_accepted_callback_is_not_auto_accepted(self):
         ok, matched = evaluate([], "op", make_ctx())
         assert (ok, matched) == (False, "")
+
+
+class TestFindMatchingRule:
+    """P8 (rule attribution and staleness): the rule *object* ``evaluate()`` matched, factored
+    out so a caller (gate.py's ``_evaluate_auto_accept``) can derive a canonical, content-based
+    id from it (``policy.store.rule_id_for_rule``) instead of the possibly-ambiguous name
+    ``evaluate()`` itself returns -- see that function's own docstring for why looking a rule back
+    up by name is unsafe when two rows can share one."""
+
+    def test_returns_the_matching_rule_object(self):
+        rule = PolicyRule(id="r1", predicate="always_allow", value=None, operations=frozenset({"op"}))
+        assert find_matching_rule([rule], "op", make_ctx()) is rule
+
+    def test_returns_none_when_nothing_matches(self):
+        rule = PolicyRule(id="r1", predicate="i_am_owner", value=None, operations=frozenset({"op"}))
+        assert find_matching_rule([rule], "op", make_ctx(connector="drive")) is None
+
+    def test_never_considers_temp_accept(self):
+        # Unlike evaluate(), find_matching_rule has no is_temp_accepted parameter at all -- a
+        # caller resolving "which rule row matched" must get None for the grace window, never a
+        # pseudo-rule, since there is no on-disk row it could possibly refer to.
+        assert find_matching_rule([], "op", make_ctx()) is None
+
+    def test_picks_the_same_rule_evaluate_reports_by_id_when_ids_collide(self):
+        # Two rules sharing one `.id` (the F9 shape a v1-compiled rule list can have -- see
+        # policy.compat.compile_rule_entry's own docstring) but naming different resources: only
+        # one of them actually matches this ctx, and find_matching_rule must return that exact
+        # object, not merely "the first rule with a matching id".
+        a = PolicyRule(id="dup", predicate="i_am_owner", value=None, operations=frozenset({"op"}))
+        b = PolicyRule(id="dup", predicate="always_allow", value=None, operations=frozenset({"op"}))
+        ok, matched_id = evaluate([a, b], "op", make_ctx(connector="drive"))
+        assert (ok, matched_id) == (True, "dup")
+        assert find_matching_rule([a, b], "op", make_ctx(connector="drive")) is b
 
 
 class TestPreflightVerdicts:

@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from privacyfence.auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION
-from privacyfence.resource_grants import GRANT_RESOURCE_TYPES
+from privacyfence.policy.resource_registry import GRANT_RESOURCE_TYPES
 from privacyfence.settings_controller import OPERATION_LABELS, RULES_BY_OPERATION
 from privacyfence.policy.registry import (
     GATES,

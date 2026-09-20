@@ -466,8 +466,8 @@ what actually prompts. It is no longer the primary proof for gate-state correctn
 `test_gate.py`'s job now, confirmed exhaustive by Phase 5 — but it's still the only thing that
 exercises the gate, the popup UI, and the audit log against a live provider end to end, and it stays
 the route to catch a connector's tool wired to the wrong gate/metadata in the first place. Run it
-before a release, or after any change to `gate.py`/`auto_accept.py`/`resource_grants.py`/the web
-approval UI broadly, not on every PR.
+before a release, or after any change to `gate.py`/`auto_accept.py`/`policy/resource_registry.py`/
+the web approval UI broadly, not on every PR.
 
 A routine release no longer runs §2.1/§2.2 across every connector on principle —
 [release-testing.md](release-testing.md)'s own "before release" check just confirms §0's scheduled

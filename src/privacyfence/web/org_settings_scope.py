@@ -34,23 +34,27 @@ silently go unclassified.
 `PER_PRINCIPAL_ACTIONS` is deliberately narrower than "every action this
 desktop-app-shaped controller exposes that is meaningful per-principal" --
 it's exactly the subset `routes_org_settings.py` has an actual route for
-(today: adding a rule row, removing a rule row, removing a grant row). A
-rule/grant *update*, a grant *add*, a connector toggle, a connector refresh,
-or a connector authentication flow is just as meaningful per-principal in
-org mode in principle, but no route wires any of them yet, so they live in
-`PER_PRINCIPAL_ACTIONS_UNROUTED` instead: still not `NOT_APPLICABLE_ACTIONS`
-(they're not meaningless or wrong the way `enable_step_up` is -- an org-mode
-route for them is exactly the kind of thing a later PR adds), but
-`is_action_permitted` denies them until that route exists and moves them
-into `PER_PRINCIPAL_ACTIONS` alongside it. Letting this allow-list claim an
-action no route consumes was the bug (#B20 in the 4.1 security review): the
-allow-list had run ahead of the routes, so `is_action_permitted` would
-happily say yes to an action for a signed-in principal with nothing on the
-other end to say no -- exactly the kind of gap a route added later, in good
-faith, could have trusted without noticing it was never actually wired for.
-`add_rule_row` itself lived in `PER_PRINCIPAL_ACTIONS_UNROUTED` for exactly
-that reason until the org-settings page grew its own "Add a rule" form and
-`/api/settings/rules/add` route -- see that route's own docstring.
+(today: adding a policy rule, removing a policy rule). A connector toggle,
+connector refresh, or connector authentication flow is just as meaningful
+per-principal in org mode in principle, but no route wires any of them yet,
+so they live in `PER_PRINCIPAL_ACTIONS_UNROUTED` instead: still not
+`NOT_APPLICABLE_ACTIONS` (they're not meaningless or wrong the way
+`enable_step_up` is -- an org-mode route for them is exactly the kind of
+thing a later PR adds), but `is_action_permitted` denies them until that
+route exists and moves them into `PER_PRINCIPAL_ACTIONS` alongside it.
+Letting this allow-list claim an action no route consumes was the bug
+(#B20 in the 4.1 security review): the allow-list had run ahead of the
+routes, so `is_action_permitted` would happily say yes to an action for a
+signed-in principal with nothing on the other end to say no -- exactly the
+kind of gap a route added later, in good faith, could have trusted without
+noticing it was never actually wired for. `add_policy_rule`/
+`remove_policy_rule` themselves lived in `PER_PRINCIPAL_ACTIONS_UNROUTED`
+for exactly that reason (P6 of the policy v2 redesign built the writer
+before org mode had a route for it) until P9 rebuilt the org-settings page
+on the v2 schema and moved them here alongside its own routes -- see
+`routes_org_settings.py`'s own docstring. The v1-shaped
+`add_rule_row`/`remove_rule_row`/`remove_grant_row` this set used to carry
+are gone with the v1 `SettingsController` methods P9 deleted.
 
 `is_action_permitted` is the other half: `Principal.is_admin` is already
 resolved from the IdP and carried end to end (`org_identity.
@@ -66,7 +70,7 @@ from __future__ import annotations
 from ..principal import Principal
 
 PER_PRINCIPAL_ACTIONS: frozenset[str] = frozenset({
-    "add_rule_row", "remove_rule_row", "remove_grant_row",
+    "add_policy_rule", "remove_policy_rule",
 })
 
 # Per-principal in concept (see module docstring), but routes_org_settings.py
@@ -74,10 +78,15 @@ PER_PRINCIPAL_ACTIONS: frozenset[str] = frozenset({
 # them, not permits them, until one does. Move an action to
 # `PER_PRINCIPAL_ACTIONS` in the same PR that adds its route, never ahead of
 # it.
+#
+# P6 of the policy v2 redesign retired update_rule_row/toggle_grant_capability/
+# add_grant_row/update_grant_row from routes_settings._ALLOWED_ACTIONS
+# entirely (SettingsController.add_policy_rule/remove_policy_rule are the
+# local Auto-accept page's own replacements) -- they had no route here
+# either, so nothing moved, nothing broke, and there is simply nothing left
+# to unblock for them.
 PER_PRINCIPAL_ACTIONS_UNROUTED: frozenset[str] = frozenset({
     "enable_connector", "disable_connector", "refresh_connectors", "authenticate_connector",
-    "update_rule_row",
-    "toggle_grant_capability", "add_grant_row", "update_grant_row",
 })
 
 ADMIN_ONLY_ACTIONS: frozenset[str] = frozenset({

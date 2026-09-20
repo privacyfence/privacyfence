@@ -37,6 +37,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- **Confirming an auto-accept rule an AI client asked for now needs the same proof as approving
+  one of its writes.** PrivacyFence has two kinds of confirmation dialog and they had been treated
+  as one. The kind that follows an **Always allow** click is a second step inside a decision whose
+  own approval card already demanded a passkey and an attributable session, so asking again there
+  would be a second tap for one decision. The kind an MCP client raises —
+  `privacyfence_propose_policy_change`, and the deprecated
+  `privacyfence_propose_auto_accept_rule_change` — has no card
+  in front of it: the dialog *is* the whole gate, and what it creates is a rule deciding what gets
+  approved without asking from then on. Both were exempt from the decide-time checks, because those
+  are scoped to a result named `accept`. So on the strongest configuration PrivacyFence offers —
+  privilege-separated, `step_up.enabled`, `require_passkey` on, a passkey enrolled — a local
+  process holding an unattested session could ask for a rule over MCP and then confirm its own
+  dialog, with no passkey and no human. Those dialogs are now marked as what they are, and
+  confirming one takes exactly what changing the same setting from the Settings page already takes:
+  a session PrivacyFence can attribute to a person, and a passkey wherever `require_passkey` is on
+  — regardless of `step_up.scope`, since a rule is not a read or a write but the thing that decides
+  which of those you get asked about at all. Org mode gets the passkey half on the same condition
+  (it has no session provenance to check — every session there is an IdP authentication).
+  **Cancelling is ungated**, for the same reason denying always has been. Found reviewing the
+  policy v2 redesign's two new meta-tools against the rest of the self-approval work, before
+  they ship together.
 - **A packaged install now requires a passkey before it releases anything, out of the box.**
   `step_up.enabled` and `step_up.require_passkey` both default to on for the DMG/`.pkg`, the
   Windows installer and the `.deb` — the same builds ADR 0003 already makes privilege-separated or
@@ -730,6 +751,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- ADR 0005 (`docs/adr/0005-moving-the-approval-decision-off-the-device.md`) asks, and does not yet
+  answer, whether local mode's approving decision should be rendered and answered on a device the
+  agent does not run on. **Proposed, not accepted — no behavior changes with this entry.** It is
+  written now because the same question had been deferred in one line three times (ADR 0002's *Out
+  of scope*, ADR 0003's, and this release's self-approval hardening work), each time to "its own
+  issue" that was never opened, and because the hardening that shipped in this release is what
+  makes the question answerable: with the credential store behind a uid boundary, enrollment gated,
+  the passkey on by default and sessions carrying a provenance, the same-machine gate is about as
+  strong as a same-machine gate gets — which is the position from which its ceiling can be measured
+  rather than guessed at. The ADR states that ceiling plainly (an adversary running as you can be
+  present for any proof you give, including the render of the sentence your passkey signs), weighs
+  a paired phone over push against a second device on the local network against a display-carrying
+  hardware authenticator against doing nothing more, recommends the LAN option, and lists what
+  would have to be true before any of it could be accepted. Nothing in the shipped hardening is
+  wasted either way: an install with no second device keeps exactly what it has today.
+
 - Policy v2 redesign, P3: a new `policy/engine.py`/`policy/compat.py` evaluator for auto-accept
   rules, built on the P1 tool registry and P2 scope/condition selectors, now runs alongside the
   existing `AutoAcceptEvaluator` on every gated call (`gate.py`, shadow mode). Nothing on disk
@@ -739,6 +776,74 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A new `policy.engine: v1 | v2` key in `config/settings.yaml` (default `v1`) is the switch for
   when the new evaluator becomes authoritative instead; flipping it back to `v1` is the documented
   rollback, no release needed.
+- Policy v2 redesign, P4: `config/settings.yaml` gains an on-disk `auto_accept:` v2 rule format
+  (`policy/store.py`). On first startup under this version, every existing `auto_accept_rules`/
+  `auto_accept_grants` entry is compiled and merged into it once (`policy.compat.migrate_to_policy_v2`)
+  — the original file is backed up to `settings.yaml.bak` first, and the migration is provably
+  behavior-preserving: the v2 rules it writes are exactly what P3's shadow-mode compiler already
+  produces from the same v1 config. `auto_accept_rules`/`auto_accept_grants` themselves are left on
+  disk untouched and still fully readable/editable by hand — nothing about which engine decides
+  changes here (`policy.engine` still governs that, per P3). If any migrated rule's expansion now
+  names a destructive (`delete`) or send (`send`/`draft`/`share`) verb — e.g. a sandbox-folder
+  "Write" grant, which already silently includes deleting spreadsheet rows/columns — the Settings
+  page shows a one-time dismissible notice listing exactly which rules, so a user finds out in
+  those terms rather than discovering it later.
+- Policy v2 redesign, P6: the settings page's per-connector **Auto-accept Rules** sidebar (one page
+  per connector, its own **Trusted `<Resource>`** grant sections, `rule_type`/`value` rows, and
+  read-only "Governed by Drive" pointer pages for Sheets/Docs) is replaced by a single **Auto-accept**
+  page — one filterable list across every connector, each rule rendered as a plain-language sentence
+  with color-coded verb chips and an "Unblocks N tools" disclosure naming exactly which tools it
+  covers before you decide to keep or remove it. Rules are added and removed straight against the
+  on-disk v2 `auto_accept:` schema (`policy/store.py`, `policy/propose.py`) rather than
+  `auto_accept_rules`/`auto_accept_grants` — the first surface this redesign actually writes through.
+  This also makes three previously-ungovernable operation groups configurable for the first time —
+  Apps Script's three tools (by script id, a new `apps_script.project` scope) and Gmail's filter
+  tools/Slack's group-chat tool (two new honestly-unconditional scopes,
+  `gmail.anything`/`slack.anything`) — none of which any surface, including a hand-edited
+  `config/settings.yaml`, could configure auto-accept for before. `gate.py` now checks a rule written
+  here unconditionally, regardless of `policy.engine`, since a rule using one of these three new
+  scopes has no v1 equivalent to be shadowed against. Org mode's own, separate per-principal settings
+  page (`web/routes_org_settings.py`) is unaffected — it still edits `auto_accept_rules`/
+  `auto_accept_grants` directly and keeps working exactly as before.
+- Policy v2 redesign, P7: the MCP bridge gets the same one-shape write path the Auto-accept Settings
+  page (P6) already has. Two new tools, `privacyfence_list_policy`/`privacyfence_propose_policy_change`,
+  read and write straight against the on-disk v2 `auto_accept:` section by scope (`group`, e.g.
+  `drive.folder`) and verb, rather than choosing between a `target: "rule"` and a `target: "grant"`
+  half of two older config sections; each rule carries a stable id a follow-up `update`/`remove`
+  call can target. `privacyfence_check_policy` gains `matched_rule_id` alongside its existing
+  verdict, checked against the same rules the real gated call would use, so a planning agent can say
+  *why* a call will pass. A verb a named scope type cannot govern is rejected before any
+  confirmation dialog is shown, closing the write-time half of what this redesign's F5 found:
+  `apps_script.*`/`gmail.create_filter`/`gmail.update_filter`/`slack.create_group_chat` previously had
+  no configurable rule *and* nothing stopping one from being written anyway.
+  `privacyfence_list_auto_accept_rules`/`privacyfence_propose_auto_accept_rule_change` are kept,
+  unchanged, as deprecated aliases for one minor release — an old-shape write still lands the same
+  rule the new engine recognizes.
+- Policy v2 redesign, P8: every audit log entry for an auto-accepted decision now carries a
+  `rule_id` — the on-disk v2 rule's own stable, content-derived id — alongside the existing
+  (and, per F9, possibly ambiguous) rule name, whenever the decision resolves to exactly one rule
+  row rather than being guessed. The Auto-accept Settings page (P6) uses it to show each rule's
+  own usage — "Matched Nx, last \<when\>" — and flags a rule that has never matched with a
+  distinct badge next to its existing Remove link, so a rule list becomes something a person
+  maintains rather than one that only ever grows. No behavior change to what auto-accepts: this is
+  attribution and staleness reporting only.
+- Policy v2 redesign, P9 (final phase): the two remaining v1 writers — the approval popup's own
+  **Always allow** button and org mode's per-principal settings page (`web/routes_org_settings.py`,
+  untouched by P6) — are ported onto the same v2 primitives P6/P7 already used
+  (`policy/propose.py`, `policy/describe.py`, `auto_accept.add_policy_v2_rules`), then
+  `AutoAcceptEvaluator`, `resource_grants.py`, `policy/compat.py`'s shadow-mode comparison, and the
+  `policy.engine: v1 | v2` switch are deleted. `resource_grants.py`'s manifest survives as
+  `policy/resource_registry.py`, with its resolver callbacks intact, for the three call sites that
+  still need it (migration, audit-log/Settings name resolution, and the deprecated bridge aliases'
+  grant-shaped input) — nothing evaluates a grant against a live call through it anymore, that
+  moved to `policy/engine.py` back in P3. `docs/always-allow-rules-reference.md` is now generated
+  from the scope/tool registry (`scripts/generate_always_allow_reference.py`) rather than
+  hand-maintained, with a CI test failing on drift; `docs/TECHNICAL_REFERENCE.md`'s two auto-accept
+  sections become one. Fixes a latent bug found while porting org mode: `daemon_main.py`'s org
+  principal loader never ran P4's migration, only local mode's startup path did, so an org
+  principal's hand-edited v1 config could go un-migrated indefinitely. See
+  [ADR 0004](docs/adr/0004-retire-the-v1-auto-accept-config-model.md) for the full decision record,
+  including why this phase's scope grew beyond its one-paragraph charter.
 - Gmail draft bodies (`body_markdown` on all 6 draft tools) now support `# Heading 1`/`## Heading 2`
   syntax, rendered as Gmail's own "Large"/"Huge" font-size compose presets (not raw `<h1>`/`<h2>`
   tags, which render inconsistently across mail clients). See issue #414.
@@ -747,6 +852,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   existing event, mirroring `calendar_set_event_visibility`. A new `calendar_list_colors` tool
   lists Calendar's fixed color palette (id, name e.g. "Tomato", hex background/foreground) so a
   color can be picked by name instead of a numeric id. See issue #414.
+- Calendar recurring-event management. `calendar_create_event` accepts a new `recurrence` parameter
+  (RRULE/EXDATE/RDATE/EXRULE lines, e.g. `"RRULE:FREQ=WEEKLY;COUNT=10"`) to create a recurring
+  series. `calendar_update_event` and a new `calendar_delete_event` tool both accept a `scope`
+  parameter (`"this"` default, `"following"`, or `"all"`) matching Google Calendar's own edit
+  picker, plus `send_updates` for attendee notification control; the approval popup gets a new
+  "Applies to" row showing which occurrences a scoped change covers. "This and following" splits
+  the series by ending the old one with an RRULE `UNTIL` and (for updates) inserting a new series
+  from that point — Google Calendar's own documented approach, there being no single API call for
+  it. `calendar_delete_event` shares `calendar_create_event`/`calendar_update_event`'s auto-accept
+  rule set (`i_am_organizer`, `no_external_attendees`, `personal_calendar`). `calendar_create_event`
+  always sends an explicit time zone for a recurring event even when `start_time`/`end_time` already
+  carry their own UTC offset — the Calendar API rejects a recurring event that omits one ("Missing
+  time zone definition for start time"), caught by `qa_fixture_recorder.py --lifecycle` against the
+  real API before this shipped. `calendar_delete_event`'s write card names its own effect, like
+  every other write card: the event goes for everyone, cannot be restored from PrivacyFence, and
+  its attendees may be told it was cancelled — the "Applies to" row above it already says how much
+  of a recurring series that covers. See issue #415.
 - Approval binder, Phase 1: `/approvals` now groups pending, batchable approvals by
   `(connector, operation)` with a per-group and page-level select-all, and **Deny selected**
   clears a whole group of unwanted requests in one action (client-side over the existing per-id
@@ -810,6 +932,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   at a time — `privacyfence_await_approval`'s own tool description now says the same thing.
 
 ### Changed
+
+- The documentation sweep [ADR 0003](docs/adr/0003-separated-installs-only.md) decision 7 started
+  is re-run now that the hedges it removed have been replaced by shipped guarantees rather than
+  intended ones, and now that the policy v2 redesign has merged back. Corrected, against the
+  source in each case: `platform-support.md` said installing the `.deb` "does not turn any of this
+  on" and that a package install "never runs" privilege separation, which `debian/postinst` has
+  done unconditionally, and fatally on failure, since decision 5; `README.md` called separation
+  "on by default" on macOS and Windows where it is mandatory, said a declined macOS admin prompt
+  "won't ask again" where decision 6 retired that marker and now asks at every start, and said
+  `disable` was simply "reversible" without noting that a packaged install then refuses to serve;
+  `TECHNICAL_REFERENCE.md` described the Windows layout as what happens when an install "has opted
+  into" separation, and described the two deprecated MCP aliases as reading and writing the v1
+  `auto_accept_rules`/`auto_accept_grants` sections, which nothing has done since P9 (only their
+  *request* shape is v1 — both go to the v2 section now); `approval-list-ui-ux.md` gave the wrong
+  reason for `/security` not being in local mode's nav (it is mounted there, just not in the nav);
+  and `coding-and-testing-guidelines.md`, `connector-qa-testing.md` and
+  `claude-knowledge-boundary.md` still listed resource grants as a thing a test or a review has to
+  account for. `scripts/build_org_bundle.py --help` still advertised `writes` as the default
+  step-up scope, the last place in the repo asserting the pre-4.2 default.
+- `TECHNICAL_REFERENCE.md` regains the "Web surfaces (`/approvals`, `/settings`)" section, which
+  documents `web.mcp.enabled`, `web.settings.enabled`/`allow_quit`, `GET /settings/connectors`, the
+  shared shell and SSE channel, and the settings dispatcher's allowlist. It was a subsection of
+  "Auto-accept grants" for historical reasons only, and went out with that section when P6 rewrote
+  the auto-accept chapter — taking the only description of those config keys with it. Restored at
+  the top level where it belongs, with the bespoke-route classification the self-approval review's
+  Phase 3 added folded in.
+- `docs/README.md`'s architecture-decision index, which stopped at ADR 0002, now lists ADR 0003,
+  0004 and 0005.
+- **The MCP server now runs on the official Python SDK's 2.x API** (`mcp>=2.2,<3.0`, up from
+  `mcp>=1.28,<2.0`). A deliberate migration rather than a widened range: mcp 2.0 rewrote the
+  low-level server surface `/mcp` is built on, so the old pin could not simply be raised.
+  Handlers are registered as constructor arguments instead of decorators and receive a
+  per-request context, the per-session `lifespan` this daemon keyed its unattended-session and
+  deduplication state by is now entered once per session *manager*, and result/tool models
+  renamed their fields to snake_case. `/mcp` behaves the same on the wire — the same tools, the
+  same `initialize` instructions, the same `tools/list_changed` notification when connectors
+  change, the same tool-level error result (rather than a protocol error) for a failed call,
+  which 2.0 would otherwise have replaced with a generic "Error executing tool" message. Each
+  Streamable HTTP session is now identified by the transport's own `Mcp-Session-Id` rather than
+  an id minted by the server's lifespan, and its unattended-session state is released when the
+  session ends, exactly as before. The organization-mode authorization server explicitly refuses
+  SEP-990 identity assertions (the RFC 7523 `jwt-bearer` grant) that 2.x added to its provider
+  interface: in org mode a human authenticates at the identity provider through PrivacyFence's
+  own `/authorize`, which is what every downstream gate, audit entry and approval is scoped to.
+  `requirements/*.lock.txt` are regenerated accordingly, including mcp 2.x's new transitive
+  dependencies (`mcp-types`, `httpx2`, `httpcore2`, `truststore`), all hash-pinned. See
+  issue #250.
 
 - **macOS ships one download, and it installs through the installer.** The DMG now carries
   `PrivacyFence.pkg` and `PrivacyFence.mcpb` side by side and nothing else — no
