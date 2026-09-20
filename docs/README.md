@@ -4,6 +4,7 @@ This directory documents PrivacyFence as it works in the current source tree. Ru
 
 ## Start here
 
+- [`getting-started.md`](getting-started.md) — install PrivacyFence step by step on macOS, Windows, or Debian/Ubuntu, connect an MCP client, and finish first-run setup.
 - [`../CHANGELOG.md`](../CHANGELOG.md) — release history. The history this directory deliberately doesn't carry (see "Documentation rules" below) lives there.
 - [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md) — architecture, runtime, MCP transport, configuration, state, approvals, connectors, audit logging, and packaging.
 - [`security-and-compliance.md`](security-and-compliance.md) — security boundaries, authentication, authorization, privacy controls, audit integrity, and deployment considerations.
