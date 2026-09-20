@@ -49,6 +49,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   registration and assertion ceremonies are now covered end to end against the packaged binary
   rather than only in unit tests. No product behaviour changes: the gates were right, the tests
   were asserting the behaviour that preceded them.
+- **The Windows packaged-artifact tests were asserting a lifecycle the product no longer allows.**
+  Two of them installed, undid the installer's own privilege separation, and drove a packaged daemon
+  against an isolated `%LOCALAPPDATA%`. ADR 0003 decision 6 ended that: a packaged daemon that finds
+  itself unseparated auto-enables separation and otherwise refuses to serve, deliberately with no
+  developer override. While the Windows `enable` was broken the auto-enable always failed and those
+  tests kept working by accident; once it started succeeding it re-separated the machine mid-test and
+  the spawned daemon collided with the real service over the control channel's named pipe. Both now
+  run against the real service the installer starts, like the `.deb` and `.pkg` modules already did.
+  Their approval round trip is *not* reproduced there and is left as follow-up: the control channel's
+  pipe is ACL'd to the service account and `PrivacyFenceUsers`, and Windows puts group membership in
+  the logon token, so a CI job — which cannot sign out and back in — cannot open that pipe however
+  elevated it is. That half stays covered on the separated path by the Linux and macOS modules.
 - **A fresh Windows install could not complete at all.** `privilege-separation.ps1` created its
   `PrivacyFenceUsers` group with an 85-character `-Description`; `New-LocalGroup` validates that
   parameter against a 48-character limit and *fails* rather than truncating, so the separation step
