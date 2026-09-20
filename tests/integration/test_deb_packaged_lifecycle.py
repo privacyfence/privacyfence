@@ -15,10 +15,14 @@ user would.
    because its own layer doesn't need it; this module's whole point is that
    the ``.deb`` specifically is what's being proven).
 2. **Validate the autostart entry**: ``desktop-file-validate`` against the
-   installed ``/etc/xdg/autostart/privacyfence.desktop`` -- the one thing a
-   malformed ``.desktop`` file would silently no-op on at the next graphical
-   login rather than fail loudly, so this is the one place that would catch
-   it before release.
+   installed autostart entry -- the one thing a malformed ``.desktop`` file
+   would silently no-op on at the next graphical login rather than fail
+   loudly, so this is the one place that would catch it before release.
+   Since ADR 0003 decision 5 the entry on disk right after an install is
+   ``privacyfence.desktop.disabled`` (auto-separation renames it), and
+   ``desktop-file-validate`` refuses a filename without a ``.desktop``
+   extension outright, so the check runs against a byte-for-byte,
+   correctly-named copy.
 3. **Start the real installed daemon** (``/usr/bin/privacyfence-app``, the
    wrapper ``debian/install`` puts on ``PATH`` -- not the PyInstaller onedir
    output directly, so this also proves the wrapper script itself works) and
@@ -117,6 +121,7 @@ invocation in ``tests.yml``'s per-PR jobs, same posture as
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import getpass
 import json
 import os
@@ -126,6 +131,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -141,8 +147,14 @@ mcp_client = pytest.importorskip(
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
-from tests.control_channel_client import mint_bootstrap_code_posix, resolve_posix_socket_path  # noqa: E402
+from tests.control_channel_client import (  # noqa: E402
+    attested_mint_script,
+    companion_stand_in_script,
+    mint_bootstrap_code_posix,
+    resolve_posix_socket_path,
+)
 from tests.diagnostics import failure_dir, suite_name_for  # noqa: E402
+from tests.packaged_step_up import decide_with_step_up, enroll_passkey  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = REPO_ROOT / "dist"
@@ -205,6 +217,16 @@ SEPARATED_WEB_BASE_URL_PATH = HANDOFF_DIR / "web_base_url"
 # for SYSTEM_ROOT here, so _bootstrap_session() uses this instead of that
 # helper whenever it's minting against the real separated daemon.
 SEPARATED_CONTROL_SOCKET_PATH = HANDOFF_DIR / "control.sock"
+# The other half of the same handoff directory: the address the *companion*
+# binds and the daemon dials back on (web/control_channel.py's
+# COMPANION_SOCKET_FILE_NAME, via companion_socket_path()). Spelled out
+# rather than imported, same as every other constant in this section -- this
+# module asserts what a real install leaves on disk. A headless CI runner
+# never has a companion, so the two helpers that need one --
+# _sudo_mint_attested_bootstrap_code() and _sudo_companion_stand_in() --
+# bind this themselves; see tests/control_channel_client.py's own
+# "Attested minting" and "Standing in for the companion" sections.
+SEPARATED_COMPANION_SOCKET_PATH = HANDOFF_DIR / "companion.sock"
 
 
 def _built_debs() -> list[Path]:
@@ -493,25 +515,68 @@ def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
-def _sudo_mint_bootstrap_code(socket_path: Path, *, timeout: float = 5.0) -> str:
-    """Speaks the control channel's own one-line ``MINT`` protocol
-    (tests/control_channel_client.py's ``mint_bootstrap_code_posix()``,
-    which this can't call directly -- it has to run as root, and there is no
-    reason ``sudo``'s own system ``python3`` would have the ``privacyfence``
-    package importable) via a small stdlib-only inline script instead."""
-    script = (
-        "import socket,sys\n"
-        f"s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
-        f"s.settimeout({timeout})\n"
-        f"s.connect({str(socket_path)!r})\n"
-        "s.sendall(b'MINT\\n')\n"
-        "sys.stdout.write(s.recv(4096).decode('utf-8'))\n"
+def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
+    """Mints the one thing a bare ``MINT`` can no longer buy: a
+    ``human``-provenance session, the only kind web/routes_approvals.py lets
+    release a sensitive confirm on a separated install. Runs as root through
+    an inline stdlib-only script, for the same reason every other helper in
+    this section shells out to ``sudo`` -- the control socket belongs to the
+    service account, and sudo's own system ``python3`` has no
+    ``privacyfence`` (nor ``tests``) package importable.
+
+    The script itself -- and the reason a test has to stand in for the
+    companion at all -- lives in tests/control_channel_client.py's
+    ``attested_mint_script()``; this is only the ``sudo`` wrapper."""
+    script = attested_mint_script(
+        SEPARATED_CONTROL_SOCKET_PATH, SEPARATED_COMPANION_SOCKET_PATH, timeout=timeout,
     )
-    result = _sudo_capture("python3", "-c", script, timeout=timeout + 5)
-    assert result.returncode == 0, f"minting a bootstrap code as root failed:\n{result.stdout}{result.stderr}"
+    result = _sudo_capture("python3", "-c", script, timeout=timeout * 2 + 10)
+    assert result.returncode == 0, (
+        f"minting an attested bootstrap code as root failed:\n{result.stdout}{result.stderr}"
+    )
     reply = result.stdout
-    assert reply.startswith("OK "), f"control channel mint failed: {reply!r}"
+    assert reply.startswith("OK "), f"attested control channel mint failed: {reply!r}"
     return reply[len("OK "):].strip()
+
+
+@contextlib.contextmanager
+def _sudo_companion_stand_in(*, serve_seconds: float = 60.0):
+    """Holds the companion's own address open for the duration of a first
+    passkey enrollment, answering the two dialogs it raises -- the
+    ``CONFIRM ENROLL`` gate and the ``SHOW RECOVERY`` hand-back -- with the
+    ``OK`` a human clicking **Allow** produces. See
+    tests/control_channel_client.py's ``companion_stand_in_script()`` for
+    what it will and will not answer.
+
+    Root, for the same reason the mint above is: the handoff directory
+    belongs to the service account's group, and this account's membership of
+    it does not apply to an already-running login session. The child prints
+    ``READY`` once the address is bound, which this waits for -- a sleep
+    here would be a race with the very call-back it exists to answer."""
+    child = subprocess.Popen(
+        ["sudo", "-n", "python3", "-u", "-c",
+         companion_stand_in_script(SEPARATED_COMPANION_SOCKET_PATH, serve_seconds=serve_seconds)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        ready = child.stdout.readline() if child.stdout else ""
+        assert ready.strip() == "READY", (
+            "the stand-in companion never bound "
+            f"{SEPARATED_COMPANION_SOCKET_PATH}: {ready!r} {child.stderr.read() if child.stderr else ''}"
+        )
+        yield
+    finally:
+        # It exits on its own once it has served the enrollment's two
+        # dialogs; this is the "the test failed before that" path. sudo
+        # forwards the signal to the python3 it started, and the script's
+        # own `finally` unlinks the socket either way.
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            child.wait(timeout=10)
+        if child.poll() is None:
+            subprocess.run(["sudo", "-n", "kill", str(child.pid)], capture_output=True, check=False)
+            child.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                child.wait(timeout=10)
 
 
 class RunningDaemon:
@@ -605,22 +670,34 @@ async def _bootstrap_session(
     # socket against this daemon's own data directory), not a bearer-
     # authenticated HTTP route -- see tests.control_channel_client's own
     # module docstring. Defaults to the real separated system root (this
-    # module's own two tests never pass anything else any more -- see the
-    # "Real-daemon helpers" section for why they mint as root instead of
-    # connecting directly). ``data_dir`` stays a parameter, not hardcoded,
-    # because test_linux_graphical_session_autostart.py's own "unseparated
-    # path" test imports this function and calls it against a scratch,
-    # genuinely-unseparated ``$HOME`` instead, where a direct, unprivileged
-    # connect is exactly correct (and the only thing that works -- nothing
-    # there is root-owned).
+    # module's own tests never pass anything else -- see the "Real-daemon
+    # helpers" section for why they mint as root instead of connecting
+    # directly). ``data_dir`` stays a parameter, not hardcoded, for a caller
+    # driving a scratch, genuinely-unseparated ``$HOME`` instead, where a
+    # direct, unprivileged connect is exactly correct (and the only thing
+    # that works -- nothing there is root-owned).
     #
-    # Not resolve_posix_socket_path() for the SYSTEM_ROOT case: that helper
-    # always assumes an unseparated layout (authority_dir()/control.sock),
-    # right for the sibling module's scratch daemon but wrong here -- a
-    # separated install binds the socket under handoff_dir() instead (see
-    # SEPARATED_CONTROL_SOCKET_PATH's own comment).
-    socket_path = SEPARATED_CONTROL_SOCKET_PATH if data_dir == SYSTEM_ROOT else resolve_posix_socket_path(data_dir)
-    code = _sudo_mint_bootstrap_code(socket_path) if data_dir == SYSTEM_ROOT else mint_bootstrap_code_posix(socket_path)
+    # Attested (``MINT COMPANION``), not a bare ``MINT``, for the SYSTEM_ROOT
+    # case: privilege separation is on for every real install, and
+    # web/server.py turns ``require_human_session`` on with it, so an
+    # unattested session can view /approvals but cannot release the sensitive
+    # rule-confirmation this module's scenario drives -- see
+    # _sudo_mint_attested_bootstrap_code() and, for the whole round trip,
+    # tests/control_channel_client.py's "Attested minting" section. Minting
+    # attested for *every* SYSTEM_ROOT session rather than only the ones that
+    # decide: a human clicking the companion's Open Approvals is how a real
+    # session on a real install is established, whatever it goes on to do.
+    #
+    # The unseparated branch stays a bare MINT against
+    # resolve_posix_socket_path(): that helper always assumes an unseparated
+    # layout (authority_dir()/control.sock), right for a directly-spawned
+    # scratch daemon and wrong for a separated install, which binds under
+    # handoff_dir() instead (see SEPARATED_CONTROL_SOCKET_PATH's own
+    # comment) -- and where separation is off, so is the gate.
+    if data_dir == SYSTEM_ROOT:
+        code = _sudo_mint_attested_bootstrap_code()
+    else:
+        code = mint_bootstrap_code_posix(resolve_posix_socket_path(data_dir))
     exchange_resp = await web_client.get(path, params={"bootstrap": code})
     assert exchange_resp.status_code == 200, exchange_resp.text
     session_id = web_client.cookies.get("pf_session")
@@ -652,14 +729,23 @@ async def _propose_trusted_sender_rule(mcp_url: str, mcp_token: str, *, value: l
                 )
 
 
-async def _resolve_pending_card(web_client: httpx.AsyncClient, session_id: str, *, decision: str) -> None:
+async def _resolve_pending_card(
+    web_client: httpx.AsyncClient, session_id: str, *, decision: str, authenticator, origin: str,
+) -> None:
     """Polls the real ``/approvals`` page for the one pending card the
     concurrently-running MCP call above just opened, then resolves it via a
     direct HTTP POST to the real decide route -- exactly what a human's
     browser does clicking the card's own Confirm/Cancel button
     (``dialog_window_html.py``'s ``data-pf-action`` values), just without a
     real browser in front of it (see module docstring point 3 for why this
-    module doesn't need one)."""
+    module doesn't need one).
+
+    Through tests/packaged_step_up.py's ``decide_with_step_up``, which is
+    the rest of what that browser does: a packaged install defaults
+    ``step_up.require_passkey`` on, so confirming answers a passkey
+    challenge first. ``cancel`` never raises one -- denying has never needed
+    a ceremony -- and that helper only reacts to a challenge that is
+    actually issued, so both decisions go through the same call."""
     deadline = time.monotonic() + 20.0
     approval_id = None
     while time.monotonic() < deadline:
@@ -685,8 +771,9 @@ async def _resolve_pending_card(web_client: httpx.AsyncClient, session_id: str, 
             break
         await asyncio.sleep(0.1)
     assert approval_id, "no pending approval card appeared on /approvals"
-    decide_resp = await web_client.post(
-        f"/api/approvals/{approval_id}/decide", json={"result": decision, "csrf": session_id},
+    decide_resp = await decide_with_step_up(
+        web_client, session_id, approval_id,
+        result=decision, authenticator=authenticator, origin=origin,
     )
     assert decide_resp.status_code == 200, decide_resp.text
     assert decide_resp.json() == {"status": "ok"}
@@ -706,6 +793,21 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         session_id = await _bootstrap_session(web_client)
         assert (await web_client.get("/settings")).status_code == 200
 
+        # -- Enroll a passkey, because this install demands one ------------
+        # default_local_step_up() turns step_up.enabled and require_passkey
+        # both on for a packaged, separated build -- which every .deb
+        # install is since ADR 0003 -- so a fresh install releases nothing
+        # at all until a passkey is on file (StepUpConfig.
+        # local_enrollment_banner()'s own docstring spells out that it is
+        # the decide route that hard-fails, not just the banner that
+        # nags). Enrolling here is not test setup working around a gate; it
+        # is the first thing a real user of this artifact has to do, and
+        # until this module did it nothing proved the shipped default was
+        # survivable.
+        authenticator = await enroll_passkey(
+            web_client, session_id, origin=daemon.base_url, companion=_sudo_companion_stand_in,
+        )
+
         # -- tools/list: the real MCP surface, no connector configured -----
         headers = {"Authorization": f"Bearer {daemon.mcp_token}"}
         async with httpx2.AsyncClient(headers=headers) as http_client:
@@ -721,7 +823,10 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         allow_task = asyncio.create_task(
             _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["allowed.example.com"])
         )
-        await _resolve_pending_card(web_client, session_id, decision="confirm")
+        await _resolve_pending_card(
+            web_client, session_id, decision="confirm",
+            authenticator=authenticator, origin=daemon.base_url,
+        )
         allow_result = await allow_task
         assert allow_result.is_error is not True, getattr(allow_result, "content", allow_result)
         assert allow_result.structured_content["confirmed"] is True
@@ -734,7 +839,10 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         deny_task = asyncio.create_task(
             _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["denied.example.com"])
         )
-        await _resolve_pending_card(web_client, session_id, decision="cancel")
+        await _resolve_pending_card(
+            web_client, session_id, decision="cancel",
+            authenticator=authenticator, origin=daemon.base_url,
+        )
         deny_result = await deny_task
         assert deny_result.is_error is True
 
@@ -802,9 +910,19 @@ async def test_deb_install_validate_scenario_remove_purge_lifecycle():
     # what's actually on disk right after an install (see above); its
     # Hidden=true line is what stop_legacy_autostart() added, still a
     # syntactically valid .desktop file ─────────────────────────────────
-    validate = subprocess.run(
-        ["desktop-file-validate", str(AUTOSTART_DESKTOP_DISABLED_FILE)], capture_output=True, text=True,
-    )
+    #
+    # Validated through a ``.desktop``-suffixed copy, not in place:
+    # desktop-file-validate rejects any filename without that extension
+    # before it reads a byte of the contents ("filename does not have a
+    # .desktop extension", exit 1), so pointing it straight at the
+    # ``.disabled`` name tests the rename rather than the file. The copy is
+    # byte-for-byte, so what gets validated is exactly what is installed.
+    with tempfile.TemporaryDirectory() as staging:
+        staged = Path(staging) / AUTOSTART_DESKTOP_FILE.name
+        shutil.copyfile(AUTOSTART_DESKTOP_DISABLED_FILE, staged)
+        validate = subprocess.run(
+            ["desktop-file-validate", str(staged)], capture_output=True, text=True,
+        )
     assert validate.returncode == 0, (
         f"{AUTOSTART_DESKTOP_DISABLED_FILE} failed validation:\n{validate.stdout}{validate.stderr}"
     )
@@ -911,10 +1029,17 @@ async def test_upgrade_in_place_preserves_user_state(tmp_path):
     daemon = _wait_for_real_daemon()
     async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
         session_id = await _bootstrap_session(web_client)
+        # Same shipped default as the scenario above -- see its own comment.
+        authenticator = await enroll_passkey(
+            web_client, session_id, origin=daemon.base_url, companion=_sudo_companion_stand_in,
+        )
         propose_task = asyncio.create_task(
             _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["preupgrade.example.com"])
         )
-        await _resolve_pending_card(web_client, session_id, decision="confirm")
+        await _resolve_pending_card(
+            web_client, session_id, decision="confirm",
+            authenticator=authenticator, origin=daemon.base_url,
+        )
         result = await propose_task
         assert result.is_error is not True, getattr(result, "content", result)
         assert result.structured_content["changed"] is True

@@ -89,33 +89,68 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# installer/privacyfence.iss's SeparateInstall (and this script's own callers
-# generally) run this with -NoProfile, which skips the profile scripts that
-# would otherwise trigger Windows PowerShell's module autoload for a cmdlet
-# like Get-Acl on some runner images -- seen for real as "the 'Get-Acl'
-# command was found in the module 'Microsoft.PowerShell.Security', but the
-# module could not be loaded" on an otherwise-unmodified GitHub Actions
-# windows-latest runner. Importing it explicitly up front, before any of
-# this script's own Get-Acl calls, removes the dependency on autoload
-# working at all rather than papering over one failure at a time.
+# ── Reading an ACL without Microsoft.PowerShell.Security ──────────────────
 #
-# -ErrorAction Stop alone turned out not to be enough: on the very runner
-# image the above was seen on, a *different* v4.1.0b2 run hit the opposite
-# problem from the same line -- Import-Module threw "The member
-# 'AuditToString' is already present" (FullyQualifiedErrorId
-# FormatXmlUpdateException) instead of CommandNotFoundException. That is
-# Update-TypeData refusing a second registration of the same type-data
-# members, which only happens when Microsoft.PowerShell.Security's
-# format/type data was already loaded by the time this line runs -- i.e.
-# autoload silently succeeded after all on that runner, and this explicit
-# import is redundant rather than needed. Both are "Get-Acl is safe to call
-# now" outcomes; only a duplicate-registration error is swallowed; anything
-# else (Get-Acl genuinely unavailable) still stops the script, which is the
-# whole reason for importing explicitly at all.
-try {
-    Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
-} catch {
-    if ($_.FullyQualifiedErrorId -notlike 'FormatXmlUpdateException,*') { throw }
+# This script does not use `Get-Acl`, and deliberately so. Three consecutive
+# release builds were lost to that one cmdlet being unavailable inside the
+# installer's own `powershell -ExecutionPolicy Bypass -File` invocation on a
+# stock GitHub Actions windows-latest (Server 2025) runner, and the module it
+# lives in refusing to load by two different routes:
+#
+#   v4.1.0b1  calling Get-Acl        -> CommandNotFoundException,
+#                                       "the 'Get-Acl' command was found in the
+#                                       module 'Microsoft.PowerShell.Security',
+#                                       but the module could not be loaded"
+#   v4.1.0b2  Import-Module ... -ErrorAction Stop
+#                                    -> FormatXmlUpdateException,
+#                                       "The member 'AuditToString' is already
+#                                       present"
+#   v4.1.0b3  that same import, with FormatXmlUpdateException swallowed as
+#             "already loaded, import redundant"
+#                                    -> the import is silently skipped and
+#                                       Get-Acl still fails exactly as in b1
+#
+# b3's swallow was the wrong read of b2: a partially-registered module is not
+# a loaded one, so tolerating the duplicate-type-data error moved the failure
+# from the import line to the first call site without making anything work.
+# Each fix addressed the symptom it had just seen and was overtaken by the
+# next shape of the same underlying problem, so this stops depending on that
+# module being loadable at all.
+#
+# `GetAccessControl()` on the FileInfo/DirectoryInfo `Get-Item` already
+# returns is plain .NET Framework, reachable from Windows PowerShell 5.1 with
+# no module import at all, and `GetOwner`/`GetAccessRules` are real methods on
+# the FileSecurity/DirectorySecurity it hands back -- taking the same
+# arguments the `.Owner`/`.Access` properties pass for you. So the two helpers
+# below need nothing from Microsoft.PowerShell.Security: not the cmdlet, and
+# not its type data either. Everything in this script reads an ACL through
+# them, which is the whole of the dependency.
+
+function Get-PathOwner {
+    <#
+      .SYNOPSIS
+      The NT account name owning $LiteralPath -- exactly what
+      `(Get-Acl $p).Owner` returned, including raising on an owner SID that
+      resolves to no account, which is the one behaviour every caller's
+      Test-TrustedIdentity comparison was already written against.
+    #>
+    param([Parameter(Mandatory = $true)][string] $LiteralPath)
+    $security = (Get-Item -LiteralPath $LiteralPath -Force).GetAccessControl()
+    return $security.GetOwner([System.Security.Principal.NTAccount]).Value
+}
+
+function Get-PathAccessRules {
+    <#
+      .SYNOPSIS
+      The access rules on $LiteralPath -- exactly what `(Get-Acl $p).Access`
+      returned, down to the arguments: inherited rules included and
+      identities resolved to NTAccount names, which is the shape
+      Test-RuleGrantsWrite/Test-RuleGrantsRead and every
+      `$_.IdentityReference.Value` comparison below are written against.
+    #>
+    param([Parameter(Mandatory = $true)][string] $LiteralPath)
+    $security = (Get-Item -LiteralPath $LiteralPath -Force).GetAccessControl()
+    return @($security.GetAccessRules($true, $true, [System.Security.Principal.NTAccount]))
 }
 
 # ── Constants. Every one of these is also declared in
@@ -366,8 +401,7 @@ function Assert-ImageProtected {
     #>
     $installDir = Split-Path -Parent $script:DaemonExec
     foreach ($target in @($script:DaemonExec, $installDir)) {
-        $acl = Get-Acl -LiteralPath $target
-        foreach ($rule in $acl.Access) {
+        foreach ($rule in (Get-PathAccessRules -LiteralPath $target)) {
             if (-not (Test-RuleGrantsWrite -Rule $rule)) { continue }
             $identity = $rule.IdentityReference.Value
             if (Test-TrustedIdentity -Identity $identity) { continue }
@@ -569,7 +603,7 @@ function Set-Layout {
     # depends on. A silent failure there would leave a layout that looks
     # right in every other respect, so it stops here -- the data has moved by
     # now, and `disable` is the way back.
-    $newOwner = (Get-Acl -LiteralPath $SystemRoot).Owner
+    $newOwner = Get-PathOwner -LiteralPath $SystemRoot
     if (-not (Test-TrustedIdentity -Identity $newOwner)) {
         Stop-WithError @"
 could not take ownership of $SystemRoot -- it is still owned by '$newOwner'.
@@ -983,7 +1017,7 @@ function Invoke-Status {
         # Checked before any grant, and reported first: an owner outside this
         # design can rewrite everything below it, so a clean ACL under the
         # wrong owner is not a clean layout.
-        $rootOwner = (Get-Acl -LiteralPath $SystemRoot).Owner
+        $rootOwner = Get-PathOwner -LiteralPath $SystemRoot
         if ((Test-TrustedIdentity -Identity $rootOwner) -or $rootOwner -ieq $ServiceAccount) {
             Write-Host "  ok               $SystemRoot is owned by $rootOwner"
         } else {
@@ -991,7 +1025,7 @@ function Invoke-Status {
             $problems = 1
         }
 
-        $listable = @(Get-Acl -LiteralPath $SystemRoot | Select-Object -ExpandProperty Access |
+        $listable = @(Get-PathAccessRules -LiteralPath $SystemRoot |
             Where-Object { (Test-RuleGrantsRead -Rule $_) -and -not (Test-TrustedIdentity -Identity $_.IdentityReference.Value) -and $_.IdentityReference.Value -ine $ServiceAccount })
         if ($listable.Count -gt 0) {
             Write-Host "  LISTABLE         $SystemRoot can be enumerated by: $(($listable | ForEach-Object { $_.IdentityReference.Value }) -join ', ')"
@@ -1002,7 +1036,7 @@ function Invoke-Status {
     }
 
     if (Test-Path -LiteralPath $authority) {
-        $exposed = @(Get-Acl -LiteralPath $authority | Select-Object -ExpandProperty Access |
+        $exposed = @(Get-PathAccessRules -LiteralPath $authority |
             Where-Object { $_.AccessControlType -eq 'Allow' -and -not (Test-TrustedIdentity -Identity $_.IdentityReference.Value) -and $_.IdentityReference.Value -ine $ServiceAccount })
         if ($exposed.Count -gt 0) {
             Write-Host "  NOT SEPARATED    $authority is reachable by: $(($exposed | ForEach-Object { $_.IdentityReference.Value }) -join ', ')"
@@ -1013,7 +1047,7 @@ function Invoke-Status {
     }
 
     if (Test-Path -LiteralPath $handoff) {
-        $groupRules = @(Get-Acl -LiteralPath $handoff | Select-Object -ExpandProperty Access |
+        $groupRules = @(Get-PathAccessRules -LiteralPath $handoff |
             Where-Object { $_.IdentityReference.Value -like "*\$ServiceGroup" -or $_.IdentityReference.Value -ieq $ServiceGroup })
         if ($groupRules.Count -eq 0) {
             Write-Host "  NO HANDOFF       $handoff grants $ServiceGroup nothing -- your MCP client cannot read mcp_token"

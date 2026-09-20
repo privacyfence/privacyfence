@@ -35,6 +35,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The packaged-artifact smoke tests now exercise the install a user actually gets, so a release
+  build can pass again.** Three consecutive pre-release tags (`v4.1.0b1`/`b2`/`b3`) were lost to
+  these tests being behind the product on three separate counts, each one hidden until the one in
+  front of it was fixed. They now stand in for the companion to mint a session PrivacyFence can
+  attribute to a person (`MINT COMPANION`, the attested shape the self-approval review's Phase 2
+  made a precondition for confirming an auto-accept rule), and they enroll a passkey through the
+  real `/security` routes before approving anything — which is what a fresh DMG/`.pkg`/`.deb`
+  install has demanded since `step_up.require_passkey` started defaulting on for packaged builds.
+  The macOS browser scenario does both through a real Chromium with a virtual authenticator, so the
+  registration and assertion ceremonies are now covered end to end against the packaged binary
+  rather than only in unit tests. No product behaviour changes: the gates were right, the tests
+  were asserting the behaviour that preceded them.
+- **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
+  `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
+  `windows-latest` runner that module refuses to load inside the installer's own
+  `powershell -File` invocation — failing the install outright, which is the correct response to a
+  separation step that cannot verify its own work but not a correct thing for the step to be unable
+  to do. Two previous attempts worked around the module load and were each overtaken by the next
+  shape of the same failure. It now reads owners and access rules through the .NET methods on the
+  object `Get-Item` already returns, which need no module import at all.
+- The `.deb` lifecycle test validated the installed autostart entry by pointing
+  `desktop-file-validate` at `privacyfence.desktop.disabled` — the name auto-separation leaves
+  behind — which that tool rejects on the filename alone, before reading the contents. It now
+  validates a correctly-named copy, so the check tests the file again rather than the rename.
+
 ### Changed
 
 - Documented that upgrading PrivacyFence on macOS is just re-running `PrivacyFence.pkg` — the

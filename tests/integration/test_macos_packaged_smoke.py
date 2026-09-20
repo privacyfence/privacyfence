@@ -152,7 +152,17 @@ pytest.importorskip(
     reason="playwright (test-only) not installed -- pip install -e '.[test]' && playwright install chromium",
 )
 from playwright.sync_api import Error as PlaywrightError  # noqa: E402
+from playwright.sync_api import TimeoutError as PlaywrightTimeout  # noqa: E402
 from playwright.sync_api import sync_playwright  # noqa: E402
+
+# The one shared test helper this module pulls in. It costs nothing of what
+# the section below guards against -- attested_mint_script() is pure source
+# text, and tests/control_channel_client.py imports the ``privacyfence``
+# package only lazily, inside the helpers this module does not call -- so
+# importing it does not make this module test anything but the frozen binary
+# from outside.
+from tests.control_channel_client import attested_mint_script, companion_stand_in_script  # noqa: E402
+from tests.packaged_step_up import decide_with_step_up, enroll_passkey  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHIM_DIR = REPO_ROOT / "mcpb" / "shim"
@@ -182,6 +192,14 @@ HANDOFF_DIR = MACOS_SYSTEM_ROOT / "handoff"
 # AUTHORITY_DIR/control.sock is only where it binds on an *unseparated*
 # install, which nothing running against MACOS_SYSTEM_ROOT here ever is.
 CONTROL_SOCKET = HANDOFF_DIR / "control.sock"
+# The other half of the same handoff directory: the address the *companion*
+# binds and the daemon dials back on (web/control_channel.py's
+# COMPANION_SOCKET_FILE_NAME, via companion_socket_path()). A CI runner has
+# no companion, so the two helpers that need one --
+# _sudo_mint_attested_bootstrap_code() and _sudo_companion_stand_in() --
+# bind this themselves; see tests/control_channel_client.py's own
+# "Attested minting" and "Standing in for the companion" sections.
+COMPANION_SOCKET = HANDOFF_DIR / "companion.sock"
 SEPARATED_SETTINGS_PATH = AUTHORITY_DIR / "config" / "settings.yaml"
 SEPARATED_MCP_TOKEN_PATH = HANDOFF_DIR / MCP_TOKEN_FILE_NAME
 SEPARATED_WEB_BASE_URL_PATH = HANDOFF_DIR / "web_base_url"
@@ -400,25 +418,68 @@ def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
-def _sudo_mint_bootstrap_code(socket_path: Path, *, timeout: float = 5.0) -> str:
-    """Speaks the control channel's own one-line ``MINT`` protocol
-    (tests/control_channel_client.py's ``mint_bootstrap_code_posix()``,
-    which this can't call directly -- it has to run as root) via a small
-    stdlib-only inline script instead -- same technique
-    test_deb_packaged_lifecycle.py's own identically-named helper uses."""
-    script = (
-        "import socket,sys\n"
-        f"s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
-        f"s.settimeout({timeout})\n"
-        f"s.connect({str(socket_path)!r})\n"
-        "s.sendall(b'MINT\\n')\n"
-        "sys.stdout.write(s.recv(4096).decode('utf-8'))\n"
+def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
+    """Mints a bootstrap code that can actually *approve*.
+
+    A bare ``MINT`` -- what this helper used to send -- lands an
+    ``unattested`` session, which since the self-approval review's Phase 2
+    may view ``/approvals`` but cannot release a sensitive confirm
+    (web/routes_approvals.py's ``require_human_session``, turned on by
+    web/server.py for every separated install, which is every packaged one).
+    The attested shape is ``MINT COMPANION <nonce>``, and a CI runner has no
+    companion to issue that nonce, so the script below stands in for one --
+    see tests/control_channel_client.py's own "Attested minting" section for
+    the whole round trip and why standing in is not a bypass.
+
+    Runs as root through an inline stdlib-only script, same technique (and
+    same reason -- the control socket belongs to the service account, and
+    sudo's own system ``python3`` has no ``privacyfence`` package
+    importable) as test_deb_packaged_lifecycle.py's own equivalent."""
+    script = attested_mint_script(CONTROL_SOCKET, COMPANION_SOCKET, timeout=timeout)
+    result = _sudo_capture("python3", "-c", script, timeout=timeout * 2 + 10)
+    assert result.returncode == 0, (
+        f"minting an attested bootstrap code as root failed:\n{result.stdout}{result.stderr}"
     )
-    result = _sudo_capture("python3", "-c", script, timeout=timeout + 5)
-    assert result.returncode == 0, f"minting a bootstrap code as root failed:\n{result.stdout}{result.stderr}"
     reply = result.stdout
-    assert reply.startswith("OK "), f"control channel mint failed: {reply!r}"
+    assert reply.startswith("OK "), f"attested control channel mint failed: {reply!r}"
     return reply[len("OK "):].strip()
+
+
+@contextlib.contextmanager
+def _sudo_companion_stand_in(*, serve_seconds: float = 120.0):
+    """Holds the companion's own address open for a first passkey
+    enrollment, answering the ``CONFIRM ENROLL`` gate and the ``SHOW
+    RECOVERY`` hand-back with the ``OK`` a human clicking **Allow**
+    produces -- see tests/control_channel_client.py's
+    ``companion_stand_in_script()``, and
+    test_deb_packaged_lifecycle.py's identically-named helper, which this
+    mirrors. Root, for the same reason every other helper in this section
+    is: HANDOFF_DIR belongs to the service account's group.
+
+    The default window is longer than the sibling's because one caller here
+    drives the ceremony through a real browser (see
+    ``_enroll_passkey_in_browser``), which has a page load and a WebAuthn
+    ceremony inside the window rather than two httpx round trips."""
+    child = subprocess.Popen(
+        ["sudo", "-n", "python3", "-u", "-c",
+         companion_stand_in_script(COMPANION_SOCKET, serve_seconds=serve_seconds)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        ready = child.stdout.readline() if child.stdout else ""
+        assert ready.strip() == "READY", (
+            f"the stand-in companion never bound {COMPANION_SOCKET}: {ready!r} "
+            f"{child.stderr.read() if child.stderr else ''}"
+        )
+        yield
+    finally:
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            child.wait(timeout=10)
+        if child.poll() is None:
+            subprocess.run(["sudo", "-n", "kill", str(child.pid)], capture_output=True, check=False)
+            child.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                child.wait(timeout=10)
 
 
 def _launchctl_print(domain: str) -> str | None:
@@ -515,7 +576,7 @@ def _wait_for_real_daemon(*, timeout: float = 30.0) -> RunningDaemon:
         time.sleep(0.2)
     assert mcp_token, f"{SEPARATED_MCP_TOKEN_PATH} never appeared within {timeout}s"
 
-    code = _sudo_mint_bootstrap_code(CONTROL_SOCKET)
+    code = _sudo_mint_attested_bootstrap_code()
     bootstrap_url = f"{base_url}/approvals?bootstrap={code}"
     return RunningDaemon(base_url, bootstrap_url, mcp_token)
 
@@ -560,6 +621,74 @@ def built_shim_entry() -> Path:
     return SHIM_ENTRY
 
 
+def _add_virtual_authenticator(page) -> None:
+    """A CTAP2 platform authenticator inside the browser under test, via
+    Chrome DevTools' own WebAuthn domain -- the browser-side counterpart of
+    tests/software_authenticator.py, and the only way a headless Chromium
+    can answer a real ``navigator.credentials`` call.
+
+    ``isUserVerified`` and ``automaticPresenceSimulation`` together stand in
+    for the fingerprint or PIN a platform authenticator would ask for, which
+    is what ``require_user_verification=True`` reads off the assertion --
+    the same self-reported bit tests/software_authenticator.py's own
+    docstring explains PrivacyFence cannot and does not try to distinguish
+    from real hardware."""
+    session = page.context.new_cdp_session(page)
+    session.send("WebAuthn.enable")
+    session.send("WebAuthn.addVirtualAuthenticator", {
+        "options": {
+            "protocol": "ctap2",
+            "transport": "internal",
+            "hasResidentKey": True,
+            "hasUserVerification": True,
+            "isUserVerified": True,
+            "automaticPresenceSimulation": True,
+        },
+    })
+
+
+def _enroll_passkey_in_browser(page, base_url: str) -> None:
+    """Clicks "Add a passkey" on the real /security page and waits for the
+    enrolled credential to appear in the page's own list -- the whole of what
+    a human does, with the virtual authenticator above answering the
+    ``navigator.credentials.create()`` in between.
+
+    Waits on the credential row rather than on a success message, because
+    there is no success message: ``_PAGE_JS``'s enrollment handler ends in
+    ``window.location.reload()``, and only the *failure* path writes into
+    ``#pf-passkey-status``. So the row appearing is both the page's own
+    report and the server's -- it is rendered from
+    ``webauthn_stepup.list_credentials()`` on a freshly served page -- and
+    that status text is checked only to turn a failure into a legible
+    assertion instead of a timeout.
+
+    The companion stand-in is up for the duration because a *first*
+    enrollment is gated on its ``CONFIRM ENROLL`` dialog, and the recovery
+    code minted straight afterwards is handed back down the same channel
+    (web/routes_security.py's ``_enrollment_gate`` and ``register_verify``);
+    with nothing listening the gate refuses and the ceremony never starts.
+    """
+    with _sudo_companion_stand_in():
+        page.goto(f"{base_url}/security")
+        page.wait_for_load_state("load")
+        assert page.locator("li.cred[data-credential-id]").count() == 0, (
+            "this install already has a passkey enrolled -- every test in this module "
+            "starts from a fresh separated root, so something leaked between tests"
+        )
+        page.locator("#pf-add-passkey").click()
+        try:
+            page.wait_for_function(
+                "() => document.querySelectorAll('li.cred[data-credential-id]').length > 0",
+                timeout=60_000,
+            )
+        except PlaywrightTimeout as exc:
+            # The one place the page does say something, and it says it only
+            # when the ceremony failed.
+            status = page.locator("#pf-passkey-status")
+            detail = status.inner_text() if status.count() else "(no status text on the page)"
+            raise AssertionError(f"enrolling a passkey on /security never completed: {detail}") from exc
+
+
 def _confirm_pending_rule_change(bootstrap_url: str) -> None:
     """Runs entirely on its own thread (see the test below) -- Playwright's
     sync API must never be invoked from a thread with a running asyncio
@@ -582,9 +711,24 @@ def _confirm_pending_rule_change(bootstrap_url: str) -> None:
             return
         try:
             page = browser.new_page()
+            _add_virtual_authenticator(page)
             page.goto(bootstrap_url)
             page.wait_for_load_state("load")
             assert page.url == f"{base_url}/approvals", f"bootstrap sign-in landed on {page.url!r}"
+
+            # This install demands a passkey before it releases anything
+            # (step_up_config.default_local_step_up(): packaged and
+            # separated means step_up.enabled and require_passkey both
+            # default on), so the Confirm click below would be answered
+            # with a passkey challenge -- or, with nothing enrolled, a flat
+            # 403 -- rather than a decision. Enrolling first through the
+            # real /security page is what a real user does, and it means
+            # this scenario now proves the whole shipped ceremony in a real
+            # browser: registration, then assertion, against the packaged
+            # binary's own WebAuthn routes.
+            _enroll_passkey_in_browser(page, base_url)
+            page.goto(f"{base_url}/approvals")
+            page.wait_for_load_state("load")
 
             row = page.wait_for_selector("[data-approval-id]", timeout=60_000)
             approval_id = row.get_attribute("data-approval-id")
@@ -599,7 +743,12 @@ def _confirm_pending_rule_change(bootstrap_url: str) -> None:
             # by waiting for "load" first.
             page.wait_for_load_state("load")
             page.locator('[data-pf-action="confirm"]').click()
-            page.wait_for_url(f"{base_url}/approvals")
+            # An explicit window rather than the default: confirming now runs
+            # a whole WebAuthn assertion between the click and the redirect
+            # (the bridge shim's own 428-then-retry, web/routes_approvals.py's
+            # ``_bridge_shim``), so the navigation this waits for is two
+            # round trips away, not one.
+            page.wait_for_url(f"{base_url}/approvals", timeout=60_000)
         finally:
             browser.close()
 
@@ -867,44 +1016,69 @@ async def _propose_trusted_sender_rule(mcp_url: str, mcp_token: str, *, value: l
                 )
 
 
-async def _resolve_pending_card(base_url: str, bootstrap_url: str) -> None:
-    """Bootstraps a real session cookie via the real ``?bootstrap=`` exchange
-    (same endpoint ``_wait_for_real_daemon()`` itself already minted the
-    code for), polls ``/approvals`` for the one pending card the concurrently-
-    running MCP call above just opened, then resolves it via a direct HTTP
-    POST to the real decide route -- ``test_deb_packaged_lifecycle.py``'s
-    own helper of the same name, adapted to a bootstrap *URL* (this module's
-    own shape) rather than a bare token."""
-    async with httpx.AsyncClient(base_url=base_url, follow_redirects=True) as web_client:
-        exchange = await web_client.get(bootstrap_url)
-        assert exchange.status_code == 200, exchange.text
-        session_id = web_client.cookies.get("pf_session")
-        assert session_id, "bootstrap exchange did not set a pf_session cookie"
+async def _sign_in_and_enroll(web_client: httpx.AsyncClient, base_url: str, bootstrap_url: str):
+    """Everything that has to happen *before* the gated MCP call is in
+    flight: the real ``?bootstrap=`` exchange (same endpoint
+    ``_wait_for_real_daemon()`` already minted an attested code for), then a
+    passkey.
 
-        deadline = time.monotonic() + 20.0
-        approval_id = None
-        while time.monotonic() < deadline:
-            page = await web_client.get("/approvals")
-            assert page.status_code == 200, page.text
-            # Matches both the plain and the binder's "unbatchable" modifier
-            # class (approval_list_html.py's _row_html: a confirm-kind card,
-            # like the rule-confirmation one this scenario drives, is never
-            # batchable) -- see approval_list_html.py's own row_class comment.
-            match = re.search(
-                r'<div class="pf-approval-row(?: pf-approval-row-unbatchable)?" data-approval-id="([0-9a-f]{16,})"',
-                page.text,
-            )
-            if match:
-                approval_id = match.group(1)
-                break
-            await asyncio.sleep(0.1)
-        assert approval_id, "no pending approval card appeared on /approvals"
+    Split out of ``_resolve_pending_card`` below, and called before its
+    caller creates the MCP task, for two reasons. The enrollment ceremony
+    spawns a privileged child and waits on its pipes, which would otherwise
+    stall the event loop the in-flight MCP call is running on. And a
+    packaged, separated install defaults ``step_up.enabled`` and
+    ``require_passkey`` both on (``step_up_config.default_local_step_up()``),
+    so it releases nothing at all until a passkey is on file -- the decide
+    route hard-fails, not just the banner nags -- which makes enrolling part
+    of signing in on this artifact rather than something to do on the way
+    past a card. The sibling browser-driven scenario does the same thing
+    through the real /security page.
 
-        decide_resp = await web_client.post(
-            f"/api/approvals/{approval_id}/decide", json={"result": "confirm", "csrf": session_id},
+    Returns the ``(session_id, authenticator)`` the decide below needs."""
+    exchange = await web_client.get(bootstrap_url)
+    assert exchange.status_code == 200, exchange.text
+    session_id = web_client.cookies.get("pf_session")
+    assert session_id, "bootstrap exchange did not set a pf_session cookie"
+    authenticator = await enroll_passkey(
+        web_client, session_id, origin=base_url, companion=_sudo_companion_stand_in,
+    )
+    return session_id, authenticator
+
+
+async def _resolve_pending_card(
+    web_client: httpx.AsyncClient, session_id: str, *, authenticator, origin: str,
+) -> None:
+    """Polls ``/approvals`` for the one pending card the concurrently-running
+    MCP call just opened, then resolves it through the real decide route --
+    ``test_deb_packaged_lifecycle.py``'s own helper of the same name, and
+    like it, through ``decide_with_step_up`` so the passkey challenge this
+    install raises on a confirm is answered the way the page's own bridge
+    shim answers it."""
+    deadline = time.monotonic() + 20.0
+    approval_id = None
+    while time.monotonic() < deadline:
+        page = await web_client.get("/approvals")
+        assert page.status_code == 200, page.text
+        # Matches both the plain and the binder's "unbatchable" modifier
+        # class (approval_list_html.py's _row_html: a confirm-kind card,
+        # like the rule-confirmation one this scenario drives, is never
+        # batchable) -- see approval_list_html.py's own row_class comment.
+        match = re.search(
+            r'<div class="pf-approval-row(?: pf-approval-row-unbatchable)?" data-approval-id="([0-9a-f]{16,})"',
+            page.text,
         )
-        assert decide_resp.status_code == 200, decide_resp.text
-        assert decide_resp.json() == {"status": "ok"}
+        if match:
+            approval_id = match.group(1)
+            break
+        await asyncio.sleep(0.1)
+    assert approval_id, "no pending approval card appeared on /approvals"
+
+    decide_resp = await decide_with_step_up(
+        web_client, session_id, approval_id,
+        result="confirm", authenticator=authenticator, origin=origin,
+    )
+    assert decide_resp.status_code == 200, decide_resp.text
+    assert decide_resp.json() == {"status": "ok"}
 
 
 @pytest.mark.timeout(420)   # builds a second bundle copy *and* boots the daemon twice via two
@@ -937,10 +1111,16 @@ async def test_macos_upgrade_preserves_user_state():
         app_n = _copy_app_from_dmg(install_dir)
         _enable_separation(app_n, user=user)
         daemon = _wait_for_real_daemon()
-        propose_task = asyncio.create_task(
-            _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["preupgrade.example.com"])
-        )
-        await _resolve_pending_card(daemon.base_url, daemon.bootstrap_url)
+        async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
+            session_id, authenticator = await _sign_in_and_enroll(
+                web_client, daemon.base_url, daemon.bootstrap_url,
+            )
+            propose_task = asyncio.create_task(
+                _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["preupgrade.example.com"])
+            )
+            await _resolve_pending_card(
+                web_client, session_id, authenticator=authenticator, origin=daemon.base_url,
+            )
         result = await propose_task
         assert result.is_error is not True, getattr(result, "content", result)
         assert result.structured_content["changed"] is True
