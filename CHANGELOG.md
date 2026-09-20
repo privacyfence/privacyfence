@@ -35,6 +35,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.1.0] — 2026-09-20
+
 ### Security
 
 - **Confirming an auto-accept rule an AI client asked for now needs the same proof as approving
@@ -1958,7 +1960,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/privacyfence/privacyfence/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/privacyfence/privacyfence/compare/v3.4.7...v4.0.0
 [3.4.7]: https://github.com/privacyfence/privacyfence/compare/v3.4.6...v3.4.7
 [3.4.6]: https://github.com/privacyfence/privacyfence/compare/v3.4.5...v3.4.6
