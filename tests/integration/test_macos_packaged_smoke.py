@@ -180,7 +180,13 @@ DAEMON_LABEL = "com.privacyfence.daemon"
 # an attested session. See _companion_agent_paused().
 COMPANION_LABEL = "com.privacyfence.companion"
 COMPANION_PLIST = Path("/Library/LaunchAgents") / f"{COMPANION_LABEL}.plist"
-SERVICE_GROUP = "privacyfence"
+# Underscore-prefixed, the macOS convention for a system account and what
+# scripts/macos_privilege_separation.sh's own SERVICE_GROUP (and
+# privilege_separation.py's MACOS_SERVICE_ACCOUNT_NAME) actually create.
+# Without it, the shim's `sudo -g` below fails with "unknown group
+# privacyfence" and the MCP session dies as "Connection closed" -- which is
+# what it had been doing, unread, behind the earlier failures.
+SERVICE_GROUP = "_privacyfence"
 
 # ADR 0003 decision 6 made a packaged daemon refuse to serve at all unless
 # genuinely separated -- see this module's own "Real-daemon helpers" section

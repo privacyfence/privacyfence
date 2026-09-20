@@ -56,6 +56,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   installation with it. Every machine that did not already have the group was affected, from
   `35e263f` (2026-09-16) onwards. It was invisible until now because the `Get-Acl` failure below
   stopped the same script a few lines earlier, so nothing had ever reached this line.
+- **A fresh Windows install could not complete, part two.** `Invoke-Enable` deletes the
+  `PrivacyFence` service before rewriting the data directory's ACLs and re-creates it afterwards,
+  but those ACLs granted the daemon's own virtual account by name — and `NT SERVICE\PrivacyFence`
+  only resolves while the service exists. So `icacls` failed with *"No mapping between account
+  names and security IDs was done"* (error 1332) on every machine that did not already have the
+  service, which is every fresh install. The grants now name the account by SID, resolved with
+  `sc.exe showsid`, exactly as the script already does for SYSTEM, Administrators and Users — and
+  for the same reason, since a service SID is derived from the service name and so answers for a
+  service that does not exist yet.
 - **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
   `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
   `windows-latest` runner that module refuses to load inside the installer's own
