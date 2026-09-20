@@ -239,14 +239,45 @@ def _disable_auto_enabled_privilege_separation() -> None:
     )
 
 
+def _reset_service_group_membership() -> None:
+    """Strips this CI account back out of ``${SERVICE_GROUP}``, best-effort.
+
+    ``cmd_disable()`` (``scripts/linux_privilege_separation.sh``) leaves the
+    ``privacyfence`` group's membership alone on purpose -- its own printed
+    note says so: keeping the account/group around means a later ``enable``
+    doesn't have to pick a new uid. That is the right call for a real
+    machine, where a human who was added stays added until they ask
+    otherwise, but it means neither ``_disable_auto_enabled_privilege_
+    separation()`` nor a plain ``dpkg -P`` (whose ``prerm`` also only calls
+    plain ``disable``) actually returns this runner's own account to "not a
+    member" between tests -- every test in this module runs real ``sudo
+    dpkg -i``, which resolves ``$SUDO_USER`` to this same CI account, and
+    once any one of them adds it, it stays added for the rest of the
+    process. ``test_unattended_install_separates_the_machine_and_defers_the_
+    membership`` asserts nobody is in the group after *its own* unattended
+    install specifically -- an assertion only a genuinely clean slate can
+    make. Root-only (``getent``/``gpasswd`` need it), so this goes through
+    ``sudo -n`` like every other machine-state reset in this module; a
+    missing group (nothing installed yet this run) is not an error."""
+    subprocess.run(
+        ["sudo", "-n", "gpasswd", "--delete", getpass.getuser(), SERVICE_GROUP],
+        capture_output=True, text=True, timeout=10,
+    )
+
+
 def _purge_if_present() -> None:
     """Best-effort cleanup -- covers both "fully installed" (a fresh
     ``dpkg -P`` needed) and "removed but not purged" (conffiles still on
     disk from a previous run's remove step), so a test that fails partway
-    through never leaves the runner with this package in either state."""
+    through never leaves the runner with this package in either state.
+
+    Also resets this account's own ``${SERVICE_GROUP}`` membership -- see
+    ``_reset_service_group_membership()`` -- since a plain purge alone
+    does not."""
     status = subprocess.run(["dpkg-query", "-W", "-f=${Status}", PACKAGE_NAME], capture_output=True, text=True)
     if status.returncode == 0 and status.stdout.strip() not in ("", "unknown ok not-installed"):
         _dpkg("-P", PACKAGE_NAME, check=False)
+    _reset_service_group_membership()
 
 
 def _capture_installed_file_manifest(request) -> None:
