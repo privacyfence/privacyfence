@@ -1706,6 +1706,27 @@ class TestWindowsInstallerContract:
         assert "privilege-separation.ps1" in self.LAYOUT.status_command
         assert "status" in self.LAYOUT.status_command
 
+    def test_the_finish_page_mcpb_entries_run_as_the_current_user(self):
+        # A real install hit "Internal error: CallSpawnServer: Unexpected
+        # response: $0" on Finish-page click. `postinstall` alone defaults to
+        # `runasoriginaluser`, and since PrivilegesRequired=admin means Setup
+        # always runs elevated, that makes Setup spawn a helper under the
+        # pre-UAC-prompt user's token to open the .mcpb (or, for the fallback
+        # entry, explorer.exe) non-elevated -- a mechanism that failed
+        # outright here instead of falling back, well after the real install
+        # work (files, privilege separation, service, companion task) had
+        # already succeeded. `runascurrentuser` skips that spawn and runs
+        # with Setup's own already-elevated token instead.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+        run_section = inno.split("[Run]", 1)[1].split("[UninstallRun]", 1)[0]
+
+        mcpb_entries = [
+            line for line in run_section.splitlines()
+            if "Flags:" in line and "postinstall" in line
+        ]
+        assert len(mcpb_entries) == 2
+        assert all("runascurrentuser" in line for line in mcpb_entries)
+
     def test_the_installer_ships_the_template_the_script_renders(self):
         # The script resolves a checkout layout first and its own directory
         # second; a real install has only the latter, so a template missing

@@ -217,13 +217,31 @@ Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 ; they fix the association via Open With, see the README) or drag it onto
 ; Claude Desktop's own Settings > Extensions page, which accepts a drop
 ; regardless of file association.
+; runascurrentuser on both entries below, and deliberately so: `postinstall`
+; alone defaults to `runasoriginaluser`, which -- because PrivilegesRequired=
+; admin means Setup itself always runs elevated -- makes Setup spawn a
+; helper process under the original, pre-UAC-prompt user's token to open the
+; file non-elevated instead. On a real install that mechanism failed
+; outright with "Internal error: CallSpawnServer: Unexpected response: $0"
+; rather than falling back to running elevated, which is what a machine
+; runasoriginaluser cannot resolve an original user token on is documented
+; to do. By that point in the Finish page the real work (files, privilege
+; separation, the service, the companion task) is already done -- only this
+; optional "open the .mcpb for me" convenience step was breaking, behind a
+; dialog alarming enough to look like the whole install had failed.
+; runascurrentuser skips the original-user spawn entirely and opens the file
+; with Setup's own (already-elevated) token instead: the one cost is that
+; whatever handles the .mcpb -- Claude Desktop, if IsMcpbAssociated -- can
+; launch elevated this one time, which is a one-off inherited-token
+; annoyance, not a privilege-separation hole (nothing about the daemon's own
+; separation depends on how this Finish-page convenience runs).
 Filename: "{app}\{#AppName}-{#AppVersion}.mcpb"; \
     Description: "Install {#AppName} into Claude Desktop"; \
-    Flags: postinstall shellexec skipifsilent; Check: IsMcpbAssociated
+    Flags: postinstall shellexec runascurrentuser skipifsilent; Check: IsMcpbAssociated
 Filename: "{win}\explorer.exe"; \
     Parameters: "/select,""{app}\{#AppName}-{#AppVersion}.mcpb"""; \
     Description: "Show the {#AppName} Claude Desktop extension in File Explorer"; \
-    Flags: postinstall skipifsilent; Check: not IsMcpbAssociated
+    Flags: postinstall runascurrentuser skipifsilent; Check: not IsMcpbAssociated
 
 [UninstallRun]
 ; Must remove the scheduled task -- wired into the uninstaller here, not

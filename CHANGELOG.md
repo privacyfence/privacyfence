@@ -37,6 +37,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The Windows installer's Finish page could fail with "Internal error: CallSpawnServer: Unexpected
+  response: $0" after a real install had already fully succeeded.** The two Finish-page `[Run]`
+  entries that open the bundled `.mcpb` (or show it in File Explorer when Claude Desktop has no
+  `.mcpb` association) relied on `postinstall`'s default `runasoriginaluser` behavior — and because
+  `PrivilegesRequired=admin` means Setup always runs elevated, that makes Setup spawn a helper
+  process under the original, pre-UAC-prompt user's token to open the file non-elevated. On a real
+  install that spawn failed outright instead of falling back, well after the files, privilege
+  separation, service and companion task had already been provisioned — an alarming dialog over a
+  step that was purely a convenience. Both entries now carry `runascurrentuser`, which skips that
+  fragile path and opens the file with Setup's own already-elevated token instead.
 - **The Windows installer refused to separate a completely ordinary install under `%ProgramFiles%`.**
   `Assert-ImageProtected` (`scripts/windows_privilege_separation.ps1`) and its daemon-startup
   counterpart `windows_acl.image_problems()` treat any write grant on the install directory as a
