@@ -49,10 +49,15 @@ user would.
 4. **Remove** (``dpkg -r``): package-owned files gone
    (``/opt/privacyfence``, ``/usr/bin/privacyfence-app``); the autostart
    ``.desktop`` file -- a ``conffile`` -- deliberately survives a plain
-   remove (dpkg's own conffile contract); ``$HOME``'s state is untouched
-   (P2.2's "the package never reaches into `$HOME`" contract).
-5. **Purge** (``dpkg -P``): the conffile is now gone too; ``$HOME`` is still
-   untouched.
+   remove (dpkg's own conffile contract). ``prerm``'s own ``remove`` case
+   also undoes separation (``disable``), which moves state from the system
+   root back into ``$HOME`` -- the one deliberate exception to P2.2's "the
+   package never reaches into `$HOME`" contract, documented in ``debian/
+   prerm`` itself; this module confirms the state that lands there is the
+   same state scenario 3 created.
+5. **Purge** (``dpkg -P``): the conffile is now gone too; the state
+   ``remove`` already restored to ``$HOME`` is still untouched by purge
+   itself (there is nothing left separated to undo a second time).
 6. **Upgrade in place** (P7.3): install version N, use it to create real
    on-disk state (an applied auto-accept rule, via the same MCP round trip
    as step 3), install a synthetically-bumped version N+1 of the identical
@@ -74,20 +79,31 @@ user would.
    installed-looking, unseparated one. These two are the only tests in this
    module that assert *about* privilege separation rather than around it.
 
-Scenarios 1-6 above are deliberately the pre-D1, unseparated lifecycle: issue
-#428 D1 made ``debian/postinst`` provision privilege separation on every
-install *and* upgrade, and ADR 0003 decision 5 made its machine half
-unconditional (the per-user half still runs only when ``$SUDO_USER`` resolves
-to a real, non-root account -- true for this module's own
-passwordless-``sudo`` CI account, same as a real human's ``sudo dpkg -i``).
-Left alone, that would move the daemon to its own system account/unit and
-rename away the autostart entry this module validates, neither of which those
-scenarios are testing (see ``test_linux_graphical_session_autostart.py`` for
-the separated-by-default path instead).
-``_disable_auto_enabled_privilege_separation()`` undoes it right after each
-``_dpkg("-i", ...)`` call, pinning the mechanism those scenarios have always
-tested -- still exactly what a bare ``pip``/``pipx`` install gets today, and
-still reachable from a ``.deb`` install by running ``disable``.
+Scenarios 1-6 above run against the real, separated install a plain
+``sudo dpkg -i``/``sudo apt install`` leaves behind: issue #428 D1 made
+``debian/postinst`` provision privilege separation on every install *and*
+upgrade, and ADR 0003 decision 5 made its machine half unconditional (the
+per-user half still runs only when ``$SUDO_USER`` resolves to a real,
+non-root account -- true for this module's own passwordless-``sudo`` CI
+account, same as a real human's ``sudo dpkg -i``). That moves the daemon to
+its own system account/unit (``privacyfence-daemon.service``, already
+running by the time ``_dpkg("-i", ...)`` returns) and renames away the
+autostart entry this module's step 2 validates -- see
+``test_linux_graphical_session_autostart.py`` for that autostart-triggering
+path itself, which this module doesn't re-prove.
+
+This wasn't always true: before ADR 0003 decision 6
+(``privilege_separation.enforce_separation()``, 4bcafc0/776128f) a packaged
+daemon that found itself unseparated still served, just without the
+guarantee, so scenarios 3 and 6 above used to run a second, directly-Popen'd
+daemon against a scratch, deliberately-unseparated ``$HOME`` instead --
+faster, and isolated from real system state. Decision 6 retired that option
+outright (no override, on any packaged build, including a test's own --
+see that function's own docstring for why), so what those two scenarios
+exercise now is the real ``privacyfence-daemon.service`` itself, through
+``sudo``-gated reads of its root-owned files -- see this module's own
+"Real-daemon helpers" section for the mechanics and why every one of them
+needs ``sudo -n`` rather than a direct read.
 
 Skipped entirely unless running on real Linux with a just-built ``.deb`` on
 disk, ``dpkg``/``dpkg-deb``/``desktop-file-validate`` on ``PATH``, and
@@ -101,22 +117,22 @@ invocation in ``tests.yml``'s per-PR jobs, same posture as
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import getpass
 import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import socket
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import httpx2
 import pytest
-import yaml
 
 mcp_client = pytest.importorskip(
     "mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'"
@@ -124,12 +140,10 @@ mcp_client = pytest.importorskip(
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
-from tests.control_channel_client import mint_bootstrap_code_posix, resolve_posix_socket_path  # noqa: E402
 from tests.diagnostics import failure_dir, suite_name_for  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = REPO_ROOT / "dist"
-SETTINGS_EXAMPLE = REPO_ROOT / "src" / "privacyfence" / "resources" / "settings.yaml.example"
 
 PACKAGE_NAME = "privacyfence"
 DAEMON_BIN = Path("/usr/bin/privacyfence-app")
@@ -146,8 +160,29 @@ SYSTEM_ROOT = Path("/var/lib/privacyfence")
 PRIVILEGE_SEPARATION_MARKER = SYSTEM_ROOT / "privilege-separation.json"
 SERVICE_GROUP = "privacyfence"
 DAEMON_SYSTEM_UNIT_FILE = Path("/etc/systemd/system/privacyfence-daemon.service")
+DAEMON_UNIT_NAME = DAEMON_SYSTEM_UNIT_FILE.name
+
+# ADR 0003 decision 6 (4bcafc0/776128f) made a packaged daemon refuse to
+# serve at all unless genuinely separated -- see this module's own
+# "Real-daemon helpers" section below for what that means for this module.
+# These are privilege_separation.py's own paths.data_dir()/authority_dir()/
+# handoff_dir() resolution, spelled out the same "not imported" way as the
+# constants above, for a *separated* Linux install specifically (data_dir()
+# == SYSTEM_ROOT once the marker exists -- privilege_separation.separation()).
+AUTHORITY_DIR = SYSTEM_ROOT / "authority"
+HANDOFF_DIR = SYSTEM_ROOT / "handoff"
+CONTROL_SOCKET = AUTHORITY_DIR / "control.sock"
+SEPARATED_SETTINGS_PATH = AUTHORITY_DIR / "config" / "settings.yaml"
+SEPARATED_AUDIT_DIR = AUTHORITY_DIR / "logs" / "audit"
 
 MCP_TOKEN_FILE_NAME = "mcp_token"
+SEPARATED_MCP_TOKEN_PATH = HANDOFF_DIR / MCP_TOKEN_FILE_NAME
+# web/control_channel.py's own WEB_BASE_URL_FILE_NAME -- what the companion
+# itself reads to learn the daemon's base_url() without hardcoding the
+# default port, and cleared on WebServer.stop() (read_base_url()'s own
+# docstring), which is what lets _wait_for_real_daemon() tell "not up yet"
+# apart from "still the previous boot's value" across a quit/restart.
+SEPARATED_WEB_BASE_URL_PATH = HANDOFF_DIR / "web_base_url"
 
 
 def _built_debs() -> list[Path]:
@@ -265,19 +300,40 @@ def _reset_service_group_membership() -> None:
     )
 
 
+def _reset_owner_home_state() -> None:
+    """Best-effort cleanup of ``~/.privacyfence`` -- real state under this CI
+    account's *real* ``$HOME``, not a ``tmp_path`` scratch copy, ever since
+    this module started running its scenarios against the real separated
+    daemon (see the "Real-daemon helpers" section). Every purge below
+    triggers ``prerm``'s own ``disable`` call, which restores separated
+    state to exactly this path -- deliberately, it is the documented
+    "give the human their data back" gesture disabling performs, not a bug
+    -- but leaving it there between tests would let one test's settings.yaml
+    silently seed the next's, the same failure mode the old scratch-``$HOME``
+    design existed to prevent. This account is disposable in CI (same
+    posture test_linux_graphical_session_autostart.py's own module
+    docstring already states for the identical reason), so deleting it here
+    is safe; a real user's ``~/.privacyfence`` is never touched by anything
+    in this module, since nothing in this module runs anywhere but a
+    disposable CI runner (this module's own pytestmark requires
+    passwordless sudo to even collect)."""
+    shutil.rmtree(Path.home() / ".privacyfence", ignore_errors=True)
+
+
 def _purge_if_present() -> None:
     """Best-effort cleanup -- covers both "fully installed" (a fresh
     ``dpkg -P`` needed) and "removed but not purged" (conffiles still on
     disk from a previous run's remove step), so a test that fails partway
     through never leaves the runner with this package in either state.
 
-    Also resets this account's own ``${SERVICE_GROUP}`` membership -- see
-    ``_reset_service_group_membership()`` -- since a plain purge alone
-    does not."""
+    Also resets this account's own ``${SERVICE_GROUP}`` membership and real
+    ``$HOME`` state -- see ``_reset_service_group_membership()``/
+    ``_reset_owner_home_state()`` -- since a plain purge alone does neither."""
     status = subprocess.run(["dpkg-query", "-W", "-f=${Status}", PACKAGE_NAME], capture_output=True, text=True)
     if status.returncode == 0 and status.stdout.strip() not in ("", "unknown ok not-installed"):
         _dpkg("-P", PACKAGE_NAME, check=False)
     _reset_service_group_membership()
+    _reset_owner_home_state()
 
 
 def _capture_installed_file_manifest(request) -> None:
@@ -320,16 +376,35 @@ def _clean_package_state(request):
 
 
 # --------------------------------------------------------------------------- #
-# Daemon process lifecycle -- same isolated-$HOME technique as
-# test_macos_packaged_smoke.py's own running_packaged_daemon fixture, adapted
-# to the .deb's installed binary instead of the DMG's frozen .app bundle.
+# Real-daemon helpers.
+#
+# Before ADR 0003 decision 6 (4bcafc0/776128f, landed after v4.1.0a10 -- the
+# last tag this module's own daemon-lifecycle helpers were green against),
+# this module ran the packaged binary directly against a scratch,
+# deliberately-unseparated $HOME -- undoing whatever postinst's machine half
+# had just done via _disable_auto_enabled_privilege_separation() -- for a
+# fast, isolated round trip that never touched real system state. Decision 6
+# retired that option outright: a packaged daemon that finds itself
+# unseparated now refuses to serve at all
+# (privilege_separation.enforce_separation()), unconditionally, with no
+# override for a test harness or anything else (see that function's own
+# docstring). Since decision 5 already separates every `dpkg -i` (postinst's
+# machine half runs unconditionally, and -- because _dpkg() goes through
+# `sudo -n dpkg`, which sets $SUDO_USER to this CI account -- the per-user
+# half runs too), what a real `sudo dpkg -i`/`sudo apt install` leaves
+# running is the real, already-separated privacyfence-daemon.service. These
+# helpers talk to *that* daemon instead of spawning a second, ad hoc one.
+#
+# Its files are root-owned (settings.yaml/the audit log under authority/,
+# 0700; mcp_token/web_base_url/control.sock under handoff/, 2770 group
+# ${SERVICE_GROUP}) -- and even though this CI account was just added to
+# ${SERVICE_GROUP} by the per-user half above, a process that was already
+# running when that happened never picks it up; only a fresh login does
+# (same reasoning test_linux_graphical_session_autostart.py's own
+# sudo-everything posture already documents for the identical problem on
+# this same account). So every read below goes through `sudo -n`, exactly
+# like that module's own helpers.
 # --------------------------------------------------------------------------- #
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
 
 def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None:
     deadline = time.monotonic() + timeout
@@ -344,104 +419,115 @@ def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None
     raise TimeoutError(f"{host}:{port} never became connectable") from last_exc
 
 
-def _wait_for_path(path: Path, proc: subprocess.Popen, log_path: Path, timeout: float = 20.0) -> None:
-    """Like ``_wait_for_file()`` but for a path with no meaningful text
-    content of its own -- the control channel's Unix domain socket, in
-    particular, whose ``read_text()`` wouldn't return anything sensible."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise AssertionError(
-                f"daemon exited early (code {proc.poll()}) instead of starting -- log:\n"
-                f"{log_path.read_text(errors='replace')}"
-            )
-        if path.exists():
-            return
-        time.sleep(0.1)
-    raise AssertionError(f"{path} never appeared within {timeout}s -- log:\n{log_path.read_text(errors='replace')}")
+def _sudo_capture(*args: str, timeout: float = 15) -> subprocess.CompletedProcess:
+    return subprocess.run(["sudo", "-n", *args], capture_output=True, text=True, timeout=timeout)
 
 
-def _wait_for_file(path: Path, proc: subprocess.Popen, log_path: Path, timeout: float = 20.0) -> str:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            raise AssertionError(
-                f"daemon exited early (code {proc.poll()}) instead of starting -- log:\n"
-                f"{log_path.read_text(errors='replace')}"
-            )
-        if path.exists():
-            content = path.read_text(encoding="utf-8").strip()
-            if content:
-                return content
-        time.sleep(0.1)
-    raise AssertionError(f"{path} never appeared within {timeout}s -- log:\n{log_path.read_text(errors='replace')}")
+def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
+    """``sudo -n cat`` -- see this section's own module comment. ``None``
+    (not an exception) when the file does not exist yet, the same "not
+    there" signal a direct ``.exists()`` would give a poll loop, which is
+    this helper's main caller."""
+    result = _sudo_capture("cat", str(path), timeout=timeout)
+    return result.stdout if result.returncode == 0 else None
+
+
+def _sudo_mint_bootstrap_code(socket_path: Path, *, timeout: float = 5.0) -> str:
+    """Speaks the control channel's own one-line ``MINT`` protocol
+    (tests/control_channel_client.py's ``mint_bootstrap_code_posix()``,
+    which this can't call directly -- it has to run as root, and there is no
+    reason ``sudo``'s own system ``python3`` would have the ``privacyfence``
+    package importable) via a small stdlib-only inline script instead."""
+    script = (
+        "import socket,sys\n"
+        f"s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        f"s.settimeout({timeout})\n"
+        f"s.connect({str(socket_path)!r})\n"
+        "s.sendall(b'MINT\\n')\n"
+        "sys.stdout.write(s.recv(4096).decode('utf-8'))\n"
+    )
+    result = _sudo_capture("python3", "-c", script, timeout=timeout + 5)
+    assert result.returncode == 0, f"minting a bootstrap code as root failed:\n{result.stdout}{result.stderr}"
+    reply = result.stdout
+    assert reply.startswith("OK "), f"control channel mint failed: {reply!r}"
+    return reply[len("OK "):].strip()
 
 
 class RunningDaemon:
-    def __init__(self, process: subprocess.Popen, home: Path, port: int, mcp_token: str):
-        self.process = process
-        self.home = home
-        self.data_dir = home / ".privacyfence"
-        self.port = port
-        self.base_url = f"http://localhost:{port}"
-        self.mcp_url = f"{self.base_url}/mcp"
+    """The real, systemd-managed ``privacyfence-daemon.service`` -- not
+    something this module owns a ``subprocess.Popen`` handle for any more,
+    see this section's own module comment."""
+
+    def __init__(self, base_url: str, mcp_token: str):
+        self.data_dir = SYSTEM_ROOT
+        self.base_url = base_url
+        self.mcp_url = f"{base_url}/mcp"
         self.mcp_token = mcp_token
 
 
-def _prepare_home(home: Path, *, port: int) -> None:
-    """Pre-seeds (or re-seeds only the harness-convenience bits of) an
-    isolated ``$HOME``'s ``settings.yaml``: a real free port (so repeated
-    boots in this module never collide with each other or anything else on
-    the runner) and update checks disabled (this tier makes no real outbound
-    network calls). If ``settings.yaml`` already exists -- a second boot
-    against a ``$HOME`` a previous boot in this same test already used --
-    its existing content (e.g. an auto-accept rule the app itself applied)
-    is loaded and only those two fields are overwritten, never replaced
-    wholesale: overwriting it every boot would silently defeat the very
-    state-survival assertions this module exists to make."""
-    # #428 Phase 1: settings.yaml lives under an authority/ subdirectory of
-    # data_dir(), same as the control channel's socket/the audit dir below --
-    # not data_dir() itself.
-    config_dir = home / ".privacyfence" / "authority" / "config"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    settings_path = config_dir / "settings.yaml"
-    if settings_path.exists():
-        settings = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+def _wait_for_real_daemon(*, timeout: float = 30.0) -> RunningDaemon:
+    """Waits for the real ``privacyfence-daemon.service`` postinst's machine
+    half just (re)started to actually come up, and returns a
+    ``RunningDaemon`` for it. ``web_base_url`` (web/control_channel.py's own
+    ``WEB_BASE_URL_FILE_NAME``) is the daemon's own way of telling the
+    companion its port without either of them hardcoding a default, and is
+    cleared on ``WebServer.stop()`` -- which is what lets this tell "not up
+    yet" apart from "still the previous boot's value" the second time this
+    module calls it, across a quit/restart against the same install."""
+    deadline = time.monotonic() + timeout
+    base_url = None
+    while time.monotonic() < deadline:
+        base_url = _sudo_read_text(SEPARATED_WEB_BASE_URL_PATH, timeout=5)
+        if base_url and base_url.strip():
+            base_url = base_url.strip()
+            break
+        base_url = None
+        time.sleep(0.2)
+    assert base_url, (
+        f"{SEPARATED_WEB_BASE_URL_PATH} never appeared within {timeout}s -- {DAEMON_UNIT_NAME} status:\n"
+        f"{_sudo_capture('systemctl', 'status', DAEMON_UNIT_NAME, '--no-pager', '-l').stdout}"
+    )
+
+    remaining = max(1.0, deadline - time.monotonic())
+    parts = urlsplit(base_url)
+    _wait_until_connectable(parts.hostname or "localhost", parts.port, timeout=remaining)
+
+    mcp_token = None
+    while time.monotonic() < deadline:
+        mcp_token = _sudo_read_text(SEPARATED_MCP_TOKEN_PATH, timeout=5)
+        if mcp_token and mcp_token.strip():
+            mcp_token = mcp_token.strip()
+            break
+        mcp_token = None
+        time.sleep(0.2)
+    assert mcp_token, f"{SEPARATED_MCP_TOKEN_PATH} never appeared within {timeout}s"
+
+    return RunningDaemon(base_url, mcp_token)
+
+
+def _wait_for_daemon_unit_stopped(*, timeout: float = 15.0) -> None:
+    """After the real "Quit PrivacyFence" action (``/api/settings/
+    quit_app``, not the control channel's own ``QUIT`` verb -- a separated
+    install's daemon refuses that outright, see installer/linux/
+    privacyfence-daemon.service.tmpl's own ``Restart=`` comment for why: it
+    is ``systemctl``'s unit to stop, not a line on a socket the agent can
+    also reach), confirms the unit actually went down and *stayed* down --
+    ``Restart=on-failure`` means a clean exit does not bounce it back, but a
+    crash would, and that distinction is the point of checking at all."""
+    deadline = time.monotonic() + timeout
+    status = None
+    while time.monotonic() < deadline:
+        status = _sudo_capture("systemctl", "is-active", DAEMON_UNIT_NAME)
+        if status.stdout.strip() != "active":
+            break
+        time.sleep(0.3)
     else:
-        settings = yaml.safe_load(SETTINGS_EXAMPLE.read_text(encoding="utf-8")) or {}
-    settings.setdefault("web", {})["port"] = port
-    settings.setdefault("update_check", {})["enabled"] = False
-    settings_path.write_text(yaml.safe_dump(settings), encoding="utf-8")
-
-
-@contextlib.contextmanager
-def _running_daemon(home: Path):
-    """Starts the real installed ``/usr/bin/privacyfence-app`` wrapper
-    (not the PyInstaller onedir binary directly -- proving the wrapper
-    script itself resolves and execs correctly is part of what this module
-    is for) with an isolated ``$HOME``, and always terminates it on the way
-    out."""
-    assert DAEMON_BIN.is_file(), f"{DAEMON_BIN} missing -- was the package actually installed?"
-    port = _free_port()
-    _prepare_home(home, port=port)
-    env = {**os.environ, "HOME": str(home)}
-    log_path = home / "daemon.log"
-    with open(log_path, "wb") as log_fh:
-        proc = subprocess.Popen([str(DAEMON_BIN)], env=env, stdout=log_fh, stderr=subprocess.STDOUT)
-        try:
-            _wait_until_connectable("localhost", port)
-            data_dir = home / ".privacyfence"
-            _wait_for_path(resolve_posix_socket_path(data_dir), proc, log_path)
-            mcp_token = _wait_for_file(data_dir / MCP_TOKEN_FILE_NAME, proc, log_path)
-            yield RunningDaemon(proc, home, port, mcp_token)
-        finally:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=5)
+        raise AssertionError(f"{DAEMON_UNIT_NAME} still active {timeout}s after quit_app")
+    show = _sudo_capture("systemctl", "show", DAEMON_UNIT_NAME, "-p", "ExecMainStatus")
+    assert "ExecMainStatus=0" in show.stdout, (
+        f"{DAEMON_UNIT_NAME} did not exit cleanly after quit_app ({status.stdout.strip() if status else '?'}):\n"
+        f"{show.stdout}{show.stderr}"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -451,12 +537,14 @@ def _running_daemon(home: Path):
 # meta-tool that needs no connector (see module docstring's point 3).
 # --------------------------------------------------------------------------- #
 
-async def _bootstrap_session(web_client: httpx.AsyncClient, data_dir: Path, *, path: str = "/settings") -> str:
+async def _bootstrap_session(web_client: httpx.AsyncClient, *, path: str = "/settings") -> str:
     # #428 Phase 2: minted through the control channel (a real Unix domain
     # socket against this daemon's own data directory), not a bearer-
     # authenticated HTTP route -- see tests.control_channel_client's own
-    # module docstring.
-    code = mint_bootstrap_code_posix(resolve_posix_socket_path(data_dir))
+    # module docstring. As root (_sudo_mint_bootstrap_code), not a direct
+    # in-process connect -- see this module's own "Real-daemon helpers"
+    # section for why.
+    code = _sudo_mint_bootstrap_code(CONTROL_SOCKET)
     exchange_resp = await web_client.get(path, params={"bootstrap": code})
     assert exchange_resp.status_code == 200, exchange_resp.text
     session_id = web_client.cookies.get("pf_session")
@@ -539,7 +627,7 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         assert (await web_client.get("/approvals")).status_code == 401
         assert (await web_client.get("/settings")).status_code == 401
 
-        session_id = await _bootstrap_session(web_client, daemon.data_dir)
+        session_id = await _bootstrap_session(web_client)
         assert (await web_client.get("/settings")).status_code == 200
 
         # -- tools/list: the real MCP surface, no connector configured -----
@@ -575,45 +663,47 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         assert deny_result.is_error is True
 
         # -- Audit log confirms both real decisions ------------------------------
-        audit_dir = daemon.home / ".privacyfence" / "authority" / "logs" / "audit"
+        # Root-owned (authority/, 0700) -- one `sudo cat` of every *.jsonl in
+        # the directory rather than a per-file glob()/read_text(), neither
+        # of which this account can do directly. See this module's own
+        # "Real-daemon helpers" section.
+        audit_dir = SEPARATED_AUDIT_DIR
+        cat_all = _sudo_capture("bash", "-c", f"cat {shlex.quote(str(audit_dir))}/*.jsonl 2>/dev/null")
         decisions = []
-        for jsonl_path in sorted(audit_dir.glob("*.jsonl")):
-            for line in jsonl_path.read_text(encoding="utf-8").splitlines():
-                if not line.strip():
-                    continue
-                entry = json.loads(line)
-                if entry.get("connector") == "rule":
-                    decisions.append(entry.get("decision"))
+        for line in cat_all.stdout.splitlines():
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            if entry.get("connector") == "rule":
+                decisions.append(entry.get("decision"))
         assert "rule_changed_via_bridge_proposal" in decisions
         assert "rejected" in decisions
 
         # Same cross-platform-suite permission assertion Phase 3's own
         # scenario adds -- this module always runs on Linux (pytestmark
         # above), so no Windows skip needed here.
-        assert audit_dir.stat().st_mode & 0o077 == 0
+        mode_result = _sudo_capture("stat", "-c", "%a", str(audit_dir))
+        assert mode_result.returncode == 0, f"could not stat {audit_dir}: {mode_result.stderr}"
+        mode = int(mode_result.stdout.strip(), 8)
+        assert mode & 0o077 == 0, f"{audit_dir} is group/world accessible: {mode:04o}"
 
         # -- Graceful shutdown via the real "Quit PrivacyFence" action -----------
         await _quit(web_client, session_id)
 
-    exit_code = daemon.process.wait(timeout=15)
-    assert exit_code == 0, (
-        f"daemon did not exit cleanly (code {exit_code}) -- log:\n"
-        f"{(daemon.home / 'daemon.log').read_text(errors='replace')}"
-    )
+    _wait_for_daemon_unit_stopped()
 
 
 # --------------------------------------------------------------------------- #
 # Test 1 -- P7.1: install / validate / start+scenario / remove / purge
 # --------------------------------------------------------------------------- #
 
-async def test_deb_install_validate_scenario_remove_purge_lifecycle(tmp_path):
+async def test_deb_install_validate_scenario_remove_purge_lifecycle():
     deb_path = _built_debs()[-1]
-    home = tmp_path / "home"
-    home.mkdir()
 
-    # ── Install ──────────────────────────────────────────────────────────
+    # ── Install. ADR 0003 decision 5 separates it unconditionally as part
+    # of `configure` -- see this module's own "Real-daemon helpers" section
+    # for what that means for the rest of this test ─────────────────────
     _dpkg("-i", str(deb_path))
-    _disable_auto_enabled_privilege_separation()
 
     assert DAEMON_BIN.is_file(), f"{DAEMON_BIN} missing after dpkg -i"
     assert os.access(DAEMON_BIN, os.X_OK), f"{DAEMON_BIN} is not executable after dpkg -i"
@@ -629,30 +719,53 @@ async def test_deb_install_validate_scenario_remove_purge_lifecycle(tmp_path):
     )
     assert validate.returncode == 0, f"{AUTOSTART_DESKTOP_FILE} failed validation:\n{validate.stdout}{validate.stderr}"
 
-    # ── Start the real installed daemon; run the Phase 3 scenario ────────
-    with _running_daemon(home) as daemon:
-        await _run_daemon_mcp_approval_audit_scenario(daemon)
+    # ── The real, already-running privacyfence-daemon.service; run the
+    # Phase 3 scenario against it ─────────────────────────────────────────
+    daemon = _wait_for_real_daemon()
+    await _run_daemon_mcp_approval_audit_scenario(daemon)
 
-    settings_path = home / ".privacyfence" / "authority" / "config" / "settings.yaml"
-    assert "allowed.example.com" in settings_path.read_text(encoding="utf-8")
+    settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+    assert settings_text and "allowed.example.com" in settings_text, settings_text
 
-    # ── Remove (P7.1): package files gone; the autostart .desktop is a
-    # conffile and survives a plain remove; $HOME is untouched ───────────
-    _dpkg("-r", PACKAGE_NAME)
-    assert not OPT_DIR.exists(), f"{OPT_DIR} should be gone after dpkg -r"
-    assert not DAEMON_BIN.exists(), f"{DAEMON_BIN} should be gone after dpkg -r"
-    assert AUTOSTART_DESKTOP_FILE.exists(), "a conffile must survive a plain `dpkg -r` (only purge removes it)"
-    assert settings_path.exists(), "dpkg -r must never touch $HOME (P2.2)"
+    owner = _marker_owner()
+    assert owner == getpass.getuser(), (
+        f"the per-user half should have recorded {getpass.getuser()!r} as the marker's owner_user, got {owner!r}"
+    )
+    # dpkg -r's own prerm runs `disable` (see
+    # _disable_auto_enabled_privilege_separation()'s own docstring for the
+    # identical mechanism run by hand), which moves separated state back to
+    # the owner's real $HOME -- this CI account's own, same disposable-
+    # account posture test_linux_graphical_session_autostart.py's module
+    # docstring already states for writing into it directly.
+    restored_settings_path = Path.home() / ".privacyfence" / "authority" / "config" / "settings.yaml"
+    try:
+        # ── Remove (P7.1): package files gone; the autostart .desktop is a
+        # conffile and survives a plain remove; separation is undone,
+        # restoring state to $HOME rather than leaving it stranded under a
+        # system root nothing can reach any more ──────────────────────────
+        _dpkg("-r", PACKAGE_NAME)
+        assert not OPT_DIR.exists(), f"{OPT_DIR} should be gone after dpkg -r"
+        assert not DAEMON_BIN.exists(), f"{DAEMON_BIN} should be gone after dpkg -r"
+        assert AUTOSTART_DESKTOP_FILE.exists(), "a conffile must survive a plain `dpkg -r` (only purge removes it)"
+        assert restored_settings_path.exists(), (
+            f"dpkg -r's own `disable` call should have restored state to {restored_settings_path}"
+        )
+        assert "allowed.example.com" in restored_settings_path.read_text(encoding="utf-8")
 
-    remove_status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True)
-    assert "Status: deinstall ok config-files" in remove_status.stdout
+        remove_status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True)
+        assert "Status: deinstall ok config-files" in remove_status.stdout
 
-    # ── Purge (P7.1): the conffile is now gone too; $HOME still untouched ──
-    _dpkg("-P", PACKAGE_NAME)
-    assert not AUTOSTART_DESKTOP_FILE.exists(), "dpkg -P must remove the conffile"
-    purge_status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True)
-    assert purge_status.returncode != 0, f"package should be unknown to dpkg after purge:\n{purge_status.stdout}"
-    assert settings_path.exists(), "dpkg -P must never touch $HOME (P2.2)"
+        # ── Purge (P7.1): the conffile is now gone too; $HOME still
+        # untouched -- already unseparated, so purge's own prerm `disable`
+        # call is the documented no-op for an install with no marker left
+        # to find ───────────────────────────────────────────────────────
+        _dpkg("-P", PACKAGE_NAME)
+        assert not AUTOSTART_DESKTOP_FILE.exists(), "dpkg -P must remove the conffile"
+        purge_status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True)
+        assert purge_status.returncode != 0, f"package should be unknown to dpkg after purge:\n{purge_status.stdout}"
+        assert restored_settings_path.exists(), "dpkg -P must never touch $HOME (P2.2)"
+    finally:
+        shutil.rmtree(Path.home() / ".privacyfence", ignore_errors=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -699,53 +812,57 @@ def _synthetic_next_version_deb(src_deb: Path, dst_deb: Path) -> str:
 
 async def test_upgrade_in_place_preserves_user_state(tmp_path):
     deb_n = _built_debs()[-1]
-    home = tmp_path / "home"
-    home.mkdir()
 
-    # ── Install version N; create real on-disk state the app itself
-    # applied (an auto-accept rule confirmed through the real MCP/approval
-    # round trip -- not a hand-written settings.yaml) ────────────────────
+    # ── Install version N; create real on-disk state through the real,
+    # already-separated daemon (postinst's machine+per-user halves both run
+    # as part of this same `sudo dpkg -i` -- see this module's own
+    # "Real-daemon helpers" section) ───────────────────────────────────────
     _dpkg("-i", str(deb_n))
-    _disable_auto_enabled_privilege_separation()
-    with _running_daemon(home) as daemon:
-        async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
-            session_id = await _bootstrap_session(web_client, daemon.data_dir)
-            propose_task = asyncio.create_task(
-                _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["preupgrade.example.com"])
-            )
-            await _resolve_pending_card(web_client, session_id, decision="confirm")
-            result = await propose_task
-            assert result.is_error is not True, getattr(result, "content", result)
-            assert result.structured_content["changed"] is True
+    daemon = _wait_for_real_daemon()
+    async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
+        session_id = await _bootstrap_session(web_client)
+        propose_task = asyncio.create_task(
+            _propose_trusted_sender_rule(daemon.mcp_url, daemon.mcp_token, value=["preupgrade.example.com"])
+        )
+        await _resolve_pending_card(web_client, session_id, decision="confirm")
+        result = await propose_task
+        assert result.is_error is not True, getattr(result, "content", result)
+        assert result.structured_content["changed"] is True
 
-            await _quit(web_client, session_id)
-        assert daemon.process.wait(timeout=15) == 0
+        await _quit(web_client, session_id)
+    _wait_for_daemon_unit_stopped()
 
-    settings_path = home / ".privacyfence" / "authority" / "config" / "settings.yaml"
-    assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
+    settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+    assert settings_text and "preupgrade.example.com" in settings_text, settings_text
 
-    # ── Install a synthetically-bumped version N+1 over it (P7.3) ────────
+    # ── Install a synthetically-bumped version N+1 over it (P7.3). prerm's
+    # `upgrade` case stops the unit before dpkg unpacks the new files over
+    # /opt/privacyfence; postinst's machine half (which runs on every
+    # `configure`, upgrade included) starts it back up once they're in
+    # place -- the same real path a `sudo apt upgrade` takes, whether or not
+    # the daemon we just quit above had already stopped itself. ──────────
     deb_n1 = tmp_path / "upgrade-build" / "privacyfence_next.deb"
     new_version = _synthetic_next_version_deb(deb_n, deb_n1)
     _dpkg("-i", str(deb_n1))
-    _disable_auto_enabled_privilege_separation()
 
     status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True, check=True)
     assert f"Version: {new_version}" in status.stdout
 
     # ── State survived the upgrade untouched (P2.2/P7.3) ──────────────────
-    assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
+    settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+    assert settings_text and "preupgrade.example.com" in settings_text, settings_text
 
     # ── The upgraded binary still starts and serves, without clobbering
     # the state it just inherited ─────────────────────────────────────────
-    with _running_daemon(home) as daemon:
-        async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
-            session_id = await _bootstrap_session(web_client, daemon.data_dir)
-            assert (await web_client.get("/settings")).status_code == 200
-            await _quit(web_client, session_id)
-        assert daemon.process.wait(timeout=15) == 0
+    daemon = _wait_for_real_daemon()
+    async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
+        session_id = await _bootstrap_session(web_client)
+        assert (await web_client.get("/settings")).status_code == 200
+        await _quit(web_client, session_id)
+    _wait_for_daemon_unit_stopped()
 
-    assert "preupgrade.example.com" in settings_path.read_text(encoding="utf-8")
+    settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+    assert settings_text and "preupgrade.example.com" in settings_text, settings_text
 
 
 # --------------------------------------------------------------------------- #
