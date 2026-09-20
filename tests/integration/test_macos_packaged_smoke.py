@@ -173,7 +173,15 @@ SERVICE_GROUP = "privacyfence"
 MACOS_SYSTEM_ROOT = Path("/Library/Application Support/PrivacyFence")
 AUTHORITY_DIR = MACOS_SYSTEM_ROOT / "authority"
 HANDOFF_DIR = MACOS_SYSTEM_ROOT / "handoff"
-CONTROL_SOCKET = AUTHORITY_DIR / "control.sock"
+# Under HANDOFF_DIR, not AUTHORITY_DIR: paths.control_socket_dir() (which
+# web/control_channel.py's posix_socket_path() binds to) relocates the
+# socket to the handoff directory once privilege separation is enabled,
+# because a separated AUTHORITY_DIR is 0700 under the daemon's own service
+# account and the companion -- running as the human, not root -- has to
+# still be able to connect (see control_socket_dir()'s own docstring).
+# AUTHORITY_DIR/control.sock is only where it binds on an *unseparated*
+# install, which nothing running against MACOS_SYSTEM_ROOT here ever is.
+CONTROL_SOCKET = HANDOFF_DIR / "control.sock"
 SEPARATED_SETTINGS_PATH = AUTHORITY_DIR / "config" / "settings.yaml"
 SEPARATED_MCP_TOKEN_PATH = HANDOFF_DIR / MCP_TOKEN_FILE_NAME
 SEPARATED_WEB_BASE_URL_PATH = HANDOFF_DIR / "web_base_url"

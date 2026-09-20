@@ -1038,7 +1038,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   profile script can't change what runs) — which on some runner images leaves Windows PowerShell
   unable to autoload `Microsoft.PowerShell.Security` for it, failing the whole `enable` step with
   `CommandNotFoundException` before it ever reaches its own checks. The script now imports that
-  module explicitly up front instead of relying on autoload.
+  module explicitly up front instead of relying on autoload. That explicit import turned out to
+  have its own failure mode on a runner where autoload had quietly succeeded after all: a second
+  `Import-Module` of a module whose type data is already registered throws `FormatXmlUpdateException`
+  ("The member ... is already present") instead of doing nothing, which aborted `enable` exactly
+  as hard as the missing-module case it was meant to fix. That specific duplicate-registration
+  error is now tolerated — anything else Get-Acl's own unavailability would raise still stops the
+  script.
 - **Org mode's top navigation bar stays put across every page, not just `/approvals`.**
   `/connect`, `/security`, and `/settings` (and `/settings/privacy`) were each their own bare
   document, so following a Connect/Reconnect button, a passkey prompt, or a settings link off
