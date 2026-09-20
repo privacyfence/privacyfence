@@ -541,9 +541,24 @@ begin
        separate itself still renders the same approval dialogs, accepts the
        same passkey enrollment and writes the same audit log, none of which
        mean what they say when the daemon and the AI client it governs share
-       an account. Shipping that silently is the outcome this refuses -- and
-       RaiseException here is what makes Setup roll back and exit non-zero,
-       rather than reporting success for an install that isn't one. *)
+       an account. Shipping that silently is the outcome this refuses.
+
+       RaiseException here stops the rest of ssPostInstall (nothing past this
+       point runs: no finish-page autostart note, nothing) and, interactively,
+       shows the message below instead of a success screen. It does *not*
+       make Setup's own process exit code non-zero -- Pascal Scripting's
+       Abort()/RaiseException only affects Setup's exit code when raised from
+       InitializeSetup, InitializeWizard or CurStepChanged(ssInstall); by
+       ssPostInstall the "actual installation process" Setup's own exit-code
+       table (codes 3/4/7/8) means has already finished, and nothing run
+       afterward can retroactively fail it. (Confirmed against Inno Setup's
+       own Pascal Scripting reference for Abort, not assumed -- see
+       privacyfence/privacyfence's build-failure notes for 4.1.0b1.) A caller
+       that needs to detect this refusal programmatically -- as
+       tests/integration/test_windows_packaged_smoke.py's own
+       test_windows_install_fails_when_the_image_is_user_writable does --
+       has to read the install log for SeparateInstall's own failure line (or
+       check that the marker/service were never created), not the exit code. *)
     if not SeparateInstall(SeparationOutput) then
     begin
       Log('SeparateInstall: FAILED; aborting the installation.');

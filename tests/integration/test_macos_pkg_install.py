@@ -56,6 +56,7 @@ import re
 import shutil
 import subprocess
 import time
+import warnings
 from pathlib import Path
 
 import pytest
@@ -148,6 +149,31 @@ def _wait_for_path_as_root(path: Path, *, timeout: float, what: str) -> None:
     raise AssertionError(f"{what} ({path}) never appeared within {timeout}s")
 
 
+def _wait_for_app_bundle(path: Path, *, timeout: float) -> float | None:
+    """Poll for the installed app bundle instead of checking once.
+
+    #562: `installer(8)` was observed reporting "The install was successful"
+    with the payload not yet visible at `path` roughly half the time, on
+    otherwise-identical runs. Polling here turns that race -- if that's what
+    it is -- into a bounded wait instead of a flaky failure, while still
+    failing for real if the bundle never shows up at all: this does not
+    swallow the possibility that the installer genuinely drops the payload,
+    it just stops a few hundred milliseconds of settling time from looking
+    like that.
+
+    Returns the number of seconds actually waited on success, or ``None`` if
+    ``path`` never appeared within ``timeout``.
+    """
+    deadline = time.monotonic() + timeout
+    start = time.monotonic()
+    while True:
+        if path.is_dir():
+            return time.monotonic() - start
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(0.1)
+
+
 def _launchctl_print(domain: str) -> str | None:
     result = _sudo_run("launchctl", "print", domain, check=False)
     return result.stdout if result.returncode == 0 else None
@@ -235,7 +261,19 @@ def test_pkg_install_enables_privilege_separation_with_no_manual_step(_clean_pkg
 
     install = _sudo_run("installer", "-pkg", str(pkg_path), "-target", "/", timeout=120)
     assert not INSTALLED_APP_PATH.is_symlink()
-    assert INSTALLED_APP_PATH.is_dir(), f"installer did not place {INSTALLED_APP_PATH}:\n{install.stdout}{install.stderr}"
+    # #562: don't assert immediately -- see _wait_for_app_bundle's own docstring.
+    waited = _wait_for_app_bundle(INSTALLED_APP_PATH, timeout=10)
+    if waited is not None and waited > 0.5:
+        warnings.warn(
+            f"{INSTALLED_APP_PATH} took {waited:.2f}s to become visible after `installer` "
+            f"reported success (#562) -- installer/installd payload-visibility race, not a "
+            f"postinstall failure",
+            stacklevel=1,
+        )
+    assert waited is not None, (
+        f"installer did not place {INSTALLED_APP_PATH} within 10s of returning:\n"
+        f"{install.stdout}{install.stderr}"
+    )
 
     # The postinstall script ran `enable --auto` itself, synchronously, as
     # part of `installer` above -- no separate `enable` call from this test,

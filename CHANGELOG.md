@@ -35,6 +35,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Documented that upgrading PrivacyFence on macOS is just re-running `PrivacyFence.pkg` — the
+  installer restarts the daemon on the new build itself, so there's no need to quit anything
+  first. (`README.md`, `docs/TECHNICAL_REFERENCE.md`)
+
 ## [4.1.0] — 2026-09-20
 
 ### Security
@@ -1026,6 +1032,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The Windows installer's privilege-separation step no longer depends on PowerShell module
+  autoload working.** `scripts/windows_privilege_separation.ps1` calls `Get-Acl` throughout, and
+  `installer/privacyfence.iss` runs it with `-NoProfile` (deliberately, so an administrator
+  profile script can't change what runs) — which on some runner images leaves Windows PowerShell
+  unable to autoload `Microsoft.PowerShell.Security` for it, failing the whole `enable` step with
+  `CommandNotFoundException` before it ever reaches its own checks. The script now imports that
+  module explicitly up front instead of relying on autoload.
 - **Org mode's top navigation bar stays put across every page, not just `/approvals`.**
   `/connect`, `/security`, and `/settings` (and `/settings/privacy`) were each their own bare
   document, so following a Connect/Reconnect button, a passkey prompt, or a settings link off
