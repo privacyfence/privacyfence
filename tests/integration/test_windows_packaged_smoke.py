@@ -28,7 +28,10 @@ as possible to how a real user would.
    signed-in user can rewrite, because a service runs whatever its
    ``binPath`` names. An ordinary ``tmp_path`` directory *is* user-writable,
    so isolation and installability now have to be arranged together. Test 3
-   below is the same fact asserted from the other side.
+   below is the same fact asserted from the other side. The scratch directory
+   also carries a space in its name (``INSTALL_DIR_NAME``), because a real
+   install's ``C:\\Program Files\\PrivacyFence`` does and a runner's ``tmp_path``
+   does not -- see that constant for the defect that hid behind the difference.
 2. **Validate the autostart entry**: ``installer/privacyfence.iss``'s
    ``[Code]`` section registers the Task Scheduler task as part of the
    (silent) install itself, not a separate opt-in step -- ``schtasks /query`` against it is
@@ -182,6 +185,26 @@ MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
 # into {app} under this name; [Code]'s SeparateInstall runs it from there.
 SEPARATION_SCRIPT_NAME = "privilege-separation.ps1"
 MARKER_PATH = WINDOWS_SYSTEM_ROOT / MARKER_FILE_NAME
+
+# The scratch install directory's name, and the space in it is the point.
+#
+# Every real install goes to `C:\Program Files\PrivacyFence`; this module's
+# `/DIR=` override used to point at a plain `install` directory under
+# `tmp_path`, which on a hosted runner has no space anywhere in it. That one
+# difference hid a defect that broke every real install for as long as Windows
+# separation has existed: `sc create`'s binPath= value is
+# `"<path>" --windows-service`, a single argument with quotes inside it, and
+# Windows PowerShell 5.1's native-argument binder re-quotes such an argument
+# without escaping the quotes already there. With no space in the path the
+# mangled result still parses as one argument and the service is created; with
+# one, sc.exe reads binPath= as `C:\Program`, rejects the rest as an unknown
+# option, and the install dies at exit 1639 -- green here, broken everywhere
+# else. See scripts/windows_privilege_separation.ps1's Invoke-NativeCommandLine.
+#
+# So the scratch directory carries a space on purpose now: a path shaped like
+# the one users actually install into is the only input that exercises the
+# quoting at all.
+INSTALL_DIR_NAME = "Program Folder"
 
 # The separated layout's own files, as `enable` leaves them on disk. Readable
 # directly rather than through an elevation shim, unlike the POSIX modules'
@@ -852,7 +875,7 @@ def _run_installer(*args: str, timeout: float = 120.0) -> subprocess.CompletedPr
 
 async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     setup_exe = _built_installers()[-1]
-    install_dir = _admin_only_writable_dir(tmp_path / "install")
+    install_dir = _admin_only_writable_dir(tmp_path / INSTALL_DIR_NAME)
     log_path = tmp_path / "install.log"
 
     # ── Install ──────────────────────────────────────────────────────────
@@ -1014,7 +1037,7 @@ def _synthetic_next_version_installer(setup_exe: Path, output_dir: Path) -> tupl
                              # isn't enough headroom for both in one test.
 async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     setup_exe_n = _built_installers()[-1]
-    install_dir = _admin_only_writable_dir(tmp_path / "install")
+    install_dir = _admin_only_writable_dir(tmp_path / INSTALL_DIR_NAME)
 
     # ── Install version N; create real on-disk state the app itself
     # applied (an auto-accept rule confirmed through the real MCP/approval
@@ -1134,7 +1157,7 @@ def test_windows_install_separates_with_no_manual_enable(tmp_path):
     (Disable-DaemonTask).
     """
     setup_exe = _built_installers()[-1]
-    install_dir = _admin_only_writable_dir(tmp_path / "install")
+    install_dir = _admin_only_writable_dir(tmp_path / INSTALL_DIR_NAME)
     log_path = tmp_path / "install.log"
 
     result = _run_installer(
@@ -1177,6 +1200,19 @@ def test_windows_install_separates_with_no_manual_enable(tmp_path):
             f"the {WINDOWS_SERVICE_NAME} service's binPath does not name the installed daemon:\n{config}"
         )
         assert "--windows-service" in config, f"binPath is missing the service-host flag:\n{config}"
+        # And the image path is *quoted* inside binPath, which matters twice
+        # over on a path with a space in it (INSTALL_DIR_NAME, deliberately).
+        # The SCM runs ImagePath as a command line, so an unquoted
+        # `C:\Program Files\...\privacyfence-app.exe --windows-service` sends
+        # CreateProcess hunting for `C:\Program.exe` first -- the
+        # unquoted-service-path hijack, in the one service whose whole purpose
+        # is to keep the agent from running its own code as this account. It is
+        # also the assertion that catches the quoting going back through
+        # PowerShell's argument binder, which cannot carry it (see
+        # scripts/windows_privilege_separation.ps1's Invoke-NativeCommandLine).
+        assert f'"{install_dir / ALIAS_EXE_NAME}" --windows-service'.lower() in config.lower(), (
+            f"the {WINDOWS_SERVICE_NAME} service's binPath does not quote the image path:\n{config}"
+        )
         assert WINDOWS_SERVICE_ACCOUNT_NAME.lower() in config.lower(), (
             f"the {WINDOWS_SERVICE_NAME} service does not run as {WINDOWS_SERVICE_ACCOUNT_NAME}:\n{config}"
         )
@@ -1237,7 +1273,7 @@ def test_windows_install_fails_when_the_image_is_user_writable(tmp_path):
     here on purpose -- this is ``_admin_only_writable_dir`` not being called.
     """
     setup_exe = _built_installers()[-1]
-    install_dir = tmp_path / "user-writable-install"
+    install_dir = tmp_path / f"user-writable {INSTALL_DIR_NAME}"
     install_dir.mkdir()
     log_path = tmp_path / "install.log"
 

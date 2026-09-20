@@ -110,6 +110,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   their way to a native executable. `sc.exe` therefore read `start=` as the password's value and
   rejected the leftover `auto` with exit 1639. The pair is gone — a virtual service account has no
   password, and omitting the option is how that is said.
+- **A fresh Windows install could not complete, part four — and this one only ever failed on a real
+  one.** With the empty `password=` gone, the same `sc.exe create` call still died with exit 1639
+  and a usage dump, for a reason that had been invisible to every CI run: its `binPath=` value is
+  `"<path>" --windows-service`, a single argument with quotes *inside* it, and Windows PowerShell
+  5.1's native-argument binder re-quotes such an argument without escaping the quotes already there.
+  Where the path has no space — a test runner's scratch directory — the mangled result still parses
+  back as one argument and the service is created, so the packaged Windows tests passed. Where it
+  does — `C:\Program Files\PrivacyFence`, i.e. every real install — `sc.exe` read `binPath=` as
+  `C:\Program` and rejected `Files\PrivacyFence\privacyfence-app.exe --windows-service` as an
+  option it had never heard of. The call now builds its own command line and hands it to
+  `CreateProcess` verbatim, which is the one spelling that means the same thing under PowerShell 5.1
+  and 7; the quoting matters beyond this failure, since the Service Control Manager runs `ImagePath`
+  as a command line and an unquoted path with a space in it is the classic service-path hijack. The
+  packaged Windows tests now install into a directory whose name has a space in it, so the
+  difference between CI and a real install stops being the thing that hides a defect.
+- **An unseparated Windows install asked for the same UAC approval every five minutes, and could
+  never act on it.** `enforce_separation()`'s backstop (ADR 0003 decision 6) elevates by having
+  PowerShell `Start-Process -Verb RunAs` a second PowerShell that runs `privilege-separation.ps1
+  enable` — and it passed that inner invocation as an `-ArgumentList` *array*. `Start-Process` joins
+  such an array with plain spaces and quotes nothing, so the elevated process received
+  `-File C:\Program Files\PrivacyFence\privilege-separation.ps1`, read `C:\Program` as the script
+  to run, and exited nonzero — after the user had already approved the prompt. The daemon's own
+  autostart task repeats every five minutes, so on the default install location that became a UAC
+  prompt returning every five minutes that could not possibly accomplish anything. The inner command
+  line is now built with the same quoting the elevated PowerShell parses it back out with, in one
+  helper both Windows elevation paths share. Declining still re-asks at the next start, which is
+  decision 6's deliberate posture (a decline is an unfinished install, not a setting) — the
+  difference is that approving it now works.
 - **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
   `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
   `windows-latest` runner that module refuses to load inside the installer's own

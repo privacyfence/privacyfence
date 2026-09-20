@@ -586,6 +586,88 @@ function Invoke-Native {
     return $output
 }
 
+function ConvertTo-CommandLineToken {
+    <#
+      One argument, quoted the way CommandLineToArgvW -- and so every C
+      runtime's argv, sc.exe's included -- parses it back out: wrapped in
+      quotes, with any quote *inside* it escaped as \" and the backslashes
+      that immediately precede a quote, or that end the token, doubled so
+      they stay literal instead of escaping the quote next to them.
+
+      Only for command lines this script builds itself, for
+      Invoke-NativeCommandLine below. Everything that goes through
+      Invoke-Native's argument array must *not* be pre-quoted -- PowerShell
+      quotes those itself, and doing it twice is its own bug.
+    #>
+    param([string] $Value)
+
+    $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
+    $escaped = [regex]::Replace($escaped, '(\\+)$', '$1$1')
+    return '"' + $escaped + '"'
+}
+
+function Invoke-NativeCommandLine {
+    <#
+      Invoke-Native's sibling for the one call whose arguments PowerShell
+      cannot carry: the command line is handed to CreateProcess exactly as
+      built here, instead of being assembled by PowerShell out of an array.
+
+      That distinction is not academic, and `sc create` is where it bites.
+      Its binPath= value has to arrive as the single argument
+      `"<path>" --windows-service`, quotes and all, because the SCM runs
+      ImagePath as a command line: drop the quotes and
+      `C:\Program Files\PrivacyFence\privacyfence-app.exe` becomes
+      CreateProcess' guessing game, starting at `C:\Program.exe` -- the
+      unquoted-service-path hijack, which is not a thing to ship in the
+      script whose entire job is to stop the agent running its own code as
+      the service account.
+
+      Windows PowerShell 5.1 cannot pass that argument. Its native-argument
+      binder wraps any argument containing an unquoted space in quotes and
+      does not escape the quotes already inside it, so that value leaves as
+      `""C:\Program Files\...\privacyfence-app.exe" --windows-service"` and
+      arrives at sc.exe split in two: binPath= gets `C:\Program`, and
+      `Files\PrivacyFence\privacyfence-app.exe --windows-service` becomes an
+      option sc.exe has never heard of. That is ERROR_INVALID_COMMAND_LINE,
+      exit 1639 and a usage dump -- the fifth defect on this one code path,
+      and the first that only fires when the install directory has a space
+      in it, which is why every CI run into a scratch directory passed while
+      every real install into %ProgramFiles% died.
+
+      Pre-escaping the quotes instead would fix 5.1 and break PowerShell 7,
+      whose default $PSNativeCommandArgumentPassing escapes them correctly
+      already and would pass our backslashes through as literals. Building
+      the command line ourselves is the one spelling that means the same
+      thing on both.
+    #>
+    param([string] $FilePath, [string] $CommandLine, [switch] $IgnoreFailure)
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $FilePath
+    $startInfo.Arguments = $CommandLine
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    [void] $process.Start()
+    # Both pipes drained concurrently. Reading one to the end while the child
+    # fills the other deadlocks both sides, and sc.exe's usage dump -- the
+    # output this most needs to report -- is exactly the kind that fills one.
+    $stdoutRead = $process.StandardOutput.ReadToEndAsync()
+    $stderrRead = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $code = $process.ExitCode
+    $output = (@($stdoutRead.Result, $stderrRead.Result) | Where-Object { $_ }) -join [Environment]::NewLine
+    $process.Dispose()
+    if ($code -ne 0 -and -not $IgnoreFailure) {
+        Stop-WithError "$FilePath $CommandLine failed (exit $code): $output"
+    }
+    return $output
+}
+
 function Invoke-Icacls {
     param([string[]] $Arguments, [switch] $IgnoreFailure)
 
@@ -750,13 +832,20 @@ function Install-DaemonService {
     # as the password's value, and rejected the leftover `auto` with exit
     # 1639 and a usage dump -- which is what a fresh Windows install had been
     # dying on, once the ordering fix let anything reach this line at all.
-    Invoke-Sc @(
-        'create', $ServiceName,
-        'binPath=', "`"$($script:DaemonExec)`" --windows-service",
-        'obj=', $ServiceAccount,
+    #
+    # And this one call builds its own command line rather than handing
+    # Invoke-Sc an argument array, because binPath='s value is
+    # `"<path>" --windows-service` -- an argument with quotes inside it,
+    # which Windows PowerShell 5.1 cannot pass without tearing in half at the
+    # space in "Program Files". See Invoke-NativeCommandLine, which exists
+    # for this line and says exactly what 5.1 does to it.
+    Invoke-NativeCommandLine -FilePath 'sc.exe' -CommandLine (@(
+        'create', (ConvertTo-CommandLineToken $ServiceName),
+        'binPath=', (ConvertTo-CommandLineToken "`"$($script:DaemonExec)`" --windows-service"),
+        'obj=', (ConvertTo-CommandLineToken $ServiceAccount),
         'start=', 'auto',
-        'DisplayName=', 'PrivacyFence'
-    ) | Out-Null
+        'DisplayName=', (ConvertTo-CommandLineToken 'PrivacyFence')
+    ) -join ' ') | Out-Null
     Invoke-Sc @('description', $ServiceName, 'Runs the PrivacyFence approval daemon under its own account (issue #428 Phase 4).') | Out-Null
     # Crash restart, the thing the Scheduled Task's repeating TimeTrigger was
     # standing in for before there was a service manager involved: three

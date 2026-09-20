@@ -1266,6 +1266,39 @@ def dev_allows_unseparated() -> bool:
     return os.environ.get(DEV_ALLOW_UNSEPARATED_ENV, "") not in ("", "0", "false", "False")
 
 
+def _windows_runas_argv(inner: list[str]) -> list[str]:
+    """The elevated relaunch both Windows callers below share: an ordinary
+    PowerShell whose only job is to ``Start-Process -Verb RunAs`` (UAC) a
+    second PowerShell running ``inner``.
+
+    ``-ArgumentList`` is handed *one* pre-built command line rather than the
+    obvious array of arguments, and that is the whole reason this function
+    exists. ``Start-Process`` joins an ``-ArgumentList`` array with plain
+    spaces and quotes nothing, so
+    ``"-File", r"C:\\Program Files\\PrivacyFence\\privilege-separation.ps1"``
+    reached the elevated process as ``-File C:\\Program Files\\...``: PowerShell
+    read ``C:\\Program`` as the script to run, could not find it, and exited
+    nonzero. On the default install location -- the only one most people
+    have -- that made every automatic ``enable`` fail *after* its UAC prompt
+    had already been approved, and since the daemon's own autostart task
+    repeats every five minutes, a prompt that could never accomplish
+    anything came back every five minutes for as long as the install stayed
+    unseparated.
+
+    ``subprocess.list2cmdline`` builds that command line by the rules
+    ``CommandLineToArgvW`` parses it back out with, which is how the
+    elevated PowerShell reads its own arguments; ``_powershell_quoted``
+    then carries the result through the outer ``-Command`` as a single
+    literal.
+    """
+    powershell = str(_windows_system32("WindowsPowerShell\\v1.0\\powershell.exe"))
+    return [
+        powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+        f"Start-Process -FilePath {_powershell_quoted(powershell)} -Verb RunAs -Wait "
+        f"-ArgumentList {_powershell_quoted(subprocess.list2cmdline(inner))}",
+    ]
+
+
 def _windows_full_enable_argv(script: Path) -> list[str]:
     """The elevated invocation of the *whole* ``enable`` (both halves) on
     Windows -- ``enforce_separation()``'s own attempt, run when a packaged
@@ -1279,14 +1312,7 @@ def _windows_full_enable_argv(script: Path) -> list[str]:
     (non-``--auto``) exit code. See ``PlatformLayout.enable_command`` for
     the same command spelled out for a human to type by hand.
     """
-    powershell = str(_windows_system32("WindowsPowerShell\\v1.0\\powershell.exe"))
-    inner = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "enable"]
-    arguments = ", ".join(_powershell_quoted(part) for part in inner)
-    return [
-        powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-        f"Start-Process -FilePath {_powershell_quoted(powershell)} -Verb RunAs -Wait "
-        f"-ArgumentList {arguments}",
-    ]
+    return _windows_runas_argv(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "enable"])
 
 
 def _run_full_auto_enable_non_macos() -> None:
@@ -1653,17 +1679,14 @@ def _per_user_argv(script: Path, user: str) -> list[str] | None:
             f"do shell script {_applescript_quoted(command)} with administrator privileges",
         ]
     if platform == "win32":
-        powershell = str(_windows_system32("WindowsPowerShell\\v1.0\\powershell.exe"))
-        inner = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "enable", "-ForUser", user]
         # -Verb RunAs is UAC: it re-launches elevated, which is why this
         # cannot simply be the inner argv. -Wait so the return code below is
-        # the script's own rather than the launcher's.
-        arguments = ", ".join(_powershell_quoted(part) for part in inner)
-        return [
-            powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-            f"Start-Process -FilePath {_powershell_quoted(powershell)} -Verb RunAs -Wait "
-            f"-ArgumentList {arguments}",
-        ]
+        # the script's own rather than the launcher's. Both live in
+        # _windows_runas_argv(), along with the quoting neither caller may
+        # get wrong on its own.
+        return _windows_runas_argv(
+            ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "enable", "-ForUser", user]
+        )
     pkexec = shutil.which("pkexec")
     if pkexec is None:
         return None
