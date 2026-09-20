@@ -751,17 +751,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **A migration guide for an install already on 4.0 or earlier** (`docs/migration-guide.md`). The
-  hardening above (mandatory privilege separation, the passkey/scope defaults, session provenance,
-  the retired sign-in-link tool) isn't fully self-applying on upgrade: privilege separation itself
-  is unconditional, but `step_up.enabled`/`require_passkey`/`scope` read from a `config/
-  settings.yaml` an existing install already has on disk, written out with the *old* explicit
-  values by every `settings.yaml.example` before this release — and an upgrade never rewrites a
-  config file that's already there. The guide walks each platform's separation steps (the retired
-  macOS drag-install and Windows non-elevated tier included), the moved data-directory paths, and
-  the one hand-edit to `config/settings.yaml` (or, for a fleet, `--step-up-scope` on the org bundle)
-  that actually turns the new defaults on for an existing install rather than just a fresh one.
-  Linked from `docs/README.md`'s Start here and from `getting-started.md`'s Where to go next.
 - **A step-by-step install guide, one section per platform**
   (`docs/getting-started.md`). The README's Quick start already had the shape of each install, but
   it interleaves each step with the reasoning behind it — why privilege separation is mandatory,
