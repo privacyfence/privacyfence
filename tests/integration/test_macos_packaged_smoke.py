@@ -125,6 +125,7 @@ import atexit
 import contextlib
 import functools
 import getpass
+import os
 import platform
 import plistlib
 import re
@@ -171,6 +172,14 @@ DIST_DIR = REPO_ROOT / "dist"
 PRIVILEGE_SEPARATION_SCRIPT = REPO_ROOT / "scripts" / "macos_privilege_separation.sh"
 MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
 DAEMON_LABEL = "com.privacyfence.daemon"
+# scripts/macos_privilege_separation.sh's own COMPANION_LABEL/COMPANION_PLIST.
+# Unlike Linux -- where a headless install has no companion at all, because
+# auto-separation renames the autostart entry away -- `enable` here starts
+# the real companion immediately (install_services' `launchctl bootstrap
+# gui/<uid>`), and it is still holding COMPANION_SOCKET when these tests need
+# an attested session. See _companion_agent_paused().
+COMPANION_LABEL = "com.privacyfence.companion"
+COMPANION_PLIST = Path("/Library/LaunchAgents") / f"{COMPANION_LABEL}.plist"
 SERVICE_GROUP = "privacyfence"
 
 # ADR 0003 decision 6 made a packaged daemon refuse to serve at all unless
@@ -195,10 +204,12 @@ CONTROL_SOCKET = HANDOFF_DIR / "control.sock"
 # The other half of the same handoff directory: the address the *companion*
 # binds and the daemon dials back on (web/control_channel.py's
 # COMPANION_SOCKET_FILE_NAME, via companion_socket_path()). A CI runner has
-# no companion, so the two helpers that need one --
-# _sudo_mint_attested_bootstrap_code() and _sudo_companion_stand_in() --
-# bind this themselves; see tests/control_channel_client.py's own
-# "Attested minting" and "Standing in for the companion" sections.
+# a real companion bound to this, and no human to click it -- so the two
+# helpers that need one, _sudo_mint_attested_bootstrap_code() and
+# _sudo_companion_stand_in(), take the address over for the length of one
+# ceremony (see _companion_agent_paused()); see
+# tests/control_channel_client.py's own "Attested minting" and "Standing in
+# for the companion" sections for what they then answer.
 COMPANION_SOCKET = HANDOFF_DIR / "companion.sock"
 SEPARATED_SETTINGS_PATH = AUTHORITY_DIR / "config" / "settings.yaml"
 SEPARATED_MCP_TOKEN_PATH = HANDOFF_DIR / MCP_TOKEN_FILE_NAME
@@ -418,6 +429,69 @@ def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def _wait_for_companion_socket_free(*, timeout: float = 20.0) -> None:
+    """``launchctl bootout`` returns before the process it stopped has
+    actually exited, so the address stays bound for a moment afterwards and
+    binding it in that window fails with EADDRINUSE. Polls until a connect is
+    refused (nothing listening) or the file is gone.
+
+    Connecting from this account rather than the service account is fine for
+    a liveness probe: _verify_companion_peer() refuses a non-service-account
+    peer *after* accepting, so the connect still succeeds while something is
+    listening, which is exactly the distinction being made here."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.settimeout(2.0)
+        try:
+            probe.connect(str(COMPANION_SOCKET))
+        except (ConnectionRefusedError, FileNotFoundError):
+            return
+        except OSError:
+            pass   # anything else: treat as still busy and poll again
+        finally:
+            probe.close()
+        time.sleep(0.2)
+    raise AssertionError(
+        f"{COMPANION_SOCKET} was still bound {timeout}s after booting out {COMPANION_LABEL}"
+    )
+
+
+@contextlib.contextmanager
+def _companion_agent_paused():
+    """Takes the companion's address back for the duration of a ceremony this
+    runner has no human to answer, then gives it back.
+
+    The real companion *is* the right process to ask for an attested mint or
+    an enrollment confirmation -- it is the one a human clicks, and on this
+    platform `enable` has already started it. What is missing on a CI runner
+    is the human, and there is no supported way to make a running companion
+    issue a mint nonce or answer its own dialog from outside. So the test
+    substitutes for the process, which here -- unlike Linux, where nothing
+    holds the address -- first means asking launchd to stop the real one.
+
+    Both calls are in this account's own GUI domain and need no ``sudo``:
+    `enable` bootstrapped the agent as ``gui/<owner uid>`` and the owner is
+    this account (``_enable_separation`` passes ``getpass.getuser()``).
+    Restoring is best-effort on purpose -- nothing in this module asserts the
+    agent is running, and the next test's own ``_enable_separation`` re-runs
+    ``install_services``, which boots it out and back regardless of the state
+    this leaves behind."""
+    domain = f"gui/{os.getuid()}"
+    subprocess.run(
+        ["launchctl", "bootout", f"{domain}/{COMPANION_LABEL}"],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    _wait_for_companion_socket_free()
+    try:
+        yield
+    finally:
+        subprocess.run(
+            ["launchctl", "bootstrap", domain, str(COMPANION_PLIST)],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+
+
 def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     """Mints a bootstrap code that can actually *approve*.
 
@@ -426,17 +500,20 @@ def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     may view ``/approvals`` but cannot release a sensitive confirm
     (web/routes_approvals.py's ``require_human_session``, turned on by
     web/server.py for every separated install, which is every packaged one).
-    The attested shape is ``MINT COMPANION <nonce>``, and a CI runner has no
-    companion to issue that nonce, so the script below stands in for one --
-    see tests/control_channel_client.py's own "Attested minting" section for
-    the whole round trip and why standing in is not a bypass.
+    The attested shape is ``MINT COMPANION <nonce>``. This runner does have a
+    real companion -- `enable` starts it -- but no human to click it, and no
+    way to make it issue a nonce from outside, so the script below stands in
+    for it while ``_companion_agent_paused()`` holds the real one out of the
+    way. See tests/control_channel_client.py's own "Attested minting" section
+    for the whole round trip and why standing in is not a bypass.
 
     Runs as root through an inline stdlib-only script, same technique (and
     same reason -- the control socket belongs to the service account, and
     sudo's own system ``python3`` has no ``privacyfence`` package
     importable) as test_deb_packaged_lifecycle.py's own equivalent."""
     script = attested_mint_script(CONTROL_SOCKET, COMPANION_SOCKET, timeout=timeout)
-    result = _sudo_capture("python3", "-c", script, timeout=timeout * 2 + 10)
+    with _companion_agent_paused():
+        result = _sudo_capture("python3", "-c", script, timeout=timeout * 2 + 10)
     assert result.returncode == 0, (
         f"minting an attested bootstrap code as root failed:\n{result.stdout}{result.stderr}"
     )
@@ -460,26 +537,27 @@ def _sudo_companion_stand_in(*, serve_seconds: float = 120.0):
     drives the ceremony through a real browser (see
     ``_enroll_passkey_in_browser``), which has a page load and a WebAuthn
     ceremony inside the window rather than two httpx round trips."""
-    child = subprocess.Popen(
-        ["sudo", "-n", "python3", "-u", "-c",
-         companion_stand_in_script(COMPANION_SOCKET, serve_seconds=serve_seconds)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    )
-    try:
-        ready = child.stdout.readline() if child.stdout else ""
-        assert ready.strip() == "READY", (
-            f"the stand-in companion never bound {COMPANION_SOCKET}: {ready!r} "
-            f"{child.stderr.read() if child.stderr else ''}"
+    with _companion_agent_paused():
+        child = subprocess.Popen(
+            ["sudo", "-n", "python3", "-u", "-c",
+             companion_stand_in_script(COMPANION_SOCKET, serve_seconds=serve_seconds)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
-        yield
-    finally:
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            child.wait(timeout=10)
-        if child.poll() is None:
-            subprocess.run(["sudo", "-n", "kill", str(child.pid)], capture_output=True, check=False)
-            child.terminate()
+        try:
+            ready = child.stdout.readline() if child.stdout else ""
+            assert ready.strip() == "READY", (
+                f"the stand-in companion never bound {COMPANION_SOCKET}: {ready!r} "
+                f"{child.stderr.read() if child.stderr else ''}"
+            )
+            yield
+        finally:
             with contextlib.suppress(subprocess.TimeoutExpired):
                 child.wait(timeout=10)
+            if child.poll() is None:
+                subprocess.run(["sudo", "-n", "kill", str(child.pid)], capture_output=True, check=False)
+                child.terminate()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    child.wait(timeout=10)
 
 
 def _launchctl_print(domain: str) -> str | None:

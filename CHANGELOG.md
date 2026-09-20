@@ -49,6 +49,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   registration and assertion ceremonies are now covered end to end against the packaged binary
   rather than only in unit tests. No product behaviour changes: the gates were right, the tests
   were asserting the behaviour that preceded them.
+- **A fresh Windows install could not complete at all.** `privilege-separation.ps1` created its
+  `PrivacyFenceUsers` group with an 85-character `-Description`; `New-LocalGroup` validates that
+  parameter against a 48-character limit and *fails* rather than truncating, so the separation step
+  aborted and — correctly, since an install that cannot separate is not installed — took the whole
+  installation with it. Every machine that did not already have the group was affected, from
+  `35e263f` (2026-09-16) onwards. It was invisible until now because the `Get-Acl` failure below
+  stopped the same script a few lines earlier, so nothing had ever reached this line.
 - **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
   `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
   `windows-latest` runner that module refuses to load inside the installer's own

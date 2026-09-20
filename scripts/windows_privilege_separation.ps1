@@ -429,7 +429,17 @@ function New-ServiceGroup {
     # Set-Layout writes name it whether or not anyone is in it yet.
     if (-not (Get-LocalGroup -Name $ServiceGroup -ErrorAction SilentlyContinue)) {
         Write-Note "creating the $ServiceGroup local group"
-        New-LocalGroup -Name $ServiceGroup -Description 'May read PrivacyFence''s handoff directory (mcp_token and the daemon discovery files).' | Out-Null
+        # Keep this under 48 characters. New-LocalGroup validates -Description
+        # against that limit and *fails* over it -- it does not truncate -- so
+        # a longer, more explanatory sentence here aborts the whole install
+        # (ParameterArgumentValidationError, "the character length of the 85
+        # argument is too long"). That is not hypothetical: it is what the
+        # separation step failed on once Get-Acl stopped failing first, since
+        # nothing had ever reached this line on a CI runner before. What the
+        # group actually grants is documented where it is granted -- see
+        # Set-Layout's own handoff ACL and privilege_separation.py's module
+        # docstring -- not in 48 characters here.
+        New-LocalGroup -Name $ServiceGroup -Description 'May read PrivacyFence''s handoff directory.' | Out-Null
     } else {
         Write-Note "local group $ServiceGroup already exists -- leaving it as it is"
     }
