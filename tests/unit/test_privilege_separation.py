@@ -3015,14 +3015,38 @@ class TestPerUserElevationCommand:
         # -Wait, or the return code below would be the launcher's rather than
         # the script's, and every decline would read as a success.
         assert "-Wait" in command
-        assert "'enable', '-ForUser', 'alice'" in command
+        assert "enable -ForUser alice" in command
 
     def test_windows_doubles_a_quote_in_an_account_name(self, monkeypatch, tmp_path):
+        # The inner command line is carried through the outer -Command as one
+        # single-quoted PowerShell literal, so doubling is still the whole of
+        # the escaping -- it just applies to the line rather than to each
+        # argument of it.
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
 
         argv = privilege_separation._per_user_argv(tmp_path / "s.ps1", "al'ice")
 
-        assert "'al''ice'" in argv[-1]
+        assert "al''ice" in argv[-1]
+        assert "al'ice" not in argv[-1].replace("al''ice", "")
+
+    def test_windows_quotes_an_install_path_with_a_space_in_it(self, monkeypatch):
+        # The path every real install has. Start-Process joins an
+        # -ArgumentList *array* with plain spaces and quotes nothing, so the
+        # array this used to pass reached the elevated PowerShell as
+        # `-File C:\Program Files\...` -- which reads `C:\Program` as the
+        # script, cannot find it, and exits nonzero after the user has
+        # already approved the UAC prompt. With the daemon task repeating
+        # every five minutes, that is a prompt that comes back forever and
+        # can never accomplish anything.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        script = Path(r"C:\Program Files\PrivacyFence\privilege-separation.ps1")
+
+        for argv in (
+            privilege_separation._per_user_argv(script, "alice"),
+            privilege_separation._windows_full_enable_argv(script),
+        ):
+            assert argv is not None
+            assert f'-File "{script}"' in argv[-1], argv[-1]
 
     def test_powershell_quoting_doubles_only_the_quote(self):
         # Backslashes are literal in a single-quoted PowerShell string, so

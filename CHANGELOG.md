@@ -125,6 +125,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as a command line and an unquoted path with a space in it is the classic service-path hijack. The
   packaged Windows tests now install into a directory whose name has a space in it, so the
   difference between CI and a real install stops being the thing that hides a defect.
+- **An unseparated Windows install asked for the same UAC approval every five minutes, and could
+  never act on it.** `enforce_separation()`'s backstop (ADR 0003 decision 6) elevates by having
+  PowerShell `Start-Process -Verb RunAs` a second PowerShell that runs `privilege-separation.ps1
+  enable` — and it passed that inner invocation as an `-ArgumentList` *array*. `Start-Process` joins
+  such an array with plain spaces and quotes nothing, so the elevated process received
+  `-File C:\Program Files\PrivacyFence\privilege-separation.ps1`, read `C:\Program` as the script
+  to run, and exited nonzero — after the user had already approved the prompt. The daemon's own
+  autostart task repeats every five minutes, so on the default install location that became a UAC
+  prompt returning every five minutes that could not possibly accomplish anything. The inner command
+  line is now built with the same quoting the elevated PowerShell parses it back out with, in one
+  helper both Windows elevation paths share. Declining still re-asks at the next start, which is
+  decision 6's deliberate posture (a decline is an unfinished install, not a setting) — the
+  difference is that approving it now works.
 - **The Windows installer no longer depends on `Microsoft.PowerShell.Security` being loadable.**
   `privilege-separation.ps1` read ACLs with `Get-Acl`, and on a stock GitHub Actions
   `windows-latest` runner that module refuses to load inside the installer's own
