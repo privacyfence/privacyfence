@@ -57,6 +57,7 @@ import shutil
 import subprocess
 import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -140,13 +141,53 @@ def _sudo_path_exists(path: Path) -> bool:
     return subprocess.run(["sudo", "-n", "test", "-e", str(path)], capture_output=True, timeout=10).returncode == 0
 
 
-def _wait_for_path_as_root(path: Path, *, timeout: float, what: str) -> None:
+def _separated_daemon_report(domain: str) -> str:
+    """Why a separated daemon that launchd says is running is not serving.
+
+    ``_wait_for_running()`` proves only that *a* pid exists under ``domain``,
+    and under a ``KeepAlive`` LaunchDaemon that is also exactly what a crash
+    loop looks like -- launchd relaunches, the poll finds the replacement, and
+    nothing it reports ever changes. So this samples the pid a few times over
+    a couple of seconds: a pid that keeps moving is a daemon dying and being
+    restarted, which is a different bug from one that came up and is merely
+    slow to open its socket, and the two are indistinguishable from the
+    timeout alone.
+
+    Alongside it, the two things that say *why*: launchd's own record for the
+    job (its last exit status included) and whatever the daemon managed to
+    write under the separated root before it went. Both need root -- the
+    separated tree grants ``_privacyfence`` and nothing else."""
+    pids = []
+    for _ in range(5):
+        printed = _launchctl_print(domain)
+        match = re.search(r"^\s*pid\s*=\s*(\d+)", printed or "", re.MULTILINE)
+        pids.append(match.group(1) if match else "none")
+        time.sleep(0.5)
+    verdict = (
+        "pid is stable -- the daemon is up and not opening its socket"
+        if len(set(pids)) == 1 and pids[0] != "none"
+        else "pid CHANGES -- launchd is relaunching a daemon that keeps exiting (KeepAlive crash loop)"
+    )
+    sections = [f"---- {domain} pid samples ----\n{' '.join(pids)}\n{verdict}"]
+    sections.append(f"---- launchctl print {domain} ----\n{_launchctl_print(domain) or '(not loaded)'}")
+
+    listing = _sudo_run("find", str(MACOS_SYSTEM_ROOT), check=False)
+    sections.append(f"---- {MACOS_SYSTEM_ROOT} ----\n{listing.stdout}{listing.stderr}")
+    for line in listing.stdout.splitlines():
+        if line.endswith(".log"):
+            tail = _sudo_run("tail", "-n", "80", line, check=False)
+            sections.append(f"---- {line} (tail) ----\n{tail.stdout}{tail.stderr}")
+    return "\n".join(sections)
+
+
+def _wait_for_path_as_root(path: Path, *, timeout: float, what: str, context: Callable[[], str] | None = None) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _sudo_path_exists(path):
             return
         time.sleep(0.1)
-    raise AssertionError(f"{what} ({path}) never appeared within {timeout}s")
+    detail = f"\n{context()}" if context is not None else ""
+    raise AssertionError(f"{what} ({path}) never appeared within {timeout}s{detail}")
 
 
 def _missing_payload_report(pkg_path: Path) -> str:
@@ -344,8 +385,12 @@ def test_pkg_install_enables_privilege_separation_with_no_manual_step(_clean_pkg
 
     _wait_for_path_as_root(
         socket_path_under(HANDOFF_DIR), timeout=20, what="the separated daemon's control channel socket",
+        context=lambda: _separated_daemon_report(f"system/{DAEMON_LABEL}"),
     )
-    _wait_for_path_as_root(HANDOFF_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token")
+    _wait_for_path_as_root(
+        HANDOFF_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token",
+        context=lambda: _separated_daemon_report(f"system/{DAEMON_LABEL}"),
+    )
 
     # ── The companion: a LaunchAgent the postinstall script bootstrapped
     # straight into this runner's own already-logged-in GUI session, exactly
