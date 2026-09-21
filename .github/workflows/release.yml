@@ -1,0 +1,197 @@
+name: Cut release tag
+
+# Cutting a release is "tag main's tip and push the tag" (CLAUDE.md's "Releasing" section). That
+# is a one-line operation with no undo, and until now it could only be done from a machine holding
+# push rights to refs/tags/* -- which a Claude Code on the web container is not, and which means
+# the checks scripts/tag_release.py exists to run were only ever run when someone remembered to run
+# them from the right laptop.
+#
+# This runs them here instead, on demand, with the same script:
+#
+#   1. scripts/r2_release.py channel   -- resolve stable/alpha/beta/rc from the version string,
+#                                         using the repo's own resolver rather than a second copy
+#                                         of the parsing rules.
+#   2. scripts/changelog_section.py    -- stable only. Proves the GitHub Release body will render
+#                                         before the tag exists, rather than after build.yml has
+#                                         already built a full artifact set. Catches all three of
+#                                         the failures that section documents: no section for this
+#                                         version, a duplicated one, and a still-populated
+#                                         [Unreleased] (the one the duplicate guard can't see).
+#                                         --allow-unreleased is deliberately never passed here.
+#   3. scripts/tag_release.py          -- clean tree, on main, local main == origin/main, no tag
+#                                         already on HEAD (CLAUDE.md's "One release tag per
+#                                         commit", i.e. the v4.1.0a6/a7 incident), PEP 440 short
+#                                         form, and sequential with no gaps (the d929510 incident).
+#
+# None of the three needs PrivacyFence installed -- all stdlib (r2_release.py imports boto3 lazily,
+# inside the upload path only), so there is no `pip install -e .` step below and therefore no way
+# for this job to resolve a version through setuptools_scm at all. The version being tagged comes
+# from the dispatch input and nowhere else, which is the same single-source-of-truth rule
+# changelog_section.py states for itself: nothing may parse CHANGELOG.md to decide what to build.
+#
+# `dry_run` defaults to TRUE. A dispatch with the defaults runs every check and creates the tag
+# locally without pushing it -- the safe thing to do first, and the only way to see the release
+# notes that will ship without shipping them. Set it to false to actually cut.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to tag, e.g. 4.2.0 (stable) or 4.2.0a1 / 4.2.0b2 / 4.2.0rc1'
+        required: true
+        type: string
+      dry_run:
+        description: 'Run every check and create the tag locally, but do NOT push it'
+        required: false
+        default: true
+        type: boolean
+
+# The GITHUB_TOKEN gets nothing: it cannot do this job's one write (see the push step's comment for
+# why), and the checkout below authenticates with RELEASE_TAG_TOKEN instead. Left read-only so a
+# mistake here can't quietly acquire write access to anything else.
+permissions:
+  contents: read
+
+concurrency:
+  # Two release cuts overlapping is exactly the d929510 failure mode in a new costume -- both
+  # resolving "the next version" against the same tag list and both being right at the time.
+  group: cut-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+
+    # Gives the release a place to hang a required reviewer (Settings -> Environments -> release ->
+    # Required reviewers), turning a dispatch into a two-person go/no-go. Exactly the checkpoint
+    # CLAUDE.md's "Publishing to PyPI" section already suggests putting on the `pypi` environment,
+    # one step earlier in the chain. The environment is created on first use; adding the reviewer to
+    # it is a separate, deliberate click and this workflow works either way.
+    environment: release
+
+    steps:
+      # Fails in two seconds with an actionable message rather than 30 seconds later inside
+      # actions/checkout, where a missing token surfaces as an opaque auth error against a repo the
+      # runner can obviously see.
+      - name: Check the release token is configured
+        env:
+          RELEASE_TAG_TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
+        run: |
+          if [ -z "${RELEASE_TAG_TOKEN}" ]; then
+            echo "::error::RELEASE_TAG_TOKEN is not set. This workflow cannot use GITHUB_TOKEN --"
+            echo "::error::a tag pushed with it does not start build.yml or publish-pypi.yml."
+            echo "::error::See this workflow's own header and CLAUDE.md's \"Releasing\" section."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Tag main's tip, never the dispatching ref -- a release is cut from main by definition
+          # (CLAUDE.md). tag_release.py independently refuses to tag anything else, so this is the
+          # first of two locks on the same door, not the only one.
+          ref: main
+          # Full history AND tags. tag_release.py needs the whole tag list for its sequential/
+          # no-gaps check and `git tag --points-at HEAD` for the one-tag-per-commit check; a shallow
+          # clone silently makes both of them pass by knowing nothing.
+          fetch-depth: 0
+          # Persisted into the remote's auth header, so tag_release.py's own `git push` below
+          # authenticates as this token without the script needing to know it exists.
+          token: ${{ secrets.RELEASE_TAG_TOKEN }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Resolve release channel
+        id: channel
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # Read through the environment rather than interpolated into the script, so a dispatch
+          # input can't inject shell -- same reasoning as qa-record-fixture.yml's own input handling.
+          CHANNEL="$(python3 scripts/r2_release.py channel "$VERSION")"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "Version $VERSION resolves to the $CHANNEL channel"
+
+      - name: Render release notes
+        if: steps.channel.outputs.channel == 'stable'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # Pre-release tags get no CHANGELOG section of their own (per Keep a Changelog they fold
+          # into the version they lead to), which is why finalize-release only renders a body on the
+          # stable channel and why this step is gated the same way.
+          echo "### Release notes for $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/changelog_section.py "$VERSION" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Create tag
+        id: tag
+        env:
+          VERSION: ${{ inputs.version }}
+          # Through the environment like VERSION above rather than interpolated into the script.
+          # A `boolean` input can only ever be true/false so this one cannot inject shell, but
+          # keeping every input on the same path means there is no per-input judgement call to get
+          # wrong later, when someone adds a third one.
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # One invocation, not a create-then-push pair: tag_release.py refuses a tag that already
+          # exists, so running it twice would fail its own check on the second pass.
+          if [ "$DRY_RUN" = "true" ]; then
+            python3 scripts/tag_release.py "$VERSION"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+          else
+            python3 scripts/tag_release.py "$VERSION" --push
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The failure this guards is silent and total: GitHub does not start a workflow run for an
+      # event raised by the GITHUB_TOKEN (its recursion guard), so a tag pushed with the wrong
+      # credential appears on the repo, looks exactly like a successful release, and starts neither
+      # build.yml nor publish-pypi.yml -- no artifacts, no R2 upload, no GitHub Release, and no
+      # error anywhere to notice. The check step above stops the known way into that state; this
+      # stops every other one, by asking whether the thing the tag exists to start actually started.
+      - name: Verify the tag started build.yml
+        if: steps.tag.outputs.pushed == 'true'
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "Waiting for a build.yml run on $SHA ..."
+          for attempt in $(seq 1 12); do
+            # `?` on .workflow_runs and `// empty` both matter: a transient API hiccup returning an
+            # error object is a reason to retry the loop, not to report the release as broken.
+            FOUND="$(curl -sS --max-time 30 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/build.yml/runs?event=push&per_page=20" \
+              | jq -r --arg sha "$SHA" \
+                  '[.workflow_runs[]? | select(.head_sha == $sha) | .html_url] | first // empty')" || true
+            if [ -n "$FOUND" ]; then
+              echo "build.yml started: $FOUND"
+              echo "Release build: $FOUND" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Tag v$VERSION was pushed, but no build.yml run appeared for $SHA within 2 minutes."
+          echo "::error::The tag exists and the release did NOT start. Check that RELEASE_TAG_TOKEN is a"
+          echo "::error::real user/app token and not GITHUB_TOKEN, then delete and re-push the tag."
+          exit 1
+
+      - name: Summary
+        if: always() && steps.tag.conclusion == 'success'
+        env:
+          VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+        run: |
+          {
+            echo "## v$VERSION ($CHANNEL)"
+            if [ "${{ steps.tag.outputs.pushed }}" = "true" ]; then
+              echo "Tag pushed. build.yml and publish-pypi.yml are running."
+            else
+              echo "**Dry run** — every check passed and the tag was created on the runner only."
+              echo "Nothing was pushed and the runner is discarded. Re-dispatch with"
+              echo '`dry_run: false` to cut this release for real.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

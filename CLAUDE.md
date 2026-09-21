@@ -27,6 +27,28 @@ git tag v4.0.0a13          # pre-release: a=alpha, b=beta, rc=release-candidate 
 git push origin <tag>
 ```
 
+`scripts/tag_release.py <version> [--push]` does the same thing with the checks this step otherwise
+has no gate for (clean tree, at `origin/main`'s tip, no second tag on the commit, PEP 440 short
+form, sequential with no gaps) — see its own docstring.
+
+**Or cut it from the Actions tab.** `.github/workflows/release.yml` (`workflow_dispatch`, inputs
+`version` and `dry_run`) runs `r2_release.py channel`, then `changelog_section.py` on the stable
+channel, then `tag_release.py`, against `main`'s tip on a runner. `dry_run` **defaults to true**:
+the default dispatch runs every check and creates the tag on the runner without pushing it, which
+is also the only way to read the release notes that would ship without shipping them. It exists
+because a release should not depend on which machine you are sitting at — in particular, a Claude
+Code on the web container can push branches but not `refs/tags/*`.
+
+It needs one secret, `RELEASE_TAG_TOKEN`, and **that secret may not be the `GITHUB_TOKEN`**:
+GitHub does not start a workflow run for an event raised by the `GITHUB_TOKEN`, so a tag pushed
+with it creates the tag, starts neither `build.yml` nor `publish-pypi.yml`, and reports success.
+No artifacts, no R2 upload, no GitHub Release, no error. Use a fine-grained PAT with **Contents:
+write** on this repo, or mint a GitHub App installation token per run and use that instead — the
+same account-owned-over-user-owned reasoning the R2 credentials get below applies here too, a user
+token stops working when that user's access changes. The workflow refuses to start without the
+secret, and after pushing a tag it polls for the `build.yml` run on that commit and fails loudly if
+none appears, so the silent-failure mode above cannot pass for a successful release.
+
 **One release tag per commit.** `setuptools_scm` resolves the version through `git describe`,
 which reports *a* tag on the commit being built rather than specifically the one whose push started
 the run — so a commit carrying two release tags builds as whichever one `describe` prefers (the
