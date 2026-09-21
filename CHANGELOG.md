@@ -35,6 +35,61 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The macOS `.pkg` no longer installs itself over whatever copy of the app your Mac happens to
+  know about.** `pkgbuild` marks a payload bundle relocatable by default, which tells the installer
+  to look up the app by its bundle identifier and, if a copy already exists somewhere, install over
+  *that* one and ignore `/Applications` entirely. If you had ever launched PrivacyFenceApp.app from
+  your Downloads folder, from a still-mounted DMG, or from anywhere else, the installer would
+  silently redirect the whole install there while still reporting success. That also skipped
+  setting up privilege separation — the package's own post-install step looks for its script under
+  `/Applications`, does not find it there, and leaves the install unseparated, which a packaged
+  daemon then refuses to serve. The package now declares its payload non-relocatable, so it always
+  installs into `/Applications`.
+- **`privilege-separation.ps1 disable` no longer breaks the install it is undoing.** `sc.exe stop`
+  only asks a Windows service to stop and returns immediately, so `disable` went on to move the
+  data directory out from under a daemon that was still running and still holding `settings.yaml`
+  open. The move failed — after the marker, the service and the companion's scheduled task had
+  already been removed — leaving an install that was neither separated nor whole, with all of its
+  data somewhere an unseparated daemon never looks. `disable` now waits for the daemon to actually
+  exit, and ends the companion app (which `enable` starts and deleting its task does not stop)
+  before moving anything.
+- **macOS privilege separation no longer risks running the daemon as `root`.** `launchctl
+  bootstrap` starts a LaunchDaemon as root — silently, reporting success — when the account its
+  plist names does not resolve for it, and nothing a script can do from outside makes that
+  resolution observable beforehand. The daemon then refuses to run as the wrong account on every
+  start (it would otherwise seed a fresh default policy over your real one), so the service
+  manager restarted it forever and nothing that talks to PrivacyFence could reach it, while the
+  install reported itself separated throughout. `enable` now reads back which account the daemon
+  actually came up as and restarts it until that is the service account, and if it never is, stops
+  the daemon and says so instead of leaving it running with every privilege the install reports it
+  dropped.
+- **A Windows install that repairs its own privilege separation at startup now says truthfully
+  whether it worked.** On a packaged Windows build that finds itself unseparated, the daemon
+  elevates the provisioning script through UAC before deciding whether to serve (ADR 0003
+  decision 6). The launcher it used never propagated the elevated run's exit code —
+  `Start-Process -Verb RunAs -Wait` waits, but without `-PassThru` there is no process object to
+  read a code off — so the daemon logged "privilege separation enabled automatically" whether
+  the repair completed or died on its first statement. The daemon still refused to serve
+  afterwards (it re-checks the machine, which is why nothing shipped unprotected), but the one
+  line a user or an operator had to go on said the opposite of what happened. The exit code is
+  now propagated, the success message is written only after re-checking the install rather than
+  off a return code, and the same correction applies to the companion app's per-user step, which
+  no longer tells anyone to sign out and back in unless the group membership really took.
+- **A failed privilege-separation `enable` on Windows no longer says why only to a console
+  nobody can see.** A `-Verb RunAs` child gets its own console, so neither its output nor its
+  errors reached the parent process, the daemon log or a CI artifact — diagnosing a failure meant
+  reading machine state afterwards and inferring backwards. The elevated run's six output streams
+  are now collected and logged with the failure.
+- **A failed privilege-separation `enable` on Windows no longer leaves the install half-moved.**
+  The data directory was relocated from `%LOCALAPPDATA%\PrivacyFence` to
+  `%ProgramData%\PrivacyFence` before the step most likely to fail on a machine the script has
+  not run on before, so a failure after it left a real install's authority directory, audit log
+  and MCP token where neither the separated nor the unseparated layout looks for them. The
+  service is now created before anything is moved, and every step after the move walks itself
+  back — the counterpart of the `disable` fix above, from the other direction.
+
 ## [4.1.3] — 2026-09-21
 
 ### Fixed

@@ -82,6 +82,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+import warnings
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -218,13 +220,16 @@ def _sudo_path_exists(path: Path) -> bool:
     return subprocess.run(["sudo", "-n", "test", "-e", str(path)], capture_output=True, timeout=10).returncode == 0
 
 
-def _wait_for_path_as_root(path: Path, *, timeout: float, what: str) -> None:
+def _wait_for_path_as_root(
+    path: Path, *, timeout: float, what: str, context: Callable[[], str] | None = None,
+) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _sudo_path_exists(path):
             return
         time.sleep(0.1)
-    raise AssertionError(f"{what} ({path}) never appeared within {timeout}s")
+    detail = f"\n{context()}" if context is not None else ""
+    raise AssertionError(f"{what} ({path}) never appeared within {timeout}s{detail}")
 
 
 def _launchctl_print(domain: str) -> str | None:
@@ -254,6 +259,54 @@ def _wait_for_running(domain: str, *, timeout: float) -> str:
                 return match.group(1)
         time.sleep(0.2)
     raise AssertionError(f"{domain} never reported a running pid within {timeout}s:\n{last}")
+
+
+def _separated_job_report(domain: str) -> str:
+    """Why a job launchd says is running is not serving.
+
+    The same report ``test_macos_pkg_install.py`` grew for the same failure
+    (privacyfence/privacyfence#598 Failure B), which has since landed here
+    too: the socket wait times out and everything before it still passes.
+    ``_wait_for_running()`` proves only that *a* pid exists under ``domain``,
+    and under a ``KeepAlive`` LaunchDaemon that is also exactly what a crash
+    loop looks like -- launchd relaunches, the next poll finds the
+    replacement, and nothing it reports ever changes. So sample the pid a few
+    times over a couple of seconds: a pid that keeps moving is a daemon dying
+    and being restarted, which is a different bug from one that came up and is
+    merely slow to open its socket, and the two are indistinguishable from the
+    timeout alone.
+
+    Alongside it, the three things that say *why*: launchd's own record for
+    the job (its last exit status included), the account the live pid is
+    actually running as (Failure A and Failure B are separate findings, and
+    this is what keeps them told apart in one report), and whatever the daemon
+    managed to write under the separated root before it went. All of it needs
+    root -- that tree grants ``_privacyfence`` and nothing else, which is why
+    none of it shows up in an ordinary capture."""
+    pids = []
+    for _ in range(5):
+        printed = _launchctl_print(domain)
+        match = re.search(r"^\s*pid\s*=\s*(\d+)", printed or "", re.MULTILINE)
+        pids.append(match.group(1) if match else "none")
+        time.sleep(0.5)
+    live = [pid for pid in pids if pid != "none"]
+    verdict = (
+        "pid is stable -- the job is up and not opening its socket"
+        if len(set(pids)) == 1 and live
+        else "pid CHANGES -- launchd is relaunching a job that keeps exiting (KeepAlive crash loop)"
+    )
+    sections = [f"---- {domain} pid samples ----\n{' '.join(pids)}\n{verdict}"]
+    if live:
+        sections.append(f"---- ps -o user=,comm= -p {live[-1]} ----\n{_process_owner(live[-1])} {_process_command(live[-1])}")
+    sections.append(f"---- launchctl print {domain} ----\n{_launchctl_print(domain) or '(not loaded)'}")
+
+    listing = _sudo_run("find", str(MACOS_SYSTEM_ROOT), check=False)
+    sections.append(f"---- {MACOS_SYSTEM_ROOT} ----\n{listing.stdout}{listing.stderr}")
+    for line in listing.stdout.splitlines():
+        if line.endswith(".log"):
+            tail = _sudo_run("tail", "-n", "80", line, check=False)
+            sections.append(f"---- {line} (tail) ----\n{tail.stdout}{tail.stderr}")
+    return "\n".join(sections)
 
 
 def _process_owner(pid: str) -> str:
@@ -338,6 +391,19 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
 
         enable = _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "enable", "--app", str(app_path), "--user", user, timeout=60)
         assert _sudo_path_exists(MARKER_PATH), f"{MARKER_PATH} missing after enable:\n{enable.stdout}{enable.stderr}"
+        # `enable` repairs a daemon launchd started as the wrong account rather
+        # than leaving it (privacyfence/privacyfence#598 Failure A -- see
+        # start_daemon_as_service_account() in the script). A repaired start is
+        # a pass, so nothing below can assert on it; but how often launchd
+        # needs the repair is the only measurement anyone has of how real that
+        # defect is, and a silent pass throws it away. Same posture as
+        # test_macos_pkg_install.py's own #562 timing warning.
+        if f"not {MACOS_SERVICE_ACCOUNT_NAME}" in enable.stderr:
+            warnings.warn(
+                f"launchd started {DAEMON_LABEL} as the wrong account and `enable` had to restart it "
+                f"(#598 Failure A):\n{enable.stderr}",
+                stacklevel=1,
+            )
 
         # ── The daemon: a LaunchDaemon in the system/ domain, running as the
         # dedicated service account -- no login session involved at all. ──
@@ -363,8 +429,12 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
         # handoff/ contract.
         _wait_for_path_as_root(
             socket_path_under(HANDOFF_DIR), timeout=20, what="the separated daemon's control channel socket",
+            context=lambda: _separated_job_report(f"system/{DAEMON_LABEL}"),
         )
-        _wait_for_path_as_root(HANDOFF_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token")
+        _wait_for_path_as_root(
+            HANDOFF_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token",
+            context=lambda: _separated_job_report(f"system/{DAEMON_LABEL}"),
+        )
 
         # ── The companion: a LaunchAgent bootstrapped straight into this
         # runner's own already-logged-in GUI session (gui/<uid>) -- the
@@ -391,6 +461,7 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
 
         _wait_for_path_as_root(
             companion_socket_path_under(HANDOFF_DIR), timeout=20, what="the companion's own control channel socket",
+            context=lambda: _separated_job_report(companion_domain),
         )
     finally:
         # TRUSTED_IMAGE_DIR itself is root-owned, but its parent (/Library/PrivacyFence) and

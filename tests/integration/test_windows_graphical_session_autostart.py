@@ -174,6 +174,7 @@ import platform
 import shutil
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -189,8 +190,15 @@ from tests.diagnostics import (  # noqa: E402
     suite_name_for,
     write_environment_info,
 )
+from privacyfence.privilege_separation import (  # noqa: E402
+    WINDOWS_COMPANION_TASK_NAME,
+    WINDOWS_SERVICE_NAME,
+    WINDOWS_SYSTEM_ROOT,
+)
 from tests.integration.test_windows_packaged_smoke import (  # noqa: E402
     ALIAS_EXE_NAME,
+    COMPANION_EXE_NAME,
+    MARKER_PATH,
     MCP_TOKEN_FILE_NAME,
     TASK_NAME,
     _admin_only_writable_dir,
@@ -513,24 +521,104 @@ def _wait_for_path_content(path: Path, *, timeout: float) -> str:
     raise AssertionError(f"{path} never appeared/populated within {timeout}s")
 
 
-def _wait_for_pipe(pipe_name: str, *, timeout: float) -> None:
+def _wait_for_pipe(pipe_name: str, *, timeout: float, context: Callable[[], str] | None = None) -> None:
     """Like ``_wait_for_path_content()`` but for the control channel's named
     pipe -- not a filesystem object, so there's no path to poll or content
     to read; ``windows_pipe_exists()`` (open-then-close) is the closest
-    equivalent liveness check."""
+    equivalent liveness check.
+
+    ``context`` is called only on failure, and only then, because what it
+    collects is expensive and meaningless while the wait is still succeeding
+    -- see ``_autostart_failure_context()`` for what a missing pipe can mean
+    now that ADR 0003 decision 6 gives a Scheduler-started packaged daemon
+    more than one way to leave none behind."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if windows_pipe_exists(pipe_name):
             return
         time.sleep(0.2)
-    raise AssertionError(f"named pipe {pipe_name} never appeared within {timeout}s")
+    detail = f"\n{context()}" if context is not None else ""
+    raise AssertionError(f"named pipe {pipe_name} never appeared within {timeout}s{detail}")
 
 
 def _kill_alias_processes() -> None:
-    """Best-effort: end any daemon this module's install left running, so a
-    failed test never leaks a process holding the install directory open."""
-    subprocess.run(
-        ["taskkill", "/f", "/im", ALIAS_EXE_NAME], capture_output=True, text=True, timeout=30,
+    """Best-effort: end any daemon *or companion* this module's install left
+    running, so a failed test never leaks a process holding the install
+    directory open.
+
+    The companion matters as much as the daemon and is easier to forget: the
+    installer's own ADR 0003 decision 4 ``enable`` starts one
+    (``Install-CompanionTask`` runs ``schtasks /run`` on the task it just
+    registered), and the ``disable`` this module runs right afterwards
+    removes that task without ending the process it already spawned. Left
+    alive, it holds ``INSTALL_DIR`` open and the *next* test's silent install
+    dies at RestartManager's "Some applications could not be shut down"
+    (Inno exit 5, install rolled back) -- which is how a leak here surfaces
+    as a setup error in the test that follows rather than in the one that
+    caused it."""
+    for image in (ALIAS_EXE_NAME, COMPANION_EXE_NAME):
+        subprocess.run(
+            ["taskkill", "/f", "/im", image], capture_output=True, text=True, timeout=30,
+        )
+
+
+def _separation_state_summary() -> str:
+    """Whether the install is still the unseparated one this module made.
+
+    ADR 0003 decision 6 gives a Scheduler-started *packaged* daemon two quite
+    different ways to leave no control pipe behind at the per-user path this
+    module polls, and the pipe timeout alone cannot tell them apart:
+
+    * it refused to serve -- ``enforce_separation()`` found the install
+      unseparated, could not fix it, and raised rather than opening /mcp or
+      the approvals UI; or
+    * it fixed the install instead. ``enforce_separation()`` attempts an
+      elevated ``enable`` first, and a successful one moves the daemon's data
+      directory out from under ``%LOCALAPPDATA%`` to ``%ProgramData%``, takes
+      the daemon over as a service, and disables the very task this module
+      just asked Task Scheduler to run -- so the pipe the daemon does open is
+      simply a different pipe from the one being waited on.
+
+    The marker file, the service, and the two tasks' enabled states say which
+    happened; nothing else here does."""
+    lines = [f"marker ({MARKER_PATH}): {'present' if MARKER_PATH.exists() else 'absent'}"]
+    service = subprocess.run(
+        ["sc.exe", "query", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
+    )
+    lines.append(f"---- sc query {WINDOWS_SERVICE_NAME} ----\n{service.stdout}{service.stderr}")
+    for task in (TASK_NAME, WINDOWS_COMPANION_TASK_NAME):
+        query = subprocess.run(
+            ["schtasks", "/query", "/tn", task, "/fo", "list"],
+            capture_output=True, text=True, timeout=30,
+        )
+        lines.append(f"---- schtasks /query /tn {task} ----\n{query.stdout}{query.stderr}")
+    listing = subprocess.run(
+        ["cmd", "/c", "dir", "/s", "/b", str(WINDOWS_SYSTEM_ROOT)],
+        capture_output=True, text=True, timeout=60,
+    )
+    lines.append(f"---- {WINDOWS_SYSTEM_ROOT} ----\n{listing.stdout}{listing.stderr}")
+    processes = subprocess.run(
+        ["tasklist", "/fi", "IMAGENAME eq PrivacyFence*"], capture_output=True, text=True, timeout=30,
+    )
+    lines.append(f"---- PrivacyFence processes ----\n{processes.stdout}{processes.stderr}")
+    return "\n".join(lines)
+
+
+def _autostart_failure_context(installed: "_Installed") -> str:
+    """Everything worth knowing when a Scheduler-started daemon comes up but
+    never serves.
+
+    ``_start_task_and_wait_for_daemon()`` already quotes the task state and
+    the daemon log when the *process* never appears; this is the other half,
+    for when it appears and then does nothing observable. The two questions
+    are "what did the daemon say" and "is this still the install this module
+    set up", so it collects both rather than making the next reader download
+    this job's diagnostics artifact to find out."""
+    return (
+        f"---- separation state ----\n{_separation_state_summary()}\n"
+        f"---- task state (schtasks /query /v) ----\n{_task_state_summary()}\n"
+        f"---- who is signed in (query user) ----\n{_session_table()}\n"
+        f"---- daemon log (tail) ----\n{_daemon_log_tail(installed.home)}"
     )
 
 
@@ -762,7 +850,11 @@ async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
 
     pid, _owner = _start_task_and_wait_for_daemon(_installed)
 
-    _wait_for_pipe(resolve_windows_pipe_name(_data_dir(_installed.home)), timeout=20)
+    _wait_for_pipe(
+        resolve_windows_pipe_name(_data_dir(_installed.home)),
+        timeout=20,
+        context=lambda: _autostart_failure_context(_installed),
+    )
     mcp_token = _wait_for_path_content(_data_dir(_installed.home) / MCP_TOKEN_FILE_NAME, timeout=20)
     _wait_until_connectable("localhost", _installed.port)
 
