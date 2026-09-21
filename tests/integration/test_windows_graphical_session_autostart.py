@@ -212,6 +212,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -235,7 +236,10 @@ from tests.integration.test_windows_packaged_smoke import (  # noqa: E402
     ALIAS_EXE_NAME,
     COMPANION_EXE_NAME,
     MARKER_PATH,
+    MCP_TOKEN_FILE_NAME,
+    SEPARATED_HANDOFF_DIR,
     SEPARATED_SETTINGS_PATH,
+    SEPARATED_WEB_BASE_URL_PATH,
     TASK_NAME,
     _admin_only_writable_dir,
     _assert_separated_service_serves_mcp,
@@ -250,6 +254,7 @@ from tests.integration.test_windows_packaged_smoke import (  # noqa: E402
     _task_state,
     _tear_down_separation,
     _wait_for_separated_service,
+    _wait_until_connectable,
 )
 from tests.windows_task_contract import assert_task_xml_matches_autostart_contract  # noqa: E402
 
@@ -582,6 +587,74 @@ def _wait_for_marker(*, timeout: float) -> bool:
     return MARKER_PATH.exists()
 
 
+# The files a *previous* boot leaves behind for the companion and the shim to
+# find it by. `enable` moves them into the separated ``handoff\`` directory
+# along with everything else, so anything stale in the per-user profile
+# reappears on the other side looking exactly like this boot's own.
+_DISCOVERY_FILE_NAMES = (MCP_TOKEN_FILE_NAME, "mcp_url", "web_base_url")
+
+
+def _clear_stale_discovery_files(home: Path) -> None:
+    """Remove the per-user profile's daemon-discovery files before any test
+    starts a daemon.
+
+    Every one of them is written when a daemon's web server *binds* and
+    removed when it stops gracefully -- so their presence is supposed to
+    mean "a daemon is serving right now, here". That only holds if nothing
+    older is lying around, and in this fixture something older is: the
+    install's own decision-4 ``enable`` starts a service before this module
+    has seeded anything, so that service binds the default port and writes
+    these three files naming it. ``disable`` then moves them back into the
+    per-user profile, and the automatic ``enable`` under test moves them
+    into the separated ``handoff\`` directory again -- where a test polling
+    for "the service is running and has reported a base URL" reads the old
+    port and waits for a socket nobody is listening on.
+
+    A service also reports ``RUNNING`` to the SCM the moment its control
+    handler is installed, which is well before ``run_app()`` gets anywhere
+    near binding a port, so there is a real window in which that read
+    happens. Clearing them here closes it at the source: nothing this
+    module asserts about may predate the boot it is asserting about.
+    """
+    for name in _DISCOVERY_FILE_NAMES:
+        (_data_dir(home) / name).unlink(missing_ok=True)
+
+
+def _wait_for_separated_service_serving(installed: "_Installed") -> tuple[str, str]:
+    """The separated service, serving *this* install's configuration.
+
+    The port comes first and comes from this module, not from the handoff
+    directory: this fixture seeded ``settings.yaml`` with a free port before
+    the daemon ever ran, so a separated service that came up on that port is
+    a service that read the configuration the automatic ``enable`` moved for
+    it. Reading ``web_base_url`` first would instead believe whatever the
+    last boot wrote there -- see ``_clear_stale_discovery_files()``, which
+    removes that possibility, and this, which would still catch it.
+    """
+    _wait_until_connectable("localhost", installed.port, timeout=120.0)
+    base_url, mcp_token = _wait_for_separated_service()
+    assert urlsplit(base_url).port == installed.port, (
+        f"the {WINDOWS_SERVICE_NAME} service is advertising {base_url!r}, but this install's "
+        f"settings.yaml names port {installed.port} -- so that file is from an earlier boot and "
+        f"the token beside it is too\n"
+        f"---- {SEPARATED_HANDOFF_DIR} ----\n{_handoff_listing()}\n"
+        f"---- daemon log (tail) ----\n{_daemon_log_tail(installed.home)}"
+    )
+    return base_url, mcp_token
+
+
+def _handoff_listing() -> str:
+    if not SEPARATED_HANDOFF_DIR.exists():
+        return f"({SEPARATED_HANDOFF_DIR} missing)"
+    names = sorted(entry.name for entry in SEPARATED_HANDOFF_DIR.iterdir())
+    web_base_url = (
+        SEPARATED_WEB_BASE_URL_PATH.read_text(encoding="utf-8").strip()
+        if SEPARATED_WEB_BASE_URL_PATH.exists()
+        else "(absent)"
+    )
+    return f"{', '.join(names) or '(empty)'}\nweb_base_url: {web_base_url}"
+
+
 def _service_pid() -> str | None:
     """The ``PrivacyFence`` service's current process id, or None when it is
     not running.
@@ -861,6 +934,11 @@ def _installed(_real_home_state, tmp_path):
     # fixture's setup for no reason. Nothing reads it until a test asks Task
     # Scheduler to start the daemon, which is well after this returns.
     _prepare_home(home, port=port)
+    # ...and nothing older than that seeding may survive into the boot under
+    # test -- see _clear_stale_discovery_files(), which is about the install's
+    # own service having already written a set of these naming the default
+    # port before this fixture seeded anything.
+    _clear_stale_discovery_files(home)
     # RegisterAutostartTask (installer/privacyfence.iss's [Code] section)
     # doesn't abort Setup on its own failure, so a silent install can still
     # exit 0 with no task actually registered -- the install log (Inno's
@@ -984,7 +1062,7 @@ async def test_installed_task_starts_the_packaged_daemon_which_separates_the_ins
     )
 
     # ── ...and the service it handed the daemon to is really serving ──────
-    base_url, mcp_token = _wait_for_separated_service()
+    base_url, mcp_token = _wait_for_separated_service_serving(_installed)
     await _assert_separated_service_serves_mcp(base_url, mcp_token)
     assert SEPARATED_SETTINGS_PATH.is_file(), (
         f"{SEPARATED_SETTINGS_PATH} missing -- the service never wrote its own authority config"
@@ -1059,7 +1137,7 @@ async def test_crash_restart_relaunches_the_separated_daemon(_installed):
         f"{MARKER_PATH} never appeared -- decision 6 did not separate this install, so there is "
         f"no service to crash\n{_autostart_failure_context(_installed)}"
     )
-    _wait_for_separated_service()
+    _wait_for_separated_service_serving(_installed)
 
     first_pid = _service_pid()
     assert first_pid, (
