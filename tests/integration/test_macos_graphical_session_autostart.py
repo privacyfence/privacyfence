@@ -82,6 +82,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import warnings
 from collections.abc import Callable
 from pathlib import Path
 
@@ -390,6 +391,19 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
 
         enable = _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "enable", "--app", str(app_path), "--user", user, timeout=60)
         assert _sudo_path_exists(MARKER_PATH), f"{MARKER_PATH} missing after enable:\n{enable.stdout}{enable.stderr}"
+        # `enable` repairs a daemon launchd started as the wrong account rather
+        # than leaving it (privacyfence/privacyfence#598 Failure A -- see
+        # start_daemon_as_service_account() in the script). A repaired start is
+        # a pass, so nothing below can assert on it; but how often launchd
+        # needs the repair is the only measurement anyone has of how real that
+        # defect is, and a silent pass throws it away. Same posture as
+        # test_macos_pkg_install.py's own #562 timing warning.
+        if f"not {MACOS_SERVICE_ACCOUNT_NAME}" in enable.stderr:
+            warnings.warn(
+                f"launchd started {DAEMON_LABEL} as the wrong account and `enable` had to restart it "
+                f"(#598 Failure A):\n{enable.stderr}",
+                stacklevel=1,
+            )
 
         # ── The daemon: a LaunchDaemon in the system/ domain, running as the
         # dedicated service account -- no login session involved at all. ──
