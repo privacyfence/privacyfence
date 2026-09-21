@@ -35,6 +35,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `/approvals` toolbar and connector icons now stay correct when new approvals stream in
+  live.** Leaving the tab open on an empty (or partial) queue used to leave the select-all/
+  batch-approve/batch-deny toolbar permanently missing — it was only ever created at first paint,
+  and the live SSE re-render had no way to add an element that was never there — and a connector
+  with nothing pending at load drew a plain letter badge instead of its real icon for as long as
+  the tab stayed open, since the icon-CSS bundle baked into the page also only covered whatever
+  was pending at that moment. The toolbar is now always present (hidden until something batchable
+  exists) and every bundled connector's icon is now baked in regardless of what's pending, so both
+  now update correctly without a reload. Also made the toolbar's own selection count read "10 of
+  11 selected" instead of just "10 selected", so a live re-render that changes the true total
+  while a selection is in progress can never be mistaken for a shrunk denominator.
+
 ## [4.1.2] — 2026-09-20
 
 ### Security

@@ -23,11 +23,17 @@ the live re-render web_shell.py's SSE dispatch calls with
 web/state_stream.py's own "approvals" event payload
 (``PendingApproval.to_summary_dict()``, which carries no icon -- these are
 ~15-135KB PNGs and base64'ing them into every tick would cost far more
-than it buys). The icon instead rides along once, as ``_icon_map``'s
-``{connector: data URI}`` baked into this page's own JS at first paint, so
-a live-updated row draws the same real mark the server-rendered one did
-rather than degrading to a letter badge within one poll interval. See
-``_icon_map`` for what that does and does not cover.
+than it buys). The icon instead rides along once, as ``_icon_connectors()``'s
+``{connector: data URI}`` baked into this page's own JS and CSS at first
+paint -- for *every* connector this build bundles an icon for
+(``approval_icons.all_connector_icons()``), not just the ones with
+something pending at that moment, so a connector with nothing pending at
+load still draws its real mark the moment a row for it arrives live rather
+than degrading to a letter badge until the next full page load (issue
+#576). The bundled set is small and fixed (~10 files today), so this costs
+one bounded, one-time addition to every first paint regardless of how many
+rows are pending -- the SSE tick itself still carries no image data at
+all, which is the cost this design was actually protecting against.
 
 **The approval binder (Phase 1 of the batch-decide plan):** a sequential
 agent can leave several approvals pending at once (P3's own removal of
@@ -143,6 +149,13 @@ _CSS = """
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   padding: 10px 14px; margin-bottom: 12px; background: var(--color-surface); border-radius: var(--radius-lg);
 }
+/* An attribute selector, needed only because the rule above sets its own
+   `display` unconditionally: author-origin CSS always wins over the
+   user-agent stylesheet's own `[hidden] { display: none }` for a normal
+   declaration, regardless of selector specificity, so without this the
+   bare `hidden` attribute (see build_list_html/updateToolbar) would do
+   nothing at all. */
+.pf-approvals-toolbar[hidden] { display: none; }
 .pf-select-all { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
 .pf-selected-count { font-size: 12.5px; color: var(--color-neutral-600); flex: 1; min-width: 0; }
 .pf-btn-deny-selected {
@@ -453,12 +466,21 @@ _JS = """
   function updateToolbar(rows) {
     var toolbar = document.getElementById('pf-approvals-toolbar');
     if (!toolbar) return;
+    // Mirrors #pf-approvals-heading's own always-emitted/kept-in-sync
+    // pattern -- see build_list_html's own comment. Without this, a
+    // toolbar created empty (rows.length === 0 at first paint) never
+    // reappears once rows start arriving live.
+    toolbar.hidden = rows.length === 0;
     var ids = selectableIds(rows);
     var selectedCount = ids.filter(function (id) { return pfSelected.has(id); }).length;
     var composition = selectedComposition(rows);
     var countEl = document.getElementById('pf-selected-count');
     if (countEl) {
-      countEl.textContent = selectedCount === 0 ? '' : selectedCount + ' selected';
+      // Names the denominator explicitly ("10 of 11 selected") rather than
+      // just the numerator -- a bare "10 selected" reads as "10 of 10" the
+      // moment it's glanced at, which is indistinguishable from the
+      // denominator having silently shrunk (issue #576, bug 2).
+      countEl.textContent = selectedCount === 0 ? '' : selectedCount + ' of ' + ids.length + ' selected';
     }
     var approveBtn = document.getElementById('pf-approve-selected');
     if (approveBtn) {
@@ -902,9 +924,10 @@ def _icon_html(connector: str, initial: str, *, has_icon: bool) -> str:
     return f'<div class="pf-approval-icon pf-approval-icon-fallback">{_html_escape(initial)}</div>'
 
 
-def _icon_connectors(rows: list[dict[str, Any]]) -> dict[str, str]:
-    """``{connector: data URI}`` for the distinct connectors on this page
-    that have a bundled icon.
+def _icon_connectors() -> dict[str, str]:
+    """``{connector: data URI}`` for every connector this build bundles an
+    icon for -- ``approval_icons.all_connector_icons()``'s whole known set,
+    not just whichever connectors happen to have a row on this page.
 
     The live re-render is driven by ``PendingApproval.to_summary_dict()``
     (web/state_stream.py), which carries no icon and shouldn't: these are
@@ -912,21 +935,22 @@ def _icon_connectors(rows: list[dict[str, Any]]) -> dict[str, str]:
     more than the letter badge it would replace. Emitting one CSS rule per
     connector instead means the live re-render needs no image data at all
     -- it renders the same class name and the rule already in the document
-    does the rest -- and it also makes the *first* paint cheaper than it
-    used to be, which embedded the same URI again for every row sharing a
-    connector.
+    does the rest.
 
-    A connector with nothing pending at load has no rule, so a row that
-    arrives for it later draws the letter badge until the next full page
-    load. That residue is bounded and self-healing; the previous behavior
-    degraded every row within one poll interval regardless."""
+    This used to build the map from ``rows`` alone, so a connector with
+    nothing pending at first paint had no rule, and a row that arrived for
+    it later drew the letter badge until the next full page load (issue
+    #576). Baking in the whole bundled set instead of just the rows present
+    right now closes that gap entirely: the set is small and fixed (~10
+    files today), so this is a bounded, one-time cost per page load, not a
+    per-row or per-tick one -- the SSE tick itself still never carries any
+    image data, which is the cost this design was actually protecting
+    against."""
     uris: dict[str, str] = {}
-    for row in rows:
-        connector = _icon_slug(row.get("connector") or "")
-        if connector and connector not in uris:
-            uri = _connector_icon_uri(connector)
-            if uri:
-                uris[connector] = uri
+    for connector, uri in approval_icons.all_connector_icons().items():
+        slug = _icon_slug(connector)
+        if slug and uri:
+            uris[slug] = uri
     return uris
 
 
@@ -1080,10 +1104,11 @@ def _heading_html(rows: list[dict[str, Any]]) -> str:
     )
 
 
-def _toolbar_html(*, any_batchable: bool) -> str:
+def _toolbar_html(*, any_batchable: bool, hidden: bool) -> str:
     select_all_disabled = "" if any_batchable else " disabled"
+    hidden_attr = " hidden" if hidden else ""
     return (
-        '<div class="pf-approvals-toolbar" id="pf-approvals-toolbar">'
+        f'<div class="pf-approvals-toolbar" id="pf-approvals-toolbar"{hidden_attr}>'
         '<label class="pf-select-all">'
         f'<input type="checkbox" id="pf-select-all-cb" aria-label="Select all batchable approvals"'
         f"{select_all_disabled}>"
@@ -1122,8 +1147,12 @@ def build_list_html(
     nonce = nonce or secrets.token_urlsafe(18)
     empty_state = _empty_state_html(any_authed=any_authed)
     body = "".join(_group_html(g) for g in _group_rows(rows)) if rows else empty_state
-    toolbar = _toolbar_html(any_batchable=any(r.get("batchable") for r in rows)) if rows else ""
-    icon_uris = _icon_connectors(rows)
+    # Always emitted, like #pf-approvals-heading below -- render() below
+    # keeps it in sync (including its "hidden" state) on every SSE tick, and
+    # an element that only exists when the first paint had rows is an
+    # element the live re-render can't create later (issue #576, bug 1).
+    toolbar = _toolbar_html(any_batchable=any(r.get("batchable") for r in rows), hidden=not rows)
+    icon_uris = _icon_connectors()
     js = _JS % {
         # Already branched: whether a connector is authenticated is fixed
         # for this document's lifetime, so render() needs the resolved

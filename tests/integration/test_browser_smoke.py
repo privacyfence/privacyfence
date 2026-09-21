@@ -936,7 +936,7 @@ class TestApprovalBinder:
             page.wait_for_selector(f'[data-approval-id="{card_b.id}"]', timeout=5000)
 
             assert page.locator(f'[data-select="{card_a.id}"]').is_checked()
-            assert "1 selected" in page.locator("#pf-selected-count").text_content()
+            assert "1 of 2 selected" in page.locator("#pf-selected-count").text_content()
         finally:
             for thread, card in ((thread_a, card_a), (thread_b, card_b)):
                 if thread is not None and thread.is_alive():
@@ -1061,6 +1061,108 @@ class TestApprovalBinder:
         finally:
             web_ui.resolve(card.id, "deny")
             thread.join(timeout=5)
+
+    def test_toolbar_appears_for_an_item_that_arrives_after_the_page_was_empty(self, page, local_server):
+        """Issue #576, bug 1: opening ``/approvals`` while nothing is
+        pending used to mean the toolbar element itself was never emitted
+        (``build_list_html``'s own ``toolbar = ... if rows else ""``), so no
+        amount of SSE-driven re-rendering could make it appear later --
+        only a reload, which re-runs ``build_list_html`` with the
+        now-nonempty ``rows``, created it. The toolbar must now always
+        exist (just ``hidden``) and the live re-render must reveal it."""
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        page.goto(f"{server.base_url}/approvals")
+        page.wait_for_selector("#pf-approvals-toolbar", state="attached")
+        assert page.locator("#pf-approvals-toolbar").is_hidden()
+
+        thread, card = _register_card(web_ui)
+        try:
+            page.wait_for_selector(f'[data-select="{card.id}"]', timeout=5000)
+            page.wait_for_function(
+                "() => !document.getElementById('pf-approvals-toolbar').hidden"
+            )
+            assert page.locator("#pf-approvals-toolbar").is_visible()
+            page.locator(f'[data-select="{card.id}"]').check()
+            assert "1 of 1 selected" in page.locator("#pf-selected-count").text_content()
+        finally:
+            if thread.is_alive():
+                web_ui.resolve(card.id, "deny")
+                thread.join(timeout=5)
+
+    def test_icon_renders_for_a_connector_with_nothing_pending_at_first_paint(self, page, local_server):
+        """Issue #576, bug 1 (icon half): a connector with nothing pending
+        at first paint used to have no baked-in CSS rule at all, so a row
+        that arrived for it live drew the generic letter badge until the
+        next full reload. Slack has nothing pending at first paint here --
+        the only card at load time is a Gmail one -- so a Slack row
+        arriving live must still draw the real bundled icon, not a letter
+        "S"."""
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        thread_a, card_a = _register_gated_card(
+            web_ui, gate_kind="review", dedupe_key="icon-gmail", summary="Doc A",
+            tool="read_a", tool_name="read_a", connector="gmail",
+        )
+        thread_b, card_b = None, None
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_selector(f'[data-approval-id="{card_a.id}"]')
+            assert "pf-approval-icon-fallback" not in page.locator(
+                f'[data-approval-id="{card_a.id}"] .pf-approval-icon'
+            ).get_attribute("class")
+
+            thread_b, card_b = _register_gated_card(
+                web_ui, gate_kind="review", dedupe_key="icon-slack", summary="Doc B",
+                tool="read_b", tool_name="read_b", connector="slack",
+            )
+            page.wait_for_selector(f'[data-approval-id="{card_b.id}"]', timeout=5000)
+            slack_icon_class = page.locator(
+                f'[data-approval-id="{card_b.id}"] .pf-approval-icon'
+            ).get_attribute("class")
+            assert "pf-approval-icon-img" in slack_icon_class
+            assert "pf-approval-icon-slack" in slack_icon_class
+            assert "pf-approval-icon-fallback" not in slack_icon_class
+        finally:
+            for thread, card in ((thread_a, card_a), (thread_b, card_b)):
+                if thread is not None and thread.is_alive():
+                    web_ui.resolve(card.id, "deny")
+                    thread.join(timeout=5)
+
+    def test_select_all_denominator_stays_pinned_after_deselecting_one(self, page, local_server):
+        """Issue #576, bug 2: with 11 batchable approvals pending, checking
+        "Select all" and then unchecking one must report "10 of 11
+        selected" -- the denominator must stay pinned to the true total
+        rather than reading as though only 10 ever existed."""
+        server, web_ui = local_server
+        _sign_in_local(page, server)
+        cards = [
+            _register_gated_card(
+                web_ui, gate_kind="review", dedupe_key=f"select-all-{i}", summary=f"Doc {i}",
+                tool=f"read_{i}", tool_name=f"read_{i}",
+            )
+            for i in range(11)
+        ]
+        try:
+            page.goto(f"{server.base_url}/approvals")
+            page.wait_for_function("() => document.querySelectorAll('[data-select]').length === 11")
+
+            page.locator("#pf-select-all-cb").check()
+            assert "11 of 11 selected" in page.locator("#pf-selected-count").text_content()
+            assert page.locator("#pf-select-all-cb").is_checked()
+
+            first_id = cards[0][1].id
+            page.locator(f'[data-select="{first_id}"]').uncheck()
+            assert "10 of 11 selected" in page.locator("#pf-selected-count").text_content()
+            assert not page.locator("#pf-select-all-cb").is_checked()
+            assert page.evaluate(
+                "document.getElementById('pf-select-all-cb').indeterminate"
+            ) is True
+        finally:
+            for thread, card in cards:
+                if thread.is_alive():
+                    web_ui.resolve(card.id, "deny")
+                    thread.join(timeout=5)
 
 
 # --------------------------------------------------------------------- #
