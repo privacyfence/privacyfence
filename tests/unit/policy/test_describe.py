@@ -142,6 +142,20 @@ class TestSentences:
                           operations=frozenset({"confluence.read_page"}))
         assert describe.rule_sentence(rule) == "Confluence - space SP: allow read"
 
+    def test_value_display_overrides_the_raw_value_phrase(self):
+        """Issue #588: a caller that already resolved the id(s) to a friendly name (Settings'
+        Auto-accept page) can pass it through so the sentence agrees with it, instead of
+        `rule_sentence` re-deriving the raw id from `rule.value` on its own."""
+        rule = PolicyRule(id="r", predicate="approved_sandbox_folder", value=["FOLDER1"],
+                          operations=frozenset({"sheets.write_range"}))
+        assert (describe.rule_sentence(rule, value_display="Groceries")
+                == "Drive - folder Groceries: allow update")
+
+    def test_value_display_is_ignored_for_a_value_less_rule(self):
+        rule = PolicyRule(id="r", predicate="i_am_owner", value=None,
+                          operations=frozenset({"drive.read_file_contents"}))
+        assert describe.rule_sentence(rule, value_display="should not appear") == "Drive - owned by me: allow read"
+
 
 class TestConfirmationText:
 

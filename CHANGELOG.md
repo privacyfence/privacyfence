@@ -35,6 +35,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The local Settings → Auto-accept page names resources again instead of spelling out their raw
+  IDs.** Every rule row already resolved a folder/task-list/channel's display name in the
+  background — that machinery has existed since P6 — but the row's rendered sentence was built
+  from the unresolved value, so the page showed `folder 1CdeFgHiJkLmNoPqRsTuVwXyZ0123456789`
+  instead of `folder Groceries` no matter how long the resolver had been running. `rule_sentence`
+  now takes an optional pre-resolved display value, and the Auto-accept page passes its own
+  resolved value through so the sentence and the copyable raw ID never disagree. The raw ID
+  still shows up, in the row's right-click-to-copy tooltip and in the search filter, since a user
+  who copied an ID out of a URL should still be able to find its row. The MCP bridge, org mode, and
+  the approval-gate confirmation text are unaffected — they keep rendering the raw ID, as before.
+
 ## [4.1.2] — 2026-09-20
 
 ### Security
