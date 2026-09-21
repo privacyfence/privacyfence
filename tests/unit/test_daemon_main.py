@@ -3060,6 +3060,34 @@ class TestMain:
         assert result == 1
         assert "not privilege-separated" in capsys.readouterr().err
 
+    def test_hands_over_without_serving_when_the_gate_separates_the_install(self, monkeypatch, capsys):
+        # The other way out of enforce_separation(), and the one that is not
+        # a failure: decision 6's automatic `enable` took, so a service now
+        # runs the daemon under an account this process is not. It must not
+        # reach run_app() -- that is the silent policy reset
+        # check_runtime_identity() exists to prevent, arriving after that
+        # check has already run and passed -- and it must not exit non-zero
+        # either, or Task Scheduler/launchd/systemd report a failed start for
+        # the one outcome decision 6 is trying to reach.
+        self._patch_config(monkeypatch)
+        served = []
+        monkeypatch.setattr(daemon_main, "run_app", lambda config, path: served.append(1) or 0)
+
+        def hand_over() -> None:
+            raise daemon_main.privilege_separation.SeparationHandover(
+                "PrivacyFence has just separated this install"
+            )
+
+        monkeypatch.setattr(daemon_main.privilege_separation, "enforce_separation", hand_over)
+
+        result = daemon_main.main([])
+
+        assert result == 0
+        assert served == []
+        captured = capsys.readouterr()
+        assert "has just separated this install" in captured.out
+        assert "Configuration error" not in captured.err
+
     def test_logs_the_dev_unseparated_notice_when_present(self, monkeypatch, caplog):
         # ADR 0003 decision 7's startup-log half -- see privilege_separation.
         # dev_unseparated_notice()'s own docstring for when this is non-None.
