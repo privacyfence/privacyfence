@@ -1896,9 +1896,38 @@ class TestWindowsInstallerContract:
         assert "could not take ownership" in set_layout
 
     def test_disable_hands_ownership_back(self):
-        disable = self.SCRIPT.split("function Invoke-Disable", 1)[1]
+        # Through Restore-LegacyDataDir, which Invoke-Disable and the rollback
+        # in Invoke-Enable share -- an `enable` that fails midway owes the
+        # human exactly what `disable` does.
+        disable = self.SCRIPT.split("function Invoke-Disable", 1)[1].split("\nfunction ", 1)[0]
+        restore = self.SCRIPT.split("function Restore-LegacyDataDir", 1)[1].split("\nfunction ", 1)[0]
 
-        assert "'/setowner', $script:OwnerUser" in disable
+        assert "Restore-LegacyDataDir" in disable
+        assert "'/setowner', $script:OwnerUser" in restore
+
+    def test_a_failed_enable_leaves_neither_half_of_a_move_behind(self):
+        # privacyfence/privacyfence#599: the observed failure left the daemon's
+        # data under %ProgramData% with no marker, no service and no companion
+        # task pointing at it -- a layout paths.py resolves for nobody. Two
+        # things stop that now, and this asserts both: `sc create` (the step
+        # that failed) happens before the data is moved at all, and everything
+        # from there on is inside a catch that walks the move back.
+        enable = self.SCRIPT.split("function Invoke-Enable", 1)[1].split("\nfunction ", 1)[0]
+
+        assert enable.index("Install-DaemonService") < enable.index("Move-Data")
+        assert "Undo-PartialEnable" in enable
+        for step in ("Move-Data", "Set-Layout", "Write-Marker", "Install-CompanionTask"):
+            assert step in enable.split("try {", 1)[1].split("} catch {", 1)[0], step
+
+    def test_the_rollback_cannot_replace_the_failure_it_is_reporting(self):
+        # It runs inside a catch whose exception is about to be re-thrown, and
+        # that exception is the only account of why `enable` failed. A rollback
+        # that threw its own would lose it.
+        undo = self.SCRIPT.split("function Undo-PartialEnable", 1)[1].split("\nfunction ", 1)[0]
+
+        assert undo.count("try {") == 1 and "} catch {" in undo
+        assert "Restore-LegacyDataDir" in undo
+        assert "Enable-DaemonTask" in undo
 
     def test_status_checks_the_owner(self):
         assert "WRONG OWNER" in self.SCRIPT

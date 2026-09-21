@@ -54,6 +54,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   errors reached the parent process, the daemon log or a CI artifact — diagnosing a failure meant
   reading machine state afterwards and inferring backwards. The elevated run's six output streams
   are now collected and logged with the failure.
+- **A failed privilege-separation `enable` on Windows no longer leaves the install half-moved.**
+  The data directory was relocated from `%LOCALAPPDATA%\PrivacyFence` to
+  `%ProgramData%\PrivacyFence` before the step most likely to fail on a machine the script has
+  not run on before, so a failure after it left a real install's authority directory, audit log
+  and MCP token where neither the separated nor the unseparated layout looks for them. The
+  service is now created before anything is moved, and every step after the move walks itself
+  back — the counterpart of the `disable` fix in 4.1.3, from the other direction.
 
 ## [4.1.3] — 2026-09-21
 
