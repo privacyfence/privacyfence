@@ -65,6 +65,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   actually came up as and restarts it until that is the service account, and if it never is, stops
   the daemon and says so instead of leaving it running with every privilege the install reports it
   dropped.
+- **A Windows install that repairs its own privilege separation at startup now says truthfully
+  whether it worked.** On a packaged Windows build that finds itself unseparated, the daemon
+  elevates the provisioning script through UAC before deciding whether to serve (ADR 0003
+  decision 6). The launcher it used never propagated the elevated run's exit code —
+  `Start-Process -Verb RunAs -Wait` waits, but without `-PassThru` there is no process object to
+  read a code off — so the daemon logged "privilege separation enabled automatically" whether
+  the repair completed or died on its first statement. The daemon still refused to serve
+  afterwards (it re-checks the machine, which is why nothing shipped unprotected), but the one
+  line a user or an operator had to go on said the opposite of what happened. The exit code is
+  now propagated, the success message is written only after re-checking the install rather than
+  off a return code, and the same correction applies to the companion app's per-user step, which
+  no longer tells anyone to sign out and back in unless the group membership really took.
+- **A failed privilege-separation `enable` on Windows no longer says why only to a console
+  nobody can see.** A `-Verb RunAs` child gets its own console, so neither its output nor its
+  errors reached the parent process, the daemon log or a CI artifact — diagnosing a failure meant
+  reading machine state afterwards and inferring backwards. The elevated run's six output streams
+  are now collected and logged with the failure.
+- **A failed privilege-separation `enable` on Windows no longer leaves the install half-moved.**
+  The data directory was relocated from `%LOCALAPPDATA%\PrivacyFence` to
+  `%ProgramData%\PrivacyFence` before the step most likely to fail on a machine the script has
+  not run on before, so a failure after it left a real install's authority directory, audit log
+  and MCP token where neither the separated nor the unseparated layout looks for them. The
+  service is now created before anything is moved, and every step after the move walks itself
+  back — the counterpart of the `disable` fix above, from the other direction.
 
 ## [4.1.3] — 2026-09-21
 
