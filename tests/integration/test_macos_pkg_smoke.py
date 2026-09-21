@@ -51,6 +51,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import defusedxml.ElementTree as ET
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -162,19 +163,27 @@ def test_pkg_payload_is_not_relocatable(expanded_pkg):
     whether Launch Services happens to know about another copy yet.
 
     ``scripts/build_pkg.sh`` turns this off via ``--component-plist`` with
-    ``BundleIsRelocatable`` false, which makes ``pkgbuild`` emit no
-    ``<relocate>`` element at all. This asserts the *built artifact*, not the
-    build script: the flag is one line in a script nobody re-reads, and a
-    silently relocatable package looks exactly like a correct one until
-    someone installs it on a machine that has seen the app before.
+    ``BundleIsRelocatable`` false. That does not make ``pkgbuild`` omit the
+    ``<relocate>`` element itself -- at least not with every ``pkgbuild``
+    build seen in CI, which still emits a self-closing ``<relocate/>`` as
+    boilerplate regardless. What it does do, and what actually matters, is
+    keep that element childless: a relocatable bundle shows up as a
+    ``<bundle .../>`` *inside* ``<relocate>``, and that's what tells installd
+    to go ask Launch Services. So this checks for an actual listed bundle,
+    not for the tag's mere presence -- checking the tag itself flags a
+    correctly-built package as broken the moment a newer Xcode/macOS
+    ``pkgbuild`` starts including the empty placeholder.
     """
     pkg_path = _built_pkgs()[-1]
     package_infos = list(expanded_pkg.glob("**/PackageInfo"))
     assert package_infos, f"no PackageInfo found under expanded {pkg_path.name}"
     for package_info in package_infos:
         xml = package_info.read_text(encoding="utf-8")
-        assert "<relocate" not in xml, (
-            f"{package_info} still declares bundle relocation -- this package will install over "
+        root = ET.fromstring(xml)
+        relocate = root.find("relocate")
+        relocatable_bundles = relocate.findall("bundle") if relocate is not None else []
+        assert not relocatable_bundles, (
+            f"{package_info} still lists relocatable bundles -- this package will install over "
             f"whatever copy of the bundle Launch Services already knows about rather than into "
             f"/Applications, and its postinstall will not find the app where it looks for it:\n{xml}"
         )
