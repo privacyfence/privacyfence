@@ -37,6 +37,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Windows: a PrivacyFence that starts at sign-in on an install that isn't privilege-separated yet
+  can now actually separate it.** The daemon repairs such an install by elevating the
+  privilege-separation script through UAC, and that script *moves* the daemon's data directory from
+  `%LOCALAPPDATA%\PrivacyFence` to `%ProgramData%\PrivacyFence`. But the daemon asking for the
+  repair still had its own `logs\privacyfence.log` open inside that directory for the whole
+  elevated run, and Windows refuses to move a directory holding an open file -- so the move failed
+  with "The process cannot access the file because it is being used by another process", the whole
+  `enable` rolled back, and PrivacyFence then refused to start at all ("Refusing to start: no /mcp,
+  no approvals") every single time. The daemon now releases its log file for the duration of the
+  elevated run, and `enable` also ends a companion left over from an earlier run before moving
+  anything, since that holds the same directory open just as effectively.
+- **A PrivacyFence that separates your install at startup now hands over to the service instead of
+  carrying on as a second daemon.** Once the repair above succeeds, the daemon belongs to the new
+  service account -- but the process that triggered the repair kept running, as you, against a
+  data directory whose authority files had just become unreadable to it. That is exactly the silent
+  policy reset the identity check guards against, reached by a route the check could not see (it
+  runs before the repair, when there is nothing to object to); on Windows it also raced the service
+  it had just created for the same port. That process now prints what happened and exits cleanly,
+  which is also what stops Task Scheduler recording a failed run at every sign-in for the one
+  outcome this is all trying to reach.
 - **The macOS `.pkg` no longer installs itself over whatever copy of the app your Mac happens to
   know about.** `pkgbuild` marks a payload bundle relocatable by default, which tells the installer
   to look up the app by its bundle identifier and, if a copy already exists somewhere, install over

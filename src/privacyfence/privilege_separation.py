@@ -349,6 +349,34 @@ class PrivilegeSeparationError(RuntimeError):
     rather than a warning."""
 
 
+class SeparationHandover(PrivilegeSeparationError):
+    """Not a failure: ADR 0003 decision 6's automatic ``enable`` just took,
+    and the daemon this process was about to become now belongs to the
+    service that ``enable`` created.
+
+    A subclass rather than a return value because every caller of
+    ``enforce_separation()`` already has to stop on
+    ``PrivilegeSeparationError``, and stopping is exactly what this asks
+    for; ``daemon_main.main()`` catches this one first and exits *0*,
+    because nothing went wrong -- see that call site.
+
+    Why this exists at all: before it, a packaged daemon that repaired its
+    own install went on to serve from the layout it had just separated,
+    **as the human**. ``check_runtime_identity()`` -- the gate that exists
+    to stop precisely that -- had already run and passed, several steps
+    earlier, when the install was still unseparated. So the process carried
+    on into a root whose ``authority/`` is now ``0700`` to the service
+    account, could not read ``config/settings.yaml`` through it, and
+    ``load_config()``'s first-run behaviour seeded a fresh default policy
+    over the real one: the silent policy reset ``check_runtime_identity()``
+    is written to prevent, arrived at by a route it could not see. On
+    Windows it also raced the service ``enable`` had just started for the
+    same port and the same control pipe, which is the collision
+    ``tests/integration/test_windows_packaged_smoke.py`` gave up its
+    unseparated scenario over.
+    """
+
+
 @dataclass(frozen=True)
 class Separation:
     """A parsed, validated marker file: what the installer provisioned."""
@@ -1451,6 +1479,131 @@ def _windows_full_enable_argv(script: Path, transcript: Path) -> list[str]:
     return _windows_runas_argv(script, "enable", transcript)
 
 
+def _log_handlers_under(directory: Path) -> list[logging.FileHandler]:
+    """Every ``FileHandler`` this process has attached whose file lives
+    inside ``directory`` -- root logger first, then any logger that
+    configured its own.
+
+    ``daemon_main.setup_logging()`` puts both handlers on the root logger
+    and everything else inherits them, so in the shipped daemon this finds
+    exactly one. It walks the rest anyway because the cost is a dictionary
+    scan and the failure it guards against is invisible until a release
+    build hits it on somebody's machine.
+    """
+    loggers: list[logging.Logger] = [logging.getLogger()]
+    loggers.extend(
+        obj for obj in logging.Logger.manager.loggerDict.values()
+        if isinstance(obj, logging.Logger)
+    )
+    found: list[logging.FileHandler] = []
+    for log in loggers:
+        for handler in list(log.handlers):
+            if not isinstance(handler, logging.FileHandler) or handler in found:
+                continue
+            try:
+                base = Path(handler.baseFilename)
+            except (AttributeError, TypeError, ValueError):  # pragma: no cover -- defensive
+                continue
+            if base.is_relative_to(directory):
+                found.append(handler)
+    return found
+
+
+@contextlib.contextmanager
+def _data_dir_log_files_released() -> Iterator[None]:
+    """Close the log files this process holds open inside the data directory
+    the elevated ``enable`` is about to **move**, and let them reopen
+    afterwards.
+
+    The third sighting of one defect, and the first where the process
+    holding the file is the one that asked for the move. ``disable`` moved
+    ``%ProgramData%\\PrivacyFence`` out from under a service it had only
+    *asked* to stop (fixed in 1d6b13f) and out from under a companion whose
+    task it had deleted without ending the process; ``enable`` moves
+    ``%LOCALAPPDATA%\\PrivacyFence`` out from under **its own caller** --
+    ``enforce_separation()`` runs from inside a packaged daemon that has
+    already called ``daemon_main.setup_logging()``, so
+    ``logs/privacyfence.log`` is open for append in this very process for
+    the whole elevated run. Windows has no POSIX rename-over-open-files
+    escape hatch, so that is a sharing violation every time::
+
+        -> moving C:\\Users\\...\\AppData\\Local\\PrivacyFence to C:\\ProgramData\\PrivacyFence
+        Move-Item : The process cannot access the file because it is being used by another process.
+            + CategoryInfo : WriteError: (privacyfence.log:FileInfo) [Move-Item], IOException
+
+    -- after which ``Undo-PartialEnable`` rolls the whole thing back and
+    decision 6 refuses to serve, which is how a Scheduler-started daemon
+    on a hosted runner (and on any machine whose install is not separated
+    yet) produced no control pipe at all.
+
+    Nothing is lost while the window is open: ``FileHandler.emit()``
+    reopens ``baseFilename`` by itself whenever ``stream`` is ``None`` --
+    that is how ``delay=True`` works -- so a record logged in the middle of
+    the elevated run simply opens the file again. That is a real hole, and
+    it is why this wraps the ``subprocess.run`` call alone rather than the
+    whole attempt: no ``logger`` call of ours is inside it.
+
+    Afterwards the handlers are pointed at wherever the data directory now
+    is. On the failure path that is the same file they had; on the success
+    path it is the separated root, which this process usually cannot write
+    -- so a handler that cannot be re-established is detached instead, and
+    the last thing this process has to say reaches stderr rather than
+    raising out of a log call.
+    """
+    from . import paths  # local, like every other paths import here -- paths imports this module
+
+    before = paths.data_dir()
+    handlers = _log_handlers_under(before)
+    relative: dict[logging.FileHandler, Path] = {}
+    for handler in handlers:
+        relative[handler] = Path(handler.baseFilename).relative_to(before)
+        handler.acquire()
+        try:
+            stream = handler.stream
+            handler.flush()
+            handler.stream = None  # type: ignore[assignment]  # reopened lazily by emit()
+        finally:
+            handler.release()
+        if stream is not None:
+            with contextlib.suppress(OSError):
+                stream.close()
+    try:
+        yield
+    finally:
+        reset_cache()
+        after = paths.data_dir()
+        for handler in handlers:
+            target = after / relative[handler]
+            try:
+                os.makedirs(target.parent, exist_ok=True)
+                # Proved, not assumed: on the success path this is the
+                # separated root, whose ACLs name the service account and
+                # Administrators -- and `emit()` finding that out for itself
+                # turns every later log call into a handleError() traceback
+                # on a stderr a windowed build does not have.
+                with open(target, "a", encoding="utf-8"):
+                    pass
+            except OSError:
+                _detach_handler(handler)
+                continue
+            handler.baseFilename = str(target)
+
+
+def _detach_handler(handler: logging.Handler) -> None:
+    """Remove one handler from every logger holding it -- the fallback when
+    the file it wrote to has moved somewhere this process may not write.
+
+    A detached handler is strictly better than one that raises out of every
+    subsequent ``logger.info()``: the stderr ``StreamHandler``
+    ``setup_logging()`` installs alongside it is still attached, so the
+    handover message below still has somewhere to go.
+    """
+    logging.getLogger().removeHandler(handler)
+    for obj in list(logging.Logger.manager.loggerDict.values()):
+        if isinstance(obj, logging.Logger):
+            obj.removeHandler(handler)
+
+
 def _run_full_auto_enable_non_macos() -> None:
     """The Windows/Linux siblings of ``maybe_auto_enable_macos()`` --
     dispatched from ``enforce_separation()`` only, never from a install path
@@ -1498,9 +1651,15 @@ def _run_full_auto_enable_non_macos() -> None:
                 return
             argv = [pkexec, str(script), "enable", "--auto"]
         try:
-            result = subprocess.run(  # nosec B603  # fixed argv built above, no shell, quoted per layer
-                argv, capture_output=True, text=True, timeout=300, check=False,
-            )
+            # The elevated run *moves* this process's own data directory, so
+            # nothing of ours may be holding a file in it while it does --
+            # see _data_dir_log_files_released(), and note that it wraps
+            # this call alone rather than the function, because a logger
+            # call inside the window would simply reopen the file.
+            with _data_dir_log_files_released():
+                result = subprocess.run(  # nosec B603  # fixed argv built above, no shell, quoted per layer
+                    argv, capture_output=True, text=True, timeout=300, check=False,
+                )
         except (OSError, subprocess.TimeoutExpired):
             logger.warning("automatic privilege-separation enable did not run", exc_info=True)
             return
@@ -1531,14 +1690,23 @@ def enforce_separation() -> None:
     A no-op on anything but a packaged build (``paths.is_bundled()`` --
     ``sys.frozen``/``_MEIPASS``, see this module's own docstring on why that
     is, in practice, "local mode and nothing else") and on an
-    already-separated install. Otherwise: attempts this platform's
+    already-separated install. Otherwise it attempts this platform's
     provisioning -- ``maybe_auto_enable_macos()`` on macOS, the Windows/Linux
-    equivalent above everywhere else -- and, if the install is *still*
-    unseparated afterwards, raises ``PrivilegeSeparationError`` naming the
-    one command that fixes it, the same fail-closed posture
-    ``check_runtime_identity()`` already takes and for the same reason: the
-    alternative failure is silent, and it does not degrade the product
-    visibly, it invalidates a guarantee the UI is still making.
+    equivalent above everywhere else -- and then raises, whichever way that
+    went, because *neither* outcome leaves this process a daemon to be:
+
+    * still unseparated: ``PrivilegeSeparationError`` naming the one command
+      that fixes it, the same fail-closed posture ``check_runtime_identity()``
+      already takes and for the same reason -- the alternative failure is
+      silent, and it does not degrade the product visibly, it invalidates a
+      guarantee the UI is still making.
+    * separated by the attempt: ``SeparationHandover``, which is not a
+      failure and which ``daemon_main.main()`` exits 0 on. The install now
+      has a service running the daemon under an account this process is
+      not, and the gate that would ordinarily say so ran several steps
+      earlier, when there was nothing to say. See ``SeparationHandover``.
+
+    So this returns only when it did nothing.
 
     No developer override here -- see ``dev_allows_unseparated()``'s own
     docstring for why decision 6's refusal is unconditional on a packaged
@@ -1557,8 +1725,22 @@ def enforce_separation() -> None:
         maybe_auto_enable_macos()
     else:
         _run_full_auto_enable_non_macos()
+    reset_cache()
     if is_enabled():
-        return
+        # It took -- and that settles what this process is, not just what
+        # the install is. `enable` has just handed the daemon to a service
+        # account this process is not, and the identity gate that would
+        # have said so (check_runtime_identity(), daemon_main.main()'s
+        # second call) ran while the install was still unseparated. Stop
+        # here instead of serving the layout we just separated; see
+        # SeparationHandover.
+        raise SeparationHandover(
+            "PrivacyFence has just separated this install (ADR 0003 decision 6). The daemon now "
+            f"runs as '{layout.service_account}', started by the system rather than by this "
+            "session, so this process -- which was started before that happened, as "
+            f"'{current_user_name()}' -- is stopping. Nothing went wrong and nothing else needs "
+            f"doing; run '{layout.status_command}' to see the install."
+        )
     raise PrivilegeSeparationError(
         "This is a packaged PrivacyFence install, and it is not privilege-separated (#428 Phase "
         "4 / ADR 0003 decision 6). The agent and the daemon would run under the same account, so "

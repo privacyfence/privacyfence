@@ -39,9 +39,11 @@ and ``PRIVACYFENCE_SYSTEM_ROOT`` relocates the whole layout under
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -1913,8 +1915,14 @@ class TestWindowsInstallerContract:
         # that failed) happens before the data is moved at all, and everything
         # from there on is inside a catch that walks the move back.
         enable = self.SCRIPT.split("function Invoke-Enable", 1)[1].split("\nfunction ", 1)[0]
+        # Call sites only. A comment that names a later step to explain an
+        # earlier one is ordinary and correct in this script, and indexing
+        # the raw text made it read as the step itself having moved.
+        calls = "\n".join(
+            line for line in enable.splitlines() if not line.strip().startswith("#")
+        )
 
-        assert enable.index("Install-DaemonService") < enable.index("Move-Data")
+        assert calls.index("Install-DaemonService") < calls.index("Move-Data")
         assert "Undo-PartialEnable" in enable
         for step in ("Move-Data", "Set-Layout", "Write-Marker", "Install-CompanionTask"):
             assert step in enable.split("try {", 1)[1].split("} catch {", 1)[0], step
@@ -3480,10 +3488,16 @@ class TestEnforceSeparation:
 
         assert attempts == ["other"]
 
-    def test_returns_quietly_when_the_attempt_takes(self, monkeypatch, tmp_path):
+    def test_hands_over_when_the_attempt_takes(self, monkeypatch, tmp_path):
         # The attempt's own side effect is provisioning the install for
         # real; simulate that by writing the marker from inside the faked
         # attempt, exactly like a real enable --auto would.
+        #
+        # This used to return quietly, and that was the defect: the daemon
+        # that repaired its own install carried on serving the layout it had
+        # just separated, as the human, past a check_runtime_identity() that
+        # had already run and passed while the install was still
+        # unseparated. See SeparationHandover.
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
         root = tmp_path / "PrivacyFence"
         monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
@@ -3495,9 +3509,27 @@ class TestEnforceSeparation:
 
         monkeypatch.setattr(privilege_separation, "_run_full_auto_enable_non_macos", _fake_attempt)
 
-        privilege_separation.enforce_separation()  # must not raise
+        with pytest.raises(privilege_separation.SeparationHandover) as exc:
+            privilege_separation.enforce_separation()
 
         assert privilege_separation.is_enabled() is True
+        message = str(exc.value)
+        layout = privilege_separation.PLATFORM_LAYOUTS["linux"]
+        assert layout.service_account in message
+        assert layout.status_command in message
+        # Decision 6's *refusal* wording must not be in it -- this outcome is
+        # the one decision 6 is trying to reach, and a user who reads
+        # "refusing to start" here will go looking for a problem that is not
+        # there.
+        assert "Refusing to start" not in message
+
+    def test_handover_is_a_privilege_separation_error(self):
+        # Every caller already stops on PrivilegeSeparationError, and
+        # stopping is what this asks for -- daemon_main.main() is what tells
+        # the two apart, by catching this subclass first.
+        assert issubclass(
+            privilege_separation.SeparationHandover, privilege_separation.PrivilegeSeparationError
+        )
 
     def test_refuses_and_names_the_enable_command_when_the_attempt_does_not_take(self, monkeypatch, tmp_path):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
@@ -3526,6 +3558,115 @@ class TestEnforceSeparation:
 
         with pytest.raises(privilege_separation.PrivilegeSeparationError):
             privilege_separation.enforce_separation()
+
+
+class TestDataDirLogFilesReleased:
+    """privacyfence/privacyfence#599's third defect: the elevated ``enable``
+    moves the data directory out from under the process that asked for it.
+
+    ``enforce_separation()`` runs from inside a packaged daemon that has
+    already called ``daemon_main.setup_logging()``, so
+    ``<data_dir>/logs/privacyfence.log`` is open for append in that very
+    process for the whole elevated run -- and Windows answers a move of a
+    directory holding an open file with a sharing violation rather than a
+    POSIX rename. The observed failure is quoted in
+    ``_data_dir_log_files_released()``'s own docstring.
+    """
+
+    @staticmethod
+    def _attach(tmp_path: Path) -> tuple[logging.Logger, logging.FileHandler, Path]:
+        log_file = tmp_path / "logs" / "privacyfence.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        log = logging.getLogger("privacyfence.tests.separation_release")
+        log.addHandler(handler)
+        log.propagate = False
+        return log, handler, log_file
+
+    def test_finds_a_handler_under_the_data_dir(self, tmp_path):
+        log, handler, _ = self._attach(tmp_path)
+        try:
+            assert handler in privilege_separation._log_handlers_under(tmp_path)
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+    def test_ignores_a_handler_outside_the_data_dir(self, tmp_path):
+        log, handler, _ = self._attach(tmp_path / "inside")
+        try:
+            assert handler not in privilege_separation._log_handlers_under(tmp_path / "elsewhere")
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+    def test_the_file_is_closed_for_the_duration(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        log, handler, _ = self._attach(tmp_path)
+        try:
+            log.warning("before")
+            assert handler.stream is not None
+            with privilege_separation._data_dir_log_files_released():
+                assert handler.stream is None, "the log file is still open during the move"
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+    def test_the_handler_writes_again_afterwards(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        log, handler, log_file = self._attach(tmp_path)
+        try:
+            with privilege_separation._data_dir_log_files_released():
+                pass
+            log.warning("after the attempt")
+            handler.flush()
+            assert "after the attempt" in log_file.read_text(encoding="utf-8")
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+    def test_follows_the_data_dir_when_the_enable_took(self, tmp_path, monkeypatch):
+        """The success path: the directory really moved, so the handler has
+        to be pointed at where it went rather than recreating an empty log
+        at a path that is no longer the install's."""
+        before = tmp_path / "unseparated"
+        after = tmp_path / "separated"
+        current = {"dir": before}
+        monkeypatch.setattr(paths, "data_dir", lambda: current["dir"])
+        log, handler, _ = self._attach(before)
+        try:
+            with privilege_separation._data_dir_log_files_released():
+                shutil.move(str(before), str(after))
+                current["dir"] = after
+            assert Path(handler.baseFilename) == after / "logs" / "privacyfence.log"
+            log.warning("written to the separated root")
+            handler.flush()
+            moved = after / "logs" / "privacyfence.log"
+            assert "written to the separated root" in moved.read_text(encoding="utf-8")
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+    def test_detaches_a_handler_it_cannot_re_establish(self, tmp_path, monkeypatch):
+        """The other success path, and the ordinary one on Windows: the
+        separated root is not writable by the account this process runs as,
+        so the handler is dropped instead of raising out of every later
+        ``logger.info()`` -- the stderr handler ``setup_logging()`` installs
+        alongside it still carries the handover message."""
+        before = tmp_path / "unseparated"
+        current = {"dir": before}
+        monkeypatch.setattr(paths, "data_dir", lambda: current["dir"])
+        log, handler, _ = self._attach(before)
+        try:
+            def _refuse(*_args, **_kwargs):
+                raise PermissionError("the separated root is the service account's")
+
+            monkeypatch.setattr(privilege_separation.os, "makedirs", _refuse)
+            with privilege_separation._data_dir_log_files_released():
+                current["dir"] = tmp_path / "separated"
+            assert handler not in log.handlers
+        finally:
+            log.removeHandler(handler)
+            handler.close()
 
 
 class TestWindowsFullEnableArgv:
@@ -3608,7 +3749,12 @@ class TestRunFullAutoEnableNonMacos:
 
         assert len(calls) == 1
         assert calls[0] == ["/usr/bin/pkexec", str(script), "enable", "--auto"]
-        assert reset_calls == [True]
+        # Twice, and both are load-bearing:
+        # _data_dir_log_files_released() resets on its way out so
+        # paths.data_dir() re-resolves against the directory the enable has
+        # just moved, and this function resets again before reading
+        # is_enabled() for its own log line.
+        assert reset_calls == [True, True]
 
     def test_windows_runs_the_uac_elevated_argv(self, monkeypatch, script):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
@@ -3626,7 +3772,7 @@ class TestRunFullAutoEnableNonMacos:
 
         assert len(calls) == 1
         assert str(script) in calls[0][-1]
-        assert reset_calls == [True]
+        assert reset_calls == [True, True]  # see the Linux case above
 
     def test_a_declined_prompt_is_not_a_crash(self, monkeypatch, script, caplog):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
