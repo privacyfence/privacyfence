@@ -552,10 +552,25 @@ def _wait_for_alias_process(
     return None
 
 
-def _wait_until_alias_process_gone(exe_path: str, *, timeout: float) -> bool:
+def _wait_until_pid_gone(pid: str, *, timeout: float) -> bool:
+    """Whether *that* process has left the process table.
+
+    By pid, deliberately, and not by image path like
+    ``_find_process_by_exe_path()`` above: on a separated install the
+    service runs the very same ``privacyfence-app.exe`` (its ``binPath`` is
+    that image plus ``--windows-service``), so "no process with this
+    executable path" is false for as long as the install is working
+    correctly. Asking whether the process Task Scheduler started is gone is
+    a different question from asking whether any daemon is running, and this
+    module needs the first one.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if _find_process_by_exe_path(exe_path) is None:
+        result = _run_powershell(
+            f"if (Get-Process -Id {int(pid)} -ErrorAction SilentlyContinue) {{ exit 0 }} else {{ exit 1 }}",
+            timeout=15,
+        )
+        if result.returncode != 0:
             return True
         time.sleep(0.5)
     return False
@@ -694,6 +709,25 @@ def _service_failure_config() -> str:
         ["sc.exe", "qfailure", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
     )
     return f"{result.stdout}{result.stderr}"
+
+
+def _wait_for_task_last_result(expected: str, *, timeout: float) -> str | None:
+    """Poll "Last Result" until it reads *expected*, and return whatever it
+    reads in the end.
+
+    Polled rather than read once: Task Scheduler records the action's exit
+    code when it notices the process has ended, which is not the same
+    instant the process actually ends, and a single read taken right after
+    the handover can still be reporting the run before it.
+    """
+    deadline = time.monotonic() + timeout
+    last = _task_last_result()
+    while time.monotonic() < deadline:
+        if last == expected:
+            return last
+        time.sleep(1.0)
+        last = _task_last_result()
+    return last
 
 
 def _task_last_result() -> str | None:
@@ -1081,13 +1115,13 @@ async def test_installed_task_starts_the_packaged_daemon_which_separates_the_ins
         f"{_separation_state_summary()}"
     )
 
-    # ── And the process Task Scheduler started is gone. It separated the
-    # install and then had nothing left to be: the daemon is the service's
-    # now, running as an account this process is not
-    # (privilege_separation.SeparationHandover). A process still alive here
-    # is one serving the layout it just separated, as the human -- the
-    # silent policy reset check_runtime_identity() exists to prevent. ─────
-    assert _wait_until_alias_process_gone(_installed.alias_exe, timeout=60.0), (
+    # ── And the process Task Scheduler started is gone -- that pid, not
+    # that image. It separated the install and then had nothing left to be:
+    # the daemon is the service's now, running as an account this process is
+    # not (privilege_separation.SeparationHandover). One still alive here is
+    # one serving the layout it just separated, as the human -- the silent
+    # policy reset check_runtime_identity() exists to prevent. ────────────
+    assert _wait_until_pid_gone(pid, timeout=60.0), (
         f"{ALIAS_EXE_NAME} (pid {pid}) is still running after separating this install -- it should "
         f"have handed over to the {WINDOWS_SERVICE_NAME} service and exited\n"
         f"{_autostart_failure_context(_installed)}"
@@ -1096,8 +1130,9 @@ async def test_installed_task_starts_the_packaged_daemon_which_separates_the_ins
     # sign-in is a support ticket, and this is the one outcome decision 6 is
     # trying to reach. `daemon_main.main()` returns 0 on the handover for
     # exactly this reason.
-    assert _task_last_result() == "0", (
-        f"the {TASK_NAME!r} task reports Last Result {_task_last_result()!r}, not 0 -- separating "
+    last_result = _wait_for_task_last_result("0", timeout=30.0)
+    assert last_result == "0", (
+        f"the {TASK_NAME!r} task reports Last Result {last_result!r}, not 0 -- separating "
         f"and handing over is a successful run\n"
         f"---- task state (schtasks /query /v) ----\n{_task_state_summary()}\n"
         f"---- daemon log (tail) ----\n{_daemon_log_tail(_installed.home)}"
