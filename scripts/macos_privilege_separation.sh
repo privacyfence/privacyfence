@@ -346,6 +346,43 @@ create_service_account() {
   fi
 }
 
+# How long to wait for a freshly created account to become resolvable, and
+# for the bootstrapped daemon to report a pid. Both are "a lookup that should
+# be instant, occasionally is not" waits, not real work -- a second of poll is
+# already generous, and the timeout is what turns a hang into a message.
+ACCOUNT_RESOLVE_TIMEOUT=30
+DAEMON_PID_TIMEOUT=15
+
+wait_for_service_account() {
+  # dscl writes to the local node and the lookups that read it back --
+  # getpwnam(3), and whatever launchd does to turn a plist's UserName into a
+  # uid -- go through opendirectoryd's cache, which does not always have the
+  # new record the instant `dscl . -create` returns. Everything after this
+  # point depends on that lookup: apply_layout()'s `chown -R`, and, far more
+  # quietly, launchd's own resolution of UserName in the LaunchDaemon plist --
+  # launchd runs a job as *root* when the account it names does not resolve at
+  # bootstrap time, which is privacyfence/privacyfence#598's Failure A: an
+  # install that reports itself separated while its daemon holds every
+  # privilege separation exists to drop.
+  #
+  # So flush the cache and then actually wait for the account to answer,
+  # rather than assuming the write is immediately visible.
+  dscacheutil -flushcache 2>/dev/null || true
+  local deadline=$((SECONDS + ACCOUNT_RESOLVE_TIMEOUT))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    # id(1) and dscacheutil both answer through the same cache launchd and
+    # chown(1) read, which is the point -- `dscl . -read` would go to the
+    # node directly and report success while the cache still says no such
+    # user.
+    if id -u "$SERVICE_ACCOUNT" >/dev/null 2>&1 \
+       && dscacheutil -q group -a name "$SERVICE_GROUP" | grep -q '^gid:'; then
+      return 0
+    fi
+    sleep 0.2
+  done
+  die "${SERVICE_ACCOUNT} was created but still does not resolve through id(1) after ${ACCOUNT_RESOLVE_TIMEOUT}s -- refusing to continue, because launchd silently runs a LaunchDaemon as root when its UserName does not resolve. Check 'dscl . -read /Users/${SERVICE_ACCOUNT}' and re-run."
+}
+
 add_owner_to_service_group() {
   note "adding ${OWNER_USER} to the ${SERVICE_GROUP} group"
   dseditgroup -o edit -a "$OWNER_USER" -t user "$SERVICE_GROUP"
@@ -531,6 +568,7 @@ install_services() {
   render_template "${TEMPLATE_DIR}/com.privacyfence.companion.plist.tmpl" "$COMPANION_PLIST"
   launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
   launchctl bootstrap system "$DAEMON_PLIST"
+  verify_daemon_account
   # The plist itself is what makes the companion start at every future GUI
   # login -- /Library/LaunchAgents is per-machine and launchd bootstraps it
   # into each session as that session is created. The two calls below only
@@ -540,6 +578,51 @@ install_services() {
     launchctl bootout "gui/${OWNER_UID}/${COMPANION_LABEL}" 2>/dev/null || true
     launchctl bootstrap "gui/${OWNER_UID}" "$COMPANION_PLIST" || warn "could not start the companion for ${OWNER_USER} now -- it will start at their next login"
   fi
+}
+
+daemon_pid() {
+  # `|| true` on both halves deliberately: `launchctl print` exits non-zero
+  # for a job that is not loaded, and with `set -o pipefail` that would make
+  # this function's own failure indistinguishable from "no pid right now",
+  # which is a state every caller here treats as ordinary.
+  local printed
+  printed="$(launchctl print "system/${DAEMON_LABEL}" 2>/dev/null || true)"
+  printf '%s\n' "$printed" \
+    | sed -n -e 's/^[[:space:]]*pid[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' -e '/^[0-9]/q' \
+    || true
+}
+
+verify_daemon_account() {
+  # The one thing `launchctl bootstrap` will not tell you: it exits 0 having
+  # started the job as root when the plist's UserName did not resolve
+  # (privacyfence/privacyfence#598 Failure A). Everything downstream then
+  # *says* the install is separated -- the marker, `status`, the approvals UI
+  # -- while the daemon holds exactly the privileges separation exists to drop.
+  # wait_for_service_account() above is the fix; this is the proof, because a
+  # guarantee that can fail silently is not one.
+  #
+  # Not fatal on "no pid yet": under this job's KeepAlive a daemon that starts
+  # and exits has no pid at any given instant, which is a real problem but a
+  # different one, and not this function's to diagnose (`status`, and the
+  # daemon's own log under ${SYSTEM_ROOT}/logs, are).
+  local deadline=$((SECONDS + DAEMON_PID_TIMEOUT)) pid="" owner=""
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    pid="$(daemon_pid)"
+    [ -n "$pid" ] && break
+    sleep 0.2
+  done
+  if [ -z "$pid" ]; then
+    warn "${DAEMON_LABEL} did not report a running pid within ${DAEMON_PID_TIMEOUT}s -- check ${SYSTEM_ROOT}/logs and 'sudo $0 status'"
+    return 0
+  fi
+  owner="$(ps -o user= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
+  # An empty owner means the process is already gone again, which is the same
+  # "not this function's problem" case as no pid at all.
+  if [ -z "$owner" ] || [ "$owner" = "$SERVICE_ACCOUNT" ]; then
+    return 0
+  fi
+  launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
+  die "${DAEMON_LABEL} started as '${owner}', not ${SERVICE_ACCOUNT} -- launchd does that when the plist's UserName does not resolve. The daemon has been stopped rather than left running unseparated while everything else reports otherwise. Check 'dscl . -read /Users/${SERVICE_ACCOUNT}' and 'id ${SERVICE_ACCOUNT}', then re-run this command."
 }
 
 uninstall_services() {
@@ -570,6 +653,10 @@ cmd_enable() {
   launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
 
   create_service_account
+  # Before anything that resolves the account by name: apply_layout()'s
+  # `chown -R`, and install_services()' `launchctl bootstrap`, which is the
+  # one that fails *silently* (#598 Failure A). See wait_for_service_account().
+  wait_for_service_account
   if [ -n "$OWNER_USER" ]; then
     add_owner_to_service_group
   else

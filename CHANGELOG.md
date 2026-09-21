@@ -35,6 +35,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS privilege separation no longer risks starting the daemon as `root`. `launchctl bootstrap`
+  runs a LaunchDaemon as root — silently, exit 0 — when the account its plist names does not
+  resolve yet, and Directory Services lookups can lag behind the `dscl` writes that just created
+  `_privacyfence`. `enable` now waits for the account to resolve before it re-owns the data
+  directory or bootstraps anything, and then checks which account the daemon actually came up as,
+  stopping it and failing loudly rather than leaving an install that reports itself separated while
+  its daemon holds every privilege separation exists to drop.
+
 ## [4.1.3] — 2026-09-21
 
 ### Fixed
