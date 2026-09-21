@@ -23,7 +23,13 @@ HOW TO USE THIS FILE
 3. Pre-release tags (`aN`/`bN`/`rcN`, and the older `-alphaN`/`-betaN` spellings) get no entry of
    their own. Their content is folded into the final version they led to, per Keep a Changelog.
 
-4. Entries are ordered by version, NOT by date. The 3.4.x maintenance line and the 4.0 line ran
+4. A version that was tagged but never published (its release build failed before anything
+   reached a GitHub Release or PyPI) gets no section of its own either. Fold its entries into the
+   version that does ship, note the supersession at the top of that section, and point the shipped
+   version's compare link at the last version that really shipped -- 4.1.4 does this for 4.1.3.
+   The tag stays in git; the changelog describes what people can actually install.
+
+5. Entries are ordered by version, NOT by date. The 3.4.x maintenance line and the 4.0 line ran
    in parallel, so 3.4.5-3.4.7 (2026-09-02/03) were cut after v4.0.0-alpha1..alpha4
    (2026-08-28/29). Sorting by date here would be actively misleading.
 -->
@@ -34,6 +40,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [4.1.4] — 2026-09-21
+
+*Supersedes 4.1.3, which was tagged but never published — its release build stopped before any
+artifact reached a GitHub Release or PyPI, so no 4.1.3 was ever installable. Everything that
+version would have carried is folded in below: from the outside this is a single 4.1.2 → 4.1.4
+change.*
 
 ### Fixed
 
@@ -109,11 +122,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and MCP token where neither the separated nor the unseparated layout looks for them. The
   service is now created before anything is moved, and every step after the move walks itself
   back — the counterpart of the `disable` fix above, from the other direction.
-
-## [4.1.3] — 2026-09-21
-
-### Fixed
-
 - **The `/approvals` toolbar and connector icons now stay correct when new approvals stream in
   live.** Leaving the tab open on an empty (or partial) queue used to leave the select-all/
   batch-approve/batch-deny toolbar permanently missing — it was only ever created at first paint,
@@ -2183,8 +2191,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.1.3...HEAD
-[4.1.3]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.3
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.1.4...HEAD
+[4.1.4]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.4
 [4.1.2]: https://github.com/privacyfence/privacyfence/compare/v4.0.0...v4.1.2
 [4.0.0]: https://github.com/privacyfence/privacyfence/compare/v3.4.7...v4.0.0
 [3.4.7]: https://github.com/privacyfence/privacyfence/compare/v3.4.6...v3.4.7
