@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Report (never gate) whether the graphical-session/autostart workflows have a green run behind
-this release tag -- privacyfence/privacyfence#374, option 1 ("Report, don't gate").
+"""Report whether the graphical-session/autostart workflows have a green run behind this release
+tag, and (stable channel only) actually gate on it -- privacyfence/privacyfence#374, options 1
+("Report, don't gate") and 3 ("Gate stable tags only").
 
 `linux-graphical-session.yml`, `windows-graphical-session.yml` and `macos-graphical-session.yml`
 are the only automated coverage for the thing every desktop user depends on and nobody notices
@@ -11,23 +12,37 @@ release's critical path (see docs/testing-policy.md's Layer 6 row and this repo'
 leaves a gap: a tag can ship with autostart broken as long as the last packaging-touching push to
 `main` was green and nothing since then re-ran any of the three workflows.
 
-This script closes the "nobody looked" half of that gap without touching the "must not gate"
-half. It first resolves which branch this release actually came from (`resolve_release_branch` --
-`main`, unless `commit` is on a `releases/*` branch, since those get the same packaging-related
-trigger as `main`; see CLAUDE.md's branch-protection section), then for each workflow reads the
-single most recent *completed* run on that branch and checks two things: that its commit is
-actually an ancestor of the commit being released (a run for a commit the branch hasn't reached
-yet says nothing about this tag), and that it succeeded. Anything else -- no run at all, the
-latest run not yet reachable from this tag, or a reachable run that failed -- prints a
-`::warning::` annotation and nothing more. `finalize-release` runs this as an ordinary step; see
-that job's own comment. It always exits 0.
+This script closes the "nobody looked" half of that gap without touching the "must not [block on a
+live run]" half -- it never waits for a workflow to run, it only asks whether one already has. It
+first resolves which branch this release actually came from (`resolve_release_branch` -- `main`,
+unless `commit` is on a `releases/*` branch, since those get the same packaging-related trigger as
+`main`; see CLAUDE.md's branch-protection section), then for each workflow reads the single most
+recent *completed* run on that branch and checks two things: that its commit is actually an
+ancestor of the commit being released (a run for a commit the branch hasn't reached yet says
+nothing about this tag), and that it succeeded. Anything else -- no run at all, the latest run not
+yet reachable from this tag, or a reachable run that failed -- is a coverage gap.
+
+What happens with a gap depends on `--channel` (the same value `scripts/r2_release.py channel`
+already resolves for the tag): on every channel it prints a `::warning::` per gap and nothing
+more (option 1); on `stable` specifically, a gap additionally fails this script, which
+`finalize-release` runs as an ordinary step ahead of anything that attaches or publishes
+anything -- so a stable tag with broken or stale autostart coverage never ships (option 3).
+Pre-release tags stay ungated on purpose, per the issue's own reasoning: that's where a flake is
+cheapest to absorb, and this is still not a live wait -- a stable tag with a real coverage gap
+fails immediately rather than blocking on a fresh run, so the "off the release's critical path"
+property this tier was built around never breaks. One re-run allowance: a run this finds red is
+not necessarily this release's fault -- if a maintainer judges it a flake, re-running that
+workflow's own failed jobs (not this script) updates the same run in place, and the next
+`finalize-release` attempt picks up the improved conclusion automatically, since this always reads
+the *latest* completed run reachable from the commit being released. A second red run on the same
+commit is real and must not be re-run away.
 
 Usage (matches scripts/release_stats.py's own conventions -- reads GH_TOKEN/GITHUB_TOKEN, and
 keeps the pure decision (`evaluate`) separate from the network fetch and the `git` ancestor check
 so it's unit-testable without mocking either):
 
     python3 scripts/check_graphical_session_coverage.py --repo privacyfence/privacyfence \
-        --commit "$GITHUB_SHA"
+        --commit "$GITHUB_SHA" --channel "$CHANNEL"
 
 Run from a checkout with full history (`fetch-depth: 0`, same requirement as setuptools_scm's own
 tag resolution -- see this repo's CLAUDE.md). Full history here means every branch, not just the
@@ -154,6 +169,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", required=True, help='"owner/repo", e.g. privacyfence/privacyfence')
     parser.add_argument("--commit", required=True, help="the commit being released (usually $GITHUB_SHA)")
+    parser.add_argument(
+        "--channel", default="",
+        help=(
+            "the release channel this commit resolves to (scripts/r2_release.py channel's own "
+            "output). A coverage gap only fails this script -- rather than just warning -- when "
+            "this is exactly 'stable' (privacyfence/privacyfence#374, option 3); left empty or "
+            "anything else, this always exits 0, same as before --channel existed."
+        ),
+    )
     args = parser.parse_args(argv)
 
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
@@ -169,8 +193,20 @@ def main(argv: list[str] | None = None) -> int:
             "Autostart coverage (" + ", ".join(WORKFLOWS) + ") "
             "is green and reachable from this release."
         )
+        return 0
 
-    # Deliberately always 0 -- this reports, it never gates the release. See module docstring.
+    if args.channel == "stable":
+        print(
+            "::error::A stable release requires green, reachable autostart coverage on every "
+            "graphical-session workflow -- see the warnings above. If a failure looks like a "
+            "flake, re-run that workflow's own failed jobs once and re-run this release; a "
+            "second red run on the same commit is real and must not be re-run away "
+            "(privacyfence/privacyfence#374)."
+        )
+        return 1
+
+    # Any other channel (pre-release, or none resolved at all): report only, never gate -- see
+    # module docstring's option 1.
     return 0
 
 

@@ -60,6 +60,7 @@ CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tes
 - [`adr/0003-separated-installs-only.md`](adr/0003-separated-installs-only.md) — every shipped local-mode install is privilege-separated, or it is not shipped and does not serve.
 - [`adr/0004-retire-the-v1-auto-accept-config-model.md`](adr/0004-retire-the-v1-auto-accept-config-model.md) — one auto-accept model (scope + verb + condition) replaces `auto_accept_rules`/`auto_accept_grants`.
 - [`adr/0005-moving-the-approval-decision-off-the-device.md`](adr/0005-moving-the-approval-decision-off-the-device.md) — **proposed, not accepted**: whether an approving decision should be rendered and answered somewhere the governed agent cannot execute code.
+- [`adr/0006-attributing-a-request-to-the-ai-system-that-made-it.md`](adr/0006-attributing-a-request-to-the-ai-system-that-made-it.md) — which AI system made a request is resolved from the connection, recorded with the provenance that established it, and may inform a human without informing a decision.
 - [`images/screenshots/README.md`](images/screenshots/README.md) — screenshot generation and maintenance.
 - `images/` — diagrams and screenshots referenced by documentation.
 

@@ -46,6 +46,24 @@ def connector_icon_path(connector: str) -> str | None:
     return str(p) if p.exists() else None
 
 
+def all_connector_icons() -> dict[str, str]:
+    """``{connector: data URI}`` for every bundled connector icon --
+    ``connector_icon_path()``'s whole known set, not just whichever
+    connectors a caller happens to already know about. The set is small
+    and fixed (resources/connector_icons/*.png, currently ~10 files, none
+    over ~135KB), so callers that want an icon reference to survive for a
+    connector they haven't seen yet (approval_list_html.py's live
+    re-render -- see issue #576) can bake in all of it once rather than
+    only the subset that happened to be relevant at the moment they asked."""
+    icons_dir = _RESOURCES / "connector_icons"
+    if not icons_dir.is_dir():
+        return {}
+    return {
+        path.stem: icon_data_uri(str(path))
+        for path in sorted(icons_dir.glob("*.png"))
+    }
+
+
 def icon_data_uri(path: str | None) -> str:
     """Base64 data: URI for a vendored PNG icon, or "" if missing. Cached
     (these are a fixed, small set of bundled resources, not user data) so

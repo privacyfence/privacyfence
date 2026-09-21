@@ -2,6 +2,7 @@
 ui-ux.md §2, the P1-compatible slice)."""
 from __future__ import annotations
 
+import json
 import time
 from types import SimpleNamespace
 
@@ -217,6 +218,14 @@ class TestBinderMarkup:
         assert 'id="pf-deny-selected"' in html
         assert 'id="pf-approve-selected"' in html
 
+    def test_toolbar_is_not_hidden_when_rows_exist(self):
+        # F576 bug 1: a toolbar that only exists in the DOM when rows exist
+        # can never be created by the live re-render -- so it must always
+        # exist, and visibility is carried by "hidden" instead.
+        rows = [approval_list_html.row_from_approval(_real_card())]
+        html = approval_list_html.build_list_html(rows, csrf="t")
+        assert 'id="pf-approvals-toolbar" hidden' not in html
+
     def test_approve_selected_starts_disabled(self):
         # Phase 3 of the binder plan: like Deny selected, nothing is
         # selected on first paint, so there is nothing to approve yet.
@@ -224,9 +233,18 @@ class TestBinderMarkup:
         html = approval_list_html.build_list_html(rows, csrf="t")
         assert 'id="pf-approve-selected" disabled' in html
 
-    def test_toolbar_absent_on_the_empty_state(self):
+    def test_toolbar_present_but_hidden_on_the_empty_state(self):
+        # Issue #576, bug 1: the toolbar used to be omitted entirely when
+        # nothing was pending at first paint, which meant it could never be
+        # created later by window.__pfRenderApprovals's own SSE-driven
+        # re-render (that function only ever updates existing elements). It
+        # must stay in the DOM, just hidden, so the live re-render can
+        # reveal it (see updateToolbar in _JS) the moment something
+        # batchable actually arrives.
         html = approval_list_html.build_list_html([], csrf="t")
-        assert 'id="pf-approvals-toolbar"' not in html
+        assert 'id="pf-approvals-toolbar" hidden' in html
+        assert 'id="pf-deny-selected"' in html
+        assert 'id="pf-approve-selected"' in html
 
     def test_select_all_is_disabled_when_nothing_is_batchable(self):
         from privacyfence.approvals import PendingApprovalRegistry
@@ -437,8 +455,14 @@ class TestConnectorIconsSurviveLiveUpdates:
         assert "pfIconConnectors" in js
 
     def test_the_image_data_appears_once_per_connector_not_once_per_row(self):
+        from privacyfence import approval_icons
+
         html = approval_list_html.build_list_html(self._rows("gmail", "gmail", "gmail"), csrf="t")
-        assert html.count("data:image/png;base64,") == 1
+        # Every bundled connector's icon is baked in regardless of what's
+        # pending (see test_icon_css_present_even_when_nothing_is_pending
+        # below), so the count is the whole bundled set's size, not "gmail"
+        # alone -- and still exactly once per connector, not once per row.
+        assert html.count("data:image/png;base64,") == len(approval_icons.all_connector_icons())
 
     def test_a_connector_with_no_bundled_icon_still_gets_a_letter_badge(self):
         rows = self._rows("nosuchconnector")
@@ -446,8 +470,15 @@ class TestConnectorIconsSurviveLiveUpdates:
         assert 'class="pf-approval-icon pf-approval-icon-fallback">N<' in row_html
 
     def test_the_connector_name_list_is_handed_to_the_page(self):
+        # Issue #576, bug 1: this is every bundled connector, not just the
+        # ones with a row on the page right now -- otherwise a connector
+        # with nothing pending at first paint would draw a letter badge for
+        # any row that arrives for it later, until the next full reload.
+        from privacyfence import approval_icons
+
         html = approval_list_html.build_list_html(self._rows("gmail", "slack"), csrf="t")
-        assert 'var pfIconConnectors = ["gmail", "slack"]' in html
+        expected = json.dumps(sorted(approval_icons.all_connector_icons()))
+        assert f"var pfIconConnectors = {expected}" in html
 
     def test_a_connector_name_that_is_not_a_safe_css_identifier_gets_no_rule(self):
         # The slug is interpolated into a selector and a class attribute,
@@ -457,10 +488,18 @@ class TestConnectorIconsSurviveLiveUpdates:
         assert approval_list_html._icon_slug('a"};x{y:z') == ""
         assert approval_list_html._icon_slug("") == ""
 
-    def test_no_icon_css_at_all_when_nothing_is_pending(self):
+    def test_icon_css_present_even_when_nothing_is_pending(self):
+        # The crux of issue #576's bug 1: a connector with nothing pending
+        # at first paint used to get no icon rule at all, so a row that
+        # arrived for it later drew a letter badge until the next full page
+        # load. The bundled icon set is small and fixed, so it's all baked
+        # in unconditionally instead.
+        from privacyfence import approval_icons
+
         html = approval_list_html.build_list_html([], csrf="t")
-        assert "data:image/png;base64," not in html
-        assert "var pfIconConnectors = []" in html
+        assert "data:image/png;base64," in html
+        expected = json.dumps(sorted(approval_icons.all_connector_icons()))
+        assert f"var pfIconConnectors = {expected}" in html
 
 
 class TestFirstRunEmptyState:

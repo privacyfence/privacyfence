@@ -43,3 +43,23 @@ class TestIconDataUri:
         second = approval_icons.icon_data_uri(path)
         assert first == second
         assert path in approval_icons._icon_data_uri_cache
+
+
+class TestAllConnectorIcons:
+    """approval_list_html.py's live re-render needs every bundled icon
+    available at first paint, not just the ones with something pending
+    right then (issue #576) -- this is the whole bundled set it draws on."""
+
+    def test_includes_every_bundled_connector(self):
+        icons = approval_icons.all_connector_icons()
+        assert "gmail" in icons
+        assert "slack" in icons
+        assert icons["gmail"].startswith("data:image/png;base64,")
+
+    def test_matches_connector_icon_path_for_each_key(self):
+        icons = approval_icons.all_connector_icons()
+        for connector, uri in icons.items():
+            assert uri == approval_icons.icon_data_uri(approval_icons.connector_icon_path(connector))
+
+    def test_excludes_a_connector_with_no_bundled_icon(self):
+        assert "not-a-real-connector" not in approval_icons.all_connector_icons()
