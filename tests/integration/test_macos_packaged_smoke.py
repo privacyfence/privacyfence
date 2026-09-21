@@ -66,11 +66,14 @@ the packaged app:
    ordinary HTTP client, so none of the group-membership plumbing above
    applies to it.
 5. **One synthetic Allow/Deny round trip**: call
-   ``privacyfence_propose_auto_accept_rule_change`` (the one meta-tool that
-   always opens a confirmation popup, so this needs no connector OAuth setup
-   at all) over MCP, click "Confirm" on the real served card from the real
+   ``privacyfence_propose_policy_change`` (the one meta-tool that always
+   opens a confirmation popup, so this needs no connector OAuth setup at
+   all) over MCP, click "Confirm" on the real served card from the real
    browser, and assert the MCP call the whole time was blocked on returns
-   the confirmed result once that happens.
+   the confirmed result once that happens. The call itself, and the
+   settings.yaml row to read back on the far side of it, come from
+   ``tests/packaged_policy_probe.py``, which all four packaged-artifact
+   smoke tests share.
 6. **State lives outside the package, twice over**: delete the *original*
    scratch copy handed to ``enable --app`` (``installed_app``) and confirm
    the rule change from step 5 is still reachable -- proving the daemon
@@ -163,6 +166,12 @@ from playwright.sync_api import sync_playwright  # noqa: E402
 # importing it does not make this module test anything but the frozen binary
 # from outside.
 from tests.control_channel_client import attested_mint_script, companion_stand_in_script  # noqa: E402
+from tests.packaged_policy_probe import (  # noqa: E402
+    PROBE_TOOL,
+    assert_probe_rule_on_disk,
+    expected_description,
+    probe_arguments,
+)
 from tests.packaged_step_up import decide_with_step_up, enroll_passkey  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -863,20 +872,16 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
 
             tools = await session.list_tools()
             names = {t.name for t in tools.tools}
-            assert "privacyfence_propose_auto_accept_rule_change" in names
+            assert PROBE_TOOL in names
             assert "privacyfence_check_policy" in names
 
             call_task = asyncio.create_task(
                 session.call_tool(
-                    "privacyfence_propose_auto_accept_rule_change",
-                    {
-                        "target": "rule",
-                        "operation": "add",
-                        "operation_key": "gmail.read_message",
-                        "rule_name": "trusted_sender_domain",
-                        "value": ["example.com"],
-                        "reason": "TST-15 packaged-app smoke test synthetic approval round trip",
-                    },
+                    PROBE_TOOL,
+                    probe_arguments(
+                        value=["example.com"],
+                        reason="TST-15 packaged-app smoke test synthetic approval round trip",
+                    ),
                 )
             )
             # Runs on a worker thread so its own (Playwright-internal) event
@@ -890,13 +895,17 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     assert result.structured_content["confirmed"] is True
     assert result.structured_content["changed"] is True
     # P9 of the policy v2 redesign: the confirmed-response description is the v2 rule's own
-    # human-readable sentence now, not an echo of the v1 rule_name string.
-    assert "Gmail - sender domain example.com: allow read" in result.structured_content["description"]
+    # human-readable sentence, not an echo of any rule name the caller passed in.
+    assert expected_description("example.com") in result.structured_content["description"]
 
     # Confirms the round trip actually reached persisted state, not just a
-    # confirmed-but-inert in-memory result.
+    # confirmed-but-inert in-memory result -- as the whole v2 rule the dialog
+    # described, not a rule-name substring that would survive the write path
+    # regressing. See packaged_policy_probe.py's own "On-disk shape is what to
+    # assert" note.
     settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
-    assert settings_text and "trusted_sender_domain" in settings_text, settings_text
+    assert settings_text, settings_text
+    assert_probe_rule_on_disk(settings_text, value=["example.com"])
 
     # ── State lives outside the package, twice over (module docstring, §6) ──
     # First: delete the *original* scratch copy `enable --app` was pointed
@@ -914,9 +923,8 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     shutil.rmtree(installed_app)
     assert not installed_app.exists()
     settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
-    assert settings_text and "trusted_sender_domain" in settings_text, (
-        "deleting the original --app copy must not affect the daemon's own staged copy"
-    )
+    assert settings_text, "deleting the original --app copy must not affect the daemon's own staged copy"
+    assert_probe_rule_on_disk(settings_text, value=["example.com"])
 
     # Second: the real uninstall gesture. macOS has no installer/uninstaller
     # pair -- "uninstalling" a separated install is `disable`, which moves
@@ -932,7 +940,9 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
         assert restored_settings_path.exists(), (
             f"`disable` should have restored state to {restored_settings_path}"
         )
-        assert "trusted_sender_domain" in restored_settings_path.read_text(encoding="utf-8")
+        assert_probe_rule_on_disk(
+            restored_settings_path.read_text(encoding="utf-8"), value=["example.com"],
+        )
     finally:
         shutil.rmtree(Path.home() / ".privacyfence", ignore_errors=True)
 
@@ -1088,15 +1098,11 @@ async def _propose_trusted_sender_rule(mcp_url: str, mcp_token: str, *, value: l
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await session.call_tool(
-                    "privacyfence_propose_auto_accept_rule_change",
-                    {
-                        "target": "rule",
-                        "operation": "add",
-                        "operation_key": "gmail.read_message",
-                        "rule_name": "trusted_sender_domain",
-                        "value": value,
-                        "reason": "tests/integration/test_macos_packaged_smoke.py upgrade-in-place scenario",
-                    },
+                    PROBE_TOOL,
+                    probe_arguments(
+                        value=value,
+                        reason="tests/integration/test_macos_packaged_smoke.py upgrade-in-place scenario",
+                    ),
                 )
 
 
