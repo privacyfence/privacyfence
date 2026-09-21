@@ -471,6 +471,19 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   INFO and exits `0` instead of ERROR/`1`, so Task Scheduler logs a clean success on every ordinary
   tick instead of a failed run forever.
 
+  **ADR 0003 moved crash-restart again, to the service.** Every packaged install is
+  privilege-separated now, and on a separated install the daemon is a Windows service rather than
+  anything Task Scheduler starts: `scripts/windows_privilege_separation.ps1`'s
+  `Install-DaemonService` configures `sc failure PrivacyFence reset= 86400 actions=
+  restart/5000/restart/10000/restart/30000`, and that is what answers a crashed daemon. The
+  `<TimeTrigger>` above is not dead — it still covers an install that has not been separated yet,
+  and it stays in the shipped template for that — but it cannot be what answers on a separated one,
+  because `enable` leaves the daemon's own task `Disabled`.
+  `test_windows_graphical_session_autostart.py`'s crash-restart test therefore kills the *service's*
+  process (`taskkill /f`, so its control handler never runs and the SCM sees a failure rather than
+  an orderly stop) and waits for a new service pid. The same module's first test asserts the task is
+  `Disabled` by then, which is what rules the `<TimeTrigger>` out as the thing that answered.
+
   **Measured on a real `windows-latest` runner, not assumed — including the three specific things this
   design could not have gotten right by reading documentation alone**: omitting `<Duration>` inside
   `<Repetition>` really does mean "repeat indefinitely" as Task Scheduler stores it (no `<Duration>` or

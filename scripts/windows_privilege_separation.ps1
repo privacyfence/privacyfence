@@ -1136,6 +1136,16 @@ function Invoke-Enable {
 
     Disable-DaemonTask
     Uninstall-DaemonService
+    # And the companion, for the same reason and with the same wait: a
+    # re-run `enable` (an upgrade, or decision 6's automatic one against an
+    # install whose previous enable half-finished) finds the companion this
+    # script's own Install-CompanionTask started still running, and a live
+    # companion holds the data directory Move-Data is about to move exactly
+    # as effectively as the daemon does. Install-CompanionTask registers and
+    # starts it again at the end of this same run, so there is nothing to put
+    # back -- the only thing removing it early costs is the seconds it takes
+    # to exit.
+    Uninstall-CompanionTask
 
     New-ServiceGroup
     if ($script:OwnerResolved) {
