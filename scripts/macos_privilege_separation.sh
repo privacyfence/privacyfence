@@ -566,9 +566,7 @@ install_services() {
   render_template "${TEMPLATE_DIR}/com.privacyfence.daemon.plist.tmpl" "$DAEMON_PLIST"
   note "installing ${COMPANION_PLIST}"
   render_template "${TEMPLATE_DIR}/com.privacyfence.companion.plist.tmpl" "$COMPANION_PLIST"
-  launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
-  launchctl bootstrap system "$DAEMON_PLIST"
-  verify_daemon_account
+  start_daemon_as_service_account
   # The plist itself is what makes the companion start at every future GUI
   # login -- /Library/LaunchAgents is per-machine and launchd bootstraps it
   # into each session as that session is created. The two calls below only
@@ -592,37 +590,90 @@ daemon_pid() {
     || true
 }
 
-verify_daemon_account() {
-  # The one thing `launchctl bootstrap` will not tell you: it exits 0 having
-  # started the job as root when the plist's UserName did not resolve
-  # (privacyfence/privacyfence#598 Failure A). Everything downstream then
-  # *says* the install is separated -- the marker, `status`, the approvals UI
-  # -- while the daemon holds exactly the privileges separation exists to drop.
-  # wait_for_service_account() above is the fix; this is the proof, because a
-  # guarantee that can fail silently is not one.
-  #
-  # Not fatal on "no pid yet": under this job's KeepAlive a daemon that starts
-  # and exits has no pid at any given instant, which is a real problem but a
-  # different one, and not this function's to diagnose (`status`, and the
-  # daemon's own log under ${SYSTEM_ROOT}/logs, are).
-  local deadline=$((SECONDS + DAEMON_PID_TIMEOUT)) pid="" owner=""
+daemon_owner() {
+  # The account the daemon is *actually* running as, "" if it has no live pid
+  # to read one off. Waits for a pid, because `launchctl bootstrap` returns
+  # before RunAtLoad has finished spawning the job.
+  local deadline=$((SECONDS + DAEMON_PID_TIMEOUT)) pid=""
   while [ "$SECONDS" -lt "$deadline" ]; do
     pid="$(daemon_pid)"
     [ -n "$pid" ] && break
     sleep 0.2
   done
-  if [ -z "$pid" ]; then
-    warn "${DAEMON_LABEL} did not report a running pid within ${DAEMON_PID_TIMEOUT}s -- check ${SYSTEM_ROOT}/logs and 'sudo $0 status'"
-    return 0
-  fi
-  owner="$(ps -o user= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true)"
-  # An empty owner means the process is already gone again, which is the same
-  # "not this function's problem" case as no pid at all.
-  if [ -z "$owner" ] || [ "$owner" = "$SERVICE_ACCOUNT" ]; then
-    return 0
-  fi
+  [ -n "$pid" ] || return 0
+  ps -o user= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true
+}
+
+daemon_account_diagnostics() {
+  # Printed only when the daemon has already come up as the wrong account, so
+  # the cost is nothing on a working install and the one report a reader
+  # actually needs is in the output they already have -- rather than in a CI
+  # artifact, or nowhere at all on a real Mac. Everything here answers the
+  # same question from a different side: what the plist asked for, what the
+  # directory says, and what launchd made of it.
+  echo "---- UserName/GroupName in ${DAEMON_PLIST} ----"
+  /usr/libexec/PlistBuddy -c 'Print :UserName' -c 'Print :GroupName' "$DAEMON_PLIST" 2>&1 || true
+  echo "---- id ${SERVICE_ACCOUNT} ----"
+  id "$SERVICE_ACCOUNT" 2>&1 || true
+  echo "---- dscl . -read /Users/${SERVICE_ACCOUNT} ----"
+  dscl . -read "/Users/${SERVICE_ACCOUNT}" UniqueID PrimaryGroupID NFSHomeDirectory UserShell 2>&1 || true
+  echo "---- dscacheutil -q user -a name ${SERVICE_ACCOUNT} ----"
+  dscacheutil -q user -a name "$SERVICE_ACCOUNT" 2>&1 || true
+  echo "---- launchctl print system/${DAEMON_LABEL} (head) ----"
+  launchctl print "system/${DAEMON_LABEL}" 2>&1 | head -40 || true
+}
+
+start_daemon_as_service_account() {
+  # The one thing `launchctl bootstrap` will not tell you: it exits 0 having
+  # started the job as root when the plist's UserName did not resolve
+  # (privacyfence/privacyfence#598 Failure A). Everything downstream then
+  # *says* the install is separated -- the marker, `status`, the approvals UI
+  # -- while the daemon holds exactly the privileges separation exists to
+  # drop. And it is not only a reporting problem: a root-owned daemon on a
+  # separated install is refused by privilege_separation.check_runtime_
+  # identity() on every start, so launchd's KeepAlive relaunches it forever
+  # and no control socket ever appears -- #598's Failure B, same cause.
+  #
+  # wait_for_service_account() above removes the obvious reason for that
+  # lookup to fail, and is not sufficient: this has been observed with
+  # `id -u ${SERVICE_ACCOUNT}` already answering and `chown -R` already
+  # having used the same name. launchd resolves UserName in its own process,
+  # through its own cache, and nothing a script does from outside makes that
+  # resolution observable *before* the job is started.
+  #
+  # So the guarantee is established by observation rather than by assumption:
+  # start the job, read back which account it actually came up as, and if it
+  # is the wrong one, tear it down, flush the lookup caches and start it
+  # again. Only after every attempt has failed the same way is this fatal --
+  # and it is fatal, rather than leaving a daemon running with every
+  # privilege the install claims it dropped.
+  local attempt owner
+  for attempt in 1 2 3; do
+    launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
+    launchctl bootstrap system "$DAEMON_PLIST"
+    owner="$(daemon_owner)"
+    # No pid to read: under this job's KeepAlive a daemon that starts and
+    # exits has none at any given instant. A real problem, but a different
+    # one, and not this function's to diagnose (`status`, and the daemon's
+    # own log under ${SYSTEM_ROOT}/logs, are) -- nothing here can be improved
+    # by another bootstrap.
+    if [ -z "$owner" ]; then
+      warn "${DAEMON_LABEL} did not report a running pid within ${DAEMON_PID_TIMEOUT}s -- check ${SYSTEM_ROOT}/logs and 'sudo $0 status'"
+      return 0
+    fi
+    if [ "$owner" = "$SERVICE_ACCOUNT" ]; then
+      [ "$attempt" = "1" ] || note "${DAEMON_LABEL} is running as ${SERVICE_ACCOUNT} (attempt ${attempt})"
+      return 0
+    fi
+    warn "${DAEMON_LABEL} started as '${owner}', not ${SERVICE_ACCOUNT} -- launchd did not resolve the plist's UserName (attempt ${attempt}); flushing the lookup caches and starting it again"
+    daemon_account_diagnostics >&2
+    dscacheutil -flushcache 2>/dev/null || true
+    dsmemberutil flushcache 2>/dev/null || true
+    id -u "$SERVICE_ACCOUNT" >/dev/null 2>&1 || true
+    sleep 1
+  done
   launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
-  die "${DAEMON_LABEL} started as '${owner}', not ${SERVICE_ACCOUNT} -- launchd does that when the plist's UserName does not resolve. The daemon has been stopped rather than left running unseparated while everything else reports otherwise. Check 'dscl . -read /Users/${SERVICE_ACCOUNT}' and 'id ${SERVICE_ACCOUNT}', then re-run this command."
+  die "${DAEMON_LABEL} kept starting as '${owner}' instead of ${SERVICE_ACCOUNT} -- launchd is not resolving the UserName in ${DAEMON_PLIST}. The daemon has been stopped rather than left running with every privilege this install reports it dropped. Check 'dscl . -read /Users/${SERVICE_ACCOUNT}' and 'id ${SERVICE_ACCOUNT}', then re-run this command."
 }
 
 uninstall_services() {
