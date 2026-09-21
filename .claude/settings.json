@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(pytest:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(ruff check:*)",
+      "Bash(ruff format --check:*)",
+      "Bash(mypy:*)",
+      "Bash(bandit:*)",
+      "Bash(python3 scripts/mypy_strict_modules.py:*)",
+      "Bash(python3 scripts/check_coverage_floor.py:*)",
+      "Bash(python3 scripts/changelog_section.py:*)",
+      "Bash(python3 scripts/r2_release.py channel:*)",
+      "Bash(python3 scripts/r2_release.py check-tag:*)",
+      "Bash(python3 scripts/generate_always_allow_reference.py:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm ci:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git tag --list:*)",
+      "Bash(git describe:*)",
+      "Bash(git fetch:*)",
+      "Bash(git add:*)",
+      "mcp__github__actions_list",
+      "mcp__github__actions_get",
+      "mcp__github__get_job_logs",
+      "mcp__github__get_check_run",
+      "mcp__github__pull_request_read",
+      "mcp__github__list_pull_requests",
+      "mcp__github__list_commits",
+      "mcp__github__get_file_contents"
+    ]
+  }
+}
