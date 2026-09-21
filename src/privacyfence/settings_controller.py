@@ -1802,13 +1802,14 @@ class SettingsController:
             connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
             connector = connectors_of_rule[0] if connectors_of_rule else ""
             rule_usage = usage.get(rule.id) or {}
+            resolved_value = self._resolved_rule_value(rule)
             rule_rows.append({
                 "id": rule.id,
-                "sentence": policy_describe.rule_sentence(rule),
+                "sentence": policy_describe.rule_sentence(rule, value_display=resolved_value),
                 "connector": connector,
                 "connector_label": policy_describe.connector_label(connector) if connector else "",
                 "scope_type": policy_describe.scope_type_of(rule),
-                "value": self._resolved_rule_value(rule),
+                "value": resolved_value,
                 # Raw (unresolved) value, for the page's right-click-to-copy affordance -- the
                 # resolved "value" field above may show a friendly name instead of the id/key a
                 # user would actually want to paste elsewhere.

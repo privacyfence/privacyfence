@@ -1798,6 +1798,17 @@ class TestResolvedRuleValue:
         state = controller.add_policy_rule("gmail.sender_domain", "acme.com", ["read"])
         assert state["auto_accept"]["rules"][0]["value"] == "acme.com"
 
+    def test_sentence_uses_the_resolved_value_not_the_raw_id(self, controller):
+        """Issue #588: the sentence rendered for the Auto-accept page must agree with the
+        resolved ``value`` field -- previously ``rule_sentence`` always spelled out the raw id
+        even though a resolved display name was computed right next to it and discarded."""
+        rt = sc.RULE_NAME_TO_RESOURCE_TYPE["approved_sandbox_folder"]
+        controller._resolver._disk[resource_names._cache_key(rt, "F1")] = "Groceries"
+        state = controller.add_policy_rule("drive.folder", "F1", ["update"])
+        row = state["auto_accept"]["rules"][0]
+        assert "Groceries" in row["sentence"]
+        assert "F1" not in row["sentence"]
+
 
 class TestPrivacyFilter:
     def test_set_default_policy(self, controller):

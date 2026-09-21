@@ -118,18 +118,24 @@ def _value_phrase(value: object) -> str:
     return str(value)
 
 
-def rule_sentence(rule: PolicyRule) -> str:
+def rule_sentence(rule: PolicyRule, value_display: str | None = None) -> str:
     """One rule as the sentence it is: ``Drive - folder 1CdeF: allow read, update, format``.
 
     An unconditional scope says so rather than hiding behind a rule name (D4), and a rule's
     conditions are appended as the narrowing they are.
+
+    ``value_display``, when given, replaces the raw ``rule.value`` phrase -- a caller that already
+    resolved the id(s) to a friendly name (Settings' Auto-accept page) passes it through here so
+    the sentence and the resolved value never disagree; this module has no client of its own to do
+    that resolution itself, so every other caller leaves it unset and gets the raw id, as before.
     """
     scope_type = scope_type_of(rule)
     connectors = sorted({propose.connector_of_operation(operation) for operation in rule.operations})
     connector = connector_label(connectors[0]) if connectors else ""
     if scope_type:
         noun = scope_type_label(scope_type)
-        subject = f"{noun} {_value_phrase(rule.value)}" if rule.value else noun
+        phrase = value_display if value_display else _value_phrase(rule.value)
+        subject = f"{noun} {phrase}" if rule.value else noun
     else:
         subject = rule.predicate
     verbs = ", ".join(verb.value for verb in rule_verbs(rule)) or "nothing"
