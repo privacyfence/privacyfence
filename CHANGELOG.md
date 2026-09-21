@@ -26,8 +26,10 @@ HOW TO USE THIS FILE
 4. A version that was tagged but never published (its release build failed before anything
    reached a GitHub Release or PyPI) gets no section of its own either. Fold its entries into the
    version that does ship, note the supersession at the top of that section, and point the shipped
-   version's compare link at the last version that really shipped -- 4.1.4 does this for 4.1.3.
-   The tag stays in git; the changelog describes what people can actually install.
+   version's compare link at the last version that really shipped -- 4.1.5 does this for both 4.1.4
+   and 4.1.3, chained: each failed tag folds into whichever section eventually ships, however many
+   attempts that takes. The tag stays in git; the changelog describes what people can actually
+   install.
 
 5. Entries are ordered by version, NOT by date. The 3.4.x maintenance line and the 4.0 line ran
    in parallel, so 3.4.5-3.4.7 (2026-09-02/03) were cut after v4.0.0-alpha1..alpha4
@@ -41,12 +43,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [4.1.4] — 2026-09-21
+## [4.1.5] — 2026-09-21
 
-*Supersedes 4.1.3, which was tagged but never published — its release build stopped before any
-artifact reached a GitHub Release or PyPI, so no 4.1.3 was ever installable. Everything that
-version would have carried is folded in below: from the outside this is a single 4.1.2 → 4.1.4
-change.*
+*Supersedes 4.1.4 and 4.1.3, neither of which was ever published. 4.1.3's release build stopped
+before any artifact reached a GitHub Release or PyPI; 4.1.4's `build` job then failed at its own
+`test_pkg_payload_is_not_relocatable` packaged-artifact smoke test — a false positive from a
+`pkgbuild` behavior change on the runner image, not a real defect in the built `.pkg` — which
+blocked that macOS artifact's own upload and, through `publish-pypi.yml`'s `wait_for_build` gate,
+the sdist/wheel publish too. Neither tag ever reached anyone. Everything both versions would have
+carried is folded in below: from the outside this is a single 4.1.2 → 4.1.5 change.*
 
 ### Fixed
 
@@ -2191,8 +2196,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.1.4...HEAD
-[4.1.4]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.4
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...HEAD
+[4.1.5]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.5
 [4.1.2]: https://github.com/privacyfence/privacyfence/compare/v4.0.0...v4.1.2
 [4.0.0]: https://github.com/privacyfence/privacyfence/compare/v3.4.7...v4.0.0
 [3.4.7]: https://github.com/privacyfence/privacyfence/compare/v3.4.6...v3.4.7
