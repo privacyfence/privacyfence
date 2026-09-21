@@ -55,6 +55,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   data somewhere an unseparated daemon never looks. `disable` now waits for the daemon to actually
   exit, and ends the companion app (which `enable` starts and deleting its task does not stop)
   before moving anything.
+- **macOS privilege separation no longer risks running the daemon as `root`.** `launchctl
+  bootstrap` starts a LaunchDaemon as root — silently, reporting success — when the account its
+  plist names does not resolve for it, and nothing a script can do from outside makes that
+  resolution observable beforehand. The daemon then refuses to run as the wrong account on every
+  start (it would otherwise seed a fresh default policy over your real one), so the service
+  manager restarted it forever and nothing that talks to PrivacyFence could reach it, while the
+  install reported itself separated throughout. `enable` now reads back which account the daemon
+  actually came up as and restarts it until that is the service account, and if it never is, stops
+  the daemon and says so instead of leaving it running with every privilege the install reports it
+  dropped.
 - **A Windows install that repairs its own privilege separation at startup now says truthfully
   whether it worked.** On a packaged Windows build that finds itself unseparated, the daemon
   elevates the provisioning script through UAC before deciding whether to serve (ADR 0003
