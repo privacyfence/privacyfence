@@ -214,7 +214,9 @@ class TestMain:
         assert exit_code == 2
         assert "GH_TOKEN" in capsys.readouterr().err
 
-    def test_always_exits_zero_even_with_warnings(self, monkeypatch, capsys):
+    def test_exits_zero_with_warnings_when_no_channel_given(self, monkeypatch, capsys):
+        # No --channel at all (the flag's own default, "") -- same as this script's behavior
+        # before privacyfence/privacyfence#374's option 3 landed.
         monkeypatch.setenv("GH_TOKEN", "test-token")
         monkeypatch.setattr(
             check_graphical_session_coverage,
@@ -229,12 +231,58 @@ class TestMain:
         assert exit_code == 0
         assert "::warning::something is stale" in capsys.readouterr().out
 
+    def test_exits_zero_with_warnings_on_a_pre_release_channel(self, monkeypatch, capsys):
+        # Option 3's whole point: pre-release tags stay ungated -- a flake there is cheap.
+        monkeypatch.setenv("GH_TOKEN", "test-token")
+        monkeypatch.setattr(
+            check_graphical_session_coverage,
+            "check_all",
+            lambda repo, commit, token: ["something is stale"],
+        )
+
+        exit_code = check_graphical_session_coverage.main(
+            ["--repo", "privacyfence/privacyfence", "--commit", "deadbeef", "--channel", "alpha"]
+        )
+
+        assert exit_code == 0
+        assert "::warning::something is stale" in capsys.readouterr().out
+
+    def test_fails_with_warnings_on_the_stable_channel(self, monkeypatch, capsys):
+        # Option 3: a stable tag is the one case a coverage gap actually blocks the release.
+        monkeypatch.setenv("GH_TOKEN", "test-token")
+        monkeypatch.setattr(
+            check_graphical_session_coverage,
+            "check_all",
+            lambda repo, commit, token: ["something is stale"],
+        )
+
+        exit_code = check_graphical_session_coverage.main(
+            ["--repo", "privacyfence/privacyfence", "--commit", "deadbeef", "--channel", "stable"]
+        )
+
+        assert exit_code == 1
+        out = capsys.readouterr().out
+        assert "::warning::something is stale" in out
+        assert "::error::" in out
+        assert "#374" in out
+
     def test_prints_a_clean_summary_with_no_warnings(self, monkeypatch, capsys):
         monkeypatch.setenv("GH_TOKEN", "test-token")
         monkeypatch.setattr(check_graphical_session_coverage, "check_all", lambda repo, commit, token: [])
 
         exit_code = check_graphical_session_coverage.main(
             ["--repo", "privacyfence/privacyfence", "--commit", "deadbeef"]
+        )
+
+        assert exit_code == 0
+        assert "is green and reachable" in capsys.readouterr().out
+
+    def test_stable_channel_exits_zero_when_nothing_is_stale(self, monkeypatch, capsys):
+        monkeypatch.setenv("GH_TOKEN", "test-token")
+        monkeypatch.setattr(check_graphical_session_coverage, "check_all", lambda repo, commit, token: [])
+
+        exit_code = check_graphical_session_coverage.main(
+            ["--repo", "privacyfence/privacyfence", "--commit", "deadbeef", "--channel", "stable"]
         )
 
         assert exit_code == 0
