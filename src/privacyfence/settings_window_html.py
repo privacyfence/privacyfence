@@ -811,7 +811,7 @@ _JS = r"""
       if (connFilter.length && connFilter.indexOf(r.connector) === -1) return false;
       if (famFilter.length && !r.verbs.some(function (v) { return famFilter.indexOf(v.family) !== -1; })) return false;
       if (!search) return true;
-      var haystack = (r.sentence + ' ' + r.connector + ' ' + r.covered_tools.join(' ')).toLowerCase();
+      var haystack = (r.sentence + ' ' + r.connector + ' ' + r.covered_tools.join(' ') + ' ' + r.value_ids.join(' ')).toLowerCase();
       return haystack.indexOf(search) !== -1;
     });
 
@@ -822,7 +822,8 @@ _JS = r"""
     }
     rows.forEach(function (r) {
       var isExpanded = !!expanded[r.id];
-      var copyAttr = r.value_ids.length ? ' data-copy-id="' + esc(r.value_ids.join(', ')) + '" title="Right-click to copy"' : '';
+      var copyAttr = r.value_ids.length ? ' data-copy-id="' + esc(r.value_ids.join(', ')) +
+        '" title="' + esc(r.value_ids.join(', ')) + ' -- right-click to copy"' : '';
       html += '<div class="pf-aa-row"' + copyAttr + '>';
       html += '<div class="pf-aa-row-main"><div class="pf-aa-sentence">' + esc(r.sentence) + '</div>';
       html += '<div class="pf-aa-verbs">' + verbChipsHtml(r.verbs) + '</div></div>';
