@@ -936,10 +936,58 @@ function Start-DaemonService {
     Invoke-Sc @('start', $ServiceName) | Out-Null
 }
 
+function Wait-ProcessExit {
+    <#
+      Waits for one process id to leave the process table, and says whether it
+      did. Not "is the service Stopped": a service reports itself stopped from
+      inside its own control handler, while the files it had open stay open
+      until the kernel tears the process down. Only the process actually being
+      gone releases them, and this whole helper exists because something has to
+      be moved out from under it immediately afterwards.
+    #>
+    param([int] $ProcessId, [int] $TimeoutSeconds = 60)
+
+    if ($ProcessId -le 0) { return $true }
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
+function Wait-ProcessImageGone {
+    <# The same wait, for a process this script did not start and has no pid
+       for -- it only asked Task Scheduler to end the task running it. #>
+    param([string] $Name, [int] $TimeoutSeconds = 30)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Get-Process -Name $Name -ErrorAction SilentlyContinue)) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
 function Uninstall-DaemonService {
     if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { return }
     Write-Note "stopping and removing the $ServiceName service"
+    # Take the pid before asking, because `sc delete` below removes the record
+    # it comes from. `sc.exe stop` only *asks*: it returns as soon as the SCM
+    # has accepted the request, with the service still STOP_PENDING and the
+    # daemon still holding every file it had open under $SystemRoot -- which
+    # Invoke-Disable moves, whole, a few lines later. Returning from here early
+    # is therefore a sharing violation waiting to happen, and one that lands
+    # *after* the marker, the service and the companion task are already gone,
+    # leaving an install that is neither separated nor whole. Observed as
+    # exactly that: `Move-Item ... settings.yaml : The process cannot access
+    # the file because it is being used by another process`, disable exiting 1
+    # with the data still under %ProgramData%.
+    $servicePid = (Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue).ProcessId
     Invoke-Sc @('stop', $ServiceName) -IgnoreFailure | Out-Null
+    if (-not (Wait-ProcessExit -ProcessId $servicePid -TimeoutSeconds 60)) {
+        Write-Warn "the $ServiceName service (pid $servicePid) has not exited after 60s -- continuing, but a file it still holds open may make a later step fail"
+    }
     Invoke-Sc @('delete', $ServiceName) -IgnoreFailure | Out-Null
 }
 
@@ -996,8 +1044,22 @@ function Install-CompanionTask {
 function Uninstall-CompanionTask {
     if (-not (Get-ScheduledTask -TaskName $CompanionTaskName -ErrorAction SilentlyContinue)) { return }
     Write-Note "removing the '$CompanionTaskName' scheduled task"
+    # End the instance before deleting the task, for the same reason
+    # Uninstall-DaemonService waits above: deleting a task does not end what it
+    # already started, and `enable` starts a companion itself
+    # (Install-CompanionTask below). A companion left running holds the
+    # separated data directory open just as effectively as the daemon does.
+    # `/end` rather than taskkill -- the companion is Task Scheduler's process
+    # to end, and asking through the same mechanism that started it leaves no
+    # ambiguity about which PrivacyFenceCompanion is being stopped.
+    Invoke-Native -FilePath 'schtasks.exe' `
+        -Arguments @('/end', '/tn', $CompanionTaskName) -IgnoreFailure | Out-Null
     Invoke-Native -FilePath 'schtasks.exe' `
         -Arguments @('/delete', '/tn', $CompanionTaskName, '/f') -IgnoreFailure | Out-Null
+    $companionProcess = [System.IO.Path]::GetFileNameWithoutExtension($DefaultCompanionExecName)
+    if (-not (Wait-ProcessImageGone -Name $companionProcess -TimeoutSeconds 30)) {
+        Write-Warn "$DefaultCompanionExecName is still running after 30s -- continuing, but a file it still holds open may make a later step fail"
+    }
 }
 
 # ── Subcommands ──────────────────────────────────────────────────────────────

@@ -71,11 +71,22 @@ class TestWhatTheFileGivesAway:
 
     def test_the_token_and_its_claims_appear_nowhere_in_the_file(self, tmp_path):
         store = _store(tmp_path)
-        _put(store, email="ana@example.com", display_name="Ana")
+        # The display name carries a space on purpose, and the assertion below
+        # uses it in full. This checks containment against the whole file --
+        # the sealed ciphertext included, which is the point: a leak would be
+        # just as real inside that field as beside it. But the ciphertext is
+        # base64, drawn from [A-Za-z0-9+/=], so a sentinel built only from
+        # those characters can turn up in it by chance. A three-character one
+        # does: `display_name="Ana"` collided in 42 of 40,000 sealed files
+        # here (0.1%, ~1 CI run in 1140), and took a release-blocking PR red
+        # once. Any character outside that alphabet makes a coincidental match
+        # impossible rather than merely unlikely, which is why the token
+        # ("-") and email ("@", ".") sentinels have never been affected.
+        _put(store, email="ana@example.com", display_name="Ana Example")
         raw = (tmp_path / "oauth_refresh.json").read_text(encoding="utf-8")
         assert TOKEN not in raw
         assert "ana@example.com" not in raw
-        assert "Ana" not in raw
+        assert "Ana Example" not in raw
         assert "claude" not in raw
 
     def test_only_the_principal_id_and_chain_expiry_are_in_the_clear(self, tmp_path):
