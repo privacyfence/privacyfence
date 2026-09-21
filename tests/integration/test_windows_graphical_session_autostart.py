@@ -31,30 +31,64 @@ This module does both:
    asserted against the shipped template on every PR, on any OS, by
    ``tests/unit/test_windows_autostart_task_template.py``; both call
    ``tests/windows_task_contract.py``.
-2. **Task Scheduler really starts the daemon.** The service is asked to run
-   the installed task; the process it launches is confirmed to be the
-   installed exe, running as the logged-on user (``Win32_Process``'s
-   ``GetOwner``, not assumed), serving the Phase 3 daemon/MCP/approval/audit
-   contract, and ending on "Quit PrivacyFence". This is also what found the
-   defect that had kept Windows autostart from ever working: started with no
-   console, the windowed build had no ``sys.stdout`` for uvicorn's log
-   formatter to probe, and the daemon exited 1 before binding its port (see
+2. **Task Scheduler really starts the packaged daemon.** The service is
+   asked to run the installed task; the process it launches is confirmed to
+   be the installed exe, running as the logged-on user (``Win32_Process``'s
+   ``GetOwner``, not assumed). This is what found the defect that had kept
+   Windows autostart from ever working: started with no console, the
+   windowed build had no ``sys.stdout`` for uvicorn's log formatter to
+   probe, and the daemon exited 1 before binding its port (see
    ``privacyfence/std_streams.py``). Every other automated start of this app
    in this repo hands it a redirected stdout, so nothing else could have.
-3. **Real crash-restart** (Phase 13 item 4). The second test kills the
-   Scheduler-started daemon outright and asserts that a *new* pid turns up,
-   still running as the same signed-in account, with no further action from
-   this test. This is the positive assertion a first measurement pass could
-   not make: killing the action showed ``<RestartOnFailure>`` does nothing
-   for a crashed daemon at all (Task Scheduler logs the dead action as a
-   *successfully completed* task, so the setting never engages), which is
-   why real crash-restart is a repeating ``<TimeTrigger>`` instead -- see
-   ``installer/privacyfence-task.xml.tmpl``'s own header comment for that
-   design and ``platform-support.md``'s "Known open items" for the
-   measurement that found ``<RestartOnFailure>`` did not work. This test is
-   the direct successor of, and replaces, the negative assertion this
-   module used to carry (``test_restart_on_failure_does_not_cover_a_
-   crashed_daemon``, preserved in git history) once that measurement made
+3. **...and what that daemon does next is separate this install, hand over,
+   and stop** (ADR 0003 decision 6). A packaged daemon that finds itself
+   unseparated does not serve: it elevates ``enable`` through UAC, and on
+   these runners that succeeds. Seconds after Task Scheduler starts it, the
+   data directory has moved to ``%ProgramData%``, a ``PrivacyFence`` service
+   is running the daemon under ``NT SERVICE\\PrivacyFence``, the companion
+   task is registered, the task that started all this is ``Disabled``, and
+   the Scheduler-started process itself has exited 0
+   (``privilege_separation.SeparationHandover``). So that is what the first
+   test asserts, end to end, against the real service.
+
+   It used to assert the other thing -- a control pipe under
+   ``%LOCALAPPDATA%``, and a full daemon/MCP/approval/audit round trip
+   against a daemon living in the signed-in user's own session -- and that
+   is why this module was red on every ``main`` push from #555 until this
+   was written: the arrangement it was asserting is one decision 6 retired.
+   ``test_windows_packaged_smoke.py`` gave up its own unseparated scenario
+   for the same reason and says so at its own call site;
+   ``test_linux_graphical_session_autostart.py`` took the same re-scoping in
+   the other direction (no polkit agent on that runner, so the *refusal* is
+   what is observable there rather than the repair -- see #560).
+
+   The separated install's full contract -- ACLs, service account, group
+   membership, the handoff directory, the marker's own fields -- stays in
+   ``test_windows_packaged_smoke.py``'s
+   ``test_windows_install_separates_with_no_manual_enable`` and is
+   deliberately not repeated here. What is here is the part only this module
+   can answer: that the thing which separated the install was *Task
+   Scheduler starting the daemon at sign-in*, not Setup.
+4. **Real crash-restart** (Phase 13 item 4). The second test kills the
+   running daemon outright and asserts that a *new* pid turns up, with no
+   further action from this test. This is the positive assertion a first
+   measurement pass could not make: killing the action showed
+   ``<RestartOnFailure>`` does nothing for a crashed daemon at all (Task
+   Scheduler logs the dead action as a *successfully completed* task, so the
+   setting never engages) -- see ``platform-support.md``'s "Known open
+   items" for that measurement, and
+   ``installer/privacyfence-task.xml.tmpl``'s own header comment for the
+   repeating ``<TimeTrigger>`` that replaced it. It is the *service* that
+   answers here, though, not either of those: crash restart moved with the
+   daemon, and ``sc failure PrivacyFence actions= restart/5000/...``
+   (``windows_privilege_separation.ps1``'s ``Install-DaemonService``) is the
+   mechanism on a separated install. The ``<TimeTrigger>`` cannot be what
+   answers: its task is ``Disabled`` by then, which the first test asserts
+   directly. This test is the successor of, and replaces, the negative
+   assertion this module used to carry
+   (``test_restart_on_failure_does_not_cover_a_crashed_daemon``, preserved
+   in git history).
+
    the positive assertion provable.
 
 **The one deliberate substitution, and the history behind it.** Task
@@ -129,25 +163,29 @@ It is created administrators-only before Setup is pointed at it
 separate itself and ``enable`` refuses an install directory the signed-in
 user can rewrite -- see that helper's own docstring.
 
-**And the separation is then undone, every time.** This module's subject is
-the *daemon's* autostart task: a task that starts ``privacyfence-app.exe`` in
-the signed-in user's own session. A separated install has no such thing --
-``enable`` disables that task (the daemon is a service by then) and
-``check_runtime_identity()`` would refuse the process even if something
-started it. So ``_disable_installer_enabled_privilege_separation()`` runs
-right after the install in the fixture below, the same way
+**And the installer's own separation is undone first, every time.** ADR
+0003 decision 4 has Setup separate the install itself, which leaves the
+daemon's autostart task ``Disabled`` -- nothing for Task Scheduler to start,
+and so nothing for this module to watch it start. So
+``_disable_installer_enabled_privilege_separation()`` runs right after the
+install in the fixture below, the same way
 ``test_deb_packaged_lifecycle.py`` has undone the ``.deb``'s own
-``enable --auto`` since #428 D1, and this module goes on testing what it has
-always tested. The separated-by-default install is asserted in
+``enable --auto`` since #428 D1. That is a *starting* state, not the
+subject: what each test then watches is the daemon putting the separation
+back, which is decision 6's whole point and the thing only an autostart run
+can exercise.
+
+The installer's own separation -- the thing being undone -- is asserted in
 ``test_windows_packaged_smoke.py``'s own
-``test_windows_install_separates_with_no_manual_enable`` -- against the
-installer's own default directory, not this module's ``/DIR=``-overridden
-one. Whether the two are supposed to behave the same is exactly what
-privacyfence/privacyfence#561 is still open on: this module's own install has,
-at least once, come out of that same installer-run ``enable`` with no marker
-to show for it despite Setup reporting success, so the disable call below
-tolerates either starting state (``require_separated=False``) rather than
-assuming this install got separated.
+``test_windows_install_separates_with_no_manual_enable``, against the
+installer's own default directory rather than this module's
+``/DIR=``-overridden one. Whether the two are supposed to behave the same is
+exactly what privacyfence/privacyfence#561 is still open on: this module's own
+install has, at least once, come out of that same installer-run ``enable``
+with no marker to show for it despite Setup reporting success, so the
+disable call below tolerates either starting state
+(``require_separated=False``) rather than assuming this install got
+separated.
 
 Skipped entirely unless running on real Windows, elevated (installing
 machine-wide and managing a Task Scheduler task needs it), with a just-built
@@ -166,7 +204,6 @@ module drives -- renaming them would break the workflow's own run history and
 """
 from __future__ import annotations
 
-import asyncio
 import base64
 import getpass
 import os
@@ -174,10 +211,8 @@ import platform
 import shutil
 import subprocess
 import time
-from collections.abc import Callable
 from pathlib import Path
 
-import httpx
 import pytest
 
 pytest.importorskip("mcp", reason="mcp (Python MCP client, test-only) not installed -- pip install -e '.[test]'")
@@ -192,6 +227,7 @@ from tests.diagnostics import (  # noqa: E402
 )
 from privacyfence.privilege_separation import (  # noqa: E402
     WINDOWS_COMPANION_TASK_NAME,
+    WINDOWS_SERVICE_ACCOUNT_NAME,
     WINDOWS_SERVICE_NAME,
     WINDOWS_SYSTEM_ROOT,
 )
@@ -199,22 +235,21 @@ from tests.integration.test_windows_packaged_smoke import (  # noqa: E402
     ALIAS_EXE_NAME,
     COMPANION_EXE_NAME,
     MARKER_PATH,
-    MCP_TOKEN_FILE_NAME,
+    SEPARATED_SETTINGS_PATH,
     TASK_NAME,
     _admin_only_writable_dir,
-    _bootstrap_session,
+    _assert_separated_service_serves_mcp,
     _built_installers,
     _data_dir,
     _disable_installer_enabled_privilege_separation,
     _free_port,
     _prepare_home,
-    _propose_trusted_sender_rule,
-    _resolve_pending_card,
-    _quit,
     _run_installer,
+    _service_config,
     _task_exists,
+    _task_state,
     _tear_down_separation,
-    _wait_until_connectable,
+    _wait_for_separated_service,
 )
 from tests.windows_task_contract import assert_task_xml_matches_autostart_contract  # noqa: E402
 
@@ -397,12 +432,23 @@ def _daemon_log_tail(home: Path, *, max_chars: int = 4000) -> str:
     unlike ``test_windows_packaged_smoke.py`` (which captures the daemon's
     stdout to a file it can quote on failure) this file is the *only* place
     a daemon that died on startup says why. ``Last Result: 1`` from
-    ``schtasks /query`` says only that it did."""
-    log_path = _data_dir(home) / "logs" / "privacyfence.log"
-    if not log_path.exists():
-        return f"({log_path} missing -- the daemon never got as far as setting up logging)"
-    text = log_path.read_text(errors="replace")
-    return text[-max_chars:] if text else "(empty)"
+    ``schtasks /query`` says only that it did.
+
+    Both roots, newest last: decision 6's automatic ``enable`` *moves* that
+    file from ``%LOCALAPPDATA%`` to ``%ProgramData%`` mid-run, so which of
+    the two has the interesting lines depends on how far the thing being
+    diagnosed got -- and a failure that has to be told apart from a
+    successful separation needs whichever one exists."""
+    parts = []
+    for log_path in (_data_dir(home) / "logs" / "privacyfence.log",
+                     WINDOWS_SYSTEM_ROOT / "logs" / "privacyfence.log"):
+        if not log_path.exists():
+            continue
+        text = log_path.read_text(errors="replace")
+        parts.append(f"-- {log_path} --\n{text[-max_chars:] if text else '(empty)'}")
+    if not parts:
+        return "(no privacyfence.log under either the per-user or the separated root)"
+    return "\n".join(parts)
 
 
 def _install_log_tail(log_path: Path, *, max_chars: int = 8000) -> str:
@@ -510,35 +556,87 @@ def _wait_until_alias_process_gone(exe_path: str, *, timeout: float) -> bool:
     return False
 
 
-def _wait_for_path_content(path: Path, *, timeout: float) -> str:
+def _wait_for_marker(*, timeout: float) -> bool:
+    """Whether ``privilege-separation.json`` turns up under ``%ProgramData%``
+    within ``timeout``.
+
+    This is the module's central wait now, and it is deliberately the
+    *marker* rather than the service, the companion task or the moved data
+    directory: ``Write-Marker`` is the second-to-last thing ``enable`` does
+    and the only one of those four that no half-finished run leaves behind
+    (see ``windows_privilege_separation.ps1``'s ``Undo-PartialEnable``,
+    which removes it first precisely so a rolled-back enable cannot be
+    mistaken for a finished one). So its presence means "this install got
+    separated", not "something started separating it".
+
+    Generous by default at the call sites: decision 6's automatic ``enable``
+    elevates through UAC, creates a virtual service account, rewrites the
+    ACLs of a whole directory tree and moves the data into it, on a runner
+    with no warm caches.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if path.exists():
-            content = path.read_text(encoding="utf-8").strip()
-            if content:
-                return content
-        time.sleep(0.2)
-    raise AssertionError(f"{path} never appeared/populated within {timeout}s")
+        if MARKER_PATH.exists():
+            return True
+        time.sleep(0.5)
+    return MARKER_PATH.exists()
 
 
-def _wait_for_pipe(pipe_name: str, *, timeout: float, context: Callable[[], str] | None = None) -> None:
-    """Like ``_wait_for_path_content()`` but for the control channel's named
-    pipe -- not a filesystem object, so there's no path to poll or content
-    to read; ``windows_pipe_exists()`` (open-then-close) is the closest
-    equivalent liveness check.
+def _service_pid() -> str | None:
+    """The ``PrivacyFence`` service's current process id, or None when it is
+    not running.
 
-    ``context`` is called only on failure, and only then, because what it
-    collects is expensive and meaningless while the wait is still succeeding
-    -- see ``_autostart_failure_context()`` for what a missing pipe can mean
-    now that ADR 0003 decision 6 gives a Scheduler-started packaged daemon
-    more than one way to leave none behind."""
+    ``Win32_Service``'s own ``ProcessId`` rather than a ``tasklist`` match on
+    the image name: the point of the crash-restart test is that a *different*
+    process is now serving, and the only identity that answers that is the
+    one the SCM itself hands out. A stopped service reports 0, which this
+    reports as None.
+    """
+    result = subprocess.run(
+        [
+            "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+            f"(Get-CimInstance -ClassName Win32_Service -Filter \"Name='{WINDOWS_SERVICE_NAME}'\")"
+            ".ProcessId",
+        ],
+        capture_output=True, text=True, timeout=60,
+    )
+    pid = result.stdout.strip()
+    return pid if pid and pid != "0" else None
+
+
+def _wait_for_service_pid(*, different_from: str, timeout: float) -> str | None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if windows_pipe_exists(pipe_name):
-            return
-        time.sleep(0.2)
-    detail = f"\n{context()}" if context is not None else ""
-    raise AssertionError(f"named pipe {pipe_name} never appeared within {timeout}s{detail}")
+        pid = _service_pid()
+        if pid is not None and pid != different_from:
+            return pid
+        time.sleep(1.0)
+    return None
+
+
+def _service_failure_config() -> str:
+    """``sc qfailure`` -- what the SCM will actually do about a crashed
+    daemon, quoted only when it did not do it."""
+    result = subprocess.run(
+        ["sc.exe", "qfailure", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
+    )
+    return f"{result.stdout}{result.stderr}"
+
+
+def _task_last_result() -> str | None:
+    """``schtasks /query /v``'s "Last Result" for the daemon task -- the exit
+    code Task Scheduler recorded for the action it ran."""
+    result = subprocess.run(
+        ["schtasks", "/query", "/tn", TASK_NAME, "/v", "/fo", "list"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Last Result:"):
+            return stripped.split(":", 1)[1].strip()
+    return None
 
 
 def _kill_alias_processes() -> None:
@@ -563,24 +661,27 @@ def _kill_alias_processes() -> None:
 
 
 def _separation_state_summary() -> str:
-    """Whether the install is still the unseparated one this module made.
+    """How far decision 6 got, and how it left the install.
 
-    ADR 0003 decision 6 gives a Scheduler-started *packaged* daemon two quite
-    different ways to leave no control pipe behind at the per-user path this
-    module polls, and the pipe timeout alone cannot tell them apart:
+    A Scheduler-started *packaged* daemon has exactly two outcomes, and the
+    one thing both look like from outside is "no daemon serving where you
+    expected one":
 
-    * it refused to serve -- ``enforce_separation()`` found the install
-      unseparated, could not fix it, and raised rather than opening /mcp or
-      the approvals UI; or
-    * it fixed the install instead. ``enforce_separation()`` attempts an
-      elevated ``enable`` first, and a successful one moves the daemon's data
-      directory out from under ``%LOCALAPPDATA%`` to ``%ProgramData%``, takes
-      the daemon over as a service, and disables the very task this module
-      just asked Task Scheduler to run -- so the pipe the daemon does open is
-      simply a different pipe from the one being waited on.
+    * it repaired the install -- ``enforce_separation()``'s elevated
+      ``enable`` took, so the data directory has moved from
+      ``%LOCALAPPDATA%`` to ``%ProgramData%``, a service owns the daemon,
+      the companion task is registered, the task that started all this is
+      disabled, and the process itself has handed over and exited. That is
+      the outcome both tests here are asserting.
+    * it refused to serve -- the ``enable`` did not take (declined UAC, a
+      rollback, a script that could not run at all), so decision 6 raised
+      rather than opening /mcp or the approvals UI.
 
-    The marker file, the service, and the two tasks' enabled states say which
-    happened; nothing else here does."""
+    The marker file, the service, and the two tasks' enabled states say
+    which happened; nothing else here does, and a failure message that
+    cannot tell them apart sends the next reader after the wrong bug -- see
+    privacyfence/privacyfence#599, which was one of these misread as the
+    other for ten consecutive red runs."""
     lines = [f"marker ({MARKER_PATH}): {'present' if MARKER_PATH.exists() else 'absent'}"]
     service = subprocess.run(
         ["sc.exe", "query", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
@@ -739,9 +840,13 @@ def _installed(_real_home_state, tmp_path):
         f"installer failed (exit {install_result.returncode}):\n{install_result.stdout}{install_result.stderr}\n"
         f"---- install log (tail) ----\n{_install_log_tail(log_path)}"
     )
-    # Back to the unseparated install this module is about -- and before the
-    # task assertion below, since `enable` leaves that task *disabled* and
-    # `disable` is what re-enables it. See the module docstring.
+    # Back to an unseparated install -- the *starting* state this module is
+    # about, not the ending one. The installer separates by itself (ADR 0003
+    # decision 4), and an install that arrives here already separated has no
+    # enabled daemon task to run and nothing left for decision 6 to do, so
+    # there would be no autostart left to test. Undoing it also re-enables
+    # the task `enable` disabled, which is what makes the assertion below
+    # mean what it always meant. See the module docstring.
     #
     # require_separated=False: privacyfence/privacyfence#561 -- a `/DIR=`-
     # overridden install has come out of the installer's own `enable` call
@@ -785,12 +890,20 @@ def _installed(_real_home_state, tmp_path):
         yield _Installed(home=home, port=port, log_path=log_path)
     finally:
         _remove_task()
+        # Separation comes down *before* the uninstaller now, not after.
+        # Both tests end with this install separated, which means a service
+        # and a companion running out of INSTALL_DIR by the time this runs --
+        # and Setup aborts at RestartManager ("Some applications could not be
+        # shut down", Inno exit 5, install rolled back) rather than replacing
+        # files a live process holds open. The floor rather than `disable`
+        # deliberately: this runs on the failure path too, and a teardown that
+        # can raise replaces the failure the test was actually reporting.
+        _tear_down_separation()
         _kill_alias_processes()
         uninstaller = INSTALL_DIR / "unins000.exe"
         if uninstaller.is_file():
             _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
         shutil.rmtree(INSTALL_DIR, ignore_errors=True)
-        _tear_down_separation()
 
 
 def _assert_registered_task_matches_autostart_contract(exec_path: str) -> None:
@@ -845,109 +958,138 @@ def _start_task_and_wait_for_daemon(installed: _Installed) -> tuple[str, str]:
 # contract) and Phase 13 item 4 (crash-restart).
 # --------------------------------------------------------------------------- #
 
-async def test_installed_task_definition_starts_the_packaged_daemon(_installed):
+async def test_installed_task_starts_the_packaged_daemon_which_separates_the_install(_installed):
+    """Task Scheduler starts the packaged exe, and what that exe does next is
+    ADR 0003 decision 6: separate this install, hand the daemon to the
+    service, and stop.
+
+    The first half is unchanged and is still the subject of this module --
+    the definition the *service* stored, a real on-demand run, the real
+    installed image, running as the real signed-in account. The second half
+    replaces the assertions this test carried before decision 6: a control
+    pipe under ``%LOCALAPPDATA%`` and an approval round trip against a daemon
+    living in the user's own session. A packaged daemon does not do that any
+    more, by design -- see the module docstring.
+    """
     _assert_registered_task_matches_autostart_contract(_installed.alias_exe)
 
     pid, _owner = _start_task_and_wait_for_daemon(_installed)
 
-    _wait_for_pipe(
-        resolve_windows_pipe_name(_data_dir(_installed.home)),
-        timeout=20,
-        context=lambda: _autostart_failure_context(_installed),
-    )
-    mcp_token = _wait_for_path_content(_data_dir(_installed.home) / MCP_TOKEN_FILE_NAME, timeout=20)
-    _wait_until_connectable("localhost", _installed.port)
-
-    base_url = f"http://localhost:{_installed.port}"
-    mcp_url = f"{base_url}/mcp"
-
-    # ── Phase 3's own daemon/MCP/approval/audit contract shape, against a
-    # daemon this test never itself started a process for ─────────────────
-    async with httpx.AsyncClient(base_url=base_url, follow_redirects=True) as web_client:
-        session_id = await _bootstrap_session(web_client, _data_dir(_installed.home))
-        assert (await web_client.get("/settings")).status_code == 200
-
-        allow_task = asyncio.create_task(
-            _propose_trusted_sender_rule(mcp_url, mcp_token, value=["autologon.example.com"])
-        )
-        await _resolve_pending_card(web_client, session_id, decision="confirm")
-        allow_result = await allow_task
-        assert allow_result.is_error is not True, getattr(allow_result, "content", allow_result)
-        assert allow_result.structured_content["changed"] is True
-
-        await _quit(web_client, session_id)
-
-    # ── Graceful shutdown propagates to the real process Task Scheduler
-    # started -- not just makes it unreachable over HTTP ───────────────────
-    assert _wait_until_alias_process_gone(_installed.alias_exe, timeout=20.0), (
-        f"{ALIAS_EXE_NAME} (pid {pid}) still running after Quit PrivacyFence"
+    # ── Decision 6, from the outside: the marker is the last thing `enable`
+    # writes, so its presence means "finished", not "started" ─────────────
+    assert _wait_for_marker(timeout=180), (
+        f"{MARKER_PATH} never appeared after Task Scheduler started {ALIAS_EXE_NAME} (pid {pid}) "
+        f"-- the packaged daemon should have separated this install itself\n"
+        f"{_autostart_failure_context(_installed)}"
     )
 
-    settings_path = _data_dir(_installed.home) / "authority" / "config" / "settings.yaml"
-    assert "autologon.example.com" in settings_path.read_text(encoding="utf-8")
+    # ── ...and the service it handed the daemon to is really serving ──────
+    base_url, mcp_token = _wait_for_separated_service()
+    await _assert_separated_service_serves_mcp(base_url, mcp_token)
+    assert SEPARATED_SETTINGS_PATH.is_file(), (
+        f"{SEPARATED_SETTINGS_PATH} missing -- the service never wrote its own authority config"
+    )
+
+    # ── The arrangement that leaves behind: the companion is what now runs
+    # in the signed-in session (ADR 0002 decision 5), and the task this test
+    # just ran is disabled rather than left to start a second daemon at
+    # every sign-in ───────────────────────────────────────────────────────
+    assert _task_exists(WINDOWS_COMPANION_TASK_NAME), (
+        f"the {WINDOWS_COMPANION_TASK_NAME!r} task was not registered\n"
+        f"{_separation_state_summary()}"
+    )
+    assert _task_state(TASK_NAME) == "Disabled", (
+        f"the {TASK_NAME!r} autostart task is {_task_state(TASK_NAME)!r}, not Disabled\n"
+        f"{_separation_state_summary()}"
+    )
+
+    # ── And the process Task Scheduler started is gone. It separated the
+    # install and then had nothing left to be: the daemon is the service's
+    # now, running as an account this process is not
+    # (privilege_separation.SeparationHandover). A process still alive here
+    # is one serving the layout it just separated, as the human -- the
+    # silent policy reset check_runtime_identity() exists to prevent. ─────
+    assert _wait_until_alias_process_gone(_installed.alias_exe, timeout=60.0), (
+        f"{ALIAS_EXE_NAME} (pid {pid}) is still running after separating this install -- it should "
+        f"have handed over to the {WINDOWS_SERVICE_NAME} service and exited\n"
+        f"{_autostart_failure_context(_installed)}"
+    )
+    # Exited *cleanly*: an autostart task that reports a failed run at every
+    # sign-in is a support ticket, and this is the one outcome decision 6 is
+    # trying to reach. `daemon_main.main()` returns 0 on the handover for
+    # exactly this reason.
+    assert _task_last_result() == "0", (
+        f"the {TASK_NAME!r} task reports Last Result {_task_last_result()!r}, not 0 -- separating "
+        f"and handing over is a successful run\n"
+        f"---- task state (schtasks /query /v) ----\n{_task_state_summary()}\n"
+        f"---- daemon log (tail) ----\n{_daemon_log_tail(_installed.home)}"
+    )
 
 
-# The <TimeTrigger><Repetition><Interval>PT5M</Interval> below is anchored
-# to the trigger's own StartBoundary, not to when this test kills the
-# daemon, so the next tick can land anywhere up to one full interval later.
-# The wait below clears a whole PT5M window with margin, on top of an
-# install and a cold daemon start -- well past this module's own 300s
-# default, let alone the suite's 30s one.
 @pytest.mark.timeout(600)
-async def test_crash_restart_relaunches_a_killed_daemon(_installed):
-    """The positive assertion, and the direct successor of this module's own negative test,
-    ``test_restart_on_failure_does_not_cover_a_crashed_daemon`` (preserved in
-    git history, not this file). That test measured, rather than assumed,
-    that the shipped ``<RestartOnFailure><Interval>PT1M</Interval>
-    <Count>3</Count></RestartOnFailure>`` -- added as the Windows analogue of
-    the macOS LaunchAgent's ``KeepAlive``/``SuccessfulExit=false`` and the
-    Linux ``.deb``'s systemd ``Restart=on-failure`` -- does nothing at all
-    for a crashed daemon: Task Scheduler logs a killed action as a
-    *successfully completed* task (its own operational log from that run::
+async def test_crash_restart_relaunches_the_separated_daemon(_installed):
+    """The positive crash-restart assertion this module has owed since a
+    first measurement pass could not make it -- kill it, wait, assert a
+    *new* pid -- against the thing that owns crash restart now.
+
+    That used to be the task's own ``<RestartOnFailure>``, and measuring it
+    is what retired it: Task Scheduler logs a killed action as a
+    *successfully completed* task (from that run's own operational log::
 
         Event ID 201:  Task Scheduler successfully completed task
                        "\\PrivacyFence", instance "{63cf2afb-...}", action
                        "C:\\...\\privacyfence-app.exe" with return code
                        2147942401.
-        Event ID 102:  Task Scheduler successfully finished "{63cf2afb-...}"
-                       instance of the "\\PrivacyFence" task for user
-                       "...\\runneradmin".
 
     ``2147942401`` is ``0x80070001``, the action's own non-zero exit
-    surfaced as an HRESULT), so ``RestartOnFailure`` never engages: it only
-    ever answers a task that fails to *run*, not an action that ran and then
-    died. That test's own docstring said what would have to replace it once
-    a real keep-alive existed: kill, wait, assert a new pid. This is that
-    test, now that ``installer/privacyfence-task.xml.tmpl`` carries a
-    repeating ``<TimeTrigger>`` as the actual crash-restart mechanism
-    (``RestartOnFailure`` itself stays in the definition, but only for the
-    narrower thing it still does -- see that template's own header comment).
-    """
-    first_pid, _owner = _start_task_and_wait_for_daemon(_installed)
-    _wait_until_connectable("localhost", _installed.port)
+    surfaced as an HRESULT), so the setting never engages: it only ever
+    answers a task that fails to *run*, not an action that ran and then
+    died. The repeating ``<TimeTrigger>`` that replaced it is standing in
+    for a service manager -- and on a separated install there *is* one. The
+    daemon is a Windows service, and ``sc failure PrivacyFence actions=
+    restart/5000/...`` (windows_privilege_separation.ps1's
+    ``Install-DaemonService``, which says exactly that) is the mechanism.
 
-    # A real crash, not a graceful quit: /f is a TerminateProcess, so the
-    # action ends non-zero and never gets to clean up after itself.
+    It cannot be the ``<TimeTrigger>`` answering here: that task is
+    Disabled by the time this kills anything, which the test above asserts
+    directly.
+    """
+    _start_task_and_wait_for_daemon(_installed)
+    assert _wait_for_marker(timeout=180), (
+        f"{MARKER_PATH} never appeared -- decision 6 did not separate this install, so there is "
+        f"no service to crash\n{_autostart_failure_context(_installed)}"
+    )
+    _wait_for_separated_service()
+
+    first_pid = _service_pid()
+    assert first_pid, (
+        f"the {WINDOWS_SERVICE_NAME} service is not reporting a process id\n"
+        f"{_separation_state_summary()}"
+    )
+
+    # A real crash, not a graceful stop: /f is a TerminateProcess, so the
+    # service's own control handler never runs and the SCM sees a failure
+    # rather than an orderly stop. That distinction is the whole point --
+    # a service that is *asked* to stop does not exercise failure actions
+    # at all.
     kill = subprocess.run(
         ["taskkill", "/pid", first_pid, "/f"], capture_output=True, text=True, timeout=30,
     )
     assert kill.returncode == 0, f"taskkill on pid {first_pid} failed:\n{kill.stdout}{kill.stderr}"
-    assert _wait_until_alias_process_gone(_installed.alias_exe, timeout=20.0), (
-        f"{ALIAS_EXE_NAME} (pid {first_pid}) survived taskkill /f, so nothing crashed"
-    )
 
-    relaunched = _wait_for_alias_process(_installed.alias_exe, timeout=340.0, different_from=first_pid)
+    relaunched = _wait_for_service_pid(different_from=first_pid, timeout=180.0)
     assert relaunched is not None, (
-        f"Task Scheduler never relaunched {ALIAS_EXE_NAME} after taskkill /pid {first_pid} /f, within "
-        f"340s of one <TimeTrigger><Repetition><Interval>PT5M</Interval></Repetition> window\n"
-        f"---- task state (schtasks /query /v) ----\n{_task_state_summary()}\n"
-        f"---- Task Scheduler operational log (newest first) ----\n{_task_scheduler_events()}"
+        f"the {WINDOWS_SERVICE_NAME} service never came back after taskkill /pid {first_pid} /f, "
+        f"within 180s of a restart/5000 failure action\n"
+        f"---- sc qc ----\n{_service_config()}\n"
+        f"---- sc failure ----\n{_service_failure_config()}\n"
+        f"{_separation_state_summary()}"
     )
-    pid, owner = relaunched
-    # Same check as _start_task_and_wait_for_daemon's own: the relaunch is
-    # still the GroupId principal resolving to the one signed-in account
-    # this runner has, not some other identity.
-    assert getpass.getuser().lower() in owner.lower(), (
-        f"relaunched {ALIAS_EXE_NAME} (pid {pid}) is running as {owner!r}, not the signed-in account "
-        f"({getpass.getuser()!r}) the Builtin\\Users principal should have resolved to"
+    # Still the service account, not something that happened to take the
+    # name: a restart that came back as anyone else would be the #428
+    # weakness reopening quietly.
+    config = _service_config()
+    assert config is not None and WINDOWS_SERVICE_ACCOUNT_NAME.lower() in config.lower(), (
+        f"the relaunched {WINDOWS_SERVICE_NAME} service does not run as "
+        f"{WINDOWS_SERVICE_ACCOUNT_NAME}:\n{config}"
     )
