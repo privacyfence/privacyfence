@@ -37,13 +37,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- macOS privilege separation no longer risks starting the daemon as `root`. `launchctl bootstrap`
-  runs a LaunchDaemon as root — silently, exit 0 — when the account its plist names does not
-  resolve yet, and Directory Services lookups can lag behind the `dscl` writes that just created
-  `_privacyfence`. `enable` now waits for the account to resolve before it re-owns the data
-  directory or bootstraps anything, and then checks which account the daemon actually came up as,
-  stopping it and failing loudly rather than leaving an install that reports itself separated while
-  its daemon holds every privilege separation exists to drop.
+- **The macOS `.pkg` no longer installs itself over whatever copy of the app your Mac happens to
+  know about.** `pkgbuild` marks a payload bundle relocatable by default, which tells the installer
+  to look up the app by its bundle identifier and, if a copy already exists somewhere, install over
+  *that* one and ignore `/Applications` entirely. If you had ever launched PrivacyFenceApp.app from
+  your Downloads folder, from a still-mounted DMG, or from anywhere else, the installer would
+  silently redirect the whole install there while still reporting success. That also skipped
+  setting up privilege separation — the package's own post-install step looks for its script under
+  `/Applications`, does not find it there, and leaves the install unseparated, which a packaged
+  daemon then refuses to serve. The package now declares its payload non-relocatable, so it always
+  installs into `/Applications`.
+- **`privilege-separation.ps1 disable` no longer breaks the install it is undoing.** `sc.exe stop`
+  only asks a Windows service to stop and returns immediately, so `disable` went on to move the
+  data directory out from under a daemon that was still running and still holding `settings.yaml`
+  open. The move failed — after the marker, the service and the companion's scheduled task had
+  already been removed — leaving an install that was neither separated nor whole, with all of its
+  data somewhere an unseparated daemon never looks. `disable` now waits for the daemon to actually
+  exit, and ends the companion app (which `enable` starts and deleting its task does not stop)
+  before moving anything.
+- **macOS privilege separation no longer risks running the daemon as `root`.** `launchctl
+  bootstrap` starts a LaunchDaemon as root — silently, reporting success — when the account its
+  plist names does not resolve for it, and nothing a script can do from outside makes that
+  resolution observable beforehand. The daemon then refuses to run as the wrong account on every
+  start (it would otherwise seed a fresh default policy over your real one), so the service
+  manager restarted it forever and nothing that talks to PrivacyFence could reach it, while the
+  install reported itself separated throughout. `enable` now reads back which account the daemon
+  actually came up as and restarts it until that is the service account, and if it never is, stops
+  the daemon and says so instead of leaving it running with every privilege the install reports it
+  dropped.
 
 ## [4.1.3] — 2026-09-21
 
