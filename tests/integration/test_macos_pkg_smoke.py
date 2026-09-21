@@ -51,6 +51,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import defusedxml.ElementTree as ET
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -139,6 +140,53 @@ def test_pkg_contains_postinstall_and_app_payload(expanded_pkg):
         f"{separation_script} missing from the package payload -- the bundled postinstall script "
         f"calls exactly this path, at install time, as root"
     )
+
+
+def test_pkg_payload_is_not_relocatable(expanded_pkg):
+    """The package must install where it says it installs.
+
+    ``pkgbuild`` marks every bundle in a payload relocatable unless told
+    otherwise, which means installd asks Launch Services where a bundle with
+    this identifier already lives and, if it finds one, installs over *that*
+    copy instead of ``--install-location``. A user who has ever launched
+    PrivacyFenceApp.app from a Downloads folder, a still-mounted DMG or a
+    build tree therefore gets the whole install silently redirected there --
+    with ``installer`` reporting success either way.
+
+    The install landing in the wrong place is only half of it. The bundled
+    ``postinstall`` resolves ``macos_privilege_separation.sh`` under the
+    literal ``/Applications/PrivacyFenceApp.app`` path, so a relocated install
+    also skips provisioning privilege separation entirely ("leaving privilege
+    separation opt-in") -- and ADR 0003 decision 6 refuses to serve the
+    unseparated install that leaves behind. Both halves shipped, and were
+    mistaken for a flaky test for weeks (#562), because the symptom depends on
+    whether Launch Services happens to know about another copy yet.
+
+    ``scripts/build_pkg.sh`` turns this off via ``--component-plist`` with
+    ``BundleIsRelocatable`` false. That does not make ``pkgbuild`` omit the
+    ``<relocate>`` element itself -- at least not with every ``pkgbuild``
+    build seen in CI, which still emits a self-closing ``<relocate/>`` as
+    boilerplate regardless. What it does do, and what actually matters, is
+    keep that element childless: a relocatable bundle shows up as a
+    ``<bundle .../>`` *inside* ``<relocate>``, and that's what tells installd
+    to go ask Launch Services. So this checks for an actual listed bundle,
+    not for the tag's mere presence -- checking the tag itself flags a
+    correctly-built package as broken the moment a newer Xcode/macOS
+    ``pkgbuild`` starts including the empty placeholder.
+    """
+    pkg_path = _built_pkgs()[-1]
+    package_infos = list(expanded_pkg.glob("**/PackageInfo"))
+    assert package_infos, f"no PackageInfo found under expanded {pkg_path.name}"
+    for package_info in package_infos:
+        xml = package_info.read_text(encoding="utf-8")
+        root = ET.fromstring(xml)
+        relocate = root.find("relocate")
+        relocatable_bundles = relocate.findall("bundle") if relocate is not None else []
+        assert not relocatable_bundles, (
+            f"{package_info} still lists relocatable bundles -- this package will install over "
+            f"whatever copy of the bundle Launch Services already knows about rather than into "
+            f"/Applications, and its postinstall will not find the app where it looks for it:\n{xml}"
+        )
 
 
 def test_pkg_signature(expanded_pkg):

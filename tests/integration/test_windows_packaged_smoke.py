@@ -579,6 +579,18 @@ def _tear_down_separation() -> None:
         ["schtasks", "/delete", "/tn", WINDOWS_COMPANION_TASK_NAME, "/f"],
         capture_output=True, text=True, timeout=30,
     )
+    # Deleting the task does not end the companion the `enable` that registered
+    # it already started (Install-CompanionTask runs `schtasks /run` on it
+    # itself, so every separated install leaves one running). A live
+    # PrivacyFenceCompanion.exe holds the install directory open, which makes
+    # the *next* silent install abort at RestartManager's "Some applications
+    # could not be shut down" -- Inno exit 5, a rolled-back install, and a
+    # failure that lands in whatever test asked for that install rather than
+    # in the one that leaked the process. Same reasoning as the service stop
+    # above: what `enable` started, the floor under `disable` has to end.
+    subprocess.run(
+        ["taskkill", "/f", "/im", COMPANION_EXE_NAME], capture_output=True, text=True, timeout=30,
+    )
     if WINDOWS_SYSTEM_ROOT.exists():
         subprocess.run(
             ["takeown", "/f", str(WINDOWS_SYSTEM_ROOT), "/r", "/d", "Y"],

@@ -39,9 +39,11 @@ and ``PRIVACYFENCE_SYSTEM_ROOT`` relocates the whole layout under
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
+import shutil
 import stat
 import subprocess
 import sys
@@ -1896,9 +1898,44 @@ class TestWindowsInstallerContract:
         assert "could not take ownership" in set_layout
 
     def test_disable_hands_ownership_back(self):
-        disable = self.SCRIPT.split("function Invoke-Disable", 1)[1]
+        # Through Restore-LegacyDataDir, which Invoke-Disable and the rollback
+        # in Invoke-Enable share -- an `enable` that fails midway owes the
+        # human exactly what `disable` does.
+        disable = self.SCRIPT.split("function Invoke-Disable", 1)[1].split("\nfunction ", 1)[0]
+        restore = self.SCRIPT.split("function Restore-LegacyDataDir", 1)[1].split("\nfunction ", 1)[0]
 
-        assert "'/setowner', $script:OwnerUser" in disable
+        assert "Restore-LegacyDataDir" in disable
+        assert "'/setowner', $script:OwnerUser" in restore
+
+    def test_a_failed_enable_leaves_neither_half_of_a_move_behind(self):
+        # privacyfence/privacyfence#599: the observed failure left the daemon's
+        # data under %ProgramData% with no marker, no service and no companion
+        # task pointing at it -- a layout paths.py resolves for nobody. Two
+        # things stop that now, and this asserts both: `sc create` (the step
+        # that failed) happens before the data is moved at all, and everything
+        # from there on is inside a catch that walks the move back.
+        enable = self.SCRIPT.split("function Invoke-Enable", 1)[1].split("\nfunction ", 1)[0]
+        # Call sites only. A comment that names a later step to explain an
+        # earlier one is ordinary and correct in this script, and indexing
+        # the raw text made it read as the step itself having moved.
+        calls = "\n".join(
+            line for line in enable.splitlines() if not line.strip().startswith("#")
+        )
+
+        assert calls.index("Install-DaemonService") < calls.index("Move-Data")
+        assert "Undo-PartialEnable" in enable
+        for step in ("Move-Data", "Set-Layout", "Write-Marker", "Install-CompanionTask"):
+            assert step in enable.split("try {", 1)[1].split("} catch {", 1)[0], step
+
+    def test_the_rollback_cannot_replace_the_failure_it_is_reporting(self):
+        # It runs inside a catch whose exception is about to be re-thrown, and
+        # that exception is the only account of why `enable` failed. A rollback
+        # that threw its own would lose it.
+        undo = self.SCRIPT.split("function Undo-PartialEnable", 1)[1].split("\nfunction ", 1)[0]
+
+        assert undo.count("try {") == 1 and "} catch {" in undo
+        assert "Restore-LegacyDataDir" in undo
+        assert "Enable-DaemonTask" in undo
 
     def test_status_checks_the_owner(self):
         assert "WRONG OWNER" in self.SCRIPT
@@ -2974,12 +3011,98 @@ class TestElevationScriptProblem:
         assert privilege_separation._elevation_script_problem(tmp_path / "x.ps1") is None
 
 
+def _command_line_to_argv(command_line: str) -> list[str]:
+    """``CommandLineToArgvW``, in Python, for the arguments half of a Windows
+    command line (no executable name).
+
+    ``subprocess.list2cmdline`` builds the elevated PowerShell's command line
+    by exactly these rules, and ``Start-Process -ArgumentList`` hands it over
+    verbatim, so this is what that process really receives -- which is the
+    only question the Windows tests below are asking. Substring-matching the
+    launcher string cannot answer it: every argument is quoted twice on the
+    way there (once for the inner ``&`` call, once for the outer
+    ``-ArgumentList`` literal), so an argument that had torn in half would
+    still match.
+    """
+    args: list[str] = []
+    current: list[str] = []
+    in_quotes = False
+    started = False
+    index = 0
+    while index < len(command_line):
+        char = command_line[index]
+        if char == "\\":
+            backslashes = 0
+            while index < len(command_line) and command_line[index] == "\\":
+                backslashes += 1
+                index += 1
+            if index < len(command_line) and command_line[index] == '"':
+                current.append("\\" * (backslashes // 2))
+                if backslashes % 2:
+                    current.append('"')
+                else:
+                    in_quotes = not in_quotes
+                index += 1
+            else:
+                current.append("\\" * backslashes)
+            started = True
+        elif char == '"':
+            if in_quotes and command_line[index + 1:index + 2] == '"':
+                current.append('"')
+                index += 2
+            else:
+                in_quotes = not in_quotes
+                index += 1
+            started = True
+        elif char in " \t" and not in_quotes:
+            if started:
+                args.append("".join(current))
+                current = []
+                started = False
+            index += 1
+        else:
+            current.append(char)
+            started = True
+            index += 1
+    if started:
+        args.append("".join(current))
+    return args
+
+
+def _elevated_argv(launcher_command: str) -> list[str]:
+    """The argv the UAC-elevated PowerShell receives, peeled back out of the
+    launcher's ``-Command``.
+
+    Two layers, and both are real: ``-ArgumentList`` carries the whole inner
+    command line as one single-quoted PowerShell literal (where doubling the
+    quote is the entire escaping rule), and that command line is itself
+    quoted by Windows' own rules. This undoes them in that order.
+    """
+    marker = "-ArgumentList '"
+    start = launcher_command.index(marker) + len(marker)
+    index = start
+    while True:
+        index = launcher_command.index("'", index)
+        if launcher_command[index + 1:index + 2] == "'":
+            index += 2
+            continue
+        break
+    return _command_line_to_argv(launcher_command[start:index].replace("''", "'"))
+
+
 class TestPerUserElevationCommand:
-    def test_macos_reuses_the_admin_prompt(self, monkeypatch, tmp_path):
+    @pytest.fixture
+    def transcript(self, tmp_path):
+        """Where the elevated child's output is collected. Only the Windows
+        branch has any use for it -- see ``_elevation_transcript()`` for why
+        only that platform needs a file to get output back at all."""
+        return tmp_path / "elevated.log"
+
+    def test_macos_reuses_the_admin_prompt(self, monkeypatch, tmp_path, transcript):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
         script = tmp_path / "macos_privilege_separation.sh"
 
-        argv = privilege_separation._per_user_argv(script, "alice")
+        argv = privilege_separation._per_user_argv(script, "alice", transcript)
 
         assert argv[0] == privilege_separation._OSASCRIPT
         assert "with administrator privileges" in argv[-1]
@@ -2989,7 +3112,7 @@ class TestPerUserElevationCommand:
         # that did not happen as one the human should now log out for.
         assert "--auto" not in argv[-1]
 
-    def test_macos_quotes_a_hostile_account_name(self, monkeypatch, tmp_path):
+    def test_macos_quotes_a_hostile_account_name(self, monkeypatch, tmp_path, transcript):
         # Two layers, neither substituting for the other: shlex for the shell
         # `do shell script` runs, then AppleScript's own string escaping on
         # top of it. Asserted by peeling both back off and checking the argv
@@ -2998,38 +3121,57 @@ class TestPerUserElevationCommand:
         script = tmp_path / "s.sh"
         hostile = 'a"; rm -rf /; #'
 
-        argv = privilege_separation._per_user_argv(script, hostile)
+        argv = privilege_separation._per_user_argv(script, hostile, transcript)
 
         literal = argv[-1][len('do shell script "'):-len('" with administrator privileges')]
         command = re.sub(r"\\(.)", r"\1", literal)
         assert shlex.split(command) == [str(script), "enable", "--for-user", hostile]
 
-    def test_windows_elevates_through_uac(self, monkeypatch, tmp_path):
+    def test_windows_elevates_through_uac(self, monkeypatch, tmp_path, transcript):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
 
-        argv = privilege_separation._per_user_argv(tmp_path / "privilege-separation.ps1", "alice")
+        argv = privilege_separation._per_user_argv(
+            tmp_path / "privilege-separation.ps1", "alice", transcript
+        )
 
         assert argv[0].endswith("powershell.exe")
         command = argv[-1]
         assert "-Verb RunAs" in command
-        # -Wait, or the return code below would be the launcher's rather than
-        # the script's, and every decline would read as a success.
+        # -Wait *and* -PassThru, or the return code below would be the
+        # launcher's rather than the script's and every failure would read as
+        # a success -- privacyfence/privacyfence#599, where it did, on every
+        # run, with the daemon logging a separation that had not happened.
         assert "-Wait" in command
-        assert "enable -ForUser alice" in command
+        assert "-PassThru" in command
+        assert "exit $p.ExitCode" in command
 
-    def test_windows_doubles_a_quote_in_an_account_name(self, monkeypatch, tmp_path):
-        # The inner command line is carried through the outer -Command as one
-        # single-quoted PowerShell literal, so doubling is still the whole of
-        # the escaping -- it just applies to the line rather than to each
-        # argument of it.
+        elevated = _elevated_argv(command)
+        assert elevated[:4] == ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
+        # -ForUser bare, alice quoted, and that asymmetry is the point:
+        # PowerShell binds a parameter *name* only while it is a bare token,
+        # so quoting it uniformly would send three positional arguments that
+        # bind nothing, while leaving the account name bare would let it be
+        # read as one.
+        assert "enable -ForUser 'alice'" in elevated[-1]
+        assert str(transcript) in elevated[-1]
+
+    def test_windows_doubles_a_quote_in_an_account_name(self, monkeypatch, tmp_path, transcript):
+        # Doubling the quote is the whole of PowerShell's escaping rule, and
+        # it applies once per layer: once to the account name inside the `&`
+        # call, then again to the whole inner command line on its way through
+        # the outer -ArgumentList. Asserted by peeling both back off rather
+        # than by counting quotes in the launcher string.
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
 
-        argv = privilege_separation._per_user_argv(tmp_path / "s.ps1", "al'ice")
+        argv = privilege_separation._per_user_argv(tmp_path / "s.ps1", "al'ice", transcript)
 
-        assert "al''ice" in argv[-1]
-        assert "al'ice" not in argv[-1].replace("al''ice", "")
+        elevated_command = _elevated_argv(argv[-1])[-1]
+        assert "-ForUser 'al''ice'" in elevated_command
+        # And nowhere does it appear unescaped, which is what would end the
+        # string literal early and leave the rest of the name as code.
+        assert "al'ice" not in elevated_command.replace("al''ice", "")
 
-    def test_windows_quotes_an_install_path_with_a_space_in_it(self, monkeypatch):
+    def test_windows_quotes_an_install_path_with_a_space_in_it(self, monkeypatch, transcript):
         # The path every real install has. Start-Process joins an
         # -ArgumentList *array* with plain spaces and quotes nothing, so the
         # array this used to pass reached the elevated PowerShell as
@@ -3042,32 +3184,39 @@ class TestPerUserElevationCommand:
         script = Path(r"C:\Program Files\PrivacyFence\privilege-separation.ps1")
 
         for argv in (
-            privilege_separation._per_user_argv(script, "alice"),
-            privilege_separation._windows_full_enable_argv(script),
+            privilege_separation._per_user_argv(script, "alice", transcript),
+            privilege_separation._windows_full_enable_argv(script, transcript),
         ):
             assert argv is not None
-            assert f'-File "{script}"' in argv[-1], argv[-1]
+            # `& '<path>'` is -File spelled as an expression; the redirection
+            # #599 needs has to be established inside the elevated process,
+            # which -File has no room for. The guarantee is unchanged: the
+            # path reaches the elevated PowerShell as one argument, whatever
+            # it contains.
+            elevated = _elevated_argv(argv[-1])
+            assert len(elevated) == 5, elevated
+            assert elevated[-1].startswith(f"try {{ & '{script}' "), elevated[-1]
 
     def test_powershell_quoting_doubles_only_the_quote(self):
         # Backslashes are literal in a single-quoted PowerShell string, so
         # escaping them the way shlex would corrupts every path here.
         assert privilege_separation._powershell_quoted("C:\\x\\y") == "'C:\\x\\y'"
 
-    def test_linux_uses_pkexec(self, monkeypatch, tmp_path):
+    def test_linux_uses_pkexec(self, monkeypatch, tmp_path, transcript):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
         monkeypatch.setattr(privilege_separation.shutil, "which", lambda name: "/usr/bin/pkexec")
 
-        argv = privilege_separation._per_user_argv(tmp_path / "s.sh", "alice")
+        argv = privilege_separation._per_user_argv(tmp_path / "s.sh", "alice", transcript)
 
         assert argv == ["/usr/bin/pkexec", str(tmp_path / "s.sh"), "enable", "--for-user", "alice"]
 
-    def test_linux_declines_to_guess_without_pkexec(self, monkeypatch, tmp_path):
+    def test_linux_declines_to_guess_without_pkexec(self, monkeypatch, tmp_path, transcript):
         # A bare `sudo` from an XDG-autostarted process hangs on a password
         # prompt nobody can see, which is worse than saying so.
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
         monkeypatch.setattr(privilege_separation.shutil, "which", lambda name: None)
 
-        assert privilege_separation._per_user_argv(tmp_path / "s.sh", "alice") is None
+        assert privilege_separation._per_user_argv(tmp_path / "s.sh", "alice", transcript) is None
 
     @pytest.mark.parametrize("platform,expected", [("linux", "sudo"), ("darwin", "sudo"), ("win32", "powershell")])
     def test_the_typed_command_matches_the_platform(self, monkeypatch, tmp_path, platform, expected):
@@ -3088,6 +3237,20 @@ class TestCompletePerUserSeparation:
         monkeypatch.setattr(privilege_separation, "_elevation_script_problem", lambda s: None)
         monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "alice")
         return path
+
+    @pytest.fixture(autouse=True)
+    def group_took_the_addition(self, monkeypatch):
+        """The ordinary outcome of a successful elevated run: the account is
+        in the service group afterwards.
+
+        Default rather than per-test because every test below that expects
+        True now depends on it -- privacyfence/privacyfence#599 made an exit
+        code alone insufficient to return True, and this is the machine state
+        that makes it sufficient. The tests that care about the *absence* of
+        this override it back."""
+        monkeypatch.setattr(
+            privilege_separation, "service_group_members", lambda group: frozenset({"alice", "bob"})
+        )
 
     def test_does_nothing_on_an_unseparated_install(self, platform_name, monkeypatch, tmp_path):
         monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
@@ -3117,7 +3280,7 @@ class TestCompletePerUserSeparation:
     def test_names_the_command_when_it_cannot_ask_for_a_password(
         self, separated, script, monkeypatch, caplog
     ):
-        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: None)
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u, t: None)
 
         with caplog.at_level("WARNING"):
             assert privilege_separation.complete_per_user_separation() is False
@@ -3130,7 +3293,7 @@ class TestCompletePerUserSeparation:
             calls.append((argv, kwargs))
             return subprocess.CompletedProcess(argv, 0, "", "")
 
-        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: ["x", u])
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u, t: ["x", u])
         monkeypatch.setattr(privilege_separation.subprocess, "run", _run)
 
         assert privilege_separation.complete_per_user_separation() is True
@@ -3141,7 +3304,7 @@ class TestCompletePerUserSeparation:
 
     def test_an_explicit_user_wins_over_this_process(self, separated, script, monkeypatch):
         seen = []
-        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: seen.append(u) or ["x"])
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u, t: seen.append(u) or ["x"])
         monkeypatch.setattr(
             privilege_separation.subprocess, "run",
             lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""),
@@ -3151,7 +3314,7 @@ class TestCompletePerUserSeparation:
         assert seen == ["bob"]
 
     def test_a_declined_prompt_is_not_a_crash(self, separated, script, monkeypatch, caplog):
-        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: ["x"])
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u, t: ["x"])
         monkeypatch.setattr(
             privilege_separation.subprocess, "run",
             lambda argv, **kwargs: subprocess.CompletedProcess(argv, 1, "", "User cancelled."),
@@ -3165,7 +3328,7 @@ class TestCompletePerUserSeparation:
         def _boom(argv, **kwargs):
             raise OSError("no such binary")
 
-        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: ["x"])
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u, t: ["x"])
         monkeypatch.setattr(privilege_separation.subprocess, "run", _boom)
 
         assert privilege_separation.complete_per_user_separation() is False
@@ -3176,7 +3339,7 @@ class TestCompletePerUserSeparation:
         privilege_separation.separation()
         reset = []
         monkeypatch.setattr(privilege_separation, "reset_cache", lambda: reset.append(True))
-        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u: ["x"])
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u, t: ["x"])
         monkeypatch.setattr(
             privilege_separation.subprocess, "run",
             lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""),
@@ -3184,6 +3347,45 @@ class TestCompletePerUserSeparation:
 
         assert privilege_separation.complete_per_user_separation() is True
         assert reset == [True]
+
+    def test_an_exit_zero_that_changed_nothing_is_not_success(
+        self, separated, script, monkeypatch, caplog
+    ):
+        # privacyfence/privacyfence#599, in the half that reaches a person:
+        # returning True here makes companion.py tell somebody to sign out
+        # and back in, and a sign-out that fixes nothing is worse advice than
+        # none. On Windows the exit code being trusted here was not even the
+        # script's -- `Start-Process -Verb RunAs -Wait` without -PassThru
+        # exits 0 whatever the elevated run did.
+        monkeypatch.setattr(
+            privilege_separation, "service_group_members", lambda group: frozenset({"bob"})
+        )
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u, t: ["x"])
+        monkeypatch.setattr(
+            privilege_separation.subprocess, "run",
+            lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""),
+        )
+
+        with caplog.at_level("ERROR"):
+            assert privilege_separation.complete_per_user_separation() is False
+        assert "still not in the" in caplog.text
+        # And names the command that does it by hand, like every other
+        # failure path here.
+        assert "enable" in caplog.text
+
+    def test_an_unreadable_group_is_taken_on_trust(self, separated, script, monkeypatch):
+        # The same fallback owner_membership_pending() takes, and for the same
+        # reason: guessing "it did not take" on a platform this process just
+        # failed to interrogate would have the companion re-prompt for a
+        # password at every single start.
+        monkeypatch.setattr(privilege_separation, "service_group_members", lambda group: None)
+        monkeypatch.setattr(privilege_separation, "_per_user_argv", lambda s, u, t: ["x"])
+        monkeypatch.setattr(
+            privilege_separation.subprocess, "run",
+            lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""),
+        )
+
+        assert privilege_separation.complete_per_user_separation() is True
 
 
 class TestEnableCommand:
@@ -3286,10 +3488,16 @@ class TestEnforceSeparation:
 
         assert attempts == ["other"]
 
-    def test_returns_quietly_when_the_attempt_takes(self, monkeypatch, tmp_path):
+    def test_hands_over_when_the_attempt_takes(self, monkeypatch, tmp_path):
         # The attempt's own side effect is provisioning the install for
         # real; simulate that by writing the marker from inside the faked
         # attempt, exactly like a real enable --auto would.
+        #
+        # This used to return quietly, and that was the defect: the daemon
+        # that repaired its own install carried on serving the layout it had
+        # just separated, as the human, past a check_runtime_identity() that
+        # had already run and passed while the install was still
+        # unseparated. See SeparationHandover.
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
         root = tmp_path / "PrivacyFence"
         monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
@@ -3301,9 +3509,27 @@ class TestEnforceSeparation:
 
         monkeypatch.setattr(privilege_separation, "_run_full_auto_enable_non_macos", _fake_attempt)
 
-        privilege_separation.enforce_separation()  # must not raise
+        with pytest.raises(privilege_separation.SeparationHandover) as exc:
+            privilege_separation.enforce_separation()
 
         assert privilege_separation.is_enabled() is True
+        message = str(exc.value)
+        layout = privilege_separation.PLATFORM_LAYOUTS["linux"]
+        assert layout.service_account in message
+        assert layout.status_command in message
+        # Decision 6's *refusal* wording must not be in it -- this outcome is
+        # the one decision 6 is trying to reach, and a user who reads
+        # "refusing to start" here will go looking for a problem that is not
+        # there.
+        assert "Refusing to start" not in message
+
+    def test_handover_is_a_privilege_separation_error(self):
+        # Every caller already stops on PrivilegeSeparationError, and
+        # stopping is what this asks for -- daemon_main.main() is what tells
+        # the two apart, by catching this subclass first.
+        assert issubclass(
+            privilege_separation.SeparationHandover, privilege_separation.PrivilegeSeparationError
+        )
 
     def test_refuses_and_names_the_enable_command_when_the_attempt_does_not_take(self, monkeypatch, tmp_path):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
@@ -3334,6 +3560,115 @@ class TestEnforceSeparation:
             privilege_separation.enforce_separation()
 
 
+class TestDataDirLogFilesReleased:
+    """privacyfence/privacyfence#599's third defect: the elevated ``enable``
+    moves the data directory out from under the process that asked for it.
+
+    ``enforce_separation()`` runs from inside a packaged daemon that has
+    already called ``daemon_main.setup_logging()``, so
+    ``<data_dir>/logs/privacyfence.log`` is open for append in that very
+    process for the whole elevated run -- and Windows answers a move of a
+    directory holding an open file with a sharing violation rather than a
+    POSIX rename. The observed failure is quoted in
+    ``_data_dir_log_files_released()``'s own docstring.
+    """
+
+    @staticmethod
+    def _attach(tmp_path: Path) -> tuple[logging.Logger, logging.FileHandler, Path]:
+        log_file = tmp_path / "logs" / "privacyfence.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_file, encoding="utf-8")
+        log = logging.getLogger("privacyfence.tests.separation_release")
+        log.addHandler(handler)
+        log.propagate = False
+        return log, handler, log_file
+
+    def test_finds_a_handler_under_the_data_dir(self, tmp_path):
+        log, handler, _ = self._attach(tmp_path)
+        try:
+            assert handler in privilege_separation._log_handlers_under(tmp_path)
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+    def test_ignores_a_handler_outside_the_data_dir(self, tmp_path):
+        log, handler, _ = self._attach(tmp_path / "inside")
+        try:
+            assert handler not in privilege_separation._log_handlers_under(tmp_path / "elsewhere")
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+    def test_the_file_is_closed_for_the_duration(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        log, handler, _ = self._attach(tmp_path)
+        try:
+            log.warning("before")
+            assert handler.stream is not None
+            with privilege_separation._data_dir_log_files_released():
+                assert handler.stream is None, "the log file is still open during the move"
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+    def test_the_handler_writes_again_afterwards(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        log, handler, log_file = self._attach(tmp_path)
+        try:
+            with privilege_separation._data_dir_log_files_released():
+                pass
+            log.warning("after the attempt")
+            handler.flush()
+            assert "after the attempt" in log_file.read_text(encoding="utf-8")
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+    def test_follows_the_data_dir_when_the_enable_took(self, tmp_path, monkeypatch):
+        """The success path: the directory really moved, so the handler has
+        to be pointed at where it went rather than recreating an empty log
+        at a path that is no longer the install's."""
+        before = tmp_path / "unseparated"
+        after = tmp_path / "separated"
+        current = {"dir": before}
+        monkeypatch.setattr(paths, "data_dir", lambda: current["dir"])
+        log, handler, _ = self._attach(before)
+        try:
+            with privilege_separation._data_dir_log_files_released():
+                shutil.move(str(before), str(after))
+                current["dir"] = after
+            assert Path(handler.baseFilename) == after / "logs" / "privacyfence.log"
+            log.warning("written to the separated root")
+            handler.flush()
+            moved = after / "logs" / "privacyfence.log"
+            assert "written to the separated root" in moved.read_text(encoding="utf-8")
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+    def test_detaches_a_handler_it_cannot_re_establish(self, tmp_path, monkeypatch):
+        """The other success path, and the ordinary one on Windows: the
+        separated root is not writable by the account this process runs as,
+        so the handler is dropped instead of raising out of every later
+        ``logger.info()`` -- the stderr handler ``setup_logging()`` installs
+        alongside it still carries the handover message."""
+        before = tmp_path / "unseparated"
+        current = {"dir": before}
+        monkeypatch.setattr(paths, "data_dir", lambda: current["dir"])
+        log, handler, _ = self._attach(before)
+        try:
+            def _refuse(*_args, **_kwargs):
+                raise PermissionError("the separated root is the service account's")
+
+            monkeypatch.setattr(privilege_separation.os, "makedirs", _refuse)
+            with privilege_separation._data_dir_log_files_released():
+                current["dir"] = tmp_path / "separated"
+            assert handler not in log.handlers
+        finally:
+            log.removeHandler(handler)
+            handler.close()
+
+
 class TestWindowsFullEnableArgv:
     """The Windows sibling of maybe_auto_enable_macos()'s AppleScript --
     UAC's own elevation, which (unlike pkexec) is always interactive, so
@@ -3342,7 +3677,7 @@ class TestWindowsFullEnableArgv:
 
     def test_elevates_via_uac_and_runs_plain_enable(self, tmp_path):
         script = tmp_path / "privilege-separation.ps1"
-        argv = privilege_separation._windows_full_enable_argv(script)
+        argv = privilege_separation._windows_full_enable_argv(script, tmp_path / "elevated.log")
 
         assert "-Verb" in argv[-1] and "RunAs" in argv[-1]
         assert str(script) in argv[-1]
@@ -3359,6 +3694,18 @@ class TestRunFullAutoEnableNonMacos:
         monkeypatch.setattr(privilege_separation, "installer_script_path", lambda: path)
         monkeypatch.setattr(privilege_separation, "_elevation_script_problem", lambda s: None)
         return path
+
+    @pytest.fixture(autouse=True)
+    def the_enable_took(self, monkeypatch):
+        """The ordinary outcome: the install is separated afterwards.
+
+        Default rather than per-test for the same reason as
+        TestCompletePerUserSeparation's own: since
+        privacyfence/privacyfence#599 the success *log line* is written off
+        the machine rather than off an exit code, so every test below that
+        expects one depends on this. The test that cares about its absence
+        overrides it."""
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
 
     def test_warns_when_no_script_is_found(self, monkeypatch, caplog):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
@@ -3402,7 +3749,12 @@ class TestRunFullAutoEnableNonMacos:
 
         assert len(calls) == 1
         assert calls[0] == ["/usr/bin/pkexec", str(script), "enable", "--auto"]
-        assert reset_calls == [True]
+        # Twice, and both are load-bearing:
+        # _data_dir_log_files_released() resets on its way out so
+        # paths.data_dir() re-resolves against the directory the enable has
+        # just moved, and this function resets again before reading
+        # is_enabled() for its own log line.
+        assert reset_calls == [True, True]
 
     def test_windows_runs_the_uac_elevated_argv(self, monkeypatch, script):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
@@ -3420,7 +3772,7 @@ class TestRunFullAutoEnableNonMacos:
 
         assert len(calls) == 1
         assert str(script) in calls[0][-1]
-        assert reset_calls == [True]
+        assert reset_calls == [True, True]  # see the Linux case above
 
     def test_a_declined_prompt_is_not_a_crash(self, monkeypatch, script, caplog):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
@@ -3444,6 +3796,130 @@ class TestRunFullAutoEnableNonMacos:
         monkeypatch.setattr(privilege_separation.subprocess, "run", _boom)
 
         privilege_separation._run_full_auto_enable_non_macos()  # must not raise
+
+    def test_an_exit_zero_that_separated_nothing_is_not_logged_as_success(
+        self, monkeypatch, script, caplog
+    ):
+        # privacyfence/privacyfence#599's first defect, and the one that made
+        # the rest of it undiagnosable: "privilege separation enabled
+        # automatically" was written at the exact moment separation had not
+        # happened, and it is the only account a user or an operator gets of a
+        # start that then refuses to serve.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(privilege_separation.shutil, "which", lambda name: "/usr/bin/pkexec")
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+        monkeypatch.setattr(
+            privilege_separation.subprocess, "run",
+            lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "", ""),
+        )
+
+        with caplog.at_level("INFO"):
+            privilege_separation._run_full_auto_enable_non_macos()
+
+        assert "enabled automatically" not in caplog.text
+        assert "still not separated" in caplog.text
+
+    def test_windows_logs_what_the_elevated_run_said(self, monkeypatch, script, caplog):
+        # The second defect: a -Verb RunAs child gets its own console, so its
+        # output reaches neither the parent's stdout nor its stderr. Without
+        # the transcript file the only thing left to report was an exit code
+        # that, on Windows, was not even the script's.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+
+        def _run(argv, **kwargs):
+            # Stand in for the elevated PowerShell, which writes the file the
+            # argv above names rather than anything the parent can capture.
+            transcript = Path(argv[-1].split("-LiteralPath ''", 1)[1].split("''", 1)[0])
+            transcript.write_text(
+                "-> creating the PrivacyFence service\n"
+                "sc.exe create failed (exit 1332): No mapping between account names\n",
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", _run)
+
+        with caplog.at_level("INFO"):
+            privilege_separation._run_full_auto_enable_non_macos()
+
+        assert "No mapping between account names" in caplog.text
+
+    def test_the_transcript_is_removed_afterwards(self, monkeypatch, script):
+        # It lives in the daemon's own temp and can hold whatever the elevated
+        # run printed; nothing needs it once it has been read back into the
+        # log.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "win32")
+        seen: list[Path] = []
+
+        def _run(argv, **kwargs):
+            seen.append(Path(argv[-1].split("-LiteralPath ''", 1)[1].split("''", 1)[0]))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        monkeypatch.setattr(privilege_separation.subprocess, "run", _run)
+        monkeypatch.setattr(privilege_separation, "reset_cache", lambda: None)
+
+        privilege_separation._run_full_auto_enable_non_macos()
+
+        assert seen and not seen[0].exists() and not seen[0].parent.exists()
+
+
+class TestElevationTranscript:
+    def test_the_file_exists_before_the_elevated_process_is_started(self):
+        # Created by this (unelevated) process on purpose: a file an elevated
+        # child creates under %TEMP% would normally be readable anyway, and
+        # "normally" is doing real work in that sentence.
+        with privilege_separation._elevation_transcript() as transcript:
+            assert transcript.exists()
+
+    def test_an_unreadable_transcript_is_not_an_error(self, tmp_path):
+        # This is only ever read on a path where something has already gone
+        # wrong; a transcript that cannot be read is one more thing to report,
+        # not a second failure.
+        assert privilege_separation._elevation_transcript_text(tmp_path / "gone.log") == ""
+        assert privilege_separation._elevation_transcript_text(None) == ""
+
+    def test_a_long_transcript_keeps_its_tail(self, tmp_path):
+        # The failure is at the end: the script prints its progress as it goes
+        # and dies on whichever step it got to.
+        transcript = tmp_path / "long.log"
+        transcript.write_text("x" * 9000 + "sc.exe create failed", encoding="utf-8")
+
+        text = privilege_separation._elevation_transcript_text(transcript, max_chars=200)
+
+        assert text.startswith("...")
+        assert text.endswith("sc.exe create failed")
+        assert len(text) == 203
+
+    def test_a_utf8_bom_does_not_reach_the_log(self, tmp_path):
+        # Windows PowerShell 5.1's -Encoding utf8 means "UTF-8 with a BOM",
+        # and the catch branch's -Append can put a second one mid-file.
+        transcript = tmp_path / "bom.log"
+        transcript.write_bytes("\ufeff-> creating the service\n\ufefffailed".encode())
+
+        text = privilege_separation._elevation_transcript_text(transcript)
+
+        assert text == "-> creating the service\nfailed"
+
+    def test_the_detail_is_never_empty(self):
+        # It is the whole of what a failure log line has to say, so "" would
+        # leave a reader with a message that names no reason at all.
+        result = subprocess.CompletedProcess(["x"], 3, "", "")
+
+        assert privilege_separation._elevation_detail(result, None) == "no output (exit 3)"
+
+    def test_the_detail_carries_both_sides(self, tmp_path):
+        transcript = tmp_path / "t.log"
+        transcript.write_text("sc.exe create failed", encoding="utf-8")
+        result = subprocess.CompletedProcess(["x"], 1, "", "The operation was canceled by the user.")
+
+        detail = privilege_separation._elevation_detail(result, transcript)
+
+        # The launcher's own stderr says a UAC prompt was declined; the
+        # transcript says what the elevated run got to. Neither substitutes
+        # for the other.
+        assert "canceled by the user" in detail
+        assert "sc.exe create failed" in detail
 
 
 class TestDevUnseparatedNotice:

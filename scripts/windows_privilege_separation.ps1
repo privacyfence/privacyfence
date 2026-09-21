@@ -552,6 +552,68 @@ function Move-HandoffFilesOut {
     Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue
 }
 
+function Restore-LegacyDataDir {
+    <#
+      Move $SystemRoot back under %LOCALAPPDATA% and hand it to the human
+      again -- the exact reverse of Move-Data, and the last thing `disable`
+      does.
+
+      Shared with Undo-PartialEnable rather than written twice, because the
+      two callers want the identical thing and only one of them is obvious:
+      an `enable` that fails after Move-Data has run is in the same state a
+      `disable` starts from (data under %ProgramData%, nothing pointing at
+      it), and the way out of it is the same walk back.
+
+      -IgnoreFailure on both icacls calls, unlike every icacls call in
+      `enable`: the data has already been moved by the time these run, so
+      aborting here would leave the user with their files back under their
+      own profile and a script that reported failure -- the most confusing
+      outcome available. `/c` already tells icacls to continue past an
+      individual entry it cannot rewrite, so a non-zero exit here means
+      "some entries were skipped", which is a warning worth printing and not
+      a reason to stop.
+    #>
+    $legacy = Get-LegacyDataDir
+    if (-not $legacy) {
+        # Only reachable from Undo-PartialEnable: `enable` resolves its owner
+        # optionally (ADR 0003 decision 3), and with no owner there is no
+        # %LOCALAPPDATA% to move anything back to -- Move-Data will have
+        # started the separated install empty rather than migrating anything,
+        # so there is nothing to walk back either.
+        Write-Note 'no owner account resolved -- there is no %LOCALAPPDATA% to move data back to'
+        return
+    }
+    if (-not (Test-Path -LiteralPath $SystemRoot)) {
+        Write-Note "$SystemRoot is not there -- nothing to move back"
+        return
+    }
+    if (Test-Path -LiteralPath $legacy) {
+        Write-Warn "$legacy already exists -- merging $SystemRoot into it"
+        Copy-Item -Path (Join-Path $SystemRoot '*') -Destination $legacy -Recurse -Force
+        Remove-Item -LiteralPath $SystemRoot -Recurse -Force
+    } else {
+        Write-Note "moving $SystemRoot back to $legacy"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $legacy) | Out-Null
+        Move-Item -LiteralPath $SystemRoot -Destination $legacy -Force
+    }
+    # Back to what %LOCALAPPDATA% gives an ordinary directory: owned by the
+    # human again and inherited from their own profile, which is what
+    # protected this data before separation and what will protect it again
+    # afterwards. The /setowner is the mirror of Set-Layout's own: without it
+    # the returned tree stays owned by Administrators, and the caller would
+    # hand back a data directory its owner cannot fully control.
+    Invoke-Icacls @($legacy, '/reset', '/t', '/c', '/q') -IgnoreFailure
+    if ($script:OwnerResolved) {
+        Invoke-Icacls @($legacy, '/setowner', $script:OwnerUser, '/t', '/c', '/q') -IgnoreFailure
+    } else {
+        # Only reachable from Undo-PartialEnable: `enable` resolves its owner
+        # optionally (ADR 0003 decision 3), so an MDM push or a SYSTEM-context
+        # install has no human to give the tree back to. /reset above still
+        # restored inheritance, which is the half that matters.
+        Write-Note "no owner account resolved -- leaving $legacy owned by Administrators"
+    }
+}
+
 # ── ACLs: the Windows half of the layout ─────────────────────────────────────
 
 function Invoke-Native {
@@ -712,17 +774,17 @@ function Set-Layout {
     # an individual entry deep in the tree it cannot rewrite, which is worth
     # tolerating, but the *root's* own owner is the thing everything below
     # depends on. A silent failure there would leave a layout that looks
-    # right in every other respect, so it stops here -- the data has moved by
-    # now, and `disable` is the way back.
+    # right in every other respect, so it stops here. The data has moved by
+    # now; Invoke-Enable's own catch is what walks it back (Undo-PartialEnable).
     $newOwner = Get-PathOwner -LiteralPath $SystemRoot
     if (-not (Test-TrustedIdentity -Identity $newOwner)) {
         Stop-WithError @"
 could not take ownership of $SystemRoot -- it is still owned by '$newOwner'.
 
 An object's owner can rewrite its access-control list at will, so leaving it
-owned by that account would make every permission below advisory. Nothing has
-been broken: run '$PSCommandPath disable' to move your data back, and re-run
-'enable' from a PowerShell started with 'Run as administrator'.
+owned by that account would make every permission below advisory. Your data is
+being moved back to where it was; once it is, re-run 'enable' from a PowerShell
+started with 'Run as administrator'.
 "@
     }
 
@@ -874,10 +936,58 @@ function Start-DaemonService {
     Invoke-Sc @('start', $ServiceName) | Out-Null
 }
 
+function Wait-ProcessExit {
+    <#
+      Waits for one process id to leave the process table, and says whether it
+      did. Not "is the service Stopped": a service reports itself stopped from
+      inside its own control handler, while the files it had open stay open
+      until the kernel tears the process down. Only the process actually being
+      gone releases them, and this whole helper exists because something has to
+      be moved out from under it immediately afterwards.
+    #>
+    param([int] $ProcessId, [int] $TimeoutSeconds = 60)
+
+    if ($ProcessId -le 0) { return $true }
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
+function Wait-ProcessImageGone {
+    <# The same wait, for a process this script did not start and has no pid
+       for -- it only asked Task Scheduler to end the task running it. #>
+    param([string] $Name, [int] $TimeoutSeconds = 30)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Get-Process -Name $Name -ErrorAction SilentlyContinue)) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
 function Uninstall-DaemonService {
     if (-not (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue)) { return }
     Write-Note "stopping and removing the $ServiceName service"
+    # Take the pid before asking, because `sc delete` below removes the record
+    # it comes from. `sc.exe stop` only *asks*: it returns as soon as the SCM
+    # has accepted the request, with the service still STOP_PENDING and the
+    # daemon still holding every file it had open under $SystemRoot -- which
+    # Invoke-Disable moves, whole, a few lines later. Returning from here early
+    # is therefore a sharing violation waiting to happen, and one that lands
+    # *after* the marker, the service and the companion task are already gone,
+    # leaving an install that is neither separated nor whole. Observed as
+    # exactly that: `Move-Item ... settings.yaml : The process cannot access
+    # the file because it is being used by another process`, disable exiting 1
+    # with the data still under %ProgramData%.
+    $servicePid = (Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue).ProcessId
     Invoke-Sc @('stop', $ServiceName) -IgnoreFailure | Out-Null
+    if (-not (Wait-ProcessExit -ProcessId $servicePid -TimeoutSeconds 60)) {
+        Write-Warn "the $ServiceName service (pid $servicePid) has not exited after 60s -- continuing, but a file it still holds open may make a later step fail"
+    }
     Invoke-Sc @('delete', $ServiceName) -IgnoreFailure | Out-Null
 }
 
@@ -934,11 +1044,78 @@ function Install-CompanionTask {
 function Uninstall-CompanionTask {
     if (-not (Get-ScheduledTask -TaskName $CompanionTaskName -ErrorAction SilentlyContinue)) { return }
     Write-Note "removing the '$CompanionTaskName' scheduled task"
+    # End the instance before deleting the task, for the same reason
+    # Uninstall-DaemonService waits above: deleting a task does not end what it
+    # already started, and `enable` starts a companion itself
+    # (Install-CompanionTask below). A companion left running holds the
+    # separated data directory open just as effectively as the daemon does.
+    # `/end` rather than taskkill -- the companion is Task Scheduler's process
+    # to end, and asking through the same mechanism that started it leaves no
+    # ambiguity about which PrivacyFenceCompanion is being stopped.
+    Invoke-Native -FilePath 'schtasks.exe' `
+        -Arguments @('/end', '/tn', $CompanionTaskName) -IgnoreFailure | Out-Null
     Invoke-Native -FilePath 'schtasks.exe' `
         -Arguments @('/delete', '/tn', $CompanionTaskName, '/f') -IgnoreFailure | Out-Null
+    $companionProcess = [System.IO.Path]::GetFileNameWithoutExtension($DefaultCompanionExecName)
+    if (-not (Wait-ProcessImageGone -Name $companionProcess -TimeoutSeconds 30)) {
+        Write-Warn "$DefaultCompanionExecName is still running after 30s -- continuing, but a file it still holds open may make a later step fail"
+    }
 }
 
 # ── Subcommands ──────────────────────────────────────────────────────────────
+
+function Undo-PartialEnable {
+    <#
+      Put a failed `enable` back the way it found the install: data under
+      %LOCALAPPDATA% again, owned by the human, with the daemon's own autostart
+      task re-enabled and nothing left claiming separation.
+
+      This is privacyfence/privacyfence#599's counterpart to the `disable`
+      defect fixed in 1d6b13f -- the same defect from the other direction: an
+      operation that is not atomic and does not clean up after itself when it
+      fails midway, leaving an install that is neither separated nor whole.
+
+      Every step is a no-op on the state it was not reached from, which is what
+      lets one function serve every failure point: Uninstall-* return early on
+      what is not there, Move-HandoffFilesOut returns early with no handoff\
+      directory, and Restore-LegacyDataDir returns early with no $SystemRoot to
+      move. An `enable` that died before Move-Data therefore walks all of this
+      and changes only the daemon task Disable-DaemonTask had already turned
+      off.
+
+      Every step is best-effort and none of them may throw, because this runs
+      *inside* a catch whose exception is about to be re-thrown -- that
+      exception is what says why `enable` failed, and a rollback that replaced
+      it with its own would lose the only useful thing in the transcript.
+    #>
+    param([string] $Reason)
+
+    Write-Warn "enable failed ($Reason) -- rolling back to the unseparated layout"
+    try {
+        $marker = Join-Path $SystemRoot $MarkerName
+        if (Test-Path -LiteralPath $marker) {
+            Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue
+        }
+        Uninstall-CompanionTask
+        Uninstall-DaemonService
+        # Set-Layout may have got as far as creating handoff\ and moving the
+        # discovery files into it; with no marker, handoff_dir() *is*
+        # data_dir(), so they have to come back to the root or an unseparated
+        # daemon comes up with no token and no way for the shim to find it.
+        Move-HandoffFilesOut
+        Restore-LegacyDataDir
+        Enable-DaemonTask
+        Write-Note "rolled back -- your data is at $(Get-LegacyDataDir) and this install is not separated"
+    } catch {
+        Write-Warn @"
+the rollback itself failed: $($_.Exception.Message)
+
+This install is now in neither layout. Your data is under $SystemRoot; move it
+back to $(Get-LegacyDataDir) by hand, or re-run '$PSCommandPath enable' from a
+PowerShell started with 'Run as administrator' to finish separating instead.
+"@
+    }
+}
 
 function Invoke-Enable {
     Assert-Windows
@@ -959,6 +1136,16 @@ function Invoke-Enable {
 
     Disable-DaemonTask
     Uninstall-DaemonService
+    # And the companion, for the same reason and with the same wait: a
+    # re-run `enable` (an upgrade, or decision 6's automatic one against an
+    # install whose previous enable half-finished) finds the companion this
+    # script's own Install-CompanionTask started still running, and a live
+    # companion holds the data directory Move-Data is about to move exactly
+    # as effectively as the daemon does. Install-CompanionTask registers and
+    # starts it again at the end of this same run, so there is nothing to put
+    # back -- the only thing removing it early costs is the seconds it takes
+    # to exit.
+    Uninstall-CompanionTask
 
     New-ServiceGroup
     if ($script:OwnerResolved) {
@@ -966,15 +1153,35 @@ function Invoke-Enable {
     } else {
         Write-Note "no owner account resolved -- leaving the $ServiceGroup membership pending"
     }
-    Move-Data
-    # Before Set-Layout, not after: this is what brings NT SERVICE\PrivacyFence
-    # into existence, and Set-Layout's grants cannot name an account that does
-    # not exist yet. It does not start the service -- Start-DaemonService below
+    # Everything that can leave this install in neither layout, in one block
+    # that undoes itself -- privacyfence/privacyfence#599's third half. The two
+    # states worth having are "separated" and "not"; an `enable` that stops
+    # between them produces neither, and that is not a theoretical shape. The
+    # observed one was the daemon's data under %ProgramData% -- a real
+    # install's authority directory, audit log and MCP token -- with no marker,
+    # no service and no companion task pointing at it, which `paths.py`
+    # resolves for nobody.
+    #
+    # Install-DaemonService goes before Move-Data for the same reason, and
+    # costs nothing there: it touches no data and starts nothing. It goes
+    # before Set-Layout because it is what brings NT SERVICE\PrivacyFence into
+    # existence, and Set-Layout's grants cannot name an account that does not
+    # exist yet. It does not start the service -- Start-DaemonService below
     # does that, once the ACLs are in place. See Start-DaemonService.
-    Install-DaemonService
-    Set-Layout
-    Write-Marker
-    Install-CompanionTask
+    try {
+        Install-DaemonService
+        Move-Data
+        Set-Layout
+        Write-Marker
+        Install-CompanionTask
+    } catch {
+        Undo-PartialEnable -Reason $_.Exception.Message
+        throw
+    }
+    # Deliberately outside that try: a service that exists but will not start
+    # is a separated install with a broken daemon, which `sc query` and the
+    # event log can both explain, and rolling the marker and the ACLs back
+    # around it would trade a diagnosable problem for a silent one.
     Start-DaemonService
 
     Write-Host @"
@@ -1080,32 +1287,8 @@ function Invoke-Disable {
     # than a separated one whose service is gone.
     Remove-Item -LiteralPath $marker -Force
     Move-HandoffFilesOut
-
+    Restore-LegacyDataDir
     $legacy = Get-LegacyDataDir
-    if (Test-Path -LiteralPath $legacy) {
-        Write-Warn "$legacy already exists -- merging $SystemRoot into it"
-        Copy-Item -Path (Join-Path $SystemRoot '*') -Destination $legacy -Recurse -Force
-        Remove-Item -LiteralPath $SystemRoot -Recurse -Force
-    } else {
-        Write-Note "moving $SystemRoot back to $legacy"
-        Move-Item -LiteralPath $SystemRoot -Destination $legacy -Force
-    }
-    # Back to what %LOCALAPPDATA% gives an ordinary directory: owned by the
-    # human again and inherited from their own profile, which is what
-    # protected this data before separation and what will protect it again
-    # afterwards. The /setowner is the mirror of Set-Layout's own: without it
-    # the returned tree stays owned by Administrators, and `disable` would
-    # hand back a data directory its owner cannot fully control.
-    #
-    # -IgnoreFailure on both, unlike every icacls call in `enable`: the data
-    # has already been moved by the time these run, so aborting here would
-    # leave the user with their files back under their own profile and a
-    # script that reported failure -- the most confusing outcome available.
-    # `/c` already tells icacls to continue past an individual entry it
-    # cannot rewrite, so a non-zero exit here means "some entries were
-    # skipped", which is a warning worth printing and not a reason to stop.
-    Invoke-Icacls @($legacy, '/reset', '/t', '/c', '/q') -IgnoreFailure
-    Invoke-Icacls @($legacy, '/setowner', $script:OwnerUser, '/t', '/c', '/q') -IgnoreFailure
 
     Enable-DaemonTask
 

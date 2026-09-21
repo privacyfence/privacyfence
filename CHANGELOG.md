@@ -23,7 +23,15 @@ HOW TO USE THIS FILE
 3. Pre-release tags (`aN`/`bN`/`rcN`, and the older `-alphaN`/`-betaN` spellings) get no entry of
    their own. Their content is folded into the final version they led to, per Keep a Changelog.
 
-4. Entries are ordered by version, NOT by date. The 3.4.x maintenance line and the 4.0 line ran
+4. A version that was tagged but never published (its release build failed before anything
+   reached a GitHub Release or PyPI) gets no section of its own either. Fold its entries into the
+   version that does ship, note the supersession at the top of that section, and point the shipped
+   version's compare link at the last version that really shipped -- 4.1.5 does this for both 4.1.4
+   and 4.1.3, chained: each failed tag folds into whichever section eventually ships, however many
+   attempts that takes. The tag stays in git; the changelog describes what people can actually
+   install.
+
+5. Entries are ordered by version, NOT by date. The 3.4.x maintenance line and the 4.0 line ran
    in parallel, so 3.4.5-3.4.7 (2026-09-02/03) were cut after v4.0.0-alpha1..alpha4
    (2026-08-28/29). Sorting by date here would be actively misleading.
 -->
@@ -35,10 +43,90 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [4.1.3] — 2026-09-21
+## [4.1.5] — 2026-09-21
+
+*Supersedes 4.1.4 and 4.1.3, neither of which was ever published. 4.1.3's release build stopped
+before any artifact reached a GitHub Release or PyPI; 4.1.4's `build` job then failed at its own
+`test_pkg_payload_is_not_relocatable` packaged-artifact smoke test — a false positive from a
+`pkgbuild` behavior change on the runner image, not a real defect in the built `.pkg` — which
+blocked that macOS artifact's own upload and, through `publish-pypi.yml`'s `wait_for_build` gate,
+the sdist/wheel publish too. Neither tag ever reached anyone. Everything both versions would have
+carried is folded in below: from the outside this is a single 4.1.2 → 4.1.5 change.*
 
 ### Fixed
 
+- **Windows: a PrivacyFence that starts at sign-in on an install that isn't privilege-separated yet
+  can now actually separate it.** The daemon repairs such an install by elevating the
+  privilege-separation script through UAC, and that script *moves* the daemon's data directory from
+  `%LOCALAPPDATA%\PrivacyFence` to `%ProgramData%\PrivacyFence`. But the daemon asking for the
+  repair still had its own `logs\privacyfence.log` open inside that directory for the whole
+  elevated run, and Windows refuses to move a directory holding an open file -- so the move failed
+  with "The process cannot access the file because it is being used by another process", the whole
+  `enable` rolled back, and PrivacyFence then refused to start at all ("Refusing to start: no /mcp,
+  no approvals") every single time. The daemon now releases its log file for the duration of the
+  elevated run, and `enable` also ends a companion left over from an earlier run before moving
+  anything, since that holds the same directory open just as effectively.
+- **A PrivacyFence that separates your install at startup now hands over to the service instead of
+  carrying on as a second daemon.** Once the repair above succeeds, the daemon belongs to the new
+  service account -- but the process that triggered the repair kept running, as you, against a
+  data directory whose authority files had just become unreadable to it. That is exactly the silent
+  policy reset the identity check guards against, reached by a route the check could not see (it
+  runs before the repair, when there is nothing to object to); on Windows it also raced the service
+  it had just created for the same port. That process now prints what happened and exits cleanly,
+  which is also what stops Task Scheduler recording a failed run at every sign-in for the one
+  outcome this is all trying to reach.
+- **The macOS `.pkg` no longer installs itself over whatever copy of the app your Mac happens to
+  know about.** `pkgbuild` marks a payload bundle relocatable by default, which tells the installer
+  to look up the app by its bundle identifier and, if a copy already exists somewhere, install over
+  *that* one and ignore `/Applications` entirely. If you had ever launched PrivacyFenceApp.app from
+  your Downloads folder, from a still-mounted DMG, or from anywhere else, the installer would
+  silently redirect the whole install there while still reporting success. That also skipped
+  setting up privilege separation — the package's own post-install step looks for its script under
+  `/Applications`, does not find it there, and leaves the install unseparated, which a packaged
+  daemon then refuses to serve. The package now declares its payload non-relocatable, so it always
+  installs into `/Applications`.
+- **`privilege-separation.ps1 disable` no longer breaks the install it is undoing.** `sc.exe stop`
+  only asks a Windows service to stop and returns immediately, so `disable` went on to move the
+  data directory out from under a daemon that was still running and still holding `settings.yaml`
+  open. The move failed — after the marker, the service and the companion's scheduled task had
+  already been removed — leaving an install that was neither separated nor whole, with all of its
+  data somewhere an unseparated daemon never looks. `disable` now waits for the daemon to actually
+  exit, and ends the companion app (which `enable` starts and deleting its task does not stop)
+  before moving anything.
+- **macOS privilege separation no longer risks running the daemon as `root`.** `launchctl
+  bootstrap` starts a LaunchDaemon as root — silently, reporting success — when the account its
+  plist names does not resolve for it, and nothing a script can do from outside makes that
+  resolution observable beforehand. The daemon then refuses to run as the wrong account on every
+  start (it would otherwise seed a fresh default policy over your real one), so the service
+  manager restarted it forever and nothing that talks to PrivacyFence could reach it, while the
+  install reported itself separated throughout. `enable` now reads back which account the daemon
+  actually came up as and restarts it until that is the service account, and if it never is, stops
+  the daemon and says so instead of leaving it running with every privilege the install reports it
+  dropped.
+- **A Windows install that repairs its own privilege separation at startup now says truthfully
+  whether it worked.** On a packaged Windows build that finds itself unseparated, the daemon
+  elevates the provisioning script through UAC before deciding whether to serve (ADR 0003
+  decision 6). The launcher it used never propagated the elevated run's exit code —
+  `Start-Process -Verb RunAs -Wait` waits, but without `-PassThru` there is no process object to
+  read a code off — so the daemon logged "privilege separation enabled automatically" whether
+  the repair completed or died on its first statement. The daemon still refused to serve
+  afterwards (it re-checks the machine, which is why nothing shipped unprotected), but the one
+  line a user or an operator had to go on said the opposite of what happened. The exit code is
+  now propagated, the success message is written only after re-checking the install rather than
+  off a return code, and the same correction applies to the companion app's per-user step, which
+  no longer tells anyone to sign out and back in unless the group membership really took.
+- **A failed privilege-separation `enable` on Windows no longer says why only to a console
+  nobody can see.** A `-Verb RunAs` child gets its own console, so neither its output nor its
+  errors reached the parent process, the daemon log or a CI artifact — diagnosing a failure meant
+  reading machine state afterwards and inferring backwards. The elevated run's six output streams
+  are now collected and logged with the failure.
+- **A failed privilege-separation `enable` on Windows no longer leaves the install half-moved.**
+  The data directory was relocated from `%LOCALAPPDATA%\PrivacyFence` to
+  `%ProgramData%\PrivacyFence` before the step most likely to fail on a machine the script has
+  not run on before, so a failure after it left a real install's authority directory, audit log
+  and MCP token where neither the separated nor the unseparated layout looks for them. The
+  service is now created before anything is moved, and every step after the move walks itself
+  back — the counterpart of the `disable` fix above, from the other direction.
 - **The `/approvals` toolbar and connector icons now stay correct when new approvals stream in
   live.** Leaving the tab open on an empty (or partial) queue used to leave the select-all/
   batch-approve/batch-deny toolbar permanently missing — it was only ever created at first paint,
@@ -2108,8 +2196,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.1.3...HEAD
-[4.1.3]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.3
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...HEAD
+[4.1.5]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.5
 [4.1.2]: https://github.com/privacyfence/privacyfence/compare/v4.0.0...v4.1.2
 [4.0.0]: https://github.com/privacyfence/privacyfence/compare/v3.4.7...v4.0.0
 [3.4.7]: https://github.com/privacyfence/privacyfence/compare/v3.4.6...v3.4.7

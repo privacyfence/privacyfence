@@ -40,8 +40,16 @@ tests/fixtures/qa_environment.yaml
 
 # Claude Code
 .claude/*
-# ...except the shared project settings (hooks, permissions) checked in for the whole team.
+# ...except the shared project config checked in for the whole team. settings.json alone was not
+# enough: its SessionStart entry points at .claude/hooks/session-start.sh, which `.claude/*` was
+# still excluding -- so the hook was configured and then never shipped. A directory has to be
+# re-included before anything under it can be, hence the trailing slashes.
 !.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
+!.claude/commands/
+# Still ignored, deliberately: settings.local.json (per-machine overrides) and everything else
+# Claude Code writes into .claude/ as session state.
 
 # Lock files
 *.lock

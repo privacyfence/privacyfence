@@ -112,6 +112,7 @@ it makes escalation require an authentication prompt a human sees.
 """
 from __future__ import annotations
 
+import contextlib
 import errno
 import json
 import logging
@@ -121,6 +122,8 @@ import shutil
 import stat
 import subprocess  # nosec B404  # osascript elevation prompt below -- fixed argv, no shell, see that call site
 import sys
+import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -344,6 +347,34 @@ class PrivilegeSeparationError(RuntimeError):
     but this process is not the account that is supposed to be holding the
     daemon's half of it -- see that function for why that has to be fatal
     rather than a warning."""
+
+
+class SeparationHandover(PrivilegeSeparationError):
+    """Not a failure: ADR 0003 decision 6's automatic ``enable`` just took,
+    and the daemon this process was about to become now belongs to the
+    service that ``enable`` created.
+
+    A subclass rather than a return value because every caller of
+    ``enforce_separation()`` already has to stop on
+    ``PrivilegeSeparationError``, and stopping is exactly what this asks
+    for; ``daemon_main.main()`` catches this one first and exits *0*,
+    because nothing went wrong -- see that call site.
+
+    Why this exists at all: before it, a packaged daemon that repaired its
+    own install went on to serve from the layout it had just separated,
+    **as the human**. ``check_runtime_identity()`` -- the gate that exists
+    to stop precisely that -- had already run and passed, several steps
+    earlier, when the install was still unseparated. So the process carried
+    on into a root whose ``authority/`` is now ``0700`` to the service
+    account, could not read ``config/settings.yaml`` through it, and
+    ``load_config()``'s first-run behaviour seeded a fresh default policy
+    over the real one: the silent policy reset ``check_runtime_identity()``
+    is written to prevent, arrived at by a route it could not see. On
+    Windows it also raced the service ``enable`` had just started for the
+    same port and the same control pipe, which is the collision
+    ``tests/integration/test_windows_packaged_smoke.py`` gave up its
+    unseparated scenario over.
+    """
 
 
 @dataclass(frozen=True)
@@ -1266,13 +1297,134 @@ def dev_allows_unseparated() -> bool:
     return os.environ.get(DEV_ALLOW_UNSEPARATED_ENV, "") not in ("", "0", "false", "False")
 
 
-def _windows_runas_argv(inner: list[str]) -> list[str]:
+@contextlib.contextmanager
+def _elevation_transcript() -> Iterator[Path]:
+    """A throwaway file for an elevated child's own output, and the reason
+    there has to be a file at all.
+
+    ``subprocess``'s ``capture_output`` catches what the process this module
+    starts writes -- and on Windows that process is only the launcher. A
+    ``Start-Process -Verb RunAs`` child is started by the shell, into a
+    console of its own, so neither its stdout nor its stderr is inherited
+    from anything the daemon can read. The only channel left is a file both
+    sides can name, which is what this is: a directory in the daemon's own
+    temp, removed again as soon as the output has been read back.
+
+    It is created by this (unelevated) process on purpose. A file an
+    elevated child creates under ``%TEMP%`` inherits that directory's ACL
+    and would normally be readable anyway, but "normally" is doing real work
+    in that sentence -- creating it here means the daemon's access to it
+    never depends on how the elevation resolved.
+    """
+    directory = tempfile.mkdtemp(prefix="privacyfence-elevate-")
+    try:
+        transcript = Path(directory) / "privilege-separation.log"
+        transcript.touch()
+        yield transcript
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def _elevation_transcript_text(transcript: Path | None, *, max_chars: int = 4000) -> str:
+    """What the elevated child said, trimmed to something a log line can
+    carry, or ``""`` where it said nothing this process can read.
+
+    Best-effort by construction: this runs on the failure path of an
+    elevation that has already gone wrong, and a transcript that cannot be
+    read is one more thing to report rather than a reason to raise.
+    """
+    if transcript is None:
+        return ""
+    try:
+        # -Encoding utf8 on the writing side (see
+        # _windows_elevated_script_command); utf-8-sig because Windows
+        # PowerShell 5.1's "utf8" means "UTF-8 with a BOM", and the catch
+        # branch's -Append can put a second one mid-file.
+        text = transcript.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return ""
+    text = text.replace("\ufeff", "").strip()
+    if len(text) > max_chars:
+        text = "..." + text[-max_chars:]
+    return text
+
+
+def _elevation_detail(result: "subprocess.CompletedProcess[str]", transcript: Path | None) -> str:
+    """One string naming everything known about how an elevation went: the
+    launcher's own stderr, the elevated child's transcript, and -- when
+    neither said anything -- the exit code, so the log line is never empty.
+    """
+    parts = [part for part in ((result.stderr or "").strip(), _elevation_transcript_text(transcript)) if part]
+    return " | ".join(parts) if parts else f"no output (exit {result.returncode})"
+
+
+def _windows_elevated_script_command(script: Path, script_arguments: str, transcript: Path) -> str:
+    """The elevated PowerShell's own ``-Command``: run ``script`` with
+    ``script_arguments``, with all six of its output streams merged into
+    ``transcript``, and exit with the script's own exit code.
+
+    ``-Command`` rather than the ``-File`` this used to pass, for the one
+    thing ``-File`` cannot buy: a ``-Verb RunAs`` child gets a console of
+    its own, and ``Start-Process``'s ``-RedirectStandardOutput``/
+    ``-RedirectStandardError`` are in a different parameter set from
+    ``-Verb`` and cannot be combined with it. The redirection therefore has
+    to be established *inside* the elevated process, which means it has to
+    be part of the command that process runs. ``& '<script>'`` is ``-File``
+    spelled as an expression, and ``_powershell_quoted`` keeps the guarantee
+    the ``-File`` form needed (see ``_windows_runas_argv``): a path with a
+    space in it stays one argument.
+
+    Three details that are each load-bearing:
+
+    * ``*>&1 | Out-File -Encoding utf8`` rather than a bare ``*>``. Windows
+      PowerShell 5.1 writes a plain ``>``/``*>`` redirection as UTF-16, which
+      the reader above would have to sniff; naming the encoding means it
+      does not have to.
+    * The ``catch``. ``Stop-WithError`` in the script is a ``throw``, which
+      unwinds *past* the redirection rather than through it -- so without
+      this, the one message that says why an ``enable`` failed would be the
+      one message missing from the transcript.
+    * ``exit $LASTEXITCODE``. A ``.ps1`` invoked with ``&`` sets it from its
+      own ``exit``, but leaves it untouched if it falls off the end, so the
+      null case is spelled out rather than left to coerce to 0 by accident.
+
+    ``script_arguments`` arrives already spelled as PowerShell rather than
+    as a list, for the same reason ``Start-Process`` below is handed a
+    pre-built command line: the quoting is not uniform and cannot be applied
+    by a rule. PowerShell binds ``-ForUser`` as a parameter *name* only
+    while it is a bare token -- quote it and ``enable -ForUser alice``
+    reaches the script as three positional arguments that bind nothing --
+    while the value beside it is an account name and must be quoted. Each
+    caller therefore composes its own, through ``_powershell_quoted`` for
+    every part that is data.
+    """
+    quoted = _powershell_quoted(str(transcript))
+    call = f"& {_powershell_quoted(str(script))} {script_arguments}"
+    return (
+        f"try {{ {call} *>&1 | Out-File -LiteralPath {quoted} -Encoding utf8 }} "
+        f"catch {{ $_ | Out-String | Out-File -LiteralPath {quoted} -Append -Encoding utf8; exit 1 }}; "
+        "if ($null -eq $LASTEXITCODE) { exit 0 }; exit $LASTEXITCODE"
+    )
+
+
+def _windows_runas_argv(script: Path, script_arguments: str, transcript: Path) -> list[str]:
     """The elevated relaunch both Windows callers below share: an ordinary
     PowerShell whose only job is to ``Start-Process -Verb RunAs`` (UAC) a
-    second PowerShell running ``inner``.
+    second PowerShell running ``script script_arguments``, and to end with
+    that second PowerShell's exit code.
+
+    ``-PassThru`` and ``exit $p.ExitCode`` are the whole of privacyfence/
+    privacyfence#599's first half, and they are not a refinement of
+    ``-Wait``. ``-Wait`` waits, and that is all it does: without
+    ``-PassThru`` there is no process object to read a code off, so the
+    launcher exits 0 whether the elevated ``enable`` completed or died on
+    its first statement. Every caller below then took its success branch on
+    a number that carried no information -- the daemon logged "privilege
+    separation enabled automatically" at the exact moment separation had not
+    happened, on a machine where it never once did.
 
     ``-ArgumentList`` is handed *one* pre-built command line rather than the
-    obvious array of arguments, and that is the whole reason this function
+    obvious array of arguments, and that is the other reason this function
     exists. ``Start-Process`` joins an ``-ArgumentList`` array with plain
     spaces and quotes nothing, so
     ``"-File", r"C:\\Program Files\\PrivacyFence\\privilege-separation.ps1"``
@@ -1290,16 +1442,28 @@ def _windows_runas_argv(inner: list[str]) -> list[str]:
     elevated PowerShell reads its own arguments; ``_powershell_quoted``
     then carries the result through the outer ``-Command`` as a single
     literal.
+
+    The ``$null -eq $p`` guard is the declined-UAC path. ``Start-Process
+    -Verb RunAs`` raises when consent is refused, which at PowerShell's
+    default ``$ErrorActionPreference`` is written as an error record and
+    execution continues -- leaving ``$p`` unset. Without the guard the next
+    line would read ``.ExitCode`` off nothing and the launcher would exit 0
+    again, which is the same lie this function exists to stop telling.
     """
     powershell = str(_windows_system32("WindowsPowerShell\\v1.0\\powershell.exe"))
+    inner = [
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+        _windows_elevated_script_command(script, script_arguments, transcript),
+    ]
     return [
         powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-        f"Start-Process -FilePath {_powershell_quoted(powershell)} -Verb RunAs -Wait "
-        f"-ArgumentList {_powershell_quoted(subprocess.list2cmdline(inner))}",
+        f"$p = Start-Process -FilePath {_powershell_quoted(powershell)} -Verb RunAs -PassThru -Wait "
+        f"-ArgumentList {_powershell_quoted(subprocess.list2cmdline(inner))}; "
+        "if ($null -eq $p) { exit 1 }; exit $p.ExitCode",
     ]
 
 
-def _windows_full_enable_argv(script: Path) -> list[str]:
+def _windows_full_enable_argv(script: Path, transcript: Path) -> list[str]:
     """The elevated invocation of the *whole* ``enable`` (both halves) on
     Windows -- ``enforce_separation()``'s own attempt, run when a packaged
     build finds itself unseparated at all.
@@ -1312,7 +1476,132 @@ def _windows_full_enable_argv(script: Path) -> list[str]:
     (non-``--auto``) exit code. See ``PlatformLayout.enable_command`` for
     the same command spelled out for a human to type by hand.
     """
-    return _windows_runas_argv(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "enable"])
+    return _windows_runas_argv(script, "enable", transcript)
+
+
+def _log_handlers_under(directory: Path) -> list[logging.FileHandler]:
+    """Every ``FileHandler`` this process has attached whose file lives
+    inside ``directory`` -- root logger first, then any logger that
+    configured its own.
+
+    ``daemon_main.setup_logging()`` puts both handlers on the root logger
+    and everything else inherits them, so in the shipped daemon this finds
+    exactly one. It walks the rest anyway because the cost is a dictionary
+    scan and the failure it guards against is invisible until a release
+    build hits it on somebody's machine.
+    """
+    loggers: list[logging.Logger] = [logging.getLogger()]
+    loggers.extend(
+        obj for obj in logging.Logger.manager.loggerDict.values()
+        if isinstance(obj, logging.Logger)
+    )
+    found: list[logging.FileHandler] = []
+    for log in loggers:
+        for handler in list(log.handlers):
+            if not isinstance(handler, logging.FileHandler) or handler in found:
+                continue
+            try:
+                base = Path(handler.baseFilename)
+            except (AttributeError, TypeError, ValueError):  # pragma: no cover -- defensive
+                continue
+            if base.is_relative_to(directory):
+                found.append(handler)
+    return found
+
+
+@contextlib.contextmanager
+def _data_dir_log_files_released() -> Iterator[None]:
+    """Close the log files this process holds open inside the data directory
+    the elevated ``enable`` is about to **move**, and let them reopen
+    afterwards.
+
+    The third sighting of one defect, and the first where the process
+    holding the file is the one that asked for the move. ``disable`` moved
+    ``%ProgramData%\\PrivacyFence`` out from under a service it had only
+    *asked* to stop (fixed in 1d6b13f) and out from under a companion whose
+    task it had deleted without ending the process; ``enable`` moves
+    ``%LOCALAPPDATA%\\PrivacyFence`` out from under **its own caller** --
+    ``enforce_separation()`` runs from inside a packaged daemon that has
+    already called ``daemon_main.setup_logging()``, so
+    ``logs/privacyfence.log`` is open for append in this very process for
+    the whole elevated run. Windows has no POSIX rename-over-open-files
+    escape hatch, so that is a sharing violation every time::
+
+        -> moving C:\\Users\\...\\AppData\\Local\\PrivacyFence to C:\\ProgramData\\PrivacyFence
+        Move-Item : The process cannot access the file because it is being used by another process.
+            + CategoryInfo : WriteError: (privacyfence.log:FileInfo) [Move-Item], IOException
+
+    -- after which ``Undo-PartialEnable`` rolls the whole thing back and
+    decision 6 refuses to serve, which is how a Scheduler-started daemon
+    on a hosted runner (and on any machine whose install is not separated
+    yet) produced no control pipe at all.
+
+    Nothing is lost while the window is open: ``FileHandler.emit()``
+    reopens ``baseFilename`` by itself whenever ``stream`` is ``None`` --
+    that is how ``delay=True`` works -- so a record logged in the middle of
+    the elevated run simply opens the file again. That is a real hole, and
+    it is why this wraps the ``subprocess.run`` call alone rather than the
+    whole attempt: no ``logger`` call of ours is inside it.
+
+    Afterwards the handlers are pointed at wherever the data directory now
+    is. On the failure path that is the same file they had; on the success
+    path it is the separated root, which this process usually cannot write
+    -- so a handler that cannot be re-established is detached instead, and
+    the last thing this process has to say reaches stderr rather than
+    raising out of a log call.
+    """
+    from . import paths  # local, like every other paths import here -- paths imports this module
+
+    before = paths.data_dir()
+    handlers = _log_handlers_under(before)
+    relative: dict[logging.FileHandler, Path] = {}
+    for handler in handlers:
+        relative[handler] = Path(handler.baseFilename).relative_to(before)
+        handler.acquire()
+        try:
+            stream = handler.stream
+            handler.flush()
+            handler.stream = None  # type: ignore[assignment]  # reopened lazily by emit()
+        finally:
+            handler.release()
+        if stream is not None:
+            with contextlib.suppress(OSError):
+                stream.close()
+    try:
+        yield
+    finally:
+        reset_cache()
+        after = paths.data_dir()
+        for handler in handlers:
+            target = after / relative[handler]
+            try:
+                os.makedirs(target.parent, exist_ok=True)
+                # Proved, not assumed: on the success path this is the
+                # separated root, whose ACLs name the service account and
+                # Administrators -- and `emit()` finding that out for itself
+                # turns every later log call into a handleError() traceback
+                # on a stderr a windowed build does not have.
+                with open(target, "a", encoding="utf-8"):
+                    pass
+            except OSError:
+                _detach_handler(handler)
+                continue
+            handler.baseFilename = str(target)
+
+
+def _detach_handler(handler: logging.Handler) -> None:
+    """Remove one handler from every logger holding it -- the fallback when
+    the file it wrote to has moved somewhere this process may not write.
+
+    A detached handler is strictly better than one that raises out of every
+    subsequent ``logger.info()``: the stderr ``StreamHandler``
+    ``setup_logging()`` installs alongside it is still attached, so the
+    handover message below still has somewhere to go.
+    """
+    logging.getLogger().removeHandler(handler)
+    for obj in list(logging.Logger.manager.loggerDict.values()):
+        if isinstance(obj, logging.Logger):
+            obj.removeHandler(handler)
 
 
 def _run_full_auto_enable_non_macos() -> None:
@@ -1327,6 +1616,16 @@ def _run_full_auto_enable_non_macos() -> None:
     module: every failure is logged, and the caller's own re-check of
     ``is_enabled()`` -- not this function's return -- is what decides
     whether to refuse.
+
+    It re-checks ``is_enabled()`` for its *own* log line too, which is the
+    second half of privacyfence/privacyfence#599 and is deliberately
+    belt-and-braces with the exit-code plumbing in
+    ``_windows_runas_argv()``. A success message here is the only account a
+    user or an operator gets of what happened during a start that then
+    refused to serve, and it was being written off a subprocess return code
+    rather than off the machine. Nothing about an elevation's exit code is
+    trustworthy enough to keep saying "separation enabled" without looking,
+    so this looks.
     """
     platform = current_platform()
     script = installer_script_path()
@@ -1337,31 +1636,50 @@ def _run_full_auto_enable_non_macos() -> None:
     if problem is not None:
         logger.warning("skipping automatic privilege-separation enable: %s", problem)
         return
-    if platform == "win32":
-        argv = _windows_full_enable_argv(script)
-    else:
-        pkexec = shutil.which("pkexec")
-        if pkexec is None:
-            logger.warning(
-                "no pkexec on this system -- cannot prompt for a password to enable privilege "
-                "separation automatically. Run: sudo %s enable", script,
-            )
+    with contextlib.ExitStack() as stack:
+        transcript: Path | None = None
+        if platform == "win32":
+            transcript = stack.enter_context(_elevation_transcript())
+            argv = _windows_full_enable_argv(script, transcript)
+        else:
+            pkexec = shutil.which("pkexec")
+            if pkexec is None:
+                logger.warning(
+                    "no pkexec on this system -- cannot prompt for a password to enable privilege "
+                    "separation automatically. Run: sudo %s enable", script,
+                )
+                return
+            argv = [pkexec, str(script), "enable", "--auto"]
+        try:
+            # The elevated run *moves* this process's own data directory, so
+            # nothing of ours may be holding a file in it while it does --
+            # see _data_dir_log_files_released(), and note that it wraps
+            # this call alone rather than the function, because a logger
+            # call inside the window would simply reopen the file.
+            with _data_dir_log_files_released():
+                result = subprocess.run(  # nosec B603  # fixed argv built above, no shell, quoted per layer
+                    argv, capture_output=True, text=True, timeout=300, check=False,
+                )
+        except (OSError, subprocess.TimeoutExpired):
+            logger.warning("automatic privilege-separation enable did not run", exc_info=True)
             return
-        argv = [pkexec, str(script), "enable", "--auto"]
-    try:
-        result = subprocess.run(  # nosec B603  # fixed argv built above, no shell, quoted per layer
-            argv, capture_output=True, text=True, timeout=300, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        logger.warning("automatic privilege-separation enable did not run", exc_info=True)
-        return
+        # Inside the ExitStack: the transcript is removed on the way out, so
+        # it has to be read while it is still there.
+        detail = _elevation_detail(result, transcript)
     if result.returncode != 0:
         # A declined UAC/polkit prompt lands here and is an expected outcome,
         # not a bug -- the same reading `_run_auto_enable_macos()` takes of
         # osascript's own nonzero exit.
-        logger.info("automatic privilege-separation enable did not complete: %s", result.stderr.strip())
+        logger.info("automatic privilege-separation enable did not complete: %s", detail)
         return
     reset_cache()
+    if not is_enabled():
+        logger.error(
+            "automatic privilege-separation enable exited 0 but this install is still not "
+            "separated -- the elevated run got part of the way and stopped. What it said: %s",
+            detail,
+        )
+        return
     logger.info("privilege separation enabled automatically (ADR 0003 decision 6)")
 
 
@@ -1372,14 +1690,23 @@ def enforce_separation() -> None:
     A no-op on anything but a packaged build (``paths.is_bundled()`` --
     ``sys.frozen``/``_MEIPASS``, see this module's own docstring on why that
     is, in practice, "local mode and nothing else") and on an
-    already-separated install. Otherwise: attempts this platform's
+    already-separated install. Otherwise it attempts this platform's
     provisioning -- ``maybe_auto_enable_macos()`` on macOS, the Windows/Linux
-    equivalent above everywhere else -- and, if the install is *still*
-    unseparated afterwards, raises ``PrivilegeSeparationError`` naming the
-    one command that fixes it, the same fail-closed posture
-    ``check_runtime_identity()`` already takes and for the same reason: the
-    alternative failure is silent, and it does not degrade the product
-    visibly, it invalidates a guarantee the UI is still making.
+    equivalent above everywhere else -- and then raises, whichever way that
+    went, because *neither* outcome leaves this process a daemon to be:
+
+    * still unseparated: ``PrivilegeSeparationError`` naming the one command
+      that fixes it, the same fail-closed posture ``check_runtime_identity()``
+      already takes and for the same reason -- the alternative failure is
+      silent, and it does not degrade the product visibly, it invalidates a
+      guarantee the UI is still making.
+    * separated by the attempt: ``SeparationHandover``, which is not a
+      failure and which ``daemon_main.main()`` exits 0 on. The install now
+      has a service running the daemon under an account this process is
+      not, and the gate that would ordinarily say so ran several steps
+      earlier, when there was nothing to say. See ``SeparationHandover``.
+
+    So this returns only when it did nothing.
 
     No developer override here -- see ``dev_allows_unseparated()``'s own
     docstring for why decision 6's refusal is unconditional on a packaged
@@ -1398,8 +1725,22 @@ def enforce_separation() -> None:
         maybe_auto_enable_macos()
     else:
         _run_full_auto_enable_non_macos()
+    reset_cache()
     if is_enabled():
-        return
+        # It took -- and that settles what this process is, not just what
+        # the install is. `enable` has just handed the daemon to a service
+        # account this process is not, and the identity gate that would
+        # have said so (check_runtime_identity(), daemon_main.main()'s
+        # second call) ran while the install was still unseparated. Stop
+        # here instead of serving the layout we just separated; see
+        # SeparationHandover.
+        raise SeparationHandover(
+            "PrivacyFence has just separated this install (ADR 0003 decision 6). The daemon now "
+            f"runs as '{layout.service_account}', started by the system rather than by this "
+            "session, so this process -- which was started before that happened, as "
+            f"'{current_user_name()}' -- is stopping. Nothing went wrong and nothing else needs "
+            f"doing; run '{layout.status_command}' to see the install."
+        )
     raise PrivilegeSeparationError(
         "This is a packaged PrivacyFence install, and it is not privilege-separated (#428 Phase "
         "4 / ADR 0003 decision 6). The agent and the daemon would run under the same account, so "
@@ -1653,9 +1994,13 @@ def per_user_command_text(script: Path, user: str) -> str:
     return f"sudo {shlex.quote(str(script))} enable --for-user {shlex.quote(user)}"
 
 
-def _per_user_argv(script: Path, user: str) -> list[str] | None:
+def _per_user_argv(script: Path, user: str, transcript: Path) -> list[str] | None:
     """The elevated invocation of ``enable --for-user``, or None where this
     platform has no way to ask for the password from a login session.
+
+    ``transcript`` is where the elevated child's output is to be collected;
+    only the Windows branch has anything to do with it, because only there
+    is that output otherwise unreachable -- see ``_elevation_transcript()``.
 
     Three different mechanisms because the platforms genuinely differ, not
     because three felt thorough: macOS has one system dialog for exactly
@@ -1680,12 +2025,13 @@ def _per_user_argv(script: Path, user: str) -> list[str] | None:
         ]
     if platform == "win32":
         # -Verb RunAs is UAC: it re-launches elevated, which is why this
-        # cannot simply be the inner argv. -Wait so the return code below is
-        # the script's own rather than the launcher's. Both live in
+        # cannot simply be the inner argv. -Wait -PassThru so the return code
+        # below is the script's own rather than the launcher's, and
+        # ``transcript`` so a failure says why. All three live in
         # _windows_runas_argv(), along with the quoting neither caller may
         # get wrong on its own.
         return _windows_runas_argv(
-            ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "enable", "-ForUser", user]
+            script, f"enable -ForUser {_powershell_quoted(user)}", transcript
         )
     pkexec = shutil.which("pkexec")
     if pkexec is None:
@@ -1723,29 +2069,51 @@ def complete_per_user_separation(user: str | None = None) -> bool:
             account, problem, per_user_command_text(script, account),
         )
         return False
-    argv = _per_user_argv(script, account)
-    if argv is None:
-        logger.warning(
-            "%s is not in the %s group yet and there is no way to ask for a password from "
-            "here (no pkexec). Run: %s",
-            account, state.service_group, per_user_command_text(script, account),
-        )
-        return False
-    try:
-        result = subprocess.run(  # nosec B603  # fixed argv built above, no shell, quoted per layer
-            argv, capture_output=True, text=True, timeout=300, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        logger.warning("could not complete privilege separation for %s", account, exc_info=True)
-        return False
+    with contextlib.ExitStack() as stack:
+        transcript = stack.enter_context(_elevation_transcript())
+        argv = _per_user_argv(script, account, transcript)
+        if argv is None:
+            logger.warning(
+                "%s is not in the %s group yet and there is no way to ask for a password from "
+                "here (no pkexec). Run: %s",
+                account, state.service_group, per_user_command_text(script, account),
+            )
+            return False
+        try:
+            result = subprocess.run(  # nosec B603  # fixed argv built above, no shell, quoted per layer
+                argv, capture_output=True, text=True, timeout=300, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            logger.warning("could not complete privilege separation for %s", account, exc_info=True)
+            return False
+        # Inside the ExitStack: the transcript is removed on the way out.
+        detail = _elevation_detail(result, transcript)
     if result.returncode != 0:
         # A declined password dialog lands here and is an expected outcome,
         # not a bug -- the same reading `_run_auto_enable_macos()` takes of
         # osascript's own nonzero exit.
         logger.info(
             "privilege separation was not completed for %s: %s. Run it by hand: %s",
-            account, result.stderr.strip(), per_user_command_text(script, account),
+            account, detail, per_user_command_text(script, account),
         )
         return False
     reset_cache()
+    # The same re-check `_run_full_auto_enable_non_macos()` makes, for the
+    # same reason (privacyfence/privacyfence#599) and with the same
+    # belt-and-braces relationship to the exit code above: returning True
+    # here makes the companion tell somebody to log out and back in, and a
+    # log-out that fixes nothing is worse advice than none. Only a group
+    # that could not be read at all is taken on trust -- the fallback
+    # `owner_membership_pending()` already takes, and for the same reason:
+    # guessing on a platform just failed to interrogate would have the
+    # companion re-prompt at every start.
+    members = service_group_members(state.service_group)
+    if members is not None and not any(accounts_equal(member, account) for member in members):
+        logger.error(
+            "privilege separation for %s exited 0 but %s is still not in the %s group. "
+            "What the elevated run said: %s. Run it by hand: %s",
+            account, account, state.service_group, detail,
+            per_user_command_text(script, account),
+        )
+        return False
     return True

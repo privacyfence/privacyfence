@@ -2113,6 +2113,16 @@ def main(argv: list[str] | None = None) -> int:
         # main() calling that directly.
         try:
             privilege_separation.enforce_separation()
+        except privilege_separation.SeparationHandover as handover:
+            # Caught before the base class below, and exiting 0: the install
+            # is now separated and its service owns the daemon, so this
+            # process has nothing left to do and nothing went wrong. Exiting
+            # non-zero here would make Task Scheduler / launchd / systemd
+            # report a failed start for the one outcome decision 6 is
+            # actually trying to reach. See SeparationHandover.
+            logger.info("%s", handover)
+            print(str(handover))
+            return 0
         except privilege_separation.PrivilegeSeparationError as exc:
             print(f"Configuration error: {exc}", file=sys.stderr)
             return 1
