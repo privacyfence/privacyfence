@@ -57,6 +57,7 @@ import shutil
 import subprocess
 import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -140,13 +141,90 @@ def _sudo_path_exists(path: Path) -> bool:
     return subprocess.run(["sudo", "-n", "test", "-e", str(path)], capture_output=True, timeout=10).returncode == 0
 
 
-def _wait_for_path_as_root(path: Path, *, timeout: float, what: str) -> None:
+def _separated_daemon_report(domain: str) -> str:
+    """Why a separated daemon that launchd says is running is not serving.
+
+    ``_wait_for_running()`` proves only that *a* pid exists under ``domain``,
+    and under a ``KeepAlive`` LaunchDaemon that is also exactly what a crash
+    loop looks like -- launchd relaunches, the poll finds the replacement, and
+    nothing it reports ever changes. So this samples the pid a few times over
+    a couple of seconds: a pid that keeps moving is a daemon dying and being
+    restarted, which is a different bug from one that came up and is merely
+    slow to open its socket, and the two are indistinguishable from the
+    timeout alone.
+
+    Alongside it, the two things that say *why*: launchd's own record for the
+    job (its last exit status included) and whatever the daemon managed to
+    write under the separated root before it went. Both need root -- the
+    separated tree grants ``_privacyfence`` and nothing else."""
+    pids = []
+    for _ in range(5):
+        printed = _launchctl_print(domain)
+        match = re.search(r"^\s*pid\s*=\s*(\d+)", printed or "", re.MULTILINE)
+        pids.append(match.group(1) if match else "none")
+        time.sleep(0.5)
+    verdict = (
+        "pid is stable -- the daemon is up and not opening its socket"
+        if len(set(pids)) == 1 and pids[0] != "none"
+        else "pid CHANGES -- launchd is relaunching a daemon that keeps exiting (KeepAlive crash loop)"
+    )
+    sections = [f"---- {domain} pid samples ----\n{' '.join(pids)}\n{verdict}"]
+    sections.append(f"---- launchctl print {domain} ----\n{_launchctl_print(domain) or '(not loaded)'}")
+
+    listing = _sudo_run("find", str(MACOS_SYSTEM_ROOT), check=False)
+    sections.append(f"---- {MACOS_SYSTEM_ROOT} ----\n{listing.stdout}{listing.stderr}")
+    for line in listing.stdout.splitlines():
+        if line.endswith(".log"):
+            tail = _sudo_run("tail", "-n", "80", line, check=False)
+            sections.append(f"---- {line} (tail) ----\n{tail.stdout}{tail.stderr}")
+    return "\n".join(sections)
+
+
+def _wait_for_path_as_root(path: Path, *, timeout: float, what: str, context: Callable[[], str] | None = None) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _sudo_path_exists(path):
             return
         time.sleep(0.1)
-    raise AssertionError(f"{what} ({path}) never appeared within {timeout}s")
+    detail = f"\n{context()}" if context is not None else ""
+    raise AssertionError(f"{what} ({path}) never appeared within {timeout}s{detail}")
+
+
+def _missing_payload_report(pkg_path: Path) -> str:
+    """What ``installer`` actually did, for the one failure this module keeps
+    hitting and cannot explain: "The install was successful" with nothing at
+    ``INSTALLED_APP_PATH`` (#562).
+
+    The receipt says whether installd thinks it installed this package at all;
+    ``--files`` says what the receipt claims it laid down and therefore whether
+    the payload was empty at *build* time rather than dropped at install time;
+    ``/Applications`` says whether the bundle landed under a different name;
+    and ``/var/log/install.log`` is installd's own account of the run, which is
+    the only source here that can distinguish a package that installed nothing
+    from a payload that was removed again immediately afterwards.
+
+    Collected into the assertion message rather than only into this job's
+    diagnostics artifact: the artifact is not reachable from every place this
+    run gets read, and a failure that reproduces roughly half the time is one
+    a reader needs to understand from the log they already have open."""
+    sections = [f"pkg under test: {pkg_path}"]
+    applications = subprocess.run(
+        ["ls", "-la", "/Applications"], capture_output=True, text=True, timeout=30,
+    )
+    sections.append(f"---- /Applications ----\n{applications.stdout}{applications.stderr}")
+    info = _sudo_run("pkgutil", "--pkg-info", PKG_ID, check=False)
+    sections.append(f"---- pkgutil --pkg-info {PKG_ID} ----\n{info.stdout}{info.stderr}")
+    files = _sudo_run("pkgutil", "--files", PKG_ID, check=False)
+    payload = files.stdout.splitlines()
+    sections.append(
+        f"---- pkgutil --files {PKG_ID} ({len(payload)} entries, first 20) ----\n"
+        + "\n".join(payload[:20]) + files.stderr
+    )
+    install_log = subprocess.run(
+        ["tail", "-n", "200", "/var/log/install.log"], capture_output=True, text=True, timeout=30,
+    )
+    sections.append(f"---- /var/log/install.log (tail) ----\n{install_log.stdout}{install_log.stderr}")
+    return "\n".join(sections)
 
 
 def _wait_for_app_bundle(path: Path, *, timeout: float) -> float | None:
@@ -259,7 +337,11 @@ def test_pkg_install_enables_privilege_separation_with_no_manual_step(_clean_pkg
     user = _current_user()
     uid = os.getuid()
 
-    install = _sudo_run("installer", "-pkg", str(pkg_path), "-target", "/", timeout=120)
+    # -verbose so `install.stdout`, which every assertion below already
+    # quotes, records installd's own per-phase progress instead of the three
+    # lines it prints by default -- the difference between "the install was
+    # successful" and knowing what it considered installing (#562).
+    install = _sudo_run("installer", "-verbose", "-pkg", str(pkg_path), "-target", "/", timeout=120)
     assert not INSTALLED_APP_PATH.is_symlink()
     # #562: don't assert immediately -- see _wait_for_app_bundle's own docstring.
     waited = _wait_for_app_bundle(INSTALLED_APP_PATH, timeout=10)
@@ -272,7 +354,8 @@ def test_pkg_install_enables_privilege_separation_with_no_manual_step(_clean_pkg
         )
     assert waited is not None, (
         f"installer did not place {INSTALLED_APP_PATH} within 10s of returning:\n"
-        f"{install.stdout}{install.stderr}"
+        f"{install.stdout}{install.stderr}\n"
+        f"{_missing_payload_report(pkg_path)}"
     )
 
     # The postinstall script ran `enable --auto` itself, synchronously, as
@@ -302,8 +385,12 @@ def test_pkg_install_enables_privilege_separation_with_no_manual_step(_clean_pkg
 
     _wait_for_path_as_root(
         socket_path_under(HANDOFF_DIR), timeout=20, what="the separated daemon's control channel socket",
+        context=lambda: _separated_daemon_report(f"system/{DAEMON_LABEL}"),
     )
-    _wait_for_path_as_root(HANDOFF_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token")
+    _wait_for_path_as_root(
+        HANDOFF_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token",
+        context=lambda: _separated_daemon_report(f"system/{DAEMON_LABEL}"),
+    )
 
     # ── The companion: a LaunchAgent the postinstall script bootstrapped
     # straight into this runner's own already-logged-in GUI session, exactly

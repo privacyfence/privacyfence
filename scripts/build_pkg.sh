@@ -77,6 +77,7 @@ PKG_ROOT="${BUILD_DIR}/root"
 SCRIPTS_DIR="${BUILD_DIR}/scripts"
 RESOURCES_DIR="${BUILD_DIR}/resources"
 COMPONENT_PKG="${BUILD_DIR}/${PRODUCT_NAME}-${VERSION}-component.pkg"
+COMPONENT_PLIST="${BUILD_DIR}/component.plist"
 DIST_XML="${BUILD_DIR}/distribution.xml"
 PKG_NAME="${PRODUCT_NAME}-${VERSION}.pkg"
 PKG_PATH="dist/${PKG_NAME}"
@@ -127,9 +128,51 @@ sed -e "s|__MCPB_NAME__|${MCPB_NAME}|g" \
 # ── 2. Build the component package ────────────────────────────────────────
 # Default --ownership recommended (no flag needed) leaves the payload
 # root:wheel -- see this script's own header comment for why that matters.
+#
+# --component-plist, with BundleIsRelocatable turned off, is not optional and
+# not a nicety. pkgbuild marks every bundle in the payload relocatable by
+# default, which tells installd: before installing, ask Launch Services where
+# a bundle with this identifier already lives, and if it finds one, install
+# over *that* copy and ignore --install-location entirely. For an app whose
+# identifier the user has ever launched from anywhere else -- a Downloads
+# folder, a still-mounted DMG, a build tree -- that silently redirects the
+# whole install away from /Applications.
+#
+# This is not hypothetical here. It is what
+# test_macos_pkg_install.py::test_pkg_install_enables_privilege_separation_
+# with_no_manual_step had been failing on for weeks (#562, mis-diagnosed as a
+# payload-visibility flake, which is why it looked intermittent -- it tracks
+# whether Launch Services happens to have registered another copy yet):
+#
+#   installd: PackageKit: Applications/PrivacyFenceApp.app relocated to
+#             Users/runner/work/.../dist/PrivacyFenceApp.app
+#   ./postinstall: PrivacyFence postinstall: /Applications/PrivacyFenceApp.app
+#             /Contents/Resources/scripts/macos_privilege_separation.sh not
+#             found or not executable -- leaving privilege separation opt-in.
+#
+# `installer` reports "The install was successful" throughout, because from
+# its point of view it was. The damage is the second line: installer/macos/pkg/
+# postinstall resolves the separation script under the literal
+# /Applications path, so a relocated install also quietly skips provisioning
+# privilege separation -- and ADR 0003 decision 6 then refuses to serve the
+# unseparated install it leaves behind. A user who once ran the app from their
+# Downloads folder gets both halves of that.
+echo "→ Analyzing package root (to turn off bundle relocation)…"
+pkgbuild --analyze --root "$PKG_ROOT" "$COMPONENT_PLIST"
+# One staged .app, one BundleIsRelocatable to clear (see step 1) -- if that
+# ever stops being true, the index below is silently wrong for the rest, so
+# fail rather than half-apply it.
+bundle_count="$(/usr/libexec/PlistBuddy -c 'Print :' "$COMPONENT_PLIST" | grep -c 'BundleIsRelocatable' || true)"
+if [ "$bundle_count" != "1" ]; then
+  echo "error: expected exactly one bundle in ${PKG_ROOT}, found ${bundle_count} -- update the BundleIsRelocatable handling below" >&2
+  exit 1
+fi
+/usr/libexec/PlistBuddy -c 'Set :0:BundleIsRelocatable false' "$COMPONENT_PLIST"
+
 echo "→ Building component package…"
 pkgbuild \
   --root "$PKG_ROOT" \
+  --component-plist "$COMPONENT_PLIST" \
   --identifier "$PKG_ID" \
   --version "$VERSION" \
   --install-location "/Applications" \
