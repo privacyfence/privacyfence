@@ -32,6 +32,7 @@ branch** and read the result back.
 | macOS `LaunchAgent` autostart, `.pkg` install | `macos-graphical-session.yml` | No inputs. |
 | A real DMG, `.pkg`, `.mcpb`, Windows installer or `.deb` | `build.yml` | No inputs. Each platform job runs its own packaged-artifact smoke test as an ordinary step before any upload, so a green job means the artifact actually starts. |
 | Cross-platform `pytest` | — | Don't dispatch. `tests.yml` already runs `platform-windows` and `platform-macos` on every PR; read the failing job's log instead of guessing. |
+| To cut a release tag | `release.yml` | Takes `version` and `dry_run`. **`dry_run` defaults to true** — dispatch it that way first; it runs every check and creates the tag on the runner without pushing. Only cut for real when the maintainer has seen the dry run and said to. See `/cut-release`. |
 
 Three things about dispatching, so they are not rediscovered at runtime:
 
@@ -55,9 +56,11 @@ Two things that look local-only but may not be, in this container specifically:
   it as local-only. The web container ships Chromium and Playwright already (see the
   `PLAYWRIGHT_BROWSERS_PATH` note in `.claude/hooks/session-start.sh`), so try it before declaring
   it impossible.
-- Creating and pushing a release tag is **not** possible here — the container can push branches but
-  not `refs/tags/*`. `scripts/tag_release.py` still runs its checks locally and is worth running
-  for the report; leave the actual tag to the maintainer.
+- Pushing a release tag directly is **not** possible here — the container can push branches but not
+  `refs/tags/*`. Don't try; a failed push can leave a local tag behind that makes
+  `tag_release.py`'s later checks lie. Dispatch `release.yml` instead (table above), and note that
+  cutting a release for real is the maintainer's decision, never a session's: dispatch the dry run,
+  report it, and wait to be told.
 
 ## Which pull requests to follow
 
