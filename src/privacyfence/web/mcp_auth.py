@@ -2,11 +2,19 @@
 OAuth 2.1 verifier (web/oauth_provider.py's ``OrgOAuthProvider``) plugs
 into.
 
-``StaticTokenVerifier`` below is a ``TokenVerifier`` (the official SDK's
-protocol, ``mcp.server.auth.provider.TokenVerifier``) checking a single
-shared secret -- the same "possession of this file is the authority"
-posture ``~/.privacyfence/ipc_token`` had for the bridge, before P5 retired
-it. Not real OAuth 2.1 -- that's org mode
+``PerUserTokenVerifier`` below is a ``TokenVerifier`` (the official SDK's
+protocol, ``mcp.server.auth.provider.TokenVerifier``) checking a bearer
+token against a ``{sha256(token): principal_id}`` map rather than one fixed
+shared secret. Through ADR 0008 (``docs/adr/0008-one-principal-per-os-user.md``)
+this was ``StaticTokenVerifier``, a single shared secret every caller
+resolved to the one local principal -- the "possession of this file is the
+authority" posture ``~/.privacyfence/ipc_token`` had for the bridge, before
+P5 retired it. That was correct while local mode had exactly one principal;
+once a separated install can have one per OS user, a single shared secret
+*is* the leak (any OS user who could read the file could act as every other
+one), so each principal now gets its own token, minted over the control
+channel (``web/control_channel.py``'s ``MINT MCP``/``ROTATE MCP``) rather
+than read from a shared file. Not real OAuth 2.1 -- that's org mode
 (landed at P7 as ``OrgOAuthProvider``, which satisfies the exact same ``TokenVerifier``
 protocol via its own ``verify_token``). Using the SDK's own
 ``TokenVerifier``/``BearerAuthBackend``/``RequireAuthMiddleware`` here
@@ -26,56 +34,202 @@ test, which is the one required to fail loudly if that ever changes.
 """
 from __future__ import annotations
 
-import hmac
+import hashlib
 import secrets
+import threading
+from pathlib import Path
 
 from mcp.server.auth.provider import AccessToken, TokenVerifier
 
-from .. import paths, privilege_separation
+from .. import paths, privilege_separation, secure_files
 from ..principal import LOCAL_PRINCIPAL, Principal
 
 MCP_TOKEN_FILE_NAME = "mcp_token"  # nosec B105  # a filename, not a credential value
 
 
-def load_or_create_mcp_token() -> str:
-    """Reused across daemon restarts (same file) -- the agent's own
-    long-lived credential, unlike the approval surface's session cookie."""
-    # handoff_dir(), not data_dir(): this is the one credential #428 keeps
-    # deliberately reachable by the agent ("mcp_token stays reachable by the
-    # agent. It is the agent's own credential and the product doesn't work
-    # without it"), so on a privilege-separated install it lives in the
-    # directory the user's own session can still read rather than in the
-    # service-account-owned root. Identical path on every other install --
-    # handoff_dir() *is* data_dir() there.
-    path = paths.handoff_dir() / MCP_TOKEN_FILE_NAME
-    if path.exists():
-        token = path.read_text(encoding="utf-8").strip()
-        if token:
-            # The one handoff file that isn't rewritten on every start, so
-            # the only one whose mode has to be re-asserted on the way past:
-            # a token carried over from a pre-#428-Phase-4 install arrives
-            # still 0600 and owned by the service account, which would leave
-            # the agent unable to read its own credential. No-op everywhere
-            # else.
-            privilege_separation.ensure_handoff_file_mode(path)
-            return token
+def _mcp_token_path(principal: Principal) -> Path:
+    """Where ``principal``'s own persisted MCP token lives. On an
+    unseparated install this is the exact path ``load_or_create_mcp_token()``
+    has always used (``handoff_dir()`` *is* ``data_dir()`` there) -- local
+    mode has exactly one principal on such an install, so nothing here
+    moves, and an old ``.mcpb`` build that still reads that file directly
+    off disk (``mcpb/shim/src/protocol.ts``'s legacy fallback) keeps working
+    unchanged. On a privilege-separated install this is
+    ``authority_dir(principal)/mcp_token`` instead -- unreadable to any OS
+    user directly (``0700``, service-account-owned), reachable only by
+    minting it fresh over the control channel (``MINT MCP``), which is what
+    makes a shared, world/group-readable file unnecessary at all once every
+    principal has its own."""
+    if not privilege_separation.is_enabled():
+        return paths.handoff_dir() / MCP_TOKEN_FILE_NAME
+    return paths.authority_dir(principal) / MCP_TOKEN_FILE_NAME
+
+
+def _read_token(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    token = path.read_text(encoding="utf-8").strip()
+    return token or None
+
+
+def load_or_create_mcp_token(principal: Principal = LOCAL_PRINCIPAL) -> str:
+    """``principal``'s own token, reused across daemon restarts (same file)
+    -- the direct successor of the pre-ADR-0008 shared ``mcp_token``, minus
+    the sharing. ``MINT MCP`` (``web/control_channel.py``) is what actually
+    calls this for a real install; a bare default of ``LOCAL_PRINCIPAL``
+    keeps every pre-ADR-0008 caller (including this module's own tests)
+    working unchanged."""
+    path = _mcp_token_path(principal)
+    token = _read_token(path)
+    if token is not None:
+        return token
+    return _write_new_token(principal, path)
+
+
+def rotate_mcp_token(principal: Principal = LOCAL_PRINCIPAL, *, verifier: "PerUserTokenVerifier | None" = None) -> str:
+    """Discards whatever token ``principal`` had and mints a fresh one --
+    ``ROTATE MCP``'s own backing. Unlike ``load_or_create_mcp_token()``,
+    always writes a new value even if one already existed. When
+    ``verifier`` is given, the superseded token (if any) is unregistered
+    from it first, so it stops verifying immediately rather than staying
+    valid in that process's memory until the next restart -- the caller is
+    still responsible for registering the *new* token this returns."""
+    path = _mcp_token_path(principal)
+    if verifier is not None:
+        old = _read_token(path)
+        if old is not None:
+            verifier.unregister(old)
+    return _write_new_token(principal, path)
+
+
+def _write_new_token(principal: Principal, path: Path) -> str:
     token = secrets.token_hex(32)
-    privilege_separation.write_handoff_file(path, token)
+    if privilege_separation.is_enabled():
+        # authority_dir(principal) already created this file's parent at
+        # 0700, service-account-owned -- plain atomic_write_text's own
+        # defaults are exactly that mode, unlike write_handoff_file()'s
+        # group-shared one below, which this path must not use: nothing
+        # but the daemon itself should ever read this file directly.
+        secure_files.atomic_write_text(path, token)
+    else:
+        privilege_separation.write_handoff_file(path, token)
     return token
 
 
-class StaticTokenVerifier(TokenVerifier):
-    """Verifies a bearer token against one fixed shared secret -- see module
-    docstring. ``client_id`` is always ``"local"``: there is exactly one
-    principal in local mode (§9.2), so there's nothing else it could be."""
+def delete_legacy_shared_mcp_token() -> None:
+    """Daemon startup, separated installs only (ADR 0008): removes a
+    leftover ``handoff/mcp_token`` from before this ADR existed -- the
+    single secret every OS user's caller resolved to ``LOCAL_PRINCIPAL``,
+    which is exactly the leak Problem 3 diagnosed. Leaving it in place would
+    still let any service-group member read the owner's own token straight
+    off disk, bypassing ``MINT MCP`` (and the kernel-verified identity it
+    is built on) entirely -- deleting it is what makes an old, unmigrated
+    ``.mcpb`` build fail loudly (the same "update the extension" outcome
+    ADR 0007 already established for a stale shim on a separated install)
+    instead of quietly handing out a token that no longer means what it
+    used to.
 
-    def __init__(self, token: str) -> None:
-        self._token = token
+    A no-op on an unseparated install: there is exactly one principal
+    there, so the file is not a leak, and ``load_or_create_mcp_token()``
+    keeps using this exact path for it (see ``_mcp_token_path()``'s own
+    docstring) -- deleting it would just make the next `/mcp` bearer-token
+    check fail for no security gain.
+    """
+    if not privilege_separation.is_enabled():
+        return
+    path = paths.handoff_dir() / MCP_TOKEN_FILE_NAME
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+class PerUserTokenVerifier(TokenVerifier):
+    """Verifies a bearer token against a ``{sha256(token): principal_id}``
+    map instead of one fixed shared secret -- see module docstring.
+    ``client_id`` stays the literal ``"local"`` for every token this
+    verifier issues, exactly as ``StaticTokenVerifier`` always set it: it
+    identifies *this install's own local-mode token scheme*, not which
+    principal presented it -- that is what ``subject`` is for, and what
+    ``principal_from_access_token()`` below reads back.
+
+    ``register()`` looks up by the token's sha256 digest, not the token
+    itself, so a lookup against an unknown or partially-guessed token never
+    compares raw secret bytes one entry at a time against this process's
+    own growing map -- the same "hash first, then a plain dict lookup"
+    posture this codebase already uses wherever a secret is looked up by
+    value rather than compared to one known value (see
+    ``upload_staging.py``'s own claim-by-token lookup)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._principal_by_digest: dict[str, str] = {}
+
+    def register(self, token: str, principal_id: str) -> None:
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        with self._lock:
+            self._principal_by_digest[digest] = principal_id
+
+    def unregister(self, token: str) -> None:
+        """Drops a superseded token (``ROTATE MCP``'s old value) so it stops
+        verifying immediately, rather than staying valid until this process
+        restarts."""
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        with self._lock:
+            self._principal_by_digest.pop(digest, None)
 
     async def verify_token(self, token: str) -> AccessToken | None:
-        if not token or not hmac.compare_digest(token, self._token):
+        if not token:
             return None
-        return AccessToken(token=token, client_id="local", scopes=[])
+        digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        with self._lock:
+            principal_id = self._principal_by_digest.get(digest)
+        if principal_id is None:
+            return None
+        return AccessToken(token=token, client_id="local", scopes=[], subject=principal_id)
+
+
+def single_token_verifier(token: str, principal: Principal = LOCAL_PRINCIPAL) -> PerUserTokenVerifier:
+    """A ``PerUserTokenVerifier`` registered with exactly one token -- for a
+    caller that has no multi-principal registration to grow (a direct,
+    low-level call to ``build_mcp_asgi_app(token=...)``/
+    ``build_file_bridge_asgi_app(token=...)``, or a test). Real local-mode
+    traffic (``web/server.py``) builds and preloads its own long-lived
+    ``PerUserTokenVerifier`` instead, so ``MINT MCP`` has something to
+    register new principals into -- see ``preload_verifier()``."""
+    verifier = PerUserTokenVerifier()
+    verifier.register(token, principal.id)
+    return verifier
+
+
+def preload_verifier(verifier: PerUserTokenVerifier) -> None:
+    """Populates ``verifier`` from every principal's own already-persisted
+    token file at daemon startup -- ``MINT MCP``/``ROTATE MCP`` grow the map
+    as they're called, but a token minted by a *previous* run has to verify
+    again on this one without anyone calling ``MINT MCP`` first (a Claude
+    Code config that pasted the token once and never asks again). Local
+    principal plus every already-provisioned ``users/<id>/`` -- the same
+    existence-only enumeration ``paths.all_uploads_dirs()``/
+    ``all_downloads_dirs()`` already use, so a principal nobody has ever
+    minted a token for (or one on an unseparated install, where there is
+    only ever the local principal) contributes nothing rather than an
+    empty file."""
+    _preload_one(verifier, LOCAL_PRINCIPAL)
+    if not privilege_separation.is_enabled():
+        return
+    users_root = paths.data_dir() / "users"
+    if not users_root.is_dir():
+        return
+    for entry in sorted(users_root.iterdir()):
+        if not entry.is_dir() or not paths.safe_principal_id(entry.name) == entry.name:
+            continue
+        _preload_one(verifier, Principal(id=entry.name))
+
+
+def _preload_one(verifier: PerUserTokenVerifier, principal: Principal) -> None:
+    token = _read_token(_mcp_token_path(principal))
+    if token is not None:
+        verifier.register(token, principal.id)
 
 
 def principal_from_access_token(token: AccessToken | None) -> Principal:
@@ -83,9 +237,12 @@ def principal_from_access_token(token: AccessToken | None) -> Principal:
     once per HTTP request, in exactly one place per surface") -- routes_mcp.py calls this once per
     tool call, wrapping dispatch in ``principal_scope(...)`` around it.
 
-    Local mode: ``StaticTokenVerifier`` above only ever mints
-    ``client_id="local"`` and no ``subject``, so this resolves to
-    ``LOCAL_PRINCIPAL``.
+    Local mode: ``PerUserTokenVerifier`` above sets ``client_id="local"``
+    and ``subject=<the presenting principal's id>`` (ADR 0008) -- a
+    ``subject`` of ``LOCAL_PRINCIPAL.id`` (the install's owner) resolves to
+    ``LOCAL_PRINCIPAL`` itself rather than a freshly-built ``Principal``
+    with no email/display_name, so every existing per-principal registry
+    keeps seeing the exact object it always has for the owner.
 
     Org mode (P7): the token comes from ``web/oauth_provider.py``'s
     ``OrgOAuthProvider`` instead, whose ``AccessToken.subject`` is the
@@ -96,11 +253,14 @@ def principal_from_access_token(token: AccessToken | None) -> Principal:
     is_admin ``OrgOAuthProvider._mint_tokens`` stashed there. Falls back to
     ``client_id`` only if a verifier somehow returns a token with no
     ``subject`` at all -- better than crashing, though nothing in this
-    codebase does that today outside ``StaticTokenVerifier``'s own
-    local-mode case, which is handled above already.
+    codebase does that today outside local mode's own case, which is
+    handled above already.
     """
-    if token is None or token.client_id == LOCAL_PRINCIPAL.id:
+    if token is None:
         return LOCAL_PRINCIPAL
+    if token.client_id == LOCAL_PRINCIPAL.id:
+        principal_id = token.subject or LOCAL_PRINCIPAL.id
+        return LOCAL_PRINCIPAL if principal_id == LOCAL_PRINCIPAL.id else Principal(id=principal_id)
     principal_id = token.subject or token.client_id
     claims = token.claims or {}
     return Principal(

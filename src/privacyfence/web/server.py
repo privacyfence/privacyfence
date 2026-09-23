@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -99,7 +100,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from .. import __version__, paths, privilege_separation, web_shell, webauthn_stepup
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
-from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, principal_scope
+from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
 from ..settings_controller import SettingsController, set_main_dispatcher
 from ..step_up_config import StepUpConfig
 from ..web_approval_ui import WebApprovalUI
@@ -118,7 +119,8 @@ from .control_channel import (
 )
 from .csp import build_csp
 from .csp import new_nonce as _new_csp_nonce
-from .mcp_auth import load_or_create_mcp_token
+from . import mcp_auth
+from .mcp_auth import PerUserTokenVerifier, load_or_create_mcp_token
 from .mcp_dispatch import McpDispatcher
 from .oauth_provider import OrgOAuthProvider
 from .org_session import OrgSessionStore
@@ -524,11 +526,32 @@ class OrgAuth:
     install_wide_settings_path: str = ""
 
 
-def _default_principal(_request: Request) -> Principal:
-    """Local mode's own resolver: there is no logged-in multi-user session
-    to resolve a real one from -- possessing the shared token *is* the
-    identity, exactly as this module's own docstring describes."""
-    return LOCAL_PRINCIPAL
+def _local_principal_resolver(sessions: LocalSessionStore) -> Callable[[Request], Principal]:
+    """Local mode's own resolver (ADR 0008): a valid ``pf_session`` cookie
+    resolves to whichever principal minted it (``LocalSessionStore.
+    principal_id`` -- set at mint time from the control channel's own peer
+    credentials, see ``web/control_channel.py``'s ``MINT``/``MINT
+    COMPANION``/``MINT CONSOLE``); anything else -- no cookie, an unknown or
+    expired one, or a session that predates this field -- resolves to
+    ``LOCAL_PRINCIPAL``, the same thing every local-mode session resolved to
+    before this ADR. Unlike ``_org_principal_resolver`` below, an
+    unauthenticated request never resolves to ``ANONYMOUS_PRINCIPAL`` here:
+    local mode's own authentication check (``_session_authenticated``) is a
+    separate, later gate every local route already runs on its own, and
+    local mode has never needed a distinct "not yet authenticated" identity
+    the way a multi-tenant org deployment does (see ``ANONYMOUS_PRINCIPAL``'s
+    own docstring)."""
+
+    def resolve(request: Request) -> Principal:
+        session_id = request.cookies.get(_SESSION_COOKIE, "")
+        if not session_id:
+            return LOCAL_PRINCIPAL
+        principal_id = sessions.principal_id(session_id)
+        if principal_id is None or principal_id == LOCAL_PRINCIPAL.id:
+            return LOCAL_PRINCIPAL
+        return Principal(id=principal_id)
+
+    return resolve
 
 
 def _org_principal_resolver(sessions: OrgSessionStore) -> Callable[[Request], Principal]:
@@ -558,8 +581,9 @@ class _PrincipalScopeMiddleware:
     privacy_filter.py, resource_names.py) resolves against whatever
     ``resolve`` returns for the rest of the request.
 
-    ``resolve`` defaults to _default_principal (always LOCAL_PRINCIPAL) in
-    local mode, or _org_principal_resolver in org mode (P7) --
+    ``resolve`` defaults to _local_principal_resolver(sessions) in local
+    mode (ADR 0008: LOCAL_PRINCIPAL, or whichever principal minted the
+    request's own session), or _org_principal_resolver in org mode (P7) --
     parameterized rather than hardcoded so a test can inject a resolver
     that varies by request to prove two principals stay isolated all the
     way through the real HTTP routes, not just via principal_scope()
@@ -577,6 +601,49 @@ class _PrincipalScopeMiddleware:
         principal = self._resolve(Request(scope))
         with principal_scope(principal):
             await self._app(scope, receive, send)
+
+
+def _owner_only_endpoint(endpoint: Callable) -> Callable:  # noqa: ANN401 -- Starlette's own endpoint signature isn't typed
+    """Wraps a Starlette endpoint so any principal other than
+    ``LOCAL_PRINCIPAL`` gets a 404 instead of reaching it -- ADR 0008's
+    "What this phase deliberately does not do": ``/settings`` administers
+    ``SettingsController``'s one connector set and one config file, both
+    the install owner's, and turning that into a genuinely per-principal
+    surface is a follow-up this phase does not attempt. A non-owner
+    principal (an ``os-<uid>``/``os-<sid>`` OS user, ADR 0008) gets the same
+    404 -- not 403 -- every other cross-principal lookup in this codebase
+    already returns, so the settings page's existence is not itself a
+    signal to a principal it does not belong to."""
+
+    @functools.wraps(endpoint)
+    async def wrapped(request: Request) -> Response:
+        if current_principal().id != LOCAL_PRINCIPAL.id:
+            return PlainTextResponse("Not Found", status_code=404)
+        return await endpoint(request)
+
+    return wrapped
+
+
+def _owner_only_routes(routes: list) -> list:  # noqa: ANN401 -- list[BaseRoute], typed loosely to avoid importing BaseRoute just for this
+    """Rebuilds each ``Route`` in ``routes`` (``build_settings_routes()``'s
+    own return value -- see that function's own docstring: always plain
+    ``Route`` objects, never a ``Mount``/``WebSocketRoute``) with its
+    endpoint wrapped by ``_owner_only_endpoint``. A list comprehension
+    rather than mutating in place: ``Route.endpoint`` has no public setter,
+    and rebuilding is what ``build_settings_routes()``'s own
+    ``_BESPOKE_SENSITIVE_ROUTE_PATHS``/assertion pass already assumes is
+    safe to do to its output (``routes_settings.py``'s own docstring on that
+    loop)."""
+    rebuilt = []
+    for route in routes:
+        assert isinstance(route, Route), (  # nosec B101 -- build_settings_routes() only ever returns plain Route objects
+            f"expected a plain Route from build_settings_routes(), got {type(route)!r}"
+        )
+        rebuilt.append(Route(
+            route.path, _owner_only_endpoint(route.endpoint),
+            methods=sorted(route.methods) if route.methods else None, name=route.name,
+        ))
+    return rebuilt
 
 
 def _parse_host_header(raw: str) -> str | None:
@@ -671,13 +738,15 @@ class _BootstrapMiddleware:
             return
         response = RedirectResponse(request.url.path, status_code=303)
         # The code carries its own provenance (web/session_auth.py's
-        # ``PROVENANCE_*``) and the session inherits it unchanged: the mint
-        # is the only moment anything knew how this credential came to
-        # exist, and a middleware reading a query string is in no position
-        # to improve on that.
-        provenance = self._bootstrap.consume(code)
-        if provenance is not None:
-            _set_session_cookie(response, self._sessions.create(provenance=provenance))
+        # ``PROVENANCE_*``) and, since ADR 0008, the principal that minted it
+        # (which OS user's control-channel connection asked), and the session
+        # inherits both unchanged: the mint is the only moment anything knew
+        # how this credential came to exist and for whom, and a middleware
+        # reading a query string is in no position to improve on that.
+        consumed = self._bootstrap.consume(code)
+        if consumed is not None:
+            provenance, principal_id = consumed
+            _set_session_cookie(response, self._sessions.create(provenance=provenance, principal_id=principal_id))
         await response(scope, receive, send)
 
 
@@ -760,6 +829,7 @@ def build_app(
     allowed_hosts: frozenset[str] = frozenset({"localhost", "127.0.0.1"}),
     mcp_dispatcher: McpDispatcher | None = None,
     mcp_token: str | None = None,
+    mcp_verifier: PerUserTokenVerifier | None = None,
     controller: SettingsController | None = None,
     allow_quit: bool = True,
     state_stream: StateStream | None = None,
@@ -785,8 +855,8 @@ def build_app(
     are mounted alongside it. Local mode (``org=None``, the default) is
     entirely unchanged from before this phase.
 
-    ``principal_resolver`` defaults to _default_principal (local mode,
-    always LOCAL_PRINCIPAL) or _org_principal_resolver (org mode) --
+    ``principal_resolver`` defaults to _local_principal_resolver(sessions)
+    (local mode, ADR 0008) or _org_principal_resolver (org mode) --
     pass an explicit one only to prove per-principal isolation over real
     HTTP in a test.
 
@@ -847,16 +917,22 @@ def build_app(
     extra_routes: list[Route] = []
     lifespans = []
     if mcp_dispatcher is not None:
-        if not mcp_token:
-            raise ValueError("mcp_token is required when mcp_dispatcher is given")
-        mcp_route, session_manager = mount_mcp(mcp_dispatcher, token=mcp_token)
+        # ADR 0008: real local-mode traffic always passes mcp_verifier (a
+        # long-lived PerUserTokenVerifier MINT MCP registers new principals
+        # into); mcp_token is kept for a caller with no multi-principal
+        # registration to grow (most of this module's own tests) --
+        # mount_mcp/mount_file_bridge's own token/verifier seam does the
+        # rest, exactly as it already does for org mode's OrgOAuthProvider.
+        if not mcp_token and mcp_verifier is None:
+            raise ValueError("mcp_token or mcp_verifier is required when mcp_dispatcher is given")
+        mcp_route, session_manager = mount_mcp(mcp_dispatcher, token=mcp_token, verifier=mcp_verifier)
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
         # ADR 0007: the local file bridge's own upload/download endpoints,
-        # authenticated exactly like /mcp (same shared secret) -- see
-        # routes_file_bridge.py's own module docstring for why this can't
-        # just be more routes on the main approval-surface app.
-        extra_routes.extend(mount_file_bridge(token=mcp_token))
+        # authenticated exactly like /mcp (same bearer-token verifier) --
+        # see routes_file_bridge.py's own module docstring for why this
+        # can't just be more routes on the main approval-surface app.
+        extra_routes.extend(mount_file_bridge(token=mcp_token, verifier=mcp_verifier))
 
     # The self-approval plan's Phase 2 -- one answer, read once here, for
     # both gates below: an approving decision (web/routes_approvals.py) and
@@ -869,11 +945,11 @@ def build_app(
     require_human_session = privilege_separation.is_enabled()
 
     if controller is not None:
-        extra_routes.extend(build_settings_routes(
+        extra_routes.extend(_owner_only_routes(build_settings_routes(
             controller, sessions=sessions, allow_quit=allow_quit, notifications_enabled=notifications_enabled,
             notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_issuer_url,
             require_human_session=require_human_session,
-        ))
+        )))
 
     # #426 Phase 1: mounted whenever step_up.rp_id is set -- which, unlike
     # org mode, local mode's own StepUpConfig.from_local_config() always
@@ -883,9 +959,10 @@ def build_app(
     if step_up is not None and step_up.rp_id:
         from . import routes_security
 
+        _resolve_local_principal = _local_principal_resolver(sessions)
         extra_routes.extend(routes_security.build_routes(
             resolve_principal=lambda request: (
-                LOCAL_PRINCIPAL if _session_authenticated(request, sessions) else None
+                _resolve_local_principal(request) if _session_authenticated(request, sessions) else None
             ),
             check_csrf=_csrf_matches,
             check_origin=_origin_ok,
@@ -939,7 +1016,9 @@ def build_app(
         require_human_session=require_human_session,
     )
     bootstrapped: ASGIApp = _BootstrapMiddleware(app, bootstrap=bootstrap, sessions=sessions)
-    scoped: ASGIApp = _PrincipalScopeMiddleware(bootstrapped, principal_resolver or _default_principal)
+    scoped: ASGIApp = _PrincipalScopeMiddleware(
+        bootstrapped, principal_resolver or _local_principal_resolver(sessions),
+    )
     wrapped: ASGIApp = _HostAllowlistMiddleware(scoped, allowed_hosts)
     return _SecurityHeadersMiddleware(wrapped)
 
@@ -1109,6 +1188,18 @@ class WebServer:
         # `self.bootstrap`'s own type is `BootstrapStore | None`, since it's
         # assigned once for both modes. See web/control_channel.py's own
         # module docstring.
+        # ADR 0008: the shared, growable {token: principal_id} map every
+        # /mcp and file-bridge call verifies against, and the one MINT
+        # MCP/ROTATE MCP register new principals into over the control
+        # channel below -- built here, ahead of ControlChannelServer, so
+        # the callback that channel is given and the verifier build_app()
+        # mounts are the exact same object. None whenever there is no /mcp
+        # surface to mint a token for at all (org mode, which has its own
+        # OAuth 2.1 authorization server instead; local mode with mcp
+        # disabled).
+        self.mcp_verifier: PerUserTokenVerifier | None = (
+            PerUserTokenVerifier() if org is None and mcp_dispatcher is not None else None
+        )
         if org is not None:
             self.sessions = None
             self.bootstrap = None
@@ -1134,12 +1225,22 @@ class WebServer:
                 enrollment_state=lambda: local_enrollment_state(step_up),
                 reissue_recovery_code=reissue_local_recovery_code,
                 status=lambda: local_status_payload(started_at),
+                mint_mcp_token=self._mint_mcp_token if self.mcp_verifier is not None else None,
             )
         self.mcp_dispatcher = mcp_dispatcher
         self.mcp_token = (
             None if org is not None
             else ((mcp_token or load_or_create_mcp_token()) if mcp_dispatcher is not None else None)
         )
+        if self.mcp_verifier is not None:
+            # Preload every already-provisioned principal's own persisted
+            # token (a previous run's MINT MCP/ROTATE MCP, or an existing
+            # single-user install's own legacy token -- see mcp_auth.py's
+            # own module docstring), then make sure the local/owner
+            # principal specifically has one registered even on a install's
+            # very first start, before anyone has ever called MINT MCP.
+            mcp_auth.preload_verifier(self.mcp_verifier)
+            self.mcp_verifier.register(self.mcp_token or load_or_create_mcp_token(), LOCAL_PRINCIPAL.id)
         self.controller = controller
         self.allow_quit = allow_quit
         self.notifications_enabled = notifications_enabled
@@ -1156,7 +1257,13 @@ class WebServer:
         if org is None and (controller is not None or web_ui is not None):
             self.state_stream = StateStream(
                 settings_snapshot=(controller.snapshot if controller is not None else lambda: None),
-                list_pending=web_ui.deferred_registry.list_pending,
+                # ADR 0008: filtered to whichever principal this SSE
+                # connection's own request is scoped to -- an unfiltered
+                # list_pending() would push every principal's pending
+                # approvals to whoever has a tab open, exactly the leak
+                # _list_rows() in routes_approvals.py closes for the
+                # equivalent poll-based endpoint.
+                list_pending=lambda: web_ui.deferred_registry.list_pending(principal_id=current_principal().id),
             )
             if controller is not None:
                 controller.add_change_listener(self.state_stream.push_settings)
@@ -1188,6 +1295,7 @@ class WebServer:
             allowed_hosts=allowed_hosts,
             mcp_dispatcher=mcp_dispatcher,
             mcp_token=self.mcp_token,
+            mcp_verifier=self.mcp_verifier,
             controller=controller,
             allow_quit=allow_quit,
             state_stream=self.state_stream,
@@ -1209,6 +1317,23 @@ class WebServer:
         )
         self._server = uvicorn.Server(config)
         self._thread: threading.Thread | None = None
+
+    def _mint_mcp_token(self, rotate: bool) -> str:
+        """``ControlChannelServer``'s own ``mint_mcp_token`` callback (ADR
+        0008): mints (or rotates) the connecting peer's own MCP token,
+        registers it into ``self.mcp_verifier``, and returns it -- called
+        only while that connection's own ``principal_scope`` is active (see
+        ``_LineProtocolServer._dispatch``), so ``current_principal()`` here
+        is exactly the peer's own kernel-verified identity, never a
+        hardcoded default."""
+        principal = current_principal()
+        assert self.mcp_verifier is not None  # nosec B101  # only ever wired in when mcp_verifier exists
+        token = (
+            load_or_create_mcp_token(principal) if not rotate
+            else mcp_auth.rotate_mcp_token(principal, verifier=self.mcp_verifier)
+        )
+        self.mcp_verifier.register(token, principal.id)
+        return token
 
     @property
     def base_url(self) -> str:

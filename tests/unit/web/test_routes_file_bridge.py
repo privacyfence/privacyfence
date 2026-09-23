@@ -81,7 +81,7 @@ class TestDownloadRoute:
         assert r.status_code == 404
 
     def test_wrong_principal_is_404(self):
-        # StaticTokenVerifier always resolves the caller to LOCAL_PRINCIPAL
+        # PerUserTokenVerifier always resolves this single-token caller to LOCAL_PRINCIPAL
         # -- stage for a different principal to exercise the mismatch path
         # directly against the store, same shape test_routes_downloads.py
         # uses for the org-mode route.

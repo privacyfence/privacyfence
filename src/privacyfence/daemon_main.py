@@ -744,8 +744,44 @@ def _maybe_start_web_server(
 
     mcp_dispatcher = None
     if mcp_enabled:
+        from .connector_registry import ConnectorRegistry
+        from .principal import Principal
+
+        # ADR 0008: local mode's own /mcp dispatch is now per-principal,
+        # exactly like org mode's (_start_org_web_server's own
+        # ConnectorRegistry below). Any principal other than the owner (an
+        # os-<uid>/os-<sid> OS user newly added to a separated install's
+        # service group) gets a freshly built, unconfigured connector set
+        # of their own -- "a new user starts with the packaged default
+        # policy and no connectors" -- built under their own principal_scope
+        # (ConnectorRegistry.get() enters it before calling this factory),
+        # so any credential a connector happens to persist lands under
+        # their own paths.user_dir(), never the owner's. This factory is
+        # never actually called for the owner (see _connectors() below).
+        def _connectors_for_new_principal(_principal: Principal) -> list:
+            new_connectors, _failures = build_connectors(config, org_config)
+            return new_connectors
+
+        connector_registry = ConnectorRegistry(factory=_connectors_for_new_principal)
+
+        def _connectors() -> dict[str, Any]:
+            # The owner (LOCAL_PRINCIPAL) dispatches against *this exact*
+            # connector_host, the one SettingsController also holds a
+            # reference to -- never through ConnectorRegistry's own cache,
+            # which would freeze a snapshot of connector_host.connectors at
+            # first build and never see a later connector_host.
+            # set_connectors() call (a toggle via /settings, an OAuth flow
+            # finishing). Bypassing the registry here is what keeps a rule
+            # changed via /settings and one changed via a gated call's own
+            # "Always allow" button in sync with no separate plumbing,
+            # exactly as before this ADR.
+            principal = current_principal()
+            if principal.id == LOCAL_PRINCIPAL_ID:
+                return connector_host.connectors
+            return connector_registry.get(principal).connectors
+
         mcp_dispatcher = McpDispatcher(
-            lambda: connector_host.connectors, unattended_sessions_enabled=unattended_sessions_enabled,
+            _connectors, unattended_sessions_enabled=unattended_sessions_enabled,
             registry=registry,
         )
         if controller is not None:
@@ -862,11 +898,14 @@ def _maybe_start_web_server(
     if use_web_settings:
         logger.info("Web settings active -- same two ways in (%s/settings)", server.base_url)
     if server.mcp_url:
-        from .web.mcp_auth import MCP_TOKEN_FILE_NAME
-
+        # ADR 0008: no single well-known file names the token any more --
+        # the .mcpb shim mints its own over the control channel (MINT MCP),
+        # and a direct client without a shim runs `--print-mcp-token`
+        # (which does the exact same mint, as itself).
         logger.info(
-            "MCP-over-HTTP active -- %s (Authorization: Bearer <token in %s>)",
-            server.mcp_url, data_dir() / MCP_TOKEN_FILE_NAME,
+            "MCP-over-HTTP active -- %s (Authorization: Bearer <token from "
+            "`privacyfence-app --print-mcp-token`>)",
+            server.mcp_url,
         )
     return server
 
@@ -1780,6 +1819,15 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
     init_config_path(_resolve_path(config_path))
 
+    # ADR 0008: a leftover handoff/mcp_token predates per-principal MCP
+    # tokens and is the shared credential that let every OS user's caller
+    # resolve to LOCAL_PRINCIPAL -- removed here, once, at the top of every
+    # separated startup, before anything else in this function runs. A
+    # no-op on an unseparated install (see that function's own docstring).
+    from .web import mcp_auth as _mcp_auth
+
+    _mcp_auth.delete_legacy_shared_mcp_token()
+
     config = _migrate_settings_to_policy_v2(config, _resolve_path(config_path))
     set_policy_v2_store_rules(policy_store.compile_rules_from_config(config))
     # Issue #151 retired the settings.yaml-configurable rule_suggestion_priority
@@ -1987,6 +2035,49 @@ def run_print_sign_in_link() -> int:
 
 
 # ---------------------------------------------------------------------------- #
+# --print-mcp-token
+# ---------------------------------------------------------------------------- #
+
+def run_print_mcp_token() -> int:
+    """ADR 0008's own break-glass-style path for ``/mcp``: a direct HTTP
+    MCP client with no ``.mcpb`` shim of its own (Claude Code, a hand-
+    rolled script) has nowhere to read a bearer token from any more on a
+    privilege-separated install -- ``handoff/mcp_token``, the one shared
+    file every OS user's caller used to read, no longer exists once
+    separated (``mcp_auth.delete_legacy_shared_mcp_token()``). This runs the
+    identical ``MINT MCP`` mint the shim itself does
+    (``mcpb/shim/src/controlChannel.ts``), as this OS account, and prints
+    the result -- the same token this account gets back every time it asks,
+    for as long as it keeps running as itself.
+
+    The URL goes to stdout alone, like ``--print-sign-in-link``, so this
+    can be composed into a shell command (e.g. ``claude mcp add ... --header
+    "Authorization: Bearer $(privacyfence-app --print-mcp-token)"``);
+    everything else goes to stderr.
+    """
+    from .web import control_channel
+
+    base_url = control_channel.read_base_url()
+    if base_url is None:
+        print(
+            "PrivacyFence does not appear to be running in local mode -- there is no MCP token "
+            "to mint. (Organization mode uses its own OAuth 2.1 sign-in instead.)",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        token = control_channel.mint_mcp_token()
+    except OSError as exc:
+        print(f"Could not reach PrivacyFence's control channel: {exc}", file=sys.stderr)
+        return 1
+    except control_channel.ControlChannelError as exc:
+        print(f"Could not mint an MCP token: {exc}", file=sys.stderr)
+        return 1
+    print(token)
+    return 0
+
+
+# ---------------------------------------------------------------------------- #
 # Argument parsing
 # ---------------------------------------------------------------------------- #
 
@@ -2020,6 +2111,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Print a one-time sign-in link for PrivacyFence's own web UI and exit. Run this "
             "yourself, in your own terminal -- PrivacyFence's companion app confirms it with you "
             "before the link is allowed to approve anything."
+        ),
+    )
+    # ADR 0008: the CLI's own equivalent of the .mcpb shim's mintMcpToken()
+    # -- for a direct HTTP MCP client (Claude Code, another tool with no
+    # shim of its own) that needs the bearer token /mcp expects, without
+    # reading a shared file that (on a separated install) no longer exists.
+    parser.add_argument(
+        "--print-mcp-token", action="store_true",
+        help=(
+            "Print this OS account's own MCP bearer token (minting one on first use) and exit. "
+            "For a direct HTTP MCP client with no PrivacyFence extension of its own."
         ),
     )
     # #428 Phase 4 (B5c): how the Windows Service Control Manager starts the
@@ -2060,6 +2162,8 @@ def main(argv: list[str] | None = None) -> int:
     # the authority directory it could not read anyway.
     if args.print_sign_in_link:
         return run_print_sign_in_link()
+    if args.print_mcp_token:
+        return run_print_mcp_token()
 
     # #428 Phase 4, before load_config() below -- which is the first thing
     # that would read settings.yaml out of the (now service-account-owned)

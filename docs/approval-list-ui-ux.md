@@ -119,7 +119,10 @@ differs is passed in, not forked:
   enrollment prompt, or directly.
 - **principal label** — org mode names the signed-in principal in the header. Its entire
   authorization model is per-principal and the page otherwise never says whose queue is on screen.
-  Local mode has exactly one principal and renders nothing.
+  Local mode renders nothing here even though [ADR 0008](adr/0008-one-principal-per-os-user.md)
+  means it can now have more than one principal too (a privilege-separated install with a second
+  OS account) — each one's `/approvals` already shows only their own queue (`web/routes_approvals.py`
+  filters by `current_principal()`), it just doesn't yet say so in the header the way org mode does.
 - **live updates** — see above.
 
 ## Approval card

@@ -128,14 +128,12 @@ usage: sudo $0 {enable|disable|status} [options]
                       install the machine half has already separated -- add
                       <name> to ${SERVICE_GROUP} and migrate their
                       ~/.privacyfence. Idempotent, and what the companion app
-                      runs when it finds that membership still pending.
-  --allow-additional-user
-                      enable --for-user only: this install already belongs to
-                      a different recorded owner, and you understand that
-                      account's own ~/.privacyfence will NOT be merged in
-                      (#428 Phase 2 §2.6 -- PrivacyFence supports one owner
-                      per machine until Phase 3). Without this, --for-user for
-                      anyone but the recorded owner refuses to run.
+                      runs when it finds that membership still pending. Works
+                      for any number of accounts on the same machine, not
+                      just this install's first (recorded) owner -- each gets
+                      its own isolated PrivacyFence identity, never merged
+                      with anyone else's (docs/adr/0008-one-principal-per-os-
+                      user.md).
   --app <path>        PrivacyFenceApp.app to run from
                       (default: ${DEFAULT_APP})
   --daemon-exec <p>   run this instead of the .app's daemon executable
@@ -169,15 +167,16 @@ USAGE
 
 AUTO=0
 FOR_USER_ONLY=0
-# #428 Phase 2 §2.6's escape hatch: without this, enable --for-user refuses
-# to add a second account to an install the marker already records a
-# different owner for. Set by --allow-additional-user below.
-ALLOW_ADDITIONAL_USER=0
 # Set by cmd_enable_for_user() when it is running for an account other than
-# the marker's recorded owner (only reachable at all with
-# ALLOW_ADDITIONAL_USER=1) -- migrate_data() reads this to skip copying that
-# account's own ~/.privacyfence into the shared data directory, per §2.6
-# item 3.
+# the marker's recorded owner -- i.e. this install already has one principal
+# and this run is adding a second (or third, ...) one. migrate_data() reads
+# this to route that account's own ~/.privacyfence into its own per-principal
+# subdirectory (users/os-<uid>/) instead of the shared root, per ADR 0008
+# ("D2: two identities, not one, per install") -- each OS account PrivacyFence
+# ever runs `enable --for-user` for gets fully isolated storage, never merged
+# with another account's. #428 Phase 2 §2.6's interim guard used to refuse
+# this outright rather than isolate it; ADR 0008 is what let the refusal be
+# replaced with a real per-user destination instead of just being deleted.
 NON_OWNER_FOR_USER=0
 # The sub-verb of `daemon {status|start|stop|restart|ensure-running}`,
 # pulled off the argument list before the generic option-parsing loop below
@@ -456,17 +455,49 @@ marker_owner_user() {
 legacy_data_dir() { printf '%s/.privacyfence' "$OWNER_HOME"; }
 
 migrate_data() {
-  local legacy
-  # #428 Phase 2 §2.6 item 3: an --allow-additional-user run for an account
-  # that is not this install's recorded owner never merges that account's
-  # own ~/.privacyfence into the shared data directory -- doing so would mix
-  # a second person's local files into the first owner's connector tokens,
-  # audit log and policy, which is exactly the cross-account leak this whole
-  # guard exists to close. cmd_enable_for_user() is the only caller that
-  # ever sets NON_OWNER_FOR_USER, and only after the owner-mismatch check
-  # above has already required --allow-additional-user to reach here at all.
+  local legacy target
+  # ADR 0008 ("D2: two identities, not one, per install"): an account that is
+  # not this install's recorded owner still gets its own ~/.privacyfence
+  # migrated -- just never into the shared root the recorded owner's data
+  # lives in, which would mix a second person's connector tokens, audit log
+  # and policy into the first owner's. Instead it goes to
+  # ${SYSTEM_ROOT}/users/os-<uid>, the exact per-principal path
+  # src/privacyfence/paths.py's user_dir() resolves to for a
+  # Principal(id=f"os-{uid}") that isn't the "local" principal -- so the
+  # daemon finds it under the same identity this migrates it as. cmd_enable_
+  # for_user() is the only caller that ever sets NON_OWNER_FOR_USER.
   if [ "$NON_OWNER_FOR_USER" = "1" ]; then
-    note "skipping data migration for '${OWNER_USER}' -- this install's shared data belongs to its recorded owner, and #428 Phase 2's interim multi-user guard (§2.6) never merges another account's ~/.privacyfence into it"
+    legacy="$(legacy_data_dir)"
+    if [ ! -d "$legacy" ]; then
+      note "no existing ${legacy} to migrate -- '${OWNER_USER}' starts with no data of their own"
+      return
+    fi
+    target="${SYSTEM_ROOT}/users/os-${OWNER_UID}"
+    # Same provisioning idiom apply_layout() uses for the top-level
+    # directories below, at the mode paths.py's secure_mkdir() itself
+    # defaults a per-principal root to (0700) -- not SYSTEM_ROOT_MODE/
+    # HANDOFF_DIR_MODE, which exist to let the *shared* root and handoff
+    # directory be entered/written by every group member; a single
+    # account's own subtree has no such requirement; it is read and written
+    # by the daemon alone.
+    mkdir -p "$target"
+    chown -R "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" "$target"
+    chmod 700 "$target"
+    # Same by-hand no-clobber merge as the owner's own case below (ditto has
+    # no no-clobber flag of its own) -- reused verbatim, just retargeted at
+    # this account's own subtree instead of the shared root.
+    note "merging ${legacy} into ${target} -- kept separate from this install's other principal(s), not merged into ${SYSTEM_ROOT} itself (no-clobber: anything already in ${target} is left as it is)"
+    local entry name
+    for entry in "$legacy"/*; do
+      [ -e "$entry" ] || continue
+      name="$(basename "$entry")"
+      if [ -e "${target}/${name}" ]; then
+        note "  ${name} already exists in ${target} -- not overwriting it from ${legacy}"
+      else
+        ditto "$entry" "${target}/${name}"
+      fi
+    done
+    rm -rf "$legacy"
     return
   fi
   # The machine half (ADR 0003 decision 3) runs with no owner resolved, and a
@@ -1105,24 +1136,22 @@ cmd_enable_for_user() {
   [ -f "${SYSTEM_ROOT}/${MARKER_NAME}" ] \
     || die "this install is not privilege-separated yet -- run 'sudo $0 enable' first"
 
-  # #428 Phase 2 §2.6's interim multi-user guard: only the recorded owner
-  # (or an install with no owner recorded yet, ADR 0003 decision 3's pending
-  # state) may complete the per-user half without an explicit override.
-  # Without this, `enable --for-user` would silently add a second account to
-  # ${SERVICE_GROUP} -- and, below, merge their own ~/.privacyfence into
-  # data the first owner's connectors already live in -- for anyone who can
-  # run this with sudo, which is the same gap privilege_separation.
-  # owner_membership_pending()/other_account_owns_this_install() close on
-  # the companion's own side (it now declines to *offer* this for a non-
-  # owner); this is the enforcement a human running the command directly, or
-  # a compromised script, cannot route around.
+  # #428 Phase 2 §2.6's interim multi-user guard used to refuse this outright
+  # for anyone but the recorded owner, because the only alternative on offer
+  # at the time was merging a second account's ~/.privacyfence into data the
+  # first owner's connectors already lived in. ADR 0008 ("D2: two identities,
+  # not one, per install") replaces that refusal with a real second identity
+  # instead: adding another OS account to ${SERVICE_GROUP} is now the normal,
+  # supported way to let more than one human use this install, and
+  # migrate_data() below sends that account's own data into its own isolated
+  # users/os-<uid>/ rather than the shared root, so nothing merges. There is
+  # no override flag to pass here any more -- this always was the interim
+  # guard's job, and now that the isolation exists, the guard has nothing
+  # left to guard against.
   local recorded_owner
   recorded_owner="$(marker_owner_user)"
   if [ -n "$recorded_owner" ] && [ "$recorded_owner" != "$OWNER_USER" ]; then
-    if [ "$ALLOW_ADDITIONAL_USER" != "1" ]; then
-      die "this install already belongs to '${recorded_owner}' -- PrivacyFence does not yet support more than one account on the same machine (#428 Phase 2 §2.6; Phase 3 will). Pass --allow-additional-user if you understand that '${OWNER_USER}'s own ~/.privacyfence will NOT be merged into the shared data directory, and want to add them to ${SERVICE_GROUP} anyway."
-    fi
-    warn "adding '${OWNER_USER}' to ${SERVICE_GROUP} alongside the existing owner '${recorded_owner}' (--allow-additional-user) -- '${OWNER_USER}'s own ~/.privacyfence will not be touched"
+    note "adding '${OWNER_USER}' alongside this install's existing owner '${recorded_owner}' -- each gets its own isolated PrivacyFence identity (docs/adr/0008-one-principal-per-os-user.md); '${OWNER_USER}'s own $(legacy_data_dir) will be migrated into its own storage, not merged with '${recorded_owner}'s"
     NON_OWNER_FOR_USER=1
   fi
 
@@ -1290,6 +1319,38 @@ cmd_status() {
     && echo "  ok               ${DAEMON_LABEL} is loaded" \
     || { echo "  NOT LOADED       ${DAEMON_LABEL}"; problems=1; }
 
+  # ADR 0008: the recorded `owner_user` above is only this install's *first*
+  # principal, not its only one -- `enable --for-user` for a second account
+  # gives it its own users/os-<uid>/ instead of touching the owner's data at
+  # all (see migrate_data()'s ADR 0008 comment), so it never shows up as an
+  # "owner" and would otherwise be invisible here. This lists whichever of
+  # those subdirectories actually exist, which is a report of who has
+  # finished the per-user half, not of who is merely in ${SERVICE_GROUP} --
+  # a group member who hasn't yet run `enable --for-user` (or the companion
+  # app hasn't done it for them) has no directory here yet and is still
+  # "pending" in the same sense the very first owner_membership_pending()
+  # case always was.
+  if [ -d "${SYSTEM_ROOT}/users" ]; then
+    local other_dir other_uid other_name printed_header=0
+    for other_dir in "${SYSTEM_ROOT}/users"/os-*; do
+      [ -d "$other_dir" ] || continue
+      if [ "$printed_header" = "0" ]; then
+        echo "  other accounts using this install:"
+        printed_header=1
+      fi
+      other_uid="$(basename "$other_dir")"
+      other_uid="${other_uid#os-}"
+      # Best-effort uid->name for a friendlier report; the directory name
+      # itself (os-<uid>) is what actually matters and is printed either way.
+      other_name="$(dscl . -search /Users UniqueID "$other_uid" 2>/dev/null | awk '{print $1; exit}')"
+      if [ -n "$other_name" ]; then
+        echo "    ${other_name} (os-${other_uid})"
+      else
+        echo "    os-${other_uid} (no matching /Users record -- account since removed?)"
+      fi
+    done
+  fi
+
   [ "$problems" = "0" ] || return 1
 }
 
@@ -1311,7 +1372,6 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --user) OWNER_USER="${2:-}"; shift 2 ;;
     --for-user) OWNER_USER="${2:-}"; FOR_USER_ONLY=1; shift 2 ;;
-    --allow-additional-user) ALLOW_ADDITIONAL_USER=1; shift ;;
     --app) APP_PATH="${2:-}"; shift 2 ;;
     --daemon-exec) DAEMON_EXECUTABLE="${2:-}"; shift 2 ;;
     --companion-exec) COMPANION_EXECUTABLE="${2:-}"; shift 2 ;;

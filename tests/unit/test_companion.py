@@ -315,9 +315,6 @@ class TestPendingSeparation:
             lambda: SimpleNamespace(service_group="privacyfence"),
         )
         monkeypatch.setattr(
-            companion.privilege_separation, "other_account_owns_this_install", lambda: None
-        )
-        monkeypatch.setattr(
             companion.privilege_separation, "owner_membership_pending", lambda: False
         )
 
@@ -334,9 +331,6 @@ class TestPendingSeparation:
         assert companion._complete_pending_separation() is None
 
     def test_a_pending_install_is_completed_and_the_next_step_named(self, monkeypatch, caplog):
-        monkeypatch.setattr(
-            companion.privilege_separation, "other_account_owns_this_install", lambda: None
-        )
         monkeypatch.setattr(
             companion.privilege_separation, "owner_membership_pending", lambda: True
         )
@@ -367,9 +361,6 @@ class TestPendingSeparation:
             lambda: SimpleNamespace(service_group="privacyfence"),
         )
         monkeypatch.setattr(
-            companion.privilege_separation, "other_account_owns_this_install", lambda: None
-        )
-        monkeypatch.setattr(
             companion.privilege_separation, "owner_membership_pending", lambda: True
         )
         monkeypatch.setattr(
@@ -381,25 +372,28 @@ class TestPendingSeparation:
 
         assert "log out and back in" not in caplog.text
 
-    def test_a_different_accounts_install_is_never_joined(self, monkeypatch, never_elevates, caplog):
-        # The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6):
-        # a non-owner account
-        # gets a notification, never the elevated join -- `never_elevates`
-        # fails the test outright if `complete_per_user_separation` is ever
-        # called from here.
+    def test_a_different_accounts_pending_join_is_completed_too(self, monkeypatch, caplog):
+        # ADR 0008 retired the local-mode-fixes plan's Phase 2 §2.6 interim
+        # guard: a non-owner account pending join is completed exactly like
+        # the owner's own always was -- each gets their own isolated
+        # principal, so there is no longer anything to refuse.
         monkeypatch.setattr(
             companion.privilege_separation, "separation",
             lambda: SimpleNamespace(service_group="privacyfence"),
         )
         monkeypatch.setattr(
-            companion.privilege_separation, "other_account_owns_this_install", lambda: "alice"
+            companion.privilege_separation, "owner_membership_pending", lambda: True
         )
+        monkeypatch.setattr(
+            companion.privilege_separation, "complete_per_user_separation", lambda: True
+        )
+        monkeypatch.setattr(companion.privilege_separation, "current_user_name", lambda: "bob")
 
         with caplog.at_level("WARNING"):
             companion._complete_pending_separation()
 
-        assert "alice" in caplog.text
-        assert "more than one account isn't supported" in caplog.text
+        assert "log out and back in" in caplog.text
+        assert "bob" in caplog.text
 
     def test_the_check_runs_off_the_startup_path(self, monkeypatch):
         # A password dialog nobody answers must not hold up the tray icon

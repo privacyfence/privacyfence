@@ -67,7 +67,7 @@ class _OrgVerifier(TokenVerifier):
     """Stands in for web/oauth_provider.py's OrgOAuthProvider: mints a token
     carrying a real ``subject``, which is what makes
     mcp_auth.principal_from_access_token resolve a signed-in human rather
-    than LOCAL_PRINCIPAL. Local mode's StaticTokenVerifier never sets one."""
+    than LOCAL_PRINCIPAL. Local mode's PerUserTokenVerifier sets it to LOCAL_PRINCIPAL.id by default."""
 
     def __init__(self, principal_id: str) -> None:
         self._principal_id = principal_id
@@ -88,7 +88,7 @@ async def _connected_session(
     ClientSession against it -- the happy-path fixture every wire-level test
     below starts from.
 
-    ``verifier`` swaps local mode's StaticTokenVerifier for an org-mode one
+    ``verifier`` swaps local mode's PerUserTokenVerifier for an org-mode one
     (see _OrgVerifier), so a test can drive this surface as a signed-in
     human rather than as LOCAL_PRINCIPAL."""
     if verifier is not None:

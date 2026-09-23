@@ -34,7 +34,7 @@ from starlette.types import ASGIApp
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..download_staging import get_download_staging_store
 from ..upload_staging import UploadAlreadyFilledError, UploadTooLargeError, get_upload_staging_store
-from .mcp_auth import StaticTokenVerifier, principal_from_access_token
+from .mcp_auth import principal_from_access_token, single_token_verifier as _single_token_verifier
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +133,12 @@ def build_file_bridge_asgi_app(
     resource_metadata_url: AnyHttpUrl | None = None,
 ) -> ASGIApp:
     """Same shape as ``routes_mcp.build_mcp_asgi_app``: exactly one of
-    ``token``/``verifier`` should be given -- ``StaticTokenVerifier(token)``
-    for local mode's single shared secret, or org mode's own
-    ``OrgOAuthProvider`` passed as ``verifier``."""
+    ``token``/``verifier`` should be given. ``token`` builds a one-off
+    ``PerUserTokenVerifier`` registered to ``LOCAL_PRINCIPAL`` alone (a
+    convenience for a caller with no multi-principal registration to grow
+    -- web/server.py's real local-mode wiring passes a shared ``verifier``
+    instead, the same instance ``MINT MCP`` registers new principals into);
+    org mode passes its own ``OrgOAuthProvider`` as ``verifier``."""
     inner = Starlette(routes=[
         Route("/uploads/{slot}", _put_upload, methods=["PUT"]),
         Route("/downloads/{token}", _get_download, methods=["GET"]),
@@ -143,7 +146,7 @@ def build_file_bridge_asgi_app(
     if verifier is None:
         if token is None:
             raise ValueError("build_file_bridge_asgi_app needs either token or verifier")
-        verifier = StaticTokenVerifier(token)
+        verifier = _single_token_verifier(token)
     protected = RequireAuthMiddleware(inner, required_scopes=[], resource_metadata_url=resource_metadata_url)
     authenticated = AuthContextMiddleware(protected)
     return AuthenticationMiddleware(authenticated, backend=BearerAuthBackend(verifier))

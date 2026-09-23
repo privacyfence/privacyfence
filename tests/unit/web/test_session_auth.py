@@ -100,17 +100,24 @@ class TestBootstrapStore:
         # inside an assert would make this pair meaningless under `python -O`.
         first = store.consume(code)
         second = store.consume(code)
-        assert first == sa.PROVENANCE_UNATTESTED
+        assert first == (sa.PROVENANCE_UNATTESTED, sa.LOCAL_PRINCIPAL_ID)
         assert second is None  # single-use -- burned by the line above
 
     def test_consume_returns_the_provenance_the_code_was_minted_with(self):
         store = sa.BootstrapStore()
-        human = store.consume(store.mint(provenance=sa.PROVENANCE_HUMAN))
+        human, principal_id = store.consume(store.mint(provenance=sa.PROVENANCE_HUMAN))
         assert human == sa.PROVENANCE_HUMAN
+        assert principal_id == sa.LOCAL_PRINCIPAL_ID
         # The default is the one a bare control-channel MINT gets, and it is
         # the safe one: nothing about that request says a human asked.
-        default = store.consume(store.mint())
+        default, default_principal_id = store.consume(store.mint())
         assert default == sa.PROVENANCE_UNATTESTED
+        assert default_principal_id == sa.LOCAL_PRINCIPAL_ID
+
+    def test_consume_returns_the_principal_the_code_was_minted_for(self):
+        store = sa.BootstrapStore()
+        _provenance, principal_id = store.consume(store.mint(principal_id="os-1001"))
+        assert principal_id == "os-1001"
 
     def test_two_mints_produce_distinct_codes(self):
         store = sa.BootstrapStore()
