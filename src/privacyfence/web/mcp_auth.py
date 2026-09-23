@@ -141,7 +141,7 @@ def delete_legacy_shared_mcp_token() -> None:
     try:
         path.unlink()
     except FileNotFoundError:
-        pass
+        pass  # already gone -- deletion here is best-effort and idempotent
 
 
 class PerUserTokenVerifier(TokenVerifier):
