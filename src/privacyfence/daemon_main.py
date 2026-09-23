@@ -555,7 +555,7 @@ def check_storage_permissions(org_mode_active: bool) -> None:
     if privilege_separation.is_enabled():
         # #428 Phase 4 deliberately makes two of those directories looser
         # than 0700 -- the system root is 0711 so the logged-in user can
-        # traverse to handoff_dir(), and handoff_dir() itself is 2770 so the
+        # traverse to handoff_dir(), and handoff_dir() itself is 3770 so the
         # companion and the daemon (two accounts now) can still hand each
         # other a socket and a token. Auditing them against the flat 0700
         # rule would report the design as a defect on every startup, and in

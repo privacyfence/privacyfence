@@ -209,6 +209,14 @@ install -m 0644 installer/linux/privacyfence-daemon.service.tmpl \
   "${STAGE}/usr/share/privacyfence/installer/linux/privacyfence-daemon.service.tmpl"
 install -m 0644 installer/linux/privacyfence-companion.desktop.tmpl \
   "${STAGE}/usr/share/privacyfence/installer/linux/privacyfence-companion.desktop.tmpl"
+# #428 Phase 2: the polkit action that lets the companion's tray menu run
+# `daemon start`/`stop`/`restart` elevated via pkexec -- see the policy
+# file's own comment for the trust reasoning, and debian/install for the
+# equivalent mapping a `dh_install`-driven build would use instead of this
+# script.
+mkdir -p "${STAGE}/usr/share/polkit-1/actions"
+install -m 0644 installer/linux/eu.privacyfence.daemon-control.policy \
+  "${STAGE}/usr/share/polkit-1/actions/eu.privacyfence.daemon-control.policy"
 install -m 0644 src/privacyfence/resources/icon_512.png "${STAGE}/usr/share/icons/hicolor/512x512/apps/privacyfence.png"
 install -m 0644 src/privacyfence/resources/icon_64.png "${STAGE}/usr/share/icons/hicolor/64x64/apps/privacyfence.png"
 install -m 0644 src/privacyfence/resources/icon_32.png "${STAGE}/usr/share/icons/hicolor/32x32/apps/privacyfence.png"

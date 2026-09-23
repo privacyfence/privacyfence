@@ -123,7 +123,9 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import logging
+import os
 import re
 import secrets
 import socket
@@ -133,7 +135,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from .. import paths, privilege_separation
@@ -330,15 +332,18 @@ def _handle_daemon_request(
     reissue_recovery_code: Callable[[], tuple[bool, str]] | None = None,
     confirm_companion_mint: Callable[[str], bool] | None = None,
     confirm_console_mint: Callable[[], tuple[bool, str]] | None = None,
+    status: Callable[[], str] | None = None,
 ) -> str:
-    """``enrollment_state``/``reissue_recovery_code`` are the daemon's own
-    answers to this channel's two Phase 1 commands (module docstring). Both
+    """``enrollment_state``/``reissue_recovery_code``/``status`` are the
+    daemon's own answers to commands this channel did not originally have
+    (module docstring's Phase 1 items, and the local-mode-fixes plan's
+    Phase 2 ``STATUS``). All
     default to ``None`` -- "this install does not offer that" -- because
     every caller that constructs a ``ControlChannelServer`` without a
-    ``StepUpConfig`` behind it (the tests that exercise ``MINT``/``QUIT``
-    alone, and any org-mode path, which has no control channel at all) has
-    nothing to answer them with, and a command that answers ``ERROR`` is a
-    better shape for that than one that raises.
+    ``StepUpConfig``/status callback behind it (the tests that exercise
+    ``MINT``/``QUIT`` alone, and any org-mode path, which has no control
+    channel at all) has nothing to answer them with, and a command that
+    answers ``ERROR`` is a better shape for that than one that raises.
 
     ``confirm_companion_mint``/``confirm_console_mint`` are the two
     call-backs an attested ``MINT`` makes into the companion's own channel
@@ -424,6 +429,19 @@ def _handle_daemon_request(
             return "ERROR recovery codes are not available on this install\n"
         issued, reason = reissue_recovery_code()
         return "OK\n" if issued else f"ERROR {reason}\n"
+    if command == "STATUS":
+        # The local-mode-fixes plan's Phase 2: read-only and safe for any
+        # group member -- no tokens or paths, just
+        # version/pid/mode/connector-configured-ness -- so
+        # unlike every command above it, this one answers unconditionally
+        # rather than gating on ``allow_quit`` or a passkey. What it reports
+        # is what ``daemon_status.probe()`` uses to decide the companion's
+        # tray-menu state; the callback itself (``server.py``) is what
+        # keeps this dispatcher from having to import connector/version
+        # machinery it has no other reason to know about.
+        if status is None:
+            return "ERROR status is not available on this install\n"
+        return f"OK {status()}\n"
     if command == "QUIT":
         if privilege_separation.is_enabled():
             # #428 B4: this socket is 0660 group-shared with the companion
@@ -1046,6 +1064,44 @@ def _handle_companion_request(line: str) -> str:
     return "OK\n" if opened else "ERROR could not open a browser\n"
 
 
+def _existing_socket_owner_problem(sock_path: Path) -> str | None:
+    """None if nothing exists at ``sock_path``, or if it does and this
+    process's own account created it; otherwise a human-readable reason for
+    ``_LineProtocolServer._start_posix()`` to refuse taking it over.
+
+    The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6, one
+    quarter of the "companion socket takeover" fix -- ``HANDOFF_DIR_MODE``'s
+    sticky bit is the filesystem-level half). Before this check, ``_start_posix()``
+    unlinked and rebound whatever was already at this path unconditionally,
+    on the theory that "the caller is the only process that will ever bind
+    here" -- true while daemon, companion and agent are one uid, false the
+    moment a *second* OS user's companion starts on a separated install
+    that already has a first user's ``companion.sock`` sitting there. The
+    daemon's own ``OPEN``/``CONFIRM MINT``/``SHOW RECOVERY`` calls go to
+    whichever companion bound last, so an unauthenticated unlink-and-rebind
+    here is exactly the takeover #428's diagnosis describes: ask for a
+    recovery code, confirm it on your own desktop, and you hold the first
+    user's approval authority. Refusing to steal a socket another account
+    created closes it with nothing more than an ``lstat``.
+
+    Applies equally to ``control.sock`` (the daemon's own channel), where it
+    is a smaller change in practice -- the daemon is always the same service
+    account across restarts -- but costs nothing to check uniformly rather
+    than carve out an exception only the companion's socket needs.
+    """
+    try:
+        st = sock_path.lstat()
+    except OSError:
+        return None
+    this_uid = os.geteuid()
+    if st.st_uid == this_uid:
+        return None
+    return (
+        f"{sock_path} already exists and is owned by uid {st.st_uid}, not this process's own "
+        f"({this_uid}) -- refusing to take it over."
+    )
+
+
 class _LineProtocolServer:
     """Shared POSIX-socket/Windows-named-pipe accept-loop plumbing for a
     request/response, one-line-per-message local IPC server -- what
@@ -1106,10 +1162,16 @@ class _LineProtocolServer:
 
     def _start_posix(self) -> None:
         sock_path = self._socket_path_fn()
-        # Any file already at this path is stale: the caller (WebServer or
-        # companion.py, constructed only after their own single-instance
-        # start-up has succeeded) is the only process that will ever bind
-        # here, so nothing legitimate could still be listening on it.
+        problem = _existing_socket_owner_problem(sock_path)
+        if problem is not None:
+            logger.warning("Could not start the %s: %s", self._thread_name, problem)
+            return
+        # Any file already at this path is stale (and, as of the check
+        # above, was left by *this* process's own account): the caller
+        # (WebServer or companion.py, constructed only after their own
+        # single-instance start-up has succeeded) is the only process that
+        # will ever legitimately bind here, so nothing still listening on it
+        # could be a peer this channel means to serve.
         with contextlib.suppress(OSError):
             sock_path.unlink()
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1182,7 +1244,7 @@ class _LineProtocolServer:
     # -- Windows: a named pipe, ACL'd to the current user ------------------- #
 
     def _start_windows(self) -> None:
-        self.address = self._pipe_name_fn()
+        address = self._pipe_name_fn()
         self._windows_security_attributes = _current_user_security_attributes()
         # Created synchronously, on this (the caller's) thread, before the
         # accept-loop thread even starts -- the same "start() doesn't
@@ -1192,18 +1254,54 @@ class _LineProtocolServer:
         # calling CreateFile/WaitNamedPipe on ``self.address`` right after
         # start() returns could race the background thread's first
         # CreateNamedPipe call and find no instance there yet.
-        first_handle = self._create_windows_pipe_instance()
+        #
+        # The local-mode-fixes plan's interim multi-user guard (Phase 2
+        # §2.6, "companion socket takeover") is why this first instance is
+        # created with FILE_FLAG_FIRST_PIPE_INSTANCE: it is the Windows
+        # counterpart of _existing_socket_owner_problem() on POSIX -- a
+        # process that already holds an instance of this exact pipe name
+        # (a stale one this account's own prior run left behind is normal
+        # and handled below; a *different* account's own companion or
+        # daemon holding one is the takeover this guards against) makes
+        # this CreateNamedPipe fail with ERROR_ACCESS_DENIED instead of
+        # silently becoming a second, indistinguishable instance the OS
+        # load-balances connections across. Refusing loudly here is strictly
+        # better than the POSIX side's own best case: Windows tells us
+        # someone else already holds the name, where POSIX can only compare
+        # uids on a stale *file* after the fact.
+        import pywintypes
+
+        try:
+            first_handle = self._create_windows_pipe_instance(address, first_instance=True)
+        except pywintypes.error as exc:
+            logger.warning(
+                "Could not start the %s: another process already holds a pipe instance named %s "
+                "-- refusing to open a second one under the same name. (%s)",
+                self._thread_name, address, exc,
+            )
+            return
+        self.address = address
         self._thread = threading.Thread(
             target=self._accept_loop_windows, args=(first_handle,), name=self._thread_name, daemon=True,
         )
         self._thread.start()
 
-    def _create_windows_pipe_instance(self):  # noqa: ANN201 -- a pywin32 PyHANDLE, no type stub
+    def _create_windows_pipe_instance(self, address: str | None = None, *, first_instance: bool = False):  # noqa: ANN201 -- a pywin32 PyHANDLE, no type stub
         import win32pipe
 
+        # ``first_instance`` is True only for _start_windows()'s own very
+        # first CreateNamedPipe call (see its own comment on why). Every
+        # instance the accept loop creates afterwards, to keep accepting the
+        # *next* client once this one disconnects, must NOT set the flag --
+        # this process already holds the name by then, and asking Windows
+        # to guarantee "first instance" a second time would fail against
+        # its own prior (legitimate) instance, not just an interloper's.
+        open_mode = win32pipe.PIPE_ACCESS_DUPLEX
+        if first_instance:
+            open_mode |= win32pipe.FILE_FLAG_FIRST_PIPE_INSTANCE
         return win32pipe.CreateNamedPipe(
-            self.address,
-            win32pipe.PIPE_ACCESS_DUPLEX,
+            address if address is not None else self.address,
+            open_mode,
             win32pipe.PIPE_TYPE_MESSAGE | win32pipe.PIPE_READMODE_MESSAGE | win32pipe.PIPE_WAIT,
             win32pipe.PIPE_UNLIMITED_INSTANCES,
             _MAX_MESSAGE_BYTES, _MAX_MESSAGE_BYTES,
@@ -1326,11 +1424,13 @@ class ControlChannelServer:
         allow_quit: bool = True,
         enrollment_state: Callable[[], str] | None = None,
         reissue_recovery_code: Callable[[], tuple[bool, str]] | None = None,
+        status: Callable[[], str] | None = None,
     ) -> None:
         self._bootstrap = bootstrap
         self._allow_quit = allow_quit
         self._enrollment_state = enrollment_state
         self._reissue_recovery_code = reissue_recovery_code
+        self._status = status
         self._impl = _LineProtocolServer(
             handler=self._handle,
             socket_path=posix_socket_path,
@@ -1343,6 +1443,7 @@ class ControlChannelServer:
             self._bootstrap, allow_quit=self._allow_quit, line=line,
             enrollment_state=self._enrollment_state,
             reissue_recovery_code=self._reissue_recovery_code,
+            status=self._status,
         )
 
     @property
@@ -1737,6 +1838,32 @@ def enrollment_state(*, timeout: float = 5.0) -> str:
     if not reply.startswith("OK "):
         raise ControlChannelError(f"control channel enrollment query failed: {reply!r}")
     return reply[len("OK "):].strip()
+
+
+def request_status(*, timeout: float = 3.0) -> dict[str, Any]:
+    """The companion's own side of ``STATUS`` (the local-mode-fixes plan's Phase 2):
+    ``{"version", "pid", "started_at", "mode", "separated", "connectors"}``,
+    parsed from the daemon's JSON reply. Raises ``ControlChannelError`` on a
+    reply that is not a well-formed ``OK <json>`` (including one this build
+    cannot parse as JSON), and ``OSError`` (uncaught) when no daemon is
+    listening at all -- same contract as ``mint_bootstrap_code()``, and the
+    same reason: ``daemon_status.probe()`` treats "PrivacyFence is not
+    running" as an ordinary case and catches it itself, falling back to
+    asking the service manager directly.
+
+    Short default timeout, unlike the dialog-backed commands above: nothing
+    here waits on a human, so anything slower than a local socket round trip
+    already means the daemon is not answering."""
+    reply = _send_to_daemon("STATUS\n", timeout=timeout)
+    if not reply.startswith("OK "):
+        raise ControlChannelError(f"control channel status query failed: {reply!r}")
+    try:
+        payload = json.loads(reply[len("OK "):].strip())
+    except ValueError as exc:
+        raise ControlChannelError(f"control channel status reply was not valid JSON: {reply!r}") from exc
+    if not isinstance(payload, dict):
+        raise ControlChannelError(f"control channel status reply was not a JSON object: {reply!r}")
+    return payload
 
 
 def request_recovery_code(*, timeout: float = (CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0) * 2) -> None:

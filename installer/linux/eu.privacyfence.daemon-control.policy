@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  #428 Phase 2 (local-mode-fixes-plan.md §2.1): what lets the companion app's
+  tray menu (running as an ordinary logged-in user, no sudo of its own) put
+  up exactly one authentication prompt for "start/stop/restart PrivacyFence's
+  background service", instead of asking a human to open a terminal.
+
+  service_control.py's run_elevated() runs
+  `pkexec /usr/sbin/privacyfence-privilege-separation daemon <action>`
+  (`<action>` is always `start`, `stop` or `restart`; see that module's own
+  docstring). pkexec looks up the *executable path* it was asked to run
+  against every action this policy file defines (there is deliberately only
+  one below, covering all three daemon actions together, since they are the
+  same trust decision made three times: "let this signed-in user manage
+  PrivacyFence's system service").
+
+  auth_admin_keep, on every one of allow_any/allow_inactive/allow_active,
+  mirrors what the plan calls for: an administrator password (or the
+  session's own already-cached admin authentication) is required, and a
+  successful authentication is kept for a few minutes so clicking Start
+  and then, moments later, Restart does not ask twice. This does not grant
+  the *signed-in* user's own account anything; an account with no admin
+  rights at all still gets denied by polkit itself before this script ever
+  runs, the same as any other polkit action gated on auth_admin_keep.
+-->
+<policyconfig>
+  <vendor>PrivacyFence</vendor>
+  <vendor_url>https://github.com/privacyfence/privacyfence</vendor_url>
+  <icon_name>privacyfence</icon_name>
+
+  <action id="eu.privacyfence.daemon-control">
+    <description>Manage the PrivacyFence background service</description>
+    <message>Authentication is required to start, stop or restart PrivacyFence's background service</message>
+    <defaults>
+      <allow_any>auth_admin_keep</allow_any>
+      <allow_inactive>auth_admin_keep</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/sbin/privacyfence-privilege-separation</annotate>
+  </action>
+</policyconfig>

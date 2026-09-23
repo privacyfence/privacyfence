@@ -592,14 +592,14 @@ class TestCheckStoragePermissions:
     def test_separated_layout_is_not_audited_against_the_flat_0700_rule(self, tmp_path, monkeypatch, caplog):
         # #428 Phase 4 makes two of these directories deliberately looser than
         # 0700 -- the system root 0711 so the logged-in user can traverse to
-        # the handoff directory, and the handoff directory 2770 so two
+        # the handoff directory, and the handoff directory 3770 so two
         # accounts can hand each other a socket. Reporting the design as a
         # defect on every startup would be noise; in org mode it would refuse
         # to start over it.
         handoff = tmp_path / "handoff"
         handoff.mkdir()
         tmp_path.chmod(0o711)
-        handoff.chmod(0o2770)
+        handoff.chmod(0o3770)
         self._patch_dirs(monkeypatch, tmp_path)
         monkeypatch.setattr(daemon_main, "handoff_dir", lambda: handoff)
         monkeypatch.setattr(daemon_main.privilege_separation, "is_enabled", lambda: True)
