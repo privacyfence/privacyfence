@@ -11,6 +11,7 @@ from privacyfence.principal import LOCAL_PRINCIPAL, Principal, principal_scope
 from privacyfence.upload_staging import get_upload_staging_store
 
 ALICE = Principal(id="alice", email="alice@example.com")
+BOB = Principal(id="bob", email="bob@example.com")
 
 
 @pytest.fixture(autouse=True)
@@ -195,6 +196,100 @@ class TestRequireLocalFilesBridge:
                 local_files.require_local_files(["~/a.pdf"], max_total_bytes=1000, download_mode="local")
 
 
+class TestRequireLocalFilesUploadRef:
+    """Phase 4 ("Clients without the bridge"): an ``upload:<id>`` reference
+    is claimed unconditionally -- it works in every mode, with or without a
+    bridge, since a capability slot needs neither can_access_user_files()
+    nor a shim -- see require_local_files' own docstring."""
+
+    def test_claims_regardless_of_mode_or_bridge_availability(self, monkeypatch):
+        # Org mode: can_access_user_files() is always False, and there is
+        # no call_context/bridge at all -- the least favorable case for
+        # every other path shape, and the exact case this exists to fix.
+        with principal_scope(ALICE):
+            store = get_upload_staging_store()
+            token = store.create_slot(ALICE, "report.pdf", max_bytes=1000)
+            store.fill(token, ALICE.id, [b"file content"])
+            ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
+            with local_files.call_context(bridge_available=False, uploads={}):
+                local_files.require_local_files([ref], max_total_bytes=1000, download_mode="org")
+                assert local_files.read_local_file(ref, download_mode="org") == b"file content"
+
+    def test_works_with_no_call_context_bound_by_the_call_but_needs_one_to_claim_into(self, monkeypatch):
+        _separated(monkeypatch)
+        with principal_scope(ALICE):
+            store = get_upload_staging_store()
+            token = store.create_slot(ALICE, "report.pdf", max_bytes=1000)
+        ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
+        with pytest.raises(local_files.LocalFileAccessError, match="no active call"):
+            local_files.require_local_files([ref], max_total_bytes=1000, download_mode="local")
+
+    def test_wrong_principal_gets_the_same_error_as_expired_or_already_claimed(self, monkeypatch):
+        with principal_scope(ALICE):
+            store = get_upload_staging_store()
+            token = store.create_slot(ALICE, "report.pdf", max_bytes=1000)
+            store.fill(token, ALICE.id, [b"file content"])
+        ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
+        with principal_scope(BOB), local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+            local_files.LocalFileAccessError,
+        ):
+            local_files.require_local_files([ref], max_total_bytes=1000, download_mode="local")
+
+    def test_second_require_for_the_same_ref_in_one_call_reuses_the_cache(self, monkeypatch):
+        with principal_scope(ALICE):
+            store = get_upload_staging_store()
+            token = store.create_slot(ALICE, "report.pdf", max_bytes=1000)
+            store.fill(token, ALICE.id, [b"file content"])
+            ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
+            with local_files.call_context(bridge_available=False, uploads={}):
+                local_files.require_local_files([ref], max_total_bytes=1000, download_mode="local")
+                # A second call must not try to re-claim the single-use slot.
+                local_files.require_local_files([ref], max_total_bytes=1000, download_mode="local")
+                assert local_files.read_local_file(ref, download_mode="local") == b"file content"
+
+
+class TestBuildUploadSlot:
+    """The privacyfence_create_upload_slot meta-tool's own handler."""
+
+    def test_returns_a_capability_url_and_id(self):
+        with principal_scope(ALICE):
+            result = local_files.build_upload_slot(
+                ALICE, filename="report.pdf", size_bytes=None, base_url="http://127.0.0.1:8765",
+            )
+        assert result["method"] == "PUT"
+        assert result["upload_url"] == f"http://127.0.0.1:8765/mcp-files/slots/{result['upload_id']}"
+        assert result["max_bytes"] == local_files.DEFAULT_CAPABILITY_UPLOAD_MAX_BYTES
+        assert result["upload_id"] in result["example"]
+
+    def test_upload_id_can_be_claimed_as_an_upload_ref(self):
+        with principal_scope(ALICE):
+            slot = local_files.build_upload_slot(
+                ALICE, filename="report.pdf", size_bytes=None, base_url="http://127.0.0.1:8765",
+            )
+            token = local_files._decode_token(slot["upload_id"])
+            get_upload_staging_store().fill(token, ALICE.id, [b"file content"])
+            ref = f"{local_files.UPLOAD_REF_PREFIX}{slot['upload_id']}"
+            with local_files.call_context(bridge_available=False, uploads={}):
+                local_files.require_local_files([ref], max_total_bytes=1000, download_mode="local")
+                assert local_files.read_local_file(ref, download_mode="local") == b"file content"
+
+    def test_rejects_a_size_over_the_cap_before_minting_a_slot(self):
+        with principal_scope(ALICE), pytest.raises(local_files.LocalFileAccessError, match="over PrivacyFence's"):
+            local_files.build_upload_slot(
+                ALICE, filename="huge.bin",
+                size_bytes=local_files.DEFAULT_CAPABILITY_UPLOAD_MAX_BYTES + 1,
+                base_url="http://127.0.0.1:8765",
+            )
+        assert get_upload_staging_store().pending_count == 0
+
+    def test_url_strips_a_trailing_slash_on_base_url(self):
+        with principal_scope(ALICE):
+            result = local_files.build_upload_slot(
+                ALICE, filename="report.pdf", size_bytes=None, base_url="http://127.0.0.1:8765/",
+            )
+        assert "//mcp-files" not in result["upload_url"]
+
+
 class TestDeliverFile:
     def test_direct_write(self, monkeypatch, tmp_path):
         _unseparated(monkeypatch)
@@ -229,7 +324,10 @@ class TestDeliverFile:
                 "~/Downloads", "report.pdf", b"content", "application/pdf", download_mode="local",
             )
         assert result["delivery"] == "link"
-        assert result["download_url"].startswith("http://127.0.0.1:8765/mcp-files/downloads/")
+        # Phase 4: the no-bridge fallback link is now the capability route
+        # (no bearer header needed), not Phase 1's bearer-authenticated
+        # /mcp-files/downloads/ -- see local_files._deliver_link.
+        assert result["download_url"].startswith("http://127.0.0.1:8765/mcp-files/fetch/")
         assert "note" in result
         assert state.staged_download is True
 
@@ -254,7 +352,7 @@ class TestDeliverFile:
             "~/Downloads", "report.pdf", b"content", "application/pdf", download_mode="local",
         )
         assert result["delivery"] == "link"
-        assert result["download_url"].startswith("/mcp-files/downloads/")
+        assert result["download_url"].startswith("/mcp-files/fetch/")
 
     def test_oversized_file_raises_local_file_access_error(self, monkeypatch):
         _unseparated(monkeypatch)

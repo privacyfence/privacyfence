@@ -492,6 +492,31 @@ class TestMetaTools:
         assert result.structured_content["mode"] == "local"
         assert result.structured_content["setup_complete"] is True
 
+    async def test_create_upload_slot_round_trips(self, tmp_path, monkeypatch):
+        # Phase 4: privacyfence_create_upload_slot mints a real
+        # UploadStagingStore slot for the principal this session resolved
+        # to (LOCAL_PRINCIPAL, same as every other meta-tool test here) and
+        # returns a capability URL built from *this request's* own base
+        # URL -- see local_files.build_upload_slot.
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool(
+                "privacyfence_create_upload_slot", {"filename": "report.pdf", "reason": "attach a file"},
+            )
+        assert result.is_error is False
+        content = result.structured_content
+        assert content["method"] == "PUT"
+        assert content["upload_url"] == f"http://testserver/mcp-files/slots/{content['upload_id']}"
+        assert content["upload_id"] in content["example"]
+
+    async def test_create_upload_slot_is_listed_in_the_tool_manifest(self):
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            tools = await session.list_tools()
+        assert "privacyfence_create_upload_slot" in {t.name for t in tools.tools}
+
     async def test_await_approval_round_trips_to_the_registry(self):
         # P3: privacyfence_await_approval, reaching the same registry a real
         # deferred approval would have registered into. No registry wired

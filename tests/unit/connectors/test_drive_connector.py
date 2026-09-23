@@ -801,14 +801,16 @@ class TestOrgModeDownloadDelivery:
         from privacyfence import paths
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
-    def _org_connector(self, *, inline_max_bytes=100, allow_disk_staging=True, link_ttl_seconds=300.0):
+    def _org_connector(
+        self, *, inline_max_bytes=100, allow_disk_staging=True, link_ttl_seconds=300.0, agent_links=True,
+    ):
         from privacyfence.org_mode import DownloadDeliveryConfig
 
         connector, client = make_connector()
         connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig(
             inline_max_bytes=inline_max_bytes, allow_disk_staging=allow_disk_staging,
-            link_ttl_seconds=link_ttl_seconds,
+            link_ttl_seconds=link_ttl_seconds, agent_links=agent_links,
         )
         connector.download_base_url = "https://pf.example.com"
         return connector, client
@@ -870,14 +872,34 @@ class TestOrgModeDownloadDelivery:
         assert result["delivery"] == "link"
         assert result["name"] == "big.bin"
         assert result["size_bytes"] == 5000
-        assert result["download_url"].startswith("https://pf.example.com/downloads/")
+        # Phase 4: DownloadDeliveryConfig.agent_links defaults to True, so
+        # the staged link is the capability route, not the older cookie-
+        # authenticated browser one -- see test_agent_links_false_keeps_
+        # the_browser_link below for the opt-out.
+        assert result["download_url"].startswith("https://pf.example.com/mcp-files/fetch/")
         assert "content_base64" not in result
         assert get_download_staging_store().pending_count == 1
 
         kwargs = gated_call_spy[0]
         assert "None" in kwargs["new_info"]["Content returned to Claude"]
         assert "one-time link" in kwargs["new_info"]["Content returned to Claude"]
-        assert kwargs["delivery"] == "staged_link"
+
+    async def test_agent_links_false_keeps_the_browser_link(self, gated_call_spy):
+        """An org that opts out of Phase 4's default (org_config.json's
+        download_delivery.agent_links: false) keeps the pre-Phase-4,
+        cookie-authenticated /downloads/{token} link -- see
+        DownloadDeliveryConfig.staged_link_path's own docstring."""
+        connector, client = self._org_connector(inline_max_bytes=10, agent_links=False)
+        client.get_file_metadata.return_value = make_file(name="big.bin", mime_type="application/octet-stream", size=5_000)
+        client.download_file_bytes.return_value = {
+            "data": b"x" * 5000, "name": "big.bin", "mime_type": "application/octet-stream", "size_bytes": 5000,
+        }
+
+        result = await connector.call("drive_download_file", {"file_id": "f1", "destination_dir": "/tmp"})
+
+        assert result["delivery"] == "link"
+        assert result["download_url"].startswith("https://pf.example.com/downloads/")
+        assert "/mcp-files/" not in result["download_url"]
 
     async def test_oversized_file_with_staging_disabled_is_refused_before_any_fetch(self, gated_call_spy):
         connector, client = self._org_connector(inline_max_bytes=10, allow_disk_staging=False)
@@ -1028,6 +1050,11 @@ class TestOrgModeUpload:
 
 
 class TestUploadFile:
+    @pytest.fixture(autouse=True)
+    def _isolated_data_dir(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
     async def test_requires_exactly_one_of_local_path_or_content_base64(self):
         connector, _client = make_connector()
         with pytest.raises(ValueError, match="exactly one"):
@@ -1036,6 +1063,88 @@ class TestUploadFile:
             await connector.call(
                 "drive_upload_file", {"local_path": "/tmp/x.txt", "content_base64": "aGk="}
             )
+        with pytest.raises(ValueError, match="exactly one"):
+            await connector.call(
+                "drive_upload_file", {"local_path": "/tmp/x.txt", "upload_id": "abc"}
+            )
+        with pytest.raises(ValueError, match="exactly one"):
+            await connector.call(
+                "drive_upload_file",
+                {"local_path": "/tmp/x.txt", "content_base64": "aGk=", "upload_id": "abc"},
+            )
+
+    async def test_upload_id_claims_the_staged_bytes(self, gated_call_spy):
+        from privacyfence import local_files
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.upload_staging import get_upload_staging_store
+
+        connector, client = make_connector()
+        client.upload_file_bytes.return_value = {"id": "uploaded-via-slot"}
+        store = get_upload_staging_store()
+        token = store.create_slot(LOCAL_PRINCIPAL, "report.pdf", max_bytes=1000)
+        store.fill(token, LOCAL_PRINCIPAL.id, [b"uploaded bytes"])
+        upload_id = local_files._encode_token(token)
+
+        with local_files.call_context(bridge_available=False, uploads={}):
+            result = await connector.call(
+                "drive_upload_file", {"upload_id": upload_id, "name": "report.pdf"},
+            )
+
+        assert result == {"id": "uploaded-via-slot"}
+        client.upload_file_bytes.assert_called_once_with(b"uploaded bytes", "report.pdf", "")
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Size"] == f"{len(b'uploaded bytes'):,} bytes"
+        assert kwargs["preview"]["Source"] == "uploaded via privacyfence_create_upload_slot"
+
+    async def test_upload_id_works_in_org_mode_too(self, gated_call_spy):
+        """Phase 4's whole point: org mode has no filesystem to read a
+        local_path from, but an upload_id claim needs neither
+        can_access_user_files() nor a bridge -- see local_files.
+        require_local_files' own ``upload:`` handling."""
+        from privacyfence import local_files
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.upload_staging import get_upload_staging_store
+
+        connector, client = make_connector()
+        connector.download_mode = "org"
+        client.upload_file_bytes.return_value = {"id": "uploaded-via-slot-org"}
+        store = get_upload_staging_store()
+        token = store.create_slot(LOCAL_PRINCIPAL, "report.pdf", max_bytes=1000)
+        store.fill(token, LOCAL_PRINCIPAL.id, [b"org bytes"])
+        upload_id = local_files._encode_token(token)
+
+        with local_files.call_context(bridge_available=False, uploads={}):
+            result = await connector.call(
+                "drive_upload_file", {"upload_id": upload_id, "name": "report.pdf"},
+            )
+
+        assert result == {"id": "uploaded-via-slot-org"}
+
+    async def test_wrong_principal_upload_id_raises(self):
+        from privacyfence import local_files
+        from privacyfence.principal import Principal
+        from privacyfence.upload_staging import get_upload_staging_store
+
+        owner = Principal(id="owner", email="owner@example.com")
+        connector, _client = make_connector()
+        store = get_upload_staging_store()
+        token = store.create_slot(owner, "report.pdf", max_bytes=1000)
+        store.fill(token, owner.id, [b"data"])
+        upload_id = local_files._encode_token(token)
+
+        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+            LocalFileAccessError,
+        ):
+            await connector.call("drive_upload_file", {"upload_id": upload_id, "name": "report.pdf"})
+
+    async def test_unknown_upload_id_raises(self):
+        from privacyfence import local_files
+
+        connector, _client = make_connector()
+        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+            LocalFileAccessError,
+        ):
+            await connector.call("drive_upload_file", {"upload_id": "not-a-real-slot", "name": "x"})
 
     async def test_local_path_upload_computes_size_and_tracks_session_id(self, tmp_path, gated_call_spy):
         connector, client = make_connector()

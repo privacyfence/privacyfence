@@ -96,6 +96,30 @@ def _body_params() -> list[ToolParam]:
     ]
 
 
+def _attachments_param() -> ToolParam:
+    """The ``attachments`` ToolParam shared by all three
+    ``gmail_*_with_attachments`` tools."""
+    return ToolParam(
+        "attachments", "str",
+        description=(
+            'JSON array of local file paths to attach, e.g. '
+            '["/path/to/report.pdf"] -- each either a path on the '
+            "user's computer (where Claude Desktop runs: absolute, or "
+            "starting with ~/. Claude's own working or outputs directory "
+            "is fine) or 'upload:<upload_id>', the id "
+            "privacyfence_create_upload_slot returned after you PUT the "
+            "file's bytes to its upload_url -- use that form if a plain "
+            "path fails with an error about PrivacyFence being unable to "
+            "read files in your home folder directly (e.g. no "
+            "PrivacyFence extension is installed, or this is an "
+            "organization-managed install: a plain path there is read "
+            "from wherever PrivacyFence's own server runs, not the "
+            "user's machine -- prefer 'upload:<upload_id>'). At least one "
+            "required."
+        ),
+    )
+
+
 def _require_body(body: str, body_markdown: str, tool: str) -> None:
     """Reject the call before gating if neither body nor body_markdown was given."""
     if not body.strip() and not body_markdown.strip():
@@ -281,20 +305,7 @@ class GmailConnector(Connector):
                     ToolParam("to", "str"),
                     ToolParam("subject", "str"),
                     *_body_params(),
-                    ToolParam(
-                        "attachments", "str",
-                        description=(
-                            'JSON array of local file paths to attach, e.g. '
-                            '["/path/to/report.pdf"] -- each a path on the '
-                            "user's computer (where Claude Desktop runs): "
-                            "absolute, or starting with ~/. Claude's own "
-                            "working or outputs directory is fine. At least "
-                            "one required. On an organization-managed "
-                            "install, paths are read from wherever "
-                            "PrivacyFence's own server runs, not the user's "
-                            "machine."
-                        ),
-                    ),
+                    _attachments_param(),
                     ToolParam("cc", "str", required=False, default=""),
                     ToolParam("bcc", "str", required=False, default=""),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -312,20 +323,7 @@ class GmailConnector(Connector):
                 params=[
                     ToolParam("message_id", "str"),
                     *_body_params(),
-                    ToolParam(
-                        "attachments", "str",
-                        description=(
-                            'JSON array of local file paths to attach, e.g. '
-                            '["/path/to/report.pdf"] -- each a path on the '
-                            "user's computer (where Claude Desktop runs): "
-                            "absolute, or starting with ~/. Claude's own "
-                            "working or outputs directory is fine. At least "
-                            "one required. On an organization-managed "
-                            "install, paths are read from wherever "
-                            "PrivacyFence's own server runs, not the user's "
-                            "machine."
-                        ),
-                    ),
+                    _attachments_param(),
                     ToolParam("cc", "str", required=False, default=""),
                     ToolParam("bcc", "str", required=False, default=""),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -344,20 +342,7 @@ class GmailConnector(Connector):
                 params=[
                     ToolParam("message_id", "str"),
                     *_body_params(),
-                    ToolParam(
-                        "attachments", "str",
-                        description=(
-                            'JSON array of local file paths to attach, e.g. '
-                            '["/path/to/report.pdf"] -- each a path on the '
-                            "user's computer (where Claude Desktop runs): "
-                            "absolute, or starting with ~/. Claude's own "
-                            "working or outputs directory is fine. At least "
-                            "one required. On an organization-managed "
-                            "install, paths are read from wherever "
-                            "PrivacyFence's own server runs, not the user's "
-                            "machine."
-                        ),
-                    ),
+                    _attachments_param(),
                     ToolParam("cc", "str", required=False, default=""),
                     ToolParam("bcc", "str", required=False, default=""),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -970,7 +955,7 @@ class GmailConnector(Connector):
             "delivery": "link",
             "name": attachment.name,
             "size_bytes": size_bytes,
-            "download_url": f"{self.download_base_url}/downloads/{base64.urlsafe_b64encode(token).decode('ascii')}",
+            "download_url": f"{self.download_base_url}{cfg.staged_link_path(token)}",
             "expires_at": datetime.fromtimestamp(
                 time.time() + cfg.link_ttl_seconds, tz=timezone.utc,
             ).isoformat(),
@@ -1073,14 +1058,10 @@ class GmailConnector(Connector):
     ) -> Any:
         _require_body(body, body_markdown, "gmail_create_draft_with_attachments")
         paths = _parse_attachment_paths(attachments)
-        # ADR 0007/B2: org mode's daemon runs on a different machine than
-        # the user entirely, never the file bridge's business -- see
-        # connectors/drive.py's _upload_file is_org_local_path branch for
-        # the same reasoning. Only local mode needs the bridge handshake.
-        if self.download_mode != "org":
-            local_files.require_local_files(
-                paths, max_total_bytes=_ATTACHMENT_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
-            )
+        # ADR 0007/B2 + Phase 4: see _require_attachment_paths' own
+        # docstring for why this differs by mode and by an ``upload:``
+        # reference's own path shape.
+        self._require_attachment_paths(paths)
         attachment_info = self._stat_attachments(paths)
         preview = {"To": to}
         if cc:
@@ -1122,10 +1103,7 @@ class GmailConnector(Connector):
     ) -> Any:
         _require_body(body, body_markdown, "gmail_reply_draft_with_attachments")
         paths = _parse_attachment_paths(attachments)
-        if self.download_mode != "org":
-            local_files.require_local_files(
-                paths, max_total_bytes=_ATTACHMENT_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
-            )
+        self._require_attachment_paths(paths)
         attachment_info = self._stat_attachments(paths)
         message, preview, to_arg = await self._reply_preview_and_to(message_id, cc, bcc, reply_all=False)
         preview["Attachments"] = self._format_attachment_preview(attachment_info)
@@ -1162,10 +1140,7 @@ class GmailConnector(Connector):
     ) -> Any:
         _require_body(body, body_markdown, "gmail_reply_all_draft_with_attachments")
         paths = _parse_attachment_paths(attachments)
-        if self.download_mode != "org":
-            local_files.require_local_files(
-                paths, max_total_bytes=_ATTACHMENT_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
-            )
+        self._require_attachment_paths(paths)
         attachment_info = self._stat_attachments(paths)
         message, preview, to_arg = await self._reply_preview_and_to(message_id, cc, bcc, reply_all=True)
         preview["Attachments"] = self._format_attachment_preview(attachment_info)
@@ -1238,6 +1213,28 @@ class GmailConnector(Connector):
         ]
         return message, preview, expanded_to or [message.sender or ""]
 
+    def _require_attachment_paths(self, paths: list[str]) -> None:
+        """Runs local_files.require_local_files() on ``paths`` before
+        gating -- see each of this method's three call sites' own ADR 0007/
+        B2 comment for why local mode always needs this (the bridge
+        handshake) and org mode's own literal filesystem paths never did
+        (its daemon runs on a different machine than the user entirely).
+        Phase 4's ``upload:`` references are the one path shape that needs
+        this in *every* mode, org included -- a capability slot claim, not
+        a filesystem read, so it's filtered out here rather than skipped
+        along with the rest of org mode's paths.
+        """
+        if self.download_mode != "org":
+            local_files.require_local_files(
+                paths, max_total_bytes=_ATTACHMENT_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
+            )
+            return
+        upload_refs = [p for p in paths if p.startswith(local_files.UPLOAD_REF_PREFIX)]
+        if upload_refs:
+            local_files.require_local_files(
+                upload_refs, max_total_bytes=_ATTACHMENT_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
+            )
+
     def _stat_attachments(self, paths: list[str]) -> list[dict[str, Any]]:
         """Stat each attachment path so the approval popup shows real
         filenames/sizes before gating -- doesn't read file content, which
@@ -1252,19 +1249,26 @@ class GmailConnector(Connector):
         ``paths: list[str]`` with no ``self``) since bridge-awareness needs
         ``self.download_mode``.
 
-        Org mode never went through require_local_files above (its daemon
-        runs on a different machine than the user entirely -- the file
-        bridge doesn't apply there, same reasoning as connectors/drive.py's
-        _upload_file is_org_local_path branch), so it keeps the original
-        direct stat here too.
+        Org mode never went through require_local_files above for a plain
+        filesystem path (its daemon runs on a different machine than the
+        user entirely -- the file bridge doesn't apply there, same
+        reasoning as connectors/drive.py's _upload_file is_org_local_path
+        branch), so it keeps the original direct stat here too. A Phase 4
+        ``upload:`` reference is never a filesystem path in any mode
+        though -- require_local_files() already claimed it above (see this
+        method's three call sites), so it always takes the local_files
+        branch here, org mode included.
         """
         info = []
         for path in paths:
-            if self.download_mode == "org":
+            if self.download_mode == "org" and not path.startswith(local_files.UPLOAD_REF_PREFIX):
                 expanded = os.path.expanduser(path.strip())
                 if not os.path.isfile(expanded):
                     raise ValueError(f"attachments: no such file: {path!r}")
                 info.append({"name": os.path.basename(expanded), "size_bytes": os.path.getsize(expanded)})
+            elif path.startswith(local_files.UPLOAD_REF_PREFIX):
+                size_bytes = local_files.local_file_size(path, download_mode=self.download_mode)
+                info.append({"name": "attachment", "size_bytes": size_bytes})
             else:
                 size_bytes = local_files.local_file_size(path, download_mode=self.download_mode)
                 info.append({"name": os.path.basename(path.strip()), "size_bytes": size_bytes})

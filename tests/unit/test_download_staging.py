@@ -221,3 +221,41 @@ class TestSingleton:
         second = download_staging.get_download_staging_store()
         assert first is second
         download_staging._INSTANCE = None
+
+
+class TestClaimCapability:
+    """Phase 4's unauthenticated claim (ADR 0007's "Clients without the
+    bridge" section) -- same semantics as claim() minus the principal
+    check, since the capability route it backs (routes_file_bridge.py's
+    GET /mcp-files/fetch/<token>) carries no bearer header/session cookie/
+    principal to check the entry against at all; the token itself is the
+    credential."""
+
+    def test_round_trip_needs_no_principal(self):
+        store = DownloadStagingStore()
+        token = store.stage(ALICE, b"hello world", "report.pdf", "application/pdf")
+        assert store.claim_capability(token) == (b"hello world", "report.pdf", "application/pdf")
+
+    def test_single_use_like_the_authenticated_claim(self):
+        store = DownloadStagingStore()
+        token = store.stage(ALICE, b"data", "f.txt", "text/plain")
+        assert store.claim_capability(token) is not None
+        assert store.claim_capability(token) is None
+        assert store.claim(token, ALICE.id) is None
+
+    def test_unknown_token_returns_none(self):
+        store = DownloadStagingStore()
+        assert store.claim_capability(b"\x00" * 32) is None
+
+    def test_expired_entry_returns_none(self):
+        store = DownloadStagingStore()
+        token = store.stage(ALICE, b"data", "f.txt", "text/plain", ttl_seconds=-1.0)
+        assert store.claim_capability(token) is None
+
+    def test_either_route_can_claim_but_only_once_between_them(self):
+        """Whichever route claims first wins -- claim() and
+        claim_capability() share the same registry entry."""
+        store = DownloadStagingStore()
+        token = store.stage(ALICE, b"data", "f.txt", "text/plain")
+        assert store.claim(token, ALICE.id) is not None
+        assert store.claim_capability(token) is None

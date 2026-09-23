@@ -309,3 +309,60 @@ class TestSingleton:
         first = upload_staging.get_upload_staging_store()
         second = upload_staging.get_upload_staging_store()
         assert first is second
+
+
+async def _achunks(data: bytes):
+    for chunk in _chunks(data):
+        yield chunk
+
+
+class TestAfillCapability:
+    """Phase 4's unauthenticated fill (ADR 0007's "Clients without the
+    bridge" section) -- same semantics as fill()/afill() minus the
+    principal check, since the capability route it backs
+    (routes_file_bridge.py's PUT /mcp-files/slots/<token>) carries no
+    bearer header/principal to check the slot against at all."""
+
+    async def test_round_trip_needs_no_principal(self):
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/report.pdf", max_bytes=1000)
+        written = await store.afill_capability(token, _achunks(b"hello world"))
+        assert written == len(b"hello world")
+        # The claim side still checks the principal it was created for --
+        # a capability upload is not a capability *claim*.
+        assert store.claim(token, ALICE.id) == b"hello world"
+        assert store.claim(token, BOB.id) is None
+
+    async def test_unknown_token_raises_lookup_error(self):
+        store = UploadStagingStore()
+        with pytest.raises(LookupError):
+            await store.afill_capability(b"\x00" * 32, _achunks(b"data"))
+
+    async def test_second_fill_raises_already_filled(self):
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/f.txt", max_bytes=1000)
+        await store.afill_capability(token, _achunks(b"first"))
+        with pytest.raises(UploadAlreadyFilledError):
+            await store.afill_capability(token, _achunks(b"second"))
+
+    async def test_oversized_stream_raises_too_large(self):
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/big.bin", max_bytes=5)
+        with pytest.raises(UploadTooLargeError):
+            await store.afill_capability(token, _achunks(b"way too many bytes"))
+
+    async def test_expired_slot_raises_lookup_error(self):
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/f.txt", max_bytes=1000, ttl_seconds=-1.0)
+        with pytest.raises(LookupError):
+            await store.afill_capability(token, _achunks(b"data"))
+
+    async def test_a_slot_already_filled_via_the_authenticated_route_rejects_a_capability_fill(self):
+        """Whichever route fills a slot first wins -- the two fill paths
+        share the same ``filled`` flag, so a slot can't be double-filled
+        by mixing the authenticated and capability routes either."""
+        store = UploadStagingStore()
+        token = store.create_slot(ALICE, "~/f.txt", max_bytes=1000)
+        store.fill(token, ALICE.id, _chunks(b"first"))
+        with pytest.raises(UploadAlreadyFilledError):
+            await store.afill_capability(token, _achunks(b"second"))

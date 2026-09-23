@@ -231,6 +231,23 @@ all. `--print-mcp-token` mints your own account's token the first time you run i
 same one every time after; if it can't reach the daemon, you haven't logged out and back in since
 installing.
 
+**Uploading a local file.** Claude Code has no `.mcpb` shim, so `drive_upload_file`'s `local_path`
+(and the `gmail_*_with_attachments` tools' `attachments`) can't read your files directly the way
+Claude Desktop's extension does — a call with `local_path` set fails with a message pointing you at
+`privacyfence_create_upload_slot` instead. Call it, then `PUT` the file to the URL it returns (no
+`Authorization` header needed — the URL itself is the one-time credential) and pass the
+`upload_id` it gave you back to the tool that needed the file:
+
+```bash
+# Claude calls privacyfence_create_upload_slot itself and gets back an upload_url; from a shell:
+curl -T /path/to/report.pdf 'http://127.0.0.1:8765/mcp-files/slots/<upload_id>'
+```
+
+Then pass `upload_id` as `drive_upload_file`'s own `upload_id` parameter, or as an
+`"upload:<upload_id>"` entry in one of the `gmail_*_with_attachments` tools' `attachments` array.
+See [`docs/org-mode-download-delivery.md`](org-mode-download-delivery.md#uploads-and-downloads-for-clients-without-the-shim-phase-4)
+for the full shape of what the tool returns.
+
 ---
 
 ## Finish setup (every platform)

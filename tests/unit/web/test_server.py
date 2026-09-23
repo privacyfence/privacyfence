@@ -967,6 +967,23 @@ class TestAudienceSeparation:
                                 headers={"Authorization": f"Bearer {self.MCP_TOKEN}"})
         assert resp.status_code != 401
 
+    def test_capability_routes_need_no_bearer_token_at_all(self):
+        # Phase 4: /mcp-files/slots/<token> and /mcp-files/fetch/<token>
+        # are mounted alongside /mcp and /mcp-files/uploads|downloads, but
+        # deliberately outside the bearer-auth stack -- a malformed/unknown
+        # token is a 404 (the route exists, the token just isn't live),
+        # never a 401 (which would mean the route demanded a credential
+        # this caller has no way to present).
+        client = TestClient(self._app(), base_url="http://localhost")
+        put_resp = client.put("/mcp-files/slots/not-a-real-slot", content=b"data")
+        assert put_resp.status_code == 404
+        get_resp = client.get("/mcp-files/fetch/not-a-real-token")
+        assert get_resp.status_code == 404
+        # The bearer-authenticated siblings, by contrast, refuse outright
+        # with no credential at all.
+        assert client.put("/mcp-files/uploads/not-a-real-slot", content=b"data").status_code == 401
+        assert client.get("/mcp-files/downloads/not-a-real-token").status_code == 401
+
     def test_approvals_decide_rejects_the_mcp_token_as_csrf(self):
         client = TestClient(self._app(), base_url="http://localhost")
         # A valid *session cookie* (a real local-mode session, not the raw

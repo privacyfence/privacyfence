@@ -780,14 +780,16 @@ class TestOrgModeDownloadDelivery:
         from privacyfence import paths
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
-    def _org_connector(self, *, inline_max_bytes=1_000, allow_disk_staging=True, link_ttl_seconds=300.0):
+    def _org_connector(
+        self, *, inline_max_bytes=1_000, allow_disk_staging=True, link_ttl_seconds=300.0, agent_links=True,
+    ):
         from privacyfence.org_mode import DownloadDeliveryConfig
 
         connector, client = make_connector()
         connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig(
             inline_max_bytes=inline_max_bytes, allow_disk_staging=allow_disk_staging,
-            link_ttl_seconds=link_ttl_seconds,
+            link_ttl_seconds=link_ttl_seconds, agent_links=agent_links,
         )
         connector.download_base_url = "https://pf.example.com"
         return connector, client
@@ -865,12 +867,28 @@ class TestOrgModeDownloadDelivery:
 
         assert result["delivery"] == "link"
         assert result["size_bytes"] == 5000
-        assert result["download_url"].startswith("https://pf.example.com/downloads/")
+        # Phase 4: agent_links defaults to True -- the capability route,
+        # not the older cookie-authenticated browser one.
+        assert result["download_url"].startswith("https://pf.example.com/mcp-files/fetch/")
         assert get_download_staging_store().pending_count == 1
 
         kwargs = gated_call_spy[0]
         assert "one-time link" in kwargs["new_info"]["Content returned to Claude"]
         assert kwargs["delivery"] == "staged_link"
+
+    async def test_agent_links_false_keeps_the_browser_link(self, gated_call_spy):
+        connector, client = self._org_connector(inline_max_bytes=10, agent_links=False)
+        client.get_message.return_value = self._message_with_attachment(size=5000)
+        client.fetch_attachment_bytes.return_value = b"x" * 5000
+
+        result = await connector.call(
+            "gmail_download_attachment",
+            {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
+        )
+
+        assert result["delivery"] == "link"
+        assert result["download_url"].startswith("https://pf.example.com/downloads/")
+        assert "/mcp-files/" not in result["download_url"]
 
     async def test_oversized_attachment_with_staging_disabled_is_refused_before_any_fetch(self, gated_call_spy):
         connector, client = self._org_connector(inline_max_bytes=10, allow_disk_staging=False)
@@ -1509,6 +1527,91 @@ class TestWriteToolsWithAttachmentsGateAndPreview:
         client.create_draft_with_attachments.assert_called_once_with(
             "alice@example.com", "Hi", "body", [str(attachment)], "", "", "", "org",
         )
+
+
+class TestWriteToolsWithUploadRefAttachments:
+    """Phase 4 ("Clients without the bridge"): an 'upload:<id>' entry in
+    attachments claims bytes already staged by
+    privacyfence_create_upload_slot -- works in every mode, org mode
+    included, unlike a plain local_path attachment."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_data_dir(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    def _staged_upload_ref(self, data: bytes = b"attachment bytes") -> str:
+        from privacyfence import local_files
+        from privacyfence.principal import LOCAL_PRINCIPAL
+        from privacyfence.upload_staging import get_upload_staging_store
+
+        store = get_upload_staging_store()
+        token = store.create_slot(LOCAL_PRINCIPAL, "report.pdf", max_bytes=1000)
+        store.fill(token, LOCAL_PRINCIPAL.id, [data])
+        return f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
+
+    async def test_local_mode_claims_the_upload_ref(self, gated_call_spy):
+        from privacyfence import local_files
+
+        connector, client = make_connector()
+        client.create_draft_with_attachments.return_value = {"draft_id": "d1"}
+        ref = self._staged_upload_ref(b"x" * 10)
+
+        with local_files.call_context(bridge_available=False, uploads={}):
+            await connector.call(
+                "gmail_create_draft_with_attachments",
+                {"to": "alice@example.com", "subject": "Hi", "body": "body", "attachments": json.dumps([ref])},
+            )
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Attachments"] == "attachment (10 bytes)"
+        client.create_draft_with_attachments.assert_called_once_with(
+            "alice@example.com", "Hi", "body", [ref], "", "", "", "local",
+        )
+
+    async def test_org_mode_claims_the_upload_ref_too(self, gated_call_spy):
+        """The one case a plain org-mode local_path never supported (see
+        the preceding test class) -- an upload_id works because it's a
+        capability claim, not a filesystem read."""
+        from privacyfence import local_files
+
+        connector, client = make_connector()
+        connector.download_mode = "org"
+        client.create_draft_with_attachments.return_value = {"draft_id": "d-org"}
+        ref = self._staged_upload_ref(b"y" * 5)
+
+        with local_files.call_context(bridge_available=False, uploads={}):
+            await connector.call(
+                "gmail_create_draft_with_attachments",
+                {"to": "alice@example.com", "subject": "Hi", "body": "body", "attachments": json.dumps([ref])},
+            )
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Attachments"] == "attachment (5 bytes)"
+        client.create_draft_with_attachments.assert_called_once_with(
+            "alice@example.com", "Hi", "body", [ref], "", "", "", "org",
+        )
+
+    async def test_wrong_principal_upload_ref_is_denied_before_the_gate(self, gated_call_spy):
+        from privacyfence import local_files
+        from privacyfence.principal import Principal
+        from privacyfence.upload_staging import get_upload_staging_store
+
+        owner = Principal(id="owner", email="owner@example.com")
+        connector, _client = make_connector()
+        store = get_upload_staging_store()
+        token = store.create_slot(owner, "report.pdf", max_bytes=1000)
+        store.fill(token, owner.id, [b"data"])
+        ref = f"{local_files.UPLOAD_REF_PREFIX}{local_files._encode_token(token)}"
+
+        with local_files.call_context(bridge_available=False, uploads={}), pytest.raises(
+            local_files.LocalFileAccessError,
+        ):
+            await connector.call(
+                "gmail_create_draft_with_attachments",
+                {"to": "a@x.com", "subject": "s", "body": "b", "attachments": json.dumps([ref])},
+            )
+        assert gated_call_spy == []
 
 
 class TestFieldCompleteness:
