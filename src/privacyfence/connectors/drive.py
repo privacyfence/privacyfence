@@ -10,6 +10,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
+from .. import local_files
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..download_staging import get_download_staging_store
@@ -32,6 +33,20 @@ logger = logging.getLogger(__name__)
 # memory regardless, and naturally bounded by the MCP/IPC wire size limit),
 # local_path can point at an arbitrarily large file on disk.
 _UPLOAD_PREVIEW_MAX_BYTES = 5_000_000
+
+# ADR 0007: the ceiling passed to local_files.require_local_files() for
+# drive_upload_file's local_path -- the file bridge buffers an upload
+# entirely in memory (upload_staging.UploadStagingStore.fill()), unlike
+# MediaFileUpload's own disk-streamed upload, so this is a real memory cap,
+# not just a preview-read cap like _UPLOAD_PREVIEW_MAX_BYTES above.
+_UPLOAD_MAX_BYTES = 50_000_000
+
+# B4 (local-mode-fixes-plan.md): reuses the same 5MB value gmail.py's
+# _ATTACHMENT_PREFETCH_MAX_BYTES already uses for "small enough to just
+# fetch the whole thing instead of a bounded prefetch" -- see
+# _download_file's own PII-scan comment for why a *truncated* prefetch is
+# actively wrong for a format like PDF, not just incomplete.
+_FULL_FETCH_PII_SCAN_MAX_BYTES = 5_000_000
 
 
 def _parse_json_str_list(value: str) -> list[str] | None:
@@ -197,12 +212,15 @@ class DriveConnector(Connector):
                     "Upload any file (e.g. a PDF or image) to Drive as a new file — "
                     "use this instead of drive_write_file_content for any binary "
                     "file, since that tool only writes UTF-8 text. Provide exactly "
-                    "one of local_path (read directly from disk by path — prefer "
-                    "this when the file is on the same machine as PrivacyFence) or "
-                    "content_base64 (base64-encoded file bytes, decoded by "
-                    "PrivacyFence itself — use this when you only have the file's "
-                    "bytes and not a local path; 'name' is then required). "
-                    "Requires user approval."
+                    "one of local_path (a path on the user's computer — where "
+                    "Claude Desktop runs: absolute, or starting with ~/. Claude's "
+                    "own working or outputs directory is fine) or content_base64 "
+                    "(base64-encoded file bytes, decoded by PrivacyFence itself — "
+                    "use this when you only have the file's bytes and not a local "
+                    "path; 'name' is then required). On an organization-managed "
+                    "install, local_path is read from wherever PrivacyFence's own "
+                    "server runs, not the user's machine — prefer content_base64 "
+                    "there. Requires user approval."
                 ),
                 params=[
                     ToolParam("local_path", "str", required=False, default=""),
@@ -860,8 +878,20 @@ class DriveConnector(Connector):
         # compute `name` the same way local mode always has.
         dest_path = resolve_download_destination(drive_file, destination_dir)
         name = os.path.basename(dest_path)
+        # ADR 0007: shown to the human, and handed to local_files.
+        # deliver_file(), exactly as the agent typed destination_dir --
+        # never the daemon-expanded dest_path above, which mixes in this
+        # process's own idea of "~" and is meaningless to a shim writing
+        # the file as a different, real user.
+        displayed_dest = f"{destination_dir.strip().rstrip('/')}/{name}" if destination_dir.strip() else dest_path
 
         cfg = self.download_config or DownloadDeliveryConfig()
+        # ADR 0007: whether this download can still write straight to this
+        # process's own filesystem (a dev checkout or an unseparated pip/
+        # pipx install, where the daemon *is* the user) or needs the file
+        # bridge instead -- see local_files.can_access_user_files's own
+        # docstring.
+        direct_write = local_files.can_access_user_files(self.download_mode)
         # Audit trail: the delivery path this call is about to take, estimated from
         # metadata size the same way the preview below is -- may not match
         # the eventual actual delivery in the rare case a Google Workspace
@@ -870,7 +900,7 @@ class DriveConnector(Connector):
         # makes, and this is an audit record of the *decision*, not a
         # guarantee about what happens after it.
         delivery = (
-            "local_disk" if self.download_mode != "org"
+            ("local_disk" if direct_write else "client_bridge") if self.download_mode != "org"
             else "inline_base64" if cfg.fits_inline(drive_file.size)
             else "staged_link"
         )
@@ -911,7 +941,7 @@ class DriveConnector(Connector):
         else:
             new_info = {
                 "Content returned to Claude": "None — file bytes are never sent",
-                "Saved to": dest_path,
+                "Saved to": displayed_dest,
             }
         details = (
             "The file above will be delivered as described above."
@@ -948,13 +978,37 @@ class DriveConnector(Connector):
         # content -- since no file content ever reaches Claude for this
         # tool, showing the human the real content here is strictly more
         # useful than a visual-only thumbnail ever was.
+        # B4: a >100KB file used to always hit get_file_content()'s default
+        # 100KB prefetch cap, so extract_text() ran on a truncated prefix --
+        # fine for text, but pypdf needs a PDF's trailer, at the *end* of
+        # the file, so a truncated prefix throws instead of returning
+        # anything usable (the "EOF marker not found" tracebacks the bug
+        # report showed). Below a sane size, fetch the whole file instead
+        # of guessing at a cap; above it, skip extract_text() on a
+        # truncated result rather than feed it something it can't parse.
+        # `full_bytes` is reused below for the actual delivery when this
+        # download turns out to need the file bridge, so a small file is
+        # never fetched from Drive twice.
         pii_scan_text = ""
+        full_bytes: bytes | None = None
         try:
-            content = await self._fetch(self._drive.get_file_content, file_id)
+            if drive_file.size and drive_file.size <= _FULL_FETCH_PII_SCAN_MAX_BYTES:
+                content = await self._fetch(self._drive.get_file_content, file_id, drive_file.size + 1)
+            else:
+                content = await self._fetch(self._drive.get_file_content, file_id)
             if content.content_text:
                 pii_scan_text = content.content_text
             elif content.content_bytes:
-                pii_scan_text = extract_text(content.content_bytes, drive_file.mime_type)
+                if content.truncated:
+                    logger.debug(
+                        "drive_download_file %s: %d-byte file exceeds the %d-byte full-fetch PII "
+                        "scan cap and get_file_content truncated it -- skipping extract_text() "
+                        "rather than feeding it a prefix some formats (e.g. PDF) can't parse.",
+                        file_id, drive_file.size, _FULL_FETCH_PII_SCAN_MAX_BYTES,
+                    )
+                else:
+                    pii_scan_text = extract_text(content.content_bytes, drive_file.mime_type)
+                    full_bytes = content.content_bytes
         except RuntimeError:
             pass
 
@@ -985,7 +1039,22 @@ class DriveConnector(Connector):
             delivery=delivery,
         )
         if self.download_mode != "org":
-            return await self._fetch(self._drive.download_file, file_id, destination_dir)
+            if direct_write:
+                return await self._fetch(self._drive.download_file, file_id, destination_dir)
+            # ADR 0007: privilege separation means this process cannot
+            # write into the real user's destination_dir -- reuse the
+            # bytes the PII scan above already fetched when it had them
+            # (small file, not truncated), otherwise fetch the full file
+            # now. local_files.deliver_file stages it for the shim (or,
+            # with no bridge-capable client, a one-time link -- SS1.4).
+            data = full_bytes
+            mime_type = drive_file.mime_type or "application/octet-stream"
+            if data is None:
+                result = await self._fetch(self._drive.download_file_bytes, file_id)
+                data, mime_type = result["data"], result["mime_type"]
+            return local_files.deliver_file(
+                destination_dir, name, data, mime_type, download_mode=self.download_mode,
+            )
         return await self._deliver_org_download(file_id, drive_file.size, cfg)
 
     async def _deliver_org_download(self, file_id: str, metadata_size: int, cfg: DownloadDeliveryConfig) -> Any:
@@ -1171,11 +1240,28 @@ class DriveConnector(Connector):
         preview_bytes = b""
         preview_mime_type = ""
         upload_pii_scan_text = ""
+        local_data: bytes | None = None
 
-        if local_path.strip():
+        # ADR 0007 is Claude-Desktop-only (the file bridge exists because
+        # the .mcpb shim runs on the user's own machine): org mode's own
+        # daemon runs wherever PrivacyFence's server runs, not the user's
+        # machine, and local_path there has always meant "read from the
+        # server's own filesystem" -- unaffected by this phase, exactly
+        # like drive_download_file's own org-mode branch stays unchanged.
+        is_org_local_path = local_path.strip() and self.download_mode == "org"
+
+        if local_path.strip() and not is_org_local_path:
+            # ADR 0007/B2: raises immediately -- LocalFileAccessError if
+            # there's no way to reach this path at all, or LocalFilesNeeded
+            # to start the upload handshake -- instead of the old
+            # os.path.getsize()/os.path.isfile() below silently reporting
+            # "0 bytes" for a file this process can't read and only failing
+            # once the human has already approved the upload.
+            local_files.require_local_files(
+                [local_path], max_total_bytes=_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
+            )
             display_name = name.strip() or os.path.basename(local_path)
-            expanded = os.path.expanduser(local_path)
-            size_bytes = os.path.getsize(expanded) if os.path.isfile(expanded) else 0
+            size_bytes = local_files.local_file_size(local_path, download_mode=self.download_mode)
             source = local_path
             sender = "(local file)"
             # The connector never used to read this file's bytes at all --
@@ -1186,6 +1272,35 @@ class DriveConnector(Connector):
             # of, so it's worth reading -- but only for types is_prefetch_
             # worthy() recognizes, under a sane cap, since it's a disk read
             # of a file that could be arbitrarily large.
+            guessed_mime = guess_mime_type(display_name)
+            if (
+                guessed_mime and is_prefetch_worthy(guessed_mime)
+                and 0 < size_bytes <= _UPLOAD_PREVIEW_MAX_BYTES
+            ):
+                try:
+                    read_bytes = local_files.read_local_file(local_path, download_mode=self.download_mode)
+                except local_files.LocalFileAccessError:
+                    logger.warning(
+                        "drive_upload_file: failed to read %r for preview/PII scan",
+                        local_path, exc_info=True,
+                    )
+                else:
+                    local_data = read_bytes
+                    if guessed_mime.startswith("image/"):
+                        preview_bytes = read_bytes
+                        preview_mime_type = guessed_mime
+                    # Not an image (or extract_text() finding nothing for one,
+                    # same no-op as before) -- feeds upload_pii_scan_text below,
+                    # which also becomes a rich "markdown" preview_blocks entry
+                    # (see this function's own preview construction further
+                    # down) instead of a visual thumbnail.
+                    upload_pii_scan_text = extract_text(read_bytes, guessed_mime)
+        elif is_org_local_path:
+            display_name = name.strip() or os.path.basename(local_path)
+            expanded = os.path.expanduser(local_path)
+            size_bytes = os.path.getsize(expanded) if os.path.isfile(expanded) else 0
+            source = local_path
+            sender = "(local file)"
             guessed_mime = guess_mime_type(display_name)
             if (
                 guessed_mime and is_prefetch_worthy(guessed_mime)
@@ -1203,11 +1318,6 @@ class DriveConnector(Connector):
                     if guessed_mime.startswith("image/"):
                         preview_bytes = read_bytes
                         preview_mime_type = guessed_mime
-                    # Not an image (or extract_text() finding nothing for one,
-                    # same no-op as before) -- feeds upload_pii_scan_text below,
-                    # which also becomes a rich "markdown" preview_blocks entry
-                    # (see this function's own preview construction further
-                    # down) instead of a visual thumbnail.
                     upload_pii_scan_text = extract_text(read_bytes, guessed_mime)
         else:
             display_name = name.strip() or "(unnamed file)"
@@ -1262,9 +1372,19 @@ class DriveConnector(Connector):
                 "content_base64": content_base64,
             },
         )
-        result = await self._fetch(
-            self._drive.upload_file, local_path, name, parent_folder_id, content_base64
-        )
+        if local_path.strip() and not is_org_local_path:
+            # ADR 0007: MediaFileUpload can't read a path this process
+            # doesn't have access to under privilege separation -- upload
+            # from the bytes the file bridge (or a direct read, in an
+            # unseparated install) already produced, reusing the preview
+            # read above when there was one instead of reading twice.
+            if local_data is None:
+                local_data = local_files.read_local_file(local_path, download_mode=self.download_mode)
+            result = await self._fetch(self._drive.upload_file_bytes, local_data, display_name, parent_folder_id)
+        else:
+            result = await self._fetch(
+                self._drive.upload_file, local_path, name, parent_folder_id, content_base64
+            )
         file_id = result.get("id", "")
         if file_id:
             self.session_created_ids.add(file_id)

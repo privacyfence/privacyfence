@@ -685,6 +685,19 @@ def _maybe_start_web_server(
     mode = org_mode.resolve_mode(org_config)
     mcp_enabled = bool(mcp_config.get("enabled", False))
 
+    # ADR 0007: settings.yaml's own file_bridge: section, read once here --
+    # same "resolve at startup, not on every call" posture as gate.py's
+    # configure_popup_executor above. No-op (keeps local_files.py's own
+    # default) when the section is absent, exactly like every other
+    # settings.yaml section that ships with no config at all.
+    from . import local_files
+    file_bridge_config = config.get("file_bridge", {}) or {}
+    local_files.configure_file_bridge(
+        max_download_bytes=int(
+            file_bridge_config.get("max_download_bytes", local_files.DEFAULT_MAX_DOWNLOAD_BYTES)
+        ),
+    )
+
     if mode == "org":
         if not mcp_enabled:
             return None

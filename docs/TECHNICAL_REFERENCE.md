@@ -813,7 +813,7 @@ The definitive tool surface lives in `src/privacyfence/connectors/` and the conn
 
 PrivacyFence extracts/normalizes supported attachment types for preview and PII inspection using the bounded extraction paths documented in [`file-type-support.md`](file-type-support.md).
 
-Local-mode downloads can be written on the user's machine. Org-mode downloads are delivered inline or through encrypted short-lived staged downloads as documented in [`org-mode-download-delivery.md`](org-mode-download-delivery.md).
+Local-mode downloads/uploads cross the privilege-separation boundary through the `.mcpb` shim's local file bridge (ADR 0007). Org-mode downloads are delivered inline or through encrypted short-lived staged downloads. Both are documented in [`org-mode-download-delivery.md`](org-mode-download-delivery.md).
 
 ## Configuration
 

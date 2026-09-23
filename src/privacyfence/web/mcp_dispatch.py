@@ -31,6 +31,7 @@ from typing import Any, Callable, Hashable
 from ..approvals import PendingApprovalRegistry, is_pending_result
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_v2_rules
+from .. import local_files
 from ..connector import Connector
 from ..gate import preflight_auto_accept, propose_policy_change, propose_rule_change, reason_scope, unattended_scope
 from ..policy import catalogue as policy_catalogue
@@ -250,6 +251,14 @@ class McpDispatcher:
         except Exception as exc:
             fut.set_exception(exc)
             fut.exception()  # mark retrieved -- see ipc_server.py's identical comment
+            # B3: a failed call must not be replayed for the rest of the
+            # dedupe window -- a caller already awaiting this exact `fut`
+            # (the `return await fut` branch above) still gets the
+            # exception fine, since that's the future object itself, not
+            # this dict entry; popping only stops a *new* call in the same
+            # window from being handed the same stale failure instead of
+            # actually retrying.
+            self._inflight.pop(key, None)
             raise
         fut.set_result(result)
         if is_pending_result(result):
@@ -261,6 +270,14 @@ class McpDispatcher:
             # instead of being handed this same stale pending blob back.
             self._inflight.pop(key, None)
             return result
+        if local_files.call_produced_deliveries():
+            # B3: a result that staged a file-bridge download carries a
+            # single-use download_staging token in its _meta -- reusing it
+            # from the dedupe cache would hand a second caller a token the
+            # first claim (or the shim writing the first response to disk)
+            # already consumed. See local_files.call_produced_deliveries's
+            # own docstring.
+            self._inflight.pop(key, None)
         if not self._is_read_only(connector, tool):
             self._last_write_at[(principal_id, connector_name)] = time.time()
         return result

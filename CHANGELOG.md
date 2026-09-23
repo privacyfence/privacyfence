@@ -43,6 +43,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Downloads and uploads (Drive, Gmail attachments, Confluence attachments) work again from Claude
+  Desktop on a privilege-separated local-mode install: a new local file bridge routes local file
+  access through the `.mcpb` shim instead of the daemon's own (inaccessible) filesystem view. The
+  `.mcpb` extension must be reinstalled/updated in Claude Desktop for this to take effect — see
+  [ADR 0007](docs/adr/0007-local-file-bridge.md).
+- Connector errors about a local path (a missing file, an unwritable destination) now reach Claude
+  directly instead of a generic "Tool call failed" message.
+- A failed tool call is no longer replayed from the dedupe cache for the rest of its 30-second
+  window; a call that staged a file-bridge download is never replayed either, since its download
+  token is single-use.
+- `drive_upload_file`'s approval preview no longer shows a file as 0 bytes when the daemon
+  couldn't actually read it — the file is now read (or its absence reported) before the human is
+  asked to approve anything.
+- `drive_download_file`'s pre-approval PII scan no longer throws (and skips scanning) on a PDF
+  over 100KB; files up to 5MB are now scanned from their full content instead of a truncated
+  prefix pypdf can't parse.
+
 ## [4.1.5] — 2026-09-21
 
 *Supersedes 4.1.4 and 4.1.3, neither of which was ever published. 4.1.3's release build stopped

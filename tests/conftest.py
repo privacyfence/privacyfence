@@ -29,11 +29,13 @@ from privacyfence import (
     daemon_main,
     download_staging,
     gate,
+    local_files,
     pii_detector,
     privacy_filter,
     privilege_separation,
     resource_names,
     settings_controller,
+    upload_staging,
     web_approval_ui,
 )
 from privacyfence.web import state_stream
@@ -49,6 +51,14 @@ def _reset() -> None:
     resource_names._REGISTRY.reset()
     web_approval_ui._INSTANCE = None
     download_staging._INSTANCE = None
+    # ADR 0007: upload_staging is the upload-side mirror of download_staging
+    # above, reset the same way for the same reason. local_files'
+    # configure_file_bridge() is gate.configure_popup_executor()'s own
+    # shape (a startup-set module-level value a test can override) --
+    # reset to its documented default so one test's override can't leak.
+    upload_staging._INSTANCE = None
+    local_files.configure_file_bridge()
+    local_files.force_bridge_for_tests(False)
     settings_controller._main_dispatch = None
     state_stream._loop = None
     # #428 Phase 4: privilege_separation caches the parsed marker file for

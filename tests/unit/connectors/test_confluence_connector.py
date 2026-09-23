@@ -543,6 +543,52 @@ class TestDownloadAttachment:
         assert result == {"path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 1024}
 
 
+class TestFileBridgeDownloadAttachment:
+    """ADR 0007: local mode, but privilege separation prevents a direct
+    write -- confluence_download_attachment must route through
+    local_files.deliver_file() instead of ConfluenceClient.
+    save_attachment_bytes/download_attachment, fetching the full
+    attachment when nothing was already prefetched for the PII scan."""
+
+    def _attachment(self, **overrides):
+        defaults = dict(
+            name="report.pdf", media_type="application/octet-stream", size=1024, attachment_id="att-1",
+        )
+        defaults.update(overrides)
+        return ConfluenceAttachment(**defaults)
+
+    @pytest.fixture(autouse=True)
+    def _isolated_data_dir(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    @pytest.fixture(autouse=True)
+    def _force_bridge(self):
+        from privacyfence import local_files
+        local_files.force_bridge_for_tests(True)
+        yield
+        local_files.force_bridge_for_tests(False)
+
+    async def test_fetches_full_bytes_when_nothing_was_prefetched(self, gated_call_spy):
+        from privacyfence import local_files
+
+        connector, client = make_connector()
+        client.get_page.return_value = make_page(title="Runbook", space_key="ENG", author="alice@example.com")
+        client.list_attachments.return_value = [self._attachment()]
+        client.fetch_attachment_bytes.return_value = b"the full attachment"
+
+        with local_files.call_context(bridge_available=True, uploads={}):
+            result = await connector.call(
+                "confluence_download_attachment",
+                {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "~/Downloads"},
+            )
+
+        assert result["delivery"] == "client_bridge"
+        client.fetch_attachment_bytes.assert_called_once_with("p1", "att-1")
+        client.download_attachment.assert_not_called()
+        client.save_attachment_bytes.assert_not_called()
+
+
 class TestOrgModeDownloadDelivery:
     """In org mode, confluence_download_attachment never writes to this
     daemon's own disk -- a small attachment's bytes come back inline, a

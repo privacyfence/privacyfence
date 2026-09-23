@@ -809,6 +809,16 @@ Org-mode files that cannot be returned inline can be staged as encrypted tempora
 
 See [`org-mode-download-delivery.md`](org-mode-download-delivery.md).
 
+## Local file bridge
+
+A privilege-separated local-mode install's daemon runs as its own OS account, with no standing access to the signed-in user's files — the same boundary [Local-mode trust boundary](#local-mode-trust-boundary) and [privilege separation](#privilege-separation-macos-linux-and-windows) describe for everything else. A tool that reads or writes a path the agent named (`drive_upload_file`'s `local_path`, `drive_download_file`'s `destination_dir`, and the equivalent Gmail/Confluence parameters) crosses that boundary through the `.mcpb` shim instead: the shim, which runs as the signed-in user, does the actual filesystem access on the daemon's behalf, over the same bearer-token-authenticated HTTP connection every tool call already uses.
+
+This adds no capability the agent did not already have — the agent and the shim run as the same OS user, so anything the shim reads or writes on the daemon's behalf was always something that process could have reached directly. What it does add is a guard: the shim will only act on a path that appears, verbatim, somewhere in the arguments of the exact tool call it's currently servicing, so a compromised or buggy daemon cannot use the shim as a general file oracle for paths the agent never named. Every upload still passes the ordinary preview/PII-scan/approval gate before its bytes are ever used, and every download still reaches disk only after approval — the bridge changes *how* bytes cross the process boundary, not when a human is asked to approve anything.
+
+Bytes in transit are staged the same way org-mode download staging is (above): per-principal, encrypted at rest, single-use, TTL-bound, with an identical no-oracle 404 for a missing/expired/wrong-principal/already-used token. See [ADR 0007](adr/0007-local-file-bridge.md) for the full wire protocol and the rejected alternatives (a shared transfer directory, granting the service account filesystem ACLs, doing file I/O in the companion) this design was chosen over.
+
+An unseparated install (a dev checkout, or a pip/pipx install that never enabled privilege separation) is unaffected: the daemon is the same OS account as the user there, so every local-mode tool keeps reading and writing local paths directly, exactly as it did before ADR 0007.
+
 ## Audit integrity and forwarding
 
 PrivacyFence records gate/approval activity in its audit log, including principal information in org mode. Every entry is unconditionally chained to the one before it with a keyed hash (HMAC-SHA256) — this isn't an opt-in feature; `AuditLogger` computes it for every install, and `verify_chain()` (or `scripts/verify_audit_log.py`) detects a line inserted, edited, or removed after the fact.
