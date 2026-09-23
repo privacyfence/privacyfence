@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted; implemented in part (`local-mode-fixes-plan.md` Phase 3). Amends [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md)
+Accepted; implemented in part (`local-mode-fixes-plan.md` Phase 3 — see Related). Amends [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md)
 decision 6 (see "Relationship to ADR 0002 decision 6" below) and decision 2's companion menu.
 Supersedes the local-mode-fixes plan's own Phase 2 §2.6 interim guard (the single-recorded-owner
 refusal in `privilege_separation.owner_membership_pending()`/`other_account_owns_this_install()`,
@@ -41,7 +41,7 @@ added, a second account was not merely under-served but actively dangerous:
 - `enable --for-user`'s data migration could overwrite the first account's `settings.yaml`,
   credentials and audit log with the second account's own `~/.privacyfence`.
 
-Phase 2 (`local-mode-fixes-plan.md` §2.6, recorded in ADR 0002 decision 2's amendment) closed all
+Phase 2 (`local-mode-fixes-plan.md` §2.6; the socket fix is ADR 0027, the rest shipped in #609) closed all
 three with a *refusal*: `owner_membership_pending()` stopped offering the elevated join to anyone
 but the marker's recorded `owner_user`, the sticky bit plus a uid check stopped socket takeover
 outright, and `--for-user`'s migration refused to touch a non-owner's `~/.privacyfence`. That is a
@@ -210,7 +210,7 @@ across accounts that have nothing to do with each other.
 - `handoff/mcp_token` is removed on startup of a separated daemon; an old `.mcpb` that only knows how
   to read that file gets the same "update the extension" failure mode ADR 0007 already established
   for a stale shim, not a silent wrong-principal token.
-- The companion socket takeover ADR 0002's own amendment closed with a refusal is now closed by
+- The companion socket takeover [ADR 0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md) closed with a refusal is now closed by
   there being nothing to take over: every non-owner principal has its own address.
 - `enable --for-user` for a second account migrates *that account's own* legacy data into its own
   `users/os-<uid>/`, never into the shared root — the data-merge hazard the interim guard prevented
@@ -242,13 +242,17 @@ across accounts that have nothing to do with each other.
 ## Related
 
 - [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md) — decision 1 (the OS-user trust
-  boundary this ADR narrows further), decision 6 (the guarantee this ADR does not touch), and the
-  amendment recording Phase 2's interim guard this ADR supersedes.
+  boundary this ADR narrows further), decision 6 (the guarantee this ADR does not touch), and decision 2, whose Phase 2
+  amendment is now [ADR 0026](0026-the-companion-manages-the-daemon-through-the-service-manager.md)
+  and [ADR 0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md). The
+  interim one-owner guard this ADR supersedes shipped with them in
+  [#609](https://github.com/privacyfence/privacyfence/pull/609).
 - [ADR 0003](0003-separated-installs-only.md) — decision 3, which made a shared service group
   possible in the first place.
 - [ADR 0007](0007-local-file-bridge.md) — the per-principal staging directories this phase's
   per-principal MCP tokens finally give a real second occupant.
-- `local-mode-fixes-plan.md` (deleted once that plan's Phase 4 lands) — Phase 3's own text, including
+- `local-mode-fixes-plan.md` (never merged to `main`; read it with
+  `git show 453ae02e:local-mode-fixes-plan.md`) — Phase 3's own text, including
   the "packaged default policy and no connectors" framing this ADR's deferrals rest on.
 - [Issue #579](https://github.com/privacyfence/privacyfence/issues/579) — builds directly on D5's
   `_PrincipalScopeMiddleware`/`current_principal()` plumbing. That work already unified principal
