@@ -1261,8 +1261,7 @@ class TestBespokeRoutesAreClassified:
         org_config_upload's own entry out of both sets so build_routes()
         hits its own bespoke route unclassified, and pin that this raises
         rather than silently mounting it."""
-        import privacyfence.web.routes_settings as routes_settings_module
-
+        routes_settings_module = sys.modules[build_routes.__module__]
         monkeypatch.setattr(routes_settings_module, "_BESPOKE_SENSITIVE_ROUTE_PATHS", frozenset())
         with pytest.raises(RuntimeError, match=r"/api/settings/org_config/upload.*classification"):
             build_routes(controller, sessions=sessions)
