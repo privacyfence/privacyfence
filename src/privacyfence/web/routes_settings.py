@@ -214,15 +214,16 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
 # settings_action's own dispatch loop.
 #
 # Two things consume these sets, deliberately both: build_routes() below
-# asserts every bespoke POST route it constructs is in one of them --
-# a real, load-bearing invariant checked every time this app is built, not
-# only under pytest -- and TestBespokeRoutesAreClassified re-asserts the
-# same thing against the actual Route objects it gets back, as a named,
-# always-collected regression test rather than only an assert a test run
-# could otherwise skip past. Either one alone would leave a future bespoke
-# POST route free to land unclassified -- the assert here catches it at
-# runtime (this call already raises on an unclassified path, before the app
-# ever serves it), the test catches it at review/CI time -- the same way
+# raises on every bespoke POST route it constructs that isn't in one of
+# them -- a real, load-bearing invariant checked every time this app is
+# built, not only under pytest, and not stripped under `python -O`/
+# PYTHONOPTIMIZE the way an `assert` would be -- and TestBespokeRoutesAreClassified
+# re-asserts the same thing against the actual Route objects it gets back,
+# as a named, always-collected regression test rather than only a check a
+# test run could otherwise skip past. Either one alone would leave a future
+# bespoke POST route free to land unclassified -- the raise here catches it
+# at runtime (this call already raises on an unclassified path, before the
+# app ever serves it), the test catches it at review/CI time -- the same way
 # TestSensitiveActionsCoverAllAllowedActions already fails the moment a new
 # _ALLOWED_ACTIONS entry lands unclassified.
 # ---------------------------------------------------------------------------- #
@@ -815,16 +816,19 @@ def build_routes(
             continue
         if route.path == "/api/settings/{action}":
             continue
-        # A real invariant, not a stripped-under-`-O` optimization: a bespoke
-        # POST route this function itself just built, with no matching
-        # _BESPOKE_SENSITIVE_ROUTE_PATHS/_BESPOKE_EXEMPT_ROUTE_PATHS entry,
-        # must never reach the app it's about to be mounted into.
-        assert route.path in _BESPOKE_SENSITIVE_ROUTE_PATHS or route.path in _BESPOKE_EXEMPT_ROUTE_PATHS, (  # nosec B101
-            f"{route.path} is a new bespoke POST route with no _BESPOKE_SENSITIVE_ROUTE_PATHS/"
-            "_BESPOKE_EXEMPT_ROUTE_PATHS classification (3.3 of the self-approval review) -- "
-            "add it to one of the two above before it can bypass _SENSITIVE_ACTIONS-shaped gating "
-            "the way org_config_upload used to (F5)"
-        )
+        # A real invariant, enforced with an explicit raise rather than
+        # `assert` so it still holds under `python -O`/PYTHONOPTIMIZE, which
+        # strips assert statements: a bespoke POST route this function
+        # itself just built, with no matching _BESPOKE_SENSITIVE_ROUTE_PATHS/
+        # _BESPOKE_EXEMPT_ROUTE_PATHS entry, must never reach the app it's
+        # about to be mounted into.
+        if route.path not in _BESPOKE_SENSITIVE_ROUTE_PATHS and route.path not in _BESPOKE_EXEMPT_ROUTE_PATHS:
+            raise RuntimeError(
+                f"{route.path} is a new bespoke POST route with no _BESPOKE_SENSITIVE_ROUTE_PATHS/"
+                "_BESPOKE_EXEMPT_ROUTE_PATHS classification (3.3 of the self-approval review) -- "
+                "add it to one of the two above before it can bypass _SENSITIVE_ACTIONS-shaped gating "
+                "the way org_config_upload used to (F5)"
+            )
     return routes
 
 
