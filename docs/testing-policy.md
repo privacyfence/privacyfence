@@ -160,11 +160,12 @@ write/read/update is a real provider-contract regression, and a cleanup call tha
 actually remove what it created would otherwise silently accumulate objects in the QA accounts
 forever. It targets a self-hosted runner this project provisions and controls
 (label `privacyfence-test`), provisioned per
-[`connector-live-check-setup.md`](connector-live-check-setup.md) Phase B. The four OAuth
+[`connector-live-check-setup.md`](connector-live-check-setup.md)'s "Runner requirements" section. The four OAuth
 token files and `org/org_config.json` live only as local files on that runner — they are never
 added as GitHub Actions secrets, and are never transmitted to GitHub at all. See
 [`connector-live-check-setup.md`](connector-live-check-setup.md) for the full account/runner setup
-and the reasoning behind isolating this tier from every GitHub-hosted job.
+and [ADR 0019](adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md) for the
+reasoning behind isolating this tier from every GitHub-hosted job.
 
 On drift, the job re-records the affected fixtures and opens an ordinary PR
 (`chore/connector-live-fixture-drift`) with the redacted diff; a maintainer reviews it exactly as
