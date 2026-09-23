@@ -67,6 +67,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- macOS: enabling privilege separation (the `.pkg` installer, or
+  `macos_privilege_separation.sh enable`) no longer occasionally leaves the companion app not
+  running until the next login. Restarting the companion in an already-logged-in session now waits
+  for the previous instance to unload and retries through launchd's bootout/bootstrap race, the
+  same way the daemon's own restart already did.
 - `scripts/qa_authenticate_connectors.py --org-config <path>` no longer crashes with
   `shutil.SameFileError` when `<path>` already resolves to `org/org_config.json` (e.g. re-running
   the command with the default install location) — it now recognizes the bundle is already
