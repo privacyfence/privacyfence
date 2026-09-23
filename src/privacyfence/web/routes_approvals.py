@@ -83,7 +83,7 @@ from starlette.routing import BaseRoute, Route
 
 from .. import approval_list_html, approval_window_html, web_shell, webauthn_stepup
 from ..approvals import BATCH_RESULTS, CONFIRM_RESULTS
-from ..principal import LOCAL_PRINCIPAL
+from ..principal import current_principal
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
 from ..web_approval_ui import WebApprovalUI
@@ -350,7 +350,11 @@ def create_app(
         return RedirectResponse("/approvals")
 
     def _list_rows() -> list:
-        return web_ui.deferred_registry.list_pending()
+        # ADR 0008: filtered to this request's own principal -- local mode
+        # is no longer guaranteed to have exactly one, and an unfiltered
+        # list_pending() would show every principal's pending approvals to
+        # whoever asked.
+        return web_ui.deferred_registry.list_pending(principal_id=current_principal().id)
 
     def _banner_html() -> str | None:
         if step_up is None:
@@ -359,8 +363,8 @@ def create_app(
         # stands alongside the Phase 3 "nothing enrolled yet" one -- see
         # web/routes_settings.py's own _banner_html for the same pairing.
         parts = [
-            step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(LOCAL_PRINCIPAL)),
-            webauthn_stepup.step_up_disabled_notice(LOCAL_PRINCIPAL),
+            step_up.local_enrollment_banner(has_credentials=webauthn_stepup.has_credentials(current_principal())),
+            webauthn_stepup.step_up_disabled_notice(current_principal()),
         ]
         parts = [p for p in parts if p]
         return " ".join(parts) if parts else None
@@ -410,7 +414,10 @@ def create_app(
         if not _authenticated(request):
             return _unauthorized(request)
         approval_id = request.path_params["id"]
-        card = web_ui.deferred_registry.get(approval_id)
+        # ADR 0008: a mismatched principal is indistinguishable from a
+        # nonexistent id, same as web/routes_org_approvals.py's own
+        # equivalent lookup.
+        card = web_ui.deferred_registry.get(approval_id, principal_id=current_principal().id)
         if card is None or card.event.is_set():
             # Covers both "never existed" and "already decided" -- an
             # answered card is left in the registry a while longer now (it
@@ -474,7 +481,7 @@ def create_app(
         ``show_approval``'s own GET."""
         if not _authenticated(request):
             return _unauthorized(request)
-        approval = web_ui.deferred_registry.get(request.path_params["id"])
+        approval = web_ui.deferred_registry.get(request.path_params["id"], principal_id=current_principal().id)
         if approval is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         return JSONResponse(
@@ -511,10 +518,10 @@ def create_app(
         this hard-fails with a ``403`` instead -- #426 Phase 3, mirroring
         org mode's own ``require_passkey`` branch exactly."""
         fingerprint = webauthn_stepup.decision_fingerprint(
-            approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
+            approval_id=approval_id, principal_id=current_principal().id, result=result, choice=choice,
         )
         options_json = step_up_decide.begin_step_up(
-            LOCAL_PRINCIPAL, rp_id=step_up.rp_id, subject_key=approval_id, fingerprint=fingerprint,
+            current_principal(), rp_id=step_up.rp_id, subject_key=approval_id, fingerprint=fingerprint,
             challenges=challenges,
         )
         if options_json is not None:
@@ -561,7 +568,7 @@ def create_app(
         # than a second step inside a card -- see approvals.
         # PendingApprovalRegistry.register_confirm's own ``sensitive``
         # parameter, and this module's docstring.
-        pending = web_ui.deferred_registry.get(approval_id)
+        pending = web_ui.deferred_registry.get(approval_id, principal_id=current_principal().id)
         sensitive_confirm = (
             pending is not None and pending.sensitive and result == CONFIRM_RESULTS[0]
         )
@@ -602,11 +609,11 @@ def create_app(
                 )
             else:
                 expected_fp = webauthn_stepup.decision_fingerprint(
-                    approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
+                    approval_id=approval_id, principal_id=current_principal().id, result=result, choice=choice,
                 )
                 try:
                     step_up_decide.verify_step_up(
-                        LOCAL_PRINCIPAL, rp_id=step_up.rp_id, origin=origin, subject_key=approval_id,
+                        current_principal(), rp_id=step_up.rp_id, origin=origin, subject_key=approval_id,
                         fingerprint=expected_fp, assertion=assertion, challenges=challenges,
                     )
                 except step_up_decide.StepUpExpired:
@@ -625,11 +632,11 @@ def create_app(
                         return stepup_response
                 else:
                     expected_fp = webauthn_stepup.decision_fingerprint(
-                        approval_id=approval_id, principal_id=LOCAL_PRINCIPAL.id, result=result, choice=choice,
+                        approval_id=approval_id, principal_id=current_principal().id, result=result, choice=choice,
                     )
                     try:
                         step_up_decide.verify_step_up(
-                            LOCAL_PRINCIPAL, rp_id=step_up.rp_id, origin=origin, subject_key=approval_id,
+                            current_principal(), rp_id=step_up.rp_id, origin=origin, subject_key=approval_id,
                             fingerprint=expected_fp, assertion=assertion, challenges=challenges,
                         )
                     except step_up_decide.StepUpExpired:
@@ -637,7 +644,7 @@ def create_app(
                     except WebAuthnError as exc:
                         return JSONResponse({"error": str(exc)}, status_code=401)
 
-        accepted = web_ui.resolve(approval_id, result, choice)
+        accepted = web_ui.resolve(approval_id, result, choice, principal_id=current_principal().id)
         if not accepted:
             # Idempotent by design (§7.1): the first accepted decision for
             # an id wins, any later one -- including a genuine double-submit
@@ -657,7 +664,7 @@ def create_app(
         for approval_id, result in parsed:
             if result not in _BATCH_STEP_UP_RESULTS:
                 continue
-            approval = registry.get(approval_id)
+            approval = registry.get(approval_id, principal_id=current_principal().id)
             if (
                 approval is not None and approval.is_batchable()
                 and webauthn_stepup.is_step_up_required(
@@ -678,7 +685,7 @@ def create_app(
         per-card one, and page-level step-up here never offered an IdP link
         either."""
         options_json = step_up_decide.begin_step_up(
-            LOCAL_PRINCIPAL, rp_id=step_up.rp_id, subject_key=f"batch:{batch_id}", fingerprint=fingerprint,
+            current_principal(), rp_id=step_up.rp_id, subject_key=f"batch:{batch_id}", fingerprint=fingerprint,
             challenges=challenges,
         )
         if options_json is not None:
@@ -760,7 +767,7 @@ def create_app(
                     },
                     status_code=400,
                 )
-            fingerprint = webauthn_stepup.batch_decision_fingerprint(principal_id=LOCAL_PRINCIPAL.id, items=parsed)
+            fingerprint = webauthn_stepup.batch_decision_fingerprint(principal_id=current_principal().id, items=parsed)
             assertion = payload.get("webauthn_assertion")
             if not isinstance(assertion, dict):
                 stepup_response = _batch_step_up_response(batch_id, fingerprint=fingerprint)
@@ -769,7 +776,7 @@ def create_app(
             else:
                 try:
                     step_up_decide.verify_step_up(
-                        LOCAL_PRINCIPAL, rp_id=step_up.rp_id, origin=origin, subject_key=f"batch:{batch_id}",
+                        current_principal(), rp_id=step_up.rp_id, origin=origin, subject_key=f"batch:{batch_id}",
                         fingerprint=fingerprint, assertion=assertion, challenges=challenges,
                     )
                 except step_up_decide.StepUpExpired:
@@ -784,7 +791,9 @@ def create_app(
         if not batch_id_verified:
             batch_id = uuid.uuid4().hex
 
-        results = registry.answer_batch(parsed, decided_via="binder", batch_id=batch_id)
+        results = registry.answer_batch(
+            parsed, principal_id=current_principal().id, decided_via="binder", batch_id=batch_id,
+        )
         return JSONResponse({"batch_id": batch_id, "results": results})
 
     async def service_worker(request: Request) -> Response:

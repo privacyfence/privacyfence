@@ -411,6 +411,38 @@ END_UNATTENDED_SESSION_TOOL = types.Tool(
     annotations=types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
 )
 
+CREATE_UPLOAD_SLOT_TOOL = types.Tool(
+    name="privacyfence_create_upload_slot",
+    description=(
+        "Get a URL to upload a local file's bytes to PrivacyFence directly, for a client with "
+        "no PrivacyFence extension (Claude Code, or any other direct HTTP MCP client) -- the "
+        "way forward when a tool's local_path/attachments parameter fails with a message about "
+        "PrivacyFence being unable to read files in your home folder directly. Returns "
+        "{upload_id, upload_url, method: 'PUT', max_bytes, expires_at, example}: PUT the file's "
+        "raw bytes to upload_url (e.g. the shown curl -T example) -- no Authorization header or "
+        "anything else is needed, the URL itself is the one-time credential. Once the upload "
+        "succeeds, pass upload_id back to the tool that needed the file (as its own upload_id "
+        "parameter, e.g. drive_upload_file, or as an 'upload:<upload_id>' entry in a tool's "
+        "attachments list, e.g. the gmail_*_with_attachments tools) -- do not try to fetch "
+        "upload_url yourself, and do not pass it as local_path. The slot is single-use, expires "
+        "10 minutes after this call, and can only ever be claimed by the tool call you make "
+        "next in this same conversation -- calling this tool does not itself upload, gate, "
+        "preview, or approve anything; that all still happens when the file's actual "
+        "destination tool runs. reason: one sentence on why this file is needed right now -- "
+        "logged, self-reported, unverified, same as every other meta tool's reason param."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "filename": {"type": "string"},
+            "size_bytes": {"type": "integer"},
+            "reason": {"type": "string"},
+        },
+        "required": ["filename", "reason"],
+    },
+    annotations=types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=False),
+)
+
 META_TOOLS: tuple[types.Tool, ...] = (
     CHECK_POLICY_TOOL,
     LIST_RULES_TOOL,
@@ -421,5 +453,6 @@ META_TOOLS: tuple[types.Tool, ...] = (
     END_UNATTENDED_SESSION_TOOL,
     AWAIT_APPROVAL_TOOL,
     PRIVACYFENCE_STATUS_TOOL,
+    CREATE_UPLOAD_SLOT_TOOL,
 )
 META_TOOL_NAMES: frozenset[str] = frozenset(t.name for t in META_TOOLS)

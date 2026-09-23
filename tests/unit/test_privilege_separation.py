@@ -488,14 +488,19 @@ class TestSeparatedPathResolution:
         assert control_channel.socket_path_under(handoff) == handoff / "control.sock"
         assert control_channel.companion_socket_path_under(handoff) == handoff / "companion.sock"
 
-    def test_mcp_token_stays_reachable_by_the_agent(self, separated):
-        # #428: "mcp_token stays reachable by the agent. It is the agent's own
-        # credential and the product doesn't work without it."
+    def test_mcp_token_moved_out_of_the_shared_handoff_dir(self, separated):
+        # ADR 0008 retires #428's "mcp_token stays reachable by the agent"
+        # invariant on purpose: a token any service-group member could read
+        # off disk is exactly the shared-identity leak Phase 3 closes. It
+        # now lives under authority_dir() -- service-account-owned, 0700,
+        # reachable only by minting it fresh over the control channel
+        # (MINT MCP) -- not under the shared, agent-readable handoff dir.
         token = mcp_auth.load_or_create_mcp_token()
 
-        path = separated / "handoff" / "mcp_token"
+        path = separated / "authority" / "mcp_token"
         assert path.read_text(encoding="utf-8") == token
-        assert stat.S_IMODE(path.stat().st_mode) == 0o640
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert not (separated / "handoff" / "mcp_token").exists()
 
     def test_resolving_paths_does_not_retighten_the_handoff_dir(self, separated):
         # secure_mkdir re-asserts its mode on an existing directory, which is
@@ -889,18 +894,6 @@ class TestHandoffWrites:
         assert target.read_text(encoding="utf-8") == "http://127.0.0.1:8765/mcp"
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
         assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
-
-    def test_ensure_handoff_file_mode_fixes_a_migrated_token(self, separated):
-        # A token carried in from a pre-Phase-4 install arrives 0600; left
-        # that way, the agent can never read its own credential again, and
-        # load_or_create_mcp_token() reuses an existing file rather than
-        # rewriting it.
-        token_path = separated / "handoff" / "mcp_token"
-        token_path.write_text("deadbeef", encoding="utf-8")
-        token_path.chmod(0o600)
-
-        assert mcp_auth.load_or_create_mcp_token() == "deadbeef"
-        assert stat.S_IMODE(token_path.stat().st_mode) == 0o640
 
 
 class TestInstallerContract:
@@ -2803,19 +2796,18 @@ class TestOwnerMembershipPending:
 
         assert privilege_separation.owner_membership_pending() is True
 
-    def test_a_different_account_outside_the_group_is_not_pending(self, separated, monkeypatch):
-        # The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6):
-        # the marker names
-        # "alice" as owner, so "bob" is never pending, however the group
-        # reads -- this is the fix for the leak where a second human on a
-        # shared machine could silently trigger the elevated
-        # ``enable --for-user`` on their own behalf.
+    def test_a_different_account_outside_the_group_is_pending(self, separated, monkeypatch):
+        # ADR 0008 retired the local-mode-fixes plan's Phase 2 §2.6 interim
+        # guard: the marker names "alice" as owner, but "bob" is a second
+        # account this install's separated daemon can now give an isolated
+        # principal of their own -- so "bob" outside the group is pending
+        # exactly like the owner always was, not refused.
         monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "bob")
         monkeypatch.setattr(
             privilege_separation, "service_group_members", lambda group: frozenset({"alice"})
         )
 
-        assert privilege_separation.owner_membership_pending() is False
+        assert privilege_separation.owner_membership_pending() is True
 
     def test_an_unreadable_group_falls_back_to_an_empty_marker_owner(
         self, platform_name, monkeypatch, tmp_path
@@ -2844,38 +2836,72 @@ class TestOwnerMembershipPending:
         assert privilege_separation.owner_membership_pending() is False
 
 
-class TestOtherAccountOwnsThisInstall:
-    """The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6):
-    ``other_account_owns_this_install()`` -- what tells the companion to
-    show a notification instead of silently doing nothing (or, before this
-    guard, silently completing the elevated join on a stranger's behalf)."""
+class TestOwnerUidAndSid:
+    """ADR 0008's own identity mapping: ``owner_uid()``/``owner_sid()`` are
+    what ``web/control_channel.py``'s ``principal_id_for_peer()`` compares a
+    connecting peer against to decide whether it is this install's owner
+    (``LOCAL_PRINCIPAL``) or a second, isolated ``os-<uid>``/``os-<sid>``
+    principal -- the direct replacement for the retired
+    ``other_account_owns_this_install()`` refusal."""
 
-    def test_unseparated_is_none(self, platform_name, monkeypatch, tmp_path):
+    pytestmark = posix_permissions_only
+
+    def test_unseparated_is_none(self, tmp_path, monkeypatch):
         monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
         privilege_separation.reset_cache()
 
-        assert privilege_separation.other_account_owns_this_install() is None
+        assert privilege_separation.owner_uid() is None
+        assert privilege_separation.owner_sid() is None
 
-    def test_the_owner_gets_none(self, separated, monkeypatch):
-        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "alice")
-
-        assert privilege_separation.other_account_owns_this_install() is None
-
-    def test_a_different_account_gets_the_owners_name(self, separated, monkeypatch):
-        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "bob")
-
-        assert privilege_separation.other_account_owns_this_install() == "alice"
-
-    def test_no_recorded_owner_gets_none(self, platform_name, monkeypatch, tmp_path):
-        # A machine-half-only install: the group membership is still open to
-        # whoever completes it first, which is owner_membership_pending()'s
-        # job, not this guard's.
+    def test_no_recorded_owner_is_none(self, platform_name, monkeypatch, tmp_path):
+        if platform_name == "win32":
+            pytest.skip("POSIX only")
         root = tmp_path / "PrivacyFence"
         monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
         _write_marker(root, platform_name, owner_user="")
-        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "bob")
 
-        assert privilege_separation.other_account_owns_this_install() is None
+        assert privilege_separation.owner_uid() is None
+
+    def test_resolves_a_real_account_on_posix(self, separated, platform_name):
+        if platform_name == "win32":
+            pytest.skip("POSIX only")
+        import pwd
+
+        _write_marker(separated, platform_name, owner_user=this_account())
+
+        assert privilege_separation.owner_uid() == pwd.getpwnam(this_account()).pw_uid
+
+    def test_none_for_an_account_that_does_not_exist(self, separated, platform_name):
+        if platform_name == "win32":
+            pytest.skip("POSIX only")
+        _write_marker(separated, platform_name, owner_user="no-such-account-anywhere")
+
+        assert privilege_separation.owner_uid() is None
+
+    def test_owner_sid_is_none_on_posix(self, separated, platform_name):
+        if platform_name == "win32":
+            pytest.skip("Windows only")
+        assert privilege_separation.owner_sid() is None
+
+    def test_owner_uid_is_none_on_windows(self, separated, platform_name):
+        if platform_name != "win32":
+            pytest.skip("Windows only")
+        assert privilege_separation.owner_uid() is None
+
+    def test_owner_sid_delegates_to_the_real_resolver_on_windows(self, separated, platform_name, monkeypatch):
+        # _resolve_owner_sid() itself is a real win32 API call (pragma:
+        # no cover -- exercised by the platform-windows job); what's
+        # testable here on any platform is that owner_sid() only calls it
+        # once its own guards (separated, owner recorded, actually
+        # windows) all pass, with the marker's own owner_user.
+        if platform_name != "win32":
+            pytest.skip("Windows only")
+        monkeypatch.setattr(
+            privilege_separation, "_resolve_owner_sid",
+            lambda owner_user: f"S-1-5-21-fake-for-{owner_user}",
+        )
+
+        assert privilege_separation.owner_sid() == "S-1-5-21-fake-for-alice"
 
 
 class TestInstallerScriptResolution:

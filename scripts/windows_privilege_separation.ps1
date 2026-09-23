@@ -79,7 +79,11 @@ param(
 
     # enable only: run *just* the per-user half for this account, against an
     # install the machine half has already separated (ADR 0003 decision 3).
-    # The POSIX scripts spell it `enable --for-user <name>`.
+    # The POSIX scripts spell it `enable --for-user <name>`. Works for any
+    # number of accounts on the same machine, not just this install's first
+    # (recorded) owner -- each gets its own isolated PrivacyFence identity,
+    # never merged with anyone else's (docs/adr/0008-one-principal-per-os-
+    # user.md).
     [string] $ForUser,
 
     [string] $DaemonExec,
@@ -229,6 +233,15 @@ $script:OwnerLocalAppData = $null
 # so "resolved" has to be its own flag (ADR 0003 decision 3's machine half is
 # the caller that has to be able to tell).
 $script:OwnerResolved = $false
+# Set by Invoke-EnableForUser when it is running for an account other than
+# the marker's recorded owner -- i.e. this install already has one principal
+# and this run is adding a second (or third, ...) one. Move-Data reads this
+# to route that account's own %LOCALAPPDATA%\PrivacyFence into its own
+# per-principal subdirectory (users\os-<sid>\) instead of the shared root,
+# per ADR 0008 ("D2: two identities, not one, per install") -- each Windows
+# account this ever runs -ForUser for gets fully isolated storage, never
+# merged with another account's.
+$script:NonOwnerForUser = $false
 
 # Windows' answer to the POSIX scripts' "root is never the owner" refusal.
 # An install provisioned from a SYSTEM context -- an MDM push, a deployment
@@ -514,6 +527,38 @@ $HandoffFileNames = @('mcp_token', 'mcp_url', 'web_base_url')
 $HandoffFileGlob = '*_url'
 
 function Move-Data {
+    # ADR 0008 ("D2: two identities, not one, per install"): an account that
+    # is not this install's recorded owner still gets its own
+    # %LOCALAPPDATA%\PrivacyFence migrated -- just never into the shared root
+    # the recorded owner's data lives in, which would mix a second person's
+    # connector tokens, audit log and policy into the first owner's. Instead
+    # it goes to $SystemRoot\users\os-<sid>, the exact per-principal path
+    # src/privacyfence/paths.py's user_dir() resolves to for a
+    # Principal(id=f"os-{sid}") that isn't the "local" principal -- so the
+    # daemon finds it under the same identity this migrates it as.
+    # Invoke-EnableForUser is the only caller that ever sets
+    # $script:NonOwnerForUser.
+    if ($script:NonOwnerForUser) {
+        $legacy = Get-LegacyDataDir
+        if (-not $legacy -or -not (Test-Path -LiteralPath $legacy)) {
+            Write-Note "no existing $legacy to migrate -- $($script:OwnerUser) starts with no data of their own"
+            return
+        }
+        $target = Join-Path $SystemRoot "users\os-$($script:OwnerSid)"
+        New-Item -ItemType Directory -Force -Path $target | Out-Null
+        # No -Force here, unlike the owner's-own merge below: Copy-Item
+        # without it fails/skips a destination item that already exists
+        # rather than overwriting it, which is the no-clobber contract this
+        # account's own subtree needs on a re-run -- the owner's own case
+        # below clobbers because that merge only ever runs once, against a
+        # source `enable` has already made the sole owner of, whereas
+        # -ForUser is explicitly documented as idempotent and safe to re-run
+        # at every companion start (see Invoke-EnableForUser's own comment).
+        Write-Note "merging $legacy into $target -- kept separate from this install's other principal(s), not merged into $SystemRoot itself (no-clobber: anything already in $target is left as it is)"
+        Copy-Item -Path (Join-Path $legacy '*') -Destination $target -Recurse -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $legacy -Recurse -Force
+        return
+    }
     $legacy = Get-LegacyDataDir
     if (-not $legacy -or -not (Test-Path -LiteralPath $legacy)) {
         Write-Note "no existing $legacy to migrate -- starting the separated install empty"
@@ -1262,6 +1307,19 @@ function Invoke-EnableForUser {
 
     if (-not (Test-Path -LiteralPath (Join-Path $SystemRoot $MarkerName))) {
         Stop-WithError "this install is not privilege-separated yet -- run '... enable' first"
+    }
+
+    # ADR 0008 ("D2: two identities, not one, per install"): adding another
+    # account to $ServiceGroup is the normal, supported way to let more than
+    # one human use this install. $script:OwnerUser is only ever compared
+    # against the marker's recorded owner to decide *where* Move-Data below
+    # sends this account's own data -- into its own isolated
+    # users\os-<sid>\, never merged with anyone else's -- there is nothing to
+    # refuse here.
+    $markerOwner = Get-MarkerOwnerUser
+    if ($markerOwner -and $markerOwner -ine $script:OwnerUser) {
+        Write-Note "adding $($script:OwnerUser) alongside this install's existing owner $markerOwner -- each gets its own isolated PrivacyFence identity (docs/adr/0008-one-principal-per-os-user.md); $($script:OwnerUser)'s own $(Get-LegacyDataDir) will be migrated into its own storage, not merged with $($markerOwner)'s"
+        $script:NonOwnerForUser = $true
     }
 
     Add-OwnerToServiceGroup

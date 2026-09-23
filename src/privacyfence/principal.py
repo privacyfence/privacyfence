@@ -1,10 +1,16 @@
 """Principal identity and per-request scoping (P6).
 
-``local`` mode has exactly one user, but the code from here on treats that
-user as ``Principal(id="local")`` — a principal like any other — rather than
-as an implicit absence of multi-tenancy. That is what makes org mode (P7+)
-additive: nothing downstream of this module needs to learn a new concept
-when a second principal shows up, it just starts seeing a second id.
+An unseparated local-mode install has exactly one user, but the code from
+here on treats that user as ``Principal(id="local")`` — a principal like
+any other — rather than as an implicit absence of multi-tenancy. That is
+what makes org mode (P7+) additive: nothing downstream of this module needs
+to learn a new concept when a second principal shows up, it just starts
+seeing a second id. It is also what makes ADR 0008's local-mode multi-user
+support (a privilege-separated install with more than one OS account in its
+service group) additive in exactly the same way: an ``os-<uid>``/``os-<sid>``
+principal is just another id this module already knew how to carry, once
+``web/control_channel.py`` started minting one from the kernel's own peer
+credentials.
 
 This mirrors a pattern the codebase already had, twice, before this phase:
 ``gate.py``'s ``reason_scope``/``unattended_scope`` are ``contextvars`` set
@@ -13,15 +19,18 @@ sites deep in the policy engine never need a "which session is this"
 parameter threaded through them. ``principal_scope`` is the same mechanism
 for "which user is this."
 
-Two entry points exist today, both wired to ``LOCAL_PRINCIPAL`` because
-neither surface has real per-user identity yet (that's P7's OIDC/OAuth 2.1
-authorization server, and P8's per-user service authorization) — see
-web/mcp_auth.py's ``principal_from_access_token`` (the ``/mcp`` endpoint)
-and web/server.py's ``_PrincipalScopeMiddleware`` (the browser surfaces).
-Both already resolve through a real ``Principal``/``principal_scope`` call,
-not a hardcoded shortcut, so P7 only has to change what those two functions
-resolve to — nothing else in this module, or in any of the per-principal
-registries built on top of it, needs to change.
+Three entry points resolve a real ``Principal`` today, never a hardcoded
+``LOCAL_PRINCIPAL`` shortcut: web/mcp_auth.py's ``principal_from_access_token``
+(the ``/mcp`` endpoint, reading whichever principal's token ``PerUserToken
+Verifier`` resolved it to); web/server.py's ``_PrincipalScopeMiddleware``
+(the browser surfaces, reading whichever principal's control-channel
+connection minted the request's own ``pf_session``); and
+web/control_channel.py's own ``_LineProtocolServer._dispatch`` (the control
+channel itself, reading the connecting peer's kernel-verified identity
+directly). Org mode's OIDC/OAuth 2.1 sign-in (P7) and local mode's kernel-
+verified OS accounts (ADR 0008) are two different ways of answering "who is
+this", but neither entry point above needed to change shape to add the
+second one — only what each resolves to.
 """
 from __future__ import annotations
 

@@ -43,6 +43,12 @@ on the same machine, so a process running as that user can reach everything the 
 on. This section states plainly what that does and does not mean, because the goals listed above
 are otherwise easy to read more broadly than they hold.
 
+On a privilege-separated install with more than one OS account in its service group, this boundary
+now applies **per account**: [ADR 0008](adr/0008-one-principal-per-os-user.md) gives each one its
+own principal, so what follows in this section (a local process reaching everything the approval UI
+depends on) is true of *that account's own* PrivacyFence state, never another account's on the same
+machine. See [Authorization and principal isolation](#authorization-and-principal-isolation).
+
 **On macOS, Linux and Windows every packaged install moves that boundary automatically** — see
 [Privilege separation (macOS, Linux and Windows)](#privilege-separation-macos-linux-and-windows)
 below, which is what [#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4 builds
@@ -755,11 +761,23 @@ The operational consequence, for an organization that wants the stronger reading
 
 ## Authorization and principal isolation
 
-Local mode has one principal for the daemon instance. Org mode supports multiple principals and maintains user-scoped state under principal-aware paths.
+Org mode supports multiple principals and maintains user-scoped state under principal-aware paths.
+
+Local mode had exactly one principal through ADR 0007. [ADR 0008](adr/0008-one-principal-per-os-user.md)
+gives a privilege-separated install one principal per OS account instead: the account this install
+is provisioned for (its `owner_user`) keeps `LOCAL_PRINCIPAL`'s existing identity and data, and any
+other OS account added to the service group gets its own `os-<uid>`/`os-<sid>` principal — its own
+`/mcp` token (kernel-verified from the local control channel's own peer credentials, never a shared
+file), its own `/approvals` and `/security`, its own audit log, and its own per-user companion-
+channel address. An unseparated install (a dev checkout, or a pip/pipx install with privilege
+separation never turned on) still has exactly one principal, unchanged. See that ADR's own "What
+this phase deliberately does not do" for what a second principal cannot yet do (connect their own
+services; use a personal `/settings` page).
 
 `ConnectorRegistry` creates/caches connector hosts per principal. Service authorization callbacks evict the affected principal's cached connector host so subsequent calls use the updated credentials.
 
-Org approval routes filter/authorize by principal rather than exposing the local-mode all-pending-approvals view across users.
+Org approval routes filter/authorize by principal; local mode's own `/approvals` and `/api/state/stream`
+now do the same, once more than one principal can exist.
 
 ## Approval and policy enforcement
 

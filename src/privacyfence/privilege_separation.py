@@ -656,32 +656,6 @@ def write_handoff_file(path: Path, text: str) -> None:
     )
 
 
-def ensure_handoff_file_mode(path: Path) -> None:
-    """Re-assert ``handoff_file_mode()`` on a file that already existed --
-    ``secure_mkdir``'s own self-healing posture, applied to the one handoff
-    file that is deliberately *not* rewritten on every daemon start:
-    ``mcp_token`` is reused across restarts, so a token migrated in from a
-    pre-Phase-4 install would keep its old ``0600`` forever and the agent
-    would never be able to read its own credential again. Best-effort and
-    silent on failure, like every other permission fix-up here.
-
-    A no-op on Windows, where there is no mode to re-assert and the
-    equivalent problem is solved a different way: a file *created* in
-    ``handoff/`` inherits that directory's ACL, and a file *moved* there by
-    the migration keeps whatever ACL it had in ``%LOCALAPPDATA%``, so
-    ``scripts/windows_privilege_separation.ps1`` runs ``icacls /reset /t``
-    over the directory once, at enable time, rather than leaving every
-    process to re-derive an inherited ACL it has no way to compute.
-    """
-    if os.name == "nt":  # pragma: no cover -- exercised by the platform-windows job
-        return
-    try:
-        if path.stat().st_mode & 0o7777 != handoff_file_mode():
-            path.chmod(handoff_file_mode())
-    except OSError as exc:  # pragma: no cover -- best effort, same posture as secure_mkdir
-        logger.warning("Could not set permissions on %s: %s", path, exc)
-
-
 def current_user_name() -> str:
     """This process's account name, or its numeric uid as a string where
     ``pwd`` can't answer (a uid with no passwd entry -- possible inside a
@@ -1916,30 +1890,29 @@ def service_group_members(group: str) -> frozenset[str] | None:
 
 
 def owner_membership_pending() -> bool:
-    """Whether this install is separated, this process's account is its
-    recorded owner (or no owner is recorded yet), and that account is still
+    """Whether this install is separated and this process's account is still
     outside the service group -- decision 3's "pending" state.
 
     False on an unseparated install: there is no group to be outside of, and
     an install with no separation at all is a different problem with a
     different answer (ADR 0003 decision 6's daemon-side gate).
 
-    Also false for any account that is *not* this install's recorded owner
-    (the local-mode-fixes plan's interim multi-user guard, Phase 2 §2.6) --
-    before this check existed, a second OS user logging into a machine
-    already separated for
-    someone else read as "pending" exactly the way the real owner's first
-    login does, and ``companion.py``'s own ``_complete_pending_separation()``
-    would answer that the same way too: by running the elevated
-    ``enable --for-user`` on their behalf, with one admin password prompt,
-    silently handing them the first user's Gmail/Drive/etc. through
-    PrivacyFence. See ``other_account_owns_this_install()`` for what a
-    non-owner sees instead.
+    Through the local-mode-fixes plan's Phase 2 (§2.6), this was also false
+    for any account that was not this install's recorded owner -- a second
+    OS user was refused rather than onboarded, to close a leak (a shared
+    principal, a takeable companion socket) that ADR 0008's Phase 3 has since
+    fixed at its actual source. Now that a second account gets its own
+    isolated principal (``os-<uid>``/``os-<sid>``) instead of the owner's,
+    there is nothing left for an owner-mismatch to protect against here: any
+    service-group member who has not yet joined is "pending" in exactly the
+    sense the owner always was, and ``companion.py``'s own
+    ``_complete_pending_separation()`` completing ``enable --for-user`` on
+    their behalf hands them their own empty principal, never the owner's.
+    See ADR 0008 ("D2: two identities, not one, per install") for the full
+    account of what changed and why.
     """
     state = separation()
     if state is None:
-        return False
-    if state.owner_user and not accounts_equal(state.owner_user, current_user_name()):
         return False
     members = service_group_members(state.service_group)
     if members is None:
@@ -1953,24 +1926,48 @@ def owner_membership_pending() -> bool:
     return not any(accounts_equal(member, user) for member in members)
 
 
-def other_account_owns_this_install() -> str | None:
-    """The interim guard's other half (the local-mode-fixes plan's Phase 2
-    §2.6): this install's recorded owner, when it is some account other than
-    the one running this
-    process -- what ``companion.py`` shows a notification about instead of
-    silently doing nothing (and, before this guard existed, instead of
-    silently offering to join).
-
-    None when there is nothing to warn about: no separated install, no
-    owner recorded yet (a machine-half-only install with the group
-    membership still open to whoever logs in and completes it first --
-    ``owner_membership_pending()`` still applies there), or the recorded
-    owner *is* this account.
-    """
+def owner_uid() -> int | None:
+    """The uid of this install's recorded owner (``Separation.owner_user``),
+    or ``None`` if there is none recorded yet, this platform has no uid
+    concept (Windows -- see ``owner_sid()``), or the named account does not
+    exist locally (a marker surviving the account's own removal). ADR 0008's
+    own principal-id mapping: a control-channel peer whose uid equals this
+    one maps to ``LOCAL_PRINCIPAL`` rather than to ``os-<uid>``, so the
+    owner's own existing data stays exactly where it already is. Mirrors
+    ``service_account_uid()``'s own shape, resolving the marker's
+    ``owner_user`` name instead of its ``service_account`` name."""
     state = separation()
-    if state is None or not state.owner_user or accounts_equal(state.owner_user, current_user_name()):
+    if state is None or not state.owner_user or current_platform() == "win32":
         return None
-    return state.owner_user
+    import pwd
+
+    try:
+        return pwd.getpwnam(state.owner_user).pw_uid
+    except KeyError:
+        return None
+
+
+def owner_sid() -> str | None:
+    """Windows' equivalent of ``owner_uid()``: the recorded owner's SID as a
+    string (``S-1-5-21-...``), or ``None`` under the same conditions
+    ``owner_uid()`` returns ``None`` for on POSIX. Used the same way: a
+    control-channel peer whose SID matches this one is ``LOCAL_PRINCIPAL``,
+    not ``os-<sid>``."""
+    state = separation()
+    if state is None or not state.owner_user or current_platform() != "win32":
+        return None
+    return _resolve_owner_sid(state.owner_user)
+
+
+def _resolve_owner_sid(owner_user: str) -> str | None:  # pragma: no cover -- exercised by the platform-windows job
+    from . import windows_acl
+
+    sid = windows_acl.lookup_account_sid(owner_user)
+    if sid is None:
+        return None
+    import win32security
+
+    return win32security.ConvertSidToStringSid(sid)
 
 
 #: Where ``scripts/build_deb.sh`` installs the Linux provisioning script, and

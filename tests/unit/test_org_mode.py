@@ -110,16 +110,21 @@ class TestDownloadDeliveryConfigFromOrgConfig:
         assert config.inline_max_bytes == org_mode.DEFAULT_INLINE_MAX_BYTES
         assert config.link_ttl_seconds == org_mode.DEFAULT_LINK_TTL_SECONDS
         assert config.allow_disk_staging is True
+        # Phase 4: defaults to the capability link -- see agent_links' own
+        # docstring.
+        assert config.agent_links is True
 
     def test_every_field_set(self):
         config = org_mode.DownloadDeliveryConfig.from_org_config({
             "download_delivery": {
                 "inline_max_bytes": 1_000_000, "link_ttl_seconds": 60.0, "allow_disk_staging": False,
+                "agent_links": False,
             },
         })
         assert config.inline_max_bytes == 1_000_000
         assert config.link_ttl_seconds == 60.0
         assert config.allow_disk_staging is False
+        assert config.agent_links is False
 
     def test_zero_inline_max_bytes_is_allowed(self):
         # The knob an org picks for "no file content ever reaches Claude's
@@ -137,6 +142,29 @@ class TestDownloadDeliveryConfigFromOrgConfig:
     def test_non_positive_link_ttl_raises(self):
         with pytest.raises(org_mode.ConfigurationError):
             org_mode.DownloadDeliveryConfig.from_org_config({"download_delivery": {"link_ttl_seconds": 0}})
+
+
+class TestDownloadDeliveryConfigStagedLinkPath:
+    """Phase 4 ("Clients without the bridge"): which URL path a staged
+    download's link should use, given agent_links -- see that field's own
+    docstring for the reasoning."""
+
+    def test_agent_links_true_uses_the_capability_route(self):
+        config = org_mode.DownloadDeliveryConfig(agent_links=True)
+        path = config.staged_link_path(b"\x01" * 32)
+        assert path.startswith("/mcp-files/fetch/")
+
+    def test_agent_links_false_uses_the_browser_route(self):
+        config = org_mode.DownloadDeliveryConfig(agent_links=False)
+        path = config.staged_link_path(b"\x01" * 32)
+        assert path.startswith("/downloads/")
+
+    def test_both_routes_encode_the_same_token(self):
+        import base64
+        token = b"\x02" * 32
+        expected = base64.urlsafe_b64encode(token).decode("ascii")
+        assert org_mode.DownloadDeliveryConfig(agent_links=True).staged_link_path(token) == f"/mcp-files/fetch/{expected}"
+        assert org_mode.DownloadDeliveryConfig(agent_links=False).staged_link_path(token) == f"/downloads/{expected}"
 
 
 class TestAuditForwardingConfigFromOrgConfig:

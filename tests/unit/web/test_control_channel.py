@@ -1261,8 +1261,9 @@ class TestAttestedMintCommands:
         store = BootstrapStore()
         reply = self._dispatch("MINT\n", store)
         assert reply.startswith("OK ")
-        provenance = store.consume(reply[len("OK "):].strip())
+        provenance, principal_id = store.consume(reply[len("OK "):].strip())
         assert provenance == sa.PROVENANCE_UNATTESTED
+        assert principal_id == "local"
 
     def test_a_confirmed_companion_nonce_mints_a_human_code(self):
         store = BootstrapStore()
@@ -1272,8 +1273,9 @@ class TestAttestedMintCommands:
             confirm_companion_mint=lambda nonce: bool(seen.append(nonce)) or True,
         )
         assert seen == ["abc123"]
-        provenance = store.consume(reply[len("OK "):].strip())
+        provenance, principal_id = store.consume(reply[len("OK "):].strip())
         assert provenance == sa.PROVENANCE_HUMAN
+        assert principal_id == "local"
 
     def test_an_unconfirmed_companion_nonce_mints_nothing_at_all(self):
         store = BootstrapStore()
@@ -1297,8 +1299,9 @@ class TestAttestedMintCommands:
     def test_a_confirmed_console_mint_is_human(self):
         store = BootstrapStore()
         reply = self._dispatch("MINT CONSOLE\n", store, confirm_console_mint=lambda: (True, ""))
-        provenance = store.consume(reply[len("OK "):].strip())
+        provenance, principal_id = store.consume(reply[len("OK "):].strip())
         assert provenance == sa.PROVENANCE_HUMAN
+        assert principal_id == "local"
 
     def test_a_denied_console_mint_passes_the_reason_back(self):
         reply = self._dispatch(
@@ -1595,8 +1598,9 @@ class TestAttestedMintClientHelpers:
     def test_the_companion_shape_mints_a_code_that_may_approve(self, both_channels):
         code = cc.mint_attested_bootstrap_code()
 
-        provenance = both_channels.consume(code)
+        provenance, principal_id = both_channels.consume(code)
         assert provenance == sa.PROVENANCE_HUMAN
+        assert principal_id == "local"
 
     def test_a_nonce_the_companion_never_issued_gets_no_code(self, both_channels, monkeypatch):
         """What an agent sending this line by hand hits: it cannot produce a
@@ -1613,8 +1617,9 @@ class TestAttestedMintClientHelpers:
 
         code = cc.mint_console_bootstrap_code(timeout=5.0)
 
-        provenance = both_channels.consume(code)
+        provenance, principal_id = both_channels.consume(code)
         assert provenance == sa.PROVENANCE_HUMAN
+        assert principal_id == "local"
 
     def test_a_denied_dialog_reaches_the_terminal_in_words(self, both_channels, monkeypatch):
         monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: False)
@@ -1682,3 +1687,193 @@ class TestAttestedMintWithNoCompanion:
         # The view-only path is the one that must never depend on anything
         # else being up -- it is what a locked-out human falls back to.
         assert cc.mint_bootstrap_code()
+
+
+class TestPeerIdentityPosix:
+    """ADR 0008: ``peer_identity_posix()`` over a real ``socket.socketpair()``
+    -- the same primitive ``_peer_uid_posix()`` already uses, generalized
+    into a resolvable identity rather than a bare uid."""
+
+    def test_resolves_this_process_own_identity(self):
+        import pwd
+
+        server_sock, client_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            peer = cc.peer_identity_posix(server_sock)
+            assert peer is not None
+            assert peer.uid == str(os.getuid())
+            assert peer.name == pwd.getpwuid(os.getuid()).pw_name
+        finally:
+            server_sock.close()
+            client_sock.close()
+
+    def test_none_when_so_peercred_is_unavailable(self, monkeypatch):
+        monkeypatch.delattr(socket, "SO_PEERCRED", raising=False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "freebsd")
+        server_sock, client_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            assert cc.peer_identity_posix(server_sock) is None
+        finally:
+            server_sock.close()
+            client_sock.close()
+
+
+class TestPrincipalIdForPeer:
+    """ADR 0008's own owner/non-owner mapping -- the local-mode-fixes plan's
+    §3.1 "the account named by the marker's owner_user maps to the existing
+    LOCAL_PRINCIPAL; every other service-group member maps to os-<uid>"."""
+
+    def test_unseparated_is_always_local(self, monkeypatch):
+        monkeypatch.setattr(cc.privilege_separation, "is_enabled", lambda: False)
+        peer = cc.OsUser(uid="12345", name="whoever")
+
+        assert cc.principal_id_for_peer(peer) == "local"
+
+    def test_no_peer_identity_is_always_local(self, monkeypatch):
+        monkeypatch.setattr(cc.privilege_separation, "is_enabled", lambda: True)
+
+        assert cc.principal_id_for_peer(None) == "local"
+
+    def test_the_owner_maps_to_local(self, monkeypatch):
+        monkeypatch.setattr(cc.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc.privilege_separation, "owner_uid", lambda: 1001)
+        peer = cc.OsUser(uid="1001", name="alice")
+
+        assert cc.principal_id_for_peer(peer) == "local"
+
+    def test_a_different_uid_maps_to_its_own_os_principal(self, monkeypatch):
+        monkeypatch.setattr(cc.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc.privilege_separation, "owner_uid", lambda: 1001)
+        peer = cc.OsUser(uid="1002", name="bob")
+
+        assert cc.principal_id_for_peer(peer) == "os-1002"
+
+    def test_an_unresolvable_owner_still_maps_a_peer_to_its_own_principal(self, monkeypatch):
+        # A half-removed install (the marker names an owner account that no
+        # longer exists): fails toward isolation, not toward everyone
+        # sharing LOCAL_PRINCIPAL.
+        monkeypatch.setattr(cc.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc.privilege_separation, "owner_uid", lambda: None)
+        peer = cc.OsUser(uid="1002", name="bob")
+
+        assert cc.principal_id_for_peer(peer) == "os-1002"
+
+    def test_windows_uses_owner_sid(self, monkeypatch):
+        monkeypatch.setattr(cc.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "win32")
+        monkeypatch.setattr(cc.privilege_separation, "owner_sid", lambda: "S-1-5-21-1-2-3-1001")
+        owner_peer = cc.OsUser(uid="S-1-5-21-1-2-3-1001", name="alice")
+        other_peer = cc.OsUser(uid="S-1-5-21-1-2-3-1002", name="bob")
+
+        assert cc.principal_id_for_peer(owner_peer) == "local"
+        assert cc.principal_id_for_peer(other_peer) == "os-S-1-5-21-1-2-3-1002"
+
+
+class TestMintMcpToken:
+    """ADR 0008 §3.2: ``MINT MCP``/``ROTATE MCP``, and the peer-scoped
+    dispatch every ``ControlChannelServer`` command now runs inside."""
+
+    def _dispatch(self, line: str, *, mint_mcp_token, peer=None) -> str:
+        server = cc._LineProtocolServer(
+            handler=lambda ln: cc._handle_daemon_request(
+                BootstrapStore(), allow_quit=True, line=ln, mint_mcp_token=mint_mcp_token,
+            ),
+            socket_path=lambda: None, pipe_name=lambda: None, thread_name="t",
+            scope_by_peer_principal=True,
+        )
+        return server._dispatch(line, peer)
+
+    def test_mint_mcp_with_no_callback_is_refused(self):
+        reply = self._dispatch("MINT MCP\n", mint_mcp_token=None)
+        assert reply.startswith("ERROR")
+
+    def test_rotate_mcp_with_no_callback_is_refused(self):
+        reply = self._dispatch("ROTATE MCP\n", mint_mcp_token=None)
+        assert reply.startswith("ERROR")
+
+    def test_mint_mcp_runs_the_callback_inside_the_peers_own_scope(self, monkeypatch):
+        monkeypatch.setattr(cc.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc.privilege_separation, "owner_uid", lambda: 1001)
+        seen = []
+
+        def mint(rotate: bool) -> str:
+            from privacyfence.principal import current_principal
+
+            seen.append((rotate, current_principal().id))
+            return "sometoken"
+
+        reply = self._dispatch(
+            "MINT MCP\n", mint_mcp_token=mint, peer=cc.OsUser(uid="9999", name="bob"),
+        )
+        assert reply == "OK sometoken\n"
+        assert seen == [(False, "os-9999")]
+
+    def test_rotate_mcp_passes_rotate_true(self):
+        seen = []
+
+        def mint(rotate: bool) -> str:
+            seen.append(rotate)
+            return "freshtoken"
+
+        reply = self._dispatch("ROTATE MCP\n", mint_mcp_token=mint)
+        assert reply == "OK freshtoken\n"
+        assert seen == [True]
+
+    def test_mint_binds_the_session_to_the_peers_principal(self, monkeypatch):
+        monkeypatch.setattr(cc.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+        monkeypatch.setattr(cc.privilege_separation, "owner_uid", lambda: 1001)
+        store = BootstrapStore()
+        server = cc._LineProtocolServer(
+            handler=lambda ln: cc._handle_daemon_request(store, allow_quit=True, line=ln),
+            socket_path=lambda: None, pipe_name=lambda: None, thread_name="t",
+            scope_by_peer_principal=True,
+        )
+        reply = server._dispatch("MINT\n", cc.OsUser(uid="4242", name="carol"))
+        assert reply.startswith("OK ")
+        code = reply[len("OK "):].strip()
+        provenance, principal_id = store.consume(code)
+        assert provenance == sa.PROVENANCE_UNATTESTED
+        assert principal_id == "os-4242"
+
+
+class TestPerUserCompanionAddress:
+    """ADR 0008 §3.5: the owner keeps the unsuffixed address; any other
+    principal gets its own, so distinct OS users' companions can never
+    collide."""
+
+    def test_the_owner_keeps_the_unsuffixed_address(self):
+        # A short, synthetic directory rather than pytest's own tmp_path --
+        # see TestPosixSocketPath.test_lives_under_the_authority_root_by_default's
+        # comment: macOS's /private/var/folders/... tmp_path prefix is
+        # already long enough to trip the sun_path-length fallback this
+        # class's own collision tests exercise on purpose, which would make
+        # this "short path" case flaky by host rather than by design.
+        from pathlib import PurePosixPath
+
+        base = PurePosixPath("/home/alice/.privacyfence/handoff")
+        path = cc.companion_socket_path_under(base, "local")
+        assert path == base / "companion.sock"
+
+    def test_another_principal_gets_a_suffixed_address(self):
+        from pathlib import PurePosixPath
+
+        base = PurePosixPath("/home/alice/.privacyfence/handoff")
+        path = cc.companion_socket_path_under(base, "os-1002")
+        assert path == base / "companion-1002.sock"
+
+    def test_two_principals_never_collide(self, tmp_path):
+        a = cc.companion_socket_path_under(tmp_path, "os-1001")
+        b = cc.companion_socket_path_under(tmp_path, "os-1002")
+        assert a != b
+
+    def test_pipe_name_is_suffixed_the_same_way(self, tmp_path):
+        owner_pipe = cc.companion_pipe_name_for(tmp_path, "local")
+        other_pipe = cc.companion_pipe_name_for(tmp_path, "os-S-1-5-21-1-2-3-1002")
+        assert owner_pipe != other_pipe
+        assert owner_pipe.startswith("\\\\.\\pipe\\PrivacyFence-Companion-")
+        assert other_pipe.endswith("-S-1-5-21-1-2-3-1002")

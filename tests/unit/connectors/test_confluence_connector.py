@@ -606,14 +606,16 @@ class TestOrgModeDownloadDelivery:
         from privacyfence import paths
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
-    def _org_connector(self, *, inline_max_bytes=1_000, allow_disk_staging=True, link_ttl_seconds=300.0):
+    def _org_connector(
+        self, *, inline_max_bytes=1_000, allow_disk_staging=True, link_ttl_seconds=300.0, agent_links=True,
+    ):
         from privacyfence.org_mode import DownloadDeliveryConfig
 
         connector, client = make_connector()
         connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig(
             inline_max_bytes=inline_max_bytes, allow_disk_staging=allow_disk_staging,
-            link_ttl_seconds=link_ttl_seconds,
+            link_ttl_seconds=link_ttl_seconds, agent_links=agent_links,
         )
         connector.download_base_url = "https://pf.example.com"
         return connector, client
@@ -667,9 +669,26 @@ class TestOrgModeDownloadDelivery:
         )
 
         assert result["delivery"] == "link"
-        assert result["download_url"].startswith("https://pf.example.com/downloads/")
+        # Phase 4: agent_links defaults to True -- the capability route,
+        # not the older cookie-authenticated browser one.
+        assert result["download_url"].startswith("https://pf.example.com/mcp-files/fetch/")
         assert get_download_staging_store().pending_count == 1
         assert gated_call_spy[0]["delivery"] == "staged_link"
+
+    async def test_agent_links_false_keeps_the_browser_link(self, gated_call_spy):
+        connector, client = self._org_connector(inline_max_bytes=10, agent_links=False)
+        client.get_page.return_value = make_page()
+        client.list_attachments.return_value = [self._attachment(size=5000)]
+        client.fetch_attachment_bytes.return_value = b"x" * 5000
+
+        result = await connector.call(
+            "confluence_download_attachment",
+            {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
+        )
+
+        assert result["delivery"] == "link"
+        assert result["download_url"].startswith("https://pf.example.com/downloads/")
+        assert "/mcp-files/" not in result["download_url"]
 
     async def test_oversized_attachment_with_staging_disabled_is_refused_before_any_fetch(self, gated_call_spy):
         connector, client = self._org_connector(inline_max_bytes=10, allow_disk_staging=False)

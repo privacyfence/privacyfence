@@ -103,10 +103,18 @@ def _read_local_attachment(path: str, *, download_mode: str) -> tuple[str, bytes
     unaffected by this phase, same reasoning as connectors/drive.py's
     _upload_file ``is_org_local_path`` branch. Only local mode routes
     through the file bridge.
+
+    Phase 4 ("Clients without the bridge"): a ``local_files.
+    UPLOAD_REF_PREFIX``-prefixed path is never a filesystem path, in *any*
+    mode -- it's bytes already staged by privacyfence_create_upload_slot,
+    claimed via local_files.read_local_file() exactly like a bridge-fetched
+    path (see that module's own ``require_local_files`` docstring), org
+    mode included, since a capability slot needs neither
+    can_access_user_files() nor a shim.
     """
     if not path or not path.strip():
         raise GmailClientError("attachments: empty file path")
-    if download_mode == "org":
+    if download_mode == "org" and not path.startswith(local_files.UPLOAD_REF_PREFIX):
         expanded = os.path.expanduser(path.strip())
         if not os.path.isfile(expanded):
             raise GmailClientError(f"attachments: no such file: {path!r}")
@@ -116,12 +124,20 @@ def _read_local_attachment(path: str, *, download_mode: str) -> tuple[str, bytes
     # ADR 0007: connectors/gmail.py's three *_with_attachments call sites
     # already ran local_files.require_local_files() on every path before
     # gating, so reachability is already resolved here -- bridge-fetched
-    # bytes or a direct read, whichever applies. LocalFileAccessError is a
-    # ValueError subclass, already safe to show the model verbatim (see
-    # safe_errors.public_message()) -- let it propagate as-is rather than
-    # wrap it in GmailClientError, which connectors/gmail.py's _fetch()
-    # would otherwise flatten into a generic RuntimeError message.
+    # bytes, an upload-slot claim, or a direct read, whichever applies.
+    # LocalFileAccessError is a ValueError subclass, already safe to show
+    # the model verbatim (see safe_errors.public_message()) -- let it
+    # propagate as-is rather than wrap it in GmailClientError, which
+    # connectors/gmail.py's _fetch() would otherwise flatten into a
+    # generic RuntimeError message.
     data = local_files.read_local_file(path, download_mode=download_mode)
+    if path.startswith(local_files.UPLOAD_REF_PREFIX):
+        # An upload_id carries no filename of its own (privacyfence_create_
+        # upload_slot's own ``filename`` argument is for the human-facing
+        # approval popup only, not threaded back through the claim) -- a
+        # generic name, same fallback resolve_attachment_destination()
+        # already uses for an inbound attachment with none.
+        return "attachment", data
     return os.path.basename(path.strip()), data
 
 

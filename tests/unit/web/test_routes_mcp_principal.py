@@ -60,7 +60,7 @@ async def _connected_session(dispatcher: McpDispatcher, *, token: str = TOKEN):
 
 
 async def test_a_tool_call_over_mcp_sees_the_local_principal():
-    # Today's only reachable outcome: StaticTokenVerifier only ever mints
+    # Today's only reachable outcome: PerUserTokenVerifier only ever mints
     # client_id="local" (see mcp_auth.py's own docstring), so
     # principal_from_access_token always resolves to LOCAL_PRINCIPAL -- this
     # is the wire-level proof that routes_mcp.py's handle_call_tool actually
