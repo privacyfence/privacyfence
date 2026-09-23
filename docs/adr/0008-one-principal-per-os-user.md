@@ -254,3 +254,12 @@ across accounts that have nothing to do with each other.
 - `local-mode-fixes-plan.md` (never merged to `main`; read it with
   `git show 453ae02e:local-mode-fixes-plan.md`) — Phase 3's own text, including
   the "packaged default policy and no connectors" framing this ADR's deferrals rest on.
+- [Issue #579](https://github.com/privacyfence/privacyfence/issues/579) — builds directly on D5's
+  `_PrincipalScopeMiddleware`/`current_principal()` plumbing. That work already unified principal
+  resolution across local and org mode (both `web/routes_approvals.py` and
+  `web/routes_org_approvals.py` read the same contextvar, fed by mode-specific resolvers registered
+  in `web/server.py`), which is why #579's own "enabler" step — originally scoped as giving
+  `session_auth.authenticated` a `Principal | None` return type — is already satisfied by a
+  different mechanism than the one it named. What #579 still has to do is merge the *route* layer
+  (the still-duplicated step-up/`sensitive_confirm` orchestration, and the settings dispatcher) now
+  that both modes already agree on how to ask "who is this."
