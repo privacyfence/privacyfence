@@ -1,4 +1,4 @@
-# ADR 0019: PyPI and TestPyPI publishing uses OIDC Trusted Publisher only
+# ADR 0020: PyPI and TestPyPI publishing uses OIDC Trusted Publisher only
 
 ## Status
 

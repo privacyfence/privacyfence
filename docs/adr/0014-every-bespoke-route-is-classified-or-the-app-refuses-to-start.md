@@ -1,4 +1,4 @@
-# ADR 0013: every bespoke settings POST route is classified, or the app refuses to start
+# ADR 0014: every bespoke settings POST route is classified, or the app refuses to start
 
 ## Status
 
@@ -91,5 +91,5 @@ daemon, never serves it.
   test").
 - [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md) decision 6 explains why the
   human-session and passkey gates are what make a sensitive action safe.
-- [ADR 0012](0012-no-mcp-tool-mints-a-sign-in-credential.md) comes from the same self-approval
+- [ADR 0013](0013-no-mcp-tool-mints-a-sign-in-credential.md) comes from the same self-approval
   review (Phase 2).

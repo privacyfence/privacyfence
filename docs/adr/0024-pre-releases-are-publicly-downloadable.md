@@ -1,4 +1,4 @@
-# ADR 0023: pre-releases are publicly downloadable through the download Worker
+# ADR 0024: pre-releases are publicly downloadable through the download Worker
 
 ## Status
 

@@ -1,4 +1,4 @@
-# ADR 0018: live-connector test credentials live only on a project-owned self-hosted runner
+# ADR 0019: live-connector test credentials live only on a project-owned self-hosted runner
 
 ## Status
 

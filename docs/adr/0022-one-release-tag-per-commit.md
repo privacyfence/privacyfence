@@ -1,4 +1,4 @@
-# ADR 0021: one release tag per commit; a stuck release is fixed forward
+# ADR 0022: one release tag per commit; a stuck release is fixed forward
 
 ## Status
 
@@ -74,5 +74,5 @@ full signing pass after the mistake, with no release produced
 - `d929510`, "Revert version bump — will release together with other pending CRs": the earlier,
   unrelated collision (two branches claiming one version) that moved versioning onto tags in the
   first place.
-- [ADR 0020](0020-release-tag-push-never-uses-github-token.md): the workflow that runs
+- [ADR 0021](0021-release-tag-push-never-uses-github-token.md): the workflow that runs
   `tag_release.py` on a runner.

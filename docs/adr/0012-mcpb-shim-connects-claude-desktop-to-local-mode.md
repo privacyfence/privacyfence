@@ -1,4 +1,4 @@
-# ADR 0011: a `.mcpb` stdio shim connects Claude Desktop to local mode with zero hand-configuration
+# ADR 0012: a `.mcpb` stdio shim connects Claude Desktop to local mode with zero hand-configuration
 
 ## Status
 
@@ -23,7 +23,7 @@ of the obvious routes worked:
   upstream bug (`anthropics/claude-code#37286`, up to silently clearing `mcpServers`);
 - Settings → Connectors connects from Anthropic's cloud, so it needs a public HTTPS URL, which is
   org mode's shape, not local mode's;
-- local mode's bearer-token-in-a-file posture is permanent (ADR 0009), so a manually configured
+- local mode's bearer-token-in-a-file posture is permanent (ADR 0010), so a manually configured
   secret would stay manual.
 
 ## Decision
@@ -77,4 +77,8 @@ grown into the thing it replaced. It talks only to `/mcp`, never to `/approvals`
   implementing P2"), §15 D11 and D12.
 - Commits `ae7d6892` (D11 decided), `00b7f78d` (P4b implemented), `8ea876c8` (P4b reverted),
   `beb445a2` (P4c reverted, P4b restored).
-- ADR 0007 (builds on this), ADR 0009 (the plain-HTTP posture), ADR 0003 (privilege separation).
+- ADR 0007 (builds on this), ADR 0010 (the plain-HTTP posture), ADR 0003 (privilege separation).
+- [ADR 0008](0008-one-principal-per-os-user.md): on a separated install the shim now obtains a
+  per-user MCP token over the control channel (`MINT MCP`) instead of reading one shared
+  `handoff/mcp_token`. [ADR 0028](0028-clients-without-the-shim-get-capability-urls.md): what
+  callers with no shim get for file transfer.

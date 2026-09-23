@@ -1,4 +1,4 @@
-# ADR 0008: use the official `mcp` SDK for Streamable HTTP, not a hand-rolled transport
+# ADR 0009: use the official `mcp` SDK for Streamable HTTP, not a hand-rolled transport
 
 ## Status
 
@@ -45,7 +45,7 @@ away at P2. The plan described that as front-loading D2's single deviation, not 
   was absorbed as a migration (issue https://github.com/privacyfence/privacyfence/issues/250); the
   pin is now a v2-only floor (`mcp>=2.2,<3.0.0`) because 2.0's server API is not additive over 1.x.
 - The same reasoning ("security-critical, spec-governed, don't hand-roll it") was later cited by
-  name for other dependencies: the SDK's own OAuth authorization-server routes (ADR 0010), `PyJWT`
+  name for other dependencies: the SDK's own OAuth authorization-server routes (ADR 0011), `PyJWT`
   for ID-token verification, and `webauthn` for step-up. Each is recorded in `pyproject.toml`'s
   comments as an application of D2 rather than a new exception.
 - `starlette` is on the security-relevant path: its Host/URL handling feeds the `Origin` checks in
@@ -69,5 +69,5 @@ away at P2. The plan described that as front-loading D2's single deviation, not 
 - `git show 96cd5af4^:docs/https-connector-refactor-plan.md` §8.2, §15 D2 and D10.
 - Commit `88fcfdaf` (D1–D7 recorded as decisions), commit `866a0827` (D10).
 - Issue https://github.com/privacyfence/privacyfence/issues/250 (migration to the SDK's 2.x API).
-- ADR 0010 (org mode's authorization server, built on the SDK's auth routes).
+- ADR 0011 (org mode's authorization server, built on the SDK's auth routes).
 - ADR 0006 (quotes an older `mcp` range, `>=1.28,<3.0`; `pyproject.toml` is authoritative).

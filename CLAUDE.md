@@ -49,7 +49,7 @@ that user's access changes — but `release.yml` reads only `secrets.RELEASE_TAG
 step that mints one, so switching to an App is a workflow change, not a secret swap. The workflow
 refuses to start without the secret, and after pushing a tag it polls for the `build.yml` run on
 that commit and fails loudly if none appears, so the silent-failure mode above cannot pass for a
-successful release. See [ADR 0020](docs/adr/0020-release-tag-push-never-uses-github-token.md).
+successful release. See [ADR 0021](docs/adr/0021-release-tag-push-never-uses-github-token.md).
 
 **One release tag per commit.** `setuptools_scm` resolves the version through `git describe`,
 which reports *a* tag on the commit being built rather than specifically the one whose push started
@@ -63,7 +63,7 @@ refused ([the run](https://github.com/privacyfence/privacyfence/actions/runs/353
 been built; `publish-pypi.yml`'s `build` job runs it after building the sdist/wheel. The fix is
 still to move the release forward onto a new commit, or to delete the unwanted tag before
 retagging. A version that has already published artifacts stays published; cut the next one. See
-[ADR 0021](docs/adr/0021-one-release-tag-per-commit.md).
+[ADR 0022](docs/adr/0022-one-release-tag-per-commit.md).
 
 **macOS ships one file.** `scripts/build_dmg.sh` builds the app bundle, the `.mcpb` and (by
 calling `scripts/build_pkg.sh`) the `.pkg`, then puts the `.pkg` and the `.mcpb` on the DMG and
@@ -294,7 +294,7 @@ credential, just the link or the "Want to test the next version?" section on
 `privacyfence.eu/download/`. Every pre-release download still goes through the Worker, so it is
 counted, and R2 stays unreachable except through it. The reasoning, and the exact steps to reverse
 it (Worker routes and website together, never one without the other), are in
-[ADR 0023](docs/adr/0023-pre-releases-are-publicly-downloadable.md).
+[ADR 0024](docs/adr/0024-pre-releases-are-publicly-downloadable.md).
 
 ## Decisions, plans and ADRs
 
@@ -313,7 +313,7 @@ Three kinds of document, three lifecycles — the full rules, template and index
 adds or amends an ADR for every decision the plan made — anything hard to reverse, touching a trust
 boundary or the release/distribution path, or rejecting an alternative for a non-obvious reason —
 or says in its description that the plan made none. Before this rule, a dozen plans were deleted
-with their rejected alternatives in them; ADRs 0008–0024 are the backfill.
+with their rejected alternatives in them; ADRs 0009–0025 are the backfill.
 
 The same applies when a decision is made somewhere else — a PR thread, an issue, a section of this
 file: if it meets the bar above, it gets an ADR in the same PR. ADRs link to issues, PRs, commits

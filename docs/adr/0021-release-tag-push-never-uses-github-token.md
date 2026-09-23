@@ -1,4 +1,4 @@
-# ADR 0020: the release tag is never pushed with `GITHUB_TOKEN`
+# ADR 0021: the release tag is never pushed with `GITHUB_TOKEN`
 
 ## Status
 
@@ -76,9 +76,9 @@ The workflow enforces this in three places rather than trusting documentation:
 
 - [#601](https://github.com/privacyfence/privacyfence/pull/601) (`af193025`): introduced
   `release.yml`, the secret requirement and the post-push poll.
-- [ADR 0021](0021-one-release-tag-per-commit.md): the tag rules `tag_release.py` enforces in the
+- [ADR 0022](0022-one-release-tag-per-commit.md): the tag rules `tag_release.py` enforces in the
   same workflow.
-- [ADR 0022](0022-changelog-is-the-only-source-of-release-notes.md): the release-notes render
+- [ADR 0023](0023-changelog-is-the-only-source-of-release-notes.md): the release-notes render
   `release.yml` runs before tagging a stable version.
-- [ADR 0019](0019-pypi-publishing-uses-oidc-trusted-publisher-only.md): the other release
+- [ADR 0020](0020-pypi-publishing-uses-oidc-trusted-publisher-only.md): the other release
   credential decision.

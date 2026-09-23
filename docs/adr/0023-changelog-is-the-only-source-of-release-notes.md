@@ -1,4 +1,4 @@
-# ADR 0022: `CHANGELOG.md` is the only source of stable release notes, and rendering fails loudly
+# ADR 0023: `CHANGELOG.md` is the only source of stable release notes, and rendering fails loudly
 
 ## Status
 
@@ -82,4 +82,4 @@ version; `setuptools_scm` does.
   [#485](https://github.com/privacyfence/privacyfence/pull/485).
 - [#373](https://github.com/privacyfence/privacyfence/issues/373): moved attaching (and so the
   single render) into `finalize-release`.
-- [ADR 0021](0021-one-release-tag-per-commit.md): the other pre-tag release guard.
+- [ADR 0022](0022-one-release-tag-per-commit.md): the other pre-tag release guard.

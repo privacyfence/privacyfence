@@ -1,4 +1,4 @@
-# ADR 0016: org-mode downloads: the approval gate is the privacy boundary, staging a bounded cost
+# ADR 0017: org-mode downloads: the approval gate is the privacy boundary, staging a bounded cost
 
 ## Status
 
@@ -96,5 +96,5 @@ It follows that:
 - Commit `3b144232`, where it was implemented.
 - [ADR 0007](0007-local-file-bridge.md) amends the local-mode half of the live doc and reuses the
   staging store.
-- [ADR 0010](0010-org-mode-runs-its-own-oauth-authorization-server.md): the org-mode deployment
+- [ADR 0011](0011-org-mode-runs-its-own-oauth-authorization-server.md): the org-mode deployment
   this applies to.

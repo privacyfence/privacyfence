@@ -1,4 +1,4 @@
-# ADR 0014: the self-declared unattended-session flag is advisory and never authorizes
+# ADR 0015: the self-declared unattended-session flag is advisory and never authorizes
 
 ## Status
 

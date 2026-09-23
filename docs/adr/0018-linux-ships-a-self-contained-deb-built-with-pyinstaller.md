@@ -1,4 +1,4 @@
-# ADR 0017: Linux local mode ships a self-contained `.deb` built with PyInstaller
+# ADR 0018: Linux local mode ships a self-contained `.deb` built with PyInstaller
 
 ## Status
 

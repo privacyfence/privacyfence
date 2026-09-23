@@ -1,4 +1,4 @@
-# ADR 0010: org mode runs its own OAuth authorization server
+# ADR 0011: org mode runs its own OAuth authorization server
 
 ## Status
 
@@ -34,7 +34,7 @@ MCP caller. The code makes that true by construction: the AS callback and the br
 
 The protocol endpoints themselves (`/authorize`, `/token`, `/register`, `/revoke`, the AS metadata
 and RFC 9728 resource-metadata documents) come from the official MCP SDK's auth routes, not
-hand-written code: the same reasoning as ADR 0008.
+hand-written code: the same reasoning as ADR 0009.
 
 ## Alternatives considered
 
@@ -75,4 +75,4 @@ hand-written code: the same reasoning as ADR 0008.
 - `git show 96cd5af4^:docs/https-connector-refactor-plan.md` §9.4, §10.3, §15 D5; its status
   header's P7 paragraph describes what shipped.
 - Commit `88fcfdaf` (D5 recorded as a decision), commit `4d93b234` (P7 implemented).
-- ADR 0008 (the SDK this is built on), ADR 0006 (attribution from the OAuth client).
+- ADR 0009 (the SDK this is built on), ADR 0006 (attribution from the OAuth client).

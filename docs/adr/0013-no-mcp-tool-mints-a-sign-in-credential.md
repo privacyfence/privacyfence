@@ -1,4 +1,4 @@
-# ADR 0012: no MCP tool may mint a sign-in credential
+# ADR 0013: no MCP tool may mint a sign-in credential
 
 ## Status
 

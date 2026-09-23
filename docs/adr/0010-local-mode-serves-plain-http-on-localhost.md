@@ -1,4 +1,4 @@
-# ADR 0009: local mode serves plain HTTP on `localhost`, not HTTPS with a self-signed certificate
+# ADR 0010: local mode serves plain HTTP on `localhost`, not HTTPS with a self-signed certificate
 
 ## Status
 
@@ -57,7 +57,7 @@ Org mode is out of scope here: it requires HTTPS, terminated in `uvicorn` or at 
   ([#426](https://github.com/privacyfence/privacyfence/issues/426)) uses RP ID `localhost`, which
   this decision is what permits.
 - Third-party HTTP clients that refuse non-HTTPS targets need a flag to reach local mode; the
-  `.mcpb` shim (ADR 0011) exists partly so Claude Desktop users never set one.
+  `.mcpb` shim (ADR 0012) exists partly so Claude Desktop users never set one.
 - The plan said TLS would remain available in local mode as an opt-in (a generated certificate plus
   trust instructions). The local-mode `WebServer` construction in `daemon_main.py` passes no
   certificate; only org mode wires `cert_file`/`key_file`. The opt-in is unbuilt, not rejected.
@@ -76,4 +76,4 @@ Org mode is out of scope here: it requires HTTPS, terminated in `uvicorn` or at 
   constrains D1"), §15 D1 and D7.
 - Commit `88fcfdaf` (D1 recorded as a decision, with the `localhost` constraint).
 - Issue https://github.com/privacyfence/privacyfence/issues/426 (local-mode passkey).
-- ADR 0002 (the local-mode trust boundary is the OS user account), ADR 0011.
+- ADR 0002 (the local-mode trust boundary is the OS user account), ADR 0012.

@@ -1,4 +1,4 @@
-# ADR 0015: org-config bundle integrity has two independent layers: a startup hash log and signing
+# ADR 0016: org-config bundle integrity has two independent layers: a startup hash log and signing
 
 ## Status
 
@@ -82,4 +82,4 @@ It flagged the split as a judgment call and offered to go straight to signing in
 - Commit `04cb47db`, where both layers were implemented.
 - Commit `151d6994` (self-approval review Phase 3) made the Settings upload ask for explicit
   confirmation before a first trust-on-first-use pin, instead of pinning as a side effect. See
-  [ADR 0013](0013-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md).
+  [ADR 0014](0014-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md).

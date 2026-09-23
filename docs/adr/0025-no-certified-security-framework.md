@@ -1,4 +1,4 @@
-# ADR 0024: no certified security framework, BCP or SLA; customers treat the gap as a risk acceptance
+# ADR 0025: no certified security framework, BCP or SLA; customers treat the gap as a risk acceptance
 
 ## Status
 
