@@ -77,10 +77,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -93,7 +96,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from .. import paths, privilege_separation, web_shell, webauthn_stepup
+from .. import __version__, paths, privilege_separation, web_shell, webauthn_stepup
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, principal_scope
@@ -289,6 +292,38 @@ def local_enrollment_state(step_up: StepUpConfig | None) -> str:
     return "ok" if webauthn_stepup.has_credentials(LOCAL_PRINCIPAL) else "pending"
 
 
+def local_status_payload(started_at: str) -> str:
+    """The companion's ``STATUS`` command, from the daemon's side (the
+    local-mode-fixes plan's Phase 2): a compact JSON object -- ``daemon_status.probe()``'s "the
+    control channel answered" case, and what the companion's tray menu and
+    ``Service Details...`` dialog are actually built from.
+
+    Read-only and free of anything a local process couldn't already infer
+    (``web/control_channel.py``'s own ``STATUS`` handler answers it to
+    anyone who can reach this socket at all, gated on nothing): a version
+    string, this process's own pid, when it started, which mode it's
+    running in, whether it's privilege-separated, and -- per connector --
+    only whether that connector has a stored grant (``"ok"``) or not
+    (``"needs_auth"``), never the grant itself. ``routes_connect.py``'s
+    ``_is_connected()``/``SERVICE_LABELS`` are reused rather than
+    reimplemented so this can never disagree with what ``/connect`` already
+    shows the same human.
+    """
+    connectors = {
+        service: ("ok" if routes_connect._is_connected(LOCAL_PRINCIPAL, service) else "needs_auth")
+        for service in routes_connect.SERVICE_LABELS
+    }
+    payload = {
+        "version": __version__,
+        "pid": os.getpid(),
+        "started_at": started_at,
+        "mode": "local",
+        "separated": privilege_separation.is_enabled(),
+        "connectors": connectors,
+    }
+    return json.dumps(payload, separators=(",", ":"))
+
+
 def _write_mcp_url_file(url: str) -> None:
     """The direct successor of ipc.py's PORT_FILE for a client that talks to
     /mcp instead of the old IPC socket -- see mcpb/shim/src/protocol.ts's
@@ -316,7 +351,7 @@ def _write_mcp_url_file(url: str) -> None:
 # URL on startup" was quietly false, and this file was the only channel that
 # actually delivered a usable link.
 #
-# The self-approval plan's Phase 2 stops writing them. handoff/ is 2770 and
+# The self-approval plan's Phase 2 stops writing them. handoff/ is 3770 and
 # group-shared with the logged-in user by design (paths.py: "deliberately
 # *not* a security boundary"), so a live bootstrap code sitting there was a
 # session for the taking, refreshed on every restart, by anything running as
@@ -1082,6 +1117,11 @@ class WebServer:
             self.sessions = LocalSessionStore()
             bootstrap = BootstrapStore()
             self.bootstrap = bootstrap
+            # The local-mode-fixes plan's Phase 2: captured once, here,
+            # rather than read fresh per STATUS call -- this *is* when the
+            # daemon started, for exactly
+            # as long as this WebServer instance is the one serving.
+            started_at = datetime.now(timezone.utc).isoformat()
             self.control_channel = ControlChannelServer(
                 bootstrap=bootstrap, allow_quit=allow_quit,
                 # Plan items 1.2/1.3: the two questions the companion asks
@@ -1093,6 +1133,7 @@ class WebServer:
                 # one loaded at startup).
                 enrollment_state=lambda: local_enrollment_state(step_up),
                 reissue_recovery_code=reissue_local_recovery_code,
+                status=lambda: local_status_payload(started_at),
             )
         self.mcp_dispatcher = mcp_dispatcher
         self.mcp_token = (

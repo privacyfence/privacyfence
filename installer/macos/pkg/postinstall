@@ -73,4 +73,28 @@ else
   log "automatic privilege-separation enable did not complete -- install continues; run 'sudo ${SEPARATION_SCRIPT} enable' by hand later, or check Console.app / /var/log/install.log for details."
 fi
 
+# #428 Phase 2: `enable`'s own internal call to `daemon ensure-running`
+# (scripts/macos_privilege_separation.sh's cmd_enable) is what is *supposed*
+# to catch a daemon that came up stopped -- the privacyfence/privacyfence#598
+# upgrade gap this phase exists to close -- but that call is itself wrapped
+# in a subshell precisely so a hiccup in it cannot take the rest of `enable`
+# down, which also means its own failure is easy to miss in a log this long.
+# Running `daemon ensure-running` a second time here, directly, costs
+# nothing when the first call already succeeded (it is a no-op against an
+# already-running daemon) and catches the case where it did not -- whether
+# `enable --auto` above reported success or not: ENABLE_STATUS above is
+# about `enable` completing, not about the daemon specifically ending up
+# running, and #598 was exactly a case where the two came apart.
+ENSURE_RUNNING_OUTPUT="$("$SEPARATION_SCRIPT" daemon ensure-running 2>&1)"
+ENSURE_RUNNING_STATUS=$?
+if [ "$ENSURE_RUNNING_STATUS" -eq 0 ]; then
+  log "confirmed the daemon is running after install."
+else
+  # Still not a reason to fail the package install -- see this script's own
+  # header. The companion app's tray menu (#428 Phase 2 §2.5) now surfaces a
+  # stopped daemon with a Start button, so a failed start here is no longer
+  # silent the way it used to be before this phase.
+  log "could not confirm the daemon is running after install: ${ENSURE_RUNNING_OUTPUT}"
+fi
+
 exit 0

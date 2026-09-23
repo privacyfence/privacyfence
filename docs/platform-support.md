@@ -23,7 +23,8 @@ The daemon uses `portalocker` for the single-instance lock, so the locking abstr
 The companion app is the only PrivacyFence process that runs inside a human's own login session
 (the daemon runs as a service account on every packaged install — see each platform's *Privilege
 separation* section below), which is what makes it the place for anything that needs a person
-rather than a process. Three jobs, in the order they happen:
+rather than a process. Four jobs, in the order the first three happen (the fourth runs continuously
+alongside them):
 
 1. **Close the pending per-user half of privilege separation** ([ADR
    0003](adr/0003-separated-installs-only.md) decision 3) — the group membership an installer with
@@ -39,12 +40,27 @@ rather than a process. Three jobs, in the order they happen:
 3. **Show the one-time recovery code**, and issue a replacement on request — "New Recovery Code…"
    on the macOS/Windows menu bar, the matching Applications-menu entry on Linux
    (`--action=recovery-code`). The code is never in an HTTP response body on a packaged install.
+4. **Manage the daemon itself** ([ADR 0002](adr/0002-local-mode-trust-boundary-and-companion-app.md)'s
+   Amendment, "the companion becomes the daemon manager"). A live status line on the macOS/Windows
+   menu bar (`● PrivacyFence is running (v4.2.0)`, `○ ... is not running`, `⚠ ... has failed` /
+   `is not responding`), polled every five seconds and backed by `daemon_status.py`'s `probe()` —
+   the daemon's own control channel first, the platform's service manager
+   (`launchctl print`/`systemctl show`/`sc.exe query`) if that doesn't answer. Start/Restart/Stop
+   run the platform script's own `daemon start`/`stop`/`restart` subcommand with a fresh,
+   platform-native elevation prompt each time (`service_control.py`'s `run_elevated()`) — no
+   standing grant, same as every other elevation this doc's *Privilege separation* sections
+   describe. Linux, which has no tray (decision 4's dependency budget), gets the same four actions
+   as `.desktop` Applications-menu entries (`--action=service-status`/`service-start`/
+   `service-restart`/`service-stop`) plus a `notify-send` notification from the `--serve` process's
+   own background poll when the daemon has been down for more than fifteen seconds.
 
-All three need a dialog on the human's desktop. macOS uses `osascript`, Windows `MessageBoxW`, and
-Linux whichever of `zenity` or `kdialog` is present — none of them a PrivacyFence dependency (ADR
-0002 decision 4's Linux budget). **On Linux, a desktop with neither program installed cannot show
-these**, and PrivacyFence says so rather than failing quietly: a first enrollment is refused with
-that reason, and a recovery code is not issued rather than issued to nobody.
+The first three need a dialog on the human's desktop. macOS uses `osascript`, Windows `MessageBoxW`,
+and Linux whichever of `zenity` or `kdialog` is present — none of them a PrivacyFence dependency
+(ADR 0002 decision 4's Linux budget). **On Linux, a desktop with neither program installed cannot
+show these**, and PrivacyFence says so rather than failing quietly: a first enrollment is refused
+with that reason, and a recovery code is not issued rather than issued to nobody. The fourth
+(status/start/stop/restart) needs no dialog to *read* — only the elevation prompt itself, which is
+the OS's own (`osascript`/`pkexec`/UAC), not one of these two.
 
 ## macOS
 
@@ -90,7 +106,7 @@ Three parts of the layout matter to anything that has to find PrivacyFence's fil
 |---|---|---|---|
 | `/Library/Application Support/PrivacyFence` | `_privacyfence` | `0711` | everything; traversable but not listable |
 | `…/authority` | `_privacyfence` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
-| `…/handoff` | `_privacyfence:_privacyfence` | `2770` | `mcp_token`, `mcp_url`, the control-channel sockets |
+| `…/handoff` | `_privacyfence:_privacyfence` | `3770` | `mcp_token`, `mcp_url`, the control-channel sockets |
 
 The installing user is added to the `_privacyfence` group, which is what keeps `handoff` reachable
 from their session — macOS evaluates group membership at login, so this needs a logout/login to take
@@ -219,7 +235,7 @@ over is the permission model:
 |---|---|---|---|
 | `%ProgramData%\PrivacyFence` | service account, `SYSTEM`, `Administrators` full; `Users` traverse-only | `0711` | everything; traversable but not listable |
 | `…\authority` | service account, `SYSTEM`, `Administrators` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
-| `…\handoff` | the above, plus the `PrivacyFenceUsers` local group, read-only | `2770` | `mcp_token`, `mcp_url`, the discovery files |
+| `…\handoff` | the above, plus the `PrivacyFenceUsers` local group, read-only | `3770` | `mcp_token`, `mcp_url`, the discovery files |
 
 Two steps before any grant are load-bearing, and both are easy to leave out. `icacls
 /inheritance:r` on each directory: `%ProgramData%` grants `Users` read-and-execute by inheritance,
@@ -338,7 +354,7 @@ The layout matches macOS exactly apart from the root and the account name:
 |---|---|---|---|
 | `/var/lib/privacyfence` | `privacyfence` | `0711` | everything; traversable but not listable |
 | `…/authority` | `privacyfence` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
-| `…/handoff` | `privacyfence:privacyfence` | `2770` | `mcp_token`, `mcp_url`, the control-channel sockets |
+| `…/handoff` | `privacyfence:privacyfence` | `3770` | `mcp_token`, `mcp_url`, the control-channel sockets |
 
 `/var/lib` rather than `/opt` for the same reason macOS uses `/Library/Application Support`: this is
 variable state the daemon rewrites (FHS 3.0 §5.8), while `/opt/privacyfence` holds the read-only,

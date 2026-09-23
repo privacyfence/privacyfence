@@ -43,8 +43,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The companion app (the menu-bar/tray icon on macOS and Windows; Applications-menu entries on
+  Linux) now shows the local-mode daemon's own run state — a live status line
+  (running/starting/stopped/failed/not responding) polled every few seconds — and can Start,
+  Restart or Stop it directly, each with a real, platform-native administrator prompt (no standing
+  grant). See [ADR 0002](docs/adr/0002-local-mode-trust-boundary-and-companion-app.md)'s Amendment,
+  "the companion becomes the daemon manager".
+
 ### Fixed
 
+- A privilege-separated macOS install's daemon could be left unloaded after a `.pkg` upgrade, with
+  no visible symptom (a `launchctl bootstrap`/`bootout` race). `enable` and the installer's own
+  `postinstall` script now retry the bootstrap with backoff and verify the daemon actually came up
+  before reporting success; the companion's new Start button (above) is the recovery path when it
+  still doesn't.
+- The Windows installer now stops the running `PrivacyFence` service and companion before copying
+  files on an upgrade, instead of leaving files it may still have open locked against overwrite.
 - Downloads and uploads (Drive, Gmail attachments, Confluence attachments) work again from Claude
   Desktop on a privilege-separated local-mode install: a new local file bridge routes local file
   access through the `.mcpb` shim instead of the daemon's own (inaccessible) filesystem view. The
@@ -61,6 +77,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `drive_download_file`'s pre-approval PII scan no longer throws (and skips scanning) on a PDF
   over 100KB; files up to 5MB are now scanned from their full content instead of a truncated
   prefix pypdf can't parse.
+
+### Security
+
+- Interim guard against a leak on a machine with more than one OS user added to a
+  privilege-separated install's service group: an account that is not the install's recorded owner
+  can no longer trigger the elevated `enable --for-user` join on its own behalf (it gets a
+  notification instead), and a second account's companion can no longer take over the group-shared
+  `companion.sock` from another account's — closing an unauthenticated path to another user's
+  recovery code and approval authority. Full per-OS-user isolation (a separate principal, policy
+  and audit trail per account) is a later phase; see
+  [ADR 0002](docs/adr/0002-local-mode-trust-boundary-and-companion-app.md)'s Amendment.
 
 ## [4.1.5] — 2026-09-21
 

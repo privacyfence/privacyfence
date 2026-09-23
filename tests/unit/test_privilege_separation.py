@@ -2794,15 +2794,28 @@ class TestOwnerMembershipPending:
 
         assert privilege_separation.owner_membership_pending() is False
 
-    def test_a_user_outside_the_group_is_pending(self, separated, monkeypatch):
-        # Even though the marker names *somebody*: a second human on a shared
-        # machine needs the same re-runnable step the first one got.
+    def test_the_owner_outside_the_group_is_pending(self, separated, monkeypatch):
+        # The marker's own owner_user is "alice" (_marker_payload's default)
+        # -- pending is still the right answer for the account the install
+        # was actually provisioned for.
+        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "alice")
+        monkeypatch.setattr(privilege_separation, "service_group_members", lambda group: frozenset())
+
+        assert privilege_separation.owner_membership_pending() is True
+
+    def test_a_different_account_outside_the_group_is_not_pending(self, separated, monkeypatch):
+        # The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6):
+        # the marker names
+        # "alice" as owner, so "bob" is never pending, however the group
+        # reads -- this is the fix for the leak where a second human on a
+        # shared machine could silently trigger the elevated
+        # ``enable --for-user`` on their own behalf.
         monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "bob")
         monkeypatch.setattr(
             privilege_separation, "service_group_members", lambda group: frozenset({"alice"})
         )
 
-        assert privilege_separation.owner_membership_pending() is True
+        assert privilege_separation.owner_membership_pending() is False
 
     def test_an_unreadable_group_falls_back_to_an_empty_marker_owner(
         self, platform_name, monkeypatch, tmp_path
@@ -2819,13 +2832,50 @@ class TestOwnerMembershipPending:
     ):
         # The safe direction: guessing "pending" on a platform we just failed
         # to interrogate would put a password dialog in front of somebody at
-        # every single companion start.
+        # every single companion start. current_user_name is pinned to the
+        # marker's own owner so this exercises that fallback specifically,
+        # not the (also-False, but unrelated) owner-mismatch guard.
         root = tmp_path / "PrivacyFence"
         monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
         _write_marker(root, platform_name, owner_user="alice")
+        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "alice")
         monkeypatch.setattr(privilege_separation, "service_group_members", lambda group: None)
 
         assert privilege_separation.owner_membership_pending() is False
+
+
+class TestOtherAccountOwnsThisInstall:
+    """The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6):
+    ``other_account_owns_this_install()`` -- what tells the companion to
+    show a notification instead of silently doing nothing (or, before this
+    guard, silently completing the elevated join on a stranger's behalf)."""
+
+    def test_unseparated_is_none(self, platform_name, monkeypatch, tmp_path):
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(tmp_path / "nothing"))
+        privilege_separation.reset_cache()
+
+        assert privilege_separation.other_account_owns_this_install() is None
+
+    def test_the_owner_gets_none(self, separated, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "alice")
+
+        assert privilege_separation.other_account_owns_this_install() is None
+
+    def test_a_different_account_gets_the_owners_name(self, separated, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "bob")
+
+        assert privilege_separation.other_account_owns_this_install() == "alice"
+
+    def test_no_recorded_owner_gets_none(self, platform_name, monkeypatch, tmp_path):
+        # A machine-half-only install: the group membership is still open to
+        # whoever completes it first, which is owner_membership_pending()'s
+        # job, not this guard's.
+        root = tmp_path / "PrivacyFence"
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
+        _write_marker(root, platform_name, owner_user="")
+        monkeypatch.setattr(privilege_separation, "current_user_name", lambda: "bob")
+
+        assert privilege_separation.other_account_owns_this_install() is None
 
 
 class TestInstallerScriptResolution:

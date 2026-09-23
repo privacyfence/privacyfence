@@ -285,7 +285,17 @@ export async function ensureDaemonRunning(opts: EnsureDaemonRunningOptions = {})
     console.error(
       `Daemon not running (${describeTarget(mcpUrlFile)}) — this install runs it as ` +
         `${manager} under its own account (#428 Phase 4), so waiting for the service ` +
-        `manager to start it rather than launching it here. If it never arrives: ${inspect}`,
+        // The local-mode-fixes plan's Phase 2: the companion's own menu (macOS/Windows) or
+        // Applications-menu entry (Linux) is now what most people should
+        // reach for first -- it can start/restart/stop the service itself,
+        // with a real elevation prompt, where the inspect command below can
+        // only say why it isn't running. Kept as the second sentence rather
+        // than dropped: not every install runs the companion (a headless
+        // server, a `--serve`-only Linux session with no Applications menu
+        // in reach), and that reader still needs a command to run by hand.
+        `manager to start it rather than launching it here. Open the PrivacyFence ` +
+        `menu-bar/tray icon (or Applications menu entry, on Linux) and choose ` +
+        `"Start PrivacyFence…". If it never arrives: ${inspect}`,
     );
     await waitForConnectable(mcpUrlFile, connectTimeoutMs, connectIntervalMs);
     return;
