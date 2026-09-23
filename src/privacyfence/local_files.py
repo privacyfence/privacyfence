@@ -58,7 +58,12 @@ NO_BRIDGE_UPLOAD_MESSAGE = (
     "(drive_upload_file only)."
 )
 
-_META_KEY = "privacyfence.eu/file-bridge"
+# ADR 0007 SS1.1's one vendor _meta namespace -- the single source of truth
+# for this string; web/routes_mcp.py imports it rather than redefining its
+# own copy (the shim's own TypeScript side necessarily keeps its own literal,
+# see mcpb/shim/src/fileBridge.ts -- there's no shared module for the two
+# languages to import from).
+META_KEY = "privacyfence.eu/file-bridge"
 
 # ADR 0007 SS1.2: deliver_file() stays synchronous and fully in memory for
 # Phase 1 (both the bridge and no-bridge-link paths stage the whole file
@@ -268,6 +273,7 @@ def read_local_file(path: str, *, download_mode: str) -> bytes:
         with open(expanded, "rb") as fh:
             return fh.read()
     except OSError as exc:
+        logger.warning("local_files: direct read of %r failed: %s", path, exc)
         raise LocalFileAccessError(f"Could not read {path!r}: {exc.strerror or exc}") from exc
 
 
@@ -356,6 +362,7 @@ def _deliver_direct(dest_dir: str, name: str, data: bytes) -> dict[str, Any]:
         with open(target, "wb") as fh:
             fh.write(data)
     except OSError as exc:
+        logger.warning("local_files: direct write to %r failed: %s", dest_dir, exc)
         raise LocalFileAccessError(f"Could not write to {dest_dir!r}: {exc.strerror or exc}") from exc
     return {"path": target, "name": safe_name, "size_bytes": len(data), "delivery": "local_disk"}
 
@@ -399,6 +406,7 @@ __all__ = [
     "DEFAULT_MAX_DOWNLOAD_BYTES",
     "LocalFileAccessError",
     "LocalFilesNeeded",
+    "META_KEY",
     "NO_BRIDGE_UPLOAD_MESSAGE",
     "build_need_uploads_files",
     "call_context",

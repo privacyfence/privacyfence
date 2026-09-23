@@ -296,10 +296,15 @@ class UploadStagingStore:
             logger.warning("upload_staging: ciphertext missing for a live slot (%s): %s", lookup_id, exc)
             return None
         finally:
+            # Best-effort cleanup, not load-bearing for correctness -- the
+            # slot is already popped from self._pending above either way,
+            # so a stray file here is at worst orphaned ciphertext the next
+            # startup sweep removes (see _sweep_orphaned_from_previous_
+            # process), never a second claim of the same slot.
             try:
                 slot.disk_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.warning("upload_staging: could not remove claimed ciphertext %s: %s", slot.disk_path, exc)
 
         nonce, ciphertext = raw[:_NONCE_LEN], raw[_NONCE_LEN:]
         key = _derive_key(token)

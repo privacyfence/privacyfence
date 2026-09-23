@@ -65,10 +65,10 @@ logger = logging.getLogger(__name__)
 
 MCP_PATH = "/mcp"
 
-# ADR 0007's one vendor _meta namespace, on both directions of the wire:
-# the shim's need_uploads/deliver responses, and the resent request's own
-# uploads map (SS1.1).
-_FILE_BRIDGE_META_KEY = "privacyfence.eu/file-bridge"
+# ADR 0007's file-bridge capability header, on every request a bridge-
+# capable shim sends (SS1.1). The vendor _meta namespace itself is
+# local_files.META_KEY -- the single source of truth for that string, not
+# redefined here.
 _FILE_BRIDGE_HEADER = "x-privacyfence-file-bridge"
 
 # Part A of issue #396: server instructions returned in the `initialize`
@@ -173,7 +173,7 @@ def _file_bridge_uploads(params: types.CallToolRequestParams) -> dict[str, str]:
     empty on every first-round call, including every call from a client
     that never does the handshake at all."""
     meta = params.meta or {}
-    bridge_meta = meta.get(_FILE_BRIDGE_META_KEY)
+    bridge_meta = meta.get(local_files.META_KEY)
     if not isinstance(bridge_meta, dict):
         return {}
     uploads = bridge_meta.get("uploads")
@@ -185,7 +185,7 @@ def _need_uploads_result(principal: Any, needed: local_files.LocalFilesNeeded) -
     names = ", ".join(f["path"] for f in files)
     text = f"PrivacyFence needs the file(s) below uploaded by the PrivacyFence extension: {names}"
     result = types.CallToolResult(content=[types.TextContent(type="text", text=text)])
-    result.meta = {_FILE_BRIDGE_META_KEY: {"v": 1, "op": "need_uploads", "files": files}}
+    result.meta = {local_files.META_KEY: {"v": 1, "op": "need_uploads", "files": files}}
     return result
 
 
@@ -391,7 +391,7 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
                 # asked for, then rewrites the result before Claude ever
                 # sees it -- see mcpb/shim/src/fileBridge.ts.
                 tool_result.meta = {
-                    _FILE_BRIDGE_META_KEY: {"v": 1, "op": "deliver", "files": call_state.pending_deliveries},
+                    local_files.META_KEY: {"v": 1, "op": "deliver", "files": call_state.pending_deliveries},
                 }
         return tool_result
 
