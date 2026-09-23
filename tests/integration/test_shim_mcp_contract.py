@@ -35,6 +35,7 @@ mcp_client = pytest.importorskip(
 from mcp import ClientSession  # noqa: E402
 from mcp.client.stdio import StdioServerParameters, stdio_client  # noqa: E402
 
+from privacyfence import local_files as local_files_module  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
 from privacyfence.connector import Connector, ToolParam, ToolSpec  # noqa: E402
 from privacyfence.web.mcp_dispatch import McpDispatcher  # noqa: E402
@@ -90,6 +91,57 @@ class EchoConnector(Connector):
     async def call(self, tool: str, args: dict) -> object:
         self.calls.append((tool, args))
         return {"echoed": args}
+
+
+class FileBridgeTestConnector(Connector):
+    """ADR 0007: a real connector whose tools call straight into
+    local_files.py (require_local_files/read_local_file/deliver_file),
+    exactly like drive.py/gmail.py/confluence.py do -- proves the real
+    Python and TypeScript halves of the file-bridge wire protocol agree,
+    the same "spawn the real artifact, drive it end to end" posture this
+    whole module already applies to the plain-passthrough case above.
+    ``local_files.force_bridge_for_tests(True)`` (set by the test that uses
+    this connector) is what makes ``can_access_user_files()`` false here
+    without a real privilege-separated install."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    @property
+    def name(self) -> str:
+        return "file_bridge_test"
+
+    def tool_specs(self) -> list[ToolSpec]:
+        return [
+            ToolSpec(
+                name="file_bridge_test_upload",
+                description="Reads local_path (via the file bridge) and echoes its content back.",
+                params=[ToolParam("local_path", "str", required=True)],
+                read_only=False,
+            ),
+            ToolSpec(
+                name="file_bridge_test_download",
+                description="Writes a fixed payload to destination_dir (via the file bridge).",
+                params=[ToolParam("destination_dir", "str", required=True)],
+                read_only=False,
+            ),
+        ]
+
+    async def call(self, tool: str, args: dict) -> object:
+        self.calls.append((tool, args))
+        if tool == "file_bridge_test_upload":
+            local_path = args["local_path"]
+            local_files_module.require_local_files(
+                [local_path], max_total_bytes=10_000, download_mode="local",
+            )
+            data = local_files_module.read_local_file(local_path, download_mode="local")
+            return {"content": data.decode("utf-8")}
+        if tool == "file_bridge_test_download":
+            return local_files_module.deliver_file(
+                args["destination_dir"], "bridged.txt", b"content from the daemon",
+                "text/plain", download_mode="local",
+            )
+        raise ValueError(f"unknown tool: {tool!r}")
 
 
 def _free_port() -> int:
@@ -162,6 +214,29 @@ async def running_mcp_server(shim_home, monkeypatch):
         server.stop()
 
 
+@pytest.fixture
+async def running_file_bridge_server(shim_home, monkeypatch):
+    """Same shape as running_mcp_server, registering FileBridgeTestConnector
+    instead and forcing the file bridge on (see local_files.
+    force_bridge_for_tests's own docstring) so this test exercises the
+    upload/download handshakes even though nothing here is actually
+    privilege-separated."""
+    monkeypatch.setattr(paths_module, "data_dir", lambda: _shim_data_dir(shim_home))
+    local_files_module.force_bridge_for_tests(True)
+
+    connector = FileBridgeTestConnector()
+    dispatcher = McpDispatcher(lambda: {"file_bridge_test": connector})
+    port = _free_port()
+    server = WebServer(WebApprovalUI(), host="localhost", port=port, mcp_dispatcher=dispatcher)
+    server.start()
+    try:
+        _wait_until_connectable("localhost", port)
+        yield connector
+    finally:
+        server.stop()
+        local_files_module.force_bridge_for_tests(False)
+
+
 @pytest.fixture(scope="session")
 def built_shim_entry() -> Path:
     """(Re)builds mcpb/shim/dist/shim.js once per test session -- see
@@ -226,3 +301,58 @@ async def test_shim_proxies_a_real_initialize_and_tool_call_over_mcp(
             assert result.structured_content == {"echoed": {"message": "hello through the shim"}}
 
     assert running_mcp_server.calls == [("contract_test_echo", {"message": "hello through the shim"})]
+
+
+async def test_shim_file_bridge_upload_and_download_round_trip(
+    running_file_bridge_server, built_shim_entry, shim_home, tmp_path,
+):
+    """ADR 0007's own cross-language proof: the real shim and the real
+    daemon agree on the need_uploads/deliver wire format, not just each
+    side's own guess at it (tests/unit/test_local_files.py and
+    mcpb/shim/test/fileBridge.test.ts each already prove their own half in
+    isolation). local_files.force_bridge_for_tests(True) (set by the
+    running_file_bridge_server fixture) is what makes this exercise the
+    bridge at all, since nothing in this test environment is actually
+    privilege-separated.
+    """
+    upload_source = tmp_path / "source.txt"
+    upload_source.write_text("uploaded through the file bridge")
+    download_dest = tmp_path / "downloads"
+    download_dest.mkdir()
+
+    params = StdioServerParameters(
+        command="node",
+        args=[str(built_shim_entry)],
+        env={"HOME": str(shim_home), "USERPROFILE": str(shim_home), "LOCALAPPDATA": str(shim_home)},
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            upload_result = await session.call_tool(
+                "file_bridge_test_upload", {"local_path": str(upload_source)},
+            )
+            assert upload_result.is_error is not True
+            assert upload_result.structured_content == {"content": "uploaded through the file bridge"}
+
+            download_result = await session.call_tool(
+                "file_bridge_test_download", {"destination_dir": str(download_dest)},
+            )
+            assert download_result.is_error is not True
+            content = download_result.structured_content
+            assert content["delivery"] == "local_disk"
+            saved_path = Path(content["path"])
+            assert saved_path == download_dest / "bridged.txt"
+            assert saved_path.read_bytes() == b"content from the daemon"
+
+    # The upload tool is dispatched twice: once before any bytes are
+    # staged (require_local_files() raises LocalFilesNeeded, which the
+    # shim turns into the upload handshake instead of an error -- see
+    # routes_mcp.py's handle_call_tool), and once more on the resend, once
+    # the shim has PUT the file and the daemon can claim it. Both
+    # dispatches reach the connector; only the second one returns.
+    assert running_file_bridge_server.calls == [
+        ("file_bridge_test_upload", {"local_path": str(upload_source)}),
+        ("file_bridge_test_upload", {"local_path": str(upload_source)}),
+        ("file_bridge_test_download", {"destination_dir": str(download_dest)}),
+    ]

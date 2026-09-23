@@ -20,9 +20,7 @@ B5c that would be silently wrong if the assumption underneath it were:
    -- which is what lets ``privilege_separation.write_handoff_file()`` stay
    a plain atomic write on Windows, with no ACL code of its own.
 4. A file *moved* into one does **not** -- which is the entire reason that
-   script runs ``icacls /reset`` over ``handoff/`` after the migration, and
-   the reason ``ensure_handoff_file_mode()`` is a no-op there rather than a
-   chmod.
+   script runs ``icacls /reset`` over ``handoff/`` after the migration.
 
 And one thing that is not about ACLs at all but only shows up on this
 platform: ``secure_mkdir(..., foreign_owner_ok=True)`` has to stay *silent*

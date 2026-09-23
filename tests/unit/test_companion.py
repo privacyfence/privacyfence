@@ -16,6 +16,7 @@ anything else reaches.
 from __future__ import annotations
 
 import sys
+import threading
 
 import pytest
 
@@ -146,9 +147,85 @@ class TestRunAction:
         monkeypatch.setattr(companion, "_quit_daemon", lambda: True)
         assert companion._run_action(companion.ACTION_QUIT) is True
 
+    def test_service_status_dispatches_to_show_service_status(self, monkeypatch):
+        monkeypatch.setattr(companion, "_show_service_status", lambda: True)
+        assert companion._run_action(companion.ACTION_SERVICE_STATUS) is True
+
+    @pytest.mark.parametrize(
+        "action_const,expected_daemon_action",
+        [
+            ("ACTION_SERVICE_START", "start"),
+            ("ACTION_SERVICE_RESTART", "restart"),
+            ("ACTION_SERVICE_STOP", "stop"),
+        ],
+    )
+    def test_service_actions_dispatch_with_the_right_verb(self, monkeypatch, action_const, expected_daemon_action):
+        calls = []
+        monkeypatch.setattr(companion, "_run_service_action", lambda action: calls.append(action) or True)
+        assert companion._run_action(getattr(companion, action_const)) is True
+        assert calls == [expected_daemon_action]
+
     def test_unknown_action_raises(self):
         with pytest.raises(ValueError):
             companion._run_action("bogus")
+
+
+class TestShowMessage:
+    def test_shows_the_message_via_the_platform_dialog(self, monkeypatch):
+        shown = []
+        monkeypatch.setattr(companion, "_dialog_for", lambda kind: (lambda text, timeout: shown.append((text, timeout)) or True))
+        assert companion._show_message("hello") is True
+        assert shown == [("hello", 15.0)]
+
+    def test_no_dialog_program_is_a_logged_false(self, monkeypatch, caplog):
+        def _raise(kind):
+            def _unavailable(text, timeout):
+                raise companion._NoDialogAvailable("no zenity/kdialog")
+            return _unavailable
+
+        monkeypatch.setattr(companion, "_dialog_for", _raise)
+        with caplog.at_level("WARNING"):
+            assert companion._show_message("hello") is False
+        assert "hello" in caplog.text
+
+
+class TestShowServiceStatus:
+    def test_shows_the_probed_detail(self, monkeypatch):
+        status = companion.daemon_status.DaemonStatus(
+            state="running", version="4.2.0", pid=1, detail="PrivacyFence 4.2.0 is running (pid 1).",
+        )
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: status)
+        shown = []
+        monkeypatch.setattr(companion, "_show_message", lambda text: shown.append(text) or True)
+
+        assert companion._show_service_status() is True
+        assert shown == [status.detail]
+
+
+class TestRunServiceAction:
+    def test_success_shows_the_outcome(self, monkeypatch):
+        monkeypatch.setattr(companion.service_control, "run_elevated", lambda action: (True, "PrivacyFence's background service was started."))
+        shown = []
+        monkeypatch.setattr(companion, "_show_message", lambda text: shown.append(text) or True)
+
+        assert companion._run_service_action("start") is True
+        assert shown == ["PrivacyFence's background service was started."]
+
+    def test_failure_shows_the_reason(self, monkeypatch):
+        monkeypatch.setattr(companion.service_control, "run_elevated", lambda action: (False, "could not stop PrivacyFence's service: boom"))
+        shown = []
+        monkeypatch.setattr(companion, "_show_message", lambda text: shown.append(text) or True)
+
+        assert companion._run_service_action("stop") is False
+        assert shown == ["could not stop PrivacyFence's service: boom"]
+
+    def test_a_cancelled_prompt_shows_nothing(self, monkeypatch):
+        # A human who just clicked Cancel on the password prompt does not
+        # need a second dialog telling them so.
+        monkeypatch.setattr(companion.service_control, "run_elevated", lambda action: (False, "cancelled"))
+        monkeypatch.setattr(companion, "_show_message", lambda text: pytest.fail("must not show anything"))
+
+        assert companion._run_service_action("restart") is False
 
 
 class TestMainArgvDispatch:
@@ -294,6 +371,29 @@ class TestPendingSeparation:
             companion._complete_pending_separation()
 
         assert "log out and back in" not in caplog.text
+
+    def test_a_different_accounts_pending_join_is_completed_too(self, monkeypatch, caplog):
+        # ADR 0008 retired the local-mode-fixes plan's Phase 2 §2.6 interim
+        # guard: a non-owner account pending join is completed exactly like
+        # the owner's own always was -- each gets their own isolated
+        # principal, so there is no longer anything to refuse.
+        monkeypatch.setattr(
+            companion.privilege_separation, "separation",
+            lambda: SimpleNamespace(service_group="privacyfence"),
+        )
+        monkeypatch.setattr(
+            companion.privilege_separation, "owner_membership_pending", lambda: True
+        )
+        monkeypatch.setattr(
+            companion.privilege_separation, "complete_per_user_separation", lambda: True
+        )
+        monkeypatch.setattr(companion.privilege_separation, "current_user_name", lambda: "bob")
+
+        with caplog.at_level("WARNING"):
+            companion._complete_pending_separation()
+
+        assert "log out and back in" in caplog.text
+        assert "bob" in caplog.text
 
     def test_the_check_runs_off_the_startup_path(self, monkeypatch):
         # A password dialog nobody answers must not hold up the tray icon
@@ -570,6 +670,237 @@ class TestFirstEnrollmentOffer:
         assert order == ["separation", "enrollment"]
 
 
+class TestMenuModel:
+    """``_menu_model()``/``_status_line_text()`` -- pystray-free on purpose
+    (the plan's own testing note: test the pure function, don't drive
+    pystray). ``TestTrayLoop`` below still exercises the real
+    ``pystray.MenuItem`` wiring end to end, but every state/visibility rule
+    itself is checked here directly."""
+
+    def _status(self, state, **overrides):
+        defaults = {"version": None, "pid": None, "detail": "detail"}
+        defaults.update(overrides)
+        return companion.daemon_status.DaemonStatus(state=state, **defaults)
+
+    @pytest.mark.parametrize(
+        "state,symbol",
+        [
+            ("running", "●"),
+            ("starting", "●"),
+            ("unresponsive", "⚠"),
+            ("failed", "⚠"),
+            ("stopped", "○"),
+            ("unknown", "○"),
+        ],
+    )
+    def test_status_line_symbol_per_state(self, state, symbol):
+        text = companion._status_line_text(self._status(state))
+        assert text.startswith(symbol)
+
+    def test_status_line_includes_the_version_when_known(self):
+        text = companion._status_line_text(self._status("running", version="4.2.0"))
+        assert "(v4.2.0)" in text
+
+    def test_status_line_omits_the_version_when_unknown(self):
+        text = companion._status_line_text(self._status("stopped"))
+        assert "(v" not in text
+
+    @pytest.mark.parametrize("state", ["running", "starting", "unresponsive"])
+    def test_running_states_hide_start_and_offer_restart_stop(self, state):
+        rows = {row.action: row for row in companion._menu_model(self._status(state)) if row.action}
+        assert rows[companion.ACTION_SERVICE_START].visible is False
+        assert rows[companion.ACTION_SERVICE_RESTART].visible is True
+        assert rows[companion.ACTION_SERVICE_STOP].visible is True
+
+    @pytest.mark.parametrize("state", ["stopped", "failed", "unknown"])
+    def test_non_running_states_offer_start_and_hide_restart_stop(self, state):
+        rows = {row.action: row for row in companion._menu_model(self._status(state)) if row.action}
+        assert rows[companion.ACTION_SERVICE_START].visible is True
+        assert rows[companion.ACTION_SERVICE_RESTART].visible is False
+        assert rows[companion.ACTION_SERVICE_STOP].visible is False
+
+    def test_every_row_but_the_status_line_is_always_enabled_and_actionable(self):
+        rows = companion._menu_model(self._status("running"))
+        assert rows[0].action is None
+        assert rows[0].enabled is False
+        for row in rows[1:]:
+            assert row.action is not None
+            assert row.enabled is True
+
+    def test_the_menu_covers_every_action_exactly_once(self):
+        rows = companion._menu_model(self._status("running"))
+        actions = [row.action for row in rows if row.action is not None]
+        assert actions == [
+            companion.ACTION_OPEN_APPROVALS, companion.ACTION_OPEN_SETTINGS,
+            companion.ACTION_SERVICE_START, companion.ACTION_SERVICE_RESTART, companion.ACTION_SERVICE_STOP,
+            companion.ACTION_SERVICE_STATUS, companion.ACTION_RECOVERY_CODE, companion.ACTION_QUIT,
+        ]
+
+
+class TestNotificationDecision:
+    """``_notification_decision()`` -- the tray poll's and ``--serve``'s
+    shared rule for when to show "PrivacyFence isn't running"."""
+
+    def _status(self, state):
+        return companion.daemon_status.DaemonStatus(state=state, version=None, pid=None, detail="")
+
+    def test_a_healthy_state_never_notifies(self):
+        state = companion._NotificationState()
+        assert companion._notification_decision(
+            state, self._status("running"), now=1000.0, started_at=0.0,
+        ) is False
+
+    def test_suppressed_within_the_first_minute_of_the_companions_own_start(self):
+        state = companion._NotificationState()
+        assert companion._notification_decision(
+            state, self._status("stopped"), now=30.0, started_at=0.0,
+        ) is False
+
+    def test_suppressed_until_the_bad_state_has_held_for_fifteen_seconds(self):
+        state = companion._NotificationState()
+        started_at = 0.0
+        # First bad poll, well past start-up suppression: records bad_since,
+        # does not yet notify.
+        assert companion._notification_decision(
+            state, self._status("stopped"), now=100.0, started_at=started_at,
+        ) is False
+        assert state.bad_since == 100.0
+        # Still under fifteen seconds since bad_since.
+        assert companion._notification_decision(
+            state, self._status("stopped"), now=110.0, started_at=started_at,
+        ) is False
+        # Past it now.
+        assert companion._notification_decision(
+            state, self._status("stopped"), now=116.0, started_at=started_at,
+        ) is True
+
+    def test_notifies_at_most_once_per_distinct_bad_state(self):
+        state = companion._NotificationState()
+        companion._notification_decision(state, self._status("stopped"), now=100.0, started_at=0.0)
+        assert companion._notification_decision(
+            state, self._status("stopped"), now=120.0, started_at=0.0,
+        ) is True
+        # Same bad state again -- already notified, no repeat.
+        assert companion._notification_decision(
+            state, self._status("stopped"), now=140.0, started_at=0.0,
+        ) is False
+
+    def test_a_different_bad_state_notifies_again(self):
+        # bad_since tracks "how long has *some* bad state held", not "how
+        # long has this exact one" -- a flap from stopped to failed after
+        # the fifteen-second threshold has already been crossed notifies
+        # immediately about the new state, rather than making the human
+        # wait through a second fifteen-second window for a problem that
+        # has already been going on at least that long.
+        state = companion._NotificationState()
+        companion._notification_decision(state, self._status("stopped"), now=100.0, started_at=0.0)
+        companion._notification_decision(state, self._status("stopped"), now=120.0, started_at=0.0)
+        assert companion._notification_decision(
+            state, self._status("failed"), now=121.0, started_at=0.0,
+        ) is True
+
+    def test_recovering_then_failing_again_clears_the_notified_marker(self):
+        state = companion._NotificationState()
+        companion._notification_decision(state, self._status("stopped"), now=100.0, started_at=0.0)
+        companion._notification_decision(state, self._status("stopped"), now=120.0, started_at=0.0)
+        # Recovers.
+        companion._notification_decision(state, self._status("running"), now=125.0, started_at=0.0)
+        assert state.bad_since is None
+        assert state.notified_state is None
+        # Fails the same way again -- notifies again, not suppressed by the
+        # earlier "already notified" marker.
+        companion._notification_decision(state, self._status("stopped"), now=200.0, started_at=0.0)
+        assert companion._notification_decision(
+            state, self._status("stopped"), now=220.0, started_at=0.0,
+        ) is True
+
+
+class TestRunStatusPollOnce:
+    """The background poll's shared per-tick logic -- factored out of
+    ``_run_tray()``'s and ``_run_serve()``'s own nested ``_poll_loop``
+    closures specifically so it can be exercised directly rather than only
+    by letting a real background thread run on a timer."""
+
+    def test_probes_and_reports_the_status(self, monkeypatch):
+        status = companion.daemon_status.DaemonStatus(state="running", version=None, pid=None, detail="")
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: status)
+
+        result = companion._run_status_poll_once(notify_state=companion._NotificationState(), started_at=0.0)
+
+        assert result is status
+
+    def test_calls_on_status_with_the_fresh_probe(self, monkeypatch):
+        status = companion.daemon_status.DaemonStatus(state="stopped", version=None, pid=None, detail="")
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: status)
+        seen = []
+
+        companion._run_status_poll_once(
+            notify_state=companion._NotificationState(), started_at=0.0, on_status=seen.append,
+        )
+
+        assert seen == [status]
+
+    def test_on_notify_runs_only_when_the_decision_says_so(self, monkeypatch):
+        status = companion.daemon_status.DaemonStatus(state="running", version=None, pid=None, detail="")
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: status)
+        notified = []
+
+        # "running" never notifies (TestNotificationDecision covers the
+        # actual rule) -- this just checks the wiring: on_notify is called
+        # exactly when _notification_decision says True, never otherwise.
+        companion._run_status_poll_once(
+            notify_state=companion._NotificationState(), started_at=0.0, on_notify=lambda: notified.append(True),
+        )
+
+        assert notified == []
+
+    def test_on_notify_fires_for_a_persisted_bad_state(self, monkeypatch):
+        status = companion.daemon_status.DaemonStatus(state="stopped", version=None, pid=None, detail="")
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: status)
+        monkeypatch.setattr(companion.time, "monotonic", lambda: 100.0)
+        state = companion._NotificationState(bad_since=0.0)
+        notified = []
+
+        companion._run_status_poll_once(
+            notify_state=state, started_at=0.0, on_notify=lambda: notified.append(True),
+        )
+
+        assert notified == [True]
+
+
+class TestNotifySend:
+    def test_no_notifier_installed_is_a_silent_no_op(self, monkeypatch):
+        monkeypatch.setattr(companion.shutil, "which", lambda name: None)
+        monkeypatch.setattr(
+            companion.subprocess, "run", lambda *a, **k: pytest.fail("must not run anything")
+        )
+        companion._notify_send("PrivacyFence isn't running.")
+
+    def test_runs_notify_send_with_the_text(self, monkeypatch):
+        monkeypatch.setattr(companion.shutil, "which", lambda name: "/usr/bin/notify-send")
+        seen = {}
+
+        def _run(argv, **kwargs):
+            seen["argv"] = argv
+            return None
+
+        monkeypatch.setattr(companion.subprocess, "run", _run)
+
+        companion._notify_send("PrivacyFence isn't running.")
+
+        assert seen["argv"] == ["/usr/bin/notify-send", "PrivacyFence", "PrivacyFence isn't running."]
+
+    def test_a_failing_notify_send_is_swallowed(self, monkeypatch):
+        monkeypatch.setattr(companion.shutil, "which", lambda name: "/usr/bin/notify-send")
+
+        def _raise(*a, **k):
+            raise OSError("no display")
+
+        monkeypatch.setattr(companion.subprocess, "run", _raise)
+
+        companion._notify_send("PrivacyFence isn't running.")  # must not raise
+
+
 class TestTrayLoop:
     """``_run_tray`` itself -- the one part of this module the header above
     called untestable. Running the real loop still is: it needs a display,
@@ -584,33 +915,80 @@ class TestTrayLoop:
     def tray(self, monkeypatch):
         """A fake ``pystray``/``PIL.Image`` pair, installed in ``sys.modules``
         so ``_run_tray``'s own deferred import picks them up, plus a captured
-        icon so the test can invoke the menu callbacks the way a click would."""
-        captured = SimpleNamespace(icon=None, ran=False, stopped=False)
+        icon so the test can invoke the menu callbacks the way a click would.
+
+        The local-mode-fixes plan's Phase 2: ``daemon_status.probe()`` is stubbed to a fixed
+        ``running`` status by default -- ``_run_tray()`` calls it before the
+        menu is even built, and a real probe would reach for a control
+        socket/service manager this test has no business touching. The
+        background poll thread is also neutered (``_STATUS_POLL_SECONDS``
+        patched to a value ``_run_tray`` never actually waits out, since the
+        fake ``Icon.run()`` returns immediately and ``finally:`` stops it
+        right after)."""
+        captured = SimpleNamespace(icon=None, ran=False, stopped=False, run_until=None)
 
         class _Icon:
             def __init__(self, name, image, title, menu):
                 self.name, self.image, self.title, self.menu = name, image, title, menu
+                self.icon = image
+                self.notified = []
+                self.update_menu_calls = 0
                 captured.icon = self
 
             def run(self):
+                # By default returns immediately, same as every other test
+                # here needs (the tray "loop" is over as soon as this
+                # returns). test_the_poll_loop_redraws_the_icon_and_menu
+                # sets captured.run_until to a real Event and waits on it
+                # (bounded) instead, so the real background poll thread gets
+                # a chance to tick at least once before teardown.
+                if captured.run_until is not None:
+                    captured.run_until.wait(timeout=2.0)
                 captured.ran = True
 
             def stop(self):
                 captured.stopped = True
 
+            def update_menu(self):
+                self.update_menu_calls += 1
+                # Signals captured.run_until, if a test is waiting on one --
+                # see run()'s own comment. Set here rather than tied to the
+                # probe itself, so run() only unblocks once a full poll tick
+                # (probe -> redraw -> update_menu) has actually finished,
+                # not merely started.
+                if captured.run_until is not None:
+                    captured.run_until.set()
+
+            def notify(self, text):
+                self.notified.append(text)
+
         class _MenuItem:
-            def __init__(self, text, action):
-                self.text, self.action = text, action
+            def __init__(self, text, action, *, enabled=True, visible=True):
+                self.text, self.action, self.enabled, self.visible = text, action, enabled, visible
 
         class _Menu:
             def __init__(self, *items):
                 self.items = items
 
+        class _FakeImage:
+            """Enough of a PIL ``Image`` for ``_status_icon_image()``: a
+            ``.mode`` to round-trip through ``.convert()``, and identity
+            preserved so a test can tell "still the color image" apart from
+            "greyscaled" without needing real pixel data."""
+
+            def __init__(self, label):
+                self.label, self.mode = label, "RGBA"
+
+            def convert(self, mode):
+                return self
+
         pystray = SimpleNamespace(Icon=_Icon, Menu=_Menu, MenuItem=_MenuItem)
-        pil_image = SimpleNamespace(open=lambda path: f"image:{path}")
+        pil_image = SimpleNamespace(open=lambda path: _FakeImage(f"color:{path}"))
+        pil_image_ops = SimpleNamespace(grayscale=lambda image: _FakeImage(f"grey:{image.label}"))
         monkeypatch.setitem(sys.modules, "pystray", pystray)
-        monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=pil_image))
+        monkeypatch.setitem(sys.modules, "PIL", SimpleNamespace(Image=pil_image, ImageOps=pil_image_ops))
         monkeypatch.setitem(sys.modules, "PIL.Image", pil_image)
+        monkeypatch.setitem(sys.modules, "PIL.ImageOps", pil_image_ops)
 
         # Nothing real starts: the separation check spawns a thread, and the
         # channel would bind a socket this test has no business owning.
@@ -620,17 +998,73 @@ class TestTrayLoop:
         channel.stop = lambda: setattr(channel, "stopped", True)
         monkeypatch.setattr(companion, "CompanionChannelServer", lambda: channel)
         captured.channel = channel
+
+        running = companion.daemon_status.DaemonStatus(
+            state="running", version="4.2.0", pid=4242, detail="PrivacyFence 4.2.0 is running (pid 4242).",
+        )
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: running)
         return captured
 
-    def _items(self, tray):
-        return {item.text: item.action for item in tray.icon.menu.items}
+    @staticmethod
+    def _resolve(value, item):
+        return value(item) if callable(value) else value
 
-    def test_the_menu_offers_exactly_the_four_documented_items(self, tray):
+    def _model(self, tray):
+        """Every menu row as plain data -- ``text``/``enabled``/``visible``
+        resolved the way real pystray would resolve a callable (calling it
+        with the ``MenuItem`` itself), keyed by label for the rows whose
+        label is a plain string."""
+        rows = []
+        for item in tray.icon.menu.items:
+            rows.append({
+                "label": self._resolve(item.text, item),
+                "action": item.action,
+                "enabled": self._resolve(item.enabled, item),
+                "visible": self._resolve(item.visible, item),
+            })
+        return rows
+
+    def _items(self, tray):
+        return {row["label"]: row["action"] for row in self._model(tray) if isinstance(row["label"], str)}
+
+    def test_the_menu_matches_the_documented_layout(self, tray):
         assert companion._run_tray() == 0
-        assert list(self._items(tray)) == [
-            "Open Approvals", "Open Settings", "New Recovery Code…", "Quit",
+        rows = self._model(tray)
+        assert [row["label"] for row in rows] == [
+            "● PrivacyFence is running (v4.2.0)",
+            "Open Approvals", "Open Settings",
+            "Start PrivacyFence…", "Restart PrivacyFence…", "Stop PrivacyFence…",
+            "Service Details…", "New Recovery Code…", "Quit Companion",
         ]
+        assert rows[0]["enabled"] is False
+        # Running: Start is hidden, Restart/Stop are offered.
+        assert rows[3]["visible"] is False
+        assert rows[4]["visible"] is True
+        assert rows[5]["visible"] is True
         assert tray.ran is True
+
+    def test_the_icon_greys_out_when_the_daemon_is_not_running(self, tray, monkeypatch):
+        stopped = companion.daemon_status.DaemonStatus(
+            state="stopped", version=None, pid=None, detail="PrivacyFence is not running.",
+        )
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: stopped)
+        companion._run_tray()
+        assert tray.icon.image.label.startswith("grey:")
+
+    def test_the_icon_stays_in_color_while_running(self, tray):
+        companion._run_tray()
+        assert tray.icon.image.label.startswith("color:")
+
+    def test_a_stopped_daemon_offers_start_not_restart_or_stop(self, tray, monkeypatch):
+        stopped = companion.daemon_status.DaemonStatus(
+            state="stopped", version=None, pid=None, detail="PrivacyFence is not running.",
+        )
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: stopped)
+        companion._run_tray()
+        rows = self._model(tray)
+        assert rows[3]["visible"] is True
+        assert rows[4]["visible"] is False
+        assert rows[5]["visible"] is False
 
     def test_the_channel_is_up_while_the_icon_runs_and_torn_down_after(self, tray):
         assert companion._run_tray() == 0
@@ -639,6 +1073,27 @@ class TestTrayLoop:
         # so the next companion to start can take the address.
         assert tray.channel.stopped is True
         assert companion._channel_running.is_set() is False
+
+    def test_the_poll_loop_redraws_the_icon_and_menu(self, tray, monkeypatch):
+        # Every other test here neuters the background poll thread (the
+        # fake Icon.run() returns immediately, so poll_stop is set before
+        # the poll thread's first wait() call). This one instead lets it
+        # run for real: a tiny poll interval, and tray.run_until (an Event
+        # the fake update_menu() sets on its first call) is what run()
+        # blocks on -- bounded at 2s, so the test waits only as long as one
+        # real poll tick (probe -> redraw -> update_menu) actually takes,
+        # rather than a fixed sleep.
+        monkeypatch.setattr(companion, "_STATUS_POLL_SECONDS", 0.01)
+        stopped_status = companion.daemon_status.DaemonStatus(
+            state="stopped", version=None, pid=None, detail="PrivacyFence is not running.",
+        )
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: stopped_status)
+        tray.run_until = threading.Event()
+
+        assert companion._run_tray() == 0
+
+        assert tray.icon.update_menu_calls >= 1
+        assert tray.icon.image.label.startswith("grey:")  # the poll's own redraw, not the initial one
 
     def test_open_items_dispatch_to_open_path(self, tray, monkeypatch):
         opened = []
@@ -655,7 +1110,7 @@ class TestTrayLoop:
         companion._run_tray()
         tray.channel.stop = lambda: order.append("channel")
         tray.icon.stop = lambda: order.append("icon")
-        self._items(tray)["Quit"](tray.icon, None)
+        self._items(tray)["Quit Companion"](tray.icon, None)
         # A tray icon with nothing left to serve has no reason to stay up --
         # and the daemon has to be asked first, since stopping the channel
         # first would remove the way to ask.
@@ -668,18 +1123,45 @@ class TestTrayLoop:
         threads = []
 
         class _Thread:
-            def __init__(self, *, target, name, daemon):
-                self.target, self.name, self.daemon = target, name, daemon
+            def __init__(self, *, target, name, daemon, args=()):
+                self.target, self.name, self.daemon, self.args = target, name, daemon, args
                 threads.append(self)
 
             def start(self):
-                self.target()
+                # The background status-poll thread is real (module-level
+                # daemon thread, not one of the click handlers this test is
+                # about) -- running it synchronously here would call
+                # `poll_stop.wait(5.0)` on this test's own thread, for real,
+                # before `_run_tray()` ever reaches `icon.run()`.
+                if self.name != "privacyfence-status-poll":
+                    self.target(*self.args)
 
         monkeypatch.setattr(companion.threading, "Thread", _Thread)
         shown = []
         monkeypatch.setattr(companion, "_show_recovery_code", lambda: shown.append(True) or True)
         companion._run_tray()
         self._items(tray)["New Recovery Code…"](tray.icon, None)
-        assert len(threads) == 1
-        assert threads[0].daemon is True
         assert shown == [True]
+
+    def test_the_service_actions_run_off_their_own_thread(self, tray, monkeypatch):
+        threads = []
+
+        class _Thread:
+            def __init__(self, *, target, name, daemon, args=()):
+                self.target, self.name, self.daemon, self.args = target, name, daemon, args
+                threads.append(self)
+
+            def start(self):
+                if self.name != "privacyfence-status-poll":
+                    self.target(*self.args)
+
+        monkeypatch.setattr(companion.threading, "Thread", _Thread)
+        calls = []
+        monkeypatch.setattr(companion, "_run_service_action", lambda action: calls.append(action) or True)
+        monkeypatch.setattr(companion, "_show_service_status", lambda: calls.append("status") or True)
+        companion._run_tray()
+        items = self._items(tray)
+        items["Restart PrivacyFence…"](tray.icon, None)
+        items["Service Details…"](tray.icon, None)
+        assert calls == ["restart", "status"]
+        assert all(t.daemon is True for t in threads)

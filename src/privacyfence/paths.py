@@ -173,7 +173,7 @@ def handoff_dir() -> Path:
     ``data_dir()`` itself on an ordinary install -- so nothing moves, and no
     caller behaves differently, until privilege separation is opted into.
     On a separated install it's ``data_dir()/handoff``, group-owned by the
-    service account with the setgid bit (``2770``) and the installing human
+    service account with the setgid bit (``3770``) and the installing human
     added to that group, which is what lets the daemon (one account) and the
     companion and agent (another) still hand each other a token and a socket
     while everything else under ``data_dir()`` stays ``0700`` and unreadable
@@ -290,10 +290,19 @@ def _migrate_path(legacy: Path, destination: Path) -> None:
     change -- #428 Phase 4 is what makes ``destination``'s parent
     service-owned. Until then it sits at the same uid as everything else
     under ``legacy``'s own parent.
+
+    On a #428 Phase 4 install, ``destination``'s parent may be a
+    service-owned directory this process can't even stat into (unlike
+    "doesn't exist", which ``Path.exists()`` itself swallows, a permission
+    denial is a real ``OSError`` it re-raises) -- e.g. a plain checkout
+    resolving to a system-wide, privilege-separated ``data_dir()`` on a
+    machine where that's already been opted into. That has to log-and-
+    continue exactly like a failed ``rename`` rather than take startup down,
+    so the whole check runs under the same ``try``.
     """
-    if destination.exists() or not legacy.exists():
-        return
     try:
+        if destination.exists() or not legacy.exists():
+            return
         destination.parent.mkdir(parents=True, exist_ok=True)
         legacy.rename(destination)
     except OSError as exc:
@@ -399,6 +408,41 @@ def downloads_dir(principal: "Principal | None" = None) -> Path:
     principal_id``) rather than adding any new path-construction code
     here."""
     return secure_mkdir(user_dir(principal) / "downloads")
+
+
+def uploads_dir(principal: "Principal | None" = None) -> Path:
+    """Per-principal staging area for the local file bridge's upload side
+    (local_files.py, upload_staging.py): ``user_dir(principal) / "uploads"``,
+    created on demand exactly like ``downloads_dir()``. Holds only
+    AES-256-GCM-encrypted ciphertext (``upload_staging.UploadStagingStore``
+    mirrors ``download_staging.DownloadStagingStore``'s "never derive or
+    store the decryption key on disk" property), so this directory's
+    contents are worthless without the one-time token that produced them.
+    Reuses ``user_dir()``'s own directory-safety logic (``_is_safe_
+    principal_id``) rather than adding any new path-construction code
+    here."""
+    return secure_mkdir(user_dir(principal) / "uploads")
+
+
+def all_uploads_dirs() -> list[Path]:
+    """Every upload-staging directory that currently exists on disk, across
+    every principal -- the upload-side mirror of ``all_downloads_dirs()``.
+    Existence-only: see that function's docstring for why, and for why
+    ``upload_staging.UploadStagingStore.__init__`` needs exactly this."""
+    base = data_dir()
+    dirs = []
+    local_uploads = base / "uploads"
+    if local_uploads.is_dir():
+        dirs.append(local_uploads)
+    users_root = base / "users"
+    if users_root.is_dir():
+        for entry in sorted(users_root.iterdir()):
+            if not entry.is_dir() or not _is_safe_principal_id(entry.name):
+                continue
+            candidate = entry / "uploads"
+            if candidate.is_dir():
+                dirs.append(candidate)
+    return dirs
 
 
 def all_downloads_dirs() -> list[Path]:

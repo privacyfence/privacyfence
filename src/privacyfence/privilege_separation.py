@@ -80,7 +80,7 @@ file this module reads. Afterwards, taking Linux's root as the example::
     │   ├── webauthn_credentials.json                <- #426's store, now unforgeable
     │   └── logs/audit/                              <- and its HMAC key
     ├── credentials/, logs/, ...                   privacyfence:privacyfence  0700
-    └── handoff/                                   privacyfence:privacyfence  2770
+    └── handoff/                                   privacyfence:privacyfence  3770
         ├── mcp_token, mcp_url                       <- the agent's own credential
         ├── web_base_url, *_url                      <- discovery files a human reads
         ├── control.sock                             <- daemon listens, companion connects
@@ -226,7 +226,21 @@ HANDOFF_DIR_NAME = "handoff"
 # ``tests/unit/test_privilege_separation.py`` can assert the shell script
 # agrees with them.
 SYSTEM_ROOT_MODE = 0o711
-HANDOFF_DIR_MODE = 0o2770
+# The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6): the
+# leading ``3`` is ``01000`` (the sticky bit) on top of the setgid ``02000``
+# this already
+# carried -- the filesystem-level half of the companion-socket-takeover fix
+# ``web/control_channel.py``'s ``_existing_socket_owner_problem()`` is the
+# code-level half of. Without it, any member of the service group (every
+# account this install has been extended to) can unlink another member's
+# ``companion.sock`` even though the group only grants ``rwx`` on the
+# directory, not ownership of what is in it -- the same reason ``/tmp`` has
+# carried this bit since 4.3BSD. With it, only the file's own owner (or
+# root) may remove or rename an entry here, so the code-level check is
+# belt, this is braces: a socket the code-level check would refuse to
+# rebind now also can't be deleted out from under a still-running owner by
+# anything but that owner.
+HANDOFF_DIR_MODE = 0o3770
 AUTHORITY_DIR_MODE = 0o700
 SOCKET_MODE_SEPARATED = 0o660
 SOCKET_MODE_SHARED_UID = 0o600
@@ -280,6 +294,20 @@ class PlatformLayout:
     #: rather than ``installer`` verbatim (see that field's own docstring
     #: for why the two differ).
     enable_command: str
+    #: The local-mode-fixes plan's Phase 2 (companion-as-daemon-manager): the
+    #: *unprivileged* argv that reads this platform's service-manager state
+    #: without asking for a password -- ``daemon_status.probe()``'s fallback
+    #: once the control
+    #: channel itself doesn't answer. Not ``status_command`` above, which is
+    #: what a human types (and which needs ``sudo``/an elevated shell only
+    #: because the *script's* own ``status`` prints the on-disk layout audit,
+    #: not because reading service state needs privilege -- ``launchctl
+    #: print``/``systemctl show``/``sc query`` all work for an ordinary
+    #: session). Named here, once, rather than spelled inline in
+    #: ``daemon_status.py``, so that module and the platform scripts'
+    #: own ``daemon status`` subcommand can't drift apart on which service
+    #: name they mean.
+    daemon_ctl_argv: tuple[str, ...]
 
 
 # #428 P4 ships per platform (B5a/B5b/B5c) rather than as one "x3 platforms"
@@ -297,6 +325,7 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
         start_command="sudo launchctl kickstart -k system/com.privacyfence.daemon",
         stop_command="sudo launchctl bootout system/com.privacyfence.daemon",
         enable_command="sudo scripts/macos_privilege_separation.sh enable",
+        daemon_ctl_argv=("launchctl", "print", "system/com.privacyfence.daemon"),
     ),
     "linux": PlatformLayout(
         system_root=LINUX_SYSTEM_ROOT,
@@ -307,6 +336,10 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
         start_command="sudo systemctl restart privacyfence-daemon.service",
         stop_command="sudo systemctl stop privacyfence-daemon.service",
         enable_command="sudo privacyfence-privilege-separation enable",
+        daemon_ctl_argv=(
+            "systemctl", "show", "privacyfence-daemon.service",
+            "-p", "ActiveState,SubState,Result,ExecMainStatus,MainPID",
+        ),
     ),
     "win32": PlatformLayout(
         system_root=WINDOWS_SYSTEM_ROOT,
@@ -336,6 +369,7 @@ PLATFORM_LAYOUTS: dict[str, PlatformLayout] = {
             'powershell -ExecutionPolicy Bypass -File '
             '"$env:ProgramFiles\\PrivacyFence\\privilege-separation.ps1" enable   (from an elevated PowerShell)'
         ),
+        daemon_ctl_argv=("sc.exe", "query", WINDOWS_SERVICE_NAME),
     ),
 }
 
@@ -593,11 +627,13 @@ def socket_mode() -> int:
 
 
 def handoff_dir_mode() -> int:
-    """The mode ``paths.handoff_dir()`` is kept at -- ``2770`` when separated
+    """The mode ``paths.handoff_dir()`` is kept at -- ``3770`` when separated
     (setgid so the daemon and the companion keep producing group-owned files
-    for each other regardless of which one creates them), and the ordinary
-    ``0700`` otherwise, where ``handoff_dir()`` *is* ``data_dir()`` and this
-    must not change it."""
+    for each other regardless of which one creates them, plus the sticky bit
+    the local-mode-fixes plan's interim multi-user guard adds -- see
+    ``HANDOFF_DIR_MODE``'s own comment), and the ordinary ``0700`` otherwise,
+    where ``handoff_dir()``
+    *is* ``data_dir()`` and this must not change it."""
     return HANDOFF_DIR_MODE if is_enabled() else secure_files.DEFAULT_DIR_MODE
 
 
@@ -618,32 +654,6 @@ def write_handoff_file(path: Path, text: str) -> None:
     secure_files.atomic_write_text(
         path, text, mode=handoff_file_mode(), dir_mode=handoff_dir_mode(),
     )
-
-
-def ensure_handoff_file_mode(path: Path) -> None:
-    """Re-assert ``handoff_file_mode()`` on a file that already existed --
-    ``secure_mkdir``'s own self-healing posture, applied to the one handoff
-    file that is deliberately *not* rewritten on every daemon start:
-    ``mcp_token`` is reused across restarts, so a token migrated in from a
-    pre-Phase-4 install would keep its old ``0600`` forever and the agent
-    would never be able to read its own credential again. Best-effort and
-    silent on failure, like every other permission fix-up here.
-
-    A no-op on Windows, where there is no mode to re-assert and the
-    equivalent problem is solved a different way: a file *created* in
-    ``handoff/`` inherits that directory's ACL, and a file *moved* there by
-    the migration keeps whatever ACL it had in ``%LOCALAPPDATA%``, so
-    ``scripts/windows_privilege_separation.ps1`` runs ``icacls /reset /t``
-    over the directory once, at enable time, rather than leaving every
-    process to re-derive an inherited ACL it has no way to compute.
-    """
-    if os.name == "nt":  # pragma: no cover -- exercised by the platform-windows job
-        return
-    try:
-        if path.stat().st_mode & 0o7777 != handoff_file_mode():
-            path.chmod(handoff_file_mode())
-    except OSError as exc:  # pragma: no cover -- best effort, same posture as secure_mkdir
-        logger.warning("Could not set permissions on %s: %s", path, exc)
 
 
 def current_user_name() -> str:
@@ -1880,12 +1890,26 @@ def service_group_members(group: str) -> frozenset[str] | None:
 
 
 def owner_membership_pending() -> bool:
-    """Whether this install is separated but the account running this process
-    is still outside its service group -- decision 3's "pending" state.
+    """Whether this install is separated and this process's account is still
+    outside the service group -- decision 3's "pending" state.
 
     False on an unseparated install: there is no group to be outside of, and
     an install with no separation at all is a different problem with a
     different answer (ADR 0003 decision 6's daemon-side gate).
+
+    Through the local-mode-fixes plan's Phase 2 (§2.6), this was also false
+    for any account that was not this install's recorded owner -- a second
+    OS user was refused rather than onboarded, to close a leak (a shared
+    principal, a takeable companion socket) that ADR 0008's Phase 3 has since
+    fixed at its actual source. Now that a second account gets its own
+    isolated principal (``os-<uid>``/``os-<sid>``) instead of the owner's,
+    there is nothing left for an owner-mismatch to protect against here: any
+    service-group member who has not yet joined is "pending" in exactly the
+    sense the owner always was, and ``companion.py``'s own
+    ``_complete_pending_separation()`` completing ``enable --for-user`` on
+    their behalf hands them their own empty principal, never the owner's.
+    See ADR 0008 ("D2: two identities, not one, per install") for the full
+    account of what changed and why.
     """
     state = separation()
     if state is None:
@@ -1900,6 +1924,50 @@ def owner_membership_pending() -> bool:
         return not state.owner_user
     user = current_user_name()
     return not any(accounts_equal(member, user) for member in members)
+
+
+def owner_uid() -> int | None:
+    """The uid of this install's recorded owner (``Separation.owner_user``),
+    or ``None`` if there is none recorded yet, this platform has no uid
+    concept (Windows -- see ``owner_sid()``), or the named account does not
+    exist locally (a marker surviving the account's own removal). ADR 0008's
+    own principal-id mapping: a control-channel peer whose uid equals this
+    one maps to ``LOCAL_PRINCIPAL`` rather than to ``os-<uid>``, so the
+    owner's own existing data stays exactly where it already is. Mirrors
+    ``service_account_uid()``'s own shape, resolving the marker's
+    ``owner_user`` name instead of its ``service_account`` name."""
+    state = separation()
+    if state is None or not state.owner_user or current_platform() == "win32":
+        return None
+    import pwd
+
+    try:
+        return pwd.getpwnam(state.owner_user).pw_uid
+    except KeyError:
+        return None
+
+
+def owner_sid() -> str | None:
+    """Windows' equivalent of ``owner_uid()``: the recorded owner's SID as a
+    string (``S-1-5-21-...``), or ``None`` under the same conditions
+    ``owner_uid()`` returns ``None`` for on POSIX. Used the same way: a
+    control-channel peer whose SID matches this one is ``LOCAL_PRINCIPAL``,
+    not ``os-<sid>``."""
+    state = separation()
+    if state is None or not state.owner_user or current_platform() != "win32":
+        return None
+    return _resolve_owner_sid(state.owner_user)
+
+
+def _resolve_owner_sid(owner_user: str) -> str | None:  # pragma: no cover -- exercised by the platform-windows job
+    from . import windows_acl
+
+    sid = windows_acl.lookup_account_sid(owner_user)
+    if sid is None:
+        return None
+    import win32security
+
+    return win32security.ConvertSidToStringSid(sid)
 
 
 #: Where ``scripts/build_deb.sh`` installs the Linux provisioning script, and
@@ -1994,6 +2062,43 @@ def per_user_command_text(script: Path, user: str) -> str:
     return f"sudo {shlex.quote(str(script))} enable --for-user {shlex.quote(user)}"
 
 
+def _macos_admin_argv(shell_command: str, *, prompt: str | None = None) -> list[str]:
+    """The ``osascript ... with administrator privileges`` argv both macOS
+    elevations share (this module's own ``enable --for-user``, and
+    ``service_control.py``'s ``daemon start/stop/restart``): one system
+    dialog, run against ``shell_command`` exactly as ``shlex.quote()`` built
+    it -- this function adds only AppleScript's own string-literal escaping
+    on top, never re-quotes the command itself.
+
+    ``prompt`` is the dialog's explanatory line. Omitted by default (a bare
+    ``with administrator privileges``, ``_per_user_argv()``'s own long-
+    standing text) because that call already explains itself through
+    ``docs/platform-support.md``'s "group membership" flow; a caller putting
+    a *new* password dialog in front of somebody (a tray click, not a
+    startup check) should pass one, so the system prompt says why it
+    appeared instead of asking cold.
+    """
+    prompt_clause = f" with prompt {_applescript_quoted(prompt)}" if prompt else ""
+    return [
+        _OSASCRIPT, "-e",
+        f"do shell script {_applescript_quoted(shell_command)} with administrator privileges{prompt_clause}",
+    ]
+
+
+def _pkexec_argv(script: Path, *args: str) -> list[str] | None:
+    """``pkexec script *args``, or None where this desktop has no ``pkexec``
+    at all -- the Linux elevation both this module's own ``enable
+    --for-user`` and ``service_control.py``'s ``daemon start/stop/restart``
+    share. None is the reason this returns rather than guessing: a bare
+    ``sudo`` with no askpass in a systemd-started process hangs on a
+    password prompt nobody can see, so every caller here treats a missing
+    ``pkexec`` as "cannot elevate from here", not as a fallback to try."""
+    pkexec = shutil.which("pkexec")
+    if pkexec is None:
+        return None
+    return [pkexec, str(script), *args]
+
+
 def _per_user_argv(script: Path, user: str, transcript: Path) -> list[str] | None:
     """The elevated invocation of ``enable --for-user``, or None where this
     platform has no way to ask for the password from a login session.
@@ -2010,6 +2115,11 @@ def _per_user_argv(script: Path, user: str, transcript: Path) -> list[str] | Non
     last one, and it is the reason this returns rather than guessing: a
     ``sudo`` with no askpass in a systemd-started process hangs on a
     password prompt nobody can see.
+
+    The three argv builders (``_macos_admin_argv``/``_windows_runas_argv``/
+    ``_pkexec_argv``) are shared with ``service_control.py``'s ``daemon
+    start/stop/restart`` (the local-mode-fixes plan's Phase 2) -- this function is only what
+    composes the ``enable --for-user`` command line each of them runs.
     """
     platform = current_platform()
     if platform == "darwin":
@@ -2019,10 +2129,7 @@ def _per_user_argv(script: Path, user: str, transcript: Path) -> list[str] | Non
         # to reach the caller rather than be reported to the human as a
         # completed step they should now log out for.
         command = f"{shlex.quote(str(script))} enable --for-user {shlex.quote(user)}"
-        return [
-            _OSASCRIPT, "-e",
-            f"do shell script {_applescript_quoted(command)} with administrator privileges",
-        ]
+        return _macos_admin_argv(command)
     if platform == "win32":
         # -Verb RunAs is UAC: it re-launches elevated, which is why this
         # cannot simply be the inner argv. -Wait -PassThru so the return code
@@ -2033,10 +2140,7 @@ def _per_user_argv(script: Path, user: str, transcript: Path) -> list[str] | Non
         return _windows_runas_argv(
             script, f"enable -ForUser {_powershell_quoted(user)}", transcript
         )
-    pkexec = shutil.which("pkexec")
-    if pkexec is None:
-        return None
-    return [pkexec, str(script), "enable", "--for-user", user]
+    return _pkexec_argv(script, "enable", "--for-user", user)
 
 
 def complete_per_user_separation(user: str | None = None) -> bool:

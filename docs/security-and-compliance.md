@@ -43,6 +43,12 @@ on the same machine, so a process running as that user can reach everything the 
 on. This section states plainly what that does and does not mean, because the goals listed above
 are otherwise easy to read more broadly than they hold.
 
+On a privilege-separated install with more than one OS account in its service group, this boundary
+now applies **per account**: [ADR 0008](adr/0008-one-principal-per-os-user.md) gives each one its
+own principal, so what follows in this section (a local process reaching everything the approval UI
+depends on) is true of *that account's own* PrivacyFence state, never another account's on the same
+machine. See [Authorization and principal isolation](#authorization-and-principal-isolation).
+
 **On macOS, Linux and Windows every packaged install moves that boundary automatically** — see
 [Privilege separation (macOS, Linux and Windows)](#privilege-separation-macos-linux-and-windows)
 below, which is what [#428](https://github.com/privacyfence/privacyfence/issues/428) Phase 4 builds
@@ -755,11 +761,23 @@ The operational consequence, for an organization that wants the stronger reading
 
 ## Authorization and principal isolation
 
-Local mode has one principal for the daemon instance. Org mode supports multiple principals and maintains user-scoped state under principal-aware paths.
+Org mode supports multiple principals and maintains user-scoped state under principal-aware paths.
+
+Local mode had exactly one principal through ADR 0007. [ADR 0008](adr/0008-one-principal-per-os-user.md)
+gives a privilege-separated install one principal per OS account instead: the account this install
+is provisioned for (its `owner_user`) keeps `LOCAL_PRINCIPAL`'s existing identity and data, and any
+other OS account added to the service group gets its own `os-<uid>`/`os-<sid>` principal — its own
+`/mcp` token (kernel-verified from the local control channel's own peer credentials, never a shared
+file), its own `/approvals` and `/security`, its own audit log, and its own per-user companion-
+channel address. An unseparated install (a dev checkout, or a pip/pipx install with privilege
+separation never turned on) still has exactly one principal, unchanged. See that ADR's own "What
+this phase deliberately does not do" for what a second principal cannot yet do (connect their own
+services; use a personal `/settings` page).
 
 `ConnectorRegistry` creates/caches connector hosts per principal. Service authorization callbacks evict the affected principal's cached connector host so subsequent calls use the updated credentials.
 
-Org approval routes filter/authorize by principal rather than exposing the local-mode all-pending-approvals view across users.
+Org approval routes filter/authorize by principal; local mode's own `/approvals` and `/api/state/stream`
+now do the same, once more than one principal can exist.
 
 ## Approval and policy enforcement
 
@@ -808,6 +826,16 @@ Org mode's OAuth dynamic client registration (DCR) endpoint bounds its own resou
 Org-mode files that cannot be returned inline can be staged as encrypted temporary content and served from an opaque short-lived download token. Staged-link lifetime and inline-size thresholds are configurable and validated.
 
 See [`org-mode-download-delivery.md`](org-mode-download-delivery.md).
+
+## Local file bridge
+
+A privilege-separated local-mode install's daemon runs as its own OS account, with no standing access to the signed-in user's files — the same boundary [Local-mode trust boundary](#local-mode-trust-boundary) and [privilege separation](#privilege-separation-macos-linux-and-windows) describe for everything else. A tool that reads or writes a path the agent named (`drive_upload_file`'s `local_path`, `drive_download_file`'s `destination_dir`, and the equivalent Gmail/Confluence parameters) crosses that boundary through the `.mcpb` shim instead: the shim, which runs as the signed-in user, does the actual filesystem access on the daemon's behalf, over the same bearer-token-authenticated HTTP connection every tool call already uses.
+
+This adds no capability the agent did not already have — the agent and the shim run as the same OS user, so anything the shim reads or writes on the daemon's behalf was always something that process could have reached directly. What it does add is a guard: the shim will only act on a path that appears, verbatim, somewhere in the arguments of the exact tool call it's currently servicing, so a compromised or buggy daemon cannot use the shim as a general file oracle for paths the agent never named. Every upload still passes the ordinary preview/PII-scan/approval gate before its bytes are ever used, and every download still reaches disk only after approval — the bridge changes *how* bytes cross the process boundary, not when a human is asked to approve anything.
+
+Bytes in transit are staged the same way org-mode download staging is (above): per-principal, encrypted at rest, single-use, TTL-bound, with an identical no-oracle 404 for a missing/expired/wrong-principal/already-used token. See [ADR 0007](adr/0007-local-file-bridge.md) for the full wire protocol and the rejected alternatives (a shared transfer directory, granting the service account filesystem ACLs, doing file I/O in the companion) this design was chosen over.
+
+An unseparated install (a dev checkout, or a pip/pipx install that never enabled privilege separation) is unaffected: the daemon is the same OS account as the user there, so every local-mode tool keeps reading and writing local paths directly, exactly as it did before ADR 0007.
 
 ## Audit integrity and forwarding
 

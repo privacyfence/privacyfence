@@ -83,7 +83,9 @@ body {
 .pf-shell-live-dot.reconnecting { background: #d9a520; }
 .pf-shell-live-dot.down { background: var(--color-danger); }
 /* Who this queue belongs to -- org mode only (see wrap's principal_label);
-   local mode has exactly one principal and renders nothing here. */
+   local mode doesn't render one here, even on a separated install with more
+   than one OS-user principal (ADR 0008) -- each one's own page already only
+   ever shows their own queue, it just doesn't caption whose it is. */
 .pf-shell-principal {
   font-size: 12px; color: var(--color-neutral-700); white-space: nowrap;
   padding-left: 10px; border-left: 1px solid var(--color-divider);

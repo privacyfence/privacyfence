@@ -303,6 +303,13 @@ the daemon running — it refuses to serve once it finds no marker). Worth readi
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
 before you run it by hand — the migration moves live connector tokens.
 
+**Downloading or uploading a file may prompt "Claude would like to access files in your
+Downloads folder"** the first time a tool saves or reads something outside its own working
+directory. This is macOS's normal per-app file-access permission (TCC), attributed to Claude
+because the `.mcpb` extension that actually reads/writes the file runs as a child process of
+Claude.app — see [Local file bridge](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#local-file-bridge).
+Approve it once and it won't ask again for that folder.
+
 ### Install on Windows
 
 1. Download the latest `PrivacyFence-<version>-setup.exe` from [privacyfence.eu/download](https://privacyfence.eu/download/).

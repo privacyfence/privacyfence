@@ -67,7 +67,7 @@ class _OrgVerifier(TokenVerifier):
     """Stands in for web/oauth_provider.py's OrgOAuthProvider: mints a token
     carrying a real ``subject``, which is what makes
     mcp_auth.principal_from_access_token resolve a signed-in human rather
-    than LOCAL_PRINCIPAL. Local mode's StaticTokenVerifier never sets one."""
+    than LOCAL_PRINCIPAL. Local mode's PerUserTokenVerifier sets it to LOCAL_PRINCIPAL.id by default."""
 
     def __init__(self, principal_id: str) -> None:
         self._principal_id = principal_id
@@ -88,7 +88,7 @@ async def _connected_session(
     ClientSession against it -- the happy-path fixture every wire-level test
     below starts from.
 
-    ``verifier`` swaps local mode's StaticTokenVerifier for an org-mode one
+    ``verifier`` swaps local mode's PerUserTokenVerifier for an org-mode one
     (see _OrgVerifier), so a test can drive this surface as a signed-in
     human rather than as LOCAL_PRINCIPAL."""
     if verifier is not None:
@@ -491,6 +491,31 @@ class TestMetaTools:
         assert result.is_error is False
         assert result.structured_content["mode"] == "local"
         assert result.structured_content["setup_complete"] is True
+
+    async def test_create_upload_slot_round_trips(self, tmp_path, monkeypatch):
+        # Phase 4: privacyfence_create_upload_slot mints a real
+        # UploadStagingStore slot for the principal this session resolved
+        # to (LOCAL_PRINCIPAL, same as every other meta-tool test here) and
+        # returns a capability URL built from *this request's* own base
+        # URL -- see local_files.build_upload_slot.
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            result = await session.call_tool(
+                "privacyfence_create_upload_slot", {"filename": "report.pdf", "reason": "attach a file"},
+            )
+        assert result.is_error is False
+        content = result.structured_content
+        assert content["method"] == "PUT"
+        assert content["upload_url"] == f"http://testserver/mcp-files/slots/{content['upload_id']}"
+        assert content["upload_id"] in content["example"]
+
+    async def test_create_upload_slot_is_listed_in_the_tool_manifest(self):
+        dispatcher = _dispatcher({})
+        async with _connected_session(dispatcher) as session:
+            tools = await session.list_tools()
+        assert "privacyfence_create_upload_slot" in {t.name for t in tools.tools}
 
     async def test_await_approval_round_trips_to_the_registry(self):
         # P3: privacyfence_await_approval, reaching the same registry a real

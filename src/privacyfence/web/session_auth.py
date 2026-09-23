@@ -60,6 +60,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
 from .. import paths, privilege_separation
+from ..principal import LOCAL_PRINCIPAL_ID
 
 SESSION_COOKIE = "pf_session"
 BOOTSTRAP_QUERY_PARAM = "bootstrap"
@@ -124,15 +125,26 @@ class _Session:
     created_at: float
     last_seen_at: float
     provenance: str = PROVENANCE_UNATTESTED
+    # ADR 0008: which OS-user principal this session belongs to, resolved
+    # from the control channel's own peer credentials at mint time
+    # (web/control_channel.py's MINT/MINT COMPANION/MINT CONSOLE). Defaults
+    # to LOCAL_PRINCIPAL_ID -- the safe answer for a caller that predates
+    # this field (an old daemon build's own in-process test, this module's
+    # existing single-principal tests) is "the one principal local mode has
+    # always had", not "unknown".
+    principal_id: str = LOCAL_PRINCIPAL_ID
 
 
 class LocalSessionStore:
     """Server-side session store backing the local-mode ``pf_session``
     cookie (SEC-06) -- the direct local-mode counterpart of
-    web/org_session.py's ``OrgSessionStore``, minus the ``Principal`` each
-    org session carries (local mode has exactly one identity, the same
-    ``LOCAL_PRINCIPAL`` it always resolves to; see web/server.py's
-    ``_default_principal``)."""
+    web/org_session.py's ``OrgSessionStore``. Through ADR 0008 this
+    docstring said it carried no ``Principal`` at all, because local mode
+    had exactly one identity; now that a separated install can have one
+    principal per OS user (``os-<uid>``/``os-<sid>``, or ``LOCAL_PRINCIPAL``
+    for the install's owner), each session remembers which one minted it --
+    see ``_Session.principal_id`` and web/server.py's ``_PrincipalScopeMiddleware``,
+    which is what reads it back."""
 
     def __init__(
         self,
@@ -145,17 +157,19 @@ class LocalSessionStore:
         self._lock = threading.Lock()
         self._sessions: dict[str, _Session] = {}
 
-    def create(self, *, provenance: str = PROVENANCE_UNATTESTED) -> str:
+    def create(self, *, provenance: str = PROVENANCE_UNATTESTED, principal_id: str = LOCAL_PRINCIPAL_ID) -> str:
         """``provenance`` defaults to ``unattested`` on purpose: the safe
         answer to "how did this session get here" is "I cannot say", and a
         caller that *can* say (web/server.py's ``_BootstrapMiddleware``,
         passing through whatever the consumed code carried) says so
-        explicitly."""
+        explicitly. ``principal_id`` is the same story, one dimension over
+        (ADR 0008): the safe default is the one principal every session
+        resolved to before this field existed."""
         session_id = secrets.token_urlsafe(32)
         now = time.time()
         with self._lock:
             self._sessions[session_id] = _Session(
-                created_at=now, last_seen_at=now, provenance=provenance,
+                created_at=now, last_seen_at=now, provenance=provenance, principal_id=principal_id,
             )
         return session_id
 
@@ -190,6 +204,15 @@ class LocalSessionStore:
             session = self._sessions.get(session_id)
             return None if session is None else session.provenance
 
+    def principal_id(self, session_id: str) -> str | None:
+        """Which principal ``session_id`` belongs to (ADR 0008), or ``None``
+        if there is no such session -- same non-renewing posture as
+        ``provenance()``, and the same caller (web/server.py's
+        ``_PrincipalScopeMiddleware``)."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            return None if session is None else session.principal_id
+
     def destroy(self, session_id: str) -> None:
         with self._lock:
             self._sessions.pop(session_id, None)
@@ -210,35 +233,36 @@ class BootstrapStore:
     def __init__(self, *, ttl_seconds: float = BOOTSTRAP_TTL_SECONDS) -> None:
         self._ttl_seconds = ttl_seconds
         self._lock = threading.Lock()
-        self._codes: dict[str, tuple[float, str]] = {}  # code -> (expires_at, provenance)
+        # code -> (expires_at, provenance, principal_id)
+        self._codes: dict[str, tuple[float, str, str]] = {}
 
-    def mint(self, *, provenance: str = PROVENANCE_UNATTESTED) -> str:
+    def mint(self, *, provenance: str = PROVENANCE_UNATTESTED, principal_id: str = LOCAL_PRINCIPAL_ID) -> str:
         """``provenance`` travels with the code and lands on the session it
         exchanges for -- the mint is the only moment anything knows how this
         credential came to exist, so recording it anywhere later would be
         guesswork. Same defaults-to-``unattested`` reasoning as
-        ``LocalSessionStore.create()``."""
+        ``LocalSessionStore.create()``. ``principal_id`` (ADR 0008) is the
+        same story: the control channel is the only place that ever learns
+        which OS user asked, and it is gone the moment this code is minted."""
         code = secrets.token_urlsafe(32)
         with self._lock:
-            self._codes[code] = (time.time() + self._ttl_seconds, provenance)
+            self._codes[code] = (time.time() + self._ttl_seconds, provenance, principal_id)
         return code
 
-    def consume(self, code: str) -> str | None:
-        """The provenance ``code`` was minted with iff it was live and
-        unexpired, else ``None`` -- always removes it first, so presenting it
-        again (a slow double-click, a replayed request, an attacker who
-        intercepted it after the fact) never gets a second attempt,
-        successful exchange or not. Returns the provenance rather than a bare
-        ``True`` because the caller's next act is creating the session that
-        inherits it, and every value this can return is truthy."""
+    def consume(self, code: str) -> tuple[str, str] | None:
+        """The ``(provenance, principal_id)`` ``code`` was minted with iff it
+        was live and unexpired, else ``None`` -- always removes it first, so
+        presenting it again (a slow double-click, a replayed request, an
+        attacker who intercepted it after the fact) never gets a second
+        attempt, successful exchange or not."""
         if not code:
             return None
         with self._lock:
             entry = self._codes.pop(code, None)
         if entry is None:
             return None
-        expires_at, provenance = entry
-        return provenance if expires_at >= time.time() else None
+        expires_at, provenance, principal_id = entry
+        return (provenance, principal_id) if expires_at >= time.time() else None
 
 
 def authenticated(request: Request, sessions: LocalSessionStore) -> bool:

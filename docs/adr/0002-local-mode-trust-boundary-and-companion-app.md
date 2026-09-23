@@ -43,12 +43,14 @@ the path a macOS download leads to rather than an alternative to one. D1's own r
 unchanged and still reached by an install that bypassed the installer, which can still decline it.
 See `docs/platform-support.md`'s "`.pkg` installer (#428 D2)" section and `CHANGELOG.md`.
 
-**Superseded in part by [ADR 0003](0003-separated-installs-only.md), 2026-09-18.** Decisions 1–4
-and 6 stand unchanged and are what ADR 0003 enforces. What it withdraws is decision 5a's answer —
-"two install tiers", the non-elevated Windows per-user path kept — and, with it, the premise every
-"opt-in"/"default-on but declinable" wording below rests on: separation stops being something an
-install may be without. The macOS DMG and D1's declinable first-start prompt go with it; see
-ADR 0003 decisions 2 and 6.
+**Amended by [ADR 0026](0026-the-companion-manages-the-daemon-through-the-service-manager.md)
+and [ADR 0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md), 2026-09-23
+([#609](https://github.com/privacyfence/privacyfence/pull/609)).** Decision 2's scope grows a daemon
+status line and Start/Restart/Stop through the platform's service manager (0026), and `handoff/`
+gains a sticky bit plus an owner check against companion-socket takeover (0027). Decisions 3 and 4
+are unchanged. The interim one-owner guard shipped in the same change is superseded by
+[ADR 0008](0008-one-principal-per-os-user.md), which also amends decision 6's reach to one
+principal per OS user.
 
 ## Context
 
@@ -112,6 +114,11 @@ Scope, deliberately minimal:
 - it opens URLs in the user's browser on behalf of the daemon (see constraint 5 below).
 
 That is the whole product surface. It renders no PrivacyFence content of its own.
+
+**Amendment (2026-09-23), recorded separately:** the daemon status line and Start/Restart/Stop are
+[ADR 0026](0026-the-companion-manages-the-daemon-through-the-service-manager.md); the
+companion-socket takeover fix is
+[ADR 0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md).
 
 ### 3. It is not a return to the native approval UI
 

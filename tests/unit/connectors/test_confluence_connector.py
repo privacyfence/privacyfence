@@ -543,6 +543,52 @@ class TestDownloadAttachment:
         assert result == {"path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 1024}
 
 
+class TestFileBridgeDownloadAttachment:
+    """ADR 0007: local mode, but privilege separation prevents a direct
+    write -- confluence_download_attachment must route through
+    local_files.deliver_file() instead of ConfluenceClient.
+    save_attachment_bytes/download_attachment, fetching the full
+    attachment when nothing was already prefetched for the PII scan."""
+
+    def _attachment(self, **overrides):
+        defaults = dict(
+            name="report.pdf", media_type="application/octet-stream", size=1024, attachment_id="att-1",
+        )
+        defaults.update(overrides)
+        return ConfluenceAttachment(**defaults)
+
+    @pytest.fixture(autouse=True)
+    def _isolated_data_dir(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    @pytest.fixture(autouse=True)
+    def _force_bridge(self):
+        from privacyfence import local_files
+        local_files.force_bridge_for_tests(True)
+        yield
+        local_files.force_bridge_for_tests(False)
+
+    async def test_fetches_full_bytes_when_nothing_was_prefetched(self, gated_call_spy):
+        from privacyfence import local_files
+
+        connector, client = make_connector()
+        client.get_page.return_value = make_page(title="Runbook", space_key="ENG", author="alice@example.com")
+        client.list_attachments.return_value = [self._attachment()]
+        client.fetch_attachment_bytes.return_value = b"the full attachment"
+
+        with local_files.call_context(bridge_available=True, uploads={}):
+            result = await connector.call(
+                "confluence_download_attachment",
+                {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "~/Downloads"},
+            )
+
+        assert result["delivery"] == "client_bridge"
+        client.fetch_attachment_bytes.assert_called_once_with("p1", "att-1")
+        client.download_attachment.assert_not_called()
+        client.save_attachment_bytes.assert_not_called()
+
+
 class TestOrgModeDownloadDelivery:
     """In org mode, confluence_download_attachment never writes to this
     daemon's own disk -- a small attachment's bytes come back inline, a
@@ -560,14 +606,16 @@ class TestOrgModeDownloadDelivery:
         from privacyfence import paths
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
 
-    def _org_connector(self, *, inline_max_bytes=1_000, allow_disk_staging=True, link_ttl_seconds=300.0):
+    def _org_connector(
+        self, *, inline_max_bytes=1_000, allow_disk_staging=True, link_ttl_seconds=300.0, agent_links=True,
+    ):
         from privacyfence.org_mode import DownloadDeliveryConfig
 
         connector, client = make_connector()
         connector.download_mode = "org"
         connector.download_config = DownloadDeliveryConfig(
             inline_max_bytes=inline_max_bytes, allow_disk_staging=allow_disk_staging,
-            link_ttl_seconds=link_ttl_seconds,
+            link_ttl_seconds=link_ttl_seconds, agent_links=agent_links,
         )
         connector.download_base_url = "https://pf.example.com"
         return connector, client
@@ -621,9 +669,26 @@ class TestOrgModeDownloadDelivery:
         )
 
         assert result["delivery"] == "link"
-        assert result["download_url"].startswith("https://pf.example.com/downloads/")
+        # Phase 4: agent_links defaults to True -- the capability route,
+        # not the older cookie-authenticated browser one.
+        assert result["download_url"].startswith("https://pf.example.com/mcp-files/fetch/")
         assert get_download_staging_store().pending_count == 1
         assert gated_call_spy[0]["delivery"] == "staged_link"
+
+    async def test_agent_links_false_keeps_the_browser_link(self, gated_call_spy):
+        connector, client = self._org_connector(inline_max_bytes=10, agent_links=False)
+        client.get_page.return_value = make_page()
+        client.list_attachments.return_value = [self._attachment(size=5000)]
+        client.fetch_attachment_bytes.return_value = b"x" * 5000
+
+        result = await connector.call(
+            "confluence_download_attachment",
+            {"page_id": "p1", "attachment_name": "report.pdf", "destination_dir": "/tmp"},
+        )
+
+        assert result["delivery"] == "link"
+        assert result["download_url"].startswith("https://pf.example.com/downloads/")
+        assert "/mcp-files/" not in result["download_url"]
 
     async def test_oversized_attachment_with_staging_disabled_is_refused_before_any_fetch(self, gated_call_spy):
         connector, client = self._org_connector(inline_max_bytes=10, allow_disk_staging=False)

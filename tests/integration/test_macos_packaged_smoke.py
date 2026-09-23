@@ -227,7 +227,10 @@ CONTROL_SOCKET = HANDOFF_DIR / "control.sock"
 # for the companion" sections for what they then answer.
 COMPANION_SOCKET = HANDOFF_DIR / "companion.sock"
 SEPARATED_SETTINGS_PATH = AUTHORITY_DIR / "config" / "settings.yaml"
-SEPARATED_MCP_TOKEN_PATH = HANDOFF_DIR / MCP_TOKEN_FILE_NAME
+# ADR 0008 D3: the owner's own mcp_token moved to AUTHORITY_DIR, not
+# HANDOFF_DIR -- see this module's own CONTROL_SOCKET comment above for why
+# those two directories differ in who can reach them.
+SEPARATED_MCP_TOKEN_PATH = AUTHORITY_DIR / MCP_TOKEN_FILE_NAME
 SEPARATED_WEB_BASE_URL_PATH = HANDOFF_DIR / "web_base_url"
 PRIVILEGE_SEPARATION_MARKER = MACOS_SYSTEM_ROOT / "privilege-separation.json"
 

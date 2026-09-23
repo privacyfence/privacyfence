@@ -34,6 +34,12 @@ scripts/linux_privilege_separation.sh usr/sbin/
 installer/linux/privacyfence-daemon.service.tmpl usr/share/privacyfence/installer/linux/
 installer/linux/privacyfence-companion.desktop.tmpl usr/share/privacyfence/installer/linux/
 
+# #428 Phase 2: the polkit action that lets the companion's tray menu run
+# `daemon start`/`stop`/`restart` elevated via pkexec, with one
+# authentication prompt, instead of asking a human to open a terminal --
+# see the policy file's own comment for the trust reasoning.
+installer/linux/eu.privacyfence.daemon-control.policy usr/share/polkit-1/actions/
+
 # Icon-theme locations, referenced by name (Icon=privacyfence) rather than absolute path from the
 # .desktop entry above.
 src/privacyfence/resources/icon_512.png usr/share/icons/hicolor/512x512/apps/privacyfence.png

@@ -1697,6 +1697,32 @@ class DriveClient:
             media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
             size_bytes = len(data)
 
+        return self._create_with_media(media, resolved_name, mime_type, size_bytes, parent_folder_id)
+
+    def upload_file_bytes(self, data: bytes, name: str, parent_folder_id: str = "") -> dict:
+        """The local file bridge's own upload entry point (ADR 0007): same
+        ``MediaIoBaseUpload`` path ``upload_file``'s own ``content_base64``
+        branch already uses, but from bytes the daemon already holds (
+        claimed from ``upload_staging.UploadStagingStore`` -- see
+        connectors/drive.py's ``_upload_file``) rather than a base64 string
+        decoded from an MCP argument. A privilege-separated daemon cannot
+        pass ``local_path`` to ``MediaFileUpload`` at all -- it cannot read
+        the user's filesystem -- so this is what ``local_path`` uploads
+        route through once the shim has read the bytes on the daemon's
+        behalf.
+        """
+        from googleapiclient.http import MediaIoBaseUpload
+
+        resolved_name = name.strip()
+        if not resolved_name:
+            raise DriveClientError("upload_file_bytes: name is required")
+        mime_type = mimetypes.guess_type(resolved_name)[0] or "application/octet-stream"
+        media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime_type, resumable=True)
+        return self._create_with_media(media, resolved_name, mime_type, len(data), parent_folder_id)
+
+    def _create_with_media(
+        self, media: Any, resolved_name: str, mime_type: str, size_bytes: int, parent_folder_id: str,
+    ) -> dict:
         body: dict = {"name": resolved_name}
         if parent_folder_id:
             body["parents"] = [parent_folder_id]

@@ -93,4 +93,92 @@ describe("main() end-to-end orchestration", () => {
   // has the same gap for the same reason: real production startup should
   // never be racing a fake findCmd), so exercising the launch path here
   // would spawn a real process instead of a fake one.
+
+  // ADR 0008 D3: getMcpToken()'s two paths, exercised end to end through a
+  // real proxied session rather than by calling that helper directly, so a
+  // regression in main()'s own wiring (e.g. reading mcpTokenFile before
+  // even trying the mint) would show up here the same way it would in
+  // production.
+  it("uses a token from a successful mint, and never reads the token file at all", async () => {
+    const { mcpUrlFile, writeUrl, cleanup } = makeTempMcpFiles();
+    const mintedToken = "minted-over-the-control-channel";
+    const daemon = new FakeMcpDaemon(mintedToken);
+    const url = await daemon.start();
+    writeUrl(url);
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    let resolveDisconnect: () => void = () => {};
+    const waitForDisconnect = () => new Promise<void>((resolve) => (resolveDisconnect = resolve));
+
+    const mainPromise = main([], {
+      mcpUrlFile,
+      // A path nothing will ever write to -- readMcpToken() throws ENOENT
+      // if main() reads it, which is exactly the regression this test
+      // exists to catch.
+      mcpTokenFile: "/definitely/does/not/exist/mcp_token",
+      mintMcpToken: async () => mintedToken,
+      transport: serverTransport,
+      waitForDisconnect,
+    });
+
+    const client = new Client({ name: "index-test-client-mint", version: "1.0.0" });
+    await client.connect(clientTransport);
+    const { tools } = await client.listTools();
+    assert.deepEqual(tools.map((t) => t.name), ["shim_test_echo"]);
+
+    assert.ok(daemon.receivedAuthHeaders.length > 0);
+    for (const header of daemon.receivedAuthHeaders) {
+      assert.equal(header, `Bearer ${mintedToken}`);
+    }
+
+    await client.close();
+    resolveDisconnect();
+    await mainPromise;
+
+    await daemon.stop();
+    cleanup();
+  });
+
+  it("falls back to the legacy token file when the mint fails, exactly like today's behavior", async () => {
+    const { mcpUrlFile, mcpTokenFile, writeUrl, token, cleanup } = makeTempMcpFiles();
+    const daemon = new FakeMcpDaemon(token);
+    const url = await daemon.start();
+    writeUrl(url);
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    let resolveDisconnect: () => void = () => {};
+    const waitForDisconnect = () => new Promise<void>((resolve) => (resolveDisconnect = resolve));
+
+    const mainPromise = main([], {
+      mcpUrlFile,
+      mcpTokenFile,
+      // Stands in for both failure shapes controlChannel.ts can raise (a
+      // plain connection error and a ControlChannelError) -- getMcpToken()
+      // treats them identically, so one rejection is enough to exercise the
+      // fallback branch; the real mintMcpToken()'s own two-shape distinction
+      // is controlChannel.test.ts's job, not this one's.
+      mintMcpToken: async () => {
+        throw new Error("no daemon control channel in this test sandbox");
+      },
+      transport: serverTransport,
+      waitForDisconnect,
+    });
+
+    const client = new Client({ name: "index-test-client-fallback", version: "1.0.0" });
+    await client.connect(clientTransport);
+    const { tools } = await client.listTools();
+    assert.deepEqual(tools.map((t) => t.name), ["shim_test_echo"]);
+
+    assert.ok(daemon.receivedAuthHeaders.length > 0);
+    for (const header of daemon.receivedAuthHeaders) {
+      assert.equal(header, `Bearer ${token}`);
+    }
+
+    await client.close();
+    resolveDisconnect();
+    await mainPromise;
+
+    await daemon.stop();
+    cleanup();
+  });
 });

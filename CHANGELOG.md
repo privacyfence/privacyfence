@@ -43,6 +43,98 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The companion app (the menu-bar/tray icon on macOS and Windows; Applications-menu entries on
+  Linux) now shows the local-mode daemon's own run state — a live status line
+  (running/starting/stopped/failed/not responding) polled every few seconds — and can Start,
+  Restart or Stop it directly, each with a real, platform-native administrator prompt (no standing
+  grant). See
+  [ADR 0026](docs/adr/0026-the-companion-manages-the-daemon-through-the-service-manager.md).
+- `privacyfence-app --print-mcp-token`: prints this OS account's own MCP bearer token (minting one
+  on first use), for a direct HTTP MCP client with no PrivacyFence extension of its own — see
+  [ADR 0008](docs/adr/0008-one-principal-per-os-user.md).
+- A new `privacyfence_create_upload_slot` tool lets a client with no `.mcpb` extension — Claude
+  Code, org mode, or any other direct HTTP MCP client — upload a local file: it returns a URL to
+  `PUT` the file's bytes to directly (no `Authorization` header needed), and the `upload_id` it
+  hands back can then be passed to `drive_upload_file`'s new `upload_id` parameter or as an
+  `"upload:<upload_id>"` entry in the `gmail_*_with_attachments` tools' `attachments` array. Org
+  mode's own staged downloads (`drive_download_file`/`gmail_download_attachment`/
+  `confluence_download_attachment`, once too large to return inline) now use the same kind of
+  capability link by default instead of a cookie-authenticated one meant for a human's browser —
+  configurable via `org_config.json`'s new `download_delivery.agent_links`. See
+  [ADR 0028](docs/adr/0028-clients-without-the-shim-get-capability-urls.md).
+
+### Fixed
+
+- `scripts/qa_authenticate_connectors.py --org-config <path>` no longer crashes with
+  `shutil.SameFileError` when `<path>` already resolves to `org/org_config.json` (e.g. re-running
+  the command with the default install location) — it now recognizes the bundle is already
+  installed and skips the backup-and-copy instead of trying to copy the file onto itself.
+- `daemon_main.py` (and anything invoking it, e.g. `scripts/qa_authenticate_connectors.py`) no
+  longer crashes with an unhandled `PermissionError` on a machine that has #428 Phase 4 privilege
+  separation enabled system-wide, even when the invocation passes its own explicit `--config` and
+  never needed the (unusable) system-root default in the first place. `paths.py`'s legacy-file
+  migration now logs and continues on a permission error from the destination's own `.exists()`
+  check, the same as it already did for a failed `rename`.
+- The Slack/Salesforce/Atlassian browser sign-in flow (`oauth_loopback.py`'s `run_browser_oauth()`,
+  used by their `--*-oauth` CLI flags and the local-mode settings UI) no longer aborts outright on
+  a host that can't auto-launch a browser (e.g. a headless SSH session with no `DISPLAY`) — it now
+  always prints the authorize URL up front and keeps its local callback listener running and
+  waiting, the same as when a browser does open, so a person can still complete sign-in by visiting
+  that URL manually (typically through an SSH tunnel or SOCKS proxy). Previously it raised and tore
+  the listener down in the same breath as telling the person to "visit manually," which made that
+  instruction impossible to follow; Google's connectors (via `google-auth-oauthlib`) already
+  behaved this way and were unaffected.
+- A privilege-separated macOS install's daemon could be left unloaded after a `.pkg` upgrade, with
+  no visible symptom (a `launchctl bootstrap`/`bootout` race). `enable` and the installer's own
+  `postinstall` script now retry the bootstrap with backoff and verify the daemon actually came up
+  before reporting success; the companion's new Start button (above) is the recovery path when it
+  still doesn't.
+- The Windows installer now stops the running `PrivacyFence` service and companion before copying
+  files on an upgrade, instead of leaving files it may still have open locked against overwrite.
+- Downloads and uploads (Drive, Gmail attachments, Confluence attachments) work again from Claude
+  Desktop on a privilege-separated local-mode install: a new local file bridge routes local file
+  access through the `.mcpb` shim instead of the daemon's own (inaccessible) filesystem view. The
+  `.mcpb` extension must be reinstalled/updated in Claude Desktop for this to take effect — see
+  [ADR 0007](docs/adr/0007-local-file-bridge.md).
+- Connector errors about a local path (a missing file, an unwritable destination) now reach Claude
+  directly instead of a generic "Tool call failed" message.
+- A failed tool call is no longer replayed from the dedupe cache for the rest of its 30-second
+  window; a call that staged a file-bridge download is never replayed either, since its download
+  token is single-use.
+- `drive_upload_file`'s approval preview no longer shows a file as 0 bytes when the daemon
+  couldn't actually read it — the file is now read (or its absence reported) before the human is
+  asked to approve anything.
+- `drive_download_file`'s pre-approval PII scan no longer throws (and skips scanning) on a PDF
+  over 100KB; files up to 5MB are now scanned from their full content instead of a truncated
+  prefix pypdf can't parse.
+
+### Security
+
+- The bespoke-settings-route classification guard (`routes_settings.build_routes()` — every
+  non-dispatcher POST route must be listed as sensitive or explicitly exempt, see
+  [ADR 0014](docs/adr/0014-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md)) is
+  now an explicit `raise RuntimeError(...)` instead of a plain `assert`. Python strips `assert`
+  under `python -O`/`PYTHONOPTIMIZE`, which would have let a daemon started that way mount an
+  unclassified route without the `_SENSITIVE_ACTIONS`-shaped gating the guard exists to enforce;
+  nothing shipped today is known to run with `-O`, but nothing prevented it either.
+- **A second OS user added to a privilege-separated install's service group now gets their own
+  isolated PrivacyFence identity, not the owner's.** Before this, every `/mcp` caller on such a
+  machine — any account's Claude Desktop, Claude Code, or other MCP client — resolved to the same
+  single principal and could reach the owner's Gmail/Drive/Slack access, policy, audit log and
+  approvals. The daemon now learns which OS account is calling from the kernel's own peer
+  credentials on the local control channel (`SO_PEERCRED`/`LOCAL_PEERCRED`/the named-pipe client's
+  token) and mints each account its own MCP token (`MINT MCP`/`ROTATE MCP`, replacing the one
+  shared `mcp_token` file, which is now removed on a separated install's startup), its own
+  `/approvals` and `/security` (passkey/recovery), and its own per-user companion-channel address
+  (`companion-<uid>.sock`, replacing the single machine-wide `companion.sock`). A new account
+  starts with the packaged default policy and no connectors configured — connecting their own
+  services, and a personal `/settings` page, are follow-up work, not part of this fix. This
+  supersedes the interim guard from the previous release (which only refused a non-owner account
+  outright); `enable --for-user` for a second account is unconditional again. See
+  [ADR 0008](docs/adr/0008-one-principal-per-os-user.md).
+
 ## [4.1.5] — 2026-09-21
 
 *Supersedes 4.1.4 and 4.1.3, neither of which was ever published. 4.1.3's release build stopped

@@ -114,6 +114,9 @@ def install_org_config(source: Path) -> None:
     if not source.is_file():
         raise FileNotFoundError(f"--org-config path does not exist: {source}")
     DEFAULT_ORG_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if DEFAULT_ORG_CONFIG_PATH.exists() and source.resolve() == DEFAULT_ORG_CONFIG_PATH.resolve():
+        print(f"{source} is already installed as {DEFAULT_ORG_CONFIG_PATH} -- nothing to do.")
+        return
     if DEFAULT_ORG_CONFIG_PATH.exists():
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = DEFAULT_ORG_CONFIG_PATH.with_name(f"org_config.json.bak.{stamp}")

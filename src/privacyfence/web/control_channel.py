@@ -122,8 +122,11 @@ holds here.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
+import json
 import logging
+import os
 import re
 import secrets
 import socket
@@ -133,10 +136,11 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from .. import paths, privilege_separation
+from ..principal import LOCAL_PRINCIPAL_ID, Principal, current_principal, principal_scope
 from . import session_auth
 from .session_auth import BootstrapStore
 
@@ -242,7 +246,19 @@ def windows_pipe_name() -> str:
     return pipe_name_for(paths.data_dir())
 
 
-def companion_socket_path_under(data_dir: Path) -> Path:
+def _companion_address_suffix(principal_id: str) -> str:
+    """ADR 0008: the owner's own companion address is unchanged --
+    unsuffixed, exactly as it always was, so an existing single-user
+    install's address never moves. Every other principal (``os-<uid>``/
+    ``os-<sid>``) gets its own address, suffixed by the bare uid/SID with
+    the ``os-`` prefix stripped (the address only has to be unique per OS
+    account; it does not need to carry the full principal-id spelling)."""
+    if principal_id == LOCAL_PRINCIPAL_ID:
+        return ""
+    return f"-{principal_id.removeprefix('os-')}"
+
+
+def companion_socket_path_under(data_dir: Path, principal_id: str = LOCAL_PRINCIPAL_ID) -> Path:
     """The companion channel's own equivalent of ``socket_path_under()`` --
     same fallback-when-too-long-for-AF_UNIX logic, a different file name so
     it can never collide with the daemon's own ``control.sock``. Rooted
@@ -255,25 +271,32 @@ def companion_socket_path_under(data_dir: Path) -> Path:
     ``companion_socket_path()``), which *is* ``data_dir()`` on an ordinary
     install and the user-reachable subdirectory of it on a separated one --
     where the companion, running as the logged-in human, could not create a
-    socket under the service-account-owned root at all."""
-    preferred = data_dir / COMPANION_SOCKET_FILE_NAME
+    socket under the service-account-owned root at all.
+
+    ``principal_id`` (ADR 0008) picks which principal's own address this
+    resolves to -- see ``_companion_address_suffix()``. ``handoff/``'s own
+    sticky bit (the local-mode-fixes plan's Phase 2 §2.6) keeps doing its
+    job unmodified here: it stops any other group member from unlinking a
+    socket they do not own, exactly as much with several legitimate
+    companions as with one."""
+    preferred = data_dir / f"companion{_companion_address_suffix(principal_id)}.sock"
     if len(str(preferred).encode(_ENCODING)) < _MAX_SUN_PATH_BYTES:
         return preferred
-    digest = hashlib.sha256(str(preferred.parent).encode(_ENCODING)).hexdigest()[:16]
+    digest = hashlib.sha256(f"{preferred.parent}{_companion_address_suffix(principal_id)}".encode(_ENCODING)).hexdigest()[:16]
     return Path(tempfile.gettempdir()) / f"privacyfence-companion-{digest}.sock"
 
 
-def companion_socket_path() -> Path:
-    return companion_socket_path_under(paths.handoff_dir())
+def companion_socket_path(principal_id: str = LOCAL_PRINCIPAL_ID) -> Path:
+    return companion_socket_path_under(paths.handoff_dir(), principal_id)
 
 
-def companion_pipe_name_for(data_dir: Path) -> str:
+def companion_pipe_name_for(data_dir: Path, principal_id: str = LOCAL_PRINCIPAL_ID) -> str:
     digest = hashlib.sha256(str(data_dir).encode(_ENCODING)).hexdigest()[:16]
-    return f"\\\\.\\pipe\\PrivacyFence-Companion-{digest}"
+    return f"\\\\.\\pipe\\PrivacyFence-Companion-{digest}{_companion_address_suffix(principal_id)}"
 
 
-def companion_pipe_name() -> str:
-    return companion_pipe_name_for(paths.data_dir())
+def companion_pipe_name(principal_id: str = LOCAL_PRINCIPAL_ID) -> str:
+    return companion_pipe_name_for(paths.data_dir(), principal_id)
 
 
 # The decision every mint is recorded under (audit_log.py's own vocabulary
@@ -330,15 +353,19 @@ def _handle_daemon_request(
     reissue_recovery_code: Callable[[], tuple[bool, str]] | None = None,
     confirm_companion_mint: Callable[[str], bool] | None = None,
     confirm_console_mint: Callable[[], tuple[bool, str]] | None = None,
+    status: Callable[[], str] | None = None,
+    mint_mcp_token: Callable[[bool], str] | None = None,
 ) -> str:
-    """``enrollment_state``/``reissue_recovery_code`` are the daemon's own
-    answers to this channel's two Phase 1 commands (module docstring). Both
+    """``enrollment_state``/``reissue_recovery_code``/``status`` are the
+    daemon's own answers to commands this channel did not originally have
+    (module docstring's Phase 1 items, and the local-mode-fixes plan's
+    Phase 2 ``STATUS``). All
     default to ``None`` -- "this install does not offer that" -- because
     every caller that constructs a ``ControlChannelServer`` without a
-    ``StepUpConfig`` behind it (the tests that exercise ``MINT``/``QUIT``
-    alone, and any org-mode path, which has no control channel at all) has
-    nothing to answer them with, and a command that answers ``ERROR`` is a
-    better shape for that than one that raises.
+    ``StepUpConfig``/status callback behind it (the tests that exercise
+    ``MINT``/``QUIT`` alone, and any org-mode path, which has no control
+    channel at all) has nothing to answer them with, and a command that
+    answers ``ERROR`` is a better shape for that than one that raises.
 
     ``confirm_companion_mint``/``confirm_console_mint`` are the two
     call-backs an attested ``MINT`` makes into the companion's own channel
@@ -346,6 +373,15 @@ def _handle_daemon_request(
     which is what they default to). Injectable because the real ones talk to
     another process: a test for this dispatch's own logic should not have to
     stand one up.
+
+    ``mint_mcp_token`` (ADR 0008) backs ``MINT MCP``/``ROTATE MCP`` --
+    ``True`` rotates, ``False`` loads-or-creates -- for whichever principal
+    this call is already scoped to (``_LineProtocolServer._dispatch``'s own
+    ``principal_scope``, entered from this connection's peer credentials
+    before this function is ever called). ``None`` on any caller that has
+    no MCP surface to mint a token for at all (org mode's OAuth 2.1
+    authorization server has an entirely different token story; a bare
+    test of this dispatch's other commands).
     """
     parts = line.strip().split(maxsplit=1)
     command = parts[0].upper() if parts else ""
@@ -361,13 +397,27 @@ def _handle_daemon_request(
         # that may view but not approve. The two attested shapes cost a
         # round trip into the companion process, which is the only
         # PrivacyFence process running where a human can be asked at all.
+        #
+        # ADR 0008: every shape below now also binds the resulting session
+        # to whichever principal this *connection* belongs to (peer
+        # credentials, already entered as this call's own principal_scope)
+        # -- current_principal().id, not a hardcoded LOCAL_PRINCIPAL_ID.
+        # Nothing about *when* a session may approve changes; only *whose*
+        # data it can see once it does.
+        principal_id = current_principal().id
         if not argument:
             _audit_mint(
                 "Issued a sign-in code (unattested -- can view what is pending, cannot release it)",
             )
-            return f"OK {bootstrap.mint(provenance=session_auth.PROVENANCE_UNATTESTED)}\n"
+            code = bootstrap.mint(provenance=session_auth.PROVENANCE_UNATTESTED, principal_id=principal_id)
+            return f"OK {code}\n"
         subcommand, _, subargument = argument.partition(" ")
         subargument = subargument.strip()
+        if subcommand.upper() == "MCP":
+            if mint_mcp_token is None:
+                return "ERROR MCP tokens are not available on this install\n"
+            _audit_mint(f"Issued an MCP token for principal {principal_id!r}")
+            return f"OK {mint_mcp_token(False)}\n"
         if subcommand.upper() == "COMPANION":
             # The companion's own Open Approvals/Open Settings click. The
             # nonce is one the *companion* issued to itself moments ago
@@ -381,7 +431,8 @@ def _handle_daemon_request(
                 _audit_mint("Refused a sign-in code that can approve: the companion did not confirm it")
                 return "ERROR that mint was not confirmed by the companion\n"
             _audit_mint("Issued a sign-in code that can approve (confirmed by the companion app)")
-            return f"OK {bootstrap.mint(provenance=session_auth.PROVENANCE_HUMAN)}\n"
+            code = bootstrap.mint(provenance=session_auth.PROVENANCE_HUMAN, principal_id=principal_id)
+            return f"OK {code}\n"
         if subcommand.upper() == "CONSOLE":
             # `privacyfence-app --print-sign-in-link`, the break-glass path
             # (daemon_main.py). Unlike COMPANION there is no click to point
@@ -405,8 +456,14 @@ def _handle_daemon_request(
                 "Issued a sign-in code that can approve, requested from a terminal "
                 "(privacyfence-app --print-sign-in-link, confirmed at the companion's dialog)",
             )
-            return f"OK {bootstrap.mint(provenance=session_auth.PROVENANCE_HUMAN)}\n"
+            code = bootstrap.mint(provenance=session_auth.PROVENANCE_HUMAN, principal_id=principal_id)
+            return f"OK {code}\n"
         return "ERROR unknown command\n"
+    if command == "ROTATE" and argument.upper() == "MCP":
+        if mint_mcp_token is None:
+            return "ERROR MCP tokens are not available on this install\n"
+        _audit_mint(f"Rotated the MCP token for principal {current_principal().id!r}")
+        return f"OK {mint_mcp_token(True)}\n"
     if command == "ENROLLMENT":
         # Deliberately says nothing about *which* credentials exist, only
         # whether this install is in the one state the companion acts on --
@@ -424,6 +481,19 @@ def _handle_daemon_request(
             return "ERROR recovery codes are not available on this install\n"
         issued, reason = reissue_recovery_code()
         return "OK\n" if issued else f"ERROR {reason}\n"
+    if command == "STATUS":
+        # The local-mode-fixes plan's Phase 2: read-only and safe for any
+        # group member -- no tokens or paths, just
+        # version/pid/mode/connector-configured-ness -- so
+        # unlike every command above it, this one answers unconditionally
+        # rather than gating on ``allow_quit`` or a passkey. What it reports
+        # is what ``daemon_status.probe()`` uses to decide the companion's
+        # tray-menu state; the callback itself (``server.py``) is what
+        # keeps this dispatcher from having to import connector/version
+        # machinery it has no other reason to know about.
+        if status is None:
+            return "ERROR status is not available on this install\n"
+        return f"OK {status()}\n"
     if command == "QUIT":
         if privilege_separation.is_enabled():
             # #428 B4: this socket is 0660 group-shared with the companion
@@ -501,6 +571,159 @@ def _peer_uid_macos(conn: socket.socket) -> int | None:
     if rc != 0:
         return None
     return xucred.cr_uid
+
+
+def _peer_pid_windows(handle) -> int | None:  # noqa: ANN001 -- a pywin32 PyHANDLE, no type stub
+    """The pid of the process on the other end of a connected named pipe --
+    Windows has no ``SO_PEERCRED``, but ``GetNamedPipeClientProcessId``
+    gives the pid, which ``_peer_identity_windows`` below turns into a real
+    identity the same way ``_current_user_security_attributes()`` already
+    does for *this* process's own token. Already logged, diagnostic-only,
+    at ``_serve_one_windows`` -- this is that same call, factored out so
+    ADR 0008's identity resolution can use it for more than a log line."""
+    import pywintypes
+    import win32pipe
+
+    try:
+        return win32pipe.GetNamedPipeClientProcessId(handle)
+    except pywintypes.error:
+        return None
+
+
+@dataclasses.dataclass(frozen=True)
+class OsUser:
+    """An OS account, identified by the kernel rather than self-reported --
+    ADR 0008's own primitive. ``uid`` is a uid (Linux/macOS, as a decimal
+    string) or a SID (Windows, ``S-1-5-21-...``); it is the one field
+    ``principal_id_for_peer()`` below keys anything on. ``name`` is cosmetic
+    (a log line, a ``status`` display), resolved best-effort and never
+    required to succeed."""
+
+    uid: str
+    name: str
+
+
+def peer_identity_posix(conn: socket.socket) -> OsUser | None:
+    """The OS account on the other end of a connected ``AF_UNIX`` socket --
+    ADR 0008's generalization of ``_peer_uid_posix()`` (which
+    ``_verify_companion_peer()`` still uses on its own, narrower question:
+    "is this uid the daemon's own service account"). ``None`` under the
+    same conditions ``_peer_uid_posix()`` returns ``None`` for -- a platform
+    with neither ``SO_PEERCRED`` nor ``LOCAL_PEERCRED``, or the lookup
+    itself failing -- which callers here treat as "cannot vouch for this
+    peer" and resolve to ``LOCAL_PRINCIPAL`` (the safe, byte-identical-to-
+    before answer), never as an error."""
+    uid = _peer_uid_posix(conn)
+    if uid is None:
+        return None
+    return OsUser(uid=str(uid), name=_account_name_posix(uid))
+
+
+def _account_name_posix(uid: int) -> str:
+    import pwd
+
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:  # pragma: no cover -- a uid with no passwd entry
+        return str(uid)
+
+
+def peer_identity_windows(handle) -> OsUser | None:  # noqa: ANN001 -- a pywin32 PyHANDLE, no type stub
+    """The OS account on the other end of a connected named pipe -- ADR
+    0008's Windows counterpart of ``peer_identity_posix()``, and the first
+    thing in this codebase to turn a named-pipe client's pid into a real
+    identity rather than only logging it (see ``_peer_pid_windows()``'s own
+    docstring). ``OpenProcess``/``OpenProcessToken``/``GetTokenInformation``
+    is the same chain ``_current_user_security_attributes()`` already runs
+    against *this* process's own token; here it runs against the peer's.
+    ``None`` for anything that fails along the way (the peer process
+    already exited, insufficient rights to query it, no pywin32) -- same
+    "cannot vouch for this peer" posture as the POSIX half."""
+    pid = _peer_pid_windows(handle)
+    if pid is None:
+        return None
+    try:
+        import pywintypes
+        import win32api
+        import win32con
+        import win32security
+
+        process = win32api.OpenProcess(win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        try:
+            token = win32security.OpenProcessToken(process, win32security.TOKEN_QUERY)
+            sid, _attributes = win32security.GetTokenInformation(token, win32security.TokenUser)
+            sid_string = win32security.ConvertSidToStringSid(sid)
+            try:
+                name, domain, _type = win32security.LookupAccountSid(None, sid)
+                display_name = f"{domain}\\{name}" if domain else name
+            except pywintypes.error:
+                display_name = sid_string
+        finally:
+            win32api.CloseHandle(process)
+    except Exception:  # pragma: no cover -- Windows-only; exercised on a Windows runner
+        logger.debug("Could not resolve the control channel peer's identity (pid %s)", pid, exc_info=True)
+        return None
+    return OsUser(uid=sid_string, name=display_name)
+
+
+def principal_id_for_peer(peer: OsUser | None) -> str:
+    """ADR 0008's principal-id mapping: the account named by this install's
+    marker as its owner keeps ``LOCAL_PRINCIPAL``'s own id (``"local"``),
+    so every byte an existing single-user install already has on disk stays
+    exactly where it is; every other peer maps to ``os-<uid>``/``os-<sid>``.
+
+    Two cases fall back to ``LOCAL_PRINCIPAL_ID`` rather than minting an
+    ``os-<uid>`` principal for a peer that could not really be identified:
+
+    - ``peer is None`` -- the platform has no peer-credential primitive at
+      all, or the lookup itself failed. There is exactly one principal on
+      an install where nothing can distinguish a second one, so this is the
+      safe, byte-identical-to-before answer, not a security hole -- nothing
+      here ever *widens* what a caller can reach based on an identity that
+      could not be confirmed.
+    - ``not privilege_separation.is_enabled()`` -- an unseparated (dev
+      checkout, pip/pipx) install has exactly one principal by construction
+      (ADR 0003's own separated-installs-only reasoning applies to org
+      mode's multi-tenancy, not to this), and there is no marker to read an
+      owner off of regardless.
+    """
+    if peer is None or not privilege_separation.is_enabled():
+        return LOCAL_PRINCIPAL_ID
+    if privilege_separation.current_platform() == "win32":
+        owner = privilege_separation.owner_sid()
+    else:
+        try:
+            owner = str(privilege_separation.owner_uid()) if privilege_separation.owner_uid() is not None else None
+        except ValueError:  # pragma: no cover -- defensive; owner_uid() never raises today
+            owner = None
+    if owner is not None and peer.uid == owner:
+        return LOCAL_PRINCIPAL_ID
+    return f"os-{peer.uid}"
+
+
+def current_os_principal_id() -> str:
+    """This process's *own* OS-user principal id -- what the companion uses
+    to pick which per-user address to bind (``companion_socket_path()``/
+    ``companion_pipe_name()`` below), since the companion is not a
+    request-scoped surface the way the daemon's web app is and never runs
+    inside a ``principal_scope`` of its own. Unlike ``peer_identity_*()``
+    above, this needs no kernel peer-credential trick at all -- a process
+    always knows its own uid/token -- so it goes straight to ``os.geteuid()``
+    (POSIX) or this process's own SID (Windows, the same
+    ``GetTokenInformation(TokenUser)`` call ``_current_user_security_
+    attributes()`` already makes), then the same ``principal_id_for_peer()``
+    mapping every other identity in this module goes through."""
+    if paths.is_windows():
+        import win32api
+        import win32security
+
+        process_token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32security.TOKEN_QUERY)
+        sid, _attributes = win32security.GetTokenInformation(process_token, win32security.TokenUser)
+        peer = OsUser(uid=win32security.ConvertSidToStringSid(sid), name="")
+    else:
+        uid = os.geteuid()
+        peer = OsUser(uid=str(uid), name=_account_name_posix(uid))
+    return principal_id_for_peer(peer)
 
 
 def _verify_companion_peer(conn: socket.socket) -> str | None:
@@ -1046,6 +1269,44 @@ def _handle_companion_request(line: str) -> str:
     return "OK\n" if opened else "ERROR could not open a browser\n"
 
 
+def _existing_socket_owner_problem(sock_path: Path) -> str | None:
+    """None if nothing exists at ``sock_path``, or if it does and this
+    process's own account created it; otherwise a human-readable reason for
+    ``_LineProtocolServer._start_posix()`` to refuse taking it over.
+
+    The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6, one
+    quarter of the "companion socket takeover" fix -- ``HANDOFF_DIR_MODE``'s
+    sticky bit is the filesystem-level half). Before this check, ``_start_posix()``
+    unlinked and rebound whatever was already at this path unconditionally,
+    on the theory that "the caller is the only process that will ever bind
+    here" -- true while daemon, companion and agent are one uid, false the
+    moment a *second* OS user's companion starts on a separated install
+    that already has a first user's ``companion.sock`` sitting there. The
+    daemon's own ``OPEN``/``CONFIRM MINT``/``SHOW RECOVERY`` calls go to
+    whichever companion bound last, so an unauthenticated unlink-and-rebind
+    here is exactly the takeover #428's diagnosis describes: ask for a
+    recovery code, confirm it on your own desktop, and you hold the first
+    user's approval authority. Refusing to steal a socket another account
+    created closes it with nothing more than an ``lstat``.
+
+    Applies equally to ``control.sock`` (the daemon's own channel), where it
+    is a smaller change in practice -- the daemon is always the same service
+    account across restarts -- but costs nothing to check uniformly rather
+    than carve out an exception only the companion's socket needs.
+    """
+    try:
+        st = sock_path.lstat()
+    except OSError:
+        return None
+    this_uid = os.geteuid()
+    if st.st_uid == this_uid:
+        return None
+    return (
+        f"{sock_path} already exists and is owned by uid {st.st_uid}, not this process's own "
+        f"({this_uid}) -- refusing to take it over."
+    )
+
+
 class _LineProtocolServer:
     """Shared POSIX-socket/Windows-named-pipe accept-loop plumbing for a
     request/response, one-line-per-message local IPC server -- what
@@ -1066,6 +1327,7 @@ class _LineProtocolServer:
         pipe_name: Callable[[], str],
         thread_name: str,
         verify_peer: Callable[[socket.socket], str | None] | None = None,
+        scope_by_peer_principal: bool = False,
     ) -> None:
         self._handler = handler
         self._socket_path_fn = socket_path
@@ -1074,6 +1336,14 @@ class _LineProtocolServer:
         # POSIX only (see _serve_one_posix) -- CompanionChannelServer's own
         # #428 B10 gate; None everywhere else (ADR 0002 decision 6).
         self._verify_peer = verify_peer
+        # ADR 0008: ``ControlChannelServer`` only -- every command it
+        # dispatches (``MINT``, ``MINT MCP``, ``STATUS``, ``RECOVERY``, ...)
+        # runs inside the connecting peer's own ``principal_scope``, resolved
+        # from the kernel's own peer credentials. ``CompanionChannelServer``
+        # never sets this: its peer is always the daemon's own service
+        # account relaying an ``OPEN``/``CONFIRM`` call that already carries
+        # no principal-scoped state of its own to get right or wrong.
+        self._scope_by_peer_principal = scope_by_peer_principal
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         # What a client needs to connect: the socket path (POSIX) or pipe
@@ -1106,10 +1376,16 @@ class _LineProtocolServer:
 
     def _start_posix(self) -> None:
         sock_path = self._socket_path_fn()
-        # Any file already at this path is stale: the caller (WebServer or
-        # companion.py, constructed only after their own single-instance
-        # start-up has succeeded) is the only process that will ever bind
-        # here, so nothing legitimate could still be listening on it.
+        problem = _existing_socket_owner_problem(sock_path)
+        if problem is not None:
+            logger.warning("Could not start the %s: %s", self._thread_name, problem)
+            return
+        # Any file already at this path is stale (and, as of the check
+        # above, was left by *this* process's own account): the caller
+        # (WebServer or companion.py, constructed only after their own
+        # single-instance start-up has succeeded) is the only process that
+        # will ever legitimately bind here, so nothing still listening on it
+        # could be a peer this channel means to serve.
         with contextlib.suppress(OSError):
             sock_path.unlink()
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1171,18 +1447,32 @@ class _LineProtocolServer:
         except OSError:
             return
         line = data.decode(_ENCODING, errors="replace")
-        try:
-            response = self._handler(line)
-        except Exception:
-            logger.exception("Control channel request failed")
-            response = "ERROR internal error\n"
+        peer = peer_identity_posix(conn) if self._scope_by_peer_principal else None
+        response = self._dispatch(line, peer)
         with contextlib.suppress(OSError):
             conn.sendall(response.encode(_ENCODING))
+
+    def _dispatch(self, line: str, peer: OsUser | None) -> str:
+        """Runs ``self._handler(line)`` -- inside ``peer``'s own
+        ``principal_scope()`` when this instance was built with
+        ``scope_by_peer_principal=True`` (ADR 0008), unscoped (the default
+        ``LOCAL_PRINCIPAL`` every command dispatched here always ran under
+        before this ADR) otherwise. One body for both transports so
+        ``_serve_one_posix``/``_serve_one_windows`` cannot drift on how the
+        scope is entered or on the ``except Exception`` fallback."""
+        try:
+            if peer is not None:
+                with principal_scope(Principal(id=principal_id_for_peer(peer))):
+                    return self._handler(line)
+            return self._handler(line)
+        except Exception:
+            logger.exception("Control channel request failed")
+            return "ERROR internal error\n"
 
     # -- Windows: a named pipe, ACL'd to the current user ------------------- #
 
     def _start_windows(self) -> None:
-        self.address = self._pipe_name_fn()
+        address = self._pipe_name_fn()
         self._windows_security_attributes = _current_user_security_attributes()
         # Created synchronously, on this (the caller's) thread, before the
         # accept-loop thread even starts -- the same "start() doesn't
@@ -1192,18 +1482,54 @@ class _LineProtocolServer:
         # calling CreateFile/WaitNamedPipe on ``self.address`` right after
         # start() returns could race the background thread's first
         # CreateNamedPipe call and find no instance there yet.
-        first_handle = self._create_windows_pipe_instance()
+        #
+        # The local-mode-fixes plan's interim multi-user guard (Phase 2
+        # §2.6, "companion socket takeover") is why this first instance is
+        # created with FILE_FLAG_FIRST_PIPE_INSTANCE: it is the Windows
+        # counterpart of _existing_socket_owner_problem() on POSIX -- a
+        # process that already holds an instance of this exact pipe name
+        # (a stale one this account's own prior run left behind is normal
+        # and handled below; a *different* account's own companion or
+        # daemon holding one is the takeover this guards against) makes
+        # this CreateNamedPipe fail with ERROR_ACCESS_DENIED instead of
+        # silently becoming a second, indistinguishable instance the OS
+        # load-balances connections across. Refusing loudly here is strictly
+        # better than the POSIX side's own best case: Windows tells us
+        # someone else already holds the name, where POSIX can only compare
+        # uids on a stale *file* after the fact.
+        import pywintypes
+
+        try:
+            first_handle = self._create_windows_pipe_instance(address, first_instance=True)
+        except pywintypes.error as exc:
+            logger.warning(
+                "Could not start the %s: another process already holds a pipe instance named %s "
+                "-- refusing to open a second one under the same name. (%s)",
+                self._thread_name, address, exc,
+            )
+            return
+        self.address = address
         self._thread = threading.Thread(
             target=self._accept_loop_windows, args=(first_handle,), name=self._thread_name, daemon=True,
         )
         self._thread.start()
 
-    def _create_windows_pipe_instance(self):  # noqa: ANN201 -- a pywin32 PyHANDLE, no type stub
+    def _create_windows_pipe_instance(self, address: str | None = None, *, first_instance: bool = False):  # noqa: ANN201 -- a pywin32 PyHANDLE, no type stub
         import win32pipe
 
+        # ``first_instance`` is True only for _start_windows()'s own very
+        # first CreateNamedPipe call (see its own comment on why). Every
+        # instance the accept loop creates afterwards, to keep accepting the
+        # *next* client once this one disconnects, must NOT set the flag --
+        # this process already holds the name by then, and asking Windows
+        # to guarantee "first instance" a second time would fail against
+        # its own prior (legitimate) instance, not just an interloper's.
+        open_mode = win32pipe.PIPE_ACCESS_DUPLEX
+        if first_instance:
+            open_mode |= win32pipe.FILE_FLAG_FIRST_PIPE_INSTANCE
         return win32pipe.CreateNamedPipe(
-            self.address,
-            win32pipe.PIPE_ACCESS_DUPLEX,
+            address if address is not None else self.address,
+            open_mode,
             win32pipe.PIPE_TYPE_MESSAGE | win32pipe.PIPE_READMODE_MESSAGE | win32pipe.PIPE_WAIT,
             win32pipe.PIPE_UNLIMITED_INSTANCES,
             _MAX_MESSAGE_BYTES, _MAX_MESSAGE_BYTES,
@@ -1262,25 +1588,20 @@ class _LineProtocolServer:
     def _serve_one_windows(self, handle) -> None:  # noqa: ANN001 -- a pywin32 PyHANDLE, no type stub
         import pywintypes
         import win32file
-        import win32pipe
 
-        # Diagnostic only -- ADR 0002 decision 6 is explicit that a peer's
-        # pid/uid can never distinguish "the human" from "the agent" while
-        # both run under the same account, so this is logged for whoever
-        # reads the daemon's audit trail later, never checked as an
-        # authorization gate.
-        with contextlib.suppress(Exception):
-            logger.debug("Control channel connection from pid %s", win32pipe.GetNamedPipeClientProcessId(handle))
+        # ADR 0002 decision 6 is still exactly right about what a peer's
+        # pid/uid *cannot* tell apart (the human from the agent, while both
+        # run under the same account) -- what changed under ADR 0008 is that
+        # this channel now also asks a different question this primitive
+        # *can* answer: which of several distinct accounts. See
+        # peer_identity_windows()'s own docstring.
+        peer = peer_identity_windows(handle) if self._scope_by_peer_principal else None
         try:
             _rc, data = win32file.ReadFile(handle, _MAX_MESSAGE_BYTES)
         except pywintypes.error:
             return
         line = data.decode(_ENCODING, errors="replace")
-        try:
-            response = self._handler(line)
-        except Exception:
-            logger.exception("Control channel request failed")
-            response = "ERROR internal error\n"
+        response = self._dispatch(line, peer)
         with contextlib.suppress(pywintypes.error):
             win32file.WriteFile(handle, response.encode(_ENCODING))
 
@@ -1326,16 +1647,23 @@ class ControlChannelServer:
         allow_quit: bool = True,
         enrollment_state: Callable[[], str] | None = None,
         reissue_recovery_code: Callable[[], tuple[bool, str]] | None = None,
+        status: Callable[[], str] | None = None,
+        mint_mcp_token: Callable[[bool], str] | None = None,
     ) -> None:
         self._bootstrap = bootstrap
         self._allow_quit = allow_quit
         self._enrollment_state = enrollment_state
         self._reissue_recovery_code = reissue_recovery_code
+        self._status = status
+        self._mint_mcp_token = mint_mcp_token
         self._impl = _LineProtocolServer(
             handler=self._handle,
             socket_path=posix_socket_path,
             pipe_name=windows_pipe_name,
             thread_name="control-channel",
+            # ADR 0008: every command below is dispatched inside its
+            # connecting peer's own principal_scope.
+            scope_by_peer_principal=True,
         )
 
     def _handle(self, line: str) -> str:
@@ -1343,6 +1671,8 @@ class ControlChannelServer:
             self._bootstrap, allow_quit=self._allow_quit, line=line,
             enrollment_state=self._enrollment_state,
             reissue_recovery_code=self._reissue_recovery_code,
+            status=self._status,
+            mint_mcp_token=self._mint_mcp_token,
         )
 
     @property
@@ -1374,10 +1704,17 @@ class CompanionChannelServer:
     """
 
     def __init__(self) -> None:
+        # ADR 0008: the companion is never itself request-scoped (it is a
+        # standalone process, not a handler running inside the daemon's own
+        # principal_scope), so it resolves which address is *its own* from
+        # its own OS identity (current_os_principal_id()) rather than from
+        # current_principal() -- see that function's own docstring for why
+        # the two are not interchangeable here. The owner's companion binds
+        # exactly the address it always has.
         self._impl = _LineProtocolServer(
             handler=_handle_companion_request,
-            socket_path=companion_socket_path,
-            pipe_name=companion_pipe_name,
+            socket_path=lambda: companion_socket_path(current_os_principal_id()),
+            pipe_name=lambda: companion_pipe_name(current_os_principal_id()),
             thread_name="companion-channel",
             verify_peer=_verify_companion_peer,
         )
@@ -1545,6 +1882,38 @@ def mint_bootstrap_code(*, timeout: float = 5.0) -> str:
     return reply[len("OK "):].strip()
 
 
+def mint_mcp_token(*, timeout: float = 5.0) -> str:
+    """ADR 0008's own client function: this connection's own MCP token,
+    resolved from the kernel's own peer credentials on this connection --
+    the same token this process gets back every time it calls this (load-
+    or-create, not rotate), for as long as it runs as this same OS user.
+    ``privacyfence-app --print-mcp-token`` (daemon_main.py) is the CLI's
+    own use of this; the ``.mcpb`` shim ports the identical wire command
+    directly (``mcpb/shim/src/controlChannel.ts``'s own ``mintMcpToken()``)
+    rather than going through this Python client at all. Raises
+    ``ControlChannelError`` on anything other than a well-formed ``OK
+    <token>`` reply (including this install having no MCP surface to mint
+    one for at all), and ``OSError`` (uncaught) if no daemon is listening.
+    """
+    reply = _send_to_daemon("MINT MCP\n", timeout=timeout)
+    if not reply.startswith("OK "):
+        raise ControlChannelError(_error_reason(reply) or "could not mint an MCP token")
+    return reply[len("OK "):].strip()
+
+
+def rotate_mcp_token(*, timeout: float = 5.0) -> str:
+    """Replaces this connection's own MCP token with a fresh one -- any
+    process still holding the old value (an already-running shim, a static
+    Claude Code config) stops authenticating with it immediately (``web/
+    mcp_auth.py``'s ``PerUserTokenVerifier.unregister()``, called before
+    the new one is registered). Same error contract as ``mint_mcp_token()``.
+    """
+    reply = _send_to_daemon("ROTATE MCP\n", timeout=timeout)
+    if not reply.startswith("OK "):
+        raise ControlChannelError(_error_reason(reply) or "could not rotate the MCP token")
+    return reply[len("OK "):].strip()
+
+
 def mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     """A code that exchanges for a session which may *approve*, not merely
     view (session_auth.py's ``PROVENANCE_HUMAN``) -- what backs the
@@ -1635,9 +2004,9 @@ def request_show(path: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS +
         raise ValueError(f"path must be one of {SHOW_PATHS}, got {path!r}")
     try:
         if paths.is_windows():
-            reply = send_line_windows(companion_pipe_name(), f"SHOW {path}\n", timeout=timeout)
+            reply = send_line_windows(companion_pipe_name(current_principal().id), f"SHOW {path}\n", timeout=timeout)
         else:
-            reply = send_line_posix(companion_socket_path(), f"SHOW {path}\n", timeout=timeout)
+            reply = send_line_posix(companion_socket_path(current_principal().id), f"SHOW {path}\n", timeout=timeout)
     except (OSError, ControlChannelError):
         return False
     return reply.startswith("OK")
@@ -1656,9 +2025,9 @@ def request_mint_attestation(nonce: str, *, timeout: float = 2.0) -> bool:
     trip is already wrong."""
     try:
         if paths.is_windows():
-            reply = send_line_windows(companion_pipe_name(), f"CONFIRM MINT {nonce}\n", timeout=timeout)
+            reply = send_line_windows(companion_pipe_name(current_principal().id), f"CONFIRM MINT {nonce}\n", timeout=timeout)
         else:
-            reply = send_line_posix(companion_socket_path(), f"CONFIRM MINT {nonce}\n", timeout=timeout)
+            reply = send_line_posix(companion_socket_path(current_principal().id), f"CONFIRM MINT {nonce}\n", timeout=timeout)
     except (OSError, ControlChannelError) as exc:
         logger.warning("Could not reach the companion to confirm a mint: %s", exc)
         return False
@@ -1677,9 +2046,9 @@ def request_sign_in_confirmation(
     not this machine's agent asked."""
     try:
         if paths.is_windows():
-            reply = send_line_windows(companion_pipe_name(), "CONFIRM SIGNIN\n", timeout=timeout)
+            reply = send_line_windows(companion_pipe_name(current_principal().id), "CONFIRM SIGNIN\n", timeout=timeout)
         else:
-            reply = send_line_posix(companion_socket_path(), "CONFIRM SIGNIN\n", timeout=timeout)
+            reply = send_line_posix(companion_socket_path(current_principal().id), "CONFIRM SIGNIN\n", timeout=timeout)
     except (OSError, ControlChannelError) as exc:
         logger.warning("Could not reach the companion to confirm a terminal sign-in link: %s", exc)
         return False, (
@@ -1716,9 +2085,9 @@ def request_open_url(url: str, *, timeout: float = 2.0) -> bool:
     missing companion never blocks a connector's OAuth flow."""
     try:
         if paths.is_windows():
-            reply = send_line_windows(companion_pipe_name(), f"OPEN {url}\n", timeout=timeout)
+            reply = send_line_windows(companion_pipe_name(current_principal().id), f"OPEN {url}\n", timeout=timeout)
         else:
-            reply = send_line_posix(companion_socket_path(), f"OPEN {url}\n", timeout=timeout)
+            reply = send_line_posix(companion_socket_path(current_principal().id), f"OPEN {url}\n", timeout=timeout)
     except (OSError, ControlChannelError):
         return False
     return reply.startswith("OK")
@@ -1737,6 +2106,32 @@ def enrollment_state(*, timeout: float = 5.0) -> str:
     if not reply.startswith("OK "):
         raise ControlChannelError(f"control channel enrollment query failed: {reply!r}")
     return reply[len("OK "):].strip()
+
+
+def request_status(*, timeout: float = 3.0) -> dict[str, Any]:
+    """The companion's own side of ``STATUS`` (the local-mode-fixes plan's Phase 2):
+    ``{"version", "pid", "started_at", "mode", "separated", "connectors"}``,
+    parsed from the daemon's JSON reply. Raises ``ControlChannelError`` on a
+    reply that is not a well-formed ``OK <json>`` (including one this build
+    cannot parse as JSON), and ``OSError`` (uncaught) when no daemon is
+    listening at all -- same contract as ``mint_bootstrap_code()``, and the
+    same reason: ``daemon_status.probe()`` treats "PrivacyFence is not
+    running" as an ordinary case and catches it itself, falling back to
+    asking the service manager directly.
+
+    Short default timeout, unlike the dialog-backed commands above: nothing
+    here waits on a human, so anything slower than a local socket round trip
+    already means the daemon is not answering."""
+    reply = _send_to_daemon("STATUS\n", timeout=timeout)
+    if not reply.startswith("OK "):
+        raise ControlChannelError(f"control channel status query failed: {reply!r}")
+    try:
+        payload = json.loads(reply[len("OK "):].strip())
+    except ValueError as exc:
+        raise ControlChannelError(f"control channel status reply was not valid JSON: {reply!r}") from exc
+    if not isinstance(payload, dict):
+        raise ControlChannelError(f"control channel status reply was not a JSON object: {reply!r}")
+    return payload
 
 
 def request_recovery_code(*, timeout: float = (CONFIRM_DIALOG_TIMEOUT_SECONDS + 5.0) * 2) -> None:
@@ -1771,9 +2166,9 @@ def _ask_companion(line: str, *, timeout: float, unreachable: str) -> tuple[bool
     from."""
     try:
         if paths.is_windows():
-            reply = send_line_windows(companion_pipe_name(), line, timeout=timeout)
+            reply = send_line_windows(companion_pipe_name(current_principal().id), line, timeout=timeout)
         else:
-            reply = send_line_posix(companion_socket_path(), line, timeout=timeout)
+            reply = send_line_posix(companion_socket_path(current_principal().id), line, timeout=timeout)
     except (OSError, ControlChannelError) as exc:
         logger.warning("Could not reach the companion (%s): %s", line.strip(), exc)
         return False, unreachable
@@ -1866,18 +2261,24 @@ __all__ = [
     "CompanionChannelServer",
     "ControlChannelError",
     "ControlChannelServer",
+    "OsUser",
     "companion_pipe_name",
     "companion_pipe_name_for",
     "companion_socket_path",
     "companion_socket_path_under",
+    "current_os_principal_id",
     "enrollment_state",
     "issue_mint_nonce",
     "mint_attested_bootstrap_code",
     "mint_bootstrap_code",
     "mint_console_bootstrap_code",
+    "mint_mcp_token",
     "open_attested_url",
+    "peer_identity_posix",
+    "peer_identity_windows",
     "pipe_name_for",
     "posix_socket_path",
+    "principal_id_for_peer",
     "read_base_url",
     "request_enrollment_confirmation",
     "request_mint_attestation",
@@ -1887,6 +2288,7 @@ __all__ = [
     "request_recovery_confirmation",
     "request_show",
     "request_sign_in_confirmation",
+    "rotate_mcp_token",
     "send_line_posix",
     "send_line_windows",
     "send_recovery_code",

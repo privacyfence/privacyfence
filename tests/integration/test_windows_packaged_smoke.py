@@ -223,9 +223,13 @@ INSTALL_DIR_NAME = "Program Folder"
 # tree, and every test in this module already runs elevated (the installer
 # needs it -- see this module's own docstring).
 SEPARATED_HANDOFF_DIR = WINDOWS_SYSTEM_ROOT / "handoff"
-SEPARATED_MCP_TOKEN_PATH = SEPARATED_HANDOFF_DIR / MCP_TOKEN_FILE_NAME
+SEPARATED_AUTHORITY_DIR = WINDOWS_SYSTEM_ROOT / "authority"
+# ADR 0008 D3: the owner's own mcp_token lives under the *authority* root,
+# not handoff/ -- handoff/ is unaffected (still web_base_url and the
+# control channel's named pipe, which lives outside the filesystem here).
+SEPARATED_MCP_TOKEN_PATH = SEPARATED_AUTHORITY_DIR / MCP_TOKEN_FILE_NAME
 SEPARATED_WEB_BASE_URL_PATH = SEPARATED_HANDOFF_DIR / "web_base_url"
-SEPARATED_SETTINGS_PATH = WINDOWS_SYSTEM_ROOT / "authority" / "config" / "settings.yaml"
+SEPARATED_SETTINGS_PATH = SEPARATED_AUTHORITY_DIR / "config" / "settings.yaml"
 
 
 def _built_installers() -> list[Path]:

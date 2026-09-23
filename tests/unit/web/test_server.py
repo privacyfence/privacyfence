@@ -17,6 +17,7 @@ from privacyfence.web.csp import build_csp
 from privacyfence.web.server import (
     DEFAULT_PORT,
     WebServer,
+    _local_principal_resolver,
     _parse_host_header,
     _PrincipalScopeMiddleware,
     _SecurityHeadersMiddleware,
@@ -184,6 +185,107 @@ class TestPrincipalScopeMiddleware:
 
         assert r.status_code == 200
         assert seen  # the custom resolver was actually consulted
+
+
+class TestLocalPrincipalResolver:
+    """ADR 0008: real local-mode traffic's own resolver -- a session
+    resolves to whichever principal minted it; anything else (no cookie,
+    an unknown one) is LOCAL_PRINCIPAL, byte-identical to every session
+    before this ADR."""
+
+    def test_no_cookie_is_local_principal(self):
+        sessions = LocalSessionStore()
+        resolver = _local_principal_resolver(sessions)
+        client = TestClient(_PrincipalScopeMiddleware(
+            lambda scope, receive, send: JSONResponse({"id": current_principal().id})(scope, receive, send),
+            resolver,
+        ))
+
+        r = client.get("/")
+
+        assert r.json() == {"id": LOCAL_PRINCIPAL_ID}
+
+    def test_a_session_minted_for_another_principal_resolves_to_it(self):
+        sessions = LocalSessionStore()
+        session_id = sessions.create(principal_id="os-1002")
+        resolver = _local_principal_resolver(sessions)
+        client = TestClient(_PrincipalScopeMiddleware(
+            lambda scope, receive, send: JSONResponse({"id": current_principal().id})(scope, receive, send),
+            resolver,
+        ))
+        client.cookies.set(SESSION_COOKIE, session_id)
+
+        r = client.get("/")
+
+        assert r.json() == {"id": "os-1002"}
+
+    @staticmethod
+    def _request(session_id: str):
+        from starlette.requests import Request
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        headers = [(b"cookie", f"{SESSION_COOKIE}={session_id}".encode())]
+        scope = {
+            "type": "http", "headers": headers, "method": "GET", "path": "/",
+            "scheme": "http", "server": ("localhost", 8765),
+        }
+        return Request(scope, receive=receive)
+
+    def test_a_session_explicitly_minted_for_local_stays_the_local_principal_object(self):
+        from privacyfence.principal import LOCAL_PRINCIPAL
+
+        sessions = LocalSessionStore()
+        session_id = sessions.create(principal_id=LOCAL_PRINCIPAL_ID)
+        resolver = _local_principal_resolver(sessions)
+
+        assert resolver(self._request(session_id)) is LOCAL_PRINCIPAL
+
+    def test_an_unknown_session_id_falls_back_to_local(self):
+        sessions = LocalSessionStore()
+        resolver = _local_principal_resolver(sessions)
+
+        assert resolver(self._request("not-a-real-session")).id == LOCAL_PRINCIPAL_ID
+
+
+class TestSettingsIsOwnerOnly:
+    """ADR 0008's own scoping decision: /settings still administers the
+    one owner's SettingsController/connector set -- a non-owner principal
+    gets a 404, the same "don't confirm existence" shape every other
+    cross-principal lookup in this codebase already uses."""
+
+    def _app(self, tmp_path, monkeypatch):
+        controller = _controller(tmp_path, monkeypatch)
+        sessions = LocalSessionStore()
+        app = build_app(WebApprovalUI(), sessions=sessions, controller=controller)
+        return TestClient(app, base_url="http://localhost"), sessions
+
+    def test_the_owner_reaches_settings(self, tmp_path, monkeypatch):
+        client, sessions = self._app(tmp_path, monkeypatch)
+        _signed_in(client, sessions)
+
+        r = client.get("/settings")
+
+        assert r.status_code == 200
+
+    def test_a_non_owner_principal_gets_a_plain_404(self, tmp_path, monkeypatch):
+        client, sessions = self._app(tmp_path, monkeypatch)
+        session_id = sessions.create(principal_id="os-1002")
+        client.cookies.set(SESSION_COOKIE, session_id)
+
+        r = client.get("/settings")
+
+        assert r.status_code == 404
+
+    def test_a_non_owner_principal_cannot_reach_settings_actions_either(self, tmp_path, monkeypatch):
+        client, sessions = self._app(tmp_path, monkeypatch)
+        session_id = sessions.create(principal_id="os-1002")
+        client.cookies.set(SESSION_COOKIE, session_id)
+
+        r = client.post("/api/settings/quit_app", json={"csrf": session_id})
+
+        assert r.status_code == 404
 
 
 class TestSecurityHeaders:
@@ -390,6 +492,12 @@ class TestWebServerConstruction:
         )
         assert server.mcp_url == "http://localhost:1234/mcp"
 
+    def test_build_app_requires_a_token_or_a_verifier_for_an_mcp_dispatcher(self):
+        from privacyfence.web.mcp_dispatch import McpDispatcher
+
+        with pytest.raises(ValueError, match="mcp_token or mcp_verifier"):
+            build_app(WebApprovalUI(), mcp_dispatcher=McpDispatcher(lambda: {}))
+
 
 # --------------------------------------------------------------------------- #
 # #428 Phase 2: WebServer owns a ControlChannelServer alongside the ASGI app
@@ -403,6 +511,81 @@ class TestWebServerControlChannel:
         server = WebServer(WebApprovalUI(), port=0)
         assert server.control_channel is not None
         assert server.control_channel.address is None  # not started yet
+
+    def test_local_mode_wires_a_status_callback(self, monkeypatch):
+        # The local-mode-fixes plan's Phase 2: daemon_status.py's "the
+        # control channel answered" source is this callback, wired to
+        # local_status_payload() -- checked here rather than only through a
+        # real round trip, since TestWebServerControlChannel's other tests
+        # already prove the channel itself binds and tears down correctly.
+        import json
+
+        server = WebServer(WebApprovalUI(), port=0)
+
+        payload = json.loads(server.control_channel._status())
+
+        assert set(payload) == {"version", "pid", "started_at", "mode", "separated", "connectors"}
+        assert payload["mode"] == "local"
+
+    def test_mint_mcp_token_is_wired_only_when_mcp_is_enabled(self):
+        server = WebServer(WebApprovalUI(), port=0)  # no mcp_dispatcher
+
+        assert server.mcp_verifier is None
+        assert server.control_channel._mint_mcp_token is None
+
+    def test_mint_mcp_token_is_wired_when_mcp_is_enabled(self):
+        from privacyfence.web.mcp_dispatch import McpDispatcher
+
+        server = WebServer(
+            WebApprovalUI(), port=0, mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok",
+        )
+
+        assert server.mcp_verifier is not None
+        assert server.control_channel._mint_mcp_token == server._mint_mcp_token
+
+    async def test_mint_for_the_owner_returns_the_same_token_already_registered(self, tmp_path, monkeypatch):
+        # No explicit mcp_token -- server.mcp_token is load_or_create_mcp_token()'s
+        # own real (disk-backed) value here, exactly like every real caller,
+        # so MINT MCP for the owner reads back the identical value rather
+        # than minting a second one alongside it. Sandboxed to tmp_path:
+        # this is the one real (unmocked) load_or_create_mcp_token() call in
+        # this class, and paths.data_dir() defaults to this checkout's own
+        # root in a dev install, which must never be written to by a test.
+        from privacyfence import paths
+        from privacyfence.web.mcp_dispatch import McpDispatcher
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        server = WebServer(WebApprovalUI(), port=0, mcp_dispatcher=McpDispatcher(lambda: {}))
+
+        minted = server._mint_mcp_token(False)
+
+        assert minted == server.mcp_token
+        result = await server.mcp_verifier.verify_token(minted)
+        assert result is not None and result.subject == LOCAL_PRINCIPAL_ID
+
+    async def test_mint_for_a_different_principal_registers_a_distinct_token(self, monkeypatch):
+        from privacyfence.principal import Principal, principal_scope
+        from privacyfence.web.mcp_dispatch import McpDispatcher
+
+        server = WebServer(
+            WebApprovalUI(), port=0, mcp_dispatcher=McpDispatcher(lambda: {}), mcp_token="mcp-tok",
+        )
+        monkeypatch.setattr(
+            "privacyfence.web.server.mcp_auth._mcp_token_path",
+            lambda principal: __import__("pathlib").Path(f"/tmp/nonexistent-{principal.id}"),
+        )
+        monkeypatch.setattr(
+            "privacyfence.web.server.mcp_auth._write_new_token",
+            lambda principal, path: f"generated-for-{principal.id}",
+        )
+
+        with principal_scope(Principal(id="os-1002")):
+            minted = server._mint_mcp_token(False)
+
+        assert minted == "generated-for-os-1002"
+        assert minted != "mcp-tok"
+        result = await server.mcp_verifier.verify_token(minted)
+        assert result is not None and result.subject == "os-1002"
 
     def test_org_mode_builds_no_control_channel(self, tmp_path, monkeypatch):
         from privacyfence import org_identity as oi
@@ -784,6 +967,23 @@ class TestAudienceSeparation:
                                 headers={"Authorization": f"Bearer {self.MCP_TOKEN}"})
         assert resp.status_code != 401
 
+    def test_capability_routes_need_no_bearer_token_at_all(self):
+        # Phase 4: /mcp-files/slots/<token> and /mcp-files/fetch/<token>
+        # are mounted alongside /mcp and /mcp-files/uploads|downloads, but
+        # deliberately outside the bearer-auth stack -- a malformed/unknown
+        # token is a 404 (the route exists, the token just isn't live),
+        # never a 401 (which would mean the route demanded a credential
+        # this caller has no way to present).
+        client = TestClient(self._app(), base_url="http://localhost")
+        put_resp = client.put("/mcp-files/slots/not-a-real-slot", content=b"data")
+        assert put_resp.status_code == 404
+        get_resp = client.get("/mcp-files/fetch/not-a-real-token")
+        assert get_resp.status_code == 404
+        # The bearer-authenticated siblings, by contrast, refuse outright
+        # with no credential at all.
+        assert client.put("/mcp-files/uploads/not-a-real-slot", content=b"data").status_code == 401
+        assert client.get("/mcp-files/downloads/not-a-real-token").status_code == 401
+
     def test_approvals_decide_rejects_the_mcp_token_as_csrf(self):
         client = TestClient(self._app(), base_url="http://localhost")
         # A valid *session cookie* (a real local-mode session, not the raw
@@ -1140,6 +1340,61 @@ class TestLocalEnrollmentState:
         assert srv.local_enrollment_state(StepUpConfig()) == "ok"
         assert srv.local_enrollment_state(StepUpConfig(enabled=True)) == "ok"
         assert srv.local_enrollment_state(StepUpConfig(require_passkey=True)) == "ok"
+
+
+class TestLocalStatusPayload:
+    """The local-mode-fixes plan's Phase 2: the daemon's own answer to the
+    companion's ``STATUS`` command."""
+
+    def _server_module(self):
+        from privacyfence.web import server as srv
+
+        return srv
+
+    def test_reports_version_pid_mode_and_separation(self, monkeypatch):
+        import json
+
+        srv = self._server_module()
+        monkeypatch.setattr(srv, "__version__", "4.2.0-test")
+        monkeypatch.setattr(srv.os, "getpid", lambda: 4242)
+        monkeypatch.setattr(srv.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(srv.routes_connect, "_is_connected", lambda principal, service: False)
+
+        payload = json.loads(srv.local_status_payload("2026-09-23T00:00:00+00:00"))
+
+        assert payload["version"] == "4.2.0-test"
+        assert payload["pid"] == 4242
+        assert payload["mode"] == "local"
+        assert payload["separated"] is True
+        assert payload["started_at"] == "2026-09-23T00:00:00+00:00"
+
+    def test_connectors_reflect_is_connected(self, monkeypatch):
+        import json
+
+        srv = self._server_module()
+        monkeypatch.setattr(srv.privilege_separation, "is_enabled", lambda: False)
+        monkeypatch.setattr(
+            srv.routes_connect, "_is_connected",
+            lambda principal, service: service == "gmail",
+        )
+
+        payload = json.loads(srv.local_status_payload("2026-09-23T00:00:00+00:00"))
+
+        assert payload["connectors"]["gmail"] == "ok"
+        assert payload["connectors"]["drive"] == "needs_auth"
+        assert set(payload["connectors"]) == set(srv.routes_connect.SERVICE_LABELS)
+
+    def test_the_payload_is_one_compact_json_line(self, monkeypatch):
+        # It travels over the same one-line-per-message control channel
+        # every other command here does -- a stray newline in the payload
+        # would truncate the reply.
+        srv = self._server_module()
+        monkeypatch.setattr(srv.routes_connect, "_is_connected", lambda principal, service: False)
+
+        payload = srv.local_status_payload("2026-09-23T00:00:00+00:00")
+
+        assert "\n" not in payload
+        assert " " not in payload
 
 
 class TestRecoveryCodeDelivery:

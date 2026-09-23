@@ -13,6 +13,7 @@ keeps meaning exactly what it already means, with no migration.
 """
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -126,25 +127,57 @@ DEFAULT_LINK_TTL_SECONDS = 300.0
 
 @dataclass(frozen=True)
 class DownloadDeliveryConfig:
-    """org mode's own answer to the local-disk-write bug docs/org-mode-
-    download-delivery-plan.md exists to fix: how ``drive_download_file``/
-    ``gmail_download_attachment``/``confluence_download_attachment``
-    deliver file bytes to a principal who has no shell on the daemon's own
-    machine. Lives in ``org_config.json``'s ``download_delivery`` section,
-    org-mode-only for the same reason ``ServerConfig`` is -- local mode
-    keeps writing straight to ``destination_dir``, unchanged, and never
-    looks at this class at all.
+    """How org mode delivers file bytes for ``drive_download_file``/
+    ``gmail_download_attachment``/``confluence_download_attachment`` to a
+    principal who has no shell on the daemon's own machine: inline in the
+    MCP tool result by default, or staged behind a short-lived, single-
+    claim link when the file is too large to return inline (see ADR 0017
+    for the rationale and the inline/staging split). Lives in
+    ``org_config.json``'s ``download_delivery`` section, org-mode-only for
+    the same reason ``ServerConfig`` is -- local mode never reads this
+    class. That doesn't mean local mode still writes straight to
+    ``destination_dir`` unchanged: since ADR 0007, a privilege-separated
+    local-mode daemon can't write to the user's directories either, so it
+    hands the file to the ``.mcpb`` shim instead, or, with no shim in the
+    request path, returns a single-use capability link of its own (ADR
+    0028) -- a separate delivery path with its own config, not this one.
     """
 
     inline_max_bytes: int = DEFAULT_INLINE_MAX_BYTES
     link_ttl_seconds: float = DEFAULT_LINK_TTL_SECONDS
-    # The org-level opt-out (see the plan's "Org-level opt-out" section):
-    # when False, a file too large for inline delivery is refused outright
+    # The org-level opt-out (ADR 0017's "Organizations can move the line"
+    # paragraph): when False, a file too large for inline delivery is
+    # refused outright
     # rather than ever being written -- encrypted or not -- to this
     # server's disk. Default True: encryption-at-rest (download_staging.py)
     # is the primary mitigation, and staging still happens for oversized
     # files by default.
     allow_disk_staging: bool = True
+    # Phase 4 (local-mode-fixes-plan.md, ADR 0007's "Clients without the
+    # bridge" section): every staged-link download in org mode is reached
+    # by an MCP client -- an agent, not a human with a browser -- so the
+    # default is the capability link (/mcp-files/fetch/<token>, no bearer
+    # header or session cookie needed: the token in the URL is the
+    # credential). Setting this False keeps the older cookie-authenticated
+    # browser link (/downloads/{token}) instead -- for an org that wants a
+    # human to be the one who actually opens a staged download, not the
+    # agent fetching it directly on their behalf.
+    agent_links: bool = True
+
+    def staged_link_path(self, token: bytes) -> str:
+        """The URL path a staged download's ``download_url`` should use,
+        given this config's own ``agent_links`` choice: the Phase 4
+        capability route (no bearer header or session cookie needed -- the
+        token in the URL is the credential) by default, or the older
+        cookie-authenticated browser route when an org has opted back into
+        it. Both routes serve the same ``download_staging.
+        DownloadStagingStore`` entry, keyed by the same token -- only which
+        HTTP endpoint (and therefore which kind of caller) can claim it
+        differs. Used by connectors/drive.py, connectors/gmail.py and
+        connectors/confluence.py's own org-mode staged-link delivery, so
+        the choice is made in exactly one place rather than three."""
+        encoded = base64.urlsafe_b64encode(token).decode("ascii")
+        return f"/mcp-files/fetch/{encoded}" if self.agent_links else f"/downloads/{encoded}"
 
     def fits_inline(self, size_bytes: int) -> bool:
         """Whether a file this size should be delivered inline (base64, in
@@ -175,6 +208,7 @@ class DownloadDeliveryConfig:
             inline_max_bytes=inline_max_bytes,
             link_ttl_seconds=link_ttl_seconds,
             allow_disk_staging=bool(raw.get("allow_disk_staging", True)),
+            agent_links=bool(raw.get("agent_links", True)),
         )
 
 

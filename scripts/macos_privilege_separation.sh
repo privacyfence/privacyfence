@@ -18,7 +18,7 @@
 #   1. creates the _privacyfence system user and group;
 #   2. adds you to that group, so the companion app can still reach the daemon;
 #   3. moves ~/.privacyfence to /Library/Application Support/PrivacyFence and
-#      re-owns it -- authority/ at 0700, handoff/ at 2770, the root at 0711;
+#      re-owns it -- authority/ at 0700, handoff/ at 3770, the root at 0711;
 #   4. copies the daemon/companion image (from --app, normally /Applications/
 #      PrivacyFenceApp.app) into a fresh root:wheel-owned copy under
 #      /Library/PrivacyFence/image -- see stage_trusted_image()'s own comment
@@ -71,7 +71,21 @@ MARKER_NAME="privilege-separation.json"
 MARKER_VERSION=1
 HANDOFF_DIR_NAME="handoff"
 SYSTEM_ROOT_MODE=711
-HANDOFF_DIR_MODE=2770
+# #428 Phase 2's interim multi-user guard (§2.6, "companion socket
+# takeover"): the leading 3 is the sticky bit (01000) on top of the setgid
+# bit (02000) this already carried. Setgid alone means every member of
+# SERVICE_GROUP can create and delete files here, which is exactly right for
+# the daemon and the companion producing group-owned files for each other --
+# but it also means any *other* account this install has since been
+# extended to (ADR 0003 decision 3's per-user half, run more than once) can
+# unlink a peer's companion.sock and rebind it as their own, even though
+# they never owned it. The sticky bit is the same fix /tmp has carried since
+# 4.3BSD: only a file's own owner (or root) may remove or rename an entry
+# here, group write notwithstanding. web/control_channel.py's
+# _existing_socket_owner_problem() is the code-level half of this same fix;
+# this is the filesystem-level half, and the two are meant to be read
+# together, not either alone.
+HANDOFF_DIR_MODE=3770
 AUTHORITY_DIR_MODE=700
 HANDOFF_FILE_MODE=640
 
@@ -104,6 +118,7 @@ warn() { printf 'warning: %s\n' "$*" >&2; }
 usage() {
   cat >&2 <<USAGE
 usage: sudo $0 {enable|disable|status} [options]
+       sudo $0 daemon {status|start|stop|restart|ensure-running}
 
   --user <name>       the human account that owns this install
                       (default: \$SUDO_USER, i.e. whoever ran sudo). With none
@@ -113,7 +128,12 @@ usage: sudo $0 {enable|disable|status} [options]
                       install the machine half has already separated -- add
                       <name> to ${SERVICE_GROUP} and migrate their
                       ~/.privacyfence. Idempotent, and what the companion app
-                      runs when it finds that membership still pending.
+                      runs when it finds that membership still pending. Works
+                      for any number of accounts on the same machine, not
+                      just this install's first (recorded) owner -- each gets
+                      its own isolated PrivacyFence identity, never merged
+                      with anyone else's (docs/adr/0008-one-principal-per-os-
+                      user.md).
   --app <path>        PrivacyFenceApp.app to run from
                       (default: ${DEFAULT_APP})
   --daemon-exec <p>   run this instead of the .app's daemon executable
@@ -126,12 +146,43 @@ usage: sudo $0 {enable|disable|status} [options]
                       the install or find the app bundle. For the daemon's own
                       unattended auto-enable trigger; a human should not pass
                       this.
+
+  daemon status           print a small unprivileged key=value report of the
+                          LaunchDaemon's own state -- loaded, pid, owner, last
+                          exit status, and whether the control socket exists.
+                          Needs no sudo.
+  daemon start            alias for ensure-running.
+  daemon ensure-running   make sure ${DAEMON_LABEL} is loaded, has a pid owned
+                          by ${SERVICE_ACCOUNT}, and has produced its control
+                          socket -- bootstrapping or kickstarting it as
+                          needed, with retry/backoff around launchd's own
+                          bootout/bootstrap race. What 'enable' itself calls
+                          at the end, and what the companion app's Start
+                          button runs elevated.
+  daemon restart          kickstart -k if loaded, otherwise ensure-running.
+  daemon stop             bootout, and wait for the job to actually unload.
 USAGE
   exit 2
 }
 
 AUTO=0
 FOR_USER_ONLY=0
+# Set by cmd_enable_for_user() when it is running for an account other than
+# the marker's recorded owner -- i.e. this install already has one principal
+# and this run is adding a second (or third, ...) one. migrate_data() reads
+# this to route that account's own ~/.privacyfence into its own per-principal
+# subdirectory (users/os-<uid>/) instead of the shared root, per ADR 0008
+# ("D2: two identities, not one, per install") -- each OS account PrivacyFence
+# ever runs `enable --for-user` for gets fully isolated storage, never merged
+# with another account's. #428 Phase 2 §2.6's interim guard used to refuse
+# this outright rather than isolate it; ADR 0008 is what let the refusal be
+# replaced with a real per-user destination instead of just being deleted.
+NON_OWNER_FOR_USER=0
+# The sub-verb of `daemon {status|start|stop|restart|ensure-running}`,
+# pulled off the argument list before the generic option-parsing loop below
+# ever sees it -- see the "── Argument parsing ──" section at the bottom for
+# why that has to happen first.
+DAEMON_SUBCOMMAND=""
 
 require_macos() {
   [ "$(uname -s)" = "Darwin" ] || die "this script is macOS-only (Linux is scripts/linux_privilege_separation.sh; Windows is scripts/windows_privilege_separation.ps1)"
@@ -404,7 +455,51 @@ marker_owner_user() {
 legacy_data_dir() { printf '%s/.privacyfence' "$OWNER_HOME"; }
 
 migrate_data() {
-  local legacy
+  local legacy target
+  # ADR 0008 ("D2: two identities, not one, per install"): an account that is
+  # not this install's recorded owner still gets its own ~/.privacyfence
+  # migrated -- just never into the shared root the recorded owner's data
+  # lives in, which would mix a second person's connector tokens, audit log
+  # and policy into the first owner's. Instead it goes to
+  # ${SYSTEM_ROOT}/users/os-<uid>, the exact per-principal path
+  # src/privacyfence/paths.py's user_dir() resolves to for a
+  # Principal(id=f"os-{uid}") that isn't the "local" principal -- so the
+  # daemon finds it under the same identity this migrates it as. cmd_enable_
+  # for_user() is the only caller that ever sets NON_OWNER_FOR_USER.
+  if [ "$NON_OWNER_FOR_USER" = "1" ]; then
+    legacy="$(legacy_data_dir)"
+    if [ ! -d "$legacy" ]; then
+      note "no existing ${legacy} to migrate -- '${OWNER_USER}' starts with no data of their own"
+      return
+    fi
+    target="${SYSTEM_ROOT}/users/os-${OWNER_UID}"
+    # Same provisioning idiom apply_layout() uses for the top-level
+    # directories below, at the mode paths.py's secure_mkdir() itself
+    # defaults a per-principal root to (0700) -- not SYSTEM_ROOT_MODE/
+    # HANDOFF_DIR_MODE, which exist to let the *shared* root and handoff
+    # directory be entered/written by every group member; a single
+    # account's own subtree has no such requirement; it is read and written
+    # by the daemon alone.
+    mkdir -p "$target"
+    chown -R "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" "$target"
+    chmod 700 "$target"
+    # Same by-hand no-clobber merge as the owner's own case below (ditto has
+    # no no-clobber flag of its own) -- reused verbatim, just retargeted at
+    # this account's own subtree instead of the shared root.
+    note "merging ${legacy} into ${target} -- kept separate from this install's other principal(s), not merged into ${SYSTEM_ROOT} itself (no-clobber: anything already in ${target} is left as it is)"
+    local entry name
+    for entry in "$legacy"/*; do
+      [ -e "$entry" ] || continue
+      name="$(basename "$entry")"
+      if [ -e "${target}/${name}" ]; then
+        note "  ${name} already exists in ${target} -- not overwriting it from ${legacy}"
+      else
+        ditto "$entry" "${target}/${name}"
+      fi
+    done
+    rm -rf "$legacy"
+    return
+  fi
   # The machine half (ADR 0003 decision 3) runs with no owner resolved, and a
   # machine with no human account has no per-user data directory to move --
   # so this reduces to creating the root the rest of `enable` provisions.
@@ -420,12 +515,32 @@ migrate_data() {
     return
   fi
   if [ -e "$SYSTEM_ROOT" ]; then
-    # Something is already there (a previous enable, or a hand-made directory).
-    # Merge rather than clobber, then remove the source -- leaving a second
-    # copy of live OAuth tokens readable by the agent would undo the point of
-    # the whole exercise.
-    note "merging ${legacy} into the existing ${SYSTEM_ROOT}"
-    ditto "$legacy" "$SYSTEM_ROOT"
+    # Something is already there (a previous enable, or a hand-made
+    # directory). Merge rather than clobber, then remove the source --
+    # leaving a second copy of live OAuth tokens readable by the agent would
+    # undo the point of the whole exercise.
+    #
+    # `ditto` has no documented no-clobber flag -- its man page describes it
+    # as a recursive copy that preserves metadata, not one that skips
+    # existing destination entries, and testing that assumption at merge
+    # time (when what is already in $SYSTEM_ROOT may be live daemon state)
+    # is not somewhere to find out it guessed wrong. So the no-clobber
+    # contract the plan asks for ("ditto with a pre-check") is implemented
+    # by hand instead: walk $legacy's own top-level entries, and `ditto`
+    # in only the ones $SYSTEM_ROOT does not already have. Anything
+    # $SYSTEM_ROOT already has -- from a previous enable, or from this same
+    # guard having already run once -- is left exactly as it is.
+    note "merging ${legacy} into the existing ${SYSTEM_ROOT} (no-clobber: anything already in ${SYSTEM_ROOT} is left as it is)"
+    local entry name
+    for entry in "$legacy"/*; do
+      [ -e "$entry" ] || continue
+      name="$(basename "$entry")"
+      if [ -e "${SYSTEM_ROOT}/${name}" ]; then
+        note "  ${name} already exists in ${SYSTEM_ROOT} -- not overwriting it from ${legacy}"
+      else
+        ditto "$entry" "${SYSTEM_ROOT}/${name}"
+      fi
+    done
     rm -rf "$legacy"
   else
     # Same volume in every default macOS install, so this is a rename: atomic,
@@ -590,6 +705,19 @@ daemon_pid() {
     || true
 }
 
+# The account a pid is running as, "" for an empty/absent pid. Split out of
+# daemon_owner() below so `daemon status` (§2.1, unprivileged and meant to
+# answer immediately) can ask the same question about whatever pid
+# daemon_pid() reports *right now*, without also inheriting daemon_owner()'s
+# own DAEMON_PID_TIMEOUT wait -- a status query has nothing to wait for: "no
+# pid yet" is itself the answer it prints, not a transient state to poll
+# through.
+owner_of_pid() {
+  local pid="$1"
+  [ -n "$pid" ] || return 0
+  ps -o user= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true
+}
+
 daemon_owner() {
   # The account the daemon is *actually* running as, "" if it has no live pid
   # to read one off. Waits for a pid, because `launchctl bootstrap` returns
@@ -600,8 +728,7 @@ daemon_owner() {
     [ -n "$pid" ] && break
     sleep 0.2
   done
-  [ -n "$pid" ] || return 0
-  ps -o user= -p "$pid" 2>/dev/null | tr -d '[:space:]' || true
+  owner_of_pid "$pid"
 }
 
 daemon_account_diagnostics() {
@@ -621,6 +748,65 @@ daemon_account_diagnostics() {
   dscacheutil -q user -a name "$SERVICE_ACCOUNT" 2>&1 || true
   echo "---- launchctl print system/${DAEMON_LABEL} (head) ----"
   launchctl print "system/${DAEMON_LABEL}" 2>&1 | head -40 || true
+}
+
+# How long to wait, after a `bootout`, for `launchctl print` to actually
+# start failing before the next `bootstrap` -- launchd accepts a bootout
+# request and tears the job down asynchronously, so issuing a bootstrap
+# immediately afterwards can race the teardown and hand back exit 5 ("Input/
+# output error") or 37 ("Operation already in progress") purely because the
+# old instance had not finished leaving yet. Both start_daemon_as_service_
+# account() and `daemon stop`/`daemon restart` below hit a bootout before a
+# bootstrap or the next `launchctl print`, so this is shared rather than
+# reimplemented at each call site.
+BOOTOUT_SETTLE_TIMEOUT=10
+
+wait_for_daemon_unloaded() {
+  local timeout="${1:-$BOOTOUT_SETTLE_TIMEOUT}" deadline
+  deadline=$((SECONDS + timeout))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    launchctl print "system/${DAEMON_LABEL}" >/dev/null 2>&1 || return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+# The backoff schedule "daemon ensure-running"/"daemon restart" and
+# start_daemon_as_service_account() below all retry a failing `launchctl
+# bootstrap` against, once wait_for_daemon_unloaded() above has already
+# removed the most common cause of exit 5/37 (a bootout that had not
+# actually finished). A residual race can still happen -- launchd's own
+# bookkeeping, not just the job's runtime state, needs a moment to settle --
+# so this is the second layer, not a replacement for the wait.
+BOOTSTRAP_RETRY_DELAYS=(1 2 4 8 16)
+
+# Runs `launchctl bootstrap system "$DAEMON_PLIST"`, retrying with the
+# backoff above when launchctl fails with exit 5 ("Input/output error") or
+# 37 ("Operation already in progress") -- both are symptoms of the bootout/
+# bootstrap race this function exists to ride out, not of anything wrong
+# with the plist or the account. Any other exit code is returned
+# immediately, unretried: retrying a config error five times with sleeps in
+# between only delays reporting it. Returns 0 on the bootstrap that
+# succeeds, or the last nonzero exit code once every retry in
+# BOOTSTRAP_RETRY_DELAYS has also failed with 5 or 37.
+bootstrap_daemon_with_retry() {
+  local delay rc
+  if launchctl bootstrap system "$DAEMON_PLIST"; then
+    return 0
+  fi
+  rc=$?
+  for delay in "${BOOTSTRAP_RETRY_DELAYS[@]}"; do
+    if [ "$rc" != 5 ] && [ "$rc" != 37 ]; then
+      return "$rc"
+    fi
+    warn "launchctl bootstrap exited ${rc} (bootout/bootstrap race) -- retrying in ${delay}s"
+    sleep "$delay"
+    if launchctl bootstrap system "$DAEMON_PLIST"; then
+      return 0
+    fi
+    rc=$?
+  done
+  return "$rc"
 }
 
 start_daemon_as_service_account() {
@@ -647,10 +833,23 @@ start_daemon_as_service_account() {
   # again. Only after every attempt has failed the same way is this fatal --
   # and it is fatal, rather than leaving a daemon running with every
   # privilege the install claims it dropped.
+  #
+  # That is Failure A, the UserName-resolution race -- a different failure
+  # from the bootout/bootstrap I/O race (exit 5/37) bootstrap_daemon_with_
+  # retry() above exists for, and both can happen to the very same
+  # `bootstrap` call. So the two are layered rather than merged: each of
+  # this loop's (up to three) attempts waits out the bootout first, then
+  # lets bootstrap_daemon_with_retry() absorb the I/O race, and only then
+  # reads back the owner to catch Failure A.
   local attempt owner
   for attempt in 1 2 3; do
     launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
-    launchctl bootstrap system "$DAEMON_PLIST"
+    wait_for_daemon_unloaded || warn "${DAEMON_LABEL} still looked loaded ${BOOTOUT_SETTLE_TIMEOUT}s after bootout -- bootstrapping anyway"
+    if ! bootstrap_daemon_with_retry; then
+      warn "launchctl bootstrap kept failing with the bootout/bootstrap race (attempt ${attempt}) even after retrying with backoff"
+      sleep 1
+      continue
+    fi
     owner="$(daemon_owner)"
     # No pid to read: under this job's KeepAlive a daemon that starts and
     # exits has none at any given instant. A real problem, but a different
@@ -680,6 +879,144 @@ uninstall_services() {
   launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
   launchctl bootout "gui/${OWNER_UID}/${COMPANION_LABEL}" 2>/dev/null || true
   rm -f "$DAEMON_PLIST" "$COMPANION_PLIST"
+}
+
+# ── Daemon manager (#428 Phase 2) ─────────────────────────────────────────────
+#
+# `daemon {status|start|stop|restart|ensure-running}` is what the companion
+# app's tray menu runs -- `status` unprivileged, on every poll, and
+# `start`/`stop`/`restart` elevated (src/privacyfence/service_control.py),
+# only when a human clicks the corresponding menu item. It is also what
+# `cmd_enable` itself calls at the very end (see below), and what
+# installer/macos/pkg/postinstall calls a second time after `enable --auto`
+# returns, so that a daemon which comes up stopped after a .pkg upgrade gets
+# one more chance to start before the tray's own Start button becomes the
+# only way to notice.
+#
+# Up to 30s to see both a pid and the control socket -- generous on purpose:
+# ensure_running/start/restart may have just issued a bootstrap or a
+# kickstart, and launchd's own RunAtLoad, plus the daemon's own startup work
+# (audit_layout(), opening its listeners), both take real wall-clock time.
+DAEMON_READY_TIMEOUT=30
+
+cmd_daemon_status() {
+  # Unprivileged and meant to answer immediately -- see owner_of_pid()'s own
+  # comment for why this does not call daemon_owner(). Exit 0 in every case
+  # except "launchctl itself could not be run at all": launchd reporting
+  # "not loaded" is itself the state a caller asked about, not a failure of
+  # this subcommand.
+  command -v launchctl >/dev/null 2>&1 \
+    || die "launchctl not found -- cannot read ${DAEMON_LABEL}'s state"
+  local printed="" loaded=false pid="" owner="" last_exit_status="" control_socket_present=false
+  if printed="$(launchctl print "system/${DAEMON_LABEL}" 2>/dev/null)"; then
+    loaded=true
+  fi
+  if [ "$loaded" = "true" ]; then
+    pid="$(printf '%s\n' "$printed" \
+      | sed -n -e 's/^[[:space:]]*pid[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' -e '/^[0-9]/q')"
+    # "last exit code = " is launchctl print's own label -- kept exactly as
+    # it prints it, since src/privacyfence/daemon_status.py's
+    # _macos_status() parses the same field from its own launchctl print
+    # call and the two must not drift apart on what to look for.
+    last_exit_status="$(printf '%s\n' "$printed" \
+      | sed -n -e 's/^[[:space:]]*last exit code[[:space:]]*=[[:space:]]*\(-\{0,1\}[0-9][0-9]*\).*/\1/p' -e '/^-\{0,1\}[0-9]/q')"
+    owner="$(owner_of_pid "$pid")"
+  fi
+  [ -e "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}/control.sock" ] && control_socket_present=true
+  printf 'loaded=%s\n' "$loaded"
+  printf 'pid=%s\n' "$pid"
+  printf 'owner=%s\n' "$owner"
+  printf 'last_exit_status=%s\n' "$last_exit_status"
+  printf 'control_socket_present=%s\n' "$control_socket_present"
+  return 0
+}
+
+cmd_daemon_ensure_running() {
+  # 1-2: not loaded -> bootstrap (with the same bootout/bootstrap-race retry
+  # start_daemon_as_service_account() uses, since the same launchd race can
+  # happen to a plain `daemon start` as to `enable`'s own first bootstrap).
+  if ! launchctl print "system/${DAEMON_LABEL}" >/dev/null 2>&1; then
+    note "${DAEMON_LABEL} is not loaded -- bootstrapping it"
+    bootstrap_daemon_with_retry \
+      || die "launchctl bootstrap kept failing (bootout/bootstrap race) even after retrying with backoff -- check ${SYSTEM_ROOT}/logs"
+  # 3: loaded but no pid -> kickstart. No -k here: that flag kills and
+  # relaunches an already-running job, which is `daemon restart`'s job, not
+  # this one's -- a loaded-but-pidless job has nothing running to kill.
+  elif [ -z "$(daemon_pid)" ]; then
+    note "${DAEMON_LABEL} is loaded but has no pid -- kickstarting it"
+    launchctl kickstart "system/${DAEMON_LABEL}" \
+      || die "launchctl kickstart failed for ${DAEMON_LABEL}"
+  fi
+
+  # 4: wait for both a pid and the control socket.
+  local deadline=$((SECONDS + DAEMON_READY_TIMEOUT)) pid="" sock="${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}/control.sock"
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    pid="$(daemon_pid)"
+    [ -n "$pid" ] && [ -e "$sock" ] && break
+    sleep 0.5
+  done
+  [ -n "$pid" ] \
+    || die "${DAEMON_LABEL} still has no pid ${DAEMON_READY_TIMEOUT}s after starting it -- check ${SYSTEM_ROOT}/logs and 'sudo $0 status'"
+  [ -e "$sock" ] \
+    || die "${DAEMON_LABEL} has pid ${pid} but ${sock} still does not exist ${DAEMON_READY_TIMEOUT}s later -- check ${SYSTEM_ROOT}/logs"
+
+  # 5: verify the owner.
+  local owner
+  owner="$(owner_of_pid "$pid")"
+  [ "$owner" = "$SERVICE_ACCOUNT" ] \
+    || die "${DAEMON_LABEL} (pid ${pid}) is running as '${owner}', not ${SERVICE_ACCOUNT} -- refusing to report success"
+
+  note "${DAEMON_LABEL} is running as ${SERVICE_ACCOUNT} (pid ${pid})"
+}
+
+cmd_daemon_restart() {
+  if launchctl print "system/${DAEMON_LABEL}" >/dev/null 2>&1; then
+    note "restarting ${DAEMON_LABEL}"
+    launchctl kickstart -k "system/${DAEMON_LABEL}" \
+      || die "launchctl kickstart -k failed for ${DAEMON_LABEL}"
+  fi
+  # Whether that kickstart just ran, or the job was not loaded at all: the
+  # same wait-for-pid-and-socket-and-owner verification applies either way,
+  # so ensure-running's own logic finishes the job rather than duplicating
+  # its last three steps here.
+  cmd_daemon_ensure_running
+}
+
+cmd_daemon_stop() {
+  launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
+  if wait_for_daemon_unloaded 15; then
+    note "${DAEMON_LABEL} stopped"
+    return 0
+  fi
+  die "${DAEMON_LABEL} is still loaded 15s after bootout -- 'sudo launchctl print system/${DAEMON_LABEL}' to see why"
+}
+
+cmd_daemon() {
+  local subcommand="$1"
+  case "$subcommand" in
+    status)
+      require_macos
+      cmd_daemon_status
+      ;;
+    start | ensure-running)
+      require_macos
+      require_root
+      cmd_daemon_ensure_running
+      ;;
+    restart)
+      require_macos
+      require_root
+      cmd_daemon_restart
+      ;;
+    stop)
+      require_macos
+      require_root
+      cmd_daemon_stop
+      ;;
+    *)
+      usage
+      ;;
+  esac
 }
 
 # ── Subcommands ───────────────────────────────────────────────────────────────
@@ -723,13 +1060,30 @@ cmd_enable() {
   write_marker
   install_services
 
+  # #428 Phase 2: install_services()'s own start_daemon_as_service_account()
+  # already tries to get the daemon running, but "tried and the LaunchDaemon
+  # reported a pid" is not the same claim as "reachable, with a control
+  # socket, and owned by the right account" -- and the #598 upgrade-gap bug
+  # this phase exists to close was exactly a case where the first succeeded
+  # and the second silently did not. Run in a subshell, the same way --auto
+  # itself is below: cmd_daemon_ensure_running's own die() would otherwise
+  # take this whole `enable` down with it under set -euo pipefail, which is
+  # not what a hiccup *here* -- after everything else above has already
+  # succeeded -- should do to the rest of the install. A failure is reported,
+  # once, clearly, and left to the companion's own Start button (or
+  # installer/macos/pkg/postinstall's own follow-up ensure-running call) to
+  # recover from.
+  if ! ( cmd_daemon_ensure_running ); then
+    warn "could not confirm ${DAEMON_LABEL} is running after enable -- check ${SYSTEM_ROOT}/logs, or run 'sudo $0 daemon ensure-running' by hand. The companion app's tray menu will offer to start it."
+  fi
+
   cat <<DONE
 
 ✓ PrivacyFence now runs as ${SERVICE_ACCOUNT}.
 
   Data directory   ${SYSTEM_ROOT}
   Human authority  ${SYSTEM_ROOT}/authority   (0700, ${SERVICE_ACCOUNT} only)
-  Shared handoff   ${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}   (2770, ${SERVICE_GROUP} group)
+  Shared handoff   ${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}   (3770, ${SERVICE_GROUP} group)
 DONE
 
   if [ -n "$OWNER_USER" ]; then
@@ -781,6 +1135,25 @@ cmd_enable_for_user() {
 
   [ -f "${SYSTEM_ROOT}/${MARKER_NAME}" ] \
     || die "this install is not privilege-separated yet -- run 'sudo $0 enable' first"
+
+  # #428 Phase 2 §2.6's interim multi-user guard used to refuse this outright
+  # for anyone but the recorded owner, because the only alternative on offer
+  # at the time was merging a second account's ~/.privacyfence into data the
+  # first owner's connectors already lived in. ADR 0008 ("D2: two identities,
+  # not one, per install") replaces that refusal with a real second identity
+  # instead: adding another OS account to ${SERVICE_GROUP} is now the normal,
+  # supported way to let more than one human use this install, and
+  # migrate_data() below sends that account's own data into its own isolated
+  # users/os-<uid>/ rather than the shared root, so nothing merges. There is
+  # no override flag to pass here any more -- this always was the interim
+  # guard's job, and now that the isolation exists, the guard has nothing
+  # left to guard against.
+  local recorded_owner
+  recorded_owner="$(marker_owner_user)"
+  if [ -n "$recorded_owner" ] && [ "$recorded_owner" != "$OWNER_USER" ]; then
+    note "adding '${OWNER_USER}' alongside this install's existing owner '${recorded_owner}' -- each gets its own isolated PrivacyFence identity (docs/adr/0008-one-principal-per-os-user.md); '${OWNER_USER}'s own $(legacy_data_dir) will be migrated into its own storage, not merged with '${recorded_owner}'s"
+    NON_OWNER_FOR_USER=1
+  fi
 
   add_owner_to_service_group
   # Anything this human accumulated under ~/.privacyfence before the machine
@@ -946,6 +1319,38 @@ cmd_status() {
     && echo "  ok               ${DAEMON_LABEL} is loaded" \
     || { echo "  NOT LOADED       ${DAEMON_LABEL}"; problems=1; }
 
+  # ADR 0008: the recorded `owner_user` above is only this install's *first*
+  # principal, not its only one -- `enable --for-user` for a second account
+  # gives it its own users/os-<uid>/ instead of touching the owner's data at
+  # all (see migrate_data()'s ADR 0008 comment), so it never shows up as an
+  # "owner" and would otherwise be invisible here. This lists whichever of
+  # those subdirectories actually exist, which is a report of who has
+  # finished the per-user half, not of who is merely in ${SERVICE_GROUP} --
+  # a group member who hasn't yet run `enable --for-user` (or the companion
+  # app hasn't done it for them) has no directory here yet and is still
+  # "pending" in the same sense the very first owner_membership_pending()
+  # case always was.
+  if [ -d "${SYSTEM_ROOT}/users" ]; then
+    local other_dir other_uid other_name printed_header=0
+    for other_dir in "${SYSTEM_ROOT}/users"/os-*; do
+      [ -d "$other_dir" ] || continue
+      if [ "$printed_header" = "0" ]; then
+        echo "  other accounts using this install:"
+        printed_header=1
+      fi
+      other_uid="$(basename "$other_dir")"
+      other_uid="${other_uid#os-}"
+      # Best-effort uid->name for a friendlier report; the directory name
+      # itself (os-<uid>) is what actually matters and is printed either way.
+      other_name="$(dscl . -search /Users UniqueID "$other_uid" 2>/dev/null | awk '{print $1; exit}')"
+      if [ -n "$other_name" ]; then
+        echo "    ${other_name} (os-${other_uid})"
+      else
+        echo "    os-${other_uid} (no matching /Users record -- account since removed?)"
+      fi
+    done
+  fi
+
   [ "$problems" = "0" ] || return 1
 }
 
@@ -953,6 +1358,16 @@ cmd_status() {
 
 [ $# -ge 1 ] || usage
 COMMAND="$1"; shift
+# `daemon`'s sub-verb is a positional, consumed here, before the generic
+# option-parsing loop below ever runs -- that loop's `*) die "unknown
+# option: $1"` would otherwise treat `start`/`stop`/etc. as an unrecognized
+# flag, since none of its `--xxx` cases match a bare word. Every other
+# command here takes only `--flag [value]` options, so this is the one place
+# a second positional argument is legal at all.
+if [ "$COMMAND" = "daemon" ]; then
+  [ $# -ge 1 ] || usage
+  DAEMON_SUBCOMMAND="$1"; shift
+fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --user) OWNER_USER="${2:-}"; shift 2 ;;
@@ -995,5 +1410,6 @@ case "$COMMAND" in
     ;;
   disable) cmd_disable ;;
   status) cmd_status ;;
+  daemon) cmd_daemon "$DAEMON_SUBCOMMAND" ;;
   *) usage ;;
 esac

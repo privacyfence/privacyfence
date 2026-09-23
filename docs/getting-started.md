@@ -200,10 +200,13 @@ Now continue with [Finish setup](#finish-setup-every-platform).
 
 ## Connect Claude Code (or another HTTP MCP client)
 
-This works on every platform, and is the only route on Linux. The daemon writes the URL and the
-bearer token your client needs into its handoff directory when it starts.
+This works on every platform, and is the only route on Linux. The daemon writes the URL your
+client needs into its handoff directory when it starts, and mints the bearer token itself over its
+local control channel — since [ADR 0008](adr/0008-one-principal-per-os-user.md), that token is no
+longer a file every account on the machine could read, so `privacyfence-app --print-mcp-token` is
+how you get your own.
 
-Where that directory is depends on the platform (all three packaged installs are
+Where the URL file lives depends on the platform (all three packaged installs are
 privilege-separated):
 
 | Platform | Handoff directory |
@@ -213,17 +216,37 @@ privilege-separated):
 | Debian/Ubuntu (packaged) | `/var/lib/privacyfence/handoff/` |
 | Source or `pip`/`pipx` run (not separated) | `~/.privacyfence/` (`%LOCALAPPDATA%\PrivacyFence\` on Windows) |
 
-It holds `mcp_url` (e.g. `http://127.0.0.1:8765/mcp`) and `mcp_token`. On macOS or Linux:
+It holds `mcp_url` (e.g. `http://127.0.0.1:8765/mcp`). On macOS or Linux:
 
 ```bash
 PF_HANDOFF=/var/lib/privacyfence/handoff        # macOS: "/Library/Application Support/PrivacyFence/handoff"
 claude mcp add --transport http privacyfence "$(cat "$PF_HANDOFF/mcp_url")" \
-  --header "Authorization: Bearer $(cat "$PF_HANDOFF/mcp_token")"
+  --header "Authorization: Bearer $(privacyfence-app --print-mcp-token)"
 ```
 
-You must be logged in as the user the install was provisioned for — that group membership is what
-makes these two files readable at all. If `cat` reports *Permission denied*, you haven't logged out
-and back in since installing.
+You must be logged in as the user the install was provisioned for (or a second account already
+added to its service group — see [Adding a second account](platform-support.md), each gets their
+own isolated token) — that group membership is what makes the daemon's control channel reachable at
+all. `--print-mcp-token` mints your own account's token the first time you run it and returns the
+same one every time after; if it can't reach the daemon, you haven't logged out and back in since
+installing.
+
+**Uploading a local file.** Claude Code has no `.mcpb` shim, so `drive_upload_file`'s `local_path`
+(and the `gmail_*_with_attachments` tools' `attachments`) can't read your files directly the way
+Claude Desktop's extension does — a call with `local_path` set fails with a message pointing you at
+`privacyfence_create_upload_slot` instead. Call it, then `PUT` the file to the URL it returns (no
+`Authorization` header needed — the URL itself is the one-time credential) and pass the
+`upload_id` it gave you back to the tool that needed the file:
+
+```bash
+# Claude calls privacyfence_create_upload_slot itself and gets back an upload_url; from a shell:
+curl -T /path/to/report.pdf 'http://127.0.0.1:8765/mcp-files/slots/<upload_id>'
+```
+
+Then pass `upload_id` as `drive_upload_file`'s own `upload_id` parameter, or as an
+`"upload:<upload_id>"` entry in one of the `gmail_*_with_attachments` tools' `attachments` array.
+See [`docs/org-mode-download-delivery.md`](org-mode-download-delivery.md#uploads-and-downloads-for-clients-without-the-shim-phase-4)
+for the full shape of what the tool returns.
 
 ---
 
@@ -300,7 +323,7 @@ Keeping the Approvals tab open gets you browser notifications for new requests.
 | Claude lists only `privacyfence_*` tools | No connector is authenticated yet. Finish setup, step 3. |
 | Claude says it can't give you a sign-in link | Working as designed. PrivacyFence never issues a session to the program it governs — use the companion. |
 | Nothing gets approved; every page warns about it | No passkey is enrolled. Finish setup, step 1. |
-| *Permission denied* reading `mcp_token`, or the companion can't reach the daemon | You haven't logged out and back in since installing. |
+| `--print-mcp-token` can't reach the daemon, or the companion can't either | You haven't logged out and back in since installing. |
 | The companion menu is out of reach | Print a one-time sign-in link with the break-glass command for your platform (see the note at the end of each platform section; on Debian/Ubuntu it is `privacyfence-app --print-sign-in-link`) and confirm it at the companion's dialog. |
 | Connector sign-in never opens a browser page (Linux) | The `--serve` companion isn't running in your session. Log out and back in, or start it by hand with `privacyfence-companion --serve &`. |
 | A first passkey enrollment is refused, naming `zenity`/`kdialog` (Linux) | Install either one. |

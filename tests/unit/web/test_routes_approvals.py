@@ -1607,3 +1607,106 @@ class TestSensitiveConfirmDialog:
         assert r.status_code == 200
         t.join(timeout=2)
         assert box["confirmed"] is True
+
+
+class TestPerPrincipalIsolation:
+    """ADR 0008: local mode is no longer guaranteed to have exactly one
+    principal, so every route here has to filter/authorize against
+    ``current_principal()`` the same way web/routes_org_approvals.py's own
+    routes always have. Exercised end to end through the real
+    ``_PrincipalScopeMiddleware`` (server.py) -- the same wrapping
+    ``build_app()`` applies in production -- rather than by calling
+    ``current_principal()``/``principal_scope`` directly, so this proves
+    the actual HTTP routes, not just the registry underneath them."""
+
+    def _app(self):
+        from privacyfence.principal import Principal
+        from privacyfence.web.server import _local_principal_resolver, _PrincipalScopeMiddleware
+
+        web_ui = WebApprovalUI()
+        sessions = LocalSessionStore()
+        app = create_app(web_ui, sessions=sessions)
+        scoped = _PrincipalScopeMiddleware(app, _local_principal_resolver(sessions))
+        client = TestClient(scoped, base_url="http://localhost")
+        return client, sessions, web_ui, Principal
+
+    def _sign_in_as(self, client, sessions, principal_id):
+        session_id = sessions.create(principal_id=principal_id)
+        client.cookies.set(SESSION_COOKIE, session_id)
+        return session_id
+
+    def _register_for(self, web_ui, principal, **kwargs):
+        from privacyfence.principal import principal_scope
+
+        with principal_scope(principal):
+            approval, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key=kwargs.pop("dedupe_key", "k1"), connector="gmail", tool="gmail_get_message",
+                gate_kind="review", request_id="r1", summary="a message", tool_name="Get message", **kwargs,
+            )
+        web_ui.deferred_registry.set_html(approval.id, "<!doctype html><html><head></head><body>CARD</body></html>")
+        return approval
+
+    def test_the_approvals_list_only_shows_the_signed_in_principals_own(self):
+        client, sessions, web_ui, Principal = self._app()
+        self._register_for(web_ui, Principal(id="local"), dedupe_key="owner")
+        self._register_for(web_ui, Principal(id="os-1002"), dedupe_key="bob")
+        self._sign_in_as(client, sessions, "os-1002")
+
+        r = client.get("/approvals")
+
+        assert r.status_code == 200
+        assert "Get message" in r.text
+
+    def test_a_foreign_principals_card_page_reads_as_not_pending_not_leaked(self):
+        client, sessions, web_ui, Principal = self._app()
+        owners_card = self._register_for(web_ui, Principal(id="local"), dedupe_key="owner")
+        self._sign_in_as(client, sessions, "os-1002")
+
+        r = client.get(f"/approvals/{owners_card.id}")
+
+        # Same "no longer pending" response show_approval already gives an
+        # unknown/already-decided id -- a foreign principal's own approval
+        # must be indistinguishable from either of those, never rendered.
+        assert r.status_code == 200
+        assert "CARD" not in r.text
+        assert "no longer pending" in r.text
+
+    def test_a_foreign_principals_preview_is_a_plain_404(self):
+        client, sessions, web_ui, Principal = self._app()
+        owners_card = self._register_for(web_ui, Principal(id="local"), dedupe_key="owner")
+        self._sign_in_as(client, sessions, "os-1002")
+
+        r = client.get(f"/api/approvals/{owners_card.id}/preview")
+
+        assert r.status_code == 404
+
+    def test_a_foreign_principal_cannot_decide_the_owners_approval(self):
+        client, sessions, web_ui, Principal = self._app()
+        owners_card = self._register_for(web_ui, Principal(id="local"), dedupe_key="owner")
+        bob_session = self._sign_in_as(client, sessions, "os-1002")
+
+        r = client.post(
+            f"/api/approvals/{owners_card.id}/decide",
+            json={"result": "approve", "csrf": bob_session},
+        )
+
+        # sensitive_confirm/pending resolution both go through the same
+        # principal-filtered .get() -- a foreign id resolves as unknown, so
+        # the decision is refused with "already_decided" (§7.1's own
+        # idempotent-refusal shape for an id resolve() cannot act on),
+        # never actually applied to the owner's own card.
+        assert r.status_code == 409
+        assert not owners_card.event.is_set()
+
+    def test_the_owner_can_still_decide_their_own_approval(self):
+        client, sessions, web_ui, Principal = self._app()
+        owners_card = self._register_for(web_ui, Principal(id="local"), dedupe_key="owner")
+        owner_session = self._sign_in_as(client, sessions, "local")
+
+        r = client.post(
+            f"/api/approvals/{owners_card.id}/decide",
+            json={"result": "approve", "csrf": owner_session},
+        )
+
+        assert r.status_code == 200
+        assert owners_card.event.is_set()

@@ -83,19 +83,25 @@ holds, and the module still imports nothing but ``web/control_channel.py``:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
+import shutil
+import subprocess  # nosec B404  # fixed argv (notify-send) below, no shell
 import sys
 import threading
 import time
 import webbrowser
+from dataclasses import dataclass
 from typing import Callable
 from pathlib import Path
 
-from . import privilege_separation
+from . import daemon_status, privilege_separation, service_control
 from .std_streams import ensure_std_streams
 from .web.control_channel import (
     CompanionChannelServer,
     ControlChannelError,
+    _dialog_for,
+    _NoDialogAvailable,
     enrollment_state,
     mint_bootstrap_code,
     open_attested_url,
@@ -117,8 +123,22 @@ ACTION_OPEN_SETTINGS = "open-settings"
 # It is a menu entry rather than anything on /security because the code is
 # not the daemon's to hand a browser any more -- see _show_recovery_code().
 ACTION_RECOVERY_CODE = "recovery-code"
+# The local-mode-fixes plan's Phase 2 (companion-as-daemon-manager): the
+# daemon-management surface ADR 0002's Amendment adds to the companion's
+# menu -- see daemon_status.py/
+# service_control.py for the split behind these, and _menu_model() below for
+# how the macOS/Windows tray turns them into the dynamic status
+# line/Start/Restart/Stop items this same set of actions backs.
+ACTION_SERVICE_STATUS = "service-status"
+ACTION_SERVICE_START = "service-start"
+ACTION_SERVICE_RESTART = "service-restart"
+ACTION_SERVICE_STOP = "service-stop"
 ACTION_QUIT = "quit"
-_ACTIONS = (ACTION_OPEN_APPROVALS, ACTION_OPEN_SETTINGS, ACTION_RECOVERY_CODE, ACTION_QUIT)
+_ACTIONS = (
+    ACTION_OPEN_APPROVALS, ACTION_OPEN_SETTINGS, ACTION_RECOVERY_CODE,
+    ACTION_SERVICE_STATUS, ACTION_SERVICE_START, ACTION_SERVICE_RESTART, ACTION_SERVICE_STOP,
+    ACTION_QUIT,
+)
 
 # How long _offer_first_enrollment() keeps looking for a daemon before
 # giving up for this login session. A packaged install starts its daemon as
@@ -142,6 +162,121 @@ _TRAY_ICON_PATH = Path(__file__).parent / "resources" / "icon_menubar.png"
 # with nothing of ours in scope, and a flag set beside the ``start()`` that
 # makes it true cannot fall out of step with it.
 _channel_running = threading.Event()
+
+# How often the tray/``--serve`` background poll re-checks
+# ``daemon_status.probe()`` and, on the tray, redraws the menu/icon from it.
+_STATUS_POLL_SECONDS = 5.0
+# ADR 0002's Amendment: a stopped/failed daemon is notified about only once
+# it has stayed that way for this long, so a daemon that is merely mid-
+# restart (a few seconds of "stopped" between the old process exiting and
+# the new one's control socket coming up) never earns one.
+_NOTIFY_AFTER_SECONDS = 15.0
+# ...and not at all in the minute right after this process itself started,
+# since the daemon may simply still be starting up behind it (a login-time
+# or post-upgrade race, the same one _offer_first_enrollment() already
+# tolerates with its own retry loop).
+_NOTIFY_SUPPRESS_AFTER_START_SECONDS = 60.0
+_NOTIFY_STATES = frozenset({"stopped", "failed"})
+_NOTIFY_TEXT = "PrivacyFence isn't running. Click the menu-bar icon to start it."
+
+
+@dataclass
+class _MenuEntry:
+    """One row of the tray/menu-bar menu -- pystray-free on purpose (the
+    local-mode-fixes plan's own testing note for this phase: "test the pure
+    function that computes the menu model; do not drive pystray"), so
+    ``_menu_model()`` below is
+    directly unit-testable on every OS this repo's CI actually runs on,
+    not only the two ``pystray`` is declared a dependency on."""
+
+    label: str
+    #: One of this module's ``ACTION_*`` constants, or None for the
+    #: disabled status line, which has nothing to dispatch.
+    action: str | None
+    enabled: bool = True
+    visible: bool = True
+
+
+_STATUS_SYMBOL = {"running": "●", "starting": "●", "unresponsive": "⚠", "failed": "⚠"}
+_STATUS_LABEL = {
+    "running": "is running", "starting": "is starting", "stopped": "is not running",
+    "failed": "has failed", "unresponsive": "is not responding", "unknown": "status is unknown",
+}
+
+
+def _status_line_text(status: "daemon_status.DaemonStatus") -> str:
+    symbol = _STATUS_SYMBOL.get(status.state, "○")  # open circle: stopped/unknown
+    version = f" (v{status.version})" if status.version else ""
+    return f"{symbol} PrivacyFence {_STATUS_LABEL[status.state]}{version}"
+
+
+def _menu_model(status: "daemon_status.DaemonStatus") -> list[_MenuEntry]:
+    """The tray/menu-bar's whole content, as data -- what ``_run_tray()``
+    turns into real ``pystray.MenuItem``s, and what a unit test can check
+    without pystray at all. Layout matches ADR 0002's Amendment: a disabled
+    status line, the two ADR 0002 decision-2 items unchanged, then exactly
+    one of Start/Restart/Stop depending on whether the daemon looks up
+    (running/starting/unresponsive all count -- an unresponsive daemon is
+    not a stopped one, and Start would just collide with whatever is
+    already listening), Service Details for the sentence behind the status
+    line's symbol, then the unchanged recovery-code and quit items."""
+    running = status.state in ("running", "starting", "unresponsive")
+    return [
+        _MenuEntry(_status_line_text(status), None, enabled=False),
+        _MenuEntry("Open Approvals", ACTION_OPEN_APPROVALS),
+        _MenuEntry("Open Settings", ACTION_OPEN_SETTINGS),
+        _MenuEntry("Start PrivacyFence…", ACTION_SERVICE_START, visible=not running),
+        _MenuEntry("Restart PrivacyFence…", ACTION_SERVICE_RESTART, visible=running),
+        _MenuEntry("Stop PrivacyFence…", ACTION_SERVICE_STOP, visible=running),
+        _MenuEntry("Service Details…", ACTION_SERVICE_STATUS),
+        _MenuEntry("New Recovery Code…", ACTION_RECOVERY_CODE),
+        # Renamed from "Quit" (ADR 0002's Amendment): on a privilege-
+        # separated install this only ever quits the companion -- the
+        # daemon's own QUIT refuses outright (#428 B4) -- and the old label
+        # read as an offer this menu cannot make good on.
+        _MenuEntry("Quit Companion", ACTION_QUIT),
+    ]
+
+
+@dataclass
+class _NotificationState:
+    """Carried across polls by the caller (the tray's poll thread, or
+    ``--serve``'s) -- kept as an explicit, passed-in object rather than
+    closure-captured module state so ``_notification_decision()`` below is
+    a pure function a test can drive with fabricated timestamps."""
+
+    bad_since: float | None = None
+    notified_state: str | None = None
+
+
+def _notification_decision(
+    poll_state: _NotificationState, status: "daemon_status.DaemonStatus", *, now: float, started_at: float,
+) -> bool:
+    """Whether *this* poll should show the "PrivacyFence isn't running"
+    notification -- mutates ``poll_state`` in place (tracking how long the
+    current bad state has persisted, and which state was last notified
+    about, so a stopped→failed→stopped flap notifies at most once per
+    distinct transition) and returns the yes/no the caller acts on.
+
+    Suppresses for ``_NOTIFY_SUPPRESS_AFTER_START_SECONDS`` after this
+    companion process itself started, and again until the bad state has
+    held for ``_NOTIFY_AFTER_SECONDS`` -- see the two constants' own
+    comments for why each exists."""
+    if status.state not in _NOTIFY_STATES:
+        poll_state.bad_since = None
+        poll_state.notified_state = None
+        return False
+    if now - started_at < _NOTIFY_SUPPRESS_AFTER_START_SECONDS:
+        return False
+    if poll_state.bad_since is None:
+        poll_state.bad_since = now
+        return False
+    if now - poll_state.bad_since < _NOTIFY_AFTER_SECONDS:
+        return False
+    if poll_state.notified_state == status.state:
+        return False
+    poll_state.notified_state = status.state
+    return True
 
 
 def _open_path(path: str) -> bool:
@@ -234,6 +369,47 @@ def _show_recovery_code() -> bool:
     return True
 
 
+def _show_message(text: str) -> bool:
+    """Put ``text`` in front of whoever is at this login session, with no
+    reply expected -- the companion's own local report of a service action's
+    outcome, reusing the daemon's own per-platform "statement" dialog
+    (``web/control_channel.py``'s ``_dialog_for("message")``) rather than a
+    second implementation of the same three dialog primitives.
+
+    False (logging why) when this desktop has neither zenity nor kdialog
+    (Linux only -- ADR 0002 decision 4's Linux budget), same posture as
+    every other companion action that reports rather than raises."""
+    try:
+        return _dialog_for("message")(text, timeout=15.0)
+    except _NoDialogAvailable as exc:
+        logger.warning("Could not show %r: %s", text, exc)
+        return False
+
+
+def _show_service_status() -> bool:
+    """The ``Service Details…``/``service-status`` action: probe the daemon
+    (``daemon_status.probe()``, this plan's Phase 2) and put its one-sentence
+    ``detail`` in front of the human -- the tray already shows the same
+    state at a glance, so this is for whoever wants the sentence behind the
+    symbol, and the whole of what Linux's one-shot ``ServiceStatus`` Desktop
+    Action has."""
+    status = daemon_status.probe()
+    return _show_message(status.detail)
+
+
+def _run_service_action(action: "service_control.DaemonAction") -> bool:
+    """Start/Restart/Stop, elevated (``service_control.run_elevated()``,
+    this plan's Phase 2). Reports the outcome the same way ``_show_service_status``
+    does -- except a declined password prompt (``detail == "cancelled"``)
+    says nothing further, the same restraint ``service_control.py``'s own
+    docstring asks for: a human who just clicked Cancel does not need a
+    dialog telling them so."""
+    ok, detail = service_control.run_elevated(action)
+    if detail != "cancelled":
+        _show_message(detail)
+    return ok
+
+
 def _run_action(action: str) -> bool:
     if action == ACTION_OPEN_APPROVALS:
         return _open_path("/approvals")
@@ -241,6 +417,14 @@ def _run_action(action: str) -> bool:
         return _open_path("/settings")
     if action == ACTION_RECOVERY_CODE:
         return _show_recovery_code()
+    if action == ACTION_SERVICE_STATUS:
+        return _show_service_status()
+    if action == ACTION_SERVICE_START:
+        return _run_service_action("start")
+    if action == ACTION_SERVICE_RESTART:
+        return _run_service_action("restart")
+    if action == ACTION_SERVICE_STOP:
+        return _run_service_action("stop")
     if action == ACTION_QUIT:
         return _quit_daemon()
     raise ValueError(f"Unknown companion action: {action!r}")  # pragma: no cover -- argparse restricts choices
@@ -262,13 +446,24 @@ def _complete_pending_separation() -> None:
     login session, which is the granularity decision 3 actually wants: group
     membership is evaluated when a session is created, so a second attempt
     inside the same session could not observe its own result anyway.
+
+    ADR 0008 ("D2: two identities, not one, per install") retired the
+    local-mode-fixes plan's Phase 2 §2.6 interim guard: through that
+    guard, an account that was not this install's recorded owner got a
+    notification instead of a join, because completing it would have
+    silently handed them the owner's own principal. Now that a second
+    account gets its own isolated ``os-<uid>``/``os-<sid>`` principal
+    instead, there is nothing left to warn about -- any pending service-
+    group member is onboarded exactly like the owner always was.
     """
     # Read once, up front: the elevated command below rewrites the marker and
     # drops the cache, so asking again afterwards could answer None on an
     # install somebody ran `disable` against in between -- and the group to
     # name in the message is the one this decision was pending on.
     state = privilege_separation.separation()
-    if state is None or not privilege_separation.owner_membership_pending():
+    if state is None:
+        return
+    if not privilege_separation.owner_membership_pending():
         return
     if not privilege_separation.complete_per_user_separation():
         return
@@ -367,13 +562,65 @@ def _start_pending_separation_check() -> None:
     ).start()
 
 
+def _status_icon_image(base_image, state: str):  # noqa: ANN001, ANN201 -- a PIL Image, no type stub imported at module scope
+    """The tray icon for ``state`` -- ``base_image`` unchanged while the
+    daemon looks up (running/starting), greyscale otherwise (ADR 0002's
+    Amendment: "swap in a grey ... icon variant when the daemon is not
+    running"). Computed from ``base_image`` fresh each call rather than
+    from whatever the icon currently shows, so repeated polls in the same
+    state never compound (grey-of-grey is still grey, but there is no
+    reason to rely on that).
+
+    A programmatic grayscale rather than a second shipped PNG: this repo
+    has no way to hand-author a second icon asset, and ``Pillow`` is
+    already a hard dependency of this entry point -- ``ImageOps.
+    grayscale()`` costs nothing new to carry."""
+    if state in ("running", "starting"):
+        return base_image
+    from PIL import ImageOps
+
+    return ImageOps.grayscale(base_image).convert(base_image.mode)
+
+
+def _run_status_poll_once(
+    *, notify_state: _NotificationState, started_at: float,
+    on_status: Callable[["daemon_status.DaemonStatus"], None] | None = None,
+    on_notify: Callable[[], None] | None = None,
+) -> "daemon_status.DaemonStatus":
+    """One tick of the background status poll -- the pure-enough core
+    ``_run_tray()``'s icon-updating loop and ``_run_serve()``'s
+    notify-send-only loop both share, factored out so it is directly
+    unit-testable rather than only reachable by letting a real background
+    thread run. Probes the daemon once, hands the fresh status to
+    ``on_status`` (the tray's own icon/menu redraw; ``--serve`` has none,
+    so it passes None), and runs ``on_notify`` exactly when
+    ``_notification_decision()`` says this tick should notify."""
+    status = daemon_status.probe()
+    if on_status is not None:
+        on_status(status)
+    if on_notify is not None and _notification_decision(
+        notify_state, status, now=time.monotonic(), started_at=started_at,
+    ):
+        on_notify()
+    return status
+
+
 def _run_tray() -> int:
     """macOS/Windows only -- a persistent process with a tray/menu-bar icon
     and this process's own ``CompanionChannelServer`` (decision 5), both
     torn down together on Quit. ``pystray``/``Pillow`` are imported here,
     not at module scope, so importing this module (e.g. from a unit test)
     never requires them on a platform where they aren't even declared as a
-    dependency (``pyproject.toml``)."""
+    dependency (``pyproject.toml``).
+
+    The local-mode-fixes plan's Phase 2 (ADR 0002's Amendment) adds a live
+    status line and Start/Restart/Stop/Service Details items, backed by ``_menu_model()``
+    above: the ``pystray.MenuItem``s built below never change identity or
+    order once created -- only their ``text``/``enabled``/``visible``,
+    each a small callable reading ``_menu_model(_state.status)[index]``, so
+    a background poll thread can redraw the whole menu (``icon.
+    update_menu()``) without rebuilding it.
+    """
     import pystray
     from PIL import Image
 
@@ -381,6 +628,18 @@ def _run_tray() -> int:
     channel = CompanionChannelServer()
     channel.start()
     _channel_running.set()
+
+    base_image = Image.open(_TRAY_ICON_PATH)
+
+    class _State:
+        status = daemon_status.probe()
+        notify = _NotificationState()
+
+    _state = _State()
+    started_at = time.monotonic()
+
+    def _model() -> list[_MenuEntry]:
+        return _menu_model(_state.status)
 
     def _on_open_approvals(_icon: "pystray.Icon", _item: "pystray.MenuItem") -> None:
         _open_path("/approvals")
@@ -406,23 +665,95 @@ def _run_tray() -> int:
             target=_show_recovery_code, name="privacyfence-recovery-code", daemon=True,
         ).start()
 
-    menu = pystray.Menu(
-        pystray.MenuItem("Open Approvals", _on_open_approvals),
-        pystray.MenuItem("Open Settings", _on_open_settings),
-        pystray.MenuItem("New Recovery Code\u2026", _on_recovery_code),
-        pystray.MenuItem("Quit", _on_quit),
+    def _on_service_status(_icon: "pystray.Icon", _item: "pystray.MenuItem") -> None:
+        threading.Thread(
+            target=_show_service_status, name="privacyfence-service-status", daemon=True,
+        ).start()
+
+    def _make_service_handler(action: "service_control.DaemonAction"):
+        def _handler(_icon: "pystray.Icon", _item: "pystray.MenuItem") -> None:
+            # Its own thread for the same reason recovery-code's is: an
+            # elevation prompt plus the platform script's own retry loop can
+            # take well past what should ever block the menu from drawing.
+            threading.Thread(
+                target=_run_service_action, args=(action,),
+                name=f"privacyfence-service-{action}", daemon=True,
+            ).start()
+
+        return _handler
+
+    _handlers: dict[str, Callable[["pystray.Icon", "pystray.MenuItem"], None]] = {
+        ACTION_OPEN_APPROVALS: _on_open_approvals,
+        ACTION_OPEN_SETTINGS: _on_open_settings,
+        ACTION_SERVICE_START: _make_service_handler("start"),
+        ACTION_SERVICE_RESTART: _make_service_handler("restart"),
+        ACTION_SERVICE_STOP: _make_service_handler("stop"),
+        ACTION_SERVICE_STATUS: _on_service_status,
+        ACTION_RECOVERY_CODE: _on_recovery_code,
+        ACTION_QUIT: _on_quit,
+    }
+
+    items = []
+    for index, entry in enumerate(_model()):
+        if entry.action is None:
+            items.append(pystray.MenuItem(lambda _item, i=index: _model()[i].label, None, enabled=False))
+        else:
+            items.append(pystray.MenuItem(
+                entry.label, _handlers[entry.action],
+                enabled=lambda _item, i=index: _model()[i].enabled,
+                visible=lambda _item, i=index: _model()[i].visible,
+            ))
+    menu = pystray.Menu(*items)
+    icon = pystray.Icon(
+        "privacyfence", _status_icon_image(base_image, _state.status.state), "PrivacyFence", menu,
     )
-    icon = pystray.Icon("privacyfence", Image.open(_TRAY_ICON_PATH), "PrivacyFence", menu)
+
+    poll_stop = threading.Event()
+
+    def _redraw(status: "daemon_status.DaemonStatus") -> None:
+        _state.status = status
+        icon.icon = _status_icon_image(base_image, status.state)
+        icon.update_menu()
+
+    def _notify() -> None:
+        icon.notify(_NOTIFY_TEXT)
+
+    def _poll_loop() -> None:
+        while not poll_stop.wait(_STATUS_POLL_SECONDS):
+            _run_status_poll_once(
+                notify_state=_state.notify, started_at=started_at, on_status=_redraw, on_notify=_notify,
+            )
+
+    threading.Thread(target=_poll_loop, name="privacyfence-status-poll", daemon=True).start()
+
     try:
         icon.run()
     finally:
+        poll_stop.set()
         _channel_running.clear()
         channel.stop()
     return 0
 
 
+def _notify_send(text: str) -> None:
+    """``--serve``'s own counterpart to the tray's ``icon.notify()`` (this
+    plan's Phase 2): ``notify-send``, if this desktop has it. Silently a no-op
+    otherwise -- ``notify-send`` is not a PrivacyFence dependency any more
+    than zenity/kdialog are (ADR 0002 decision 4's Linux budget), and a
+    background poll finding no notifier installed is not worth a log line
+    on every single poll."""
+    notify_send = shutil.which("notify-send")
+    if notify_send is None:
+        return
+    with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+        subprocess.run(  # nosec B603  # fixed argv, no shell; `text` is this module's own constant
+            [notify_send, "PrivacyFence", text], capture_output=True, timeout=5, check=False,
+        )
+
+
 def _run_serve(wait: Callable[[], None] | None = None) -> int:
-    """``--serve``: the companion channel and nothing else, until killed.
+    """``--serve``: the companion channel, plus (this plan's Phase 2) a background
+    status poll, until killed.
 
     #428 Phase 4 (B5b). A separated install's daemon runs under its own
     account with no desktop session, so ``oauth_loopback.py``'s
@@ -432,6 +763,11 @@ def _run_serve(wait: Callable[[], None] | None = None) -> int:
     tray process already running a ``CompanionChannelServer``. This is that
     server on its own: no ``pystray``, no icon, no menu, no imports beyond
     what the one-shot ``--action`` path already pulls in.
+
+    The poll thread is this platform's only way to *notice* a stopped/
+    failed daemon on its own (there is no tray icon to glance at) -- it
+    reuses the exact same ``_notification_decision()`` rule the tray's poll
+    does, just sent through ``notify-send`` instead of ``icon.notify()``.
 
     Blocks on an Event nothing ever sets rather than a sleep loop: SIGTERM's
     default disposition kills the process outright, which is how the XDG
@@ -448,11 +784,26 @@ def _run_serve(wait: Callable[[], None] | None = None) -> int:
         return 1
     _channel_running.set()
     logger.info("Companion channel listening on %s", channel.address)
+
+    notify_state = _NotificationState()
+    started_at = time.monotonic()
+    poll_stop = threading.Event()
+
+    def _poll_loop() -> None:
+        while not poll_stop.wait(_STATUS_POLL_SECONDS):
+            _run_status_poll_once(
+                notify_state=notify_state, started_at=started_at,
+                on_notify=lambda: _notify_send(_NOTIFY_TEXT),
+            )
+
+    threading.Thread(target=_poll_loop, name="privacyfence-status-poll", daemon=True).start()
+
     try:
         (wait or threading.Event().wait)()
     except KeyboardInterrupt:  # pragma: no cover -- interactive only
         pass
     finally:
+        poll_stop.set()
         # Tears the socket down cleanly rather than leaving a stale node
         # behind for the next start to unlink.
         _channel_running.clear()

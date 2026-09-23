@@ -52,17 +52,24 @@ from starlette.routing import Route
 from starlette.types import ASGIApp
 
 from .. import __version__ as PRIVACYFENCE_VERSION
+from .. import local_files
 from ..connector import Connector
-from ..principal import principal_scope
+from ..principal import Principal, principal_scope
 from ..safe_errors import public_message
 from . import mcp_tools
-from .mcp_auth import StaticTokenVerifier, principal_from_access_token
+from .mcp_auth import principal_from_access_token, single_token_verifier
 from .mcp_dispatch import McpDispatcher
 from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
 
 logger = logging.getLogger(__name__)
 
 MCP_PATH = "/mcp"
+
+# ADR 0007's file-bridge capability header, on every request a bridge-
+# capable shim sends (SS1.1). The vendor _meta namespace itself is
+# local_files.META_KEY -- the single source of truth for that string, not
+# redefined here.
+_FILE_BRIDGE_HEADER = "x-privacyfence-file-bridge"
 
 # Part A of issue #396: server instructions returned in the `initialize`
 # result (Server.instructions -> InitializationOptions.instructions,
@@ -153,6 +160,33 @@ def _session_key(ctx: ServerRequestContext) -> str:
         return header
     connection = _connection_of(ctx)
     return getattr(connection, "session_id", None) or _SESSIONLESS_KEY
+
+
+def _request_header(ctx: ServerRequestContext, name: str) -> str | None:
+    request = ctx.request
+    return request.headers.get(name) if request is not None else None
+
+
+def _file_bridge_uploads(params: types.CallToolRequestParams) -> dict[str, str]:
+    """The ``{declared_path: slot}`` map a bridge-capable shim resends on
+    the second round of the upload handshake (ADR 0007 SS1.1 step 4) --
+    empty on every first-round call, including every call from a client
+    that never does the handshake at all."""
+    meta = params.meta or {}
+    bridge_meta = meta.get(local_files.META_KEY)
+    if not isinstance(bridge_meta, dict):
+        return {}
+    uploads = bridge_meta.get("uploads")
+    return dict(uploads) if isinstance(uploads, dict) else {}
+
+
+def _need_uploads_result(principal: Any, needed: local_files.LocalFilesNeeded) -> types.CallToolResult:
+    files = local_files.build_need_uploads_files(principal, needed)
+    names = ", ".join(f["path"] for f in files)
+    text = f"PrivacyFence needs the file(s) below uploaded by the PrivacyFence extension: {names}"
+    result = types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+    result.meta = {local_files.META_KEY: {"v": 1, "op": "need_uploads", "files": files}}
+    return result
 
 
 class _PrivacyFenceServer(MCPServer):
@@ -314,12 +348,24 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
         # mcp_auth.principal_from_access_token's own docstring for how each
         # is resolved.
         principal = principal_from_access_token(get_access_token())
-        with principal_scope(principal):
+        bridge_available = _request_header(ctx, _FILE_BRIDGE_HEADER) is not None
+        uploads = _file_bridge_uploads(params)
+        base_url = str(ctx.request.base_url) if ctx.request is not None else ""
+        with principal_scope(principal), local_files.call_context(
+            bridge_available=bridge_available, uploads=uploads, base_url=base_url,
+        ) as call_state:
             try:
                 if name in mcp_tools.META_TOOL_NAMES:
-                    result = await _dispatch_meta_tool(dispatcher, session_key, name, arguments)
+                    result = await _dispatch_meta_tool(dispatcher, session_key, name, arguments, principal, base_url)
                 else:
                     result = await _dispatch_connector_tool(dispatcher, session_key, name, arguments)
+            except local_files.LocalFilesNeeded as needed:
+                # ADR 0007 SS1.1: not a failure -- the shim intercepts this
+                # response, fetches the listed paths from the user's own
+                # disk, and resends the same call with an uploads map. Logged
+                # at INFO, not as a tool-call failure.
+                logger.info("Tool call %s needs %d local file(s) via the file bridge", name, len(needed.paths))
+                return _need_uploads_result(principal, needed)
             except Exception as exc:  # noqa: BLE001 -- surfaced to the client as a tool error, not a
                 # transport-level failure, exactly like ipc_server.py's own
                 # `{"id": ..., "error": str(exc)}` response to a "call" request.
@@ -338,7 +384,16 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
                 # nor something the model can act on.
                 logger.info("Tool call %s failed: %s", name, exc)
                 return mcp_tools.error_result(public_message(exc))
-        return mcp_tools.to_call_tool_result(result)
+            tool_result = mcp_tools.to_call_tool_result(result)
+            if call_state.pending_deliveries:
+                # SS1.1's "deliver" op: the shim intercepts this response,
+                # writes each staged file to the path the agent originally
+                # asked for, then rewrites the result before Claude ever
+                # sees it -- see mcpb/shim/src/fileBridge.ts.
+                tool_result.meta = {
+                    local_files.META_KEY: {"v": 1, "op": "deliver", "files": call_state.pending_deliveries},
+                }
+        return tool_result
 
     return _PrivacyFenceServer(
         "privacyfence", version=PRIVACYFENCE_VERSION, instructions=SERVER_INSTRUCTIONS,
@@ -365,6 +420,7 @@ def _connector_for_tool(connectors: dict[str, Connector], tool: str) -> str | No
 
 async def _dispatch_meta_tool(
     dispatcher: McpDispatcher, session_key: str, name: str, arguments: dict[str, Any],
+    principal: Principal, base_url: str,
 ) -> Any:
     reason = arguments.get("reason", "")
     if name == mcp_tools.CHECK_POLICY_TOOL.name:
@@ -389,6 +445,15 @@ async def _dispatch_meta_tool(
         )
     if name == mcp_tools.PRIVACYFENCE_STATUS_TOOL.name:
         return dispatcher.status(reason)
+    if name == mcp_tools.CREATE_UPLOAD_SLOT_TOOL.name:
+        # Phase 4: no gate/approval here -- see the tool's own description.
+        # local_files.build_upload_slot raises LocalFileAccessError
+        # (a ValueError -- safe_errors.public_message() shows it verbatim)
+        # for a size_bytes already over the slot cap.
+        return local_files.build_upload_slot(
+            principal, filename=arguments.get("filename", ""),
+            size_bytes=arguments.get("size_bytes"), base_url=base_url,
+        )
     raise ValueError(f"Unknown tool: {name!r}")  # pragma: no cover -- unreachable, META_TOOL_NAMES gates this
 
 
@@ -634,9 +699,12 @@ def build_mcp_asgi_app(
 
     ``verifier`` is the seam P7 plugs org mode into: pass
     ``web/oauth_provider.py``'s ``OrgOAuthProvider`` (which satisfies
-    ``TokenVerifier`` via its own ``verify_token``) instead of building
-    ``StaticTokenVerifier(token)`` for local mode's single shared secret --
-    exactly one of ``token``/``verifier`` should be given.
+    ``TokenVerifier`` via its own ``verify_token``) instead of building a
+    one-off single-token ``PerUserTokenVerifier`` for a caller with no
+    multi-principal registration to grow -- exactly one of ``token``/
+    ``verifier`` should be given. web/server.py's real local-mode wiring
+    always passes ``verifier`` (a long-lived ``PerUserTokenVerifier``
+    ``MINT MCP`` registers new principals into, ADR 0008), never ``token``.
     ``resource_metadata_url`` (RFC 9728, org mode only) is threaded into a
     401 response's ``WWW-Authenticate`` header so a client that gets one
     knows where to discover this server's authorization server; local
@@ -648,7 +716,7 @@ def build_mcp_asgi_app(
     if verifier is None:
         if token is None:
             raise ValueError("build_mcp_asgi_app needs either token or verifier")
-        verifier = StaticTokenVerifier(token)
+        verifier = single_token_verifier(token)
     protected = RequireAuthMiddleware(
         _SessionIdOnlyOnSuccess(
             _RehomeStaleInitialize(_StreamableHTTPASGIApp(session_manager), session_manager),

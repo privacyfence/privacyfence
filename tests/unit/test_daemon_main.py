@@ -592,14 +592,14 @@ class TestCheckStoragePermissions:
     def test_separated_layout_is_not_audited_against_the_flat_0700_rule(self, tmp_path, monkeypatch, caplog):
         # #428 Phase 4 makes two of these directories deliberately looser than
         # 0700 -- the system root 0711 so the logged-in user can traverse to
-        # the handoff directory, and the handoff directory 2770 so two
+        # the handoff directory, and the handoff directory 3770 so two
         # accounts can hand each other a socket. Reporting the design as a
         # defect on every startup would be noise; in org mode it would refuse
         # to start over it.
         handoff = tmp_path / "handoff"
         handoff.mkdir()
         tmp_path.chmod(0o711)
-        handoff.chmod(0o2770)
+        handoff.chmod(0o3770)
         self._patch_dirs(monkeypatch, tmp_path)
         monkeypatch.setattr(daemon_main, "handoff_dir", lambda: handoff)
         monkeypatch.setattr(daemon_main.privilege_separation, "is_enabled", lambda: True)
@@ -1497,6 +1497,33 @@ class TestMaybeStartWebServer:
         fake_connector = object.__new__(GmailConnector)
         connector_host.set_connectors([fake_connector])
         # No second push into the dispatcher -- it polls connector_host.connectors.
+        assert list(result.mcp_dispatcher.connectors) == [fake_connector.name]
+
+    def test_mcp_dispatcher_gives_a_different_principal_their_own_fresh_connector_set(
+        self, monkeypatch, tmp_path,
+    ):
+        # ADR 0008: a non-owner principal (an os-<uid>/os-<sid> OS user)
+        # never sees the owner's connector_host at all -- ConnectorRegistry
+        # builds them their own, empty set instead ("a new user starts with
+        # the packaged default policy and no connectors").
+        from privacyfence.principal import Principal, principal_scope
+
+        self._no_bind(monkeypatch, tmp_path)
+        connector_host = self._connector_host()
+        from privacyfence.connectors.gmail import GmailConnector
+
+        fake_connector = object.__new__(GmailConnector)
+        connector_host.set_connectors([fake_connector])
+
+        result = daemon_main._maybe_start_web_server(
+            {"web": {"mcp": {"enabled": True}}}, connector_host, unattended_sessions_enabled=False,
+        )
+
+        with principal_scope(Principal(id="os-1002")):
+            other_connectors = result.mcp_dispatcher.connectors
+        assert other_connectors == {}
+        # The owner's own connectors are unaffected by resolving another
+        # principal in between.
         assert list(result.mcp_dispatcher.connectors) == [fake_connector.name]
 
     def test_the_dispatcher_has_no_way_to_mint_a_sign_in_link(self, monkeypatch, tmp_path):
@@ -3467,3 +3494,69 @@ class TestPrintSignInLink:
         monkeypatch.setattr(daemon_main, "run_print_sign_in_link", lambda: 0)
 
         assert daemon_main.main(["--print-sign-in-link"]) == 0
+
+
+class TestPrintMcpToken:
+    """ADR 0008's own break-glass-style path for ``/mcp``: a direct HTTP
+    client with no shim mints its own token the same way the ``.mcpb``
+    shim does, as this OS account."""
+
+    @pytest.fixture
+    def channel(self, monkeypatch):
+        from privacyfence.web import control_channel
+
+        monkeypatch.setattr(control_channel, "read_base_url", lambda: "http://127.0.0.1:8765")
+        return control_channel
+
+    def test_a_minted_token_is_printed_on_stdout_alone(self, channel, monkeypatch, capsys):
+        monkeypatch.setattr(channel, "mint_mcp_token", lambda: "sometoken")
+
+        assert daemon_main.run_print_mcp_token() == 0
+
+        captured = capsys.readouterr()
+        assert captured.out.strip() == "sometoken"
+
+    def test_no_daemon_running_prints_nothing_to_stdout(self, monkeypatch, capsys):
+        from privacyfence.web import control_channel
+
+        monkeypatch.setattr(control_channel, "read_base_url", lambda: None)
+
+        assert daemon_main.run_print_mcp_token() == 1
+
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "does not appear to be running" in captured.err
+
+    def test_an_unreachable_control_channel_is_an_error_not_a_traceback(self, channel, monkeypatch, capsys):
+        def _boom():
+            raise OSError("no such socket")
+
+        monkeypatch.setattr(channel, "mint_mcp_token", _boom)
+
+        assert daemon_main.run_print_mcp_token() == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Could not reach PrivacyFence's control channel" in captured.err
+
+    def test_a_refused_mint_is_an_error_not_a_traceback(self, channel, monkeypatch, capsys):
+        def _refused():
+            raise channel.ControlChannelError("MCP tokens are not available on this install")
+
+        monkeypatch.setattr(channel, "mint_mcp_token", _refused)
+
+        assert daemon_main.run_print_mcp_token() == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Could not mint an MCP token" in captured.err
+
+    def test_main_dispatches_before_the_runtime_identity_check(self, monkeypatch):
+        from privacyfence import privilege_separation
+
+        def _refuse():
+            raise privilege_separation.PrivilegeSeparationError("wrong account")
+
+        monkeypatch.setattr(privilege_separation, "check_runtime_identity", _refuse)
+        monkeypatch.setattr(daemon_main, "load_config", lambda path: pytest.fail("read config"))
+        monkeypatch.setattr(daemon_main, "run_print_mcp_token", lambda: 0)
+
+        assert daemon_main.main(["--print-mcp-token"]) == 0
