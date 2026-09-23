@@ -56,9 +56,10 @@ external IdP, real TLS certificate, or real reverse proxy binary:
     signed-in principal's own, proving the token really did resolve to
     that principal end to end, not just that the dance completed.
   - **An approval, exercised end to end, with audit-principal correctness**
-    (Phase 8): ``privacyfence_propose_auto_accept_rule_change`` (the one
+    (Phase 8): ``privacyfence_propose_policy_change`` (the one
     MCP-reachable approval this module's zero-connector config can drive
-    without a real Google/Slack/... credential) blocks on a human
+    without a real Google/Slack/... credential -- the shared probe in
+    ``tests/packaged_policy_probe.py``) blocks on a human
     confirmation the same way a gated tool call's own popup does; a
     *different* signed-in principal cannot decide it (cross-principal
     authorization, over the real subprocess this time -- see
@@ -212,6 +213,13 @@ from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamable_http_client  # noqa: E402
 
 from tests.integration.mock_idp import MockIdp  # noqa: E402
+from tests.packaged_policy_probe import (  # noqa: E402
+    AUDIT_DECISION_CHANGED,
+    PROBE_TOOL,
+    assert_probe_rule_on_disk,
+    expected_description,
+    probe_arguments,
+)
 
 # `system`, not `packaged`: this module drives the installable `privacyfence`
 # package directly, via a `--target` install (see this module's own "Why a
@@ -715,8 +723,8 @@ class TestRunningOrgModeService:
     # correctness --------------------------------------------------------- #
 
     async def test_an_approval_is_exercised_by_the_correct_principal_and_audited_there(self):
-        """``privacyfence_propose_auto_accept_rule_change`` (gate.py's
-        ``propose_rule_change``, MCP-reachable with no connector required --
+        """``privacyfence_propose_policy_change`` (gate.py's
+        ``propose_policy_change``, MCP-reachable with no connector required --
         unlike a gated *tool* call, there's no real Google/Slack/...
         credential this synthetic config needs for this one) always blocks
         on a human confirmation, exactly like a gated tool's own popup --
@@ -744,19 +752,17 @@ class TestRunningOrgModeService:
                 async with streamable_http_client(f"http://127.0.0.1:{self.port}/mcp", http_client=hc) as (r, w):
                     async with ClientSession(r, w) as session:
                         await session.initialize()
-                        return await session.call_tool("privacyfence_propose_auto_accept_rule_change", {
-                            "target": "rule", "operation": "add", "reason": "TST-16 Phase 8 smoke test",
-                            "operation_key": "gmail.read_message", "rule_name": "trusted_sender_domain",
-                            "value": ["example.com"],
-                        })
+                        return await session.call_tool(PROBE_TOOL, probe_arguments(
+                            value=["example.com"], reason="TST-16 Phase 8 smoke test",
+                        ))
 
-        # propose_rule_change blocks (on the human confirmation dialog)
+        # propose_policy_change blocks (on the human confirmation dialog)
         # until decided below -- run it as a background task so this test
         # can poll for, and then decide, the approval it creates while
         # that call is still in flight, the same "two things happening at
         # once over one real running service" shape
         # test_deferred_approval_round_trip.py (TST-09) already proves for
-        # gated *tool* calls, applied here to propose_rule_change instead.
+        # gated *tool* calls, applied here to propose_policy_change instead.
         propose_task = asyncio.ensure_future(propose())
         try:
             approval_id = None
@@ -766,7 +772,7 @@ class TestRunningOrgModeService:
                 approval_id = _find_pending_approval_id(listing.text)
                 if approval_id is not None:
                     break
-            assert approval_id is not None, "propose_rule_change never registered a pending approval for carol"
+            assert approval_id is not None, "propose_policy_change never registered a pending approval for carol"
 
             # Cross-principal: bob can't see it (P9's per-principal list_
             # pending filter) or decide it (approvals.PendingApprovalRegistry.
@@ -799,11 +805,10 @@ class TestRunningOrgModeService:
                 propose_task.cancel()
 
         assert not result.is_error, result.content
-        # P9 of the policy v2 redesign: propose_rule_change's confirmed-response no longer echoes
-        # the v1 rule_name verbatim -- it reports the v2 rule's own human-readable sentence instead
+        # The confirmed response reports the v2 rule's own human-readable sentence
         # (policy.describe.rule_sentence), which names the scope ("sender domain example.com") and
-        # the verb, not the v1 predicate string.
-        assert "Gmail - sender domain example.com: allow read" in result.content[0].text
+        # the verb, not any predicate string the caller passed in.
+        assert expected_description("example.com") in result.content[0].text
 
         # Audit-principal correctness: the decision this call made landed
         # under carol's own per-principal audit log directory (audit_log.py's
@@ -820,8 +825,8 @@ class TestRunningOrgModeService:
         )
         assert audit_file.exists(), f"expected an audit log for carol at {audit_file}"
         entries = [json.loads(line) for line in audit_file.read_text().splitlines() if line.strip()]
-        matching = [e for e in entries if e["decision"] == "rule_changed_via_bridge_proposal"]
-        assert matching, f"no rule_changed_via_bridge_proposal entry in {[e['decision'] for e in entries]}"
+        matching = [e for e in entries if e["decision"] == AUDIT_DECISION_CHANGED]
+        assert matching, f"no {AUDIT_DECISION_CHANGED} entry in {[e['decision'] for e in entries]}"
         assert matching[-1]["claude_reason"] == "TST-16 Phase 8 smoke test"
 
         bob_audit_file = (
@@ -946,11 +951,9 @@ class TestCleanShutdownAndRestart:
                     async with streamable_http_client(f"http://127.0.0.1:{port}/mcp", http_client=hc) as (r, w):
                         async with ClientSession(r, w) as session:
                             await session.initialize()
-                            return await session.call_tool("privacyfence_propose_auto_accept_rule_change", {
-                                "target": "rule", "operation": "add", "reason": "restart-state-survival smoke test",
-                                "operation_key": "gmail.read_message", "rule_name": "trusted_sender_domain",
-                                "value": ["example.com"],
-                            })
+                            return await session.call_tool(PROBE_TOOL, probe_arguments(
+                                value=["example.com"], reason="restart-state-survival smoke test",
+                            ))
 
             propose_task = asyncio.ensure_future(propose())
             approval_id = None
@@ -981,7 +984,11 @@ class TestCleanShutdownAndRestart:
             assert exited is not None
 
         assert settings_file.exists()
-        assert "trusted_sender_domain" in settings_file.read_text()
+        # Keyed on the v2 rule's own on-disk row (policy/store.py's ``auto_accept:``
+        # section), not on a predicate name appearing anywhere in the file: v2 kept v1's
+        # predicate vocabulary, so a bare grep would stay green even if the write had
+        # landed in a stale v1 section, or landed narrower than the dialog described.
+        assert_probe_rule_on_disk(settings_file.read_text(), value=["example.com"])
         assert audit_file.exists()
         entries_before_restart = [
             line for line in audit_file.read_text().splitlines() if line.strip()
@@ -995,7 +1002,7 @@ class TestCleanShutdownAndRestart:
             # not just "the file wasn't deleted", but something in this new
             # process actually parses it back successfully.
             assert settings_file.exists()
-            assert "trusted_sender_domain" in settings_file.read_text()
+            assert_probe_rule_on_disk(settings_file.read_text(), value=["example.com"])
 
             client2 = LoopbackClient(port)
             access_token2 = _mcp_bearer_token_for(client2, mock_idp, sub="carol")
@@ -1008,14 +1015,13 @@ class TestCleanShutdownAndRestart:
                         async with ClientSession(r, w) as session:
                             await session.initialize()
                             return await session.call_tool(
-                                "privacyfence_list_auto_accept_rules", {"reason": "post-restart check"},
+                                "privacyfence_list_policy", {"reason": "post-restart check"},
                             )
 
             result = asyncio.run(_list_rules())
             assert not result.is_error, result.content
-            # P9: privacyfence_list_auto_accept_rules is a deprecated alias of privacyfence_list_policy
-            # now -- it reports the v2 rule's own sentence/scope_type, not the v1 rule_name string.
-            assert "Gmail - sender domain example.com: allow read" in result.content[0].text
+            # privacyfence_list_policy reports the v2 rule's own sentence/scope_type.
+            assert expected_description("example.com") in result.content[0].text
             assert "gmail.sender_domain" in result.content[0].text
 
         # The audit trail grew, in the *same* weekly file, rather than
