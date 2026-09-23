@@ -1846,13 +1846,25 @@ class TestPerUserCompanionAddress:
     principal gets its own, so distinct OS users' companions can never
     collide."""
 
-    def test_the_owner_keeps_the_unsuffixed_address(self, tmp_path):
-        path = cc.companion_socket_path_under(tmp_path, "local")
-        assert path == tmp_path / "companion.sock"
+    def test_the_owner_keeps_the_unsuffixed_address(self):
+        # A short, synthetic directory rather than pytest's own tmp_path --
+        # see TestPosixSocketPath.test_lives_under_the_authority_root_by_default's
+        # comment: macOS's /private/var/folders/... tmp_path prefix is
+        # already long enough to trip the sun_path-length fallback this
+        # class's own collision tests exercise on purpose, which would make
+        # this "short path" case flaky by host rather than by design.
+        from pathlib import PurePosixPath
 
-    def test_another_principal_gets_a_suffixed_address(self, tmp_path):
-        path = cc.companion_socket_path_under(tmp_path, "os-1002")
-        assert path == tmp_path / "companion-1002.sock"
+        base = PurePosixPath("/home/alice/.privacyfence/handoff")
+        path = cc.companion_socket_path_under(base, "local")
+        assert path == base / "companion.sock"
+
+    def test_another_principal_gets_a_suffixed_address(self):
+        from pathlib import PurePosixPath
+
+        base = PurePosixPath("/home/alice/.privacyfence/handoff")
+        path = cc.companion_socket_path_under(base, "os-1002")
+        assert path == base / "companion-1002.sock"
 
     def test_two_principals_never_collide(self, tmp_path):
         a = cc.companion_socket_path_under(tmp_path, "os-1001")
