@@ -43,7 +43,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [4.2.0] — 2026-09-23
+## [4.2.1] — 2026-09-23
+
+*Supersedes 4.2.0, which was tagged but never published. Its release build's `build` (macOS) and
+`build-deb` jobs both failed the same packaged-artifact smoke-test assertion — "attested control
+channel mint failed: 'ERROR that mint was not confirmed by the companion'" — because the smoke-test
+helpers still minted their stand-in bootstrap code as root, and this same cycle's ADR 0008 change
+(per-peer `principal_id` resolved from the real connecting uid) resolves root to its own `os-0`
+principal rather than the install's owner, so the daemon's mint call reached an address nothing was
+listening on. A false positive in the test harness, not a defect in the built `.pkg`/`.deb`/DMG;
+`finalize-release` never ran, so no GitHub Release or PyPI/TestPyPI publish happened. Both smoke-test
+helpers now connect as the install's owner instead of root, matching how a real companion connects.
+Everything 4.2.0 would have carried is folded in below: from the outside this is a single
+4.1.5 → 4.2.1 change.*
 
 ### Added
 
@@ -2295,8 +2307,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.2.0...HEAD
-[4.2.0]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...v4.2.0
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.2.1...HEAD
+[4.2.1]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...v4.2.1
 [4.1.5]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.5
 [4.1.2]: https://github.com/privacyfence/privacyfence/compare/v4.0.0...v4.1.2
 [4.0.0]: https://github.com/privacyfence/privacyfence/compare/v3.4.7...v4.0.0
