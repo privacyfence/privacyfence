@@ -54,9 +54,12 @@ as possible to how a real user would.
    is ever imported -- only possible when the test controls the Python
    import itself, which a packaged, frozen daemon started as its own binary
    never does. This module instead drives
-   ``privacyfence_propose_auto_accept_rule_change``, the one built-in
-   meta-tool that always blocks on a confirmation dialog with no
-   connector/credential of any kind behind it -- same tool, same reasoning.
+   ``privacyfence_propose_policy_change``, the one built-in meta-tool that
+   always blocks on a confirmation dialog with no connector/credential of
+   any kind behind it -- same tool, same reasoning. The call itself, and
+   the audit vocabulary to read back on the far side of it, come from
+   ``tests/packaged_policy_probe.py``, which all four packaged-artifact
+   smoke tests share.
    Like ``test_deb_packaged_lifecycle.py`` (and unlike the macOS module's
    real headless-Chromium click), this one resolves the pending card via a
    direct HTTP POST to ``/api/approvals/<id>/decide`` with the
@@ -169,6 +172,14 @@ from privacyfence.privilege_separation import (  # noqa: E402
     WINDOWS_SYSTEM_ROOT,
 )
 from tests.control_channel_client import mint_bootstrap_code_windows, resolve_windows_pipe_name  # noqa: E402
+from tests.packaged_policy_probe import (  # noqa: E402
+    AUDIT_CONNECTOR,
+    AUDIT_DECISION_CHANGED,
+    AUDIT_DECISION_REJECTED,
+    PROBE_TOOL,
+    expected_description,
+    probe_arguments,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DIST_DIR = REPO_ROOT / "dist"
@@ -514,7 +525,7 @@ async def _assert_separated_service_serves_mcp(base_url: str, mcp_token: str) ->
                 tools = await session.list_tools()
                 names = {tool.name for tool in tools.tools}
     assert "privacyfence_check_policy" in names, names
-    assert "privacyfence_propose_auto_accept_rule_change" in names, names
+    assert PROBE_TOOL in names, names
 
 
 def _service_config(name: str = WINDOWS_SERVICE_NAME) -> str | None:
@@ -774,15 +785,14 @@ async def _propose_trusted_sender_rule(mcp_url: str, mcp_token: str, *, value: l
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await session.call_tool(
-                    "privacyfence_propose_auto_accept_rule_change",
-                    {
-                        "target": "rule",
-                        "operation": "add",
-                        "operation_key": "gmail.read_message",
-                        "rule_name": "trusted_sender_domain",
-                        "value": value,
-                        "reason": "tests/integration/test_windows_packaged_smoke.py packaged installer lifecycle scenario",
-                    },
+                    PROBE_TOOL,
+                    probe_arguments(
+                        value=value,
+                        reason=(
+                            "tests/integration/test_windows_packaged_smoke.py packaged installer "
+                            "lifecycle scenario"
+                        ),
+                    ),
                 )
 
 
@@ -833,7 +843,7 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
                     await session.initialize()
                     tools = await session.list_tools()
                     names = {t.name for t in tools.tools}
-        assert "privacyfence_propose_auto_accept_rule_change" in names
+        assert PROBE_TOOL in names
         assert "privacyfence_check_policy" in names
 
         # -- Allow round trip -------------------------------------------------
@@ -846,8 +856,8 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         assert allow_result.structured_content["confirmed"] is True
         assert allow_result.structured_content["changed"] is True
         # P9 of the policy v2 redesign: the confirmed-response description is the v2 rule's own
-        # human-readable sentence now, not an echo of the v1 rule_name string.
-        assert "Gmail - sender domain allowed.example.com: allow read" in allow_result.structured_content["description"]
+        # human-readable sentence, not an echo of any rule name the caller passed in.
+        assert expected_description("allowed.example.com") in allow_result.structured_content["description"]
 
         # -- Deny round trip ----------------------------------------------------
         deny_task = asyncio.create_task(
@@ -865,10 +875,10 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
                 if not line.strip():
                     continue
                 entry = json.loads(line)
-                if entry.get("connector") == "rule":
+                if entry.get("connector") == AUDIT_CONNECTOR:
                     decisions.append(entry.get("decision"))
-        assert "rule_changed_via_bridge_proposal" in decisions
-        assert "rejected" in decisions
+        assert AUDIT_DECISION_CHANGED in decisions
+        assert AUDIT_DECISION_REJECTED in decisions
 
         # -- Graceful shutdown via the real "Quit PrivacyFence" action -----------
         await _quit(web_client, session_id)

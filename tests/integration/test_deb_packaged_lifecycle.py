@@ -38,13 +38,16 @@ user would.
    *before* ``daemon_main`` is ever imported -- only possible when the test
    controls the Python import itself. A packaged, frozen daemon started as
    its own binary offers no such hook. This module instead drives
-   ``privacyfence_propose_auto_accept_rule_change``, the one built-in
-   meta-tool that "ALWAYS blocks on a native confirmation dialog" with no
+   ``privacyfence_propose_policy_change``, the one built-in meta-tool that
+   "ALWAYS blocks on a native confirmation dialog" with no
    connector/credential of any kind behind it (see that tool's own
    description in ``web/mcp_tools.py``) -- same reasoning
    ``test_macos_packaged_smoke.py``'s own docstring gives for the identical
-   choice. Unlike that module (which drives a real headless-Chromium click),
-   this one resolves the pending card the same way Phase 3 itself does: a
+   choice. The call itself, and the audit vocabulary to read back on the
+   far side of it, come from ``tests/packaged_policy_probe.py``, which all
+   four packaged-artifact smoke tests share. Unlike that module (which
+   drives a real headless-Chromium click), this one resolves the pending
+   card the same way Phase 3 itself does: a
    direct HTTP POST to ``/api/approvals/<id>/decide`` with the bootstrap-
    minted session cookie doubling as the CSRF token -- no Node/Playwright
    dependency needed here, keeping this job's prerequisites to exactly what
@@ -154,6 +157,14 @@ from tests.control_channel_client import (  # noqa: E402
     resolve_posix_socket_path,
 )
 from tests.diagnostics import failure_dir, suite_name_for  # noqa: E402
+from tests.packaged_policy_probe import (  # noqa: E402
+    AUDIT_CONNECTOR,
+    AUDIT_DECISION_CHANGED,
+    AUDIT_DECISION_REJECTED,
+    PROBE_TOOL,
+    expected_description,
+    probe_arguments,
+)
 from tests.packaged_step_up import decide_with_step_up, enroll_passkey  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -709,26 +720,24 @@ async def _bootstrap_session(
 
 
 async def _propose_trusted_sender_rule(mcp_url: str, mcp_token: str, *, value: list[str]):
-    """One real MCP session calling ``privacyfence_propose_auto_accept_rule_
-    change`` -- a fresh session per call, since the tool's own confirmation
-    dialog is a new "Claude tool-call turn" each time in production too, same
-    reasoning as every other MCP helper in this repo's system/packaged
-    tests."""
+    """One real MCP session driving ``tests/packaged_policy_probe.py``'s probe
+    -- a fresh session per call, since the tool's own confirmation dialog is a
+    new "Claude tool-call turn" each time in production too, same reasoning as
+    every other MCP helper in this repo's system/packaged tests."""
     headers = {"Authorization": f"Bearer {mcp_token}"}
     async with httpx2.AsyncClient(headers=headers) as http_client:
         async with streamable_http_client(mcp_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 return await session.call_tool(
-                    "privacyfence_propose_auto_accept_rule_change",
-                    {
-                        "target": "rule",
-                        "operation": "add",
-                        "operation_key": "gmail.read_message",
-                        "rule_name": "trusted_sender_domain",
-                        "value": value,
-                        "reason": "tests/integration/test_deb_packaged_lifecycle.py packaged .deb lifecycle scenario",
-                    },
+                    PROBE_TOOL,
+                    probe_arguments(
+                        value=value,
+                        reason=(
+                            "tests/integration/test_deb_packaged_lifecycle.py packaged .deb "
+                            "lifecycle scenario"
+                        ),
+                    ),
                 )
 
 
@@ -819,7 +828,7 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
                     await session.initialize()
                     tools = await session.list_tools()
                     names = {t.name for t in tools.tools}
-        assert "privacyfence_propose_auto_accept_rule_change" in names
+        assert PROBE_TOOL in names
         assert "privacyfence_check_policy" in names
 
         # -- Allow round trip -------------------------------------------------
@@ -835,8 +844,8 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
         assert allow_result.structured_content["confirmed"] is True
         assert allow_result.structured_content["changed"] is True
         # P9 of the policy v2 redesign: the confirmed-response description is the v2 rule's own
-        # human-readable sentence now, not an echo of the v1 rule_name string.
-        assert "Gmail - sender domain allowed.example.com: allow read" in allow_result.structured_content["description"]
+        # human-readable sentence, not an echo of any rule name the caller passed in.
+        assert expected_description("allowed.example.com") in allow_result.structured_content["description"]
 
         # -- Deny round trip ----------------------------------------------------
         deny_task = asyncio.create_task(
@@ -861,10 +870,10 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
             if not line.strip():
                 continue
             entry = json.loads(line)
-            if entry.get("connector") == "rule":
+            if entry.get("connector") == AUDIT_CONNECTOR:
                 decisions.append(entry.get("decision"))
-        assert "rule_changed_via_bridge_proposal" in decisions
-        assert "rejected" in decisions
+        assert AUDIT_DECISION_CHANGED in decisions
+        assert AUDIT_DECISION_REJECTED in decisions
 
         # Same cross-platform-suite permission assertion Phase 3's own
         # scenario adds -- this module always runs on Linux (pytestmark
