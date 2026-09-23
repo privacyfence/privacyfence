@@ -317,6 +317,29 @@ the bucket — the bucket is already private and gates nothing on its own:
 
 Doing (1) without (2) leaves the website inviting people to a download that will refuse them.
 
+## Decisions, plans and ADRs
+
+Three kinds of document, three lifecycles — the full rules, template and index are in
+[`docs/adr/README.md`](docs/adr/README.md):
+
+- **Plans** (what we are about to do) are temporary: a GitHub issue, or a `docs/*-plan.md` while its
+  work is open. They are deleted when the work lands.
+- **ADRs** (`docs/adr/NNNN-*.md` — why it is this way, what was rejected) are permanent and frozen
+  once accepted. Change your mind with a new ADR that supersedes the old one; never rewrite an
+  accepted ADR's body, and never put implementation progress in one.
+- **Reference docs** (`docs/*.md`, this file) describe today's behavior and link to ADRs for the
+  *why* rather than retelling it.
+
+**Retiring a plan requires extracting its decisions first.** The PR that deletes a plan document
+adds or amends an ADR for every decision the plan made — anything hard to reverse, touching a trust
+boundary or the release/distribution path, or rejecting an alternative for a non-obvious reason —
+or says in its description that the plan made none. Before this rule, a dozen plans were deleted
+with their rejected alternatives in them; ADRs 0008–0024 are the backfill.
+
+The same applies when a decision is made somewhere else — a PR thread, an issue, a section of this
+file: if it meets the bar above, it gets an ADR in the same PR. ADRs link to issues, PRs, commits
+and source files, never to a plan document, which will not outlive it.
+
 ## Branching & PRs
 
 - Branch names are `<type>/<kebab-case-description>`. Standard types: `feature/` for new

@@ -275,6 +275,10 @@ A new connector's test module should include, at minimum:
 - [ ] A user-visible change has a line under `CHANGELOG.md`'s `## [Unreleased]` heading (not under
       a concrete version heading — see this repo's CLAUDE.md, "Release notes come from
       CHANGELOG.md"). Internal-only changes don't need one.
+- [ ] A decision that is hard to reverse, moves a trust boundary, changes the build/release/
+      distribution path, or rejects a non-obvious alternative has an ADR in `docs/adr/`. A PR that
+      deletes a plan document extracts that plan's decisions into ADRs first, or says in its
+      description that it made none — see [`adr/README.md`](adr/README.md).
 - [ ] Every new/changed tool call still resolves through `gated_call` or an explicit
       always-auto-approve connector, and leaves an audit trail either way.
 - [ ] No preview dict carries full content; no log line carries a credential or a message/document
