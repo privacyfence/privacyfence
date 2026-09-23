@@ -172,6 +172,14 @@ def run_browser_oauth(
     local server itself always binds ``127.0.0.1:port`` — ``localhost``
     resolves there — only for the duration of this call, and is torn down as
     soon as the callback is received (or the timeout expires).
+
+    The authorize URL is always printed, and a failed/no-op ``open_browser``
+    (e.g. a headless host with no DISPLAY) does not end the flow -- it keeps
+    the local server up and waiting the same as if a browser had opened, so
+    a human can still complete it by visiting the printed URL manually
+    (typically through an SSH tunnel or SOCKS proxy to this machine's
+    loopback interface). ``timeout`` is what eventually gives up if nobody
+    does.
     """
     state = secrets.token_urlsafe(24)
     code_verifier, code_challenge = _make_pkce_pair()
@@ -225,11 +233,24 @@ def run_browser_oauth(
     try:
         authorize_url = build_authorize_url(redirect_uri, state, code_challenge)
         logger.info("Opening browser for OAuth authorization (redirect_uri=%s)", redirect_uri)
+        # Printed unconditionally, and before attempting to open anything --
+        # not just when opener() below fails -- so it's there to copy on a
+        # headless host (over SSH, no DISPLAY) without needing to wait for
+        # that failure first. Matches google-auth-oauthlib's own
+        # InstalledAppFlow.run_local_server(), which prints this same kind
+        # of line unconditionally rather than only as a failure message.
+        print(f"Please visit this URL to authorize PrivacyFence: {authorize_url}")
         opener = open_browser
         if opener is None:
             opener = _default_open_browser
         if not opener(authorize_url):
-            raise OAuthLoopbackError(f"Could not open a browser. Visit manually: {authorize_url}")
+            # Used to raise here -- but the local server this flow just
+            # bound is exactly what a manual visit (e.g. through an SSH
+            # tunnel to a headless host) still needs, and killing it in the
+            # same breath as telling the person to "visit manually" made
+            # that instruction impossible to follow. Keep waiting instead;
+            # done.wait() below still times out if nobody ever does.
+            logger.warning("Could not open a browser automatically -- waiting for the URL above to be visited manually.")
 
         if not done.wait(timeout=timeout):
             raise OAuthLoopbackError("Timed out waiting for sign-in to complete in the browser.")

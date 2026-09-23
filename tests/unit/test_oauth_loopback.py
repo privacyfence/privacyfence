@@ -14,6 +14,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import socket
+import threading
+import time
 
 import pytest
 import requests
@@ -267,13 +269,49 @@ class TestCallbackErrorHandling:
 # ---------------------------------------------------------------------------- #
 
 class TestOpenBrowserAndTimeoutFailures:
-    def test_browser_fails_to_open_raises_with_manual_url(self):
+    def test_browser_fails_to_open_but_manual_visit_still_completes_the_flow(self):
+        # privacyfence/privacyfence: a headless host (SSH, no DISPLAY) can't
+        # auto-launch a browser, but a human can still visit the printed URL
+        # manually -- e.g. through an SSH tunnel to this machine's loopback
+        # interface -- as long as the local server this flow bound is still
+        # up to receive that visit. Simulated here with a background thread
+        # standing in for "a person, a few moments later, through a tunnel".
         flow = _Flow()
-        with pytest.raises(OAuthLoopbackError, match="Could not open a browser"):
+
+        def opener(url: str) -> bool:
+            def visit_manually() -> None:
+                time.sleep(0.05)
+                _NO_PROXY_SESSION.get(
+                    flow.captured["redirect_uri"],
+                    params={"code": "auth-code-123", "state": flow.captured["state"]},
+                    timeout=5,
+                )
+
+            threading.Thread(target=visit_manually, daemon=True).start()
+            return False
+
+        result = run_browser_oauth(
+            flow.build_authorize_url, flow.exchange, port=free_port(),
+            open_browser=opener, timeout=2,
+        )
+        assert result == {"access_token": "tok-123"}
+
+    def test_browser_fails_to_open_and_nobody_visits_manually_times_out(self):
+        flow = _Flow()
+        with pytest.raises(OAuthLoopbackError, match="Timed out"):
             run_browser_oauth(
                 flow.build_authorize_url, flow.exchange, port=free_port(),
-                open_browser=flow.opener_for(respond=False),
+                open_browser=flow.opener_for(respond=False), timeout=0.2,
             )
+
+    def test_authorize_url_is_always_printed_for_manual_visiting(self, capsys):
+        flow = _Flow()
+        run_browser_oauth(
+            flow.build_authorize_url, flow.exchange, port=free_port(),
+            open_browser=flow.opener_for(),
+        )
+        out = capsys.readouterr().out
+        assert f"https://provider.example/authorize?state={flow.captured['state']}" in out
 
     def test_timeout_when_browser_never_completes_the_flow(self):
         flow = _Flow()
