@@ -8,6 +8,7 @@ this module shares with `enable --for-user`.
 """
 from __future__ import annotations
 
+import shlex
 import subprocess
 
 import pytest
@@ -89,7 +90,7 @@ class TestMacosElevation:
         assert ok is True
         assert "restarted" in detail
         assert seen["argv"][0] == privilege_separation._OSASCRIPT
-        assert f"{separated} daemon restart" in seen["argv"][-1]
+        assert f"{shlex.quote(str(separated))} daemon restart" in seen["argv"][-1]
         assert "with administrator privileges" in seen["argv"][-1]
         assert "needs an administrator password to restart" in seen["argv"][-1]
 
@@ -147,7 +148,7 @@ class TestLinuxElevation:
 
         assert ok is False
         assert "pkexec" in detail
-        assert f"sudo {separated} daemon start" in detail
+        assert f"sudo {shlex.quote(str(separated))} daemon start" in detail
 
     def test_a_dismissed_polkit_dialog_reports_cancelled(self, monkeypatch, separated):
         monkeypatch.setattr(privilege_separation, "current_platform", lambda: "linux")
