@@ -447,17 +447,44 @@ def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
+def _bootout_companion() -> None:
+    """One ``launchctl bootout`` of the companion agent, in this account's own
+    GUI domain (no ``sudo`` needed -- see ``_companion_agent_paused``'s own
+    docstring for why). Split out so ``_wait_for_companion_socket_free`` can
+    reissue it -- see that function's own docstring for why a single call is
+    not always enough."""
+    domain = f"gui/{os.getuid()}"
+    subprocess.run(
+        ["launchctl", "bootout", f"{domain}/{COMPANION_LABEL}"],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+
+
 def _wait_for_companion_socket_free(*, timeout: float = 20.0) -> None:
     """``launchctl bootout`` returns before the process it stopped has
     actually exited, so the address stays bound for a moment afterwards and
     binding it in that window fails with EADDRINUSE. Polls until a connect is
     refused (nothing listening) or the file is gone.
 
+    On this module's own upgrade test, the companion being booted out here
+    was itself bootstrapped moments earlier by the *second*
+    ``_enable_separation``'s own ``install_services()`` -- the same
+    bootout-right-after-a-bootstrap ordering
+    scripts/macos_privilege_separation.sh's own ``bootstrap_with_retry()``
+    exists to ride out, just from the other verb. A single ``bootout`` issued
+    into that same window can be silently dropped by launchd's own
+    not-yet-settled bookkeeping rather than merely delayed -- the socket
+    stays bound for the *entire* timeout, not just a moment past it, which is
+    what a plain settle-time wait would show instead. So this reissues the
+    bootout every quarter of the timeout rather than trusting the first call
+    to have taken.
+
     Connecting from this account rather than the service account is fine for
     a liveness probe: _verify_companion_peer() refuses a non-service-account
     peer *after* accepting, so the connect still succeeds while something is
     listening, which is exactly the distinction being made here."""
     deadline = time.monotonic() + timeout
+    next_bootout = time.monotonic() + timeout / 4
     while time.monotonic() < deadline:
         probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         probe.settimeout(2.0)
@@ -469,6 +496,9 @@ def _wait_for_companion_socket_free(*, timeout: float = 20.0) -> None:
             pass   # anything else: treat as still busy and poll again
         finally:
             probe.close()
+        if time.monotonic() >= next_bootout:
+            _bootout_companion()
+            next_bootout = time.monotonic() + timeout / 4
         time.sleep(0.2)
     raise AssertionError(
         f"{COMPANION_SOCKET} was still bound {timeout}s after booting out {COMPANION_LABEL}"
@@ -495,15 +525,12 @@ def _companion_agent_paused():
     agent is running, and the next test's own ``_enable_separation`` re-runs
     ``install_services``, which boots it out and back regardless of the state
     this leaves behind."""
-    domain = f"gui/{os.getuid()}"
-    subprocess.run(
-        ["launchctl", "bootout", f"{domain}/{COMPANION_LABEL}"],
-        capture_output=True, text=True, timeout=30, check=False,
-    )
+    _bootout_companion()
     _wait_for_companion_socket_free()
     try:
         yield
     finally:
+        domain = f"gui/{os.getuid()}"
         subprocess.run(
             ["launchctl", "bootstrap", domain, str(COMPANION_PLIST)],
             capture_output=True, text=True, timeout=30, check=False,
