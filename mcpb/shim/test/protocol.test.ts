@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
+  CONTROL_SOCKET_FILE_NAME,
   dataDir,
   handoffDir,
+  MAX_SUN_PATH_BYTES,
+  pipeNameFor,
+  posixControlSocketPath,
   privilegeSeparationRoot,
   readMcpToken,
   readMcpUrl,
+  socketPathUnder,
   SYSTEM_ROOTS,
   defaultSystemRoot,
+  windowsControlPipeName,
   windowsDataDir,
 } from "../src/protocol.js";
 
@@ -267,6 +274,86 @@ describe("privilegeSeparationRoot / handoffDir (#428 Phase 4)", () => {
           }
         });
       });
+    });
+  });
+});
+
+describe("pipeNameFor / socketPathUnder (ADR 0008 D3: the control-channel address)", () => {
+  // These lock the exact hashing scheme -- sha256, truncated to the first 16
+  // hex characters -- against control_channel.py's own pipe_name_for()/
+  // socket_path_under(), which this file has no way to invoke directly (no
+  // Python test harness is wired into this suite -- see this file's own
+  // module comment in the task that added it). Each case asserts two things
+  // at once, deliberately: that this file's own crypto.createHash() call
+  // (computed independently, the same way control_channel.py's Python
+  // hashlib call is, not by importing pipeNameFor()'s own hashing) agrees
+  // with a golden digest hardcoded here, and that pipeNameFor()/
+  // socketPathUnder() themselves agree with that same independently-computed
+  // digest. A future change to the hash algorithm or the truncation length
+  // would still make both files agree with *each other* -- what the golden
+  // literal catches is a change that quietly breaks agreement with the
+  // Python side, which two TypeScript computations agreeing with each other
+  // cannot.
+  it("pipeNameFor hashes a POSIX-style data dir with sha256, truncated to 16 hex chars", () => {
+    const dataDirPath = "/home/alice/.privacyfence";
+    const digest = crypto.createHash("sha256").update(dataDirPath, "utf8").digest("hex").slice(0, 16);
+    assert.equal(digest, "14f27d9340f0ec10"); // golden value -- see this describe block's own comment
+    assert.equal(pipeNameFor(dataDirPath), `\\\\.\\pipe\\PrivacyFence-Control-${digest}`);
+  });
+
+  it("pipeNameFor hashes a Windows-style data dir the same way", () => {
+    const dataDirPath = "C:\\Users\\alice\\AppData\\Local\\PrivacyFence";
+    const digest = crypto.createHash("sha256").update(dataDirPath, "utf8").digest("hex").slice(0, 16);
+    assert.equal(digest, "79bcea1ec557bccf"); // golden value -- see this describe block's own comment
+    assert.equal(pipeNameFor(dataDirPath), `\\\\.\\pipe\\PrivacyFence-Control-${digest}`);
+  });
+
+  it("socketPathUnder prefers the plain <authority>/control.sock path when it fits sun_path", () => {
+    const authorityDir = "/home/alice/.privacyfence/authority";
+    assert.equal(socketPathUnder(authorityDir), path.join(authorityDir, CONTROL_SOCKET_FILE_NAME));
+  });
+
+  it("socketPathUnder falls back to a hashed temp-dir path once the preferred one is too long", () => {
+    // A deeply nested authority dir, standing in for the case
+    // control_channel.py's own socket_path_under() docstring calls out: a
+    // real install's ~/.privacyfence never gets close to sun_path's limit,
+    // but a test's own tmp_path sometimes does.
+    const authorityDir = `/home/alice/${"x".repeat(120)}/authority`;
+    const preferred = path.join(authorityDir, CONTROL_SOCKET_FILE_NAME);
+    assert.ok(
+      Buffer.byteLength(preferred, "utf8") >= MAX_SUN_PATH_BYTES,
+      "fixture path should already be at or past the sun_path margin"
+    );
+    const digest = crypto.createHash("sha256").update(authorityDir, "utf8").digest("hex").slice(0, 16);
+    assert.equal(socketPathUnder(authorityDir), path.join(os.tmpdir(), `privacyfence-control-${digest}.sock`));
+  });
+
+  it("socketPathUnder uses UTF-8 byte length, not UTF-16 code-unit length, for the sun_path check", () => {
+    // A multi-byte character makes the two disagree: this path is short
+    // enough in UTF-16 code units (.length) to look safe, but its UTF-8
+    // byte length is what AF_UNIX's sun_path buffer actually measures --
+    // getting this backwards would bind a path the kernel then refuses.
+    const authorityDir = `/home/${"é".repeat(40)}/.privacyfence/authority`;
+    const preferred = path.join(authorityDir, CONTROL_SOCKET_FILE_NAME);
+    assert.ok(preferred.length < MAX_SUN_PATH_BYTES, "fixture should look short by UTF-16 .length alone");
+    assert.ok(Buffer.byteLength(preferred, "utf8") >= MAX_SUN_PATH_BYTES, "but not by UTF-8 byte length");
+    const digest = crypto.createHash("sha256").update(authorityDir, "utf8").digest("hex").slice(0, 16);
+    assert.equal(socketPathUnder(authorityDir), path.join(os.tmpdir(), `privacyfence-control-${digest}.sock`));
+  });
+});
+
+describe("posixControlSocketPath / windowsControlPipeName stability", () => {
+  it("posixControlSocketPath returns the same address for repeated calls with the same env", () => {
+    withPlatform("linux", () => {
+      const env = { HOME: "/home/alice" };
+      assert.equal(posixControlSocketPath(env), posixControlSocketPath(env));
+    });
+  });
+
+  it("windowsControlPipeName returns the same address for repeated calls with the same env", () => {
+    withPlatform("win32", () => {
+      const env = { LOCALAPPDATA: "C:\\Users\\alice\\AppData\\Local" };
+      assert.equal(windowsControlPipeName(env), windowsControlPipeName(env));
     });
   });
 });

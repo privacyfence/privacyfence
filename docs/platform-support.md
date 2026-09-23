@@ -395,6 +395,15 @@ upgrade or a root shell has nobody to add, and that leaves the install separated
 membership outstanding (`status` reports `PENDING USER`, not "not separated"). The companion closes
 it at the next login, or `enable --for-user <name>` does by hand.
 
+**Adding a second account to an already-separated install** works the same way, on any platform:
+an administrator runs `enable --for-user <name>` (POSIX) or `-ForUser <name>` (Windows) for that
+account, or that account's own companion offers to complete the same pending join at its first
+login. Since [ADR 0008](adr/0008-one-principal-per-os-user.md), the result is a second, fully
+isolated principal — its own MCP token, approvals, audit log, passkeys and companion-channel
+address — never the first account's own data. The one manual step no command can take: the new
+account has to log out and back in, because group membership is evaluated when a login session is
+created.
+
 ## Architecture and CPU constraints
 
 PyInstaller builds are native to the runner architecture. The current Debian release job produces the architecture supported by its Ubuntu runner rather than cross-compiling another CPU target.

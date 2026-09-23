@@ -57,7 +57,7 @@ from ..connector import Connector
 from ..principal import principal_scope
 from ..safe_errors import public_message
 from . import mcp_tools
-from .mcp_auth import StaticTokenVerifier, principal_from_access_token
+from .mcp_auth import principal_from_access_token, single_token_verifier
 from .mcp_dispatch import McpDispatcher
 from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
 
@@ -689,9 +689,12 @@ def build_mcp_asgi_app(
 
     ``verifier`` is the seam P7 plugs org mode into: pass
     ``web/oauth_provider.py``'s ``OrgOAuthProvider`` (which satisfies
-    ``TokenVerifier`` via its own ``verify_token``) instead of building
-    ``StaticTokenVerifier(token)`` for local mode's single shared secret --
-    exactly one of ``token``/``verifier`` should be given.
+    ``TokenVerifier`` via its own ``verify_token``) instead of building a
+    one-off single-token ``PerUserTokenVerifier`` for a caller with no
+    multi-principal registration to grow -- exactly one of ``token``/
+    ``verifier`` should be given. web/server.py's real local-mode wiring
+    always passes ``verifier`` (a long-lived ``PerUserTokenVerifier``
+    ``MINT MCP`` registers new principals into, ADR 0008), never ``token``.
     ``resource_metadata_url`` (RFC 9728, org mode only) is threaded into a
     401 response's ``WWW-Authenticate`` header so a client that gets one
     knows where to discover this server's authorization server; local
@@ -703,7 +706,7 @@ def build_mcp_asgi_app(
     if verifier is None:
         if token is None:
             raise ValueError("build_mcp_asgi_app needs either token or verifier")
-        verifier = StaticTokenVerifier(token)
+        verifier = single_token_verifier(token)
     protected = RequireAuthMiddleware(
         _SessionIdOnlyOnSuccess(
             _RehomeStaleInitialize(_StreamableHTTPASGIApp(session_manager), session_manager),

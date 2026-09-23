@@ -51,6 +51,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Restart or Stop it directly, each with a real, platform-native administrator prompt (no standing
   grant). See [ADR 0002](docs/adr/0002-local-mode-trust-boundary-and-companion-app.md)'s Amendment,
   "the companion becomes the daemon manager".
+- `privacyfence-app --print-mcp-token`: prints this OS account's own MCP bearer token (minting one
+  on first use), for a direct HTTP MCP client with no PrivacyFence extension of its own — see
+  [ADR 0008](docs/adr/0008-one-principal-per-os-user.md).
 
 ### Fixed
 
@@ -80,14 +83,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
-- Interim guard against a leak on a machine with more than one OS user added to a
-  privilege-separated install's service group: an account that is not the install's recorded owner
-  can no longer trigger the elevated `enable --for-user` join on its own behalf (it gets a
-  notification instead), and a second account's companion can no longer take over the group-shared
-  `companion.sock` from another account's — closing an unauthenticated path to another user's
-  recovery code and approval authority. Full per-OS-user isolation (a separate principal, policy
-  and audit trail per account) is a later phase; see
-  [ADR 0002](docs/adr/0002-local-mode-trust-boundary-and-companion-app.md)'s Amendment.
+- **A second OS user added to a privilege-separated install's service group now gets their own
+  isolated PrivacyFence identity, not the owner's.** Before this, every `/mcp` caller on such a
+  machine — any account's Claude Desktop, Claude Code, or other MCP client — resolved to the same
+  single principal and could reach the owner's Gmail/Drive/Slack access, policy, audit log and
+  approvals. The daemon now learns which OS account is calling from the kernel's own peer
+  credentials on the local control channel (`SO_PEERCRED`/`LOCAL_PEERCRED`/the named-pipe client's
+  token) and mints each account its own MCP token (`MINT MCP`/`ROTATE MCP`, replacing the one
+  shared `mcp_token` file, which is now removed on a separated install's startup), its own
+  `/approvals` and `/security` (passkey/recovery), and its own per-user companion-channel address
+  (`companion-<uid>.sock`, replacing the single machine-wide `companion.sock`). A new account
+  starts with the packaged default policy and no connectors configured — connecting their own
+  services, and a personal `/settings` page, are follow-up work, not part of this fix. This
+  supersedes the interim guard from the previous release (which only refused a non-owner account
+  outright); `enable --for-user` for a second account is unconditional again. See
+  [ADR 0008](docs/adr/0008-one-principal-per-os-user.md).
 
 ## [4.1.5] — 2026-09-21
 

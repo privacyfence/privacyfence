@@ -447,12 +447,14 @@ def _complete_pending_separation() -> None:
     membership is evaluated when a session is created, so a second attempt
     inside the same session could not observe its own result anyway.
 
-    The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6): an
-    account that is not this install's recorded owner gets a notification instead, and nothing
-    is prompted or elevated on its behalf -- before this guard existed, a
-    second OS user's companion landed in the branch below and ran
-    ``enable --for-user`` for *them*, with one admin password prompt,
-    quietly extending the first user's PrivacyFence to a second account.
+    ADR 0008 ("D2: two identities, not one, per install") retired the
+    local-mode-fixes plan's Phase 2 §2.6 interim guard: through that
+    guard, an account that was not this install's recorded owner got a
+    notification instead of a join, because completing it would have
+    silently handed them the owner's own principal. Now that a second
+    account gets its own isolated ``os-<uid>``/``os-<sid>`` principal
+    instead, there is nothing left to warn about -- any pending service-
+    group member is onboarded exactly like the owner always was.
     """
     # Read once, up front: the elevated command below rewrites the marker and
     # drops the cache, so asking again afterwards could answer None on an
@@ -460,14 +462,6 @@ def _complete_pending_separation() -> None:
     # name in the message is the one this decision was pending on.
     state = privilege_separation.separation()
     if state is None:
-        return
-    other_owner = privilege_separation.other_account_owns_this_install()
-    if other_owner is not None:
-        logger.warning(
-            "PrivacyFence on this computer is set up for %s. Using it from more than one "
-            "account isn't supported yet.",
-            other_owner,
-        )
         return
     if not privilege_separation.owner_membership_pending():
         return
