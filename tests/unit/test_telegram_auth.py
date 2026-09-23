@@ -1,5 +1,5 @@
-"""Tests for telegram_auth.py's three coroutines (P8, docs/https-connector-
-refactor-plan.md §9.3) -- extracted from settings_controller.py's own
+"""Tests for telegram_auth.py's three coroutines (P8, `git show 96cd5af4^:docs/https-connector-
+refactor-plan.md` §9.3) -- extracted from settings_controller.py's own
 telegram_start_auth/telegram_submit_code/telegram_submit_2fa work()
 closures (see test_settings_controller.py's TestTelegramStartAuth/
 TestTelegramSubmitCode/TestTelegramSubmit2fa, which still pass unchanged

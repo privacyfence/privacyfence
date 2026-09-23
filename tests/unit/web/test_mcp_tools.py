@@ -1,6 +1,6 @@
 """Tests for mcp_tools.py's ``ToolSpec`` -> MCP ``Tool``/``CallToolResult``
-translation, plus TST-02's three specific coverage gaps (docs/security-
-remediation-plan.md phase 1.9): ``privacyfence_begin_unattended_session``
+translation, plus TST-02's three specific coverage gaps (`git show ba1ec76e^:docs/
+security-remediation-plan.md` phase 1.9): ``privacyfence_begin_unattended_session``
 refused when disabled, ``privacyfence_propose_auto_accept_rule_change``
 denied inside an unattended session, and ``privacyfence_list_auto_accept_
 rules``' disclosure being audited.

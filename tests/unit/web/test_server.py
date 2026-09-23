@@ -87,8 +87,8 @@ class TestHostAllowlist:
 
 
 class TestParseHostHeader:
-    """Direct coverage of the RFC-3986-aware parser SEC-17 (docs/security-
-    remediation-plan.md Phase 3 item 3.4) replaced the manual
+    """Direct coverage of the RFC-3986-aware parser SEC-17 (`git show ba1ec76e^:docs/
+    security-remediation-plan.md` Phase 3 item 3.4) replaced the manual
     ``split(":", 1)[0]`` with -- TestHostAllowlist above covers it wired
     into the real middleware, this covers every branch of the parser
     itself."""

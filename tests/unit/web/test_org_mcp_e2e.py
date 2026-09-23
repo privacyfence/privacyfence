@@ -1,5 +1,5 @@
-"""End-to-end proof of P7's own exit criterion (docs/https-connector-
-refactor-plan.md §12: "Claude adds the connector by DCR; audience
+"""End-to-end proof of P7's own exit criterion (`git show 96cd5af4^:docs/https-connector-
+refactor-plan.md` §12: "Claude adds the connector by DCR; audience
 separation test passes") -- drives the real ``/mcp`` Streamable HTTP
 endpoint and the real OAuth 2.1 authorization-server routes
 (``mount_org_oauth``) together, over an in-process ASGI transport, exactly

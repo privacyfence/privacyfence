@@ -194,7 +194,7 @@ machine-wide and managing a Task Scheduler task needs it), with a just-built
 own ``.github/workflows/windows-graphical-session.yml`` (packaging-related
 ``main`` pushes, weekly, and on demand) rather than ``build.yml``'s
 tag-triggered release pipeline or ``tests.yml``'s per-PR jobs: this is the
-same most-expensive tier in ``docs/automated-test-strategy-plan.md``'s
+same most-expensive tier in ``docs/testing-policy.md``'s
 taxonomy (Phase 7's own objective) the Linux module already lives in, so
 its runtime cost must not sit on an actual release's critical path. The
 module and workflow keep their "graphical session" names, which now read

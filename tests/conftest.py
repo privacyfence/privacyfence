@@ -99,8 +99,8 @@ def _reset_singletons():
 # (outside tests/integration/) can use ``request.node.rep_call`` too, without
 # a second, near-duplicate hookimpl in a tests/system/conftest.py.
 #
-# Also where Phase 10's own CI-diagnostics capture (docs/automated-test-
-# strategy-plan.md Phase 10, tests/diagnostics.py) hooks in: on a failing
+# Also where Phase 10's own CI-diagnostics capture (docs/testing-policy.md's
+# Phase 10, tests/diagnostics.py) hooks in: on a failing
 # ``packaged``/``system``-marked test, write that test's own environment
 # info/installed-file manifest/daemon-and-audit logs under test-results/ (see
 # tests/diagnostics.py's own module docstring), and record where they landed

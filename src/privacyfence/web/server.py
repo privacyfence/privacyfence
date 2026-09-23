@@ -1142,8 +1142,8 @@ class WebServer:
     ``_maybe_start_web_server``), since the web approval UI is the only one
     there is. Through P9 this started only when ``web.approval_ui: web`` was
     configured; see approval_ui.py's ``init_approval_ui`` seam, which was
-    the switch between this and the native popup (docs/https-connector-
-    refactor-plan.md §12, decision D6)."""
+    the switch between this and the native popup (`git show 96cd5af4^:docs/https-
+    connector-refactor-plan.md` §12, decision D6)."""
 
     def __init__(
         self,

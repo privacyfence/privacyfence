@@ -1,6 +1,6 @@
 """Tests for web/routes_connect.py: /connect and the GET /oauth/start/
-{service}+/oauth/callback/{service} server-redirect flow (P8, docs/https-
-connector-refactor-plan.md §9.3).
+{service}+/oauth/callback/{service} server-redirect flow (P8, `git show 96cd5af4^:docs/https-
+connector-refactor-plan.md` §9.3).
 
 httpx's TestClient does not enforce SameSite cookie semantics the way a
 real browser does, so it would happily pass a naive implementation that

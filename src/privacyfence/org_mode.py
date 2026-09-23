@@ -153,8 +153,8 @@ class DownloadDeliveryConfig:
     # is the primary mitigation, and staging still happens for oversized
     # files by default.
     allow_disk_staging: bool = True
-    # Phase 4 (local-mode-fixes-plan.md, ADR 0007's "Clients without the
-    # bridge" section): every staged-link download in org mode is reached
+    # Phase 4 (`git show 453ae02e:local-mode-fixes-plan.md`, ADR 0007's "Clients
+    # without the bridge" section): every staged-link download in org mode is reached
     # by an MCP client -- an agent, not a human with a browser -- so the
     # default is the capability link (/mcp-files/fetch/<token>, no bearer
     # header or session cookie needed: the token in the URL is the

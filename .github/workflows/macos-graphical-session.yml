@@ -99,7 +99,7 @@ jobs:
       - name: Run macOS pkg install test
         run: pytest tests/integration/test_macos_pkg_install.py -v
 
-      # The now-removed automated-test-strategy-plan.md Phase 10: same tests/
+      # docs/testing-policy.md's Phase 10: same tests/
       # diagnostics.py capture as linux-graphical-session.yml/windows-graphical-
       # session.yml's own steps -- same reasoning (a flaky/scheduled tier still
       # needs to be diagnosable from CI, not just tellable apart from a real

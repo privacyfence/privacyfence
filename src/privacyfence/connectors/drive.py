@@ -41,7 +41,7 @@ _UPLOAD_PREVIEW_MAX_BYTES = 5_000_000
 # not just a preview-read cap like _UPLOAD_PREVIEW_MAX_BYTES above.
 _UPLOAD_MAX_BYTES = 50_000_000
 
-# B4 (local-mode-fixes-plan.md): reuses the same 5MB value gmail.py's
+# B4 (`git show 453ae02e:local-mode-fixes-plan.md`): reuses the same 5MB value gmail.py's
 # _ATTACHMENT_PREFETCH_MAX_BYTES already uses for "small enough to just
 # fetch the whole thing instead of a bounded prefetch" -- see
 # _download_file's own PII-scan comment for why a *truncated* prefetch is
