@@ -54,6 +54,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `privacyfence-app --print-mcp-token`: prints this OS account's own MCP bearer token (minting one
   on first use), for a direct HTTP MCP client with no PrivacyFence extension of its own — see
   [ADR 0008](docs/adr/0008-one-principal-per-os-user.md).
+- A new `privacyfence_create_upload_slot` tool lets a client with no `.mcpb` extension — Claude
+  Code, org mode, or any other direct HTTP MCP client — upload a local file: it returns a URL to
+  `PUT` the file's bytes to directly (no `Authorization` header needed), and the `upload_id` it
+  hands back can then be passed to `drive_upload_file`'s new `upload_id` parameter or as an
+  `"upload:<upload_id>"` entry in the `gmail_*_with_attachments` tools' `attachments` array. Org
+  mode's own staged downloads (`drive_download_file`/`gmail_download_attachment`/
+  `confluence_download_attachment`, once too large to return inline) now use the same kind of
+  capability link by default instead of a cookie-authenticated one meant for a human's browser —
+  configurable via `org_config.json`'s new `download_delivery.agent_links`. See
+  [ADR 0007](docs/adr/0007-local-file-bridge.md)'s "Clients without the bridge" section.
 
 ### Fixed
 

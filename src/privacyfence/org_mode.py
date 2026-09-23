@@ -13,6 +13,7 @@ keeps meaning exactly what it already means, with no migration.
 """
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -145,6 +146,31 @@ class DownloadDeliveryConfig:
     # is the primary mitigation, and staging still happens for oversized
     # files by default.
     allow_disk_staging: bool = True
+    # Phase 4 (local-mode-fixes-plan.md, ADR 0007's "Clients without the
+    # bridge" section): every staged-link download in org mode is reached
+    # by an MCP client -- an agent, not a human with a browser -- so the
+    # default is the capability link (/mcp-files/fetch/<token>, no bearer
+    # header or session cookie needed: the token in the URL is the
+    # credential). Setting this False keeps the older cookie-authenticated
+    # browser link (/downloads/{token}) instead -- for an org that wants a
+    # human to be the one who actually opens a staged download, not the
+    # agent fetching it directly on their behalf.
+    agent_links: bool = True
+
+    def staged_link_path(self, token: bytes) -> str:
+        """The URL path a staged download's ``download_url`` should use,
+        given this config's own ``agent_links`` choice: the Phase 4
+        capability route (no bearer header or session cookie needed -- the
+        token in the URL is the credential) by default, or the older
+        cookie-authenticated browser route when an org has opted back into
+        it. Both routes serve the same ``download_staging.
+        DownloadStagingStore`` entry, keyed by the same token -- only which
+        HTTP endpoint (and therefore which kind of caller) can claim it
+        differs. Used by connectors/drive.py, connectors/gmail.py and
+        connectors/confluence.py's own org-mode staged-link delivery, so
+        the choice is made in exactly one place rather than three."""
+        encoded = base64.urlsafe_b64encode(token).decode("ascii")
+        return f"/mcp-files/fetch/{encoded}" if self.agent_links else f"/downloads/{encoded}"
 
     def fits_inline(self, size_bytes: int) -> bool:
         """Whether a file this size should be delivered inline (base64, in
@@ -175,6 +201,7 @@ class DownloadDeliveryConfig:
             inline_max_bytes=inline_max_bytes,
             link_ttl_seconds=link_ttl_seconds,
             allow_disk_staging=bool(raw.get("allow_disk_staging", True)),
+            agent_links=bool(raw.get("agent_links", True)),
         )
 
 

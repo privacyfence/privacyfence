@@ -214,17 +214,23 @@ class DriveConnector(Connector):
                     "file, since that tool only writes UTF-8 text. Provide exactly "
                     "one of local_path (a path on the user's computer — where "
                     "Claude Desktop runs: absolute, or starting with ~/. Claude's "
-                    "own working or outputs directory is fine) or content_base64 "
+                    "own working or outputs directory is fine), content_base64 "
                     "(base64-encoded file bytes, decoded by PrivacyFence itself — "
                     "use this when you only have the file's bytes and not a local "
-                    "path; 'name' is then required). On an organization-managed "
-                    "install, local_path is read from wherever PrivacyFence's own "
-                    "server runs, not the user's machine — prefer content_base64 "
-                    "there. Requires user approval."
+                    "path; 'name' is then required), or upload_id (the id "
+                    "privacyfence_create_upload_slot returned after you PUT the "
+                    "file's bytes to its upload_url — use this if local_path fails "
+                    "with an error about PrivacyFence being unable to read files in "
+                    "your home folder directly, e.g. no PrivacyFence extension is "
+                    "installed). On an organization-managed install, local_path is "
+                    "read from wherever PrivacyFence's own server runs, not the "
+                    "user's machine — prefer content_base64 or upload_id there. "
+                    "Requires user approval."
                 ),
                 params=[
                     ToolParam("local_path", "str", required=False, default=""),
                     ToolParam("content_base64", "str", required=False, default=""),
+                    ToolParam("upload_id", "str", required=False, default=""),
                     ToolParam("name", "str", required=False, default=""),
                     ToolParam("parent_folder_id", "str", required=False, default=""),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
@@ -1107,7 +1113,7 @@ class DriveConnector(Connector):
             "delivery": "link",
             "name": name,
             "size_bytes": size_bytes,
-            "download_url": f"{self.download_base_url}/downloads/{base64.urlsafe_b64encode(token).decode('ascii')}",
+            "download_url": f"{self.download_base_url}{cfg.staged_link_path(token)}",
             "expires_at": datetime.fromtimestamp(
                 time.time() + cfg.link_ttl_seconds, tz=timezone.utc,
             ).isoformat(),
@@ -1230,12 +1236,16 @@ class DriveConnector(Connector):
         name: str = "",
         parent_folder_id: str = "",
         content_base64: str = "",
+        upload_id: str = "",
     ) -> Any:
         import base64
         import os
 
-        if bool(local_path.strip()) == bool(content_base64.strip()):
-            raise ValueError("drive_upload_file: provide exactly one of local_path or content_base64")
+        provided = (bool(local_path.strip()), bool(content_base64.strip()), bool(upload_id.strip()))
+        if sum(provided) != 1:
+            raise ValueError(
+                "drive_upload_file: provide exactly one of local_path, content_base64, or upload_id"
+            )
 
         preview_bytes = b""
         preview_mime_type = ""
@@ -1250,7 +1260,19 @@ class DriveConnector(Connector):
         # like drive_download_file's own org-mode branch stays unchanged.
         is_org_local_path = local_path.strip() and self.download_mode == "org"
 
-        if local_path.strip() and not is_org_local_path:
+        # Phase 4 ("Clients without the bridge"): upload_id names bytes
+        # already staged by privacyfence_create_upload_slot, via the
+        # local_files.py ``upload:`` convention -- this works in every
+        # mode, org mode included, since a capability slot needs neither
+        # can_access_user_files() nor a bridge-capable shim, only the
+        # token itself (see local_files.require_local_files' own
+        # docstring). Treated as a variant of the local_path/file-bridge
+        # branch below: once claimed, an uploaded file behaves exactly
+        # like a bridge-fetched local_path.
+        upload_ref = f"{local_files.UPLOAD_REF_PREFIX}{upload_id.strip()}" if upload_id.strip() else ""
+        effective_local_path = local_path if (local_path.strip() and not is_org_local_path) else upload_ref
+
+        if effective_local_path:
             # ADR 0007/B2: raises immediately -- LocalFileAccessError if
             # there's no way to reach this path at all, or LocalFilesNeeded
             # to start the upload handshake -- instead of the old
@@ -1258,12 +1280,12 @@ class DriveConnector(Connector):
             # "0 bytes" for a file this process can't read and only failing
             # once the human has already approved the upload.
             local_files.require_local_files(
-                [local_path], max_total_bytes=_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
+                [effective_local_path], max_total_bytes=_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
             )
-            display_name = name.strip() or os.path.basename(local_path)
-            size_bytes = local_files.local_file_size(local_path, download_mode=self.download_mode)
-            source = local_path
-            sender = "(local file)"
+            display_name = name.strip() or (os.path.basename(local_path) if local_path.strip() else "(unnamed file)")
+            size_bytes = local_files.local_file_size(effective_local_path, download_mode=self.download_mode)
+            source = local_path.strip() or "uploaded via privacyfence_create_upload_slot"
+            sender = "(local file)" if local_path.strip() else "(uploaded file)"
             # The connector never used to read this file's bytes at all --
             # only stat its size -- so the popup showed a human nothing about
             # what's actually in it, and nothing was ever scanned for PII
@@ -1278,11 +1300,11 @@ class DriveConnector(Connector):
                 and 0 < size_bytes <= _UPLOAD_PREVIEW_MAX_BYTES
             ):
                 try:
-                    read_bytes = local_files.read_local_file(local_path, download_mode=self.download_mode)
+                    read_bytes = local_files.read_local_file(effective_local_path, download_mode=self.download_mode)
                 except local_files.LocalFileAccessError:
                     logger.warning(
                         "drive_upload_file: failed to read %r for preview/PII scan",
-                        local_path, exc_info=True,
+                        effective_local_path, exc_info=True,
                     )
                 else:
                     local_data = read_bytes
@@ -1354,7 +1376,7 @@ class DriveConnector(Connector):
             tool_name="Upload File to Drive",
             summary=f"Upload \"{display_name}\" to Drive",
             sender=sender,
-            raw_data={"local_path": local_path, "name": display_name, "size_bytes": size_bytes},
+            raw_data={"local_path": local_path, "upload_id": upload_id, "name": display_name, "size_bytes": size_bytes},
             filtered_data=None,
             gate="popup",
             preview=preview,
@@ -1367,19 +1389,21 @@ class DriveConnector(Connector):
             session_created_ids=self.session_created_ids,
             args={
                 "local_path": local_path,
+                "upload_id": upload_id,
                 "name": name,
                 "parent_folder_id": parent_folder_id,
                 "content_base64": content_base64,
             },
         )
-        if local_path.strip() and not is_org_local_path:
+        if effective_local_path:
             # ADR 0007: MediaFileUpload can't read a path this process
             # doesn't have access to under privilege separation -- upload
-            # from the bytes the file bridge (or a direct read, in an
-            # unseparated install) already produced, reusing the preview
-            # read above when there was one instead of reading twice.
+            # from the bytes the file bridge (or an upload slot claim, or a
+            # direct read in an unseparated install) already produced,
+            # reusing the preview read above when there was one instead of
+            # reading twice.
             if local_data is None:
-                local_data = local_files.read_local_file(local_path, download_mode=self.download_mode)
+                local_data = local_files.read_local_file(effective_local_path, download_mode=self.download_mode)
             result = await self._fetch(self._drive.upload_file_bytes, local_data, display_name, parent_folder_id)
         else:
             result = await self._fetch(

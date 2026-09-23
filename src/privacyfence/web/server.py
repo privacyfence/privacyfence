@@ -107,7 +107,7 @@ from ..web_approval_ui import WebApprovalUI
 from . import org_session
 from . import routes_connect
 from . import routes_downloads
-from .routes_file_bridge import mount_file_bridge
+from .routes_file_bridge import mount_capability_routes, mount_file_bridge
 from . import routes_org_identity
 from . import state_stream as _state_stream
 from .control_channel import (
@@ -931,7 +931,13 @@ def build_app(
         # ADR 0007: the local file bridge's own upload/download endpoints,
         # authenticated exactly like /mcp (same bearer-token verifier) --
         # see routes_file_bridge.py's own module docstring for why this
-        # can't just be more routes on the main approval-surface app.
+        # can't just be more routes on the main approval-surface app. Also
+        # includes Phase 4's unauthenticated capability pair
+        # (privacyfence_create_upload_slot and the no-bridge download
+        # fallback hand out /mcp-files/slots|fetch URLs a client with no
+        # shim -- and possibly no way to set a custom header at all -- can
+        # still use) -- combined into this same Mount rather than a second
+        # one at the same prefix, see mount_file_bridge's own docstring.
         extra_routes.extend(mount_file_bridge(token=mcp_token, verifier=mcp_verifier))
 
     # The self-approval plan's Phase 2 -- one answer, read once here, for
@@ -1051,6 +1057,14 @@ def _build_org_app(
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
+        # Phase 4: org mode's own privacyfence_create_upload_slot and
+        # DownloadDeliveryConfig.agent_links need the same two
+        # unauthenticated capability routes local mode mounts above --
+        # see routes_file_bridge.py's own module docstring. Gated on
+        # mcp_dispatcher exactly like /mcp itself: with no dispatcher,
+        # neither the upload-slot meta-tool nor a connector download tool
+        # is reachable to mint a capability link in the first place.
+        extra_routes.extend(mount_capability_routes())
 
     extra_routes.extend(mount_org_oauth(org.provider, issuer_url=org.issuer_url))
     # Mounted unconditionally here (every _build_org_app call is already

@@ -54,7 +54,7 @@ from starlette.types import ASGIApp
 from .. import __version__ as PRIVACYFENCE_VERSION
 from .. import local_files
 from ..connector import Connector
-from ..principal import principal_scope
+from ..principal import Principal, principal_scope
 from ..safe_errors import public_message
 from . import mcp_tools
 from .mcp_auth import principal_from_access_token, single_token_verifier
@@ -356,7 +356,7 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
         ) as call_state:
             try:
                 if name in mcp_tools.META_TOOL_NAMES:
-                    result = await _dispatch_meta_tool(dispatcher, session_key, name, arguments)
+                    result = await _dispatch_meta_tool(dispatcher, session_key, name, arguments, principal, base_url)
                 else:
                     result = await _dispatch_connector_tool(dispatcher, session_key, name, arguments)
             except local_files.LocalFilesNeeded as needed:
@@ -420,6 +420,7 @@ def _connector_for_tool(connectors: dict[str, Connector], tool: str) -> str | No
 
 async def _dispatch_meta_tool(
     dispatcher: McpDispatcher, session_key: str, name: str, arguments: dict[str, Any],
+    principal: Principal, base_url: str,
 ) -> Any:
     reason = arguments.get("reason", "")
     if name == mcp_tools.CHECK_POLICY_TOOL.name:
@@ -444,6 +445,15 @@ async def _dispatch_meta_tool(
         )
     if name == mcp_tools.PRIVACYFENCE_STATUS_TOOL.name:
         return dispatcher.status(reason)
+    if name == mcp_tools.CREATE_UPLOAD_SLOT_TOOL.name:
+        # Phase 4: no gate/approval here -- see the tool's own description.
+        # local_files.build_upload_slot raises LocalFileAccessError
+        # (a ValueError -- safe_errors.public_message() shows it verbatim)
+        # for a size_bytes already over the slot cap.
+        return local_files.build_upload_slot(
+            principal, filename=arguments.get("filename", ""),
+            size_bytes=arguments.get("size_bytes"), base_url=base_url,
+        )
     raise ValueError(f"Unknown tool: {name!r}")  # pragma: no cover -- unreachable, META_TOOL_NAMES gates this
 
 

@@ -13,6 +13,22 @@ stack (SEC-06's audience separation: a browser session cookie must never be
 accepted here any more than it is on ``/mcp``). The principal for both
 routes always comes from that bearer token via ``principal_from_access_
 token``, never from a cookie or a path parameter.
+
+Also ``PUT /mcp-files/slots/{slot}`` / ``GET /mcp-files/fetch/{token}`` --
+Phase 4's own pair (ADR 0007's "Clients without the bridge" section),
+reached by any HTTP client, no bearer header (or anything else) required:
+the capability token embedded in the URL is itself the credential. Built by
+``mount_capability_routes`` below, as plain, unauthenticated ``Route``s --
+never wrapped in this module's own bearer-auth stack, since the whole point
+is a caller that may have no way to set a custom header at all (a sandboxed
+agent shelling out to ``curl``). Authorization for these two lives entirely
+in ``upload_staging.UploadStagingStore.afill_capability``/``download_
+staging.DownloadStagingStore.claim_capability``, which check the token
+against a live, unexpired, not-yet-claimed slot/entry and nothing else --
+see either method's own docstring for why skipping the principal check here
+doesn't skip it overall (``local_files.require_local_files``'s ``upload:``
+handling re-checks it, principal-bound, before a claimed upload is ever
+read by a tool call).
 """
 from __future__ import annotations
 
@@ -28,7 +44,7 @@ from starlette.applications import Starlette
 from starlette.middleware.authentication import AuthenticationMiddleware
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
-from starlette.routing import BaseRoute, Mount, Route
+from starlette.routing import BaseRoute, Mount, Route, get_route_path
 from starlette.types import ASGIApp
 
 from ..audit_log import AuditEntry, current_week, get_audit_logger
@@ -128,6 +144,105 @@ async def _get_download(request: Request) -> Response:
     )
 
 
+async def _put_slot(request: Request) -> Response:
+    """Phase 4's unauthenticated upload -- see module docstring. No
+    ``principal_from_access_token(get_access_token())`` here at all: this
+    route isn't wrapped in the bearer-auth middleware stack in the first
+    place (``mount_capability_routes``), so there is no access token to
+    read."""
+    token = _decode_token(request.path_params["slot"])
+    if token is None:
+        return _NOT_FOUND
+    store = get_upload_staging_store()
+    try:
+        size = await store.afill_capability(token, request.stream())
+    except LookupError:
+        return _NOT_FOUND
+    except UploadAlreadyFilledError as exc:
+        return PlainTextResponse(str(exc), status_code=409, headers={"Cache-Control": "no-store"})
+    except UploadTooLargeError as exc:
+        return PlainTextResponse(str(exc), status_code=413, headers={"Cache-Control": "no-store"})
+    _audit_bridge_upload_received("(capability)", size)
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
+
+async def _get_fetch(request: Request) -> Response:
+    """Phase 4's unauthenticated download -- see module docstring, and
+    ``_put_slot`` above for why there's no access token to read here
+    either."""
+    token = _decode_token(request.path_params["token"])
+    if token is None:
+        return _NOT_FOUND
+    result = get_download_staging_store().claim_capability(token)
+    if result is None:
+        return _NOT_FOUND
+    data, name, _mime_type = result
+    _audit_bridge_download_served("(capability)", name, len(data))
+    return Response(
+        content=data,
+        media_type="application/octet-stream",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-SHA256": hashlib.sha256(data).hexdigest(),
+        },
+    )
+
+
+def _capability_asgi_app() -> ASGIApp:
+    """The two Phase 4 capability routes as one plain Starlette app, with
+    *no* auth middleware around it -- see module docstring."""
+    return Starlette(routes=[
+        Route("/slots/{slot}", _put_slot, methods=["PUT"]),
+        Route("/fetch/{token}", _get_fetch, methods=["GET"]),
+    ])
+
+
+class _FileBridgeRouter:
+    """Dispatches by top-level path segment instead of nesting two
+    ``Mount``s at the identical ``/mcp-files`` prefix. Starlette's own
+    ``Mount.matches()`` only checks whether the request path starts with
+    the mount's own prefix -- it never looks inside to see whether one of
+    the mount's *own* routes actually matches -- so two ``Mount``s
+    registered at the same prefix are not additive: whichever is tried
+    first by the outer ``Router`` swallows every request under that
+    prefix, auth stack and all, and the second ``Mount`` is unreachable
+    dead code. (Caught by tests/unit/web/test_server.py's own
+    audience-separation coverage: a capability route nested behind
+    ``mount_file_bridge``'s bearer app came back 401, not 404, because the
+    request never got anywhere near the unauthenticated app at all.)
+
+    So both pairs of routes live under exactly one ``Mount``, and this
+    class is that mount's own ASGI app: ``/slots`` and ``/fetch`` need no
+    auth at all and go straight to the capability app; everything else
+    (``/uploads``, ``/downloads``) goes through the bearer-authenticated
+    app exactly as before Phase 4.
+    """
+
+    _NO_AUTH_SEGMENTS = frozenset({"slots", "fetch"})
+
+    def __init__(self, authenticated: ASGIApp, capability: ASGIApp) -> None:
+        self._authenticated = authenticated
+        self._capability = capability
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] == "http":
+            # Starlette's Mount does NOT rewrite scope["path"] to be
+            # mount-relative for a plain ASGI ``app=`` callable like this
+            # one -- it only extends scope["root_path"] (see Mount.matches
+            # in starlette/routing.py) and expects the wrapped app to
+            # compute its own route-relative path from root_path, exactly
+            # as get_route_path() does (the same helper Starlette's own
+            # Router/Route matching uses internally). Reading scope["path"]
+            # directly here previously always started with "/mcp-files/...",
+            # never matched "slots"/"fetch", and silently sent every
+            # capability request into the bearer-authenticated app instead.
+            segment = get_route_path(scope).lstrip("/").split("/", 1)[0]
+            if segment in self._NO_AUTH_SEGMENTS:
+                await self._capability(scope, receive, send)
+                return
+        await self._authenticated(scope, receive, send)
+
+
 def build_file_bridge_asgi_app(
     *, token: str | None = None, verifier: TokenVerifier | None = None,
     resource_metadata_url: AnyHttpUrl | None = None,
@@ -138,7 +253,14 @@ def build_file_bridge_asgi_app(
     convenience for a caller with no multi-principal registration to grow
     -- web/server.py's real local-mode wiring passes a shared ``verifier``
     instead, the same instance ``MINT MCP`` registers new principals into);
-    org mode passes its own ``OrgOAuthProvider`` as ``verifier``."""
+    org mode passes its own ``OrgOAuthProvider`` as ``verifier``.
+
+    This is the bearer-authenticated pair (``/uploads``, ``/downloads``)
+    alone -- ``mount_file_bridge`` is what combines it with the Phase 4
+    capability pair under one ``Mount``; a caller that wants only the
+    authenticated app itself (as a handful of existing tests do) still
+    gets exactly that from this function, unchanged.
+    """
     inner = Starlette(routes=[
         Route("/uploads/{slot}", _put_upload, methods=["PUT"]),
         Route("/downloads/{token}", _get_download, methods=["GET"]),
@@ -156,15 +278,41 @@ def mount_file_bridge(
     *, token: str | None = None, verifier: TokenVerifier | None = None,
     resource_metadata_url: AnyHttpUrl | None = None,
 ) -> list[BaseRoute]:
-    """The two file-bridge routes, as one ``Mount`` under
-    ``FILE_BRIDGE_PREFIX``. ``web/server.py``'s local-mode ``build_app``
-    extends its own ``extra_routes`` with this, alongside ``mount_mcp``'s
-    own route, whenever a dispatcher is present. Not mounted in org mode
-    (``_build_org_app``): the file bridge is Claude-Desktop-only (ADR
-    0007), and org-mode connectors never call into local_files.py in the
-    first place -- see that ADR's own "why is org mode untouched" section."""
-    app = build_file_bridge_asgi_app(token=token, verifier=verifier, resource_metadata_url=resource_metadata_url)
+    """All four file-bridge routes -- Phase 1's bearer-authenticated
+    ``/uploads``/``/downloads`` pair plus Phase 4's unauthenticated
+    ``/slots``/``/fetch`` capability pair (ADR 0007's "Clients without the
+    bridge" section) -- as one ``Mount`` under ``FILE_BRIDGE_PREFIX``. Used
+    by local mode's own ``build_app`` alongside ``mount_mcp``'s own route,
+    whenever a dispatcher is present. Not mounted in org mode
+    (``_build_org_app``): the bearer-authenticated half is Claude-Desktop-
+    only (ADR 0007), and org-mode connectors never call into
+    local_files.py's shim-facing side in the first place -- see that ADR's
+    own "why is org mode untouched" section. Org mode gets the capability
+    pair alone, via ``mount_capability_routes`` below."""
+    authenticated = build_file_bridge_asgi_app(token=token, verifier=verifier, resource_metadata_url=resource_metadata_url)
+    app = _FileBridgeRouter(authenticated, _capability_asgi_app())
     return [Mount(FILE_BRIDGE_PREFIX, app=app)]
 
 
-__all__ = ["FILE_BRIDGE_PREFIX", "build_file_bridge_asgi_app", "mount_file_bridge"]
+def mount_capability_routes() -> list[BaseRoute]:
+    """Phase 4's two capability routes alone, as one ``Mount`` under
+    ``FILE_BRIDGE_PREFIX`` -- no bearer-auth stack at all, unlike
+    ``mount_file_bridge``. This is org mode's own mount
+    (``_build_org_app``): org mode never mounts ``mount_file_bridge``'s
+    bearer-authenticated pair (see that function's own docstring), but
+    still needs ``privacyfence_create_upload_slot`` and
+    ``DownloadDeliveryConfig.agent_links``'s staged-link delivery to work.
+    Local mode gets the same two routes from ``mount_file_bridge`` instead
+    -- combined into the *same* ``/mcp-files`` ``Mount`` alongside the
+    bearer-authenticated pair, since two ``Mount``s can't share one prefix
+    (see ``_FileBridgeRouter``'s own docstring) -- so local mode's
+    ``build_app`` must never call this function too."""
+    return [Mount(FILE_BRIDGE_PREFIX, app=_capability_asgi_app())]
+
+
+__all__ = [
+    "FILE_BRIDGE_PREFIX",
+    "build_file_bridge_asgi_app",
+    "mount_capability_routes",
+    "mount_file_bridge",
+]

@@ -46,6 +46,21 @@ class TestBuildAppOrgMode:
         r = client.post("/mcp", json={}, headers={"Accept": "application/json, text/event-stream"})
         assert r.status_code == 401
 
+    def test_capability_routes_are_mounted_with_no_auth_required(self, tmp_path, monkeypatch):
+        # Phase 4 ("Clients without the bridge"): org mode mounts
+        # mount_capability_routes() alone (never mount_file_bridge's
+        # bearer-authenticated pair -- see that function's own docstring),
+        # so both a malformed slot and a malformed token come back 404
+        # (route exists, token isn't live), never 401.
+        org = _org_auth(tmp_path, monkeypatch)
+        app = build_app(
+            WebApprovalUI(), org=org, mcp_dispatcher=McpDispatcher(lambda: {}),
+            allowed_hosts=frozenset({"pf.example.com"}),
+        )
+        client = TestClient(app, base_url=ISSUER)
+        assert client.put("/mcp-files/slots/not-a-real-slot", content=b"data").status_code == 404
+        assert client.get("/mcp-files/fetch/not-a-real-token").status_code == 404
+
     def test_oauth_authorization_server_metadata_is_served(self, tmp_path, monkeypatch):
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))

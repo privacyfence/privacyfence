@@ -196,15 +196,7 @@ class UploadStagingStore:
         are deliberately typed so the HTTP layer can map them without
         inspecting message text.
         """
-        lookup_id = _lookup_id(token)
-        with self._lock:
-            self._sweep_expired_locked()
-            slot = self._pending.get(lookup_id)
-            if slot is None or slot.principal_id != principal_id:
-                raise LookupError("unknown, expired, or wrong-principal upload slot")
-            if slot.filled:
-                raise UploadAlreadyFilledError("this upload slot has already been filled")
-
+        slot = self._claim_pending_locked(token, principal_id)
         plaintext = bytearray()
         max_bytes = slot.max_bytes
         for chunk in stream:
@@ -217,15 +209,7 @@ class UploadStagingStore:
         """Async counterpart of ``fill()`` for Starlette's ``request.
         stream()``. Same semantics, same exceptions -- see ``fill()``'s
         docstring."""
-        lookup_id = _lookup_id(token)
-        with self._lock:
-            self._sweep_expired_locked()
-            slot = self._pending.get(lookup_id)
-            if slot is None or slot.principal_id != principal_id:
-                raise LookupError("unknown, expired, or wrong-principal upload slot")
-            if slot.filled:
-                raise UploadAlreadyFilledError("this upload slot has already been filled")
-
+        slot = self._claim_pending_locked(token, principal_id)
         plaintext = bytearray()
         max_bytes = slot.max_bytes
         async for chunk in stream:
@@ -233,6 +217,45 @@ class UploadStagingStore:
             if len(plaintext) > max_bytes:
                 raise UploadTooLargeError(f"upload exceeds the {max_bytes}-byte limit for this call")
         return self._finish_fill(slot, token, bytes(plaintext))
+
+    async def afill_capability(self, token: bytes, stream: AsyncIterator[bytes]) -> int:
+        """Phase 4's own fill, for the unauthenticated ``PUT
+        /mcp-files/slots/<token>`` capability route (ADR 0007's "Clients
+        without the bridge" section) -- reached by a caller carrying no
+        bearer header at all, so there is no principal to check the slot
+        against here. That check isn't skipped, only moved: the slot is
+        still bound to whichever principal created it (see
+        ``create_slot``), and ``local_files.require_local_files``'s
+        ``upload:`` handling re-verifies that principal, via the ordinary
+        principal-checked ``claim()``, before anything staged here is ever
+        read by a tool call. Same semantics/exceptions otherwise as
+        ``afill()``."""
+        slot = self._claim_pending_locked(token, None)
+        plaintext = bytearray()
+        max_bytes = slot.max_bytes
+        async for chunk in stream:
+            plaintext.extend(chunk)
+            if len(plaintext) > max_bytes:
+                raise UploadTooLargeError(f"upload exceeds the {max_bytes}-byte limit for this call")
+        return self._finish_fill(slot, token, bytes(plaintext))
+
+    def _claim_pending_locked(self, token: bytes, principal_id: str | None) -> "_PendingSlot":
+        """Looks up ``token``'s slot and checks it's fillable, without yet
+        claiming it (``_finish_fill`` does that, right before the actual
+        write -- see its own docstring for why the two are split).
+        ``principal_id is None`` is the capability-route case
+        (``afill_capability``): the slot's own ``principal_id`` is simply
+        not checked, since a capability token carries no principal to check
+        it against in the first place."""
+        lookup_id = _lookup_id(token)
+        with self._lock:
+            self._sweep_expired_locked()
+            slot = self._pending.get(lookup_id)
+            if slot is None or (principal_id is not None and slot.principal_id != principal_id):
+                raise LookupError("unknown, expired, or wrong-principal upload slot")
+            if slot.filled:
+                raise UploadAlreadyFilledError("this upload slot has already been filled")
+        return slot
 
     def _finish_fill(self, slot: "_PendingSlot", token: bytes, data: bytes) -> int:
         """Claims ``slot`` for this fill -- under the lock, before any I/O

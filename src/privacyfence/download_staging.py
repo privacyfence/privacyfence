@@ -211,11 +211,27 @@ class DownloadStagingStore:
         them). On success, both the ciphertext file and the registry entry
         are deleted before this returns.
         """
+        return self._claim(token, principal_id)
+
+    def claim_capability(self, token: bytes) -> tuple[bytes, str, str] | None:
+        """Phase 4's own claim, for the unauthenticated ``GET
+        /mcp-files/fetch/<token>`` capability route (ADR 0007's "Clients
+        without the bridge" section) and for org mode's own agent-facing
+        staged-link delivery (``org_mode.DownloadDeliveryConfig.
+        agent_links``) -- both reached by a caller carrying no bearer
+        header and, for org mode, no browser session cookie either. There
+        is no principal to check the entry against here; the capability
+        token itself is what authorizes the claim, exactly like
+        ``UploadStagingStore.afill_capability``'s own upload-side
+        counterpart. Same "no oracle" posture otherwise as ``claim()``."""
+        return self._claim(token, None)
+
+    def _claim(self, token: bytes, principal_id: str | None) -> tuple[bytes, str, str] | None:
         lookup_id = _lookup_id(token)
         with self._lock:
             self._sweep_expired_locked()
             staged = self._pending.get(lookup_id)
-            if staged is None or staged.principal_id != principal_id:
+            if staged is None or (principal_id is not None and staged.principal_id != principal_id):
                 return None
             # Claimed exactly once -- pop now, under the lock, so a second
             # concurrent claim (a retried request, a guessed token racing

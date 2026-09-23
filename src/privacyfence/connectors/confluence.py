@@ -582,7 +582,7 @@ class ConfluenceConnector(Connector):
             "delivery": "link",
             "name": attachment.name,
             "size_bytes": size_bytes,
-            "download_url": f"{self.download_base_url}/downloads/{base64.urlsafe_b64encode(token).decode('ascii')}",
+            "download_url": f"{self.download_base_url}{cfg.staged_link_path(token)}",
             "expires_at": datetime.fromtimestamp(
                 time.time() + cfg.link_ttl_seconds, tz=timezone.utc,
             ).isoformat(),

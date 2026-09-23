@@ -248,6 +248,16 @@ class TestMetaToolManifest:
         assert mcp_tools.LIST_POLICY_TOOL in mcp_tools.META_TOOLS
         assert mcp_tools.PROPOSE_POLICY_CHANGE_TOOL in mcp_tools.META_TOOLS
 
+    def test_create_upload_slot_is_in_the_meta_tool_manifest(self):
+        assert mcp_tools.CREATE_UPLOAD_SLOT_TOOL in mcp_tools.META_TOOLS
+        assert mcp_tools.CREATE_UPLOAD_SLOT_TOOL.name in mcp_tools.META_TOOL_NAMES
+
+    def test_create_upload_slot_requires_filename_and_reason(self):
+        schema = mcp_tools.CREATE_UPLOAD_SLOT_TOOL.input_schema
+        assert set(schema["required"]) == {"filename", "reason"}
+        assert "size_bytes" in schema["properties"]
+        assert "size_bytes" not in schema["required"]
+
     def test_propose_policy_change_requires_only_operation_and_reason(self):
         # rule_id/group/value/verbs are each conditionally required depending on operation --
         # gate.propose_policy_change enforces that at call time (ValueError before any popup),

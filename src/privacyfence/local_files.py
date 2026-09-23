@@ -39,6 +39,7 @@ from . import privilege_separation
 from .download_staging import DEFAULT_TTL_SECONDS as _DOWNLOAD_TTL_SECONDS
 from .download_staging import get_download_staging_store
 from .principal import current_principal
+from .upload_staging import DEFAULT_TTL_SECONDS as _UPLOAD_TTL_SECONDS
 from .upload_staging import get_upload_staging_store
 
 if TYPE_CHECKING:
@@ -46,16 +47,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# §1.4: shown verbatim to the model (LocalFileAccessError is a ValueError
-# subclass -- see safe_errors.public_message()'s passthrough rule) when a
-# tool needs to read a local path but neither a direct read nor a bridge
-# handshake is available. Phase 4 replaces the last sentence with upload
-# slots for non-shim clients too.
+# §1.4/Phase 4: shown verbatim to the model (LocalFileAccessError is a
+# ValueError subclass -- see safe_errors.public_message()'s passthrough
+# rule) when a tool needs to read a local path but neither a direct read
+# nor a bridge handshake is available. Phase 4 (privacyfence_create_upload_
+# slot, §4.1) is the way forward for a client with no shim at all -- Claude
+# Code, org mode, or an old .mcpb -- so this message leads with that rather
+# than content_base64, which still works for drive_upload_file alone and
+# stays mentioned as the no-round-trip alternative for a small file.
 NO_BRIDGE_UPLOAD_MESSAGE = (
     "PrivacyFence runs under its own system account and cannot read files in your home "
-    "folder. From Claude Desktop, update the PrivacyFence extension (install the .mcpb that "
-    "came with this version). Otherwise pass the file content as content_base64 "
-    "(drive_upload_file only)."
+    "folder directly. Call privacyfence_create_upload_slot to get a URL you can PUT the "
+    "file's bytes to (no PrivacyFence extension needed), then pass its upload_id back to "
+    "this tool. For drive_upload_file specifically, passing the file content as "
+    "content_base64 also works for a small file."
 )
 
 # ADR 0007 SS1.1's one vendor _meta namespace -- the single source of truth
@@ -75,6 +80,27 @@ META_KEY = "privacyfence.eu/file-bridge"
 # plausibly downloads, small enough that holding one in memory on a
 # single-user desktop install is a non-event.
 DEFAULT_MAX_DOWNLOAD_BYTES = 200_000_000
+
+# Phase 4 ("Clients without the bridge"): a path prefixed this way in any
+# require_local_files()/read_local_file()/local_file_size() call is not a
+# filesystem path at all -- it names bytes already staged in
+# UploadStagingStore by privacyfence_create_upload_slot, waiting to be
+# claimed for *this* tool call. Recognized unconditionally, before the
+# direct-read/bridge-handshake decision below, so it works in every mode
+# (including org mode, where can_access_user_files() is always False and
+# there is no bridge at all) -- a capability slot's authorization is the
+# token itself, not the daemon's read access to anything.
+UPLOAD_REF_PREFIX = "upload:"
+
+# Phase 4: the cap privacyfence_create_upload_slot enforces on a capability
+# upload. A slot is created before any connector-specific tool is named, so
+# there's no per-tool ceiling to size it against the way
+# connectors/drive.py's _UPLOAD_MAX_BYTES sizes drive_upload_file's own
+# local_path bridge cap -- reusing that same 50MB figure here isn't a
+# coincidence, it's the same "one multi-megabyte file" ceiling applied to
+# the one path that has to pick a single number for every tool that might
+# later consume an upload_id.
+DEFAULT_CAPABILITY_UPLOAD_MAX_BYTES = 50_000_000
 
 _max_download_bytes = DEFAULT_MAX_DOWNLOAD_BYTES
 
@@ -226,11 +252,18 @@ def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode
     to approve anything).
 
     For each path: already claimed from an upload this call -> nothing
-    more to do. The daemon can read the user's files directly
-    (``can_access_user_files``) -> nothing to do, ``read_local_file``/
-    ``local_file_size`` will open it directly. A bridge-capable shim is on
-    the other end -> collect the path. None of the above -> raise
-    ``LocalFileAccessError`` immediately (B1: shown to the model verbatim).
+    more to do. A Phase 4 ``upload:<id>`` reference -> claim it from
+    ``UploadStagingStore`` for the current principal now, unconditionally
+    -- this bypasses the direct-read/bridge decision entirely (a capability
+    slot works in org mode and in every no-bridge case, precisely because
+    it needs neither), and a wrong principal gets the exact same
+    ``LocalFileAccessError`` an expired or already-claimed slot does (no
+    oracle, same as the slot's own 404-shaped HTTP route). The daemon can
+    read the user's files directly (``can_access_user_files``) -> nothing
+    to do, ``read_local_file``/``local_file_size`` will open it directly. A
+    bridge-capable shim is on the other end -> collect the path. None of
+    the above -> raise ``LocalFileAccessError`` immediately (B1: shown to
+    the model verbatim).
 
     Raises ``LocalFilesNeeded`` once, listing every path that needs the
     upload handshake at once (not one at a time), if anything was
@@ -241,6 +274,11 @@ def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode
     needed: list[str] = []
     for path in paths:
         if state is not None and path in state.resolved:
+            continue
+        if path.startswith(UPLOAD_REF_PREFIX):
+            if state is None:
+                raise LocalFileAccessError(f"Could not read {path!r}: no active call to claim it in")
+            _claim_upload(state, path, path[len(UPLOAD_REF_PREFIX):])
             continue
         if state is not None:
             slot_b64 = state.uploads.get(path)
@@ -255,6 +293,55 @@ def require_local_files(paths: list[str], *, max_total_bytes: int, download_mode
         raise LocalFileAccessError(NO_BRIDGE_UPLOAD_MESSAGE)
     if needed:
         raise LocalFilesNeeded(needed, max_total_bytes)
+
+
+def build_upload_slot(
+    principal: "Principal", *, filename: str, size_bytes: int | None, base_url: str,
+) -> dict[str, Any]:
+    """Handles the ``privacyfence_create_upload_slot`` meta-tool (ADR 0007's
+    "Clients without the bridge" section, Phase 4 §4.1): mints an
+    ``UploadStagingStore`` slot and returns a capability URL any HTTP
+    client can ``PUT`` bytes to directly, with **no bearer header** -- the
+    32-byte token embedded in ``upload_url`` is itself the credential,
+    which is what makes this reachable from a client that has no way to
+    set a custom header at all (a sandboxed agent shelling out to `curl`).
+    This is deliberately a different route (``/mcp-files/slots/<token>``,
+    unauthenticated) from Phase 1's shim-only ``/mcp-files/uploads/<slot>``
+    (bearer-authenticated, reached only by a shim that already carries the
+    daemon's bearer token on every request) -- see web/routes_file_bridge.py.
+
+    The slot's principal is fixed at creation, to whoever is making *this*
+    already-authenticated ``tools/call`` -- a capability token minted for
+    one principal can still only be claimed by that principal, since
+    ``require_local_files``'s own ``upload:`` handling re-checks it via
+    the ordinary, principal-bound ``UploadStagingStore.claim()``. Losing
+    the URL therefore lets someone else fill *your* pending upload slot
+    with their own bytes, not read or claim anything of yours -- see this
+    ADR's own security note.
+
+    ``size_bytes``, when given, is checked against the one fixed cap this
+    (connector-agnostic) meta-tool enforces -- raises before a slot is even
+    created for a file already known to be too big, rather than minting a
+    slot that ``fill()``/``afill_capability()`` would reject mid-stream
+    anyway.
+    """
+    max_bytes = DEFAULT_CAPABILITY_UPLOAD_MAX_BYTES
+    if size_bytes is not None and size_bytes > max_bytes:
+        raise LocalFileAccessError(
+            f"This file is {size_bytes:,} bytes, over PrivacyFence's {max_bytes:,}-byte "
+            "upload-slot limit. Ask for a narrower export or a different way to share it."
+        )
+    token = get_upload_staging_store().create_slot(principal, filename, max_bytes, ttl_seconds=_UPLOAD_TTL_SECONDS)
+    slot = _encode_token(token)
+    upload_url = f"{base_url.rstrip('/')}/mcp-files/slots/{slot}"
+    return {
+        "upload_id": slot,
+        "upload_url": upload_url,
+        "method": "PUT",
+        "max_bytes": max_bytes,
+        "expires_at": time.time() + _UPLOAD_TTL_SECONDS,
+        "example": f"curl -T <file> '{upload_url}'",
+    }
 
 
 def read_local_file(path: str, *, download_mode: str) -> bytes:
@@ -384,10 +471,18 @@ def _deliver_bridge(state: "_CallState", dest_dir: str, name: str, data: bytes, 
 
 
 def _deliver_link(state: "_CallState | None", name: str, data: bytes, mime_type: str) -> dict[str, Any]:
+    """Phase 4: a capability link (``/mcp-files/fetch/<token>``, no bearer
+    header needed -- the token in the URL is the credential) rather than
+    Phase 1's bearer-authenticated ``/mcp-files/downloads/<token>``, since
+    the whole point of this branch is a caller with no bridge and,
+    frequently, no way to attach a custom header either (a sandboxed agent
+    `curl`-ing a URL it was handed). See web/routes_file_bridge.py and
+    local_files.build_upload_slot's own docstring for the upload-side
+    counterpart of this same capability-URL shape."""
     principal = current_principal()
     token = get_download_staging_store().stage(principal, data, name, mime_type)
     base_url = (state.base_url if state is not None else "").rstrip("/")
-    download_url = f"{base_url}/mcp-files/downloads/{_encode_token(token)}"
+    download_url = f"{base_url}/mcp-files/fetch/{_encode_token(token)}"
     if state is not None:
         state.staged_download = True
     safe_name = os.path.basename(name) or "file"
@@ -398,17 +493,20 @@ def _deliver_link(state: "_CallState | None", name: str, data: bytes, mime_type:
         "delivery": "link",
         "download_url": download_url,
         "expires_at": time.time() + _DOWNLOAD_TTL_SECONDS,
-        "note": "Fetch with the same Authorization: Bearer header your MCP client uses",
+        "note": "Fetch this URL directly -- it's a one-time capability link, no auth header needed.",
     }
 
 
 __all__ = [
+    "DEFAULT_CAPABILITY_UPLOAD_MAX_BYTES",
     "DEFAULT_MAX_DOWNLOAD_BYTES",
     "LocalFileAccessError",
     "LocalFilesNeeded",
     "META_KEY",
     "NO_BRIDGE_UPLOAD_MESSAGE",
+    "UPLOAD_REF_PREFIX",
     "build_need_uploads_files",
+    "build_upload_slot",
     "call_context",
     "call_produced_deliveries",
     "can_access_user_files",
