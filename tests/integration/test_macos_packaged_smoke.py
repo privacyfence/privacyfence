@@ -44,15 +44,22 @@ the packaged app:
    ``system/com.privacyfence.daemon`` LaunchDaemon means for the rest of
    this module, in place of the directly-Popen'd, deliberately-unseparated
    process this used to start against a scratch ``$HOME``. Mints a
-   bootstrap link the same way a human with root but no daemon-log line
-   handy would (through the #428 Phase 2 control channel -- a real Unix
-   domain socket against the daemon's own, now root-owned, data
-   directory), as root: SEC-10's ``SecretRedactingFormatter`` redacts a
-   ``bootstrap=<value>`` substring from every log line on principle, and
-   separately, a currently-running process never picks up the ``${SERVICE_
-   GROUP}`` membership ``enable`` just granted this account -- only a
-   fresh login does (same reasoning ``test_macos_graphical_session_
-   autostart.py``'s own sudo-everything posture already documents).
+   bootstrap link the same way a human with no daemon-log line handy would
+   (through the #428 Phase 2 control channel -- a real Unix domain socket
+   against the daemon's own, now root-owned, data directory): SEC-10's
+   ``SecretRedactingFormatter`` redacts a ``bootstrap=<value>`` substring
+   from every log line on principle, so this can't just be read out of a
+   log. Connects as this account with ``${SERVICE_GROUP}`` added in (``sudo
+   -u <this account> -g ${SERVICE_GROUP}``), the same "simulate the fresh
+   login this group membership is actually waiting on" substitution step 3
+   below needs for its own reads (a currently-running process never picks
+   up the ``${SERVICE_GROUP}`` membership ``enable`` just granted this
+   account -- only a fresh login does, same reasoning
+   ``test_macos_graphical_session_autostart.py``'s own sudo-everything
+   posture already documents) -- not as root, since ADR 0008 keys the
+   companion address the daemon dials back on off the connecting peer's own
+   principal, and only this account's own peer still resolves to
+   ``LOCAL_PRINCIPAL_ID``.
 3. **Connect via the MCP shim**: build and spawn the real
    ``mcpb/shim/dist/shim.js`` (same artifact Claude Desktop would run) over
    real stdio, exactly like test_shim_mcp_contract.py -- via
@@ -411,24 +418,45 @@ def installed_app() -> Path:
 # already established the pattern for, and talks to the real, separated
 # system/com.privacyfence.daemon LaunchDaemon that leaves running.
 #
-# Its files are root-owned (settings.yaml/the control socket under
-# authority/, 0700; mcp_token/web_base_url under handoff/, 2770 group
+# Its files are root-owned (settings.yaml under authority/, 0700; the control
+# socket, mcp_token/web_base_url under handoff/, 2770 group
 # ${SERVICE_GROUP}) -- and even though this CI account was just added to
 # ${SERVICE_GROUP} by `enable`, a process already running when that happens
 # never picks it up, only a fresh login does (same reasoning
 # test_macos_graphical_session_autostart.py's own sudo-everything posture
 # already documents for the identical problem on this same account). So
-# every read below goes through `sudo -n`, and the Node shim -- the one
-# thing in this module that reads those files as a plain, non-sudo child
-# process, because that is what the real Claude Desktop does -- is spawned
-# via `sudo -u <this account> -g ${SERVICE_GROUP}` instead: the same "fresh
-# login" `enable`'s own printed note says this account is waiting on,
+# every read below goes through `sudo -n`, and both the Node shim and the two
+# helpers that dial the control/companion sockets as this account --
+# _sudo_mint_attested_bootstrap_code() and _sudo_companion_stand_in(), the
+# one thing besides the shim in this module that talks to those sockets as a
+# plain, non-root peer, because that is what a real companion does -- are
+# spawned via `sudo -u <this account> -g ${SERVICE_GROUP}` instead: the same
+# "fresh login" `enable`'s own printed note says this account is waiting on,
 # simulated rather than skipped, since nothing in CI can actually log back
-# in.
+# in. Connecting to control.sock as root, rather than as this account, used
+# to be harmless because every peer mapped to the same principal; ADR 0008
+# changed that (control_channel.py's principal_id_for_peer() maps a root
+# peer's uid 0 to its own os-0 principal, not the install's owner), so these
+# two helpers now have to run as the owner to still land on LOCAL_PRINCIPAL_ID
+# and reach the address a real companion binds.
 # --------------------------------------------------------------------------- #
 
 def _sudo_capture(*args: str, timeout: float = 15) -> subprocess.CompletedProcess:
     return subprocess.run(["sudo", "-n", *args], capture_output=True, text=True, timeout=timeout)
+
+
+def _sudo_capture_as_owner(*args: str, timeout: float = 15) -> subprocess.CompletedProcess:
+    """Same as ``_sudo_capture``, but as this account rather than root, with
+    ``${SERVICE_GROUP}`` added in -- the same ``sudo -u <this account> -g
+    ${SERVICE_GROUP}`` the Node shim already runs under (this section's own
+    module comment). Anything that has to be seen as the install's *owner*
+    (``control_channel.principal_id_for_peer()``'s ``LOCAL_PRINCIPAL_ID``
+    mapping, which keys off peer uid, not root-ness) goes through this
+    instead of ``_sudo_capture``."""
+    return subprocess.run(
+        ["sudo", "-n", "-u", getpass.getuser(), "-g", SERVICE_GROUP, *args],
+        capture_output=True, text=True, timeout=timeout,
+    )
 
 
 def _sudo_run(*args: str, check: bool = True, timeout: float = 90) -> subprocess.CompletedProcess:
@@ -596,15 +624,24 @@ def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     way. See tests/control_channel_client.py's own "Attested minting" section
     for the whole round trip and why standing in is not a bypass.
 
-    Runs as root through an inline stdlib-only script, same technique (and
-    same reason -- the control socket belongs to the service account, and
-    sudo's own system ``python3`` has no ``privacyfence`` package
-    importable) as test_deb_packaged_lifecycle.py's own equivalent."""
+    Runs through an inline stdlib-only script, same technique (and same
+    reason -- sudo's own system ``python3`` has no ``privacyfence`` package
+    importable) as test_deb_packaged_lifecycle.py's own equivalent -- but as
+    this account, not root: ADR 0008 makes the daemon key ``CONFIRM MINT``'s
+    companion address off the connecting peer's own principal
+    (``control_channel.principal_id_for_peer()``), and a root peer no longer
+    maps to the install's owner the way every peer used to pre-ADR-0008 --
+    it maps to its own ``os-0`` principal, with its own, different companion
+    address, which nothing here binds. Connecting as this account instead
+    (``_sudo_capture_as_owner``) keeps the peer uid the same as
+    ``_enable_separation``'s own ``--user``, so it still resolves to
+    ``LOCAL_PRINCIPAL_ID`` and dials the address
+    ``_companion_agent_paused()`` actually freed up."""
     script = attested_mint_script(CONTROL_SOCKET, COMPANION_SOCKET, timeout=timeout)
     with _companion_agent_paused():
-        result = _sudo_capture("python3", "-c", script, timeout=timeout * 2 + 10)
+        result = _sudo_capture_as_owner("python3", "-c", script, timeout=timeout * 2 + 10)
     assert result.returncode == 0, (
-        f"minting an attested bootstrap code as root failed:\n{result.stdout}{result.stderr}"
+        f"minting an attested bootstrap code failed:\n{result.stdout}{result.stderr}"
     )
     reply = result.stdout
     assert reply.startswith("OK "), f"attested control channel mint failed: {reply!r}"
@@ -619,16 +656,21 @@ def _sudo_companion_stand_in(*, serve_seconds: float = 120.0):
     produces -- see tests/control_channel_client.py's
     ``companion_stand_in_script()``, and
     test_deb_packaged_lifecycle.py's identically-named helper, which this
-    mirrors. Root, for the same reason every other helper in this section
-    is: HANDOFF_DIR belongs to the service account's group.
+    mirrors. Run as this account with ``${SERVICE_GROUP}`` added in
+    (``sudo -u <this account> -g ${SERVICE_GROUP}``), not as root: binding
+    COMPANION_SOCKET only needs write access to HANDOFF_DIR, which the group
+    already grants, and running as this account rather than root is what
+    keeps ``_sudo_mint_attested_bootstrap_code()``'s own peer resolve to
+    ``LOCAL_PRINCIPAL_ID`` -- see this section's own module comment.
 
     The default window is longer than the sibling's because one caller here
     drives the ceremony through a real browser (see
     ``_enroll_passkey_in_browser``), which has a page load and a WebAuthn
     ceremony inside the window rather than two httpx round trips."""
+    user = getpass.getuser()
     with _companion_agent_paused():
         child = subprocess.Popen(
-            ["sudo", "-n", "python3", "-u", "-c",
+            ["sudo", "-n", "-u", user, "-g", SERVICE_GROUP, "python3", "-u", "-c",
              companion_stand_in_script(COMPANION_SOCKET, serve_seconds=serve_seconds)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
