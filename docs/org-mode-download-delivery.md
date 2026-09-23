@@ -86,7 +86,7 @@ alongside the Phase 1 pair under the same `/mcp-files` prefix, but carry no auth
 their own -- authorization is entirely the token: single-use, TTL-bound, and (for uploads)
 re-checked against the creating principal the moment a tool call actually claims the bytes, so a
 leaked `upload_url` lets someone else fill *your* pending slot with their own bytes, never read or
-claim anything of yours. See ADR 0007's own "Clients without the bridge" section for the full
+claim anything of yours. See [ADR 0028](adr/0028-clients-without-the-shim-get-capability-urls.md) for the full
 security reasoning.
 
 ## Preview and PII limits are separate

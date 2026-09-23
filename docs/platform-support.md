@@ -105,8 +105,8 @@ Three parts of the layout matter to anything that has to find PrivacyFence's fil
 | Path | Owner | Mode | Holds |
 |---|---|---|---|
 | `/Library/Application Support/PrivacyFence` | `_privacyfence` | `0711` | everything; traversable but not listable |
-| `…/authority` | `_privacyfence` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
-| `…/handoff` | `_privacyfence:_privacyfence` | `3770` | `mcp_token`, `mcp_url`, the control-channel sockets |
+| `…/authority` | `_privacyfence` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key, the owner's own `mcp_token` (ADR 0008 D3) |
+| `…/handoff` | `_privacyfence:_privacyfence` | `3770` | `mcp_url`, the control-channel sockets |
 
 The installing user is added to the `_privacyfence` group, which is what keeps `handoff` reachable
 from their session — macOS evaluates group membership at login, so this needs a logout/login to take
@@ -234,8 +234,8 @@ over is the permission model:
 | Path | Trustees | POSIX equivalent | Holds |
 |---|---|---|---|
 | `%ProgramData%\PrivacyFence` | service account, `SYSTEM`, `Administrators` full; `Users` traverse-only | `0711` | everything; traversable but not listable |
-| `…\authority` | service account, `SYSTEM`, `Administrators` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
-| `…\handoff` | the above, plus the `PrivacyFenceUsers` local group, read-only | `3770` | `mcp_token`, `mcp_url`, the discovery files |
+| `…\authority` | service account, `SYSTEM`, `Administrators` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key, the owner's own `mcp_token` (ADR 0008 D3) |
+| `…\handoff` | the above, plus the `PrivacyFenceUsers` local group, read-only | `3770` | `mcp_url`, the discovery files |
 
 Two steps before any grant are load-bearing, and both are easy to leave out. `icacls
 /inheritance:r` on each directory: `%ProgramData%` grants `Users` read-and-execute by inheritance,
@@ -353,8 +353,8 @@ The layout matches macOS exactly apart from the root and the account name:
 | Path | Owner | Mode | Holds |
 |---|---|---|---|
 | `/var/lib/privacyfence` | `privacyfence` | `0711` | everything; traversable but not listable |
-| `…/authority` | `privacyfence` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key |
-| `…/handoff` | `privacyfence:privacyfence` | `3770` | `mcp_token`, `mcp_url`, the control-channel sockets |
+| `…/authority` | `privacyfence` | `0700` | `config/settings.yaml`, WebAuthn credentials, audit log + key, the owner's own `mcp_token` (ADR 0008 D3) |
+| `…/handoff` | `privacyfence:privacyfence` | `3770` | `mcp_url`, the control-channel sockets |
 
 `/var/lib` rather than `/opt` for the same reason macOS uses `/Library/Application Support`: this is
 variable state the daemon rewrites (FHS 3.0 §5.8), while `/opt/privacyfence` holds the read-only,

@@ -49,8 +49,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Linux) now shows the local-mode daemon's own run state — a live status line
   (running/starting/stopped/failed/not responding) polled every few seconds — and can Start,
   Restart or Stop it directly, each with a real, platform-native administrator prompt (no standing
-  grant). See [ADR 0002](docs/adr/0002-local-mode-trust-boundary-and-companion-app.md)'s Amendment,
-  "the companion becomes the daemon manager".
+  grant). See
+  [ADR 0026](docs/adr/0026-the-companion-manages-the-daemon-through-the-service-manager.md).
 - `privacyfence-app --print-mcp-token`: prints this OS account's own MCP bearer token (minting one
   on first use), for a direct HTTP MCP client with no PrivacyFence extension of its own — see
   [ADR 0008](docs/adr/0008-one-principal-per-os-user.md).
@@ -63,7 +63,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `confluence_download_attachment`, once too large to return inline) now use the same kind of
   capability link by default instead of a cookie-authenticated one meant for a human's browser —
   configurable via `org_config.json`'s new `download_delivery.agent_links`. See
-  [ADR 0007](docs/adr/0007-local-file-bridge.md)'s "Clients without the bridge" section.
+  [ADR 0028](docs/adr/0028-clients-without-the-shim-get-capability-urls.md).
 
 ### Fixed
 
