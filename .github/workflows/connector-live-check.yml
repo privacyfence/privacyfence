@@ -2,10 +2,11 @@ name: Connector live check
 
 # Runs only on a schedule or by explicit maintainer trigger -- never on
 # pull_request, never on push from a branch a non-maintainer controls.
-# Targets the self-hosted runner provisioned in docs/connector-live-check-setup.md
-# Phase B (label `privacyfence-test`), which is the only place these
-# connectors' live OAuth credentials ever exist. See docs/testing-policy.md's
-# "Runner-local live tier" section.
+# Targets the self-hosted runner provisioned in docs/connector-live-check-setup.md's
+# "Runner requirements" section (label `privacyfence-test`), which is the only place
+# these connectors' live OAuth credentials ever exist. See docs/testing-policy.md's
+# "Runner-local live tier" section and ADR 0019
+# (docs/adr/0019-live-connector-credentials-only-on-a-self-hosted-runner.md) for why.
 on:
   schedule:
     - cron: '0 6 * * 1'   # weekly, Monday 06:00 UTC -- matched to how often
@@ -83,8 +84,8 @@ jobs:
       # QA_SECRETS_DIR (org_config.json, credentials/,
       # tests/fixtures/qa_environment.yaml) is deliberately kept outside
       # any Actions workspace and copied in fresh each run -- see the
-      # module comment above and docs/connector-live-check-setup.md
-      # Phase B.3. paths.py's data_dir() resolves credential storage
+      # module comment above and docs/connector-live-check-setup.md's
+      # "Persistent QA state" section. paths.py's data_dir() resolves credential storage
       # relative to wherever this checkout physically sits on disk, so
       # the copy has to land at these exact paths for the script to see
       # it. qa_environment.yaml isn't a credential (it's non-secret
@@ -98,7 +99,7 @@ jobs:
           for required in credentials org/org_config.json tests/fixtures/qa_environment.yaml; do
             if [ ! -e "${secrets_dir}/${required}" ]; then
               echo "##[error] ${secrets_dir}/${required} not found." \
-                   "See docs/connector-live-check-setup.md Phase B.3" \
+                   "See docs/connector-live-check-setup.md's 'Persistent QA state' section" \
                    "for how this runner's QA credentials are provisioned."
               exit 1
             fi
