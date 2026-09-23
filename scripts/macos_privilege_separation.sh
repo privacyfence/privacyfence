@@ -608,11 +608,18 @@ apply_layout() {
   note "re-owning ${SYSTEM_ROOT} to ${SERVICE_ACCOUNT}:${SERVICE_GROUP}"
   mkdir -p "${SYSTEM_ROOT}/authority" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" "${SYSTEM_ROOT}/logs"
   move_handoff_files_in
-  chown -R "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" "$SYSTEM_ROOT"
+  # Everything except sockets (ADR 0029). A socket belongs to the process that
+  # bound it, at the mode it chose: re-owning a live companion's
+  # handoff/companion.sock on a re-run -- every .pkg upgrade is one -- leaves
+  # that companion unable to unlink it under handoff/'s sticky bit, and every
+  # companion after it refusing to take it over (ADR 0027). `chown -h` and
+  # the chmod's `! -type l` keep `find -exec` from following a symlink, which
+  # `chown -R`/`chmod -R` never did.
+  find "$SYSTEM_ROOT" ! -type s -exec chown -h "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" {} +
   # Tighten everything first, then re-open exactly the two places that have to
   # be reachable from the user's own session. Order matters: the blanket
   # go-rwx below would otherwise undo the handoff directory's group bits.
-  chmod -R go-rwx "$SYSTEM_ROOT"
+  find "$SYSTEM_ROOT" ! -type s ! -type l -exec chmod go-rwx {} +
   chmod "$SYSTEM_ROOT_MODE" "$SYSTEM_ROOT"
   chmod "$AUTHORITY_DIR_MODE" "${SYSTEM_ROOT}/authority"
   chmod "$HANDOFF_DIR_MODE" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}"

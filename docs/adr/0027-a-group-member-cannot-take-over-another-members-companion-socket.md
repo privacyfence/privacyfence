@@ -8,6 +8,8 @@ principal its own socket address: the sticky bit is what keeps those per-user ad
 per-user. #609 first recorded this inside ADR 0002's decision 2; it was moved here when the ADR
 rules in [`README.md`](README.md) were adopted.
 
+Amended by [ADR 0029](0029-the-layout-step-never-re-owns-a-socket.md): the installers' layout step no longer re-owns sockets, which had turned every upgrade into a stale-socket lockout.
+
 ## Context
 
 ADR 0003 decision 3 deliberately lets an administrator add more than one OS account to a separated
