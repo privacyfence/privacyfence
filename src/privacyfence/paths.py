@@ -290,10 +290,19 @@ def _migrate_path(legacy: Path, destination: Path) -> None:
     change -- #428 Phase 4 is what makes ``destination``'s parent
     service-owned. Until then it sits at the same uid as everything else
     under ``legacy``'s own parent.
+
+    On a #428 Phase 4 install, ``destination``'s parent may be a
+    service-owned directory this process can't even stat into (unlike
+    "doesn't exist", which ``Path.exists()`` itself swallows, a permission
+    denial is a real ``OSError`` it re-raises) -- e.g. a plain checkout
+    resolving to a system-wide, privilege-separated ``data_dir()`` on a
+    machine where that's already been opted into. That has to log-and-
+    continue exactly like a failed ``rename`` rather than take startup down,
+    so the whole check runs under the same ``try``.
     """
-    if destination.exists() or not legacy.exists():
-        return
     try:
+        if destination.exists() or not legacy.exists():
+            return
         destination.parent.mkdir(parents=True, exist_ok=True)
         legacy.rename(destination)
     except OSError as exc:
