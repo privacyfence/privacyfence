@@ -1,5 +1,5 @@
-"""Per-user service authorization on the web (P8, docs/https-connector-
-refactor-plan.md §9.3) -- the org-mode surface that finally makes P6/P7's
+"""Per-user service authorization on the web (P8, `git show 96cd5af4^:docs/https-
+connector-refactor-plan.md` §9.3) -- the org-mode surface that finally makes P6/P7's
 per-principal machinery reach somewhere: ``GET /connect`` lets a signed-in
 principal see which of Google/Slack/Salesforce/Atlassian/Telegram they've
 authorized and connect the rest, and ``GET /oauth/start/{service}``/

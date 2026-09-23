@@ -127,8 +127,8 @@ DEFAULT_LINK_TTL_SECONDS = 300.0
 
 @dataclass(frozen=True)
 class DownloadDeliveryConfig:
-    """org mode's own answer to the local-disk-write bug docs/org-mode-
-    download-delivery-plan.md exists to fix: how ``drive_download_file``/
+    """org mode's own answer to the local-disk-write bug `git show 04d08f4a^:docs/
+    org-mode-download-delivery-plan.md` exists to fix: how ``drive_download_file``/
     ``gmail_download_attachment``/``confluence_download_attachment``
     deliver file bytes to a principal who has no shell on the daemon's own
     machine. Lives in ``org_config.json``'s ``download_delivery`` section,
@@ -139,15 +139,16 @@ class DownloadDeliveryConfig:
 
     inline_max_bytes: int = DEFAULT_INLINE_MAX_BYTES
     link_ttl_seconds: float = DEFAULT_LINK_TTL_SECONDS
-    # The org-level opt-out (see the plan's "Org-level opt-out" section):
+    # The org-level opt-out (see `git show 04d08f4a^:docs/org-mode-download-
+    # delivery-plan.md`'s "Org-level opt-out" section):
     # when False, a file too large for inline delivery is refused outright
     # rather than ever being written -- encrypted or not -- to this
     # server's disk. Default True: encryption-at-rest (download_staging.py)
     # is the primary mitigation, and staging still happens for oversized
     # files by default.
     allow_disk_staging: bool = True
-    # Phase 4 (local-mode-fixes-plan.md, ADR 0007's "Clients without the
-    # bridge" section): every staged-link download in org mode is reached
+    # Phase 4 (`git show 453ae02e:local-mode-fixes-plan.md`, ADR 0007's "Clients
+    # without the bridge" section): every staged-link download in org mode is reached
     # by an MCP client -- an agent, not a human with a browser -- so the
     # default is the capability link (/mcp-files/fetch/<token>, no bearer
     # header or session cookie needed: the token in the URL is the

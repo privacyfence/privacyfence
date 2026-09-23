@@ -398,7 +398,7 @@ jobs:
         shell: pwsh
         run: ./scripts/build_installer.ps1
 
-      # The now-removed automated-test-strategy-plan.md Phase 6 item 6.2: the one place the actual packaged
+      # docs/testing-policy.md's Phase 6 item 6.2: the one place the actual packaged
       # artifact -- not a source checkout, not a dev install -- gets exercised at all on Windows.
       # A real silent install (schtasks-registered autostart task included), the real installed
       # daemon started and driven through a daemon/MCP/approval/audit round trip, then a real

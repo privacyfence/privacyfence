@@ -579,8 +579,8 @@ class McpDispatcher:
         # tool call (routes_mcp._dispatch_connector_tool already touches
         # self.connectors before dispatching), this meta tool has no
         # connector of its own to force that same lazy bootstrap, so it
-        # has to ask for it directly -- discovered by docs/automated-test-
-        # strategy-plan.md Phase 8's own release-workflow smoke test: a
+        # has to ask for it directly -- discovered by docs/testing-policy.md's
+        # Phase 8 release-workflow smoke test: a
         # principal whose very first MCP call was this one had never had
         # this side effect run at all.
         _ = self.connectors

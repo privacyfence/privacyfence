@@ -150,7 +150,7 @@ class TestResolvePath:
 
 class TestResolveAuthorityPath:
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (the now-removed automated-test-strategy-plan.md Phase 2.1), tracked in the now-removed windows-support-plan.md rather than guessed at here",
+        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (docs/testing-policy.md's Phase 2.1), tracked in `git show be78e7ee^:docs/windows-support-plan.md` rather than guessed at here",
     )
     def test_absolute_path_is_returned_unchanged(self):
         assert daemon_main._resolve_authority_path("/etc/hosts") == "/etc/hosts"
