@@ -116,9 +116,9 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0010](0010-org-mode-runs-its-own-oauth-authorization-server.md) | Org mode runs its own OAuth authorization server | Accepted (retroactive) |
 | [0011](0011-mcpb-shim-connects-claude-desktop-to-local-mode.md) | A `.mcpb` stdio shim connects Claude Desktop to local mode with zero hand-configuration | Accepted (retroactive) |
 | [0012](0012-no-mcp-tool-mints-a-sign-in-credential.md) | No MCP tool may mint a sign-in credential | Accepted (retroactive) |
-| [0013](0013-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md) | Every bespoke web route is classified sensitive/exempt, or the app refuses to start | Accepted (retroactive) |
+| [0013](0013-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md) | Every bespoke settings POST route is classified sensitive/exempt, or the app refuses to start | Accepted (retroactive) |
 | [0014](0014-unattended-session-flag-is-advisory-only.md) | The self-declared unattended-session flag is advisory and never authorizes | Accepted (retroactive) |
-| [0015](0015-org-config-bundle-integrity-in-two-steps.md) | Org-config bundle integrity ships as a hash log first, signing second | Accepted (retroactive) |
+| [0015](0015-org-config-bundle-hash-log-and-signing.md) | Org-config bundle integrity has two independent layers: a startup hash log and TOFU-pinned signing | Accepted (retroactive) |
 | [0016](0016-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md) | Org-mode downloads: the approval gate is the privacy boundary, staging a bounded cost | Accepted (retroactive) |
 | [0017](0017-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) | Linux local mode ships a self-contained `.deb` built with PyInstaller | Accepted (retroactive) |
 | [0018](0018-live-connector-credentials-only-on-a-self-hosted-runner.md) | Live-connector test credentials live only on a project-owned self-hosted runner | Accepted (retroactive) |
