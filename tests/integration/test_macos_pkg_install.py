@@ -82,6 +82,10 @@ MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
 
 MARKER_PATH = MACOS_SYSTEM_ROOT / MARKER_FILE_NAME
 HANDOFF_DIR = MACOS_SYSTEM_ROOT / HANDOFF_DIR_NAME
+# ADR 0008 D3: the owner's own mcp_token lives under the *authority* root,
+# not handoff/ -- handoff/ is unaffected (still the control channel socket,
+# companion socket, and web_base_url).
+AUTHORITY_DIR = MACOS_SYSTEM_ROOT / "authority"
 
 
 def _built_pkgs() -> list[Path]:
@@ -388,7 +392,7 @@ def test_pkg_install_enables_privilege_separation_with_no_manual_step(_clean_pkg
         context=lambda: _separated_daemon_report(f"system/{DAEMON_LABEL}"),
     )
     _wait_for_path_as_root(
-        HANDOFF_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token",
+        AUTHORITY_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token",
         context=lambda: _separated_daemon_report(f"system/{DAEMON_LABEL}"),
     )
 
