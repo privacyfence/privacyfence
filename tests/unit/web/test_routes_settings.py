@@ -1253,3 +1253,43 @@ class TestBespokeRoutesAreClassified:
 
     def test_no_path_is_both_sensitive_and_exempt(self):
         assert not (_BESPOKE_SENSITIVE_ROUTE_PATHS & set(_BESPOKE_EXEMPT_ROUTE_PATHS))
+
+    def test_build_routes_raises_on_an_unclassified_bespoke_route(self, controller, sessions, monkeypatch):
+        """#614: the classification guard is an explicit `if ...: raise
+        RuntimeError(...)`, not `assert`, precisely so it still fires under
+        `python -O`/PYTHONOPTIMIZE (which strips assert statements). Drop
+        org_config_upload's own entry out of both sets so build_routes()
+        hits its own bespoke route unclassified, and pin that this raises
+        rather than silently mounting it."""
+        routes_settings_module = sys.modules[build_routes.__module__]
+        monkeypatch.setattr(routes_settings_module, "_BESPOKE_SENSITIVE_ROUTE_PATHS", frozenset())
+        with pytest.raises(RuntimeError, match=r"/api/settings/org_config/upload.*classification"):
+            build_routes(controller, sessions=sessions)
+
+    def test_classification_guard_fires_under_python_dash_o(self, tmp_path):
+        """The regression #614 actually describes: with `assert`, this same
+        scenario would silently mount the unclassified route under
+        `python -O` instead of raising. Runs the guard in a real `-O`
+        subprocess against a stripped-down copy of the two classification
+        sets to confirm it's immune to assert-stripping."""
+        script = tmp_path / "check_under_dash_o.py"
+        script.write_text(
+            "import privacyfence.web.routes_settings as rs\n"
+            "from privacyfence.web.session_auth import LocalSessionStore\n"
+            "rs._BESPOKE_SENSITIVE_ROUTE_PATHS = frozenset()\n"
+            "try:\n"
+            "    rs.build_routes(None, sessions=LocalSessionStore())\n"
+            "except RuntimeError as exc:\n"
+            "    assert '/api/settings/org_config/upload' in str(exc)\n"
+            "    print('RAISED')\n"
+            "else:\n"
+            "    print('NOT-RAISED')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-O", str(script)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "RAISED" in result.stdout, result.stdout + result.stderr
