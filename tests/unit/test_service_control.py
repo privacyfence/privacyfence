@@ -90,7 +90,14 @@ class TestMacosElevation:
         assert ok is True
         assert "restarted" in detail
         assert seen["argv"][0] == privilege_separation._OSASCRIPT
-        assert f"{shlex.quote(str(separated))} daemon restart" in seen["argv"][-1]
+        # Compare through the same two quoting layers production goes
+        # through (shlex for the shell command, then AppleScript's own
+        # string-literal escaping on top) rather than against the raw path
+        # -- on a runner where tmp_path renders with backslashes, AppleScript
+        # quoting doubles them, so a bare shlex.quote(str(separated)) is not
+        # a substring of the final argument.
+        expected_command = f"{shlex.quote(str(separated))} daemon restart"
+        assert privilege_separation._applescript_quoted(expected_command) in seen["argv"][-1]  # noqa: SLF001
         assert "with administrator privileges" in seen["argv"][-1]
         assert "needs an administrator password to restart" in seen["argv"][-1]
 
