@@ -80,7 +80,14 @@ class TestRequireLocalFilesDirectAccess:
 
     def test_tilde_is_expanded(self, monkeypatch, tmp_path):
         _unseparated(monkeypatch)
+        # os.path.expanduser reads $HOME on POSIX but $USERPROFILE first on
+        # Windows (falling back to $HOME only if USERPROFILE/HOMEDRIVE+
+        # HOMEPATH are unset) -- a bare HOME override is silently ignored on
+        # a Windows runner where USERPROFILE is already set to the real
+        # account. Set both, matching tests/integration/test_shim_mcp_
+        # contract.py's own cross-platform env for the identical reason.
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
         (tmp_path / "report.pdf").write_bytes(b"data")
         assert local_files.local_file_size("~/report.pdf", download_mode="local") == 4
 
