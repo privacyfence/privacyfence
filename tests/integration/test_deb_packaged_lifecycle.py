@@ -461,7 +461,17 @@ def _clean_package_state(request):
 # (same reasoning test_linux_graphical_session_autostart.py's own
 # sudo-everything posture already documents for the identical problem on
 # this same account). So every read below goes through `sudo -n`, exactly
-# like that module's own helpers.
+# like that module's own helpers -- except _sudo_mint_attested_bootstrap_
+# code() and _sudo_companion_stand_in(), which dial the control/companion
+# sockets as this account (`sudo -u <this account> -g ${SERVICE_GROUP}`)
+# rather than as root. Connecting as root used to be harmless, because every
+# peer mapped to the same principal; ADR 0008 changed that
+# (control_channel.principal_id_for_peer() maps a root peer's uid 0 to its
+# own os-0 principal, not the install's owner, so its CONFIRM MINT would
+# dial a companion-0.sock nothing here binds), so these two now have to run
+# as the owner to keep landing on LOCAL_PRINCIPAL_ID -- matching what a real,
+# human-run companion connects as. HANDOFF_DIR's own group grant is enough
+# for the socket I/O itself; nothing about it needs root.
 # --------------------------------------------------------------------------- #
 
 def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None:
@@ -520,6 +530,19 @@ def _sudo_capture(*args: str, timeout: float = 15) -> subprocess.CompletedProces
     return subprocess.run(["sudo", "-n", *args], capture_output=True, text=True, timeout=timeout)
 
 
+def _sudo_capture_as_owner(*args: str, timeout: float = 15) -> subprocess.CompletedProcess:
+    """Same as ``_sudo_capture``, but as this account rather than root, with
+    ``${SERVICE_GROUP}`` added in -- this section's own module comment.
+    Anything that has to be seen as the install's *owner*
+    (``control_channel.principal_id_for_peer()``'s ``LOCAL_PRINCIPAL_ID``
+    mapping, which keys off peer uid, not root-ness) goes through this
+    instead of ``_sudo_capture``."""
+    return subprocess.run(
+        ["sudo", "-n", "-u", getpass.getuser(), "-g", SERVICE_GROUP, *args],
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
 def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
     """``sudo -n cat`` -- see this section's own module comment. ``None``
     (not an exception) when the file does not exist yet, the same "not
@@ -532,11 +555,19 @@ def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
 def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     """Mints the one thing a bare ``MINT`` can no longer buy: a
     ``human``-provenance session, the only kind web/routes_approvals.py lets
-    release a sensitive confirm on a separated install. Runs as root through
-    an inline stdlib-only script, for the same reason every other helper in
-    this section shells out to ``sudo`` -- the control socket belongs to the
-    service account, and sudo's own system ``python3`` has no
-    ``privacyfence`` (nor ``tests``) package importable.
+    release a sensitive confirm on a separated install. Runs through an
+    inline stdlib-only script, for the same reason every other helper in
+    this section shells out to ``sudo`` -- sudo's own system ``python3`` has
+    no ``privacyfence`` (nor ``tests``) package importable -- but as this
+    account, not root: ADR 0008 makes the daemon key ``CONFIRM MINT``'s
+    companion address off the connecting peer's own principal
+    (``control_channel.principal_id_for_peer()``), and a root peer no longer
+    maps to the install's owner the way every peer used to pre-ADR-0008 --
+    it maps to its own ``os-0`` principal, with its own, different companion
+    address, which nothing here binds. ``_sudo_capture_as_owner`` keeps the
+    peer uid the one the daemon's marker actually names as owner, so it
+    still resolves to ``LOCAL_PRINCIPAL_ID`` and dials the address
+    ``_sudo_companion_stand_in()`` actually binds.
 
     The script itself -- and the reason a test has to stand in for the
     companion at all -- lives in tests/control_channel_client.py's
@@ -544,9 +575,9 @@ def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     script = attested_mint_script(
         SEPARATED_CONTROL_SOCKET_PATH, SEPARATED_COMPANION_SOCKET_PATH, timeout=timeout,
     )
-    result = _sudo_capture("python3", "-c", script, timeout=timeout * 2 + 10)
+    result = _sudo_capture_as_owner("python3", "-c", script, timeout=timeout * 2 + 10)
     assert result.returncode == 0, (
-        f"minting an attested bootstrap code as root failed:\n{result.stdout}{result.stderr}"
+        f"minting an attested bootstrap code failed:\n{result.stdout}{result.stderr}"
     )
     reply = result.stdout
     assert reply.startswith("OK "), f"attested control channel mint failed: {reply!r}"
@@ -562,13 +593,19 @@ def _sudo_companion_stand_in(*, serve_seconds: float = 60.0):
     tests/control_channel_client.py's ``companion_stand_in_script()`` for
     what it will and will not answer.
 
-    Root, for the same reason the mint above is: the handoff directory
-    belongs to the service account's group, and this account's membership of
-    it does not apply to an already-running login session. The child prints
-    ``READY`` once the address is bound, which this waits for -- a sleep
-    here would be a race with the very call-back it exists to answer."""
+    Run as this account with ``${SERVICE_GROUP}`` added in (``sudo -u <this
+    account> -g ${SERVICE_GROUP}``), not as root: binding
+    SEPARATED_COMPANION_SOCKET_PATH only needs write access to HANDOFF_DIR,
+    which the group already grants (this account's membership of it does not
+    apply to an already-running login session, hence still needing ``sudo``
+    to pick the group up at all), and running as this account rather than
+    root is what keeps ``_sudo_mint_attested_bootstrap_code()``'s own peer
+    resolve to ``LOCAL_PRINCIPAL_ID`` -- see this section's own module
+    comment. The child prints ``READY`` once the address is bound, which
+    this waits for -- a sleep here would be a race with the very call-back
+    it exists to answer."""
     child = subprocess.Popen(
-        ["sudo", "-n", "python3", "-u", "-c",
+        ["sudo", "-n", "-u", getpass.getuser(), "-g", SERVICE_GROUP, "python3", "-u", "-c",
          companion_stand_in_script(SEPARATED_COMPANION_SOCKET_PATH, serve_seconds=serve_seconds)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
@@ -685,8 +722,9 @@ async def _bootstrap_session(
     # authenticated HTTP route -- see tests.control_channel_client's own
     # module docstring. Defaults to the real separated system root (this
     # module's own tests never pass anything else -- see the "Real-daemon
-    # helpers" section for why they mint as root instead of connecting
-    # directly). ``data_dir`` stays a parameter, not hardcoded, for a caller
+    # helpers" section for why they mint through `sudo -u <this account> -g
+    # ${SERVICE_GROUP}` instead of connecting directly). ``data_dir`` stays
+    # a parameter, not hardcoded, for a caller
     # driving a scratch, genuinely-unseparated ``$HOME`` instead, where a
     # direct, unprivileged connect is exactly correct (and the only thing
     # that works -- nothing there is root-owned).
