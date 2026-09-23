@@ -164,6 +164,59 @@ class TestControlChannelServerPosix:
         finally:
             server.stop()
 
+    def test_refuses_to_take_over_a_socket_owned_by_another_account(self, tmp_path, monkeypatch, caplog):
+        # The local-mode-fixes plan's interim multi-user guard (Phase 2 §2.6):
+        # a socket file left
+        # by a different uid is never unlinked-and-rebound, even a stale
+        # one -- see _existing_socket_owner_problem()'s own docstring for
+        # the takeover this stops.
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        stranger_path = cc.posix_socket_path()
+        stranger_path.parent.mkdir(parents=True, exist_ok=True)
+        stranger_path.touch()
+        monkeypatch.setattr(cc.os, "geteuid", lambda: stranger_path.stat().st_uid + 1)
+
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore())
+        try:
+            with caplog.at_level("WARNING"):
+                server.start()
+            assert server.address is None
+            assert "refusing to take it over" in caplog.text
+            # The stranger's file is left exactly as it was -- refusing means
+            # refusing, not "unlink it anyway and just skip the bind".
+            assert stranger_path.exists()
+        finally:
+            server.stop()
+
+
+class TestExistingSocketOwnerProblem:
+    """The pure check ``_start_posix()`` above is built on -- unit-testable
+    without a real socket bind."""
+
+    def test_nothing_there_is_fine(self, tmp_path):
+        assert cc._existing_socket_owner_problem(tmp_path / "nothing.sock") is None
+
+    def test_this_processes_own_file_is_fine(self, tmp_path, monkeypatch):
+        sock_path = tmp_path / "companion.sock"
+        sock_path.touch()
+        monkeypatch.setattr(cc.os, "geteuid", lambda: sock_path.stat().st_uid)
+
+        assert cc._existing_socket_owner_problem(sock_path) is None
+
+    def test_a_different_owner_is_a_problem(self, tmp_path, monkeypatch):
+        sock_path = tmp_path / "companion.sock"
+        sock_path.touch()
+        real_uid = sock_path.stat().st_uid
+        monkeypatch.setattr(cc.os, "geteuid", lambda: real_uid + 1)
+
+        problem = cc._existing_socket_owner_problem(sock_path)
+
+        assert problem is not None
+        assert str(real_uid) in problem
+        assert "refusing to take it over" in problem
+
 
 class TestQuitCommand:
     """#428 Phase 3 (ADR 0002): the companion's tray/launcher "Quit" action
@@ -508,6 +561,83 @@ class TestEnrollmentCommand:
         try:
             with pytest.raises(cc.ControlChannelError):
                 cc.enrollment_state(timeout=5.0)
+        finally:
+            server.stop()
+
+
+class TestStatusCommand:
+    """The local-mode-fixes plan's Phase 2: ``STATUS``, ``daemon_status.py``'s
+    "the control channel answered" source. Unlike every other command on
+    this channel it is never gated on ``allow_quit`` or a passkey -- it
+    carries nothing but a version string, a pid and connector-configured-ness,
+    so it answers unconditionally whenever a callback is wired up at all."""
+
+    def _server(self, tmp_path, monkeypatch, **kwargs):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        server = cc.ControlChannelServer(bootstrap=BootstrapStore(), **kwargs)
+        server.start()
+        return server
+
+    def test_reports_the_json_the_daemon_gives_it(self, tmp_path, monkeypatch):
+        payload = '{"version": "4.2.0", "pid": 4242}'
+        server = self._server(tmp_path, monkeypatch, status=lambda: payload)
+        try:
+            assert _mint(server.address, message="STATUS\n") == f"OK {payload}\n"
+        finally:
+            server.stop()
+
+    def test_an_install_with_nothing_to_answer_with_says_so(self, tmp_path, monkeypatch):
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="STATUS\n").startswith("ERROR")
+        finally:
+            server.stop()
+
+    def test_the_client_parses_the_reply_into_a_dict(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        payload = '{"version": "4.2.0", "pid": 4242, "separated": true, "connectors": {"gmail": "ok"}}'
+        server = self._server(tmp_path, monkeypatch, status=lambda: payload)
+        try:
+            result = cc.request_status(timeout=5.0)
+            assert result == {
+                "version": "4.2.0", "pid": 4242, "separated": True, "connectors": {"gmail": "ok"},
+            }
+        finally:
+            server.stop()
+
+    def test_the_client_raises_on_a_daemon_that_cannot_answer(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            with pytest.raises(cc.ControlChannelError):
+                cc.request_status(timeout=5.0)
+        finally:
+            server.stop()
+
+    def test_the_client_raises_on_malformed_json(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "is_windows", lambda: False)
+        server = self._server(tmp_path, monkeypatch, status=lambda: "not json")
+        try:
+            with pytest.raises(cc.ControlChannelError):
+                cc.request_status(timeout=5.0)
+        finally:
+            server.stop()
+
+    def test_status_is_never_gated_on_allow_quit(self, tmp_path, monkeypatch):
+        # Unlike QUIT, this carries no secrets and no ability to act -- an
+        # install with allow_quit disabled still answers it.
+        payload = '{"version": "4.2.0", "pid": 1}'
+        server = self._server(tmp_path, monkeypatch, allow_quit=False, status=lambda: payload)
+        try:
+            assert _mint(server.address, message="STATUS\n") == f"OK {payload}\n"
         finally:
             server.stop()
 

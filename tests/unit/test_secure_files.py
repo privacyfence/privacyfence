@@ -70,15 +70,15 @@ class TestSecureMkdir:
         sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap)",
     )
     def test_atomic_write_respects_an_explicit_dir_mode(self, tmp_path):
-        # The handoff directory (#428 Phase 4) is deliberately 2770, and the
+        # The handoff directory (#428 Phase 4) is deliberately 3770, and the
         # 0700 default would re-tighten it on every discovery-file write --
         # locking out the accounts the installer just let in, one write at a
         # time.
         target = tmp_path / "handoff" / "mcp_token"
 
-        secure_files.atomic_write_text(target, "token", mode=0o640, dir_mode=0o2770)
+        secure_files.atomic_write_text(target, "token", mode=0o640, dir_mode=0o3770)
 
-        assert stat.S_IMODE(target.parent.stat().st_mode) == 0o2770
+        assert stat.S_IMODE(target.parent.stat().st_mode) == 0o3770
         assert stat.S_IMODE(target.stat().st_mode) == 0o640
 
     @pytest.mark.skipif(

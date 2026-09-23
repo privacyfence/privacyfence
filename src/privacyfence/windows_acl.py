@@ -1,7 +1,7 @@
 """NTFS ACLs -- the net-new half of #428 Phase 4's Windows phase (B5c).
 
 On macOS and Linux, Phase 4 (B5a/B5b) expressed its whole layout in POSIX
-permission bits: ``0711`` on the root, ``0700`` on ``authority/``, ``2770``
+permission bits: ``0711`` on the root, ``0700`` on ``authority/``, ``3770``
 on ``handoff/``. Windows has none of those. ``secure_files.secure_mkdir``'s
 ``chmod`` there is the documented no-op its own docstring describes, and
 what protected the data directory until now was not a permission at all --
@@ -17,7 +17,7 @@ POSIX (B5a/B5b)    Windows (B5c)                                   What it means
 =================  ==============================================  ==========================
 root ``0711``      ``Users:(X)``, no ``FILE_READ_DATA``            traverse, never enumerate
 authority ``0700`` service account only                            policy/passkeys/audit key
-handoff ``2770``   service account full, service group read        the two-account handoff
+handoff ``3770``   service account full, service group read        the two-account handoff
 =================  ==============================================  ==========================
 
 One asymmetry is deliberate and is not an oversight: ``handoff/`` is

@@ -67,7 +67,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('enable', 'disable', 'status')]
+    [ValidateSet('enable', 'disable', 'status', 'daemon')]
     [string] $Command,
 
     # The human account that owns this install. Defaults to whoever is running
@@ -83,7 +83,24 @@ param(
     [string] $ForUser,
 
     [string] $DaemonExec,
-    [string] $CompanionExec
+    [string] $CompanionExec,
+
+    # #428 Phase 2: `daemon`'s own sub-verb -- {status|start|stop|restart|
+    # ensure-running}. Position = 1 (the only other positional parameter
+    # this script has) is what lets `service_control.py`'s elevated
+    # `_windows_runas_argv(script, "daemon $action", transcript)` work
+    # exactly the way the POSIX scripts' own `<script> daemon <action>` does,
+    # with no `-Command`/`-DaemonSubcommand` names needed on the command
+    # line: `<script> daemon start` binds $Command='daemon' and
+    # $DaemonSubcommand='start' purely by position, since $User/$ForUser/
+    # $DaemonExec/$CompanionExec above carry no Position of their own and so
+    # are never candidates for positional binding in the first place.
+    # ValidateSet only runs against a value PowerShell actually binds, so
+    # leaving this unset for `enable`/`disable`/`status` (its default, an
+    # empty string) never trips it.
+    [Parameter(Position = 1)]
+    [ValidateSet('status', 'start', 'stop', 'restart', 'ensure-running')]
+    [string] $DaemonSubcommand
 )
 
 Set-StrictMode -Version Latest
@@ -1442,6 +1459,106 @@ function Invoke-Status {
     return $problems
 }
 
+# ── Daemon manager (#428 Phase 2) ──────────────────────────────────────────
+#
+# `daemon {status|start|stop|restart|ensure-running}` is what the companion
+# app's tray menu runs -- `status` unprivileged, on every poll, and
+# `start`/`stop`/`restart` elevated (src/privacyfence/service_control.py's
+# `run_elevated()`, via `privilege_separation._windows_runas_argv`), only
+# when a human clicks the corresponding menu item. Built on the same
+# Invoke-Sc/Invoke-Native wrappers `enable`/`disable`/`status` already use
+# above -- deliberately not Get-Service/Start-Service/Stop-Service/
+# Restart-Service, which this script otherwise avoids except for the two
+# read-only existence checks Invoke-Status already makes.
+function Invoke-DaemonStatus {
+    <#
+      Unprivileged and meant to answer immediately, the same posture
+      Invoke-Status has for the read-only audit above. Prints a small
+      key=value block, one entry per line -- the same shape scripts/
+      macos_privilege_separation.sh's and scripts/linux_privilege_
+      separation.sh's own `daemon status` print, so a human or a script
+      reading any of the three sees the same keys. daemon_status.py's own
+      probe does not read this output at all; it asks sc.exe directly
+      (PlatformLayout.daemon_ctl_argv), so nothing here has to match that
+      module's parser byte for byte -- see that module's own docstring.
+    #>
+    $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if (-not $service) {
+        Write-Host 'status=NotInstalled'
+        Write-Host 'pid='
+        Write-Host 'win32_exit_code='
+        return 0
+    }
+    $processId = ''
+    $cim = Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
+    if ($cim -and $cim.ProcessId) { $processId = $cim.ProcessId }
+    # sc.exe query, not Get-Service, for the exit code: .Status alone (used
+    # for the state below) says nothing about *why* a stopped service is
+    # stopped, and WIN32_EXIT_CODE/SERVICE_EXIT_CODE are exactly the fields
+    # src/privacyfence/daemon_status.py's own _windows_status() reads off a
+    # direct `sc.exe query` -- keeping this script's own report of the same
+    # two fields is what lets a human cross-check the two without learning a
+    # second vocabulary.
+    $queryOutput = Invoke-Sc @('query', $ServiceName) -IgnoreFailure
+    $win32ExitCode = ''
+    foreach ($line in ($queryOutput -split [Environment]::NewLine)) {
+        if ($line.Trim() -match '^WIN32_EXIT_CODE\s*:\s*(\d+)') { $win32ExitCode = $Matches[1] }
+    }
+    Write-Host "status=$($service.Status)"
+    Write-Host "pid=$processId"
+    Write-Host "win32_exit_code=$win32ExitCode"
+    return 0
+}
+
+function Invoke-DaemonStart {
+    Write-Note "starting the $ServiceName service"
+    Invoke-Sc @('start', $ServiceName) | Out-Null
+}
+
+function Invoke-DaemonStop {
+    # Same pattern as Uninstall-DaemonService above: capture the pid before
+    # asking the SCM to stop it, because `sc.exe stop` only asks -- it
+    # returns as soon as the SCM accepts the request, with the service still
+    # STOP_PENDING and the process itself not yet gone.
+    $servicePid = (Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue).ProcessId
+    Invoke-Sc @('stop', $ServiceName) -IgnoreFailure | Out-Null
+    if (-not (Wait-ProcessExit -ProcessId $servicePid -TimeoutSeconds 30)) {
+        Stop-WithError "the $ServiceName service (pid $servicePid) has not exited 30s after stop -- 'sc.exe query $ServiceName' to see why"
+    }
+    Write-Note "the $ServiceName service stopped"
+}
+
+function Invoke-DaemonRestart {
+    # There is no `sc.exe restart` -- stop (and wait for the process to
+    # actually exit, not just for the SCM to accept the request) then start,
+    # mirroring Uninstall-DaemonService's own Invoke-Sc-stop/Wait-ProcessExit
+    # pattern followed by a fresh start here instead of a delete.
+    $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($service -and $service.Status -eq 'Running') {
+        Invoke-DaemonStop
+    }
+    Invoke-DaemonStart
+}
+
+function Invoke-DaemonEnsureRunning {
+    # Tolerant of "already running", unlike a plain Start: the companion's
+    # own Start-button click and `enable`'s own daemon start are both
+    # supposed to be idempotent, and re-issuing `sc.exe start` against an
+    # already-running service is itself harmless (SCM answers "already
+    # running" and Invoke-Sc's -IgnoreFailure below just logs it) -- but
+    # checking first means the ordinary case prints one clear line instead
+    # of a native command's own error text.
+    $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if (-not $service) {
+        Stop-WithError "the $ServiceName service is not installed -- run 'enable' first"
+    }
+    if ($service.Status -eq 'Running') {
+        Write-Note "the $ServiceName service is already running"
+        return
+    }
+    Invoke-DaemonStart
+}
+
 switch ($Command) {
     'enable' {
         # -ForUser selects which half runs (ADR 0003 decision 3); it also
@@ -1464,5 +1581,15 @@ switch ($Command) {
         # goes through Write-Host, which does not reach this stream.
         $status = Invoke-Status
         exit ([int] @($status)[-1])
+    }
+    'daemon' {
+        switch ($DaemonSubcommand) {
+            'status' { $result = Invoke-DaemonStatus; exit ([int] @($result)[-1]) }
+            'start' { Invoke-DaemonStart; exit 0 }
+            'stop' { Invoke-DaemonStop; exit 0 }
+            'restart' { Invoke-DaemonRestart; exit 0 }
+            'ensure-running' { Invoke-DaemonEnsureRunning; exit 0 }
+            default { Stop-WithError "daemon: a sub-command is required -- one of status|start|stop|restart|ensure-running" }
+        }
     }
 }

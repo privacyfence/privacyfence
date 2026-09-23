@@ -173,7 +173,7 @@ def handoff_dir() -> Path:
     ``data_dir()`` itself on an ordinary install -- so nothing moves, and no
     caller behaves differently, until privilege separation is opted into.
     On a separated install it's ``data_dir()/handoff``, group-owned by the
-    service account with the setgid bit (``2770``) and the installing human
+    service account with the setgid bit (``3770``) and the installing human
     added to that group, which is what lets the daemon (one account) and the
     companion and agent (another) still hand each other a token and a socket
     while everything else under ``data_dir()`` stays ``0700`` and unreadable

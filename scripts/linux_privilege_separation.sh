@@ -23,7 +23,7 @@
 #   1. creates the privacyfence system user and group;
 #   2. adds you to that group, so the companion app can still reach the daemon;
 #   3. moves ~/.privacyfence to /var/lib/privacyfence and re-owns it --
-#      authority/ at 0700, handoff/ at 2770, the root at 0711;
+#      authority/ at 0700, handoff/ at 3770, the root at 0711;
 #   4. writes the marker file every PrivacyFence process reads to agree on that
 #      layout (src/privacyfence/privilege_separation.py);
 #   5. replaces the two things that start the daemon in your own session -- the
@@ -88,7 +88,21 @@ MARKER_NAME="privilege-separation.json"
 MARKER_VERSION=1
 HANDOFF_DIR_NAME="handoff"
 SYSTEM_ROOT_MODE=711
-HANDOFF_DIR_MODE=2770
+# #428 Phase 2's interim multi-user guard (§2.6, "companion socket
+# takeover"): the leading 3 is the sticky bit (01000) on top of the setgid
+# bit (02000) this already carried. Setgid alone means every member of
+# SERVICE_GROUP can create and delete files here, which is exactly right for
+# the daemon and the companion producing group-owned files for each other --
+# but it also means any *other* account this install has since been
+# extended to (ADR 0003 decision 3's per-user half, run more than once) can
+# unlink a peer's companion.sock and rebind it as their own, even though
+# they never owned it. The sticky bit is the same fix /tmp has carried since
+# 4.3BSD: only a file's own owner (or root) may remove or rename an entry
+# here, group write notwithstanding. web/control_channel.py's
+# _existing_socket_owner_problem() is the code-level half of this same fix;
+# this is the filesystem-level half, and the two are meant to be read
+# together, not either alone.
+HANDOFF_DIR_MODE=3770
 AUTHORITY_DIR_MODE=700
 HANDOFF_FILE_MODE=640
 
@@ -135,6 +149,7 @@ warn() { printf 'warning: %s\n' "$*" >&2; }
 usage() {
   cat >&2 <<USAGE
 usage: sudo $0 {enable|disable|status} [options]
+       sudo $0 daemon {status|start|stop|restart|ensure-running}
 
   --user <name>       the human account that owns this install
                       (default: \$SUDO_USER, i.e. whoever ran sudo). With none
@@ -145,6 +160,13 @@ usage: sudo $0 {enable|disable|status} [options]
                       <name> to ${SERVICE_GROUP} and migrate their
                       ~/.privacyfence. Idempotent, and what the companion app
                       runs when it finds that membership still pending.
+  --allow-additional-user
+                      enable --for-user only: this install already belongs to
+                      a different recorded owner, and you understand that
+                      account's own ~/.privacyfence will NOT be merged in
+                      (#428 Phase 2 §2.6 -- PrivacyFence supports one owner
+                      per machine until Phase 3). Without this, --for-user for
+                      anyone but the recorded owner refuses to run.
   --machine-only      enable only: run *just* the machine half -- everything
                       root can do with no human in sight -- and leave the
                       group membership pending even if \$SUDO_USER would have
@@ -159,6 +181,21 @@ usage: sudo $0 {enable|disable|status} [options]
                       instead of failing when this can't safely tell who owns
                       the install or find the daemon. For unattended callers
                       (the .deb's postinst); a human should not pass this.
+
+  daemon status           print a small unprivileged key=value report of the
+                          unit's own state (ActiveState/SubState/Result/
+                          ExecMainStatus/MainPID via systemctl show). Needs
+                          no sudo.
+  daemon start            alias for ensure-running.
+  daemon ensure-running   make sure ${DAEMON_UNIT} is enabled and active,
+                          clearing a prior failed state first so systemd's
+                          own start-limit throttling doesn't get in the way.
+                          What the companion app's Start button runs
+                          elevated.
+  daemon restart          systemctl restart if active, otherwise
+                          ensure-running.
+  daemon stop             systemctl stop, and wait for it to actually go
+                          inactive.
 USAGE
   exit 2
 }
@@ -166,6 +203,21 @@ USAGE
 AUTO=0
 FOR_USER_ONLY=0
 MACHINE_ONLY=0
+# #428 Phase 2 §2.6's escape hatch: without this, enable --for-user refuses
+# to add a second account to an install the marker already records a
+# different owner for. Set by --allow-additional-user below.
+ALLOW_ADDITIONAL_USER=0
+# Set by cmd_enable_for_user() when it is running for an account other than
+# the marker's recorded owner (only reachable at all with
+# ALLOW_ADDITIONAL_USER=1) -- migrate_data() reads this to skip copying that
+# account's own ~/.privacyfence into the shared data directory, per §2.6
+# item 3.
+NON_OWNER_FOR_USER=0
+# The sub-verb of `daemon {status|start|stop|restart|ensure-running}`,
+# pulled off the argument list before the generic option-parsing loop below
+# ever sees it -- see the "── Argument parsing ──" section at the bottom for
+# why that has to happen first.
+DAEMON_SUBCOMMAND=""
 
 require_linux() {
   [ "$(uname -s)" = "Linux" ] || die "this script is Linux-only (macOS is scripts/macos_privilege_separation.sh; Windows is scripts/windows_privilege_separation.ps1)"
@@ -263,6 +315,18 @@ legacy_data_dir() { printf '%s/.privacyfence' "$OWNER_HOME"; }
 
 migrate_data() {
   local legacy
+  # #428 Phase 2 §2.6 item 3: an --allow-additional-user run for an account
+  # that is not this install's recorded owner never merges that account's
+  # own ~/.privacyfence into the shared data directory -- doing so would mix
+  # a second person's local files into the first owner's connector tokens,
+  # audit log and policy, which is exactly the cross-account leak this whole
+  # guard exists to close. cmd_enable_for_user() is the only caller that
+  # ever sets NON_OWNER_FOR_USER, and only after the owner-mismatch check
+  # above has already required --allow-additional-user to reach here at all.
+  if [ "$NON_OWNER_FOR_USER" = "1" ]; then
+    note "skipping data migration for '${OWNER_USER}' -- this install's shared data belongs to its recorded owner, and #428 Phase 2's interim multi-user guard (§2.6) never merges another account's ~/.privacyfence into it"
+    return
+  fi
   # The machine half (ADR 0003 decision 3) runs with no owner resolved, and a
   # machine with no human account has no per-user data directory to move --
   # so this reduces to creating the root the rest of `enable` provisions.
@@ -281,9 +345,14 @@ migrate_data() {
     # Something is already there (a previous enable, or a hand-made directory).
     # Merge rather than clobber, then remove the source -- leaving a second
     # copy of live OAuth tokens readable by the agent would undo the point of
-    # the whole exercise.
-    note "merging ${legacy} into the existing ${SYSTEM_ROOT}"
-    cp -a "${legacy}/." "$SYSTEM_ROOT/"
+    # the whole exercise. -n is GNU cp's own no-clobber flag (this repo's
+    # only Linux packaging target is the .deb, which is coreutils/GNU cp --
+    # see debian/control): it skips any destination path that already
+    # exists rather than overwriting it, which is the same "leave what's
+    # already there alone" contract macOS's own migrate_data() implements by
+    # hand for ditto, which has no such flag.
+    note "merging ${legacy} into the existing ${SYSTEM_ROOT} (no-clobber: anything already in ${SYSTEM_ROOT} is left as it is)"
+    cp -an "${legacy}/." "$SYSTEM_ROOT/"
     rm -rf "$legacy"
   else
     # /home and /var are separate filesystems often enough that this cannot
@@ -514,6 +583,120 @@ uninstall_services() {
   systemctl daemon-reload || true
 }
 
+# ── Daemon manager (#428 Phase 2) ─────────────────────────────────────────────
+#
+# `daemon {status|start|stop|restart|ensure-running}` is what the companion
+# app's tray menu runs -- `status` unprivileged, on every poll, and
+# `start`/`stop`/`restart` elevated (src/privacyfence/service_control.py),
+# only when a human clicks the corresponding menu item. It is also what
+# `cmd_enable`'s own install_services() already achieves via `systemctl
+# enable --now`, so unlike macOS's launchd there is no separate bootout/
+# bootstrap race to guard against here -- systemd itself starts the unit as
+# the account the unit file names, with no window for a script-observable
+# wrong-owner race the way launchd's UserName resolution has. What still
+# needs doing by hand is correct sequencing and a clear exit code.
+DAEMON_STOP_TIMEOUT=15
+
+cmd_daemon_status() {
+  # Unprivileged and meant to answer immediately: `systemctl show` always
+  # exits 0 and prints every requested property, even for a unit that has
+  # never existed (every value comes back empty), so there is no "not
+  # loaded" failure mode to special-case the way launchctl has on macOS --
+  # only "systemctl itself could not be run at all" is worth dying on.
+  command -v systemctl >/dev/null 2>&1 || die "systemctl not found -- cannot read ${DAEMON_UNIT}'s state"
+  local output active_state="" sub_state="" result="" exec_main_status="" main_pid=""
+  output="$(systemctl show "$DAEMON_UNIT" -p ActiveState,SubState,Result,ExecMainStatus,MainPID 2>/dev/null)" \
+    || die "could not run systemctl show ${DAEMON_UNIT}"
+  local key value
+  while IFS='=' read -r key value; do
+    case "$key" in
+      ActiveState) active_state="$value" ;;
+      SubState) sub_state="$value" ;;
+      Result) result="$value" ;;
+      ExecMainStatus) exec_main_status="$value" ;;
+      MainPID) main_pid="$value" ;;
+    esac
+  done <<<"$output"
+  local control_socket_present=false
+  [ -e "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}/control.sock" ] && control_socket_present=true
+  printf 'active_state=%s\n' "$active_state"
+  printf 'sub_state=%s\n' "$sub_state"
+  printf 'result=%s\n' "$result"
+  printf 'exec_main_status=%s\n' "$exec_main_status"
+  printf 'pid=%s\n' "$([ "$main_pid" != "0" ] && printf '%s' "$main_pid")"
+  printf 'control_socket_present=%s\n' "$control_socket_present"
+  return 0
+}
+
+cmd_daemon_ensure_running() {
+  if daemon_unit_is_active; then
+    note "${DAEMON_UNIT} is already active"
+    return 0
+  fi
+  # A unit systemd has already given up on (Result=exit-code from a prior
+  # crash) is subject to systemd's own start-limit throttling -- repeated
+  # `systemctl start` calls inside its burst window silently do nothing.
+  # `reset-failed` clears that bookkeeping before every start attempt here,
+  # not just the ones that already look failed, since it is a harmless no-op
+  # against a unit that isn't in that state.
+  systemctl reset-failed "$DAEMON_UNIT" >/dev/null 2>&1 || true
+  note "starting ${DAEMON_UNIT}"
+  systemctl enable --now "$DAEMON_UNIT" || die "systemctl enable --now ${DAEMON_UNIT} failed"
+  daemon_unit_is_active || die "${DAEMON_UNIT} did not become active -- check 'systemctl status ${DAEMON_UNIT}' and 'journalctl -u ${DAEMON_UNIT}'"
+  note "${DAEMON_UNIT} is active"
+}
+
+cmd_daemon_restart() {
+  if daemon_unit_is_active; then
+    note "restarting ${DAEMON_UNIT}"
+    systemctl restart "$DAEMON_UNIT" || die "systemctl restart ${DAEMON_UNIT} failed"
+    daemon_unit_is_active || die "${DAEMON_UNIT} did not come back up after restart -- check 'systemctl status ${DAEMON_UNIT}'"
+    return 0
+  fi
+  cmd_daemon_ensure_running
+}
+
+cmd_daemon_stop() {
+  systemctl stop "$DAEMON_UNIT" 2>/dev/null || true
+  local deadline=$((SECONDS + DAEMON_STOP_TIMEOUT))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    daemon_unit_is_active || { note "${DAEMON_UNIT} stopped"; return 0; }
+    sleep 0.3
+  done
+  die "${DAEMON_UNIT} is still active ${DAEMON_STOP_TIMEOUT}s after stop -- 'systemctl status ${DAEMON_UNIT}' to see why"
+}
+
+cmd_daemon() {
+  local subcommand="$1"
+  case "$subcommand" in
+    status)
+      require_linux
+      cmd_daemon_status
+      ;;
+    start | ensure-running)
+      require_linux
+      require_systemd
+      require_root
+      cmd_daemon_ensure_running
+      ;;
+    restart)
+      require_linux
+      require_systemd
+      require_root
+      cmd_daemon_restart
+      ;;
+    stop)
+      require_linux
+      require_systemd
+      require_root
+      cmd_daemon_stop
+      ;;
+    *)
+      usage
+      ;;
+  esac
+}
+
 # ── Subcommands ───────────────────────────────────────────────────────────────
 
 cmd_enable() {
@@ -563,7 +746,7 @@ cmd_enable() {
 
   Data directory   ${SYSTEM_ROOT}
   Human authority  ${SYSTEM_ROOT}/authority   (0700, ${SERVICE_ACCOUNT} only)
-  Shared handoff   ${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}   (2770, ${SERVICE_GROUP} group)
+  Shared handoff   ${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}   (3770, ${SERVICE_GROUP} group)
   Daemon           systemctl status ${DAEMON_UNIT}
   Logs             journalctl -u ${DAEMON_UNIT} -f
 DONE
@@ -618,6 +801,27 @@ cmd_enable_for_user() {
   [ -f "${SYSTEM_ROOT}/${MARKER_NAME}" ] \
     || die "this install is not privilege-separated yet -- run 'sudo $0 enable' first"
 
+  # #428 Phase 2 §2.6's interim multi-user guard: only the recorded owner
+  # (or an install with no owner recorded yet, ADR 0003 decision 3's pending
+  # state) may complete the per-user half without an explicit override.
+  # Without this, `enable --for-user` would silently add a second account to
+  # ${SERVICE_GROUP} -- and, below, merge their own ~/.privacyfence into
+  # data the first owner's connectors already live in -- for anyone who can
+  # run this with sudo, which is the same gap privilege_separation.
+  # owner_membership_pending()/other_account_owns_this_install() close on
+  # the companion's own side (it now declines to *offer* this for a non-
+  # owner); this is the enforcement a human running the command directly, or
+  # a compromised script, cannot route around.
+  local recorded_owner
+  recorded_owner="$(marker_owner_user)"
+  if [ -n "$recorded_owner" ] && [ "$recorded_owner" != "$OWNER_USER" ]; then
+    if [ "$ALLOW_ADDITIONAL_USER" != "1" ]; then
+      die "this install already belongs to '${recorded_owner}' -- PrivacyFence does not yet support more than one account on the same machine (#428 Phase 2 §2.6; Phase 3 will). Pass --allow-additional-user if you understand that '${OWNER_USER}'s own ~/.privacyfence will NOT be merged into the shared data directory, and want to add them to ${SERVICE_GROUP} anyway."
+    fi
+    warn "adding '${OWNER_USER}' to ${SERVICE_GROUP} alongside the existing owner '${recorded_owner}' (--allow-additional-user) -- '${OWNER_USER}'s own ~/.privacyfence will not be touched"
+    NON_OWNER_FOR_USER=1
+  fi
+
   add_owner_to_service_group
   # Anything this human accumulated under ~/.privacyfence before the machine
   # half ran -- live connector OAuth tokens included -- still has to follow
@@ -634,10 +838,16 @@ cmd_enable_for_user() {
   # around the merge, and only around a merge: with nothing left to migrate,
   # which is every run after the first, this costs nothing and does nothing.
   local bounce=0
-  if [ -d "$(legacy_data_dir)" ] && daemon_unit_is_active; then
-    bounce=1
-    note "stopping ${DAEMON_UNIT} while $(legacy_data_dir) is merged into ${SYSTEM_ROOT}"
-    systemctl stop "$DAEMON_UNIT"
+  # NON_OWNER_FOR_USER's migrate_data() call below is a no-op (it skips the
+  # copy entirely), so there is nothing here worth bouncing the owner's
+  # already-running daemon for -- doing it anyway would interrupt them for a
+  # merge that was never going to happen.
+  if [ "$NON_OWNER_FOR_USER" != "1" ]; then
+    if [ -d "$(legacy_data_dir)" ] && daemon_unit_is_active; then
+      bounce=1
+      note "stopping ${DAEMON_UNIT} while $(legacy_data_dir) is merged into ${SYSTEM_ROOT}"
+      systemctl stop "$DAEMON_UNIT"
+    fi
   fi
   migrate_data
   apply_layout
@@ -838,10 +1048,21 @@ cmd_status() {
 
 [ $# -ge 1 ] || usage
 COMMAND="$1"; shift
+# `daemon`'s sub-verb is a positional, consumed here, before the generic
+# option-parsing loop below ever runs -- that loop's `*) die "unknown
+# option: $1"` would otherwise treat `start`/`stop`/etc. as an unrecognized
+# flag, since none of its `--xxx` cases match a bare word. Every other
+# command here takes only `--flag [value]` options, so this is the one place
+# a second positional argument is legal at all.
+if [ "$COMMAND" = "daemon" ]; then
+  [ $# -ge 1 ] || usage
+  DAEMON_SUBCOMMAND="$1"; shift
+fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --user) OWNER_USER="${2:-}"; shift 2 ;;
     --for-user) OWNER_USER="${2:-}"; FOR_USER_ONLY=1; shift 2 ;;
+    --allow-additional-user) ALLOW_ADDITIONAL_USER=1; shift ;;
     --machine-only) MACHINE_ONLY=1; shift ;;
     --daemon-exec) DAEMON_EXECUTABLE="${2:-}"; shift 2 ;;
     --companion-exec) COMPANION_EXECUTABLE="${2:-}"; shift 2 ;;
@@ -891,5 +1112,6 @@ case "$COMMAND" in
     ;;
   disable) cmd_disable ;;
   status) cmd_status ;;
+  daemon) cmd_daemon "$DAEMON_SUBCOMMAND" ;;
   *) usage ;;
 esac

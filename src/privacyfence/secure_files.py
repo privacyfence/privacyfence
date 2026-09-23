@@ -143,7 +143,7 @@ def atomic_write_bytes(
     *existing* directory too, which is the right default everywhere except
     the one directory #428 Phase 4 deliberately shares between two accounts:
     writing ``mcp_token`` into ``paths.handoff_dir()`` with the ``0700``
-    default would silently re-tighten the ``2770`` the installer set, and
+    default would silently re-tighten the ``3770`` the installer set, and
     lock the agent out of its own credential on the next read. Callers that
     write into such a directory pass its real mode -- see
     ``privilege_separation.write_handoff_file()``, the only one that does.

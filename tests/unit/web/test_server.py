@@ -404,6 +404,21 @@ class TestWebServerControlChannel:
         assert server.control_channel is not None
         assert server.control_channel.address is None  # not started yet
 
+    def test_local_mode_wires_a_status_callback(self, monkeypatch):
+        # The local-mode-fixes plan's Phase 2: daemon_status.py's "the
+        # control channel answered" source is this callback, wired to
+        # local_status_payload() -- checked here rather than only through a
+        # real round trip, since TestWebServerControlChannel's other tests
+        # already prove the channel itself binds and tears down correctly.
+        import json
+
+        server = WebServer(WebApprovalUI(), port=0)
+
+        payload = json.loads(server.control_channel._status())
+
+        assert set(payload) == {"version", "pid", "started_at", "mode", "separated", "connectors"}
+        assert payload["mode"] == "local"
+
     def test_org_mode_builds_no_control_channel(self, tmp_path, monkeypatch):
         from privacyfence import org_identity as oi
         from privacyfence import paths
@@ -1140,6 +1155,61 @@ class TestLocalEnrollmentState:
         assert srv.local_enrollment_state(StepUpConfig()) == "ok"
         assert srv.local_enrollment_state(StepUpConfig(enabled=True)) == "ok"
         assert srv.local_enrollment_state(StepUpConfig(require_passkey=True)) == "ok"
+
+
+class TestLocalStatusPayload:
+    """The local-mode-fixes plan's Phase 2: the daemon's own answer to the
+    companion's ``STATUS`` command."""
+
+    def _server_module(self):
+        from privacyfence.web import server as srv
+
+        return srv
+
+    def test_reports_version_pid_mode_and_separation(self, monkeypatch):
+        import json
+
+        srv = self._server_module()
+        monkeypatch.setattr(srv, "__version__", "4.2.0-test")
+        monkeypatch.setattr(srv.os, "getpid", lambda: 4242)
+        monkeypatch.setattr(srv.privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(srv.routes_connect, "_is_connected", lambda principal, service: False)
+
+        payload = json.loads(srv.local_status_payload("2026-09-23T00:00:00+00:00"))
+
+        assert payload["version"] == "4.2.0-test"
+        assert payload["pid"] == 4242
+        assert payload["mode"] == "local"
+        assert payload["separated"] is True
+        assert payload["started_at"] == "2026-09-23T00:00:00+00:00"
+
+    def test_connectors_reflect_is_connected(self, monkeypatch):
+        import json
+
+        srv = self._server_module()
+        monkeypatch.setattr(srv.privilege_separation, "is_enabled", lambda: False)
+        monkeypatch.setattr(
+            srv.routes_connect, "_is_connected",
+            lambda principal, service: service == "gmail",
+        )
+
+        payload = json.loads(srv.local_status_payload("2026-09-23T00:00:00+00:00"))
+
+        assert payload["connectors"]["gmail"] == "ok"
+        assert payload["connectors"]["drive"] == "needs_auth"
+        assert set(payload["connectors"]) == set(srv.routes_connect.SERVICE_LABELS)
+
+    def test_the_payload_is_one_compact_json_line(self, monkeypatch):
+        # It travels over the same one-line-per-message control channel
+        # every other command here does -- a stray newline in the payload
+        # would truncate the reply.
+        srv = self._server_module()
+        monkeypatch.setattr(srv.routes_connect, "_is_connected", lambda principal, service: False)
+
+        payload = srv.local_status_payload("2026-09-23T00:00:00+00:00")
+
+        assert "\n" not in payload
+        assert " " not in payload
 
 
 class TestRecoveryCodeDelivery:

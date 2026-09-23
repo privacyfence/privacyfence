@@ -529,6 +529,112 @@ begin
   end;
 end;
 
+(* #428 Phase 2 (local-mode-fixes-plan.md §2.1): stop whatever a previous
+   install left running BEFORE Setup copies a single file over it.
+
+   PrepareToInstall is Inno Setup's own hook for exactly this timing -- it
+   runs ahead of ssInstall, where [Files] actually copies, unlike
+   CurStepChanged(ssPostInstall) above which runs *after*. df1a403d fixed
+   this gap only in tests/integration/test_windows_packaged_smoke.py's own
+   test harness (_stop_daemon_service/_kill_stray_app_processes, called by
+   the test around its own upgrade-install step); this is the same fix
+   ported into the installer itself, which is what a real upgrade -- not
+   just the test's own -- needed all along. See that module's own
+   docstrings for the two failures this closes: v4.1.0a9's real release
+   build hit "Some applications could not be shut down" (exit 5) because
+   RestartManager did not win the race against a still-running
+   privacyfence-app/PrivacyFenceCompanion; a separated install's daemon is
+   the harder case, because it runs as a Windows service with crash-restart
+   failure actions configured (Install-DaemonService's own `sc failure ...`
+   call), so killing it by image name only buys about five seconds before
+   the SCM relaunches it -- a clean `sc.exe stop` is required, not a
+   taskkill, for the same reason _stop_daemon_service() spells out.
+
+   Best-effort throughout, and always returns '' (success): a fresh install
+   has no prior service or processes to stop at all, which is the ordinary
+   case, not a failure one, and this hook's only job is making sure nothing
+   already has a file open before Setup starts overwriting it -- Setup's own
+   file-in-use retry/RestartManager machinery is still the last line of
+   defense, this just gives it far less to do. *)
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  OutFile, CmdLine: String;
+  ResultCode, Attempt: Integer;
+  StillRunning: Boolean;
+begin
+  Result := '';
+  try
+    Log('PrepareToInstall: stopping the {#ServiceName} service (if any) before copying files');
+    OutFile := ExpandConstant('{tmp}\prepare-stop-service.out');
+    (* Same doubled-outer-quotes /C rule as RegisterAutostartTask/
+       SeparateInstall's own cmd.exe invocations above -- see either one's
+       comment for why. *)
+    CmdLine := '/C ""' + ExpandConstant('{sys}\sc.exe') +
+      '" stop "{#ServiceName}" > "' + OutFile + '" 2>&1"';
+    if not Exec(ExpandConstant('{cmd}'), CmdLine, '', SW_HIDE,
+        ewWaitUntilTerminated, ResultCode) then
+      Log('PrepareToInstall: Exec itself failed to launch cmd.exe for sc.exe stop')
+    else
+    begin
+      LogCommandOutput('PrepareToInstall: sc.exe stop', OutFile);
+      Log('PrepareToInstall: sc.exe stop exit code = ' + IntToStr(ResultCode));
+    end;
+
+    (* Poll `sc.exe query` for up to 30s (60 attempts, 500ms apart) -- the
+       same 30s local-mode-fixes-plan.md §2.1 names. A nonzero exit from
+       `sc.exe query` means the service does not exist at all (a fresh
+       install, or one already uninstalled), which ends the wait
+       immediately rather than polling out the full 30s for an answer that
+       was never going to change. *)
+    StillRunning := True;
+    Attempt := 0;
+    while StillRunning and (Attempt < 60) do
+    begin
+      Attempt := Attempt + 1;
+      OutFile := ExpandConstant('{tmp}\prepare-query-service.out');
+      CmdLine := '/C ""' + ExpandConstant('{sys}\sc.exe') +
+        '" query "{#ServiceName}" > "' + OutFile + '" 2>&1"';
+      if not Exec(ExpandConstant('{cmd}'), CmdLine, '', SW_HIDE,
+          ewWaitUntilTerminated, ResultCode) then
+      begin
+        Log('PrepareToInstall: Exec itself failed to launch cmd.exe for sc.exe query');
+        StillRunning := False;
+      end
+      else if ResultCode <> 0 then
+        StillRunning := False
+      else
+        StillRunning := (Pos('STOPPED', ReadCapturedOutput(OutFile)) = 0);
+      if StillRunning then
+        Sleep(500);
+    end;
+    if StillRunning then
+      Log('PrepareToInstall: the {#ServiceName} service did not reach STOPPED within 30s -- continuing anyway')
+    else
+      Log('PrepareToInstall: the {#ServiceName} service is stopped (or was never installed)');
+
+    (* The companion, and the daemon's own non-service alias -- both best
+       effort, both a no-op against a process that is not running (taskkill
+       exits non-zero, which this ignores, same as
+       _kill_stray_app_processes() does in the test module cited above).
+       All three image names, ported from that same helper's own sweep, so
+       a real upgrade gets the protection the test was previously only
+       asserting for itself. *)
+    Log('PrepareToInstall: sweeping stray PrivacyFence processes');
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#CompanionExeName}"', '',
+      SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#AppExeName}"', '',
+      SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#AliasExeName}"', '',
+      SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  except
+    (* Never let a hiccup here fail the install before it has even started
+       copying files -- the whole point of this hook is a convenience on top
+       of Setup's own file-in-use handling, not a new way to refuse an
+       install that would otherwise have succeeded. *)
+    Log('PrepareToInstall: exception: ' + GetExceptionMessage);
+  end;
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   AutostartRegistered: Boolean;
