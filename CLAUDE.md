@@ -43,11 +43,13 @@ It needs one secret, `RELEASE_TAG_TOKEN`, and **that secret may not be the `GITH
 GitHub does not start a workflow run for an event raised by the `GITHUB_TOKEN`, so a tag pushed
 with it creates the tag, starts neither `build.yml` nor `publish-pypi.yml`, and reports success.
 No artifacts, no R2 upload, no GitHub Release, no error. Use a fine-grained PAT with **Contents:
-write** on this repo, or mint a GitHub App installation token per run and use that instead — the
-same account-owned-over-user-owned reasoning the R2 credentials get below applies here too, a user
-token stops working when that user's access changes. The workflow refuses to start without the
-secret, and after pushing a tag it polls for the `build.yml` run on that commit and fails loudly if
-none appears, so the silent-failure mode above cannot pass for a successful release.
+write** on this repo. A GitHub App installation token minted per run would be the account-owned
+alternative — the same reasoning the R2 credentials get below, a user token stops working when
+that user's access changes — but `release.yml` reads only `secrets.RELEASE_TAG_TOKEN` and has no
+step that mints one, so switching to an App is a workflow change, not a secret swap. The workflow
+refuses to start without the secret, and after pushing a tag it polls for the `build.yml` run on
+that commit and fails loudly if none appears, so the silent-failure mode above cannot pass for a
+successful release. See [ADR 0020](docs/adr/0020-release-tag-push-never-uses-github-token.md).
 
 **One release tag per commit.** `setuptools_scm` resolves the version through `git describe`,
 which reports *a* tag on the commit being built rather than specifically the one whose push started
@@ -56,10 +58,12 @@ alphabetically earlier, for two lightweight tags of the same age), not as the ta
 is not hypothetical: `v4.1.0a7` was tagged onto the same commit as a stuck `v4.1.0a6` and the whole
 run built, signed and tried to publish `4.1.0a6` a second time, which R2's immutability guard
 refused ([the run](https://github.com/privacyfence/privacyfence/actions/runs/35388772087)). Every job that resolves a version now runs
-`scripts/r2_release.py check-tag` first, so this fails in the first few seconds instead of after a
-full artifact set has been built — but the fix is still to move the release forward onto a new
-commit, or to delete the unwanted tag before retagging. A version that has already published
-artifacts stays published; cut the next one.
+`scripts/r2_release.py check-tag` before publishing anything — as the first step in each of
+`build.yml`'s jobs, so this fails in the first few seconds instead of after a full artifact set has
+been built; `publish-pypi.yml`'s `build` job runs it after building the sdist/wheel. The fix is
+still to move the release forward onto a new commit, or to delete the unwanted tag before
+retagging. A version that has already published artifacts stays published; cut the next one. See
+[ADR 0021](docs/adr/0021-one-release-tag-per-commit.md).
 
 **macOS ships one file.** `scripts/build_dmg.sh` builds the app bundle, the `.mcpb` and (by
 calling `scripts/build_pkg.sh`) the `.pkg`, then puts the `.pkg` and the `.mcpb` on the DMG and
@@ -285,37 +289,12 @@ section for those):
 
 ### Who can download a pre-release
 
-**Decided (2026-09-13): anyone can, through the Worker.** A tester needs no credential, no
-presigned URL and no Access policy — just the link, or the "Want to test the next version?" section
-on `privacyfence.eu/download/`, which offers whichever pre-release channel has a build.
-
-This section previously asked "how does an authorized alpha/beta tester get a file out of the
-private bucket?" as an open question. It was answered by accident, in the opposite direction from
-the one intended: Phase 1's Worker shipped `/download/<channel>/<artifact>` unauthenticated for
-every channel, so pre-releases have been publicly downloadable since the day it deployed. Phase 5
-then put them on the public website on purpose — the plan's own wording asks for a public
-"want to test the next version?" invitation, which is flatly incompatible with the restricted
-access this section used to assert. The plan won, in code, months before anyone noticed the
-contradiction in writing.
-
-Keeping it that way is deliberate, not merely inherited. An open-source governance tool wants
-testers more than it wants gatekeeping; the pre-release channels are already separated from stable
-everywhere it matters (no PyPI, no GitHub Release assets, distinct `latest.json`, distinct D1
-counter rows); and the honest alternative — asking people to test software you make hard to obtain
-— tends to produce no testers rather than careful ones.
-
-**What still holds:** every pre-release download goes through the Worker, so it is counted, and R2
-itself stays unreachable except through it.
-
-**To reverse this** and make pre-releases genuinely restricted, the change is in the Worker, not
-the bucket — the bucket is already private and gates nothing on its own:
-
-1. Gate `routeDownload`/`routeApi` on channel: serve `stable` publicly, require proof for the rest
-   (a shared token header, or Cloudflare Access in front of the pre-release paths).
-2. Drop or gate the pre-release section in `website/download/download.js`, which currently
-   advertises whatever `rc`/`beta`/`alpha` build exists to every visitor.
-
-Doing (1) without (2) leaves the website inviting people to a download that will refuse them.
+Anyone, through the Worker — decided 2026-09-13, and deliberately kept. A tester needs no
+credential, just the link or the "Want to test the next version?" section on
+`privacyfence.eu/download/`. Every pre-release download still goes through the Worker, so it is
+counted, and R2 stays unreachable except through it. The reasoning, and the exact steps to reverse
+it (Worker routes and website together, never one without the other), are in
+[ADR 0023](docs/adr/0023-pre-releases-are-publicly-downloadable.md).
 
 ## Decisions, plans and ADRs
 
