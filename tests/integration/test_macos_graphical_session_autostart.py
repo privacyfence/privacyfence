@@ -107,6 +107,10 @@ MCP_TOKEN_FILE_NAME = "mcp_token"  # web/mcp_auth.py's MCP_TOKEN_FILE_NAME
 
 MARKER_PATH = MACOS_SYSTEM_ROOT / MARKER_FILE_NAME
 HANDOFF_DIR = MACOS_SYSTEM_ROOT / HANDOFF_DIR_NAME
+# ADR 0008 D3: the owner's own mcp_token lives under the *authority* root,
+# not handoff/ -- handoff/ is unaffected (still the control channel socket,
+# companion socket, and web_base_url).
+AUTHORITY_DIR = MACOS_SYSTEM_ROOT / "authority"
 
 
 def _built_dmgs() -> list[Path]:
@@ -425,14 +429,14 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
 
         # Functional proof, not just "launchd thinks it's active": the
         # daemon actually reached the point of writing its own control
-        # socket and minting mcp_token -- privilege_separation.py's own
-        # handoff/ contract.
+        # socket under handoff/ and minting the owner's mcp_token under
+        # authority/ (ADR 0008 D3).
         _wait_for_path_as_root(
             socket_path_under(HANDOFF_DIR), timeout=20, what="the separated daemon's control channel socket",
             context=lambda: _separated_job_report(f"system/{DAEMON_LABEL}"),
         )
         _wait_for_path_as_root(
-            HANDOFF_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token",
+            AUTHORITY_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token",
             context=lambda: _separated_job_report(f"system/{DAEMON_LABEL}"),
         )
 

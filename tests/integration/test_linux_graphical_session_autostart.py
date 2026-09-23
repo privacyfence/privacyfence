@@ -151,6 +151,10 @@ from tests.integration.test_deb_packaged_lifecycle import (  # noqa: E402
 # AUTOSTART_UNIT_NAME below already applies to the legacy autostart entry).
 SYSTEM_ROOT = LINUX_SYSTEM_ROOT
 HANDOFF_DIR = SYSTEM_ROOT / HANDOFF_DIR_NAME
+# ADR 0008 D3: the owner's own mcp_token lives under the *authority* root,
+# not handoff/ -- handoff/ is unaffected (still the control channel socket,
+# companion socket, and web_base_url).
+AUTHORITY_DIR = SYSTEM_ROOT / "authority"
 PRIVILEGE_SEPARATION_MARKER = SYSTEM_ROOT / MARKER_FILE_NAME
 
 # systemd reserves a bare "-" as the unit-name hierarchy separator, so
@@ -561,10 +565,10 @@ async def test_deb_autostart_starts_companion_while_daemon_runs_under_system_uni
     assert daemon_owner == "privacyfence", f"the daemon should run as the service account, not {daemon_owner!r}"
 
     # Not just "systemd thinks it's active" -- the daemon's own control
-    # channel and mcp_token genuinely came up, moved to handoff/ exactly as
-    # privilege_separation.py's own module docstring lays out.
+    # channel came up under handoff/, and the owner's mcp_token under
+    # authority/ (ADR 0008 D3 -- mcp_auth.py's _mcp_token_path()).
     _wait_for_path_as_root(socket_path_under(HANDOFF_DIR), timeout=20, what="the separated daemon's control channel socket")
-    _wait_for_path_as_root(HANDOFF_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token")
+    _wait_for_path_as_root(AUTHORITY_DIR / MCP_TOKEN_FILE_NAME, timeout=20, what="the separated daemon's mcp_token")
 
     # ── "Log in": same real systemd --user manager + xdg-desktop-autostart
     # .target dance as the unseparated test -- what differs here is which
