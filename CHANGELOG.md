@@ -77,6 +77,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never needed the (unusable) system-root default in the first place. `paths.py`'s legacy-file
   migration now logs and continues on a permission error from the destination's own `.exists()`
   check, the same as it already did for a failed `rename`.
+- The Slack/Salesforce/Atlassian browser sign-in flow (`oauth_loopback.py`'s `run_browser_oauth()`,
+  used by their `--*-oauth` CLI flags and the local-mode settings UI) no longer aborts outright on
+  a host that can't auto-launch a browser (e.g. a headless SSH session with no `DISPLAY`) — it now
+  always prints the authorize URL up front and keeps its local callback listener running and
+  waiting, the same as when a browser does open, so a person can still complete sign-in by visiting
+  that URL manually (typically through an SSH tunnel or SOCKS proxy). Previously it raised and tore
+  the listener down in the same breath as telling the person to "visit manually," which made that
+  instruction impossible to follow; Google's connectors (via `google-auth-oauthlib`) already
+  behaved this way and were unaffected.
 - A privilege-separated macOS install's daemon could be left unloaded after a `.pkg` upgrade, with
   no visible symptom (a `launchctl bootstrap`/`bootout` race). `enable` and the installer's own
   `postinstall` script now retry the bootstrap with backoff and verify the daemon actually came up
