@@ -71,6 +71,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `shutil.SameFileError` when `<path>` already resolves to `org/org_config.json` (e.g. re-running
   the command with the default install location) — it now recognizes the bundle is already
   installed and skips the backup-and-copy instead of trying to copy the file onto itself.
+- `daemon_main.py` (and anything invoking it, e.g. `scripts/qa_authenticate_connectors.py`) no
+  longer crashes with an unhandled `PermissionError` on a machine that has #428 Phase 4 privilege
+  separation enabled system-wide, even when the invocation passes its own explicit `--config` and
+  never needed the (unusable) system-root default in the first place. `paths.py`'s legacy-file
+  migration now logs and continues on a permission error from the destination's own `.exists()`
+  check, the same as it already did for a failed `rename`.
 - A privilege-separated macOS install's daemon could be left unloaded after a `.pkg` upgrade, with
   no visible symptom (a `launchctl bootstrap`/`bootout` race). `enable` and the installer's own
   `postinstall` script now retry the bootstrap with backoff and verify the daemon actually came up
@@ -97,6 +103,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- The bespoke-settings-route classification guard (`routes_settings.build_routes()` — every
+  non-dispatcher POST route must be listed as sensitive or explicitly exempt, see
+  [ADR 0014](docs/adr/0014-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md)) is
+  now an explicit `raise RuntimeError(...)` instead of a plain `assert`. Python strips `assert`
+  under `python -O`/`PYTHONOPTIMIZE`, which would have let a daemon started that way mount an
+  unclassified route without the `_SENSITIVE_ACTIONS`-shaped gating the guard exists to enforce;
+  nothing shipped today is known to run with `-O`, but nothing prevented it either.
 - **A second OS user added to a privilege-separated install's service group now gets their own
   isolated PrivacyFence identity, not the owner's.** Before this, every `/mcp` caller on such a
   machine — any account's Claude Desktop, Claude Code, or other MCP client — resolved to the same
