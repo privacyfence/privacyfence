@@ -450,13 +450,68 @@ def _sudo_read_text(path: Path, *, timeout: float = 15) -> str | None:
 def _bootout_companion() -> None:
     """One ``launchctl bootout`` of the companion agent, in this account's own
     GUI domain (no ``sudo`` needed -- see ``_companion_agent_paused``'s own
-    docstring for why). Split out so ``_wait_for_companion_socket_free`` can
-    reissue it -- see that function's own docstring for why a single call is
-    not always enough."""
+    docstring for why)."""
     domain = f"gui/{os.getuid()}"
     subprocess.run(
         ["launchctl", "bootout", f"{domain}/{COMPANION_LABEL}"],
         capture_output=True, text=True, timeout=30, check=False,
+    )
+
+
+def _companion_launchctl_print() -> str:
+    """Diagnostics only -- attached to this module's own timeout errors so a
+    failure that does not match the theory below still says what launchd
+    actually saw, instead of just "still bound"."""
+    domain = f"gui/{os.getuid()}"
+    result = subprocess.run(
+        ["launchctl", "print", f"{domain}/{COMPANION_LABEL}"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    return result.stdout or result.stderr or f"(launchctl print exited {result.returncode}, no output)"
+
+
+def _wait_for_companion_socket_bound(*, timeout: float = 30.0) -> None:
+    """Waits for the companion `install_services()` just (re)bootstrapped to
+    actually be listening on ``COMPANION_SOCKET``, before this module tries
+    to boot it back out again.
+
+    Without this wait, this module's own upgrade test failed
+    (run 35897583364, then again with a since-reverted bootout-retry fix in
+    run 35902612720): a `bootout` landing while the freshly (re)bootstrapped
+    companion was still mid-startup left ``COMPANION_SOCKET`` bound for the
+    *entire* 20s of `_wait_for_companion_socket_free`'s old timeout, with no
+    gap a repeated bootout ever caught -- consistent with one long-lived
+    process that simply never responded to the signal, not with something
+    repeatedly relaunching. 20s is also launchd's own default
+    ``ExitTimeOut``, so that failure is what a job looks like right up until
+    launchd gives up waiting for a graceful exit and escalates to
+    ``SIGKILL``. The most likely reason a companion doesn't act on `SIGTERM`
+    for that long is still being in the slow, one-time part of its own
+    startup (PyInstaller onefile's self-extraction, on this test's own fresh
+    per-cycle copy of the bundle -- see ``_copy_app_from_dmg`` and
+    ``_bump_bundle_version``) rather than running the Python that installs a
+    signal handler at all.
+
+    This module's very first ``_companion_agent_paused()`` use per test
+    doesn't need this: `enable`'s own account/layout provisioning (skipped or
+    fast on this test's *second*, idempotent `_enable_separation` call --
+    exactly the one this guards) already gives the companion plenty of wall
+    time to finish starting before anything here tries to bootout it."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.settimeout(2.0)
+        try:
+            probe.connect(str(COMPANION_SOCKET))
+            return
+        except OSError:
+            pass   # not up (yet) -- poll again
+        finally:
+            probe.close()
+        time.sleep(0.2)
+    raise AssertionError(
+        f"{COMPANION_SOCKET} was never bound within {timeout}s of (re)starting "
+        f"{COMPANION_LABEL}:\n{_companion_launchctl_print()}"
     )
 
 
@@ -466,25 +521,11 @@ def _wait_for_companion_socket_free(*, timeout: float = 20.0) -> None:
     binding it in that window fails with EADDRINUSE. Polls until a connect is
     refused (nothing listening) or the file is gone.
 
-    On this module's own upgrade test, the companion being booted out here
-    was itself bootstrapped moments earlier by the *second*
-    ``_enable_separation``'s own ``install_services()`` -- the same
-    bootout-right-after-a-bootstrap ordering
-    scripts/macos_privilege_separation.sh's own ``bootstrap_with_retry()``
-    exists to ride out, just from the other verb. A single ``bootout`` issued
-    into that same window can be silently dropped by launchd's own
-    not-yet-settled bookkeeping rather than merely delayed -- the socket
-    stays bound for the *entire* timeout, not just a moment past it, which is
-    what a plain settle-time wait would show instead. So this reissues the
-    bootout every quarter of the timeout rather than trusting the first call
-    to have taken.
-
     Connecting from this account rather than the service account is fine for
     a liveness probe: _verify_companion_peer() refuses a non-service-account
     peer *after* accepting, so the connect still succeeds while something is
     listening, which is exactly the distinction being made here."""
     deadline = time.monotonic() + timeout
-    next_bootout = time.monotonic() + timeout / 4
     while time.monotonic() < deadline:
         probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         probe.settimeout(2.0)
@@ -496,12 +537,10 @@ def _wait_for_companion_socket_free(*, timeout: float = 20.0) -> None:
             pass   # anything else: treat as still busy and poll again
         finally:
             probe.close()
-        if time.monotonic() >= next_bootout:
-            _bootout_companion()
-            next_bootout = time.monotonic() + timeout / 4
         time.sleep(0.2)
     raise AssertionError(
-        f"{COMPANION_SOCKET} was still bound {timeout}s after booting out {COMPANION_LABEL}"
+        f"{COMPANION_SOCKET} was still bound {timeout}s after booting out {COMPANION_LABEL}:\n"
+        f"{_companion_launchctl_print()}"
     )
 
 
@@ -517,6 +556,10 @@ def _companion_agent_paused():
     issue a mint nonce or answer its own dialog from outside. So the test
     substitutes for the process, which here -- unlike Linux, where nothing
     holds the address -- first means asking launchd to stop the real one.
+    ``_wait_for_companion_socket_bound()`` first makes sure that "the real
+    one" is actually up -- see its own docstring for why booting out a
+    companion that has not gotten there yet is exactly what this module used
+    to get wrong.
 
     Both calls are in this account's own GUI domain and need no ``sudo``:
     `enable` bootstrapped the agent as ``gui/<owner uid>`` and the owner is
@@ -525,6 +568,7 @@ def _companion_agent_paused():
     agent is running, and the next test's own ``_enable_separation`` re-runs
     ``install_services``, which boots it out and back regardless of the state
     this leaves behind."""
+    _wait_for_companion_socket_bound()
     _bootout_companion()
     _wait_for_companion_socket_free()
     try:
