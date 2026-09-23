@@ -39,7 +39,16 @@ At-rest encryption protects a staged file against recovery from disk, a backup, 
 
 ## Local mode
 
-Local mode can write a requested download to a user-selected/local destination because the daemon runs on the user's machine. The org-mode delivery rules above are specific to centralized deployments where the daemon and user filesystem are different machines.
+The org-mode delivery rules above are specific to centralized deployments where the daemon and user filesystem are different machines. Local mode's daemon runs on the user's own machine -- but on a privilege-separated install (the only kind PrivacyFence ships, [ADR 0003](adr/0003-separated-installs-only.md)) it runs as its *own* OS account, not the user's, so "same machine" does not mean "same filesystem access." A plain `open()`/`os.path.expanduser()` against a path the agent supplied resolves against the service account's own home (`/var/empty` on macOS), not the human's.
+
+Local mode's answer is the **local file bridge** ([ADR 0007](adr/0007-local-file-bridge.md)): the `.mcpb` shim, which runs as the user in every Claude Desktop setup and already carries the request path's own authenticated connection to the daemon's `/mcp` endpoint, does the actual filesystem read/write on the daemon's behalf.
+
+- **Downloads** (`drive_download_file`, `gmail_download_attachment`, `confluence_download_attachment`): the tool's full preview/PII-scan/approval flow is unchanged -- only the final write is redirected. Once approved, the daemon stages the file in the *same* `DownloadStagingStore` org mode's own staged links use (per-principal, encrypted at rest, single-use, TTL-bound -- see "Staged downloads" above, all of which applies unchanged) and tells the shim where to fetch it and where the agent asked it saved. The shim fetches it over `GET /mcp-files/downloads/{token}` (same bearer-token auth as `/mcp`, a sibling of the org-mode browser route `GET /downloads/{token}` above but authenticated the same way `/mcp` itself is, not by a browser session cookie) and writes it as the user, never overwriting an existing file at that name.
+- **Uploads** (`drive_upload_file`'s `local_path`, the Gmail attachment tools): the daemon answers a call it can't service yet with a `need_uploads` response instead of gating anything; the shim reads the named path itself and `PUT`s the bytes to `/mcp-files/uploads/{slot}` (a sibling upload-side store, `upload_staging.UploadStagingStore`, with the identical encrypted-at-rest/single-use/TTL/no-oracle-404 properties `DownloadStagingStore` has); the daemon then re-runs the same tool call with the bytes staged and claimable, and the normal preview/PII-scan/gate/approval flow runs from there, on real content this time rather than a bare file-size guess.
+- A client with no `.mcpb` shim (Claude Code, another direct HTTP client, or an old extension) gets a clear upload error telling it to update the extension or pass `content_base64`, and downloads still work via a one-time link it can fetch with its own bearer token.
+- Unseparated installs (a dev checkout, or a pip/pipx install that never enabled privilege separation) are unaffected: the daemon *is* the user there, so every local-mode tool keeps reading and writing local paths directly, exactly as before this ADR.
+
+See ADR 0007 for the full wire protocol, the guard that stops the shim from touching a path the agent didn't itself name, and the security reasoning for why this adds no capability the agent didn't already have.
 
 ## Preview and PII limits are separate
 

@@ -401,6 +401,41 @@ def downloads_dir(principal: "Principal | None" = None) -> Path:
     return secure_mkdir(user_dir(principal) / "downloads")
 
 
+def uploads_dir(principal: "Principal | None" = None) -> Path:
+    """Per-principal staging area for the local file bridge's upload side
+    (local_files.py, upload_staging.py): ``user_dir(principal) / "uploads"``,
+    created on demand exactly like ``downloads_dir()``. Holds only
+    AES-256-GCM-encrypted ciphertext (``upload_staging.UploadStagingStore``
+    mirrors ``download_staging.DownloadStagingStore``'s "never derive or
+    store the decryption key on disk" property), so this directory's
+    contents are worthless without the one-time token that produced them.
+    Reuses ``user_dir()``'s own directory-safety logic (``_is_safe_
+    principal_id``) rather than adding any new path-construction code
+    here."""
+    return secure_mkdir(user_dir(principal) / "uploads")
+
+
+def all_uploads_dirs() -> list[Path]:
+    """Every upload-staging directory that currently exists on disk, across
+    every principal -- the upload-side mirror of ``all_downloads_dirs()``.
+    Existence-only: see that function's docstring for why, and for why
+    ``upload_staging.UploadStagingStore.__init__`` needs exactly this."""
+    base = data_dir()
+    dirs = []
+    local_uploads = base / "uploads"
+    if local_uploads.is_dir():
+        dirs.append(local_uploads)
+    users_root = base / "users"
+    if users_root.is_dir():
+        for entry in sorted(users_root.iterdir()):
+            if not entry.is_dir() or not _is_safe_principal_id(entry.name):
+                continue
+            candidate = entry / "uploads"
+            if candidate.is_dir():
+                dirs.append(candidate)
+    return dirs
+
+
 def all_downloads_dirs() -> list[Path]:
     """Every download-staging directory that currently exists on disk,
     across every principal: the local principal's own ``downloads_dir()``

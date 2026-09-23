@@ -26,6 +26,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from . import local_files
 from .email_markdown import markdown_to_html, markdown_to_plain
 from .secure_files import atomic_write_text
 
@@ -87,37 +88,57 @@ def resolve_attachment_destination(filename: str, destination_dir: str = "") -> 
 _MAX_TOTAL_ATTACHMENT_BYTES = 18_000_000
 
 
-def _read_local_attachment(path: str) -> tuple[str, bytes]:
-    """Read one local attachment file from disk, sanitizing only its own name.
+def _read_local_attachment(path: str, *, download_mode: str) -> tuple[str, bytes]:
+    """Read one local attachment file, sanitizing only its own name.
 
     Unlike ``resolve_attachment_destination`` (an inbound filename from a
     remote sender, untrusted), ``path`` here is a location Claude was told to
     read by the caller -- but the resulting attachment name still shouldn't
     leak the full local path into the outgoing message, so only the basename
     is kept, same reasoning as the inbound case.
+
+    ADR 0007 is Claude-Desktop-only: org mode's daemon runs on a different
+    machine than the user entirely, and a local attachment path there has
+    always meant "read from PrivacyFence's own server filesystem" --
+    unaffected by this phase, same reasoning as connectors/drive.py's
+    _upload_file ``is_org_local_path`` branch. Only local mode routes
+    through the file bridge.
     """
     if not path or not path.strip():
         raise GmailClientError("attachments: empty file path")
-    expanded = os.path.expanduser(path.strip())
-    if not os.path.isfile(expanded):
-        raise GmailClientError(f"attachments: no such file: {path!r}")
-    with open(expanded, "rb") as fh:
-        data = fh.read()
-    return os.path.basename(expanded), data
+    if download_mode == "org":
+        expanded = os.path.expanduser(path.strip())
+        if not os.path.isfile(expanded):
+            raise GmailClientError(f"attachments: no such file: {path!r}")
+        with open(expanded, "rb") as fh:
+            data = fh.read()
+        return os.path.basename(expanded), data
+    # ADR 0007: connectors/gmail.py's three *_with_attachments call sites
+    # already ran local_files.require_local_files() on every path before
+    # gating, so reachability is already resolved here -- bridge-fetched
+    # bytes or a direct read, whichever applies. LocalFileAccessError is a
+    # ValueError subclass, already safe to show the model verbatim (see
+    # safe_errors.public_message()) -- let it propagate as-is rather than
+    # wrap it in GmailClientError, which connectors/gmail.py's _fetch()
+    # would otherwise flatten into a generic RuntimeError message.
+    data = local_files.read_local_file(path, download_mode=download_mode)
+    return os.path.basename(path.strip()), data
 
 
-def _attach_files(msg, attachments: list[str]) -> None:
-    """Read each attachment from disk and attach it as a MIME part of ``msg``.
+def _attach_files(msg, attachments: list[str], *, download_mode: str) -> None:
+    """Read each attachment and attach it as a MIME part of ``msg``.
 
     Raises ``GmailClientError`` if a file is missing or the running total
     exceeds Gmail's draft size cap -- see ``_MAX_TOTAL_ATTACHMENT_BYTES``.
+    ``local_files.LocalFileAccessError`` (from a non-org, no-bridge local
+    read) propagates through unwrapped -- see ``_read_local_attachment``.
     """
     import email.encoders
     import email.mime.base
 
     total_bytes = 0
     for path in attachments:
-        name, data = _read_local_attachment(path)
+        name, data = _read_local_attachment(path, download_mode=download_mode)
         total_bytes += len(data)
         if total_bytes > _MAX_TOTAL_ATTACHMENT_BYTES:
             raise GmailClientError(
@@ -525,6 +546,7 @@ class GmailClient:
         cc: str = "",
         bcc: str = "",
         body_markdown: str = "",
+        download_mode: str = "local",
     ) -> dict:
         """Create a Gmail draft with one or more local-file attachments.
 
@@ -546,7 +568,7 @@ class GmailClient:
         if bcc:
             msg["bcc"] = self._encode_addresses(bcc)
         msg.attach(_build_body_part(body, body_markdown))
-        _attach_files(msg, attachments)
+        _attach_files(msg, attachments, download_mode=download_mode)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
         service = self._get_service()
@@ -636,6 +658,7 @@ class GmailClient:
         cc: str = "",
         bcc: str = "",
         body_markdown: str = "",
+        download_mode: str = "local",
     ) -> dict:
         """Create a reply draft with one or more local-file attachments.
 
@@ -663,7 +686,7 @@ class GmailClient:
             msg["In-Reply-To"] = target["original_message_id"]
             msg["References"] = target["references"]
         msg.attach(_build_body_part(body, body_markdown))
-        _attach_files(msg, attachments)
+        _attach_files(msg, attachments, download_mode=download_mode)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
         message_body: dict[str, Any] = {"raw": raw}

@@ -22,6 +22,14 @@ config/settings.local.yaml
 # (paths.py's authority_dir()/authority_root()).
 authority/
 
+# ADR 0007: download_staging.py's/upload_staging.py's own per-principal
+# staging directories -- same "dev-mode data_dir() is the repo root"
+# reasoning as authority/ above. Only ever holds encrypted, short-lived
+# ciphertext (see either module's own docstring), but there's no reason
+# for it to sit in the working tree either.
+downloads/
+uploads/
+
 # Local runtime caches (dev-mode data_dir() is the repo root -- see paths.py)
 resource_name_cache.json
 update_check_cache.json

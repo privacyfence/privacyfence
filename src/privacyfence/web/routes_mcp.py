@@ -52,6 +52,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp
 
 from .. import __version__ as PRIVACYFENCE_VERSION
+from .. import local_files
 from ..connector import Connector
 from ..principal import principal_scope
 from ..safe_errors import public_message
@@ -63,6 +64,12 @@ from .oauth_provider import IDP_CALLBACK_PATH, OrgOAuthProvider
 logger = logging.getLogger(__name__)
 
 MCP_PATH = "/mcp"
+
+# ADR 0007's one vendor _meta namespace, on both directions of the wire:
+# the shim's need_uploads/deliver responses, and the resent request's own
+# uploads map (SS1.1).
+_FILE_BRIDGE_META_KEY = "privacyfence.eu/file-bridge"
+_FILE_BRIDGE_HEADER = "x-privacyfence-file-bridge"
 
 # Part A of issue #396: server instructions returned in the `initialize`
 # result (Server.instructions -> InitializationOptions.instructions,
@@ -153,6 +160,33 @@ def _session_key(ctx: ServerRequestContext) -> str:
         return header
     connection = _connection_of(ctx)
     return getattr(connection, "session_id", None) or _SESSIONLESS_KEY
+
+
+def _request_header(ctx: ServerRequestContext, name: str) -> str | None:
+    request = ctx.request
+    return request.headers.get(name) if request is not None else None
+
+
+def _file_bridge_uploads(params: types.CallToolRequestParams) -> dict[str, str]:
+    """The ``{declared_path: slot}`` map a bridge-capable shim resends on
+    the second round of the upload handshake (ADR 0007 SS1.1 step 4) --
+    empty on every first-round call, including every call from a client
+    that never does the handshake at all."""
+    meta = params.meta or {}
+    bridge_meta = meta.get(_FILE_BRIDGE_META_KEY)
+    if not isinstance(bridge_meta, dict):
+        return {}
+    uploads = bridge_meta.get("uploads")
+    return dict(uploads) if isinstance(uploads, dict) else {}
+
+
+def _need_uploads_result(principal: Any, needed: local_files.LocalFilesNeeded) -> types.CallToolResult:
+    files = local_files.build_need_uploads_files(principal, needed)
+    names = ", ".join(f["path"] for f in files)
+    text = f"PrivacyFence needs the file(s) below uploaded by the PrivacyFence extension: {names}"
+    result = types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+    result.meta = {_FILE_BRIDGE_META_KEY: {"v": 1, "op": "need_uploads", "files": files}}
+    return result
 
 
 class _PrivacyFenceServer(MCPServer):
@@ -314,12 +348,24 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
         # mcp_auth.principal_from_access_token's own docstring for how each
         # is resolved.
         principal = principal_from_access_token(get_access_token())
-        with principal_scope(principal):
+        bridge_available = _request_header(ctx, _FILE_BRIDGE_HEADER) is not None
+        uploads = _file_bridge_uploads(params)
+        base_url = str(ctx.request.base_url) if ctx.request is not None else ""
+        with principal_scope(principal), local_files.call_context(
+            bridge_available=bridge_available, uploads=uploads, base_url=base_url,
+        ) as call_state:
             try:
                 if name in mcp_tools.META_TOOL_NAMES:
                     result = await _dispatch_meta_tool(dispatcher, session_key, name, arguments)
                 else:
                     result = await _dispatch_connector_tool(dispatcher, session_key, name, arguments)
+            except local_files.LocalFilesNeeded as needed:
+                # ADR 0007 SS1.1: not a failure -- the shim intercepts this
+                # response, fetches the listed paths from the user's own
+                # disk, and resends the same call with an uploads map. Logged
+                # at INFO, not as a tool-call failure.
+                logger.info("Tool call %s needs %d local file(s) via the file bridge", name, len(needed.paths))
+                return _need_uploads_result(principal, needed)
             except Exception as exc:  # noqa: BLE001 -- surfaced to the client as a tool error, not a
                 # transport-level failure, exactly like ipc_server.py's own
                 # `{"id": ..., "error": str(exc)}` response to a "call" request.
@@ -338,7 +384,16 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
                 # nor something the model can act on.
                 logger.info("Tool call %s failed: %s", name, exc)
                 return mcp_tools.error_result(public_message(exc))
-        return mcp_tools.to_call_tool_result(result)
+            tool_result = mcp_tools.to_call_tool_result(result)
+            if call_state.pending_deliveries:
+                # SS1.1's "deliver" op: the shim intercepts this response,
+                # writes each staged file to the path the agent originally
+                # asked for, then rewrites the result before Claude ever
+                # sees it -- see mcpb/shim/src/fileBridge.ts.
+                tool_result.meta = {
+                    _FILE_BRIDGE_META_KEY: {"v": 1, "op": "deliver", "files": call_state.pending_deliveries},
+                }
+        return tool_result
 
     return _PrivacyFenceServer(
         "privacyfence", version=PRIVACYFENCE_VERSION, instructions=SERVER_INSTRUCTIONS,

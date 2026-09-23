@@ -40,6 +40,7 @@ from privacyfence.gmail_client import (
     GmailMessage,
     resolve_attachment_destination,
 )
+from privacyfence.local_files import LocalFileAccessError
 from googleapiclient.errors import HttpError
 
 LIVE_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures" / "live" / "gmail"
@@ -1015,6 +1016,27 @@ class TestCreateDraftWithAttachments:
         assert len(attachment_parts) == 1
         assert attachment_parts[0].get_payload(decode=True) == b"attachment file contents"
 
+    def test_org_mode_reads_the_attachment_directly_without_the_bridge(self, tmp_path):
+        # ADR 0007 is Claude-Desktop-only -- org mode keeps reading the
+        # attachment straight off whatever filesystem the org daemon runs
+        # on, exactly as before this phase. See _read_local_attachment's
+        # own docstring.
+        attachment = tmp_path / "report.txt"
+        attachment.write_bytes(b"attachment file contents")
+        service = MagicMock()
+        service.users.return_value.drafts.return_value.create.return_value.execute.return_value = {"id": "d-org"}
+        client = make_client(service)
+
+        result = client.create_draft_with_attachments(
+            to="a@x.com", subject="Hi", body="body", attachments=[str(attachment)], download_mode="org",
+        )
+
+        assert result == {"draft_id": "d-org", "to": "a@x.com", "subject": "Hi"}
+        raw = service.users.return_value.drafts.return_value.create.call_args.kwargs["body"]["message"]["raw"]
+        parsed, _raw_bytes = _extract_parts(raw)
+        attachment_parts = [p for p in parsed.walk() if p.get_filename() == "report.txt"]
+        assert attachment_parts[0].get_payload(decode=True) == b"attachment file contents"
+
     def test_multiple_attachments_all_present(self, tmp_path):
         first = tmp_path / "a.txt"
         first.write_bytes(b"AAA")
@@ -1051,8 +1073,12 @@ class TestCreateDraftWithAttachments:
         assert parsed["bcc"] == "d@x.com"
 
     def test_missing_attachment_file_raises(self):
+        # ADR 0007: a non-org, unseparated read that can't find the file
+        # raises local_files.LocalFileAccessError (a ValueError subclass,
+        # shown to the model verbatim by safe_errors.py) rather than
+        # GmailClientError -- see _read_local_attachment's own docstring.
         client = make_client(MagicMock())
-        with pytest.raises(GmailClientError, match="no such file"):
+        with pytest.raises(LocalFileAccessError, match="No such file"):
             client.create_draft_with_attachments(
                 to="a@x.com", subject="s", body="b", attachments=["/no/such/file.pdf"],
             )
@@ -1171,7 +1197,7 @@ class TestCreateReplyDraftWithAttachments:
     def test_missing_attachment_file_raises(self):
         service = make_reply_service({"Subject": "Original", "From": "sender@x.com"})
         client = make_client(service)
-        with pytest.raises(GmailClientError, match="no such file"):
+        with pytest.raises(LocalFileAccessError, match="No such file"):
             client.create_reply_draft_with_attachments(
                 "m1", body="b", attachments=["/no/such/file.pdf"], my_email="me@x.com",
             )

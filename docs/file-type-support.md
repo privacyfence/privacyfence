@@ -38,6 +38,12 @@ DOCX/PPTX are ZIP containers containing XML. The extraction code uses hardened X
 
 PDF extraction is best-effort text extraction. Scanned/image-only PDFs can contain little or no extractable text because OCR is not part of the normal pipeline. The approval UI should still show the available file metadata so the reviewer understands what object is being requested.
 
+`pypdf` needs a PDF's trailer, at the end of the file, to parse it at all -- a truncated prefix throws instead of returning a partial result. Drive's pre-approval PII scan (`drive_download_file`) therefore fetches the whole file, not a bounded prefix, whenever the file is small enough to do so cheaply (currently 5MB, the same threshold Gmail's own attachment prefetch uses); above that threshold it skips `extract_text()` on a truncated result rather than feeding it a prefix PDF can't parse, and the PII scan reports nothing found for that file rather than raising.
+
+## Local file bridge
+
+On a privilege-separated local-mode install, a download's or upload's bytes cross the process boundary through the `.mcpb` shim rather than a direct filesystem read/write -- see [ADR 0007](adr/0007-local-file-bridge.md) and [`org-mode-download-delivery.md`](org-mode-download-delivery.md)'s own "Local mode" section. This changes nothing about what gets extracted/scanned or when; it only changes how the approved bytes eventually reach disk.
+
 ## Org-mode delivery
 
 Preview/PII limits are independent from final approved file delivery. A tool can inspect a bounded preview and, after approval, deliver the complete file inline or through the org-mode staged-download path.

@@ -19,6 +19,7 @@ import json
 
 import pytest
 
+from privacyfence import local_files
 from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolSpec
@@ -254,15 +255,56 @@ class TestCall:
         assert all(isinstance(r, ValueError) and str(r) == "boom" for r in results)
         assert len(connector.calls) == 1
 
-    async def test_a_failed_call_completed_result_is_also_reused_within_the_ttl(self):
-        # Sequential, not concurrent: the failed future is still "done", so
-        # the same completed-result reuse a successful call gets applies
-        # here too (the exception propagates from the cached future).
+    async def test_a_failed_call_is_not_reused_by_a_later_sequential_call(self):
+        # B3 (local-mode-fixes-plan.md): a failed call is popped from
+        # _inflight once its exception is set, so a *new*, sequential call
+        # in the same dedupe window re-runs instead of replaying the same
+        # failure -- unlike a concurrent retry racing the original call
+        # (test_error_from_original_call_propagates_to_a_concurrent_deduped_
+        # retry above), which still gets the same in-flight future and
+        # therefore the same exception, since it started before the pop
+        # could happen.
         connector = FakeConnector("gmail", error=RuntimeError("boom"))
         dispatcher = _dispatcher({"gmail": connector})
         with pytest.raises(RuntimeError):
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
         with pytest.raises(RuntimeError):
+            await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        assert len(connector.calls) == 2
+
+    async def test_a_result_with_bridge_deliveries_is_not_reused(self, monkeypatch):
+        # B3: a result that staged a file-bridge download carries a
+        # single-use download_staging token -- reusing it from the dedupe
+        # cache would hand a second caller a token the first claim already
+        # consumed. local_files.call_context() is entered here exactly the
+        # way routes_mcp.py's handle_call_tool enters it around dispatch.
+        monkeypatch.setattr(local_files.privilege_separation, "is_enabled", lambda: True)
+
+        class DeliveringConnector(FakeConnector):
+            async def call(self, tool: str, args: dict) -> object:
+                result = await super().call(tool, args)
+                local_files.deliver_file(
+                    "~/Downloads", "f.pdf", b"data", "application/pdf", download_mode="local",
+                )
+                return result
+
+        connector = DeliveringConnector("gmail", result="ok")
+        dispatcher = _dispatcher({"gmail": connector})
+        with local_files.call_context(bridge_available=True, uploads={}):
+            await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        with local_files.call_context(bridge_available=True, uploads={}):
+            await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        assert len(connector.calls) == 2
+
+    async def test_a_result_with_no_deliveries_is_still_deduped_as_before(self, monkeypatch):
+        # Control for the test above: entering call_context() alone must
+        # not itself defeat dedupe -- only an actual staged delivery does.
+        monkeypatch.setattr(local_files.privilege_separation, "is_enabled", lambda: True)
+        connector = FakeConnector("gmail", result="ok")
+        dispatcher = _dispatcher({"gmail": connector})
+        with local_files.call_context(bridge_available=True, uploads={}):
+            await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
+        with local_files.call_context(bridge_available=True, uploads={}):
             await dispatcher.call("s1", "gmail", "gmail_tool", {"x": 1})
         assert len(connector.calls) == 1
 

@@ -393,3 +393,19 @@ step_up:
 # regresses something, no release needed.
 policy:
   engine: v1
+
+# ADR 0007 (docs/adr/0007-local-file-bridge.md): the local file bridge --
+# how a privilege-separated daemon moves bytes to/from a path an agent
+# named (drive_upload_file's local_path, drive_download_file's
+# destination_dir, the Gmail/Confluence attachment tools) through the
+# .mcpb shim instead of reading/writing the user's filesystem directly.
+# Unset means every default below applies -- most installs never need this
+# section at all.
+file_bridge:
+  # A download this large is held fully in memory before it's staged for
+  # the shim (or, with no shim, before a one-time link is handed out) --
+  # not streamed to disk on this side. 200MB is generous for anything a
+  # Drive/Gmail/Confluence tool plausibly downloads; raise it only if you
+  # know this machine has memory to spare for occasional larger files.
+  # Uncomment to change it.
+  # max_download_bytes: 200000000

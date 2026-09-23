@@ -103,6 +103,7 @@ from ..web_approval_ui import WebApprovalUI
 from . import org_session
 from . import routes_connect
 from . import routes_downloads
+from .routes_file_bridge import mount_file_bridge
 from . import routes_org_identity
 from . import state_stream as _state_stream
 from .control_channel import (
@@ -816,6 +817,11 @@ def build_app(
         mcp_route, session_manager = mount_mcp(mcp_dispatcher, token=mcp_token)
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
+        # ADR 0007: the local file bridge's own upload/download endpoints,
+        # authenticated exactly like /mcp (same shared secret) -- see
+        # routes_file_bridge.py's own module docstring for why this can't
+        # just be more routes on the main approval-surface app.
+        extra_routes.extend(mount_file_bridge(token=mcp_token))
 
     # The self-approval plan's Phase 2 -- one answer, read once here, for
     # both gates below: an approving decision (web/routes_approvals.py) and

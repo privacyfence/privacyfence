@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
+from .. import local_files
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..confluence_client import ConfluenceClient, ConfluenceClientError, resolve_attachment_destination
 from ..connector import Connector, ToolParam, ToolSpec
@@ -384,11 +386,25 @@ class ConfluenceConnector(Connector):
         if attachment is None:
             raise RuntimeError(f"No attachment named {attachment_name!r} on page {page_id}")
         dest_path = resolve_attachment_destination(attachment.name, destination_dir)
+        name = os.path.basename(dest_path)
+        # ADR 0007: shown to the human, and handed to local_files.
+        # deliver_file(), exactly as the agent typed destination_dir --
+        # never the daemon-expanded dest_path above, which mixes in this
+        # process's own idea of "~" and is meaningless to a shim writing
+        # the file as a different, real user. See connectors/drive.py's
+        # _download_file's own displayed_dest.
+        displayed_dest = f"{destination_dir.strip().rstrip('/')}/{name}" if destination_dir.strip() else dest_path
         cfg = self.download_config or DownloadDeliveryConfig()
+        # ADR 0007: whether this download can still write straight to this
+        # process's own filesystem (a dev checkout or an unseparated pip/
+        # pipx install, where the daemon *is* the user) or needs the file
+        # bridge instead -- see local_files.can_access_user_files's own
+        # docstring.
+        direct_write = local_files.can_access_user_files(self.download_mode)
         # Phase 3 audit trail -- see connectors/drive.py's own `delivery`
         # comment for the reasoning.
         delivery = (
-            "local_disk" if self.download_mode != "org"
+            ("local_disk" if direct_write else "client_bridge") if self.download_mode != "org"
             else "inline_base64" if cfg.fits_inline(attachment.size)
             else "staged_link"
         )
@@ -425,7 +441,7 @@ class ConfluenceConnector(Connector):
         else:
             new_info = {
                 "Content returned to Claude": "None — file bytes are never sent",
-                "Will save to": dest_path,
+                "Will save to": displayed_dest,
             }
         details = (
             "The attachment above will be delivered as described above."
@@ -490,15 +506,32 @@ class ConfluenceConnector(Connector):
         )
         if self.download_mode == "org":
             return await self._deliver_org_attachment(page_id, attachment, fetched_bytes, cfg)
-        if fetched_bytes is not None:
-            # Already fetched above for the preview/scan -- reuse it instead
-            # of fetching the same attachment from Confluence a second time.
+        if direct_write:
+            # Unseparated install -- unchanged from before ADR 0007. Reuses
+            # the PII-scan prefetch exactly as it always did.
+            if fetched_bytes is not None:
+                return await self._fetch(
+                    self._confluence.save_attachment_bytes, fetched_bytes, attachment.name, destination_dir,
+                )
             return await self._fetch(
-                self._confluence.save_attachment_bytes, fetched_bytes, attachment.name, destination_dir,
+                self._confluence.download_attachment,
+                page_id, attachment.attachment_id, attachment.name, destination_dir,
             )
-        return await self._fetch(
-            self._confluence.download_attachment,
-            page_id, attachment.attachment_id, attachment.name, destination_dir,
+        # ADR 0007: privilege separation means this process cannot write
+        # into the real user's destination_dir -- reuse the bytes the PII
+        # scan/preview above already fetched when it had them (prefetch-
+        # worthy type, under _ATTACHMENT_PREFETCH_MAX_BYTES), otherwise
+        # fetch the full attachment now. local_files.deliver_file stages it
+        # for the shim (or, with no bridge-capable client, a one-time link
+        # -- ADR 0007 SS1.4). Mirrors connectors/gmail.py's _download_attachment.
+        data = fetched_bytes
+        mime_type = attachment.media_type or "application/octet-stream"
+        if data is None:
+            data = await self._fetch(
+                self._confluence.fetch_attachment_bytes, page_id, attachment.attachment_id,
+            )
+        return local_files.deliver_file(
+            destination_dir, name, data, mime_type, download_mode=self.download_mode,
         )
 
     async def _deliver_org_attachment(

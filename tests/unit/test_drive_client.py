@@ -665,6 +665,58 @@ class TestUploadFile:
             client.upload_file(local_path=str(file_path))
 
 
+class TestUploadFileBytes:
+    """ADR 0007: the local file bridge's own upload entry point -- the same
+    MediaIoBaseUpload path upload_file()'s content_base64 branch already
+    uses, but from bytes the daemon already holds rather than a base64
+    string it decodes itself."""
+
+    def test_uploads_the_given_bytes(self, monkeypatch):
+        fake_media = MagicMock()
+        monkeypatch.setattr("googleapiclient.http.MediaIoBaseUpload", lambda *a, **kw: fake_media)
+
+        service = MagicMock()
+        service.files.return_value.create.return_value.execute.return_value = {
+            "id": "f3", "name": "photo.png", "mimeType": "image/png",
+        }
+        client = make_client(service)
+
+        result = client.upload_file_bytes(b"\x89PNGfakebytes", "photo.png")
+
+        assert result["id"] == "f3"
+        assert result["name"] == "photo.png"
+        assert result["mime_type"] == "image/png"
+        assert result["size_bytes"] == len(b"\x89PNGfakebytes")
+        create_kwargs = service.files.return_value.create.call_args.kwargs
+        assert create_kwargs["media_body"] is fake_media
+        assert create_kwargs["body"] == {"name": "photo.png"}
+
+    def test_empty_name_raises(self):
+        client = make_client(MagicMock())
+        with pytest.raises(DriveClientError, match="name is required"):
+            client.upload_file_bytes(b"data", "  ")
+
+    def test_parent_folder_included_when_given(self, monkeypatch):
+        monkeypatch.setattr("googleapiclient.http.MediaIoBaseUpload", lambda *a, **kw: MagicMock())
+        service = MagicMock()
+        service.files.return_value.create.return_value.execute.return_value = {"id": "f4", "name": "f.bin"}
+        client = make_client(service)
+
+        client.upload_file_bytes(b"data", "f.bin", parent_folder_id="folder-1")
+
+        create_kwargs = service.files.return_value.create.call_args.kwargs
+        assert create_kwargs["body"] == {"name": "f.bin", "parents": ["folder-1"]}
+
+    def test_a_create_failure_raises_driveclienterror(self, monkeypatch):
+        monkeypatch.setattr("googleapiclient.http.MediaIoBaseUpload", lambda *a, **kw: MagicMock())
+        service = MagicMock()
+        service.files.return_value.create.return_value.execute.side_effect = RuntimeError("api down")
+        client = make_client(service)
+
+        with pytest.raises(DriveClientError, match="upload_file"):
+            client.upload_file_bytes(b"data", "f.bin")
+
+
 # ---------------------------------------------------------------------------- #
 # write_file_content / move_file / add_comment / list_shared_drives /
 # create_blank_file

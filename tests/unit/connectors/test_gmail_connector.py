@@ -716,6 +716,52 @@ class TestDownloadAttachment:
         assert result == {"path": "/tmp/photo.png", "name": "photo.png", "size_bytes": 1024}
 
 
+class TestFileBridgeDownloadAttachment:
+    """ADR 0007: local mode, but privilege separation prevents a direct
+    write -- gmail_download_attachment must route through local_files.
+    deliver_file() instead of GmailClient.save_attachment_bytes/
+    download_attachment, fetching the full attachment when nothing was
+    already prefetched for the PII scan."""
+
+    def _message_with_attachment(self, **overrides):
+        defaults = dict(name="report.pdf", mime_type="application/octet-stream", size=1024, attachment_id="att-1")
+        defaults.update(overrides)
+        return GmailMessage(
+            id="m1", thread_id="t1", subject="Q3 numbers", sender="alice@example.com",
+            attachments=[Attachment(**defaults)],
+        )
+
+    @pytest.fixture(autouse=True)
+    def _isolated_data_dir(self, tmp_path, monkeypatch):
+        from privacyfence import paths
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+
+    @pytest.fixture(autouse=True)
+    def _force_bridge(self):
+        from privacyfence import local_files
+        local_files.force_bridge_for_tests(True)
+        yield
+        local_files.force_bridge_for_tests(False)
+
+    async def test_fetches_full_bytes_when_nothing_was_prefetched(self, gated_call_spy):
+        from privacyfence import local_files
+
+        connector, client = make_connector()
+        client.get_message.return_value = self._message_with_attachment()
+        client.fetch_attachment_bytes.return_value = b"the full attachment"
+
+        with local_files.call_context(bridge_available=True, uploads={}):
+            result = await connector.call(
+                "gmail_download_attachment",
+                {"message_id": "m1", "attachment_name": "report.pdf", "destination_dir": "~/Downloads"},
+            )
+
+        assert result["delivery"] == "client_bridge"
+        client.fetch_attachment_bytes.assert_called_once_with("m1", "att-1")
+        client.download_attachment.assert_not_called()
+        client.save_attachment_bytes.assert_not_called()
+
+
 class TestOrgModeDownloadDelivery:
     """In org mode, gmail_download_attachment never writes to this
     daemon's own disk -- a small attachment's bytes come back inline, a
@@ -1292,7 +1338,7 @@ class TestBodyMarkdownRichText:
         kwargs = gated_call_spy[0]
         assert kwargs["details_text"] == "see [report](https://x.com/r)"
         client.create_reply_draft_with_attachments.assert_called_once_with(
-            "m1", "", [str(attachment)], False, "me@example.com", "", "", "see [report](https://x.com/r)",
+            "m1", "", [str(attachment)], False, "me@example.com", "", "", "see [report](https://x.com/r)", "local",
         )
 
 
@@ -1329,7 +1375,7 @@ class TestWriteToolsWithAttachmentsGateAndPreview:
         assert kwargs["preview"]["Attachments"] == "report.pdf (10 bytes)"
         assert kwargs["args"] == {"to": "alice@example.com", "subject": "Hi"}
         client.create_draft_with_attachments.assert_called_once_with(
-            "alice@example.com", "Hi", "Secret plan details", [str(attachment)], "bob@example.com", "", "",
+            "alice@example.com", "Hi", "Secret plan details", [str(attachment)], "bob@example.com", "", "", "local",
         )
 
     async def test_create_draft_with_attachments_bcc_included_when_provided(self, gated_call_spy, tmp_path):
@@ -1412,7 +1458,7 @@ class TestWriteToolsWithAttachmentsGateAndPreview:
         assert kwargs["args"] == {"message_id": "m1", "to": "alice@example.com"}
         assert kwargs["preview"]["Attachments"] == "f.txt (2 bytes)"
         client.create_reply_draft_with_attachments.assert_called_once_with(
-            "m1", "ok", [str(attachment)], False, "me@example.com", "", "", "",
+            "m1", "ok", [str(attachment)], False, "me@example.com", "", "", "", "local",
         )
 
     async def test_reply_all_draft_with_attachments_expands_recipients_excluding_self(self, gated_call_spy, tmp_path):
@@ -1439,7 +1485,29 @@ class TestWriteToolsWithAttachmentsGateAndPreview:
         assert "me@example.com" not in kwargs["args"]["to"]
         assert "Also to" in kwargs["preview"]
         client.create_reply_draft_with_attachments.assert_called_once_with(
-            "m1", "ok", [str(attachment)], True, "me@example.com", "eve@example.com", "", "",
+            "m1", "ok", [str(attachment)], True, "me@example.com", "eve@example.com", "", "", "local",
+        )
+
+    async def test_org_mode_stats_the_attachment_directly_without_the_bridge(self, gated_call_spy, tmp_path):
+        # ADR 0007 is Claude-Desktop-only -- org mode's _stat_attachments
+        # keeps stat'ing the path directly (never calls local_files.
+        # require_local_files/local_file_size), exactly as before this
+        # phase. See connectors/gmail.py's own _stat_attachments docstring.
+        connector, client = make_connector()
+        connector.download_mode = "org"
+        attachment = tmp_path / "report.pdf"
+        attachment.write_bytes(b"x" * 10)
+        client.create_draft_with_attachments.return_value = {"draft_id": "d-org"}
+
+        await connector.call(
+            "gmail_create_draft_with_attachments",
+            {"to": "alice@example.com", "subject": "Hi", "body": "body", "attachments": json.dumps([str(attachment)])},
+        )
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Attachments"] == "report.pdf (10 bytes)"
+        client.create_draft_with_attachments.assert_called_once_with(
+            "alice@example.com", "Hi", "body", [str(attachment)], "", "", "", "org",
         )
 
 

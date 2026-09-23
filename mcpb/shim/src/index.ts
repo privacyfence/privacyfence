@@ -17,10 +17,19 @@
  * 2. Read the daemon's current /mcp URL and bearer token from the discovery
  *    files web/server.py and web/mcp_auth.py write (protocol.ts).
  * 3. Open a Streamable HTTP client connection to /mcp, authenticated by
- *    that bearer token.
+ *    that bearer token, advertising the local file bridge via the
+ *    ``X-PrivacyFence-File-Bridge`` header.
  * 4. Proxy MCP frames between that connection and this process's own stdio
  *    transport (proxy.ts) -- Claude Desktop can now call tools, exactly as
  *    it could through the bridge.
+ *
+ * One exception to "no protocol knowledge" (ADR 0007, ``docs/adr/
+ * 0007-local-file-bridge.md``): fileBridge.ts's local file bridge, which
+ * reads and writes local files on the daemon's behalf now that privilege
+ * separation (ADR 0003) leaves the daemon unable to reach the real user's
+ * home directory itself. It is wired into step 4's proxy as an
+ * ``interceptor`` -- see proxy.ts's module docstring for exactly how
+ * bounded that exception is.
  *
  * Logs go to stderr only (stdout is the MCP protocol channel) -- see
  * setupLogging(), same reasoning as bridge_main.py's original stderr-only
@@ -33,6 +42,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { waitForDaemonPatiently } from "./daemon.js";
 import { ShimExitError } from "./errors.js";
+import { createFileBridge, FILE_BRIDGE_HEADER } from "./fileBridge.js";
 import { MCP_TOKEN_FILE, MCP_URL_FILE, readMcpToken, readMcpUrl } from "./protocol.js";
 import { proxyTransports } from "./proxy.js";
 import { sessionSafeFetch } from "./sessionFetch.js";
@@ -126,18 +136,35 @@ export async function main(argv = process.argv.slice(2), opts: MainOptions = {})
   const mcpToken = readMcpToken(mcpTokenFile);
   console.error(`Proxying stdio <-> ${mcpUrl}`);
 
+  const authHeader = `Bearer ${mcpToken}`;
   const daemonSide =
     opts.daemonTransport ??
     new StreamableHTTPClientTransport(new URL(mcpUrl), {
-      requestInit: { headers: { Authorization: `Bearer ${mcpToken}` } },
+      requestInit: {
+        headers: {
+          Authorization: authHeader,
+          // Tells the daemon this shim can carry out the local file bridge
+          // handshake (ADR 0007) -- without it, local_files.py never offers
+          // need_uploads/deliver and instead falls back to the no-bridge
+          // messaging (a plain client, or an old .mcpb, gets that fallback
+          // instead of a silently-never-arriving upload prompt).
+          [FILE_BRIDGE_HEADER]: "1",
+        },
+      },
       // Keeps a rejected request from leaving this connection pinned to a
       // session the daemon has already discarded -- see sessionFetch.ts.
       fetch: sessionSafeFetch(),
     });
   const desktopSide = opts.transport ?? new StdioServerTransport();
 
+  // Same origin /mcp itself is on, and the same bearer token already used
+  // for it -- the file bridge's uploads/downloads endpoints sit behind the
+  // same auth as /mcp (routes_file_bridge.py), and Phase 1 has no second
+  // credential of its own to read (fileBridge.ts's own docstring).
+  const fileBridge = createFileBridge({ origin: new URL(mcpUrl).origin, authHeader });
+
   // Must run before either side's start() -- see proxy.ts's own doc comment.
-  proxyTransports(desktopSide, daemonSide);
+  proxyTransports(desktopSide, daemonSide, fileBridge);
 
   let closed = false;
   const closeBoth = async (): Promise<void> => {
