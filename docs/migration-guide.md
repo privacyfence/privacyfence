@@ -76,8 +76,11 @@ sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privileg
 
 Your data directory has moved from `~/.privacyfence` to `/Library/Application Support/PrivacyFence`.
 If you connected Claude Code to the old `/mcp` endpoint directly, re-run `claude mcp add` against
-the new handoff directory (`.../handoff/mcp_url` and `mcp_token`) — the old files under
-`~/.privacyfence` are gone. The `.mcpb` shim for Claude Desktop finds the new location on its own.
+the new handoff directory's `mcp_url` and `privacyfence-app --print-mcp-token` (ADR 0008: `mcp_token`
+is no longer a shared file under `handoff/` at all — see `getting-started.md`'s own
+"Connect Claude Code (or another HTTP MCP client)" section for the exact command) — the old files
+under `~/.privacyfence` are gone. The `.mcpb` shim for Claude Desktop finds the new location on its
+own.
 
 ### Windows
 
@@ -101,7 +104,8 @@ powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privile
 
 Your data directory has moved from `%LOCALAPPDATA%\PrivacyFence` to `%ProgramData%\PrivacyFence`. If
 you connected Claude Code directly to the old `/mcp` endpoint, re-run `claude mcp add` against the
-new handoff directory's `mcp_url`/`mcp_token`.
+new handoff directory's `mcp_url` and `privacyfence-app --print-mcp-token` (ADR 0008: `mcp_token` is
+no longer a shared file under `handoff\` at all).
 
 ### Debian/Ubuntu
 

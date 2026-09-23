@@ -197,7 +197,10 @@ SEPARATED_SETTINGS_PATH = AUTHORITY_DIR / "config" / "settings.yaml"
 SEPARATED_AUDIT_DIR = AUTHORITY_DIR / "logs" / "audit"
 
 MCP_TOKEN_FILE_NAME = "mcp_token"
-SEPARATED_MCP_TOKEN_PATH = HANDOFF_DIR / MCP_TOKEN_FILE_NAME
+# ADR 0008 D3: the owner's own mcp_token moved to AUTHORITY_DIR, not
+# HANDOFF_DIR -- see this section's own SEPARATED_CONTROL_SOCKET_PATH
+# comment below for why those two directories differ in who can reach them.
+SEPARATED_MCP_TOKEN_PATH = AUTHORITY_DIR / MCP_TOKEN_FILE_NAME
 # web/control_channel.py's own WEB_BASE_URL_FILE_NAME -- what the companion
 # itself reads to learn the daemon's base_url() without hardcoding the
 # default port, and cleared on WebServer.stop() (read_base_url()'s own
