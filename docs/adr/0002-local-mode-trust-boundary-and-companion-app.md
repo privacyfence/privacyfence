@@ -43,12 +43,14 @@ the path a macOS download leads to rather than an alternative to one. D1's own r
 unchanged and still reached by an install that bypassed the installer, which can still decline it.
 See `docs/platform-support.md`'s "`.pkg` installer (#428 D2)" section and `CHANGELOG.md`.
 
-**Superseded in part by [ADR 0003](0003-separated-installs-only.md), 2026-09-18.** Decisions 1–4
-and 6 stand unchanged and are what ADR 0003 enforces. What it withdraws is decision 5a's answer —
-"two install tiers", the non-elevated Windows per-user path kept — and, with it, the premise every
-"opt-in"/"default-on but declinable" wording below rests on: separation stops being something an
-install may be without. The macOS DMG and D1's declinable first-start prompt go with it; see
-ADR 0003 decisions 2 and 6.
+**Amended by [ADR 0026](0026-the-companion-manages-the-daemon-through-the-service-manager.md)
+and [ADR 0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md), 2026-09-23
+([#609](https://github.com/privacyfence/privacyfence/pull/609)).** Decision 2's scope grows a daemon
+status line and Start/Restart/Stop through the platform's service manager (0026), and `handoff/`
+gains a sticky bit plus an owner check against companion-socket takeover (0027). Decisions 3 and 4
+are unchanged. The interim one-owner guard shipped in the same change is superseded by
+[ADR 0008](0008-one-principal-per-os-user.md), which also amends decision 6's reach to one
+principal per OS user.
 
 ## Context
 
@@ -113,81 +115,10 @@ Scope, deliberately minimal:
 
 That is the whole product surface. It renders no PrivacyFence content of its own.
 
-**Amended by the local-mode-fixes plan's Phase 2, 2026-09-23: the companion becomes the daemon
-manager.** Two problems this ADR's original scope did not anticipate: a packaged upgrade can leave
-the separated daemon's LaunchDaemon/systemd unit/service unloaded with no visible symptom (a
-`launchctl bootstrap`/`bootout` race on macOS, an installer that overwrites a running service's
-files on Windows), and the companion had no way to say so — it showed no daemon status and offered
-no way to start, stop or restart it. Decision 2's own scope ("Open Approvals, Open Settings, and
-Quit") is extended, not replaced:
-
-- **A live status line** (`daemon_status.py`'s `probe()`), polled every five seconds:
-  `running`/`starting`/`stopped`/`failed`/`unresponsive`/`unknown`, with the tray icon itself
-  swapped to a greyscale variant whenever the daemon is not up. It answers first from the daemon's
-  own control channel (a new, unprivileged `STATUS` command — read-only, no tokens or paths, and
-  therefore unlike every other command on that channel it is never gated on `allow_quit` or a
-  passkey) and falls back to asking the platform's service manager directly
-  (`launchctl print`/`systemctl show`/`sc.exe query`) when the daemon isn't answering at all — which
-  is the case a stuck-after-upgrade daemon actually produces.
-- **Start / Restart / Stop**, each running the platform's own provisioning script's new `daemon
-  start`/`stop`/`restart` subcommand with a real, platform-native elevation prompt
-  (`service_control.py`'s `run_elevated()`): `osascript ... with administrator privileges` on
-  macOS, `pkexec` on Linux (a new polkit policy authorizes it), UAC on Windows — the same three
-  mechanisms, and the same script-trust check (root-owned, not group/world-writable), this ADR's
-  Phase 4 already uses for `enable --for-user`. A cancelled prompt reports as cancelled and is never
-  retried automatically. This is deliberately still a *prompt* rather than a standing grant: the
-  companion asking for a fresh administrator password each time is the cost of never widening what
-  an agent sharing the companion's own uid could reach — see decision 6.
-- **Service Details…**, the one-sentence reason behind the status line's symbol, for whoever wants
-  it spelled out.
-
-None of this widens decision 3 or 4. **Decision 3 still holds**: what the companion shows is a
-diagnostic sentence about the daemon's *process*, never approval content — `daemon_status.py`'s
-`DaemonStatus.detail` is built from `launchctl`/`systemctl`/`sc.exe` output and the daemon's own
-version/pid, not from anything `web/routes_approvals.py` renders. **Decision 4 still holds**: no new
-dependency, on any platform — `daemon_status.py`/`service_control.py` are `subprocess` and the
-platform's own tools, and the tray's grey icon variant is computed at runtime from the one PNG this
-process already ships, via `Pillow`'s `ImageOps`, which was already a hard dependency for the icon
-`pystray.Icon()` itself requires. Linux, which decision 4 gives no tray, gets the same four actions
-as `.desktop` Actions (`--action=service-status`/`service-start`/`service-restart`/`service-stop`,
-one-shot like its existing Open Approvals/Settings/Quit entries) plus a `notify-send` notification
-from the `--serve` process's own background poll, on the same "stopped or failed for more than
-fifteen seconds, and not within the first minute after this process itself started" rule the tray's
-`icon.notify()` uses.
-
-**A companion socket takeover, closed two ways.** Investigating the upgrade-daemon problem surfaced
-a second one this ADR's decision 6 had already reasoned about in one direction but not this one: on
-a machine with more than one OS user added to the separated install's service group (ADR 0003
-decision 3 makes this possible, deliberately, for a shared machine), any member could unlink and
-rebind another member's `companion.sock` — the last one to (re)start wins, and the daemon's own
-`OPEN`/`MINT COMPANION`/`SHOW RECOVERY` calls go to whichever process that is. That is not a
-hypothetical inconvenience: `SHOW RECOVERY` puts a fresh recovery code in front of whoever's
-companion answers it. Two independent fixes, one filesystem-level and one code-level, since neither
-alone is airtight — the sticky bit stops a straightforward `unlink()` by anyone but the file's own
-owner (or root), but a socket bound before the sticky bit existed, or a race in the narrow window
-between an owner's `unlink()` and its own re-`bind()`, is exactly what the second fix is for:
-
-1. `handoff/`'s mode gains the sticky bit (`0o2770` → `0o3770`) — the same protection `/tmp` has
-   carried since 4.3BSD, applied to a directory this ADR already documented as group-shared by
-   design.
-2. `web/control_channel.py`'s `_start_posix()` refuses to unlink-and-rebind a socket file already
-   owned by a different uid, logging why instead — the code-level backstop for exactly the case the
-   sticky bit alone does not fully close.
-
-**And an interim guard, ahead of the real fix.** The deeper problem — every OS user this install has
-been extended to still shares one principal, so nothing here actually gives a second user their own
-policy, connectors or audit trail — is not fixed by this amendment. The local-mode-fixes plan's own
-Phase 3 (its ADR, one principal per OS user identified by kernel peer credentials, not yet written)
-is what does that; what ships now is narrower and explicitly temporary, closing the one leak that
-was live today rather than waiting for that redesign. `owner_membership_pending()` (and therefore
-the companion's own `_complete_pending_separation()`) no longer offers to complete the elevated
-per-user join for any account except the marker's recorded owner; a different account gets a
-notification ("PrivacyFence on this computer is set up for `<owner>`. Using it from more than one
-account isn't supported yet.") instead of a silent, one-admin-password join that would have handed
-them the owner's Gmail/Drive/etc. Reaching `enable --for-user` for a second account at all now
-requires the platform script's own `--allow-additional-user` flag, run by hand, and `migrate_data`
-refuses to copy a non-owner's `~/.privacyfence` into the shared root regardless. Phase 3 supersedes
-all of this once kernel-authenticated, per-OS-user principals exist.
+**Amendment (2026-09-23), recorded separately:** the daemon status line and Start/Restart/Stop are
+[ADR 0026](0026-the-companion-manages-the-daemon-through-the-service-manager.md); the
+companion-socket takeover fix is
+[ADR 0027](0027-a-group-member-cannot-take-over-another-members-companion-socket.md).
 
 ### 3. It is not a return to the native approval UI
 
