@@ -67,6 +67,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `scripts/qa_authenticate_connectors.py --org-config <path>` no longer crashes with
+  `shutil.SameFileError` when `<path>` already resolves to `org/org_config.json` (e.g. re-running
+  the command with the default install location) — it now recognizes the bundle is already
+  installed and skips the backup-and-copy instead of trying to copy the file onto itself.
 - A privilege-separated macOS install's daemon could be left unloaded after a `.pkg` upgrade, with
   no visible symptom (a `launchctl bootstrap`/`bootout` race). `enable` and the installer's own
   `postinstall` script now retry the bootstrap with backoff and verify the daemon actually came up
