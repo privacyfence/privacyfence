@@ -97,6 +97,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- The bespoke-settings-route classification guard (`routes_settings.build_routes()` — every
+  non-dispatcher POST route must be listed as sensitive or explicitly exempt, see
+  [ADR 0014](docs/adr/0014-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md)) is
+  now an explicit `raise RuntimeError(...)` instead of a plain `assert`. Python strips `assert`
+  under `python -O`/`PYTHONOPTIMIZE`, which would have let a daemon started that way mount an
+  unclassified route without the `_SENSITIVE_ACTIONS`-shaped gating the guard exists to enforce;
+  nothing shipped today is known to run with `-O`, but nothing prevented it either.
 - **A second OS user added to a privilege-separated install's service group now gets their own
   isolated PrivacyFence identity, not the owner's.** Before this, every `/mcp` caller on such a
   machine — any account's Claude Desktop, Claude Code, or other MCP client — resolved to the same
