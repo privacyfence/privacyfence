@@ -90,6 +90,31 @@ def test_install_org_config_backs_up_existing_file(tmp_path, monkeypatch):
     assert backups[0].read_text(encoding="utf-8") == '{"google": {"old": true}}'
 
 
+def test_install_org_config_source_is_already_the_target_is_a_noop(tmp_path, monkeypatch):
+    target = tmp_path / "org" / "org_config.json"
+    target.parent.mkdir(parents=True)
+    target.write_text('{"google": {}}', encoding="utf-8")
+    monkeypatch.setattr(qa_auth, "DEFAULT_ORG_CONFIG_PATH", target)
+
+    qa_auth.install_org_config(target)
+
+    assert target.read_text(encoding="utf-8") == '{"google": {}}'
+    assert not list(target.parent.glob("org_config.json.bak.*"))
+
+
+def test_install_org_config_relative_source_resolving_to_target_is_a_noop(tmp_path, monkeypatch):
+    target = tmp_path / "org" / "org_config.json"
+    target.parent.mkdir(parents=True)
+    target.write_text('{"google": {}}', encoding="utf-8")
+    monkeypatch.setattr(qa_auth, "DEFAULT_ORG_CONFIG_PATH", target)
+    monkeypatch.chdir(tmp_path)
+
+    qa_auth.install_org_config(Path("org/org_config.json"))
+
+    assert target.read_text(encoding="utf-8") == '{"google": {}}'
+    assert not list(target.parent.glob("org_config.json.bak.*"))
+
+
 def test_install_org_config_missing_source_raises(tmp_path, monkeypatch):
     target = tmp_path / "org" / "org_config.json"
     monkeypatch.setattr(qa_auth, "DEFAULT_ORG_CONFIG_PATH", target)
