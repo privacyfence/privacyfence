@@ -484,22 +484,37 @@ def _wait_for_companion_socket_free(*, timeout: float = 20.0) -> None:
     Connecting from this account rather than the service account is fine for
     a liveness probe: _verify_companion_peer() refuses a non-service-account
     peer *after* accepting, so the connect still succeeds while something is
-    listening, which is exactly the distinction being made here."""
+    listening, which is exactly the distinction being made here.
+
+    "Not refused and not gone" covers more than a live listener: a socket
+    node the probing account may not connect to raises PermissionError for
+    as long as it exists (ADR 0029). So the timeout reports what the last
+    connect actually did, and who owns the node, rather than a verdict."""
     deadline = time.monotonic() + timeout
+    last_outcome = "never probed"
     while time.monotonic() < deadline:
         probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         probe.settimeout(2.0)
         try:
             probe.connect(str(COMPANION_SOCKET))
+            last_outcome = "connected (something is listening)"
         except (ConnectionRefusedError, FileNotFoundError):
             return
-        except OSError:
-            pass   # anything else: treat as still busy and poll again
+        except OSError as exc:
+            last_outcome = f"{type(exc).__name__}: {exc}"
         finally:
             probe.close()
         time.sleep(0.2)
+    listing = _sudo_capture("ls", "-le", str(COMPANION_SOCKET))
+    launchd = subprocess.run(
+        ["launchctl", "print", f"gui/{os.getuid()}/{COMPANION_LABEL}"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
     raise AssertionError(
-        f"{COMPANION_SOCKET} was still bound {timeout}s after booting out {COMPANION_LABEL}"
+        f"{COMPANION_SOCKET} did not come free within {timeout}s of booting out {COMPANION_LABEL}; "
+        f"last connect: {last_outcome}\n"
+        f"ls -le: {listing.stdout or listing.stderr}\n"
+        f"launchctl print: {launchd.stdout or launchd.stderr}"
     )
 
 

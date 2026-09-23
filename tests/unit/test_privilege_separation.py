@@ -44,9 +44,11 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import stat
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1102,6 +1104,87 @@ class TestInstallerContract:
         deconfigure_case = re.search(r"\bdeconfigure\)(.*?);;", prerm, re.DOTALL)
         assert deconfigure_case is not None, "no `deconfigure)` case in debian/prerm"
         assert deconfigure_case.group(1).strip() == ""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the POSIX installers' own bash against a real unix socket")
+class TestApplyLayoutLeavesSocketsAlone:
+    """ADR 0029: ``apply_layout()`` runs on every ``enable``, including the
+    re-run every package upgrade makes while a companion is still bound to
+    ``handoff/companion.sock``. It used to ``chown -R``/``chmod -R`` the whole
+    root, which handed that live socket to the service account and stripped
+    its group bits -- after which the sticky ``handoff/`` stopped its own
+    companion unlinking it and ADR 0027's owner check stopped every later
+    companion binding at all.
+
+    Runs each script's real ``apply_layout`` with ``chown``/``chmod`` stubbed
+    on ``PATH`` to record their arguments, so no root is needed. "No ``-R``"
+    plus "the regular file is named explicitly" is what tells the fixed
+    ``find`` apart from the old recursion, which never named anything below
+    the root and so would pass a bare "socket not in the arguments" check."""
+
+    @staticmethod
+    def _function(platform: str, name: str) -> str:
+        text = INSTALLERS[platform].read_text(encoding="utf-8")
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL)
+        assert match is not None, f"no {name}() in {INSTALLERS[platform].name}"
+        return match.group(0)
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_re_owns_everything_but_a_live_socket(self, platform, tmp_path):
+        # /tmp rather than tmp_path for the tree itself: macOS's sun_path is
+        # 104 bytes, and pytest's tmp_path under /private/var/folders is
+        # already most of that before a socket name is added.
+        root = Path(tempfile.mkdtemp(prefix="pf-layout-", dir="/tmp"))
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            handoff = root / "handoff"
+            handoff.mkdir()
+            token = handoff / "mcp_token"
+            token.write_text("token", encoding="utf-8")
+            companion_sock = handoff / "companion.sock"
+            listener.bind(str(companion_sock))
+            listener.listen(1)
+            link = root / "points-outside"
+            link.symlink_to(tmp_path)
+
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            log = tmp_path / "calls.log"
+            for tool in ("chown", "chmod"):
+                stub = bin_dir / tool
+                stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> "$CALL_LOG"\n', encoding="utf-8")
+                stub.chmod(0o755)
+
+            script = "\n".join([
+                "set -euo pipefail",
+                "note() { :; }",
+                "move_handoff_files_in() { :; }",
+                f"SYSTEM_ROOT={shlex.quote(str(root))}",
+                "SERVICE_ACCOUNT=svc SERVICE_GROUP=grp HANDOFF_DIR_NAME=handoff",
+                "SYSTEM_ROOT_MODE=711 AUTHORITY_DIR_MODE=700 HANDOFF_DIR_MODE=3770 HANDOFF_FILE_MODE=640",
+                self._function(platform, "apply_layout"),
+                "apply_layout",
+            ])
+            env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "CALL_LOG": str(log)}
+            subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, timeout=30)
+
+            calls = [line.split() for line in log.read_text(encoding="utf-8").splitlines()]
+            chowns = [args[1:] for args in calls if args[0] == "chown"]
+            chmods = [args[1:] for args in calls if args[0] == "chmod"]
+            chowned = {arg for args in chowns for arg in args}
+            chmodded = {arg for args in chmods for arg in args}
+
+            assert all("-R" not in args for args in chowns + chmods), calls
+            assert str(token) in chowned and str(token) in chmodded, calls
+            assert str(root) in chowned, calls
+            assert str(companion_sock) not in chowned | chmodded, calls
+            # chown -h acts on the link itself; chmod has no such flag, so it
+            # must not be handed the link at all.
+            assert all(args[0] == "-h" for args in chowns), chowns
+            assert str(link) not in chmodded, chmods
+        finally:
+            listener.close()
+            shutil.rmtree(root, ignore_errors=True)
 
 
 class TestAutoEnableMacos:
