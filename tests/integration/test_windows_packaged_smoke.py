@@ -760,11 +760,7 @@ async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     # /DIR keeps the install under this test's own tmp_path; the directory is
     # pre-created administrators-only so that the install's own `enable` step
     # accepts it -- see _admin_only_writable_dir.
-    _run_installer(  # TEMPORARY: force the timeout path once -- reverted before the final push
-        str(setup_exe), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
-        f"/DIR={install_dir}", f"/LOG={tmp_path / 'install.log'}",
-        timeout=20.0, log_path=tmp_path / "install.log",
-    )
+    _install(setup_exe, install_dir, tmp_path / "install.log")
     main_exe = install_dir / MAIN_EXE_NAME
     alias_exe = install_dir / ALIAS_EXE_NAME
     assert main_exe.is_file(), f"{main_exe} missing after silent install"
