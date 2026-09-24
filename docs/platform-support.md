@@ -8,7 +8,7 @@ PrivacyFence local mode is packaged for macOS, Windows, and Debian/Ubuntu Linux.
 |---|---|---|---|---|
 | macOS | macOS 13, Apple silicon | one signed/notarized DMG, carrying the `.pkg` installer (which holds the PyInstaller app bundle) and the MCPB side by side | installed by the `.pkg`, which provisions a LaunchDaemon under a dedicated account at install time, mandatorily (see below); D1's runtime prompt is the fallback for an install that reached a running state some other way, not a second shipped path | `.github/workflows/build.yml` on `macos-latest` |
 | Windows | Windows 10 / Windows Server 2016 (x64) | Inno Setup installer containing the PyInstaller executable and MCPB | the installer separates the install as part of installing (see below): a Windows service under a virtual service account runs the daemon, a Task Scheduler entry runs the companion | `.github/workflows/build.yml` on `windows-latest` |
-| Debian/Ubuntu local mode | glibc 2.38 and systemd 242 (Ubuntu 24.04, Debian 13 or newer) | self-contained `.deb` built from the PyInstaller onedir output | `postinst` separates the install unconditionally on every install and upgrade (see below): a system systemd unit under a dedicated account runs the daemon, an XDG autostart desktop entry runs the companion | `.github/workflows/build.yml` on `ubuntu-latest` |
+| Debian/Ubuntu local mode | glibc 2.38 and systemd 242 (Ubuntu 24.04, Debian 13 or newer, amd64) | self-contained `.deb` built from the PyInstaller onedir output | `postinst` separates the install unconditionally on every install and upgrade (see below): a system systemd unit under a dedicated account runs the daemon, an XDG autostart desktop entry runs the companion | `.github/workflows/build.yml` on `ubuntu-latest` |
 | Linux Python install | Python 3.11 | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
 | Linux org mode | Python 3.11 | Python/system service behind the configured reverse proxy and identity provider | operator-managed service | release smoke coverage in the build/test suite |
 
@@ -438,7 +438,7 @@ created.
 
 ## Architecture and CPU constraints
 
-PyInstaller builds are native to the runner architecture. The current Debian release job produces the architecture supported by its Ubuntu runner rather than cross-compiling another CPU target.
+PyInstaller builds are native to the runner architecture. The `.deb` is built and tested for amd64 only: `build.yml`'s `build-deb` job runs on an amd64 Ubuntu runner, `debian/control` declares `Architecture: amd64`, and `scripts/build_deb.sh` refuses to package on a host whose architecture `debian/control` does not declare. An arm64 `.deb` needs an arm64 build leg and its packaged lifecycle test first; the support matrix, `debian/control` and that leg change together.
 
 ## Verification boundaries
 

@@ -458,9 +458,9 @@ jobs:
   # itself carries the macOS `.pkg` and the `.mcpb`), the Windows installer, and the `.deb` --
   # all attached together by `finalize-release`.
   build-deb:
-    runs-on: ubuntu-latest   # amd64 -- arm64 is a follow-up once there's a concrete request, not
-                              # a build-script change (P4.2: PyInstaller needs a real arm64 build
-                              # host, it doesn't cross-compile)
+    runs-on: ubuntu-latest   # amd64 -- the only architecture debian/control declares (ADR 0044).
+                              # arm64 needs its own leg here (PyInstaller doesn't cross-compile)
+                              # plus the matching debian/control and support-matrix change.
     permissions:
       contents: read
 

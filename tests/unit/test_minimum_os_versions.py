@@ -92,6 +92,21 @@ def test_deb_floor_matches_matrix():
     )
 
 
+def test_deb_architectures_match_matrix():
+    # debian/control may only claim what the matrix (and so CI) ships -- #679.
+    control = (REPO_ROOT / "debian" / "control").read_text(encoding="utf-8")
+    package_stanza = control.strip().split("\n\n")[-1]
+    declared = re.findall(r"^Architecture: (.+)$", package_stanza, flags=re.MULTILINE)
+    assert declared == ["amd64"], declared
+    assert _matrix_floor("Debian/Ubuntu local mode").endswith(f", {declared[0]})")
+
+
+def test_deb_build_refuses_an_undeclared_host_architecture():
+    script = (REPO_ROOT / "scripts" / "build_deb.sh").read_text(encoding="utf-8")
+    assert 'declared = line.partition(":")[2].split()' in script
+    assert re.search(r"^\s+if arch not in declared:\n\s+sys\.exit\(", script, flags=re.MULTILINE)
+
+
 def test_deb_systemd_floor_covers_every_unit_directive():
     # RestrictSUIDSGID= is the newest directive the daemon's unit uses (systemd 242).
     unit = (REPO_ROOT / "installer" / "linux" / "privacyfence-daemon.service.tmpl").read_text(encoding="utf-8")

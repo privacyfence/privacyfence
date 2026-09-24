@@ -123,7 +123,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0015](0015-unattended-session-flag-is-advisory-only.md) | The self-declared unattended-session flag is advisory and never authorizes | Accepted (retroactive) |
 | [0016](0016-org-config-bundle-hash-log-and-signing.md) | Org-config bundle integrity has two independent layers: a startup hash log and TOFU-pinned signing | Accepted (retroactive) |
 | [0017](0017-org-mode-downloads-the-approval-gate-is-the-privacy-boundary.md) | Org-mode downloads: the approval gate is the privacy boundary, staging a bounded cost | Accepted (retroactive) |
-| [0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) | Linux local mode ships a self-contained `.deb` built with PyInstaller | Accepted (retroactive); amended by 0039 |
+| [0018](0018-linux-ships-a-self-contained-deb-built-with-pyinstaller.md) | Linux local mode ships a self-contained `.deb` built with PyInstaller | Accepted (retroactive); amended by 0039, 0044 |
 | [0019](0019-live-connector-credentials-only-on-a-self-hosted-runner.md) | Live-connector test credentials live only on a project-owned self-hosted runner | Accepted (retroactive) |
 | [0020](0020-pypi-publishing-uses-oidc-trusted-publisher-only.md) | PyPI/TestPyPI publishing uses OIDC Trusted Publisher only | Accepted (retroactive) |
 | [0021](0021-release-tag-push-never-uses-github-token.md) | The release tag is never pushed with `GITHUB_TOKEN` | Accepted (retroactive) |
@@ -149,3 +149,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0041](0041-only-the-current-install-layout-is-supported.md) | Only the current install layout is supported; there is no upgrade path from earlier layouts | Accepted |
 | [0042](0042-uninstall-replaces-disable.md) | `uninstall [--purge]` replaces `disable`; uninstalling keeps the data, purging deletes it | Accepted |
 | [0043](0043-the-recorded-owner-is-never-rewritten.md) | The marker's recorded owner is written once and never rewritten by adding another account | Accepted |
+| [0044](0044-the-deb-declares-only-the-architectures-ci-builds.md) | The `.deb` declares only the architectures CI builds and tests | Accepted |
