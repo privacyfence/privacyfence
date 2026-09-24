@@ -370,21 +370,68 @@ jobs:
       # CodeSignTool's Windows release zip bundles its own JDK (CodeSignTool.bat shells out to
       # .\jdk-11.0.2\bin\java, never a system `java`), so there's no separate JDK/setup-java step
       # needed here at all.
+      #
+      # Pinned to one release and its SHA-256, not "latest" -- this is the code that holds our
+      # signing credentials and signs the installer, so a new version is a reviewed diff, not
+      # whatever SSLcom/CodeSignTool published last. Pinning also removes the api.github.com
+      # releases/latest lookup this step used to make, unauthenticated, which failed on the
+      # hosted runner's shared 60-requests/hour anonymous limit in 5 of ~25 dispatches on
+      # 2026-09-24. See ADR 0046.
+      #
+      # To update CodeSignTool: change CODESIGNTOOL_VERSION and CODESIGNTOOL_SHA256 below, and
+      # nothing else. Take the hash from the release page's asset list (GitHub shows each asset's
+      # sha256) -- not from a CI run: on a mismatch this step prints the hash it downloaded and
+      # GitHub's recorded digest side by side, to diagnose, never to copy in unchecked.
       - name: Install eSigner CodeSignTool
         if: env.ESIGNER_CREDENTIAL_ID != ''
         shell: pwsh
+        env:
+          CODESIGNTOOL_VERSION: v1.3.2
+          CODESIGNTOOL_SHA256: 0000000000000000000000000000000000000000000000000000000000000000
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # CodeSignTool's release assets are versioned (e.g. CodeSignTool-v1.3.2-windows.zip) --
-          # there's no unversioned "CodeSignTool.zip" for a plain releases/latest/download URL to
-          # resolve -- so this looks up the actual latest-release asset name via the GitHub API
-          # instead of hardcoding a version.
-          $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/SSLcom/CodeSignTool/releases/latest" -Headers @{ "User-Agent" = "privacyfence-ci" }
-          $Asset = $Release.assets | Where-Object { $_.name -like "*-windows.zip" } | Select-Object -First 1
-          if (-not $Asset) { throw "Could not find a Windows CodeSignTool release asset in $($Release.tag_name)" }
-          Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile "$env:RUNNER_TEMP\CodeSignTool.zip"
+          $ErrorActionPreference = 'Stop'
+          # Bounded retry with exponential backoff (5s, 10s, 20s) for a transient 5xx/429/403 or a
+          # dropped connection; the fourth failure fails the step.
+          function Invoke-WithRetry([scriptblock]$Action, [string]$What) {
+            for ($Attempt = 1; ; $Attempt++) {
+              try { return & $Action }
+              catch {
+                if ($Attempt -ge 4) { throw "$What failed after $Attempt attempts: $_" }
+                $Delay = 5 * [math]::Pow(2, $Attempt - 1)
+                Write-Host "::warning::$What failed (attempt $Attempt): $_ -- retrying in ${Delay}s"
+                Start-Sleep -Seconds $Delay
+              }
+            }
+          }
+          $Asset = "CodeSignTool-$env:CODESIGNTOOL_VERSION-windows.zip"
+          $Zip = "$env:RUNNER_TEMP\CodeSignTool.zip"
+          # A plain release-asset download from github.com, not an api.github.com call, so it
+          # draws on no API rate limit.
+          $Url = "https://github.com/SSLcom/CodeSignTool/releases/download/$env:CODESIGNTOOL_VERSION/$Asset"
+          Invoke-WithRetry { Invoke-WebRequest -Uri $Url -OutFile $Zip } "Downloading $Url"
+          $Actual = (Get-FileHash -Algorithm SHA256 -Path $Zip).Hash.ToLowerInvariant()
+          if ($Actual -ne $env:CODESIGNTOOL_SHA256.ToLowerInvariant()) {
+            # Diagnostics only: look up the digest GitHub recorded for this asset at upload time,
+            # authenticated so it can't hit the anonymous rate limit this step used to.
+            $Recorded = 'unavailable'
+            try {
+              $Release = Invoke-WithRetry {
+                Invoke-RestMethod -Uri "https://api.github.com/repos/SSLcom/CodeSignTool/releases/tags/$env:CODESIGNTOOL_VERSION" `
+                  -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'privacyfence-ci' }
+              } "Looking up $env:CODESIGNTOOL_VERSION's recorded digest"
+              $Recorded = ($Release.assets | Where-Object { $_.name -eq $Asset }).digest
+            } catch { Write-Host "::warning::$_" }
+            Write-Host "::error::$Asset SHA-256 mismatch -- refusing to sign with it."
+            Write-Host "::error::pinned:          $env:CODESIGNTOOL_SHA256"
+            Write-Host "::error::downloaded:      $Actual"
+            Write-Host "::error::GitHub recorded: $Recorded"
+            exit 1
+          }
+          Write-Host "$Asset verified: sha256 $Actual"
           # The zip extracts flat -- CodeSignTool.bat, jar/, jdk-11.0.2/ etc. all sit directly at
           # its root, no wrapping folder -- so the destination itself is $env:CODESIGNTOOL_DIR.
-          Expand-Archive -Path "$env:RUNNER_TEMP\CodeSignTool.zip" -DestinationPath "$env:RUNNER_TEMP\CodeSignTool"
+          Expand-Archive -Path $Zip -DestinationPath "$env:RUNNER_TEMP\CodeSignTool"
           echo "CODESIGNTOOL_DIR=$env:RUNNER_TEMP\CodeSignTool" >> $env:GITHUB_ENV
 
       - name: Build installer
