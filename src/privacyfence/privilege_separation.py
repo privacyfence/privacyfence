@@ -161,13 +161,9 @@ WINDOWS_SERVICE_ACCOUNT_NAME = f"NT SERVICE\\{WINDOWS_SERVICE_NAME}"
 # a member of its own group -- the two principals are always listed
 # separately in every ACL and pipe DACL this phase writes.
 WINDOWS_SERVICE_GROUP_NAME = "PrivacyFenceUsers"
-# Windows' own "startup wiring inverts" (ADR 0002): the Scheduled Task the
-# installer registers keeps its name and starts the *companion* on a
-# separated install, while the daemon becomes the service above. The
-# installer script disables the daemon task rather than deleting it, so
-# ``disable`` can put it back and the uninstaller's own
-# ``schtasks /delete`` still finds it.
-WINDOWS_DAEMON_TASK_NAME = "PrivacyFence"
+# Windows' own "startup wiring inverts" (ADR 0002): the daemon is the
+# service above, and the only Scheduled Task is the one that starts the
+# *companion* at sign-in.
 WINDOWS_COMPANION_TASK_NAME = "PrivacyFenceCompanion"
 
 # Where a separated install keeps everything ``paths.data_dir()`` used to put

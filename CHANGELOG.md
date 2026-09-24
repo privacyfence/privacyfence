@@ -97,6 +97,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   control channel. Instead it stops with an error asking you to check that PrivacyFence and the
   extension are the same version. On Windows it also no longer looks for PrivacyFence under
   `%LOCALAPPDATA%\Programs`, where no current installer puts it.
+- **Windows: uninstalling keeps your data; `privilege-separation.ps1 disable` is gone.** The
+  uninstaller now runs `privilege-separation.ps1 uninstall`, which stops and removes the
+  `PrivacyFence` service and the companion's sign-in task and leaves `%ProgramData%\PrivacyFence`
+  and the `PrivacyFenceUsers` group in place, so reinstalling picks your settings, connector
+  sign-ins and audit log straight back up. Tick the uninstaller's new **Delete PrivacyFence data**
+  checkbox (unchecked by default) to remove them too, or run `privilege-separation.ps1 uninstall
+  -Purge`; a silent uninstall never deletes data. `disable`, which moved the data back into
+  `%LOCALAPPDATA%`, is removed, and `enable` no longer moves an existing `%LOCALAPPDATA%\PrivacyFence`
+  into `%ProgramData%`. See ADR 0041 and ADR 0042.
+- **Windows: the installer no longer registers a daemon sign-in task** that it then disabled. The
+  daemon is a Windows service, and the companion's `PrivacyFenceCompanion` task is the only
+  Scheduled Task an install has. `privilege-separation.ps1 status` no longer reports
+  `STILL AUTOSTARTS`.
 
 ### Fixed
 

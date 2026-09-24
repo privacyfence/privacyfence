@@ -1861,8 +1861,7 @@ class TestWindowsInstallerContract:
     """B5c's half of the same contract, against a PowerShell script instead
     of a shell one.
 
-    Windows shares the marker, the directory names and the migration list
-    with macOS and Linux, so those are asserted here exactly as
+    Windows shares the marker and the directory names with macOS and Linux, so those are asserted here exactly as
     ``TestInstallerContract`` asserts them for bash -- only the syntax of the
     assignment differs. What it does *not* share is a single mode: the layout
     is NTFS ACLs, and the checks for those are further down.
@@ -1965,22 +1964,30 @@ class TestWindowsInstallerContract:
 
     def test_a_failed_enable_fails_the_install(self):
         # The whole of decision 1 on this platform. Inno ignores a [Run]
-        # entry's exit code and CurStepChanged's own autostart step
-        # deliberately only warns, so "Setup finished successfully" is the
-        # default outcome of anything that goes wrong in post-install --
-        # which for this step would mean shipping an install whose approval
-        # UI means less than it says. RaiseException is what turns it into a
-        # rollback and a non-zero exit instead.
+        # entry's exit code, so "Setup finished successfully" is the default
+        # outcome of anything that goes wrong in post-install -- which for
+        # this step would mean shipping an install whose approval UI means
+        # less than it says. RaiseException is what turns it into a rollback
+        # instead.
         inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
         post_install = inno.split("procedure CurStepChanged", 1)[1]
 
         assert "if not SeparateInstall(SeparationOutput) then" in post_install
         assert "RaiseException(" in post_install
-        # ...and after the autostart registration, not before: `enable` ends
-        # by disabling that task (Disable-DaemonTask), so registering it
-        # afterwards would re-arm a second daemon in the user's own session
-        # on every fresh install.
-        assert post_install.index("RegisterAutostartTask()") < post_install.index("SeparateInstall(")
+
+    def test_the_installer_registers_no_daemon_task(self):
+        # The installer registers nothing it later disables (ADR 0042's
+        # cleanup): the daemon is a service, and the only Scheduled Task is
+        # the companion's, which `enable` registers. The daemon sign-in task
+        # and its template are gone, with the step that registered them.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        assert "RegisterAutostartTask" not in inno
+        assert "#define TaskName" not in inno
+        assert "privacyfence-task.xml.tmpl" not in inno
+        assert not (REPO_ROOT / "installer" / "privacyfence-task.xml.tmpl").exists()
+        assert "DaemonTaskName" not in self.SCRIPT
+        assert not hasattr(privilege_separation, "WINDOWS_DAEMON_TASK_NAME")
 
     def test_nothing_in_the_installer_starts_the_daemon_directly(self):
         # A separated install's daemon is a service; a copy of it started in
@@ -2013,36 +2020,75 @@ class TestWindowsInstallerContract:
 
     def test_task_names_match_the_module_and_the_uninstaller(self):
         # Three places name these: the script that creates them, the module
-        # that documents them, and the .iss whose [UninstallRun] has to
-        # remove them from a machine that opted in and then uninstalled.
+        # that documents them, and the .iss whose [UninstallRun] floor has to
+        # remove them even if the script could not run.
         inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
 
-        assert self._assign("DaemonTaskName") == privilege_separation.WINDOWS_DAEMON_TASK_NAME
         assert self._assign("CompanionTaskName") == privilege_separation.WINDOWS_COMPANION_TASK_NAME
         assert f'#define CompanionTaskName "{privilege_separation.WINDOWS_COMPANION_TASK_NAME}"' in inno
         assert f'#define ServiceName "{privilege_separation.WINDOWS_SERVICE_NAME}"' in inno
 
     def test_the_uninstaller_removes_the_service_and_the_companion_task(self):
-        # Both exist only on an install that opted in, and both outlive the
-        # program files if nothing removes them -- a service whose binPath no
-        # longer exists, and a task that fails at every sign-in.
+        # Both outlive the program files if nothing removes them -- a service
+        # whose binPath no longer exists, and a task that fails at every
+        # sign-in. The script's `uninstall` does it first; these entries are
+        # the floor under it.
         inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
 
         assert 'Parameters: "/delete /tn ""{#CompanionTaskName}"" /f"' in inno
         assert 'Parameters: "delete ""{#ServiceName}"""' in inno
 
-    def test_migrates_every_file_that_moved_into_the_handoff_dir(self):
-        names = re.search(r"^\$HandoffFileNames = @\(([^)]*)\)$", self.SCRIPT, re.MULTILINE)
-        assert names is not None
-        moved = {part.strip().strip("'") for part in names.group(1).split(",")}
+    def test_the_uninstaller_runs_uninstall_and_purges_only_when_asked(self):
+        # ADR 0042 on Windows: the uninstaller runs the script's `uninstall`,
+        # adding -Purge only when the "Delete PrivacyFence data" checkbox --
+        # unchecked by default -- was ticked. A silent uninstall never asks
+        # and never purges.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+        run = inno.split("function RunSeparationUninstall", 1)[1].split("\nend;", 1)[0]
+        ask = inno.split("function AskDeleteData", 1)[1].split("\nend;", 1)[0]
+        step = inno.split("procedure CurUninstallStepChanged", 1)[1]
 
-        assert mcp_auth.MCP_TOKEN_FILE_NAME in moved
-        assert control_channel.WEB_BASE_URL_FILE_NAME in moved
-        from privacyfence.web import server
+        assert "ScriptPath := ExpandConstant('{app}\\privilege-separation.ps1')" in run
+        assert "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " in run
+        assert "'\" uninstall' + PurgeArg" in run
+        assert "PurgeArg := ' -Purge'" in run
+        assert "DeleteData.Caption := 'Delete {#AppName} data';" in ask
+        assert "DeleteData.Checked := False;" in ask
+        assert "if CurUninstallStep = usUninstall then" in step
+        assert "Purge := False;" in step
+        assert "if not UninstallSilent() then\n      Purge := AskDeleteData();" in step
+        # Nothing in the uninstaller deletes data on its own account.
+        assert "[UninstallDelete]" not in inno.replace("No [UninstallDelete] section", "")
 
-        assert server.MCP_URL_FILE_NAME in moved
+    def test_uninstall_keeps_data_unless_purged(self):
+        uninstall = self.SCRIPT.split("function Invoke-Uninstall", 1)[1].split("\nfunction ", 1)[0]
+        # Everything before the -Purge check runs on every uninstall and must
+        # not touch the data directory or the group.
+        keep, purge = uninstall.split("if (-not $Purge) {", 1)
+        not_purged = purge.split("\n        return\n", 1)[0]
 
-    @pytest.mark.parametrize("subcommand", ["enable", "disable", "status"])
+        def statements(text):
+            # What runs, not what the here-string tells the user to run.
+            return [line.strip() for line in text.splitlines()]
+
+        for text in (keep, not_purged):
+            assert not any(line.startswith(("Remove-Item", "Remove-LocalGroup")) for line in statements(text))
+        assert "Uninstall-CompanionTask" in statements(keep)
+        assert "Uninstall-DaemonService" in statements(keep)
+        assert "Remove-Item -LiteralPath $SystemRoot -Recurse -Force" in purge
+        assert "Remove-LocalGroup -Name $ServiceGroup" in purge
+        assert "[switch] $Purge" in self.SCRIPT
+
+    def test_nothing_moves_data_into_or_out_of_a_user_profile(self):
+        # ADR 0041/0042: no upgrade path from the per-user layout, and no way
+        # back to it.
+        for gone in (
+            "Move-Data", "Get-LegacyDataDir", "Restore-LegacyDataDir", "Move-HandoffFiles",
+            "Invoke-Disable", "'disable'", "LOCALAPPDATA%\\PrivacyFence", "$HandoffFileGlob",
+        ):
+            assert gone not in self.SCRIPT, gone
+
+    @pytest.mark.parametrize("subcommand", ["enable", "uninstall", "status"])
     def test_documents_each_subcommand(self, subcommand):
         assert f"function Invoke-{subcommand.capitalize()}" in self.SCRIPT
         assert f"'{subcommand}'" in self.SCRIPT
@@ -2085,12 +2131,11 @@ class TestWindowsInstallerContract:
 
         assert "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464" in test_trusted_identity
 
-    def test_takes_ownership_of_the_migrated_tree(self):
-        # The hole a real platform-windows run exposed: Move-Data moves the
-        # data directory out of %LOCALAPPDATA%, and a move preserves
-        # ownership -- so without this the separated root is owned by the
-        # human account being excluded, who can then rewrite every ACL below
-        # it with no elevation at all.
+    def test_takes_ownership_of_the_tree(self):
+        # The hole a real platform-windows run exposed: a directory the human
+        # account owns under %ProgramData% (any user may create one there)
+        # lets that account rewrite every ACL below it with no elevation at
+        # all, however right the ACL looks.
         set_layout = self.SCRIPT.split("function Set-Layout", 1)[1].split("\nfunction ", 1)[0]
 
         assert "'/setowner'" in set_layout
@@ -2100,35 +2145,24 @@ class TestWindowsInstallerContract:
         # that looks right in every other respect.
         assert "could not take ownership" in set_layout
 
-    def test_disable_hands_ownership_back(self):
-        # Through Restore-LegacyDataDir, which Invoke-Disable and the rollback
-        # in Invoke-Enable share -- an `enable` that fails midway owes the
-        # human exactly what `disable` does.
-        disable = self.SCRIPT.split("function Invoke-Disable", 1)[1].split("\nfunction ", 1)[0]
-        restore = self.SCRIPT.split("function Restore-LegacyDataDir", 1)[1].split("\nfunction ", 1)[0]
-
-        assert "Restore-LegacyDataDir" in disable
-        assert "'/setowner', $script:OwnerUser" in restore
-
-    def test_a_failed_enable_leaves_neither_half_of_a_move_behind(self):
+    def test_a_failed_enable_leaves_nothing_claiming_separation(self):
         # privacyfence/privacyfence#599: the observed failure left the daemon's
         # data under %ProgramData% with no marker, no service and no companion
-        # task pointing at it -- a layout paths.py resolves for nobody. Two
-        # things stop that now, and this asserts both: `sc create` (the step
-        # that failed) happens before the data is moved at all, and everything
-        # from there on is inside a catch that walks the move back.
+        # task pointing at it -- a layout paths.py resolves for nobody. `sc
+        # create` (the step that failed) now comes first, and everything from
+        # there on is inside a catch that takes the half-made install down.
         enable = self.SCRIPT.split("function Invoke-Enable", 1)[1].split("\nfunction ", 1)[0]
         # Call sites only. A comment that names a later step to explain an
-        # earlier one is ordinary and correct in this script, and indexing
-        # the raw text made it read as the step itself having moved.
+        # earlier one is ordinary and correct in this script.
         calls = "\n".join(
             line for line in enable.splitlines() if not line.strip().startswith("#")
         )
+        body = calls.split("try {", 1)[1].split("} catch {", 1)[0]
 
-        assert calls.index("Install-DaemonService") < calls.index("Move-Data")
+        assert body.index("Install-DaemonService") < body.index("Set-Layout")
         assert "Undo-PartialEnable" in enable
-        for step in ("Move-Data", "Set-Layout", "Write-Marker", "Install-CompanionTask"):
-            assert step in enable.split("try {", 1)[1].split("} catch {", 1)[0], step
+        for step in ("Set-Layout", "Write-Marker", "Install-CompanionTask"):
+            assert step in body, step
 
     def test_the_rollback_cannot_replace_the_failure_it_is_reporting(self):
         # It runs inside a catch whose exception is about to be re-thrown, and
@@ -2137,8 +2171,10 @@ class TestWindowsInstallerContract:
         undo = self.SCRIPT.split("function Undo-PartialEnable", 1)[1].split("\nfunction ", 1)[0]
 
         assert undo.count("try {") == 1 and "} catch {" in undo
-        assert "Restore-LegacyDataDir" in undo
-        assert "Enable-DaemonTask" in undo
+        assert "Remove-Item -LiteralPath $marker" in undo
+        # ...and it takes the service and task down without moving any data.
+        assert "Uninstall-DaemonService" in undo and "Uninstall-CompanionTask" in undo
+        assert "Move-Item" not in undo and "Copy-Item" not in undo
 
     def test_status_checks_the_owner(self):
         assert "WRONG OWNER" in self.SCRIPT
@@ -2193,17 +2229,6 @@ class TestWindowsCompanionTaskTemplate:
         # template actually carries.
         assert "__EXEC_PATH__" in self.TEMPLATE
         assert "'__EXEC_PATH__'" in script
-
-    def test_the_installer_disables_the_daemons_own_task(self):
-        # Left enabled it would start a second daemon in the logged-in user's
-        # session at every sign-in, which on a separated install refuses to
-        # start (check_runtime_identity) rather than quietly seeding a
-        # default policy -- loud, but still a daemon that is not running for
-        # the reason the log says.
-        script = INSTALLERS["win32"].read_text(encoding="utf-8")
-
-        assert "Disable-ScheduledTask -TaskName $DaemonTaskName" in script
-        assert "Enable-ScheduledTask -TaskName $DaemonTaskName" in script
 
     def test_the_companion_is_reachable_by_hand_as_well(self):
         # The companion has no crash-restart of its own (see the template's

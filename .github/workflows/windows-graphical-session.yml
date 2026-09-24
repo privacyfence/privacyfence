@@ -1,14 +1,14 @@
 name: Windows graphical-session autostart
 
-# docs/testing-policy.md's Phase 7 item 2 (`git show be78e7ee^:docs/windows-support-
-# plan.md` 8.2): the installer's Task Scheduler LogonTrigger actually starting
-# the packaged daemon -- see tests/integration/test_windows_graphical_session_
-# autostart.py's own docstring for exactly what it proves and the one
-# deliberate substitution it makes: no throwaway account and no physical
-# sign-in in CI; the registered task is run on demand (`schtasks /run`) as
-# the real, already-signed-in CI runner account, and the trigger's own
-# firing on a real interactive sign-in is exercised only by the manual
-# check in docs/release-testing.md.
+# docs/testing-policy.md's Phase 7 item 2: the installer's Task Scheduler
+# LogonTrigger actually starting the packaged companion in the signed-in
+# session, and the daemon's Windows service restarting after a crash -- see
+# tests/integration/test_windows_graphical_session_autostart.py's own
+# docstring for exactly what it proves and the one deliberate substitution it
+# makes: no physical sign-in in CI; the registered task is run on demand
+# (`schtasks /run`) as the real, already-signed-in CI runner account, and the
+# trigger's own firing on a real interactive sign-in is exercised only by the
+# manual check in docs/release-testing.md.
 #
 # Deliberately its own workflow, not a step added to build.yml's
 # build-windows job or tests.yml's per-PR jobs -- same reasoning as

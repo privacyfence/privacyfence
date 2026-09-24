@@ -3,9 +3,9 @@
 ; The now-removed docs/windows-support-plan.md Phase 4 (B4 in the now-removed docs/windows-linux-support-
 ; plan.md) -- the Windows analogue of build_dmg.sh's DMG: one distributable
 ; carrying both the daemon and the Claude Desktop extension (.mcpb), plus
-; (unlike the drag-to-Applications DMG) the autostart wiring a real installer
-; can do that a disk image can't -- registering/removing the Task Scheduler
-; task from Phase 3.
+; the privilege-separation step (ADR 0003 decision 4) that installs the
+; daemon as a Windows service and the companion's sign-in task, and the
+; matching `uninstall` step on the way out (ADR 0042).
 ;
 ; Built by scripts/build_installer.ps1, which passes every {#...} value below
 ; on the command line (/D...) rather than hardcoding a version or absolute
@@ -41,12 +41,12 @@
 ; Matches daemon.ts's Windows DEFAULT_APP_PATH (docs/windows-support-
 ; plan.md Phase 7 / B6) -- keep these in sync if this changes.
 #define InstallDirName "PrivacyFence"
-#define TaskName "PrivacyFence"
 ; #428 Phase 4 (B5c). Both of these are created by
 ; scripts/windows_privilege_separation.ps1's `enable` -- which, since ADR 0003
 ; decision 4, [Code]'s CurStepChanged(ssPostInstall) below runs as part of
 ; every install. They are still named here rather than derived, because
-; *uninstall* has to clean them up without running that script at all. Kept in
+; *uninstall* keeps a floor under that script's own `uninstall` (see
+; [UninstallRun]) that does not depend on it running at all. Kept in
 ; sync with privilege_separation.WINDOWS_COMPANION_TASK_NAME /
 ; WINDOWS_SERVICE_NAME (tests/unit/test_privilege_separation.py asserts it).
 #define CompanionTaskName "PrivacyFenceCompanion"
@@ -67,32 +67,14 @@ OutputBaseFilename={#SetupBaseName}
 SetupIconFile={#IconPath}
 Compression=lzma2
 SolidCompression=yes
-; This used to be `lowest`, on the theory that a single-user desktop daemon
-; has no reason to demand an admin elevation prompt just to install under
-; Program Files. That theory was wrong, and not in a way any amount of
-; reasoning from documentation would have caught -- a real non-admin user
-; hit it, the same failure first reported as privacyfence/privacyfence#410:
-; a `lowest` install with no explicit "Run as administrator" resolves
-; {autopf} to {userpf} and launches Setup with an ordinary, non-elevated
-; token, and RegisterAutostartTask() below then fails outright on that
-; token, every time, not occasionally. #410 was fixed by making that
-; failure visible (a warning dialog instead of only a log line) and by
-; widening the mcpb shim's own daemon lookup to also check the non-admin
-; install location -- not by fixing the registration failure itself, which
-; kept happening on every non-elevated install afterward. The reason is
-; `schtasks /create /xml` registering a LogonTrigger task at all --
-; regardless of whether its Principal is a GroupId or the calling user's
-; own UserId -- needs the SeCreateGlobalPrivilege user right, which Windows
-; grants by default only to Administrators, SERVICE, LOCAL SERVICE and
-; NETWORK SERVICE. A UAC-filtered admin token (the ordinary, non-elevated
-; token an admin account's own processes run with, same as a plain
-; standard-user token for this purpose) does not carry it, so "Access is
-; denied" is the deterministic outcome, not a flake -- the installer's own
-; dialog asking the user to "report it if it keeps happening" was asking
-; for reports of something that happens every time. `admin` makes Setup's
-; own manifest require an elevated token before RegisterAutostartTask()
-; ever runs, closing the gap at its actual cause rather than adding another
-; fallback path around it.
+; Setup runs privilege-separation.ps1 `enable` (CurStepChanged below), which
+; creates a Windows service, a local group and an ACL'd %ProgramData%
+; directory -- none of which a non-elevated token can do. It also has to be a
+; machine-wide install: Assert-ImageProtected refuses to run a service out of
+; a directory the signed-in user can rewrite. This used to be `lowest`; why
+; that stopped working (#410: a LogonTrigger task needs
+; SeCreateGlobalPrivilege) is in git history, with the daemon sign-in task it
+; was about.
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 ; The OS floor (docs/platform-support.md's support matrix;
@@ -111,15 +93,12 @@ Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
 ; comment). Kept at its versioned filename so a user who's kept an older
 ; installer's copy doesn't collide with it.
 Source: "{#McpbPath}"; DestDir: "{app}"; Flags: ignoreversion
-; The autostart task-definition template (see [Code]'s RegisterAutostartTask
-; below) -- dontcopy means Setup extracts it to {tmp} for [Code] to read at
-; install time, but it's never actually installed into {app}.
-Source: "privacyfence-task.xml.tmpl"; Flags: dontcopy
 ; #428 Phase 4 (B5c): the privilege-separation tool and the companion
 ; autostart task it registers. Both are *installed* rather than extracted to
 ; {tmp}, because both outlive the install: the script is how a human inspects
-; (`status`) or unwinds (`disable`) the separation afterwards, and the template
-; is what a later re-run of `enable` renders the companion task from.
+; (`status`) the separation afterwards and what the uninstaller runs
+; (`uninstall`), and the template is what a later re-run of `enable` renders
+; the companion task from.
 ;
 ; This used to be the whole of it -- the script shipped, nothing ran it, and a
 ; Windows install stayed unseparated until somebody typed `enable` into an
@@ -162,19 +141,10 @@ Name: "{group}\{#AppName} Companion"; Filename: "{app}\{#CompanionExeName}"; \
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
 
 [Run]
-; The autostart Task Scheduler task itself (Phase 3.1) is registered from
-; [Code]'s RegisterAutostartTask below, via CurStepChanged(ssPostInstall)
-; -- not a [Run] entry -- see that function's own comment and
-; privacyfence-task.xml.tmpl's header comment for what actually gets
-; registered and why this needs a real Task Scheduler XML task definition
-; rather than a plain `schtasks /create` CLI call (short version: two
-; independent CLI-flag attempts at this were each found broken by a real
-; windows-graphical-session.yml run -- invalid /ri/du flags for an ONLOGON
-; schedule, then a trigger that only fired for the installing account
-; instead of any interactive logon -- and the capability this task
-; actually needs, "run for whichever user just logged on, in their own
-; session, restarting on crash," has no equivalent exposed through
-; schtasks.exe's plain flags at all).
+; The daemon has no sign-in task: it is a Windows service, installed and
+; started by privilege-separation.ps1 `enable` (CurStepChanged below), and the
+; only thing started at sign-in is the companion, by the PrivacyFenceCompanion
+; task that same step registers.
 ;
 ; There is deliberately no "Launch PrivacyFence now" entry here any more.
 ; Until ADR 0003 decision 4 this section started {#AliasExeName} on the
@@ -248,26 +218,18 @@ Filename: "{win}\explorer.exe"; \
     Flags: postinstall runascurrentuser skipifsilent; Check: not IsMcpbAssociated
 
 [UninstallRun]
-; Must remove the scheduled task -- wired into the uninstaller here, not
-; left as a manual step (Phase 3.2). RunOnceId so this only ever runs once
-; per uninstall even if Inno retries the uninstall step.
-Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#TaskName}"" /f"; \
-    Flags: runhidden; RunOnceId: "RemovePrivacyFenceTask"
-; #428 Phase 4 (B5c): the two things a privilege-separated install adds, torn
-; down here rather than left behind. Since ADR 0003 decision 4 every install
-; has both; they are still tolerant of finding neither -- an install whose
-; separation was unwound with `disable` first (the documented order, see
-; [UninstallDelete] below) has already removed them, and schtasks and sc.exe
-; each exit non-zero for something that does not exist, which Inno ignores for
-; an [UninstallRun] entry. That is the right behavior either way: this must
-; not fail an uninstall over a step that has already happened.
+; The floor under CurUninstallStepChanged(usUninstall) below, which runs
+; privilege-separation.ps1 `uninstall` first and normally leaves nothing for
+; these to do. They exist so that an uninstall never leaves a service pointing
+; at program files it is about to delete, even if that script could not run
+; at all (an execution policy, a script someone deleted). schtasks and sc.exe
+; each exit non-zero for something that does not exist, which Inno ignores
+; for an [UninstallRun] entry -- the right behavior: this must not fail an
+; uninstall over a step that has already happened. RunOnceId so each runs
+; once per uninstall even if Inno retries.
 ;
 ; Deleting the service is also what retires the NT SERVICE\PrivacyFence
-; virtual account -- it exists only for as long as its service does, which is
-; the whole appeal of a virtual account over a real one nobody would ever
-; remember to delete.
-;
-; The data directory is deliberately not touched; see [UninstallDelete] below.
+; virtual account -- it exists only for as long as its service does.
 Filename: "{sys}\schtasks.exe"; Parameters: "/delete /tn ""{#CompanionTaskName}"" /f"; \
     Flags: runhidden; RunOnceId: "RemovePrivacyFenceCompanionTask"
 Filename: "{sys}\sc.exe"; Parameters: "stop ""{#ServiceName}"""; \
@@ -275,31 +237,14 @@ Filename: "{sys}\sc.exe"; Parameters: "stop ""{#ServiceName}"""; \
 Filename: "{sys}\sc.exe"; Parameters: "delete ""{#ServiceName}"""; \
     Flags: runhidden; RunOnceId: "RemovePrivacyFenceService"
 
-[UninstallDelete]
-; Explicitly scope what uninstall does NOT touch (Phase 4.3): per-user data
-; -- credentials, settings, the audit log -- lives under
-; %LOCALAPPDATA%\PrivacyFence\ (paths.py's data_dir(), via its
-; windows_data_dir() branch -- see that function's own docstring for why
-; that's a different convention from the POSIX ~/.privacyfence dotfile
-; rather than the same name reused under %USERPROFILE%), created by the app
-; on first run. Uninstalling removes the program files (handled
-; automatically by Inno Setup for everything under {app}) and the scheduled
-; task (UninstallRun, above) only -- there is deliberately no
-; [UninstallDelete] entry naming %LOCALAPPDATA%\PrivacyFence, unlike the
-; entries a "clean uninstall" for a typical app might add.
-;
-; #428 Phase 4 (B5c) adds a second such directory and the same rule applies
-; to it: a privilege-separated install keeps its state under
-; %ProgramData%\PrivacyFence instead, holding the same credentials, settings
-; and audit log plus the policy and passkeys the service account owns. It is
-; not removed here either. Since ADR 0003 decision 4 that is every install,
-; not only one that opted in, so the order matters to everyone now:
-; uninstalling while separated leaves a directory no account can read except
-; the service account that no longer exists and the Administrators group --
-; which is why scripts/windows_privilege_separation.ps1 disable, run *before*
-; uninstalling, is the documented order (docs/platform-support.md). An
-; administrator can still recover the directory afterwards by taking
-; ownership of it.
+; No [UninstallDelete] section, deliberately. PrivacyFence's data --
+; credentials, settings, policy, passkeys, the audit log -- lives under
+; %ProgramData%\PrivacyFence, not under {app}, and uninstall keeps it (ADR
+; 0042: removing the program stops PrivacyFence and leaves its data; purging
+; deletes it). The "Delete PrivacyFence data" checkbox the uninstaller shows
+; (CurUninstallStepChanged below) is the purge, and it is unchecked by
+; default; a silent uninstall never purges. Nothing moves that data back into
+; %LOCALAPPDATA% (ADR 0041).
 
 [Code]
 (* Backs the [Run] section's Check: on the two mutually-exclusive
@@ -327,19 +272,12 @@ end;
    Setup's own log file, one line per log entry, tagged with which step ran
    it.
 
-   Everything about the autostart registration below was otherwise
-   invisible: Inno logs its own [Run] entries automatically but says
-   nothing at all about an Exec() call made from [Code], and Exec()
-   captures neither stream. So a run of consecutive real
-   windows-graphical-session.yml runs could establish only that the task
-   was missing afterwards, never why -- the install log they dumped
-   (tests/integration/test_windows_graphical_session_autostart.py's own
-   _install_log_tail) went straight from "Installation process succeeded"
-   to "Deinitializing Setup" with no trace of the registration attempt in
-   between. An exit code alone would not have closed that gap either: when
-   this finally ran, schtasks' own stderr was the thing that named the
-   defect outright ("(1,40)::ERROR: unable to switch the encoding", the
-   task XML's encoding declaration -- see privacyfence-task.xml.tmpl). *)
+   Everything a [Code] Exec() runs is otherwise invisible: Inno logs its own
+   [Run] entries automatically but says nothing at all about an Exec() call
+   made from [Code], and Exec() captures neither stream. A run of consecutive
+   real windows-graphical-session.yml runs once established only that a task
+   was missing afterwards, never why, until this carried schtasks' own stderr
+   into the log -- which named the defect outright. *)
 procedure LogCommandOutput(Prefix: String; OutFile: String);
 var
   Lines: TArrayOfString;
@@ -378,96 +316,6 @@ begin
     Result := Result + Lines[I] + #13#10;
 end;
 
-(* Registers the autostart Task Scheduler task (Phase 3.1) via a real Task
-   Scheduler XML task definition (privacyfence-task.xml.tmpl, extracted to
-   the temp directory by the [Files] "dontcopy" entry above), not
-   schtasks.exe's plain /create flags -- see [Run]'s own comment and that
-   template's own header comment for why. Substitutes the real installed
-   AliasExeName path for the template's __EXEC_PATH__ placeholder, writes
-   the result to a scratch file, then runs `schtasks /create /xml <file>
-   /f` against it. Called from CurStepChanged(ssPostInstall) below, i.e.
-   after the app's files are already in place (Files copy happens during
-   ssInstall, before ssPostInstall) but before this file's own [Run]
-   entries execute, so the path it substitutes in always exists by the
-   time schtasks reads it.
-
-   schtasks runs through cmd.exe rather than directly for one reason only:
-   so its stdout and stderr can be redirected to a file and read back into
-   the log (LogCommandOutput above).
-
-   The whole body is wrapped in try/except with a Log() at each step. That
-   was added while the failure was still unexplained, on the theory that an
-   unhandled Pascal Script runtime exception was silently aborting Setup's
-   post-install processing; the actual defect turned out to be in the task
-   XML itself, and no exception was ever involved. It stays because the
-   reasoning behind it holds regardless: an exception here would otherwise
-   abort the rest of post-install with the overall install still reporting
-   success, and nothing would say so.
-
-   Deliberately using this parenthesis-asterisk comment style rather than
-   curly braces: Pascal's curly-brace comments don't nest, and the
-   {app}/{tmp}-style Inno constant references this comment needs to talk
-   about would otherwise close the comment early at their own closing
-   brace -- exactly the "'BEGIN' expected" compile error an earlier
-   version of this comment actually hit. *)
-function RegisterAutostartTask(): Boolean;
-var
-  TemplateFile, XmlFile, OutFile, XmlContent, ExecPath, CmdLine: String;
-  RawContent: AnsiString;
-  ResultCode: Integer;
-begin
-  Result := False;
-  try
-    Log('RegisterAutostartTask: starting');
-    ExtractTemporaryFile('privacyfence-task.xml.tmpl');
-    TemplateFile := ExpandConstant('{tmp}\privacyfence-task.xml.tmpl');
-    Log('RegisterAutostartTask: template path = ' + TemplateFile);
-    { LoadStringFromFile's own "var S" output parameter is typed
-      AnsiString, not String -- passed as RawContent here and converted
-      (a plain assignment allows the AnsiString/String conversion that a
-      var parameter, like StringChangeEx's own first argument below,
-      does not) rather than declared as the var parameter's own type
-      throughout, so every other call in this function can use the
-      ordinary String type. }
-    if not LoadStringFromFile(TemplateFile, RawContent) then
-    begin
-      Log('RegisterAutostartTask: LoadStringFromFile returned False');
-      Exit;
-    end;
-    Log('RegisterAutostartTask: loaded template, ' + IntToStr(Length(RawContent)) + ' bytes');
-    XmlContent := RawContent;
-    ExecPath := ExpandConstant('{app}\{#AliasExeName}');
-    Log('RegisterAutostartTask: exec path = ' + ExecPath);
-    StringChangeEx(XmlContent, '__EXEC_PATH__', ExecPath, False);
-    XmlFile := ExpandConstant('{tmp}\privacyfence-task.xml');
-    if not SaveStringToFile(XmlFile, XmlContent, False) then
-    begin
-      Log('RegisterAutostartTask: SaveStringToFile returned False');
-      Exit;
-    end;
-    Log('RegisterAutostartTask: wrote ' + XmlFile + ', ' + IntToStr(Length(XmlContent)) + ' bytes, running schtasks');
-
-    OutFile := ExpandConstant('{tmp}\schtasks-create.out');
-    { The doubled outer quotes are cmd.exe's own rule for a /C command line
-      whose first token is itself a quoted path: cmd strips the outermost
-      pair and runs what is left. }
-    CmdLine := '/C ""' + ExpandConstant('{sys}\schtasks.exe') +
-      '" /create /tn "{#TaskName}" /xml "' + XmlFile + '" /f > "' + OutFile + '" 2>&1"';
-    if not Exec(ExpandConstant('{cmd}'), CmdLine, '', SW_HIDE,
-        ewWaitUntilTerminated, ResultCode) then
-    begin
-      Log('RegisterAutostartTask: Exec itself failed to launch cmd.exe');
-      Exit;
-    end;
-    LogCommandOutput('RegisterAutostartTask: schtasks', OutFile);
-    Log('RegisterAutostartTask: schtasks exit code = ' + IntToStr(ResultCode));
-    Result := ResultCode = 0;
-  except
-    Log('RegisterAutostartTask: exception: ' + GetExceptionMessage);
-    Result := False;
-  end;
-end;
-
 (* ADR 0003 decision 4: the installer separates the install, rather than
    shipping privilege-separation.ps1 and hoping somebody runs it.
 
@@ -490,8 +338,7 @@ end;
    user-writable is the case it exists for, and failing the install there is
    the correct outcome, not a rough edge to smooth over.
 
-   Via cmd.exe for the same single reason RegisterAutostartTask goes through
-   it: Exec() captures neither stream, and what `enable` printed is the only
+   Via cmd.exe for one reason only: Exec() captures neither stream, and what `enable` printed is the only
    explanation of a failure there will ever be. -NoProfile so an administrator
    profile script cannot change what runs, -NonInteractive so a prompt can
    never wait forever behind SW_HIDE on an unattended install, and
@@ -510,8 +357,9 @@ begin
     ScriptPath := ExpandConstant('{app}\privilege-separation.ps1');
     OutFile := ExpandConstant('{tmp}\privilege-separation.out');
     Log('SeparateInstall: running ' + ScriptPath + ' enable');
-    (* Same doubled-outer-quotes rule cmd.exe imposes on RegisterAutostartTask's
-       own /C line: cmd strips the outermost pair and runs what is left. *)
+    (* The doubled outer quotes are cmd.exe's own rule for a /C command line
+       whose first token is itself a quoted path: cmd strips the outermost
+       pair and runs what is left. *)
     CmdLine := '/C ""' + ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe') +
       '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath +
       '" enable > "' + OutFile + '" 2>&1"';
@@ -570,9 +418,8 @@ begin
   try
     Log('PrepareToInstall: stopping the {#ServiceName} service (if any) before copying files');
     OutFile := ExpandConstant('{tmp}\prepare-stop-service.out');
-    (* Same doubled-outer-quotes /C rule as RegisterAutostartTask/
-       SeparateInstall's own cmd.exe invocations above -- see either one's
-       comment for why. *)
+    (* Same doubled-outer-quotes /C rule as SeparateInstall's own cmd.exe
+       invocation above -- see its comment for why. *)
     CmdLine := '/C ""' + ExpandConstant('{sys}\sc.exe') +
       '" stop "{#ServiceName}" > "' + OutFile + '" 2>&1"';
     if not Exec(ExpandConstant('{cmd}'), CmdLine, '', SW_HIDE,
@@ -641,52 +488,40 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  AutostartRegistered: Boolean;
   SeparationOutput: String;
 begin
   if CurStep = ssPostInstall then
   begin
-    (* A failed registration deliberately does not abort the install: every
-       other part of the install is still usable without this task, and what
-       it would cost is narrower than it used to be -- see the dialog below.
-       It is logged as a failure rather than passed over silently so that the
-       install log actually says so, which is also what Phase 7's
-       graphical-session test reads back when it finds the task missing. *)
-    AutostartRegistered := RegisterAutostartTask();
-    if not AutostartRegistered then
-      Log('RegisterAutostartTask: FAILED; the sign-in task was not registered.');
+    (* A failure here aborts the install. That is ADR 0003 decision 1 in one
+       line: a PrivacyFence that cannot separate itself still renders the
+       same approval dialogs, accepts the same passkey enrollment and writes
+       the same audit log, none of which mean what they say when the daemon
+       and the AI client it governs share an account. Shipping that silently
+       is the outcome this refuses.
 
-    (* Deliberately after RegisterAutostartTask, not before: `enable`'s last
-       act is to *disable* that task (it would start a second daemon, in the
-       user's own session, against a data directory only the service account
-       can read -- see Disable-DaemonTask in the .ps1). Registering it
-       afterwards would hand the separated install exactly the thing the
-       separation just took away, and `... status` would report
-       STILL AUTOSTARTS on a fresh install. `disable` puts it back.
-
-       Unlike the autostart step above, a failure here aborts the install.
-       That is ADR 0003 decision 1 in one line: a PrivacyFence that cannot
-       separate itself still renders the same approval dialogs, accepts the
-       same passkey enrollment and writes the same audit log, none of which
-       mean what they say when the daemon and the AI client it governs share
-       an account. Shipping that silently is the outcome this refuses.
-
-       RaiseException here stops the rest of ssPostInstall (nothing past this
-       point runs: no finish-page autostart note, nothing) and, interactively,
-       shows the message below instead of a success screen. It does *not*
-       make Setup's own process exit code non-zero -- Pascal Scripting's
-       Abort()/RaiseException only affects Setup's exit code when raised from
-       InitializeSetup, InitializeWizard or CurStepChanged(ssInstall); by
-       ssPostInstall the "actual installation process" Setup's own exit-code
-       table (codes 3/4/7/8) means has already finished, and nothing run
-       afterward can retroactively fail it. (Confirmed against Inno Setup's
-       own Pascal Scripting reference for Abort, not assumed -- see
-       privacyfence/privacyfence's build-failure notes for 4.1.0b1.) A caller
-       that needs to detect this refusal programmatically -- as
-       tests/integration/test_windows_packaged_smoke.py's own
-       test_windows_install_fails_when_the_image_is_user_writable does --
+       RaiseException here stops the rest of ssPostInstall and,
+       interactively, shows the message below instead of a success screen. It
+       does *not* make Setup's own process exit code non-zero -- Pascal
+       Scripting's Abort()/RaiseException only affects Setup's exit code when
+       raised from InitializeSetup, InitializeWizard or
+       CurStepChanged(ssInstall); by ssPostInstall the "actual installation
+       process" Setup's own exit-code table (codes 3/4/7/8) means has already
+       finished, and nothing run afterward can retroactively fail it.
+       (Confirmed against Inno Setup's own Pascal Scripting reference for
+       Abort, not assumed -- see privacyfence/privacyfence's build-failure
+       notes for 4.1.0b1.) A caller that needs to detect this refusal
+       programmatically -- as tests/integration/test_windows_packaged_smoke.py's
+       own test_windows_install_fails_when_the_image_is_user_writable does --
        has to read the install log for SeparateInstall's own failure line (or
-       check that the marker/service were never created), not the exit code. *)
+       check that the marker/service were never created), not the exit code.
+
+       Every continuation line below starts with a quoted string, never a
+       bare #13#10 -- Inno's preprocessor (ISPP) treats a line whose first
+       non-blank character is '#' as a directive line, and "unknown
+       preprocessor directive" is a compile-time error, not a Pascal one, so
+       this bit it once already (privacyfence/privacyfence#411's own CI).
+       Each #13#10 pair stays glued to the end of the previous line
+       instead. *)
     if not SeparateInstall(SeparationOutput) then
     begin
       Log('SeparateInstall: FAILED; aborting the installation.');
@@ -704,42 +539,146 @@ begin
         'Program Files is what this expects.' + #13#10 + #13#10 +
         'The separation step reported:' + #13#10 + SeparationOutput);
     end;
+  end;
+end;
 
-    (* Reported only now, once separation has succeeded, because what a
-       missing sign-in task actually costs depends on that -- and because an
-       install that is about to abort should not first stop to discuss its
-       autostart arrangements.
+(* ADR 0042's remove/purge split, for the uninstaller: asks whether to delete
+   PrivacyFence's data as well, with the answer defaulting to "no". A custom
+   form rather than a Yes/No MsgBox so the choice reads as the checkbox it is
+   ("Delete PrivacyFence data", unchecked) rather than as a second "are you
+   sure?" that a reflexive Yes would answer destructively. Closing the form
+   any other way than OK keeps the data too.
 
-       The dialog exists at all because Log() alone was not enough:
-       privacyfence/privacyfence#410 was a real install reporting overall
-       success while autostart silently never got wired up, discovered only
-       after the next reboot left the daemon not running with no clue why.
-       What it says has changed with decision 4, because the daemon is a
-       service now and the service is what starts it -- this task is the
-       *unseparated* install's autostart, which is to say the one `disable`
-       hands back. Saying "PrivacyFence will not start at sign-in" here
-       would be alarming and wrong.
+   Only ever called interactively -- CurUninstallStepChanged below never asks
+   a silent uninstall anything, and a silent uninstall never purges. *)
+function AskDeleteData(): Boolean;
+var
+  Form: TSetupForm;
+  Prompt: TNewStaticText;
+  DeleteData: TNewCheckBox;
+  OkButton: TNewButton;
+begin
+  Result := False;
+  Form := CreateCustomForm();
+  try
+    Form.ClientWidth := ScaleX(400);
+    Form.ClientHeight := ScaleY(160);
+    Form.Caption := 'Uninstall {#AppName}';
 
-       WizardSilent guards it so an unattended/scripted install (this repo's
-       own /VERYSILENT integration tests included) never blocks on a message
-       box nobody is there to dismiss.
+    Prompt := TNewStaticText.Create(Form);
+    Prompt.Parent := Form;
+    Prompt.Left := ScaleX(12);
+    Prompt.Top := ScaleY(12);
+    Prompt.Width := Form.ClientWidth - ScaleX(24);
+    Prompt.AutoSize := False;
+    Prompt.Height := ScaleY(64);
+    Prompt.WordWrap := True;
+    Prompt.Caption :=
+      '{#AppName} keeps its settings, connector sign-ins, policy, passkeys ' +
+      'and audit log in ' + ExpandConstant('{commonappdata}') + '\{#AppName}. ' +
+      'They are kept by default, so reinstalling picks them up again.';
 
-       Every continuation line below starts with a quoted string or
-       ExpandConstant, never a bare #13#10 -- Inno's preprocessor (ISPP)
-       treats a line whose first non-blank character is '#' as a directive
-       line, and "unknown preprocessor directive" is a compile-time error,
-       not a Pascal one, so this bit it once already
-       (privacyfence/privacyfence#411's own CI). Each #13#10 pair stays glued
-       to the end of the previous line instead. *)
-    if (not AutostartRegistered) and (not WizardSilent()) then
-      MsgBox(
-        'PrivacyFence could not register its Windows sign-in task.' + #13#10 + #13#10 +
-        'This does not stop PrivacyFence from running: the daemon runs as a ' +
-        'Windows service and starts with the machine. The task only matters ' +
-        'if you later turn privilege separation off, which moves the daemon ' +
-        'back into your own session and relies on it.' + #13#10 + #13#10 +
-        'Re-running this installer may resolve it -- if it keeps ' +
-        'happening, please report it to the PrivacyFence project.',
-        mbInformation, MB_OK);
+    DeleteData := TNewCheckBox.Create(Form);
+    DeleteData.Parent := Form;
+    DeleteData.Left := ScaleX(12);
+    DeleteData.Top := ScaleY(84);
+    DeleteData.Width := Form.ClientWidth - ScaleX(24);
+    DeleteData.Height := ScaleY(17);
+    DeleteData.Caption := 'Delete {#AppName} data';
+    DeleteData.Checked := False;
+
+    OkButton := TNewButton.Create(Form);
+    OkButton.Parent := Form;
+    OkButton.Caption := 'OK';
+    OkButton.ModalResult := mrOk;
+    OkButton.Default := True;
+    OkButton.Width := ScaleX(75);
+    OkButton.Height := ScaleY(23);
+    OkButton.Left := Form.ClientWidth - OkButton.Width - ScaleX(12);
+    OkButton.Top := Form.ClientHeight - OkButton.Height - ScaleY(12);
+
+    Form.ActiveControl := OkButton;
+    if Form.ShowModal() = mrOk then
+      Result := DeleteData.Checked;
+  finally
+    Form.Free();
+  end;
+end;
+
+(* Runs privilege-separation.ps1 `uninstall` (or `uninstall -Purge`) with the
+   uninstaller's own elevated token, before Inno deletes the program files
+   the service runs. Same cmd.exe/-NoProfile/-NonInteractive/-ExecutionPolicy
+   Bypass invocation, for the same reasons, as SeparateInstall above.
+
+   Never fails the uninstall: the program files are going regardless, and
+   [UninstallRun]'s floor still stops and deletes the service and the
+   companion task if this could not. A failed *purge* is reported
+   interactively, because then data the user asked to delete is still on
+   disk and they need to know where. *)
+function RunSeparationUninstall(Purge: Boolean; var Output: String): Boolean;
+var
+  ScriptPath, OutFile, CmdLine, PurgeArg: String;
+  ResultCode: Integer;
+begin
+  Result := False;
+  Output := '';
+  PurgeArg := '';
+  if Purge then
+    PurgeArg := ' -Purge';
+  try
+    ScriptPath := ExpandConstant('{app}\privilege-separation.ps1');
+    if not FileExists(ScriptPath) then
+    begin
+      Log('RunSeparationUninstall: ' + ScriptPath + ' is missing -- leaving it to [UninstallRun]');
+      Output := ScriptPath + ' is missing.';
+      Exit;
+    end;
+    OutFile := ExpandConstant('{tmp}\privilege-separation-uninstall.out');
+    Log('RunSeparationUninstall: running ' + ScriptPath + ' uninstall' + PurgeArg);
+    CmdLine := '/C ""' + ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe') +
+      '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath +
+      '" uninstall' + PurgeArg + ' > "' + OutFile + '" 2>&1"';
+    if not Exec(ExpandConstant('{cmd}'), CmdLine, '', SW_HIDE,
+        ewWaitUntilTerminated, ResultCode) then
+    begin
+      Log('RunSeparationUninstall: Exec itself failed to launch cmd.exe');
+      Output := 'The uninstaller could not start powershell.exe at all.';
+      Exit;
+    end;
+    LogCommandOutput('RunSeparationUninstall', OutFile);
+    Log('RunSeparationUninstall: exit code = ' + IntToStr(ResultCode));
+    Output := ReadCapturedOutput(OutFile);
+    Result := ResultCode = 0;
+  except
+    Log('RunSeparationUninstall: exception: ' + GetExceptionMessage);
+    Output := GetExceptionMessage;
+    Result := False;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Purge: Boolean;
+  Output: String;
+begin
+  (* usUninstall: after the user has confirmed, before Inno processes the
+     uninstall log -- so before [UninstallRun]'s floor and before any file
+     under {app} (this script included) is deleted. *)
+  if CurUninstallStep = usUninstall then
+  begin
+    Purge := False;
+    if not UninstallSilent() then
+      Purge := AskDeleteData();
+    if not RunSeparationUninstall(Purge, Output) then
+    begin
+      Log('RunSeparationUninstall: FAILED; continuing the uninstall.');
+      if Purge and (not UninstallSilent()) then
+        MsgBox(
+          '{#AppName} was uninstalled, but its data could not be deleted.' + #13#10 + #13#10 +
+          'It is still in ' + ExpandConstant('{commonappdata}') + '\{#AppName}. ' +
+          'Delete that folder from an administrator account to remove it.' + #13#10 + #13#10 +
+          'The uninstall step reported:' + #13#10 + Output,
+          mbError, MB_OK);
+    end;
   end;
 end;

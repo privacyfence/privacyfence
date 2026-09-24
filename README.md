@@ -361,13 +361,11 @@ rewrite the policy deciding what it's allowed to do. The installer in step 2 mov
 Windows service
 running under a virtual account of its own — which takes the policy, the audit key and the
 connector credentials out of that client's reach — and starts a tray companion so you still have a
-way in, all while it already has the administrator rights it needs to do that. One thing differs
-from macOS and Linux: your data directory moves to `%ProgramData%\PrivacyFence\`, so run `…
-disable` *before* uninstalling if you ever want it back under your own account. The same command,
-`powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" enable`
-from an elevated PowerShell, remains available for inspecting or re-running it by hand. `…
-disable` reverses the layout, but on a packaged install it stops being a way to keep the daemon
-running — it refuses to serve once it finds no marker. Worth reading
+way in, all while it already has the administrator rights it needs to do that. Your data lives
+in `%ProgramData%\PrivacyFence\`. Uninstalling keeps it there, so a reinstall picks it up again;
+tick **Delete PrivacyFence data** in the uninstaller to remove it as well. The same tool,
+`powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" status`
+from an elevated PowerShell, is how to inspect the separation by hand (`enable` re-runs it). Worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
 either way — the migration moves live connector tokens.
 
