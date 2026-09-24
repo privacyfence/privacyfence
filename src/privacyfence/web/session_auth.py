@@ -431,8 +431,7 @@ def unauthorized_html(request: Request) -> Response:
     # #428 Phase 4 moved the control socket to a user-reachable
     # subdirectory on a privilege-separated install, and this page's whole
     # job is telling a locked-out human where to find it. Identical to
-    # data_dir() everywhere else. Unlike authority_dir(), neither call runs
-    # a migration.
+    # data_dir() everywhere else.
     handoff = paths.handoff_dir()
     # Deferred import: control_channel.py imports BootstrapStore from this
     # module, so importing it back at module scope here would be circular.
@@ -449,7 +448,7 @@ def unauthorized_html(request: Request) -> Response:
     else:
         # A plain join, not control_channel.posix_socket_path() -- that
         # calls the real, side-effecting paths.authority_dir() (creates the
-        # directory, runs its migration-on-first-use), which this
+        # directory), which this
         # unauthenticated error page has no business triggering on every
         # hit. socket_path_under() is the pure half of that same logic.
         # On a #428 Phase 4 install the socket isn't under ``authority`` at

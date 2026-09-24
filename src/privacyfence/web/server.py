@@ -353,39 +353,6 @@ def _write_mcp_url_file(url: str) -> None:
     privilege_separation.write_handoff_file(path, url)
 
 
-# The discovery files this daemon used to write a live sign-in link into, on
-# every startup and every re-mint: ``/approvals`` -> ``approvals_url``,
-# ``/settings`` -> ``settings_url``, ``/security`` -> ``security_url``. They
-# were the answer to a real problem -- SecretRedactingFormatter (SEC-10)
-# scrubs ``bootstrap=<value>`` out of every log line, so "the daemon logs its
-# URL on startup" was quietly false, and this file was the only channel that
-# actually delivered a usable link.
-#
-# The self-approval plan's Phase 2 stops writing them. handoff/ is 3770 and
-# group-shared with the logged-in user by design (paths.py: "deliberately
-# *not* a security boundary"), so a live bootstrap code sitting there was a
-# session for the taking, refreshed on every restart, by anything running as
-# that user -- the agent included, which is what §02 of that review counts as
-# the second of three silent paths to a session.
-#
-# Nothing replaces them, because two things already had: the companion's own
-# Open Approvals/Open Settings items, which are how a human gets an attested
-# session at all now, and ``privacyfence-app --print-sign-in-link`` for a
-# reader whose companion menu is out of reach (daemon_main.py).
-_LEGACY_BOOTSTRAP_URL_FILE_NAMES = ("approvals_url", "settings_url", "security_url")
-
-
-def _clear_legacy_bootstrap_url_files() -> None:
-    """Deletes any of the above left behind by a previous version, on
-    startup. An upgraded install would otherwise keep whatever file the old
-    daemon wrote last: the code in it is dead once that process exits (the
-    store is in memory), but it reads as a live sign-in link to a human, and
-    leaving a file this daemon no longer maintains where somebody was taught
-    to look for a working link is worse than leaving nothing."""
-    for name in _LEGACY_BOOTSTRAP_URL_FILE_NAMES:
-        (paths.handoff_dir() / name).unlink(missing_ok=True)
-
-
 def _clear_mcp_url_file() -> None:
     """Called on WebServer.stop() so a shim launched after this daemon exits
     finds no file rather than a stale, now-dead URL -- the same reasoning
@@ -1292,9 +1259,9 @@ class WebServer:
         )
         if self.mcp_verifier is not None:
             # Preload every already-provisioned principal's own persisted
-            # token (a previous run's MINT MCP/ROTATE MCP, or an existing
-            # single-user install's own legacy token -- see mcp_auth.py's
-            # own module docstring), then make sure the local/owner
+            # token (a previous run's MINT MCP/ROTATE MCP, or an unseparated
+            # install's handoff/mcp_token -- see mcp_auth.py's
+            # _mcp_token_path()), then make sure the local/owner
             # principal specifically has one registered even on a install's
             # very first start, before anyone has ever called MINT MCP.
             mcp_auth.preload_verifier(self.mcp_verifier)
@@ -1440,9 +1407,6 @@ class WebServer:
         if self.control_channel is not None:
             self.control_channel.start()
             _write_web_base_url_file(self.base_url)
-            # Local mode only: org mode never wrote these (no bootstrap
-            # concept at all), so there is nothing of its own to clean up.
-            _clear_legacy_bootstrap_url_files()
 
     def stop(self) -> None:
         self._server.should_exit = True

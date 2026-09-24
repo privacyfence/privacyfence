@@ -3150,7 +3150,7 @@ class TestLoadPrincipalSettings:
         from privacyfence import paths
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-        config_dir = tmp_path / "users" / principal_id / "config"
+        config_dir = tmp_path / "users" / principal_id / "authority" / "config"
         config_dir.mkdir(parents=True)
         cfg = {policy_store.AUTO_ACCEPT_CONFIG_KEY: policy_store.rules_to_config(policy_rules(rules)), **(extra or {})}
         (config_dir / "settings.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")

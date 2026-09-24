@@ -613,9 +613,9 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   `%ProgramFiles%\PrivacyFence\` path only, so on the common non-admin install it couldn't find the
   daemon at `%LOCALAPPDATA%\Programs\PrivacyFence\` either, whatever autostart did. Those two were
   fixed at the time: a failed `RegisterAutostartTask()` also raises a dialog (guarded by
-  `WizardSilent` so a scripted/silent install never blocks on it), and `findDaemonCmd()` checks both
-  Windows install locations, preferring `%ProgramFiles%` but falling back to
-  `%LOCALAPPDATA%\Programs`. Neither fix touched the registration failure itself, so the dialog kept
+  `WizardSilent` so a scripted/silent install never blocks on it), and `findDaemonCmd()` checked
+  `%LOCALAPPDATA%\Programs` as well until ADR 0041 dropped every non-current install layout; it now
+  checks `%ProgramFiles%` only. Neither fix touched the registration failure itself, so the dialog kept
   firing on every non-admin install — including, later, a second real user hitting exactly the same
   dialog, screenshots and all. **The actual fix is `PrivilegesRequired=admin`**: Setup's own manifest
   now requires an elevated token before it runs at all, so `RegisterAutostartTask()` never runs

@@ -49,12 +49,9 @@ MCP_TOKEN_FILE_NAME = "mcp_token"  # nosec B105  # a filename, not a credential 
 
 def _mcp_token_path(principal: Principal) -> Path:
     """Where ``principal``'s own persisted MCP token lives. On an
-    unseparated install this is the exact path ``load_or_create_mcp_token()``
-    has always used (``handoff_dir()`` *is* ``data_dir()`` there) -- local
-    mode has exactly one principal on such an install, so nothing here
-    moves, and an old ``.mcpb`` build that still reads that file directly
-    off disk (``mcpb/shim/src/protocol.ts``'s legacy fallback) keeps working
-    unchanged. On a privilege-separated install this is
+    unseparated install this is ``handoff_dir()/mcp_token`` (``handoff_dir()``
+    *is* ``data_dir()`` there) -- local mode has exactly one principal on
+    such an install. On a privilege-separated install this is
     ``authority_dir(principal)/mcp_token`` instead -- unreadable to any OS
     user directly (``0700``, service-account-owned), reachable only by
     minting it fresh over the control channel (``MINT MCP``), which is what
@@ -114,34 +111,6 @@ def _write_new_token(principal: Principal, path: Path) -> str:
     else:
         privilege_separation.write_handoff_file(path, token)
     return token
-
-
-def delete_legacy_shared_mcp_token() -> None:
-    """Daemon startup, separated installs only (ADR 0008): removes a
-    leftover ``handoff/mcp_token`` from before this ADR existed -- the
-    single secret every OS user's caller resolved to ``LOCAL_PRINCIPAL``,
-    which is exactly the leak Problem 3 diagnosed. Leaving it in place would
-    still let any service-group member read the owner's own token straight
-    off disk, bypassing ``MINT MCP`` (and the kernel-verified identity it
-    is built on) entirely -- deleting it is what makes an old, unmigrated
-    ``.mcpb`` build fail loudly (the same "update the extension" outcome
-    ADR 0007 already established for a stale shim on a separated install)
-    instead of quietly handing out a token that no longer means what it
-    used to.
-
-    A no-op on an unseparated install: there is exactly one principal
-    there, so the file is not a leak, and ``load_or_create_mcp_token()``
-    keeps using this exact path for it (see ``_mcp_token_path()``'s own
-    docstring) -- deleting it would just make the next `/mcp` bearer-token
-    check fail for no security gain.
-    """
-    if not privilege_separation.is_enabled():
-        return
-    path = paths.handoff_dir() / MCP_TOKEN_FILE_NAME
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        pass  # already gone -- deletion here is best-effort and idempotent
 
 
 class PerUserTokenVerifier(TokenVerifier):

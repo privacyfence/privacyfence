@@ -299,8 +299,7 @@ def _resolve_path(path: str) -> str:
 
 def _resolve_authority_path(path: str) -> str:
     """Like ``_resolve_path()``, but rooted at the ``authority`` subtree
-    rather than ``user_dir()``/``PROJECT_ROOT`` directly -- #428 Phase 1's
-    split for the files that back the *human's* authority (today, just
+    rather than ``user_dir()``/``PROJECT_ROOT`` directly -- the split for the files that back the *human's* authority (today, just
     ``config/settings.yaml``) rather than the agent's own operational data.
     Mirrors ``_resolve_path()``'s own local-vs-other-principal branching,
     including anchoring the local principal on ``PROJECT_ROOT`` rather than
@@ -880,15 +879,11 @@ def _maybe_start_web_server(
             "wasn't done deliberately, treat this install as compromised (see "
             "docs/security-and-compliance.md's Local-mode trust boundary section)",
         )
-    # No link in these lines any more, and no discovery file behind them
-    # either (the self-approval plan's Phase 2 -- see web/server.py's own
-    # _clear_legacy_bootstrap_url_files). Both channels were already
-    # half-broken by design: SEC-10's SecretRedactingFormatter scrubs
-    # bootstrap=<value> out of every line this process logs, so the log line
-    # itself never carried a usable link, and the file that did sat in a
-    # group-shared directory where anything running as this user could take
-    # the session out of it. What a human does instead is open the companion
-    # app, which is also the only route to a session that may approve
+    # No sign-in link in these lines, and no discovery file carrying one:
+    # SecretRedactingFormatter scrubs bootstrap=<value> out of every line
+    # this process logs, and a file in the group-shared handoff directory
+    # would hand the session to anything running as this user. What a human
+    # does instead is open the companion app, which is also the only route to a session that may approve
     # (web/session_auth.py's PROVENANCE_HUMAN), or run the break-glass
     # command these lines name.
     logger.info(
@@ -1762,15 +1757,6 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
     init_config_path(_resolve_path(config_path))
 
-    # ADR 0008: a leftover handoff/mcp_token predates per-principal MCP
-    # tokens and is the shared credential that let every OS user's caller
-    # resolve to LOCAL_PRINCIPAL -- removed here, once, at the top of every
-    # separated startup, before anything else in this function runs. A
-    # no-op on an unseparated install (see that function's own docstring).
-    from .web import mcp_auth as _mcp_auth
-
-    _mcp_auth.delete_legacy_shared_mcp_token()
-
     set_policy_v2_store_rules(policy_store.compile_rules_from_config(config))
     # Issue #151 retired the settings.yaml-configurable rule_suggestion_priority
     # (every matching auto-accept rule now gets its own "Always allow" button, so
@@ -1819,14 +1805,9 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
             logger.warning("Could not start audit-log forwarding -- continuing without it: %s", exc)
 
     audit_logger = init_audit_logger(
-        # #428 Phase 1: the audit log (plus its HMAC key) is one of the
-        # human-authority files -- authority_root(), not data_dir() itself.
-        # migrate_audit_log=True only here: this is the one call site that
-        # also reads the local principal's audit log back from the new
-        # location afterwards -- see authority_root()'s own docstring for
-        # why every other authority_root()/authority_dir() call defaults to
-        # leaving the audit directory alone.
-        str(authority_root(Path(data_dir()), migrate_audit_log=True) / "logs" / "audit"),
+        # The audit log (plus its HMAC key) is one of the human-authority
+        # files -- authority_root(), not data_dir() itself.
+        str(authority_root(Path(data_dir())) / "logs" / "audit"),
         deployment_id=get_or_create_deployment_id(),
         security_config_hash=compute_security_config_hash(config),
         forwarder=audit_forwarder,
@@ -1984,9 +1965,9 @@ def run_print_mcp_token() -> int:
     """ADR 0008's own break-glass-style path for ``/mcp``: a direct HTTP
     MCP client with no ``.mcpb`` shim of its own (Claude Code, a hand-
     rolled script) has nowhere to read a bearer token from any more on a
-    privilege-separated install -- ``handoff/mcp_token``, the one shared
-    file every OS user's caller used to read, no longer exists once
-    separated (``mcp_auth.delete_legacy_shared_mcp_token()``). This runs the
+    privilege-separated install, where each principal's token lives in its
+    own service-owned ``authority_dir()`` (``mcp_auth._mcp_token_path()``).
+    This runs the
     identical ``MINT MCP`` mint the shim itself does
     (``mcpb/shim/src/controlChannel.ts``), as this OS account, and prints
     the result -- the same token this account gets back every time it asks,
@@ -2028,7 +2009,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="privacyfence-app",
         description="PrivacyFence daemon — governance UI and connector host.",
     )
-    # #428 Phase 1: authority_root(), not PROJECT_ROOT directly -- settings.yaml
+    # authority_root(), not PROJECT_ROOT directly -- settings.yaml
     # is the human's privacy policy, not the agent's own operational data.
     default_config = str(authority_root(Path(PROJECT_ROOT)) / "config" / "settings.yaml")
     parser.add_argument("--config", default=default_config)

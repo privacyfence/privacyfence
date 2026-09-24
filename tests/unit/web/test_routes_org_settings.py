@@ -86,22 +86,15 @@ def _on_disk_rules(tmp_path, principal_id: str) -> list:
     # Reads straight off disk rather than through auto_accept.get_policy_v2_rules(), which
     # requires that principal's config_path to already be registered -- true after a request
     # actually reaches that principal's scope, not for a principal who only attempted a rejected
-    # (bad-CSRF/wrong-origin/forbidden) request in this test process. A refused request that still
-    # touched this principal's WebAuthn credentials (a step-up challenge/verify attempt) triggers
-    # paths.py's own one-time legacy-authority-files migration as a side effect -- settings.yaml
-    # moves from config/ to authority/config/ the first time authority_dir() is asked for this
-    # principal at all, whether or not the settings write itself was ever reached. Check the
-    # post-migration location first since a migration, once it happens, is one-directional.
+    # (bad-CSRF/wrong-origin/forbidden) request in this test process.
     settings_path = tmp_path / "users" / principal_id / "authority" / "config" / "settings.yaml"
-    if not settings_path.exists():
-        settings_path = tmp_path / "users" / principal_id / "config" / "settings.yaml"
     raw = yaml.safe_load(settings_path.read_text())
     return ((raw or {}).get("auto_accept") or {}).get("rules") or []
 
 
 def _seed(tmp_path, monkeypatch, principal_id: str, *, rules=None) -> None:
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    config_dir = tmp_path / "users" / principal_id / "config"
+    config_dir = tmp_path / "users" / principal_id / "authority" / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     cfg: dict = {}
     if rules:

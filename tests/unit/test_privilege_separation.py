@@ -1022,11 +1022,6 @@ class TestInstallerContract:
         from privacyfence.web import server
 
         assert server.MCP_URL_FILE_NAME in moved
-        # The legacy <page>_url files an older version wrote are matched by
-        # the glob rather than named -- see the scripts' own comment, and
-        # web/server.py's _clear_legacy_bootstrap_url_files for what deletes
-        # them once they have been moved.
-        assert all(name.endswith("_url") for name in server._LEGACY_BOOTSTRAP_URL_FILE_NAMES)
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     @pytest.mark.parametrize("subcommand", ["enable", "disable", "status"])
