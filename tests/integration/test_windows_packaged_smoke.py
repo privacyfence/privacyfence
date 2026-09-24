@@ -1141,9 +1141,11 @@ def test_windows_install_separates_with_no_manual_enable(tmp_path):
             f"a {REMOVED_DAEMON_TASK_NAME!r} daemon sign-in task is registered"
         )
     finally:
-        uninstaller = install_dir / "unins000.exe"
-        if uninstaller.is_file():
-            _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
+        # _silent_uninstall, not a bare _run_installer: unins000.exe returning
+        # is only the uninstall's first phase, and a second phase still running
+        # when this test returns is a leak _clean_separation_state fails it for.
+        if (install_dir / "unins000.exe").is_file():
+            _silent_uninstall(install_dir)
 
 
 # --------------------------------------------------------------------------- #
