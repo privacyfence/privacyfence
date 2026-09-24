@@ -139,6 +139,7 @@ from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
 from .session_auth import authenticated as _session_authenticated
 from .session_auth import check_csrf as _csrf_matches
 from .session_auth import check_origin as _origin_ok
+from .session_auth import is_human_session as _is_human_session
 from .session_auth import set_session_cookie as _set_session_cookie
 from .session_auth import unauthorized_html as _unauthorized_response
 from .state_stream import StateStream
@@ -1006,6 +1007,14 @@ def build_app(
             # comes back in the body exactly as it always did. See
             # present_recovery_code() and routes_security.build_routes.
             deliver_recovery_code=present_recovery_code if paths.is_bundled() else None,
+            # Trading in a recovery code wipes every enrolled passkey, so it
+            # asks the same human-session question as an approving decision,
+            # on the same installs -- see routes_security.build_routes'
+            # docstring on is_human_session. Org mode's call below passes
+            # nothing: an org session is itself an IdP sign-in.
+            is_human_session=(
+                (lambda request: _is_human_session(request, sessions)) if require_human_session else None
+            ),
         ))
 
     if state_stream is not None:
