@@ -95,6 +95,11 @@ SolidCompression=yes
 ; fallback path around it.
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
+; The OS floor (docs/platform-support.md's support matrix;
+; tests/unit/test_minimum_os_versions.py keeps the two in step): Windows 10 /
+; Server 2016. Setup refuses to run on anything older rather than installing
+; an app nothing has built or tested for.
+MinVersion=10.0
 
 [Files]
 ; The whole onedir PyInstaller output -- PrivacyFenceApp.exe,

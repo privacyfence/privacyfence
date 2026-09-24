@@ -43,6 +43,7 @@ else
 fi
 
 command -v dpkg-deb &>/dev/null || { echo "Required tool not found: dpkg-deb (apt-get install dpkg-dev)" >&2; exit 1; }
+command -v objdump &>/dev/null || { echo "Required tool not found: objdump (apt-get install binutils, a dpkg-dev dependency)" >&2; exit 1; }
 
 # Version comes from the git tag via setuptools_scm now (this repo's CLAUDE.md "Releasing")
 # -- read back through the installed package's own metadata, same as PrivacyFenceApp.spec/
@@ -257,9 +258,9 @@ CHANGELOG_DATE="$(date -Ru)"
 # note, but not directly usable as a binary .deb's DEBIAN/control. Render the binary control file
 # from its Package: stanza here: drop comment lines (not valid in a binary control file, only in
 # the source-package one dpkg-source parses) and dh substvar placeholders (nothing computes
-# ${misc:Depends} outside a real dh build -- an empty/absent Depends is exactly the "no python3-*
-# dependency requirements" property the key design decision above (PyInstaller over a
-# python3-*-dependent package) is built around), then fill in this build's Architecture/Version/Installed-Size.
+# ${misc:Depends} outside a real dh build; the explicit libc6/systemd floors next to it stay -- they
+# are the OS floor, not python3-* packages, so the key design decision above still holds), then
+# fill in this build's Architecture/Version/Installed-Size.
 INSTALLED_SIZE_KB=$(find "$STAGE" -mindepth 1 -maxdepth 1 ! -name DEBIAN -exec du -sk {} + | awk '{sum+=$1} END {print sum+0}')
 
 "$PYTHON" - "$ARCH" "$DEB_VERSION" "$INSTALLED_SIZE_KB" "${STAGE}/DEBIAN/control" <<'PYEOF'
@@ -279,8 +280,12 @@ for line in pkg_stanza.splitlines():
         out.append(f"Architecture: {arch}")
         continue
     if "${" in line:
-        # Drop dh substvar placeholders (e.g. "Depends: ${misc:Depends}") -- see this script's
-        # own comment above for why.
+        # Drop dh substvar placeholders (e.g. "${misc:Depends}") -- see this script's own comment
+        # above for why -- and the whole field if nothing else is left in it.
+        field, _, value = line.partition(":")
+        kept = [item.strip() for item in value.split(",") if item.strip() and "${" not in item]
+        if kept:
+            out.append(f"{field}: {', '.join(kept)}")
         continue
     out.append(line)
 
@@ -302,6 +307,11 @@ out[insert_at:insert_at] = [f"Version: {ver}", f"Installed-Size: {installed_size
 with open(out_path, "w") as f:
     f.write("\n".join(out).strip() + "\n")
 PYEOF
+
+# The OS floor debian/control declares has to cover what the bundle was actually linked against --
+# see scripts/check_deb_glibc_floor.py's own docstring.
+echo "→ Checking the declared glibc floor…"
+"$PYTHON" scripts/check_deb_glibc_floor.py "${STAGE}/opt/privacyfence" "${STAGE}/DEBIAN/control"
 
 # ── 6. Build the .deb ──────────────────────────────────────────────────────────
 echo "→ Running dpkg-deb…"

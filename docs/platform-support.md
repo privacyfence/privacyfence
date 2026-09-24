@@ -4,13 +4,21 @@ PrivacyFence local mode is packaged for macOS, Windows, and Debian/Ubuntu Linux.
 
 ## Support matrix
 
-| Platform | Distribution | Startup model | Release automation |
-|---|---|---|---|
-| macOS | one signed/notarized DMG, carrying the `.pkg` installer (which holds the PyInstaller app bundle) and the MCPB side by side | installed by the `.pkg`, which provisions a LaunchDaemon under a dedicated account at install time, mandatorily (see below); D1's runtime prompt is the fallback for an install that reached a running state some other way, not a second shipped path | `.github/workflows/build.yml` on `macos-latest` |
-| Windows | Inno Setup installer containing the PyInstaller executable and MCPB | the installer separates the install as part of installing (see below): a Windows service under a virtual service account runs the daemon, a Task Scheduler entry runs the companion | `.github/workflows/build.yml` on `windows-latest` |
-| Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | `postinst` separates the install unconditionally on every install and upgrade (see below): a system systemd unit under a dedicated account runs the daemon, an XDG autostart desktop entry runs the companion | `.github/workflows/build.yml` on `ubuntu-latest` |
-| Linux Python install | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
-| Linux org mode | Python/system service behind the configured reverse proxy and identity provider | operator-managed service | release smoke coverage in the build/test suite |
+| Platform | Minimum OS | Distribution | Startup model | Release automation |
+|---|---|---|---|---|
+| macOS | macOS 13 | one signed/notarized DMG, carrying the `.pkg` installer (which holds the PyInstaller app bundle) and the MCPB side by side | installed by the `.pkg`, which provisions a LaunchDaemon under a dedicated account at install time, mandatorily (see below); D1's runtime prompt is the fallback for an install that reached a running state some other way, not a second shipped path | `.github/workflows/build.yml` on `macos-latest` |
+| Windows | Windows 10 / Windows Server 2016 (x64) | Inno Setup installer containing the PyInstaller executable and MCPB | the installer separates the install as part of installing (see below): a Windows service under a virtual service account runs the daemon, a Task Scheduler entry runs the companion | `.github/workflows/build.yml` on `windows-latest` |
+| Debian/Ubuntu local mode | glibc 2.39 and systemd 242 (Ubuntu 24.04, Debian 13 or newer) | self-contained `.deb` built from the PyInstaller onedir output | `postinst` separates the install unconditionally on every install and upgrade (see below): a system systemd unit under a dedicated account runs the daemon, an XDG autostart desktop entry runs the companion | `.github/workflows/build.yml` on `ubuntu-latest` |
+| Linux Python install | Python 3.11 | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
+| Linux org mode | Python 3.11 | Python/system service behind the configured reverse proxy and identity provider | operator-managed service | release smoke coverage in the build/test suite |
+
+Each installer enforces its own row's floor and refuses an older system instead of installing
+something that cannot start: the `.pkg` through its `allowed-os-versions` (the app's
+`LSMinimumSystemVersion`), the Windows installer through `MinVersion`, and the `.deb` through its
+`libc6`/`systemd` dependency versions. The `.deb`'s glibc floor is whatever the build runner linked
+the bundled Python against; `scripts/check_deb_glibc_floor.py` fails the build if that ever rises
+above the declared floor. `tests/unit/test_minimum_os_versions.py` keeps all three in step with
+this table.
 
 ## Shared runtime architecture
 

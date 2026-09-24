@@ -43,6 +43,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The installers now refuse a system older than PrivacyFence supports instead of installing an
+  app that cannot start: the macOS `.pkg` requires macOS 13, the Windows installer Windows 10 /
+  Windows Server 2016, and the `.deb` declares its glibc and systemd floors as package
+  dependencies (glibc 2.39, systemd 242: Ubuntu 24.04 or Debian 13 and newer). The support
+  matrix in `docs/platform-support.md` now lists each platform's minimum.
+
 ## [4.4.0] — 2026-09-24
 
 ### Added

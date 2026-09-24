@@ -162,8 +162,9 @@ Now continue with [Finish setup](#finish-setup-every-platform).
 sudo apt install ./privacyfence_<version>_amd64.deb
 ```
 
-`sudo dpkg -i privacyfence_<version>_amd64.deb` works too — the package declares no dependencies
-today, and `apt` simply resolves any future ones. Installing it separates the install itself: the
+`sudo dpkg -i privacyfence_<version>_amd64.deb` works too — the package's only dependencies are
+its minimum glibc and systemd versions, which any supported release already has (see the support
+matrix in [Platform support](platform-support.md)). Installing it separates the install itself: the
 daemon becomes a system systemd unit running as a dedicated `privacyfence` account, with your data
 directory at `/var/lib/privacyfence`.
 

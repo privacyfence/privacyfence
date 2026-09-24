@@ -34,7 +34,9 @@ What this proves, all without installing anything:
    ``scripts/build_pkg.sh`` actually resolved -- a stale value here would
    have the installer's own UI, and ``pkgutil --pkg-info`` afterward, lie
    about what got installed.
-5. Signature: same optional-and-skip-if-unsigned posture as
+5. The ``Distribution`` XML refuses a macOS older than the payload app's own
+   ``LSMinimumSystemVersion``.
+6. Signature: same optional-and-skip-if-unsigned posture as
    ``test_macos_packaged_smoke.py``'s own ``test_packaged_app_signature_
    and_notarization`` -- a local dev build with no ``--sign`` is legitimate
    and this must not fail over it, but ``build.yml``'s real release job
@@ -150,6 +152,23 @@ def test_pkg_contains_postinstall_and_app_payload(expanded_pkg):
         f"{separation_script} missing from the package payload -- the bundled postinstall script "
         f"calls exactly this path, at install time, as root"
     )
+
+
+def test_pkg_refuses_macos_older_than_the_app_supports(expanded_pkg):
+    """The installer's own OS floor is the app's ``LSMinimumSystemVersion``,
+    so Installer.app refuses a system the app would not launch on instead of
+    installing it anyway (``scripts/build_pkg.sh`` reads the floor back from
+    the built bundle; ``tests/unit/test_minimum_os_versions.py`` ties that
+    value to the support matrix)."""
+    pkg_path = _built_pkgs()[-1]
+    root = ET.fromstring((expanded_pkg / "Distribution").read_text(encoding="utf-8"))
+    os_versions = root.findall("./allowed-os-versions/os-version")
+    assert len(os_versions) == 1, f"{pkg_path.name}'s Distribution declares no single allowed-os-versions floor"
+
+    app_bundle = next(expanded_pkg.glob("**/Payload/PrivacyFenceApp.app"))
+    with open(app_bundle / "Contents" / "Info.plist", "rb") as f:
+        app_floor = plistlib.load(f)["LSMinimumSystemVersion"]
+    assert os_versions[0].get("min") == app_floor
 
 
 def test_pkg_payload_is_not_relocatable(expanded_pkg):
