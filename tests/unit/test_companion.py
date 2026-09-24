@@ -1084,6 +1084,9 @@ class TestTrayLoop:
         # real poll tick (probe -> redraw -> update_menu) actually takes,
         # rather than a fixed sleep.
         monkeypatch.setattr(companion, "_STATUS_POLL_SECONDS", 0.01)
+        # The direct (Windows) redraw path; macOS queues it onto a main run
+        # loop no test drives -- see the test below.
+        monkeypatch.setattr(companion.sys, "platform", "win32")
         stopped_status = companion.daemon_status.DaemonStatus(
             state="stopped", version=None, pid=None, detail="PrivacyFence is not running.",
         )
