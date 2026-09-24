@@ -23,7 +23,9 @@ Run only checks that automation cannot judge reliably:
   after a logout/login, confirm the daemon is running under `_privacyfence` (`ps -o user= -p …`) and
   that your own account genuinely cannot read `/Library/Application Support/PrivacyFence/authority`,
   confirm the menu-bar companion opens `/approvals` and a real MCP client still reaches `/mcp`, then
-  run `… disable` and confirm the previous layout is back with connector tokens intact. No CI job can
+  run `… uninstall` and confirm the daemon and companion are gone while
+  `/Library/Application Support/PrivacyFence` is kept and nothing appeared under your home
+  directory ([ADR 0042](adr/0042-uninstall-replaces-disable.md)). No CI job can
   cover any of this — it needs root, a real system account and a real login session — so this check
   is its only coverage; see `platform-support.md`'s "Known open items";
 - on Linux specifically, the same check against the same set of changes, in that platform's own
@@ -31,8 +33,9 @@ Run only checks that automation cannot judge reliably:
   `… status` reports a clean layout after a logout/login, confirm the daemon is running under
   `privacyfence` (`systemctl show -p User privacyfence-daemon.service`, `ps -o user= -p …`) and that
   your own account genuinely cannot read `/var/lib/privacyfence/authority`, confirm the Applications
-  menu entry opens `/approvals` and a real MCP client still reaches `/mcp`, then run `… disable` and
-  confirm the previous layout is back with connector tokens intact. **Plus the one thing macOS's
+  menu entry opens `/approvals` and a real MCP client still reaches `/mcp`, then `apt remove` and
+  reinstall and confirm the connector is still signed in (`/var/lib/privacyfence` is kept, ADR 0042),
+  and `apt purge` and confirm it and the `privacyfence` account are gone. **Plus the one thing macOS's
   check doesn't have to cover: complete a real connector OAuth flow (Slack, Salesforce or
   Atlassian) while separated.** A daemon with no desktop session cannot open a browser itself, so
   that flow goes through the `--serve` companion the XDG autostart entry starts — and if that entry

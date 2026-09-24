@@ -120,15 +120,16 @@ companion app in each user session so a human still has a way in.
 The `.pkg` below runs this itself, as root, during the install — the ordinary macOS path, since
 [ADR 0003](adr/0003-separated-installs-only.md) decision 2 left nothing else to install macOS
 PrivacyFence from. The admin-password dialog (`privilege_separation.maybe_auto_enable_macos()`,
-called from `daemon_main.main()`) is the fallback for an install that reached a running state some
-other way — a copied app bundle, an in-place upgrade from before this ADR — and is asked again on
+called from `daemon_main.main()`) is the fallback for a `.pkg` install whose postinstall did not
+finish separating — the postinstall never fails the install, so the app can land in `/Applications`
+with no marker, and the MCPB shim then starts the packaged daemon directly. It is asked again on
 every start it finds itself still unseparated, not just once: ADR 0003 decision 6 retired the
 one-shot marker that used to make a decline permanent, because under that ADR a decline is not a
-configuration, it is an unfinished install. `enable`/`disable`/`status` remain available by hand for
-inspecting or reversing an install either way — but see ADR 0003 decision 6 below: a **packaged**
-build that ends up unseparated anyway refuses to serve, so `disable` stops being a way to keep
-running PrivacyFence and becomes only the way to get your data back out from under the service
-account first.
+configuration, it is an unfinished install. `enable`/`uninstall`/`status` remain available by hand
+([ADR 0042](adr/0042-uninstall-replaces-disable.md)): `uninstall` stops and unregisters the
+LaunchDaemon and companion and keeps the data under the system root; `uninstall --purge` also
+deletes it. Nothing moves data back into `~/Library` — see ADR 0003 decision 6 below: a
+**packaged** build that ends up unseparated refuses to serve.
 
 Three parts of the layout matter to anything that has to find PrivacyFence's files:
 
@@ -142,11 +143,11 @@ The installing user is added to the `_privacyfence` group, which is what keeps `
 from their session — macOS evaluates group membership at login, so this needs a logout/login to take
 effect. `src/privacyfence/privilege_separation.py` resolves all of it from a marker file the
 installer writes, and the MCPB shim (`mcpb/shim/src/protocol.ts`) reads the same marker so Claude
-Desktop keeps finding the daemon. `… status` audits the result; `… disable` reverses it.
+Desktop keeps finding the daemon. `… status` audits the result; `… uninstall [--purge]` removes it.
 
 Mandatory on every packaged install as of [ADR 0003](adr/0003-separated-installs-only.md) — the
-manual `enable`/`disable`/`status` subcommands above still exist for inspecting or reversing an
-install by hand; the migration moves live connector OAuth tokens. Linux and Windows separate too
+manual `enable`/`uninstall`/`status` subcommands above still exist for inspecting or removing an
+install by hand. Linux and Windows separate too
 (below), the same ADR making all three mandatory rather than leaving any of them opt-in.
 See [`security-and-compliance.md`](security-and-compliance.md#privilege-separation-macos-linux-and-windows) for
 what the separation does and does not buy.

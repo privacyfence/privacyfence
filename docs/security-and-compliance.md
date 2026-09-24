@@ -55,9 +55,9 @@ below, which is what [#428](https://github.com/privacyfence/privacyfence/issues/
 and [ADR 0003](adr/0003-separated-installs-only.md) makes mandatory rather than opt-in on any of the
 three. A packaged build that finds itself unseparated does not serve at all (ADR 0003 decision 6 —
 no `/mcp`, no approvals), so the un-separated install the rest of this section describes is not
-something any of the three platforms' installers ship: it is reachable only via `... disable`
-on Windows or `... uninstall --purge` on macOS and Linux (documented and deliberate — see that
-subsection), or from a non-packaged source/pip checkout run
+something any of the three platforms' installers ship: it is reachable only via
+`... uninstall --purge` (`-Purge` on Windows) with the package still installed (documented and
+deliberate — see that subsection), or from a non-packaged source/pip checkout run
 with `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` for local development (never a real deployment — see
 that subsection and [ADR 0003](adr/0003-separated-installs-only.md) decision 7). That subsection
 says exactly which of the statements below a separated install changes and which it leaves
