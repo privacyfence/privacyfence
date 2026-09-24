@@ -43,6 +43,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Local mode's settings dispatcher now records every settings change — and every step-up
+  refusal of one — in the audit log**, the same way org mode's settings routes already do. Before
+  this, a local install's own `POST /api/settings/{action}` dispatcher never called
+  `_record_settings_audit` at all, so nothing about a local settings change (a policy tweak, a
+  new auto-accept rule, a connector being enabled) showed up in that install's own audit log.
+
 ### Security
 
 - **Org mode's own sensitive settings actions — adding or removing an auto-accept rule, and
