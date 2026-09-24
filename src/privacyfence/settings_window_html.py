@@ -1450,9 +1450,9 @@ def build_html(
     (``mode="local"``, every caller before PSC-5) *and*, since PSC-5, for
     org mode's own ``GET /settings``/``GET /settings/privacy`` -- one
     implementation rendering a capability-filtered subset for each, not one
-    page (see ``docs/policy-surface-consolidation-plan.md``'s own PSC-5
-    brief): the nav items and page content below differ by mode/``is_admin``,
-    but every section both modes keep (Auto-accept; General/Privacy Filter
+    page (see ADR 0033 and ADR 0032): the nav items and page content below
+    differ by mode/``is_admin``, but every section both modes keep
+    (Auto-accept; General/Privacy Filter
     for an org admin) is the exact same template, reading the exact same
     ``state`` shape, posting through the exact same bridge.
 

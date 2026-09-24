@@ -7,7 +7,9 @@ decision 6 (see "Relationship to ADR 0002 decision 6" below) and decision 2's co
 Supersedes the local-mode-fixes plan's own Phase 2 §2.6 interim guard (the single-recorded-owner
 refusal in `privilege_separation.owner_membership_pending()`/`other_account_owns_this_install()`,
 and the shell scripts' `--allow-additional-user` flag) — that guard closed one leak ahead of this
-redesign; this ADR is the redesign.
+redesign; this ADR is the redesign. The route-layer merge this ADR's own Related section pointed
+[Issue #579](https://github.com/privacyfence/privacyfence/issues/579) at is now
+[ADR 0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md), implemented.
 
 **This phase ships a narrower slice than the plan document describes**, and that narrowing is
 recorded here rather than left implicit. See "What this phase deliberately does not do" below for
