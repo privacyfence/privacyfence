@@ -1102,12 +1102,6 @@ def test_windows_install_separates_with_no_manual_enable(tmp_path):
         if uninstaller.is_file():
             _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
 
-    # TEMPORARY (reverted before the final push): leak a process named like the
-    # companion to show _clean_separation_state fails this test for it.
-    leaked = tmp_path / COMPANION_EXE_NAME
-    shutil.copy(Path(os.environ["SystemRoot"]) / "System32" / "PING.EXE", leaked)
-    subprocess.Popen([str(leaked), "-n", "600", "127.0.0.1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
 
 # --------------------------------------------------------------------------- #
 # Test 4 -- remove keeps data, reinstall picks it up, purge deletes it (ADR 0042)
