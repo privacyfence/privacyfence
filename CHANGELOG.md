@@ -52,7 +52,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   organization server's Google connector client needs
   `https://<your-server>/oauth/callback/apps_script` added to its registered redirect URIs.
 
+- **`--agent-links` / `--no-agent-links` for `scripts/build_org_bundle.py`**, writing the org
+  bundle's `download_delivery.agent_links` (on by default, unchanged) instead of requiring the
+  bundle to be edited by hand.
+
 ### Changed
+
+- **Org bundles bind the daemon to loopback by default.** `scripts/build_org_bundle.py
+  --server-bind-host` now defaults to `127.0.0.1` instead of `0.0.0.0`, so a bundle built without
+  the flag is reachable only by a reverse proxy on the same host, as the org-mode setup guide
+  already required. A bundle with no `server.bind_host` also binds `127.0.0.1` (was `localhost`).
+  Pass `--server-bind-host` explicitly when the proxy runs on another host.
 
 - The installers now refuse a system older than PrivacyFence supports instead of installing an
   app that cannot start: the macOS `.pkg` requires macOS 13, the Windows installer Windows 10 /
