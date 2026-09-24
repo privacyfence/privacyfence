@@ -123,7 +123,6 @@ mkdir -p \
   "${STAGE}/DEBIAN" \
   "${STAGE}/opt/privacyfence" \
   "${STAGE}/usr/bin" \
-  "${STAGE}/etc/xdg/autostart" \
   "${STAGE}/usr/share/applications" \
   "${STAGE}/usr/share/icons/hicolor/512x512/apps" \
   "${STAGE}/usr/share/icons/hicolor/64x64/apps" \
@@ -179,10 +178,10 @@ fi
 find "${STAGE}/opt/privacyfence" \( -name '*.so' -o -name '*.so.*' \) -type f -exec chmod 0644 {} +
 
 install -m 0755 resources/linux/privacyfence-app-wrapper "${STAGE}/usr/bin/privacyfence-app"
-install -m 0644 resources/linux/privacyfence.desktop "${STAGE}/etc/xdg/autostart/privacyfence.desktop"
-# #428 Phase 3 (ADR 0002): the companion app's own wrapper/launcher entry -- see
-# resources/linux/privacyfence.desktop's own comment for why this is a second, separate .desktop
-# file rather than a change to the autostart one above.
+# The companion app's own wrapper and application-menu entry (ADR 0002). The package ships no
+# autostart entry of its own: the daemon is a system unit, and the companion's autostart entry is
+# rendered by the separation tool at `enable` time (installer/linux/
+# privacyfence-companion.desktop.tmpl).
 install -m 0755 resources/linux/privacyfence-companion-wrapper "${STAGE}/usr/bin/privacyfence-companion"
 install -m 0644 resources/linux/privacyfence-companion.desktop \
   "${STAGE}/usr/share/applications/privacyfence-companion.desktop"
@@ -221,11 +220,6 @@ install -m 0755 debian/postinst "${STAGE}/DEBIAN/postinst"
 install -m 0755 debian/prerm "${STAGE}/DEBIAN/prerm"
 install -m 0755 debian/postrm "${STAGE}/DEBIAN/postrm"
 
-# /etc/xdg/autostart/privacyfence.desktop is package-owned configuration under /etc -- mark it a
-# conffile so dpkg preserves local edits across upgrades instead of silently overwriting them
-# (dh_installdeb would do this automatically for anything under /etc in a real dh build; this
-# script replicates it by hand for the same reason as everywhere else in this staging step).
-echo "/etc/xdg/autostart/privacyfence.desktop" > "${STAGE}/DEBIAN/conffiles"
 
 # debian/changelog isn't hand-maintained per release (this repo's CLAUDE.md "Releasing" section:
 # there's no hand-bumped version file at all, on the same reasoning) -- generate a single-entry

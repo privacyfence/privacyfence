@@ -857,73 +857,32 @@ on top of a running daemon restarts it onto the new build rather than needing it
 `installer/privacyfence.iss` (built by `scripts/build_installer.ps1`) installs the PyInstaller
 onedir output under `%ProgramFiles%\PrivacyFence\`, the bundled `.mcpb` alongside it, and a Start
 Menu entry pointing at the embedded web settings UI rather than at the daemon executable directly.
-The installer requires admin elevation (`PrivilegesRequired=admin`) — it used to allow a
-per-user-writable install without elevation (`PrivilegesRequired=lowest`), but that path could
-never register the Task Scheduler autostart task below at all: `schtasks /create /xml` registering
-a task with a `LogonTrigger` needs the `SeCreateGlobalPrivilege` user right, which a non-elevated
-token lacks regardless of the task's principal (see `platform-support.md`'s "Known open items").
+The installer requires admin elevation (`PrivilegesRequired=admin`): its post-install step runs
+`privilege-separation.ps1 enable` ([ADR 0003](adr/0003-separated-installs-only.md) decision 4),
+which creates a Windows service, a local group and an ACL'd `%ProgramData%\PrivacyFence`, and
+refuses to run a service out of a directory the signed-in user can rewrite.
 
-Autostart is a Task Scheduler task (`PrivacyFence`), not a Startup-folder shortcut, registered from
-`installer/privacyfence.iss`'s `[Code]` section (`CurStepChanged(ssPostInstall)` calling
-`RegisterAutostartTask`) rather than a plain `[Run]` entry, and removed by the uninstaller's
-`[UninstallRun]` section (`schtasks /delete`) — visible and removable through normal Windows
-install/uninstall UI, the same way the macOS LaunchAgent plist and the Linux `.deb`'s XDG autostart
-entry are. Registration is a real Task Scheduler XML task definition
-(`installer/privacyfence-task.xml.tmpl`, extracted at install time, `__EXEC_PATH__` substituted for
-the real installed path, registered via `schtasks /create /xml`), not plain `schtasks /create` CLI
-flags — an earlier CLI-flag-only version of this mechanism shipped briefly with two real bugs
-(invalid `/ri`/`/du` flags for an `ONLOGON` schedule, then a trigger scoped to only the installing
-account), both superseded by this XML-based rewrite rather than patched in place; see that
-template's own header comment and `platform-support.md`'s "Known open items" for the full history.
-`<LogonTrigger>` with no `<UserId>` fires for any interactive logon, `<Principal>` uses `GroupId`
-(`Builtin\Users`) rather than a specific account so the task runs as whichever user just signed in,
-in their own session, at the non-elevated `LeastPrivilege` run level.
-`<RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>` was first added as
-parity with the macOS LaunchAgent's `KeepAlive`/`SuccessfulExit=false` and the Linux `.deb`'s systemd
-restart policy, but **does not actually restart a crashed daemon** — Task Scheduler logs an action
-that ran and then died as a successfully completed task, so the setting never engages for that case
-(measured, with the event-log evidence, in `platform-support.md`'s "Known open items"). It stays in
-the definition anyway, for the narrower thing it still does: a faster (`PT1M`) retry of a launch
-failure right at logon. Real crash-restart is a second trigger,
-`<TimeTrigger><StartBoundary>2020-01-01T00:00:00</StartBoundary><Enabled>true</Enabled>
-<Repetition><Interval>PT5M</Interval></Repetition></TimeTrigger>`, alongside the `<LogonTrigger>`: a
-past `StartBoundary` and an indefinite `<Repetition>` make it live immediately rather than waiting for
-a sign-in, and every tick relaunches the daemon (a tick that finds one already running exits at once,
-via the single-instance lock) — `daemon_main.run_app()` logs that case at INFO and exits `0` rather
-than ERROR/`1`, so Task Scheduler logs a clean success on every ordinary tick. `<DisallowStartIfOnBatteries>` and
-`<StopIfGoingOnBatteries>` are both set to `false`, inverting Task Scheduler's own defaults: left at
-the defaults, a laptop on battery power would not start PrivacyFence at sign-in and would stop it
-when unplugged — a privacy gate that quietly isn't running, with the MCP client simply finding no
-daemon. This closes the crash-restart gap in Windows autostart — measured, not assumed, on a real
-`windows-latest` runner: killing the
-Scheduler-started daemon produces a new pid, under the same signed-in account, before the
-`<TimeTrigger>`'s own next tick would otherwise be due. See
-[`platform-support.md`](platform-support.md)'s "Known open items" for this mechanism's current
-verification status. In short: `windows-graphical-session.yml` verifies the definition Task
-Scheduler itself stored, that Task Scheduler really starts the daemon for an account that installed
-nothing, and that it really relaunches it after a crash; the `<LogonTrigger>`'s own firing is a
-human check on a real machine (`release-testing.md`), because a hosted runner cannot produce the
-Terminal Services session logon the trigger subscribes to.
+The daemon is the `PrivacyFence` Windows service, running as the `NT SERVICE\PrivacyFence`
+virtual account, with its own `sc failure` crash-restart; the only Scheduled Task is
+`PrivacyFenceCompanion`, which starts the companion tray app in each user session at sign-in
+(`installer/windows/privacyfence-companion-task.xml.tmpl`, rendered and registered by `enable` via
+`schtasks /create /xml`; see that template's header comment for the load-bearing details of the
+definition). State — credentials, settings, policy, passkeys, the audit log — lives under
+`%ProgramData%\PrivacyFence\`; see `platform-support.md`'s Windows section for the layout and ACLs,
+and its "Known open items" for what `windows-graphical-session.yml` verifies.
 
-Per-user state (credentials, settings, the audit log) lives under `%LOCALAPPDATA%\PrivacyFence\`
-(`paths.py`'s `data_dir()`, via its `_windows_data_dir()` branch — not the same `~/.privacyfence`
-dotfile POSIX uses reused verbatim under `%USERPROFILE%`, since a dot-prefixed name isn't a hiding
-convention Explorer honors the way it is on POSIX; `%LOCALAPPDATA%` rather than the Roaming
-`%APPDATA%` because this directory holds credentials and audit logs that shouldn't follow a roaming
-profile across machines), created by the app on first run — the installer never touches it, and
-uninstalling removes only the program files, the scheduled task(s) and, if one exists, the
-privilege-separation service.
+Uninstalling runs `privilege-separation.ps1 uninstall`, which removes the service and the companion
+task and keeps `%ProgramData%\PrivacyFence\` and the `PrivacyFenceUsers` group, so a reinstall picks
+the data up again; the uninstaller's **Delete PrivacyFence data** checkbox (unchecked by default,
+never offered on a silent uninstall) adds `-Purge`, which deletes both ([ADR 0042](adr/0042-uninstall-replaces-disable.md)). Nothing moves data
+back into `%LOCALAPPDATA%` ([ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)).
 
-**That layout describes a source checkout or `pip`/`pipx` run.** On every packaged Windows install
-— where the installer runs privilege separation itself as a post-install step, and where a daemon
-that finds itself unseparated refuses to serve ([ADR 0003](adr/0003-separated-installs-only.md)
-decisions 4 and 6, see `platform-support.md`'s Windows section) — that state lives at
-`%ProgramData%\PrivacyFence\` under the `NT SERVICE\PrivacyFence` virtual account instead, the
-daemon is a Windows service rather than the Scheduled Task above (which is left registered but
-disabled), and a second task starts the companion tray app in each user session. Uninstall leaves
-`%ProgramData%\PrivacyFence\` in place exactly as it leaves `%LOCALAPPDATA%\PrivacyFence\`, which
-on a separated install means a directory no ordinary account can read afterwards — so
-`privilege-separation.ps1 disable` before uninstalling is the documented order.
+A source checkout or `pip`/`pipx` run is not separated, and keeps its state under
+`%LOCALAPPDATA%\PrivacyFence\` (`paths.py`'s `data_dir()`, via its `_windows_data_dir()` branch —
+not the same `~/.privacyfence` dotfile POSIX uses reused verbatim under `%USERPROFILE%`, since a
+dot-prefixed name isn't a hiding convention Explorer honors the way it is on POSIX; `%LOCALAPPDATA%`
+rather than the Roaming `%APPDATA%` because this directory holds credentials and audit logs that
+shouldn't follow a roaming profile across machines).
 
 **File-permissions caveat, accepted for v1**: elsewhere on this codebase, credential/token files are
 written with `chmod(0o600/0o700)` to lock them down to the owning user. On Windows, `chmod` is a
@@ -954,9 +913,9 @@ comparison:
 
 - **Local desktop mode**: a self-contained `.deb` (`PrivacyFenceApp.linux.spec`,
   `scripts/build_deb.sh`, `debian/`) installing the PyInstaller onedir output under
-  `/opt/privacyfence`, exposing `/usr/bin/privacyfence-app`, and registering an XDG autostart entry
-  under `/etc/xdg/autostart/` — the Linux analogue of the macOS LaunchAgent/Windows Task Scheduler
-  task. Package removal does not delete per-user state from the home directory. Currently `amd64`
+  `/opt/privacyfence`, exposing `/usr/bin/privacyfence-app`, and running the daemon as a system
+  systemd unit under its own account. `apt remove` keeps the data in `/var/lib/privacyfence`;
+  `apt purge` deletes it (ADR 0042). Currently `amd64`
   only; `arm64` is a deliberate, undecided follow-up rather than a gap (see `platform-support.md`'s
   "Architecture and CPU constraints").
 - **Org mode / server deployments**: `pip`/`pipx install privacyfence`, walked end to end by

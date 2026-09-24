@@ -3,7 +3,8 @@
 # macOS install. It provisions privilege separation (#428 D2) automatically at
 # install time, instead of leaving that to the daemon's own admin-password
 # runtime prompt (privilege_separation.maybe_auto_enable_macos(), #428 D1),
-# which now only ever fires for an install that bypassed this package. A .pkg
+# which now only fires when this package's postinstall did not finish
+# separating the install (it never fails the install over that). A .pkg
 # install already runs as root and already asks for an administrator password
 # as part of the normal "Install PrivacyFence" step non-technical users already
 # expect -- so the one unavoidable elevation macOS requires for this (creating

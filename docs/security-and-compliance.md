@@ -56,7 +56,8 @@ and [ADR 0003](adr/0003-separated-installs-only.md) makes mandatory rather than 
 three. A packaged build that finds itself unseparated does not serve at all (ADR 0003 decision 6 —
 no `/mcp`, no approvals), so the un-separated install the rest of this section describes is not
 something any of the three platforms' installers ship: it is reachable only via `... disable`
-(documented and deliberate — see that subsection), or from a non-packaged source/pip checkout run
+on Windows or `... uninstall --purge` on macOS and Linux (documented and deliberate — see that
+subsection), or from a non-packaged source/pip checkout run
 with `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` for local development (never a real deployment — see
 that subsection and [ADR 0003](adr/0003-separated-installs-only.md) decision 7). That subsection
 says exactly which of the statements below a separated install changes and which it leaves
@@ -530,12 +531,15 @@ so the daemon leaves your session and the companion app enters it:
 | Data directory | `/Library/Application Support/PrivacyFence` | `/var/lib/privacyfence` | `%ProgramData%\PrivacyFence` |
 | Daemon starts as | a LaunchDaemon | a system systemd unit (`privacyfence-daemon.service`) | a Windows service (`PrivacyFence`) |
 | Companion starts as | a LaunchAgent (the menu-bar app) | an XDG autostart entry running `privacyfence-companion --serve` | a Scheduled Task (`PrivacyFenceCompanion`, the tray app) |
-| Replaces | the login-session LaunchAgent | the `.deb`'s XDG autostart entry and the `--user` unit | the installer's own `PrivacyFence` Scheduled Task, disabled rather than deleted |
+| Replaces | the login-session LaunchAgent | a pip/pipx install's `--user` unit | nothing: the installer registers no daemon task |
 
-All three still ship the manual `enable`/`disable`/`status` subcommands above; the migration moves
-live connector OAuth tokens, so take a backup first if running one by hand. `... disable` reverses
-it on any platform — and, per [ADR 0003](adr/0003-separated-installs-only.md) decision 6, it stops
-being a way to run PrivacyFence: a packaged build finds no marker afterward and refuses to serve.
+All three platforms ship `enable`/`uninstall [--purge]`/`status` ([ADR 0042](adr/0042-uninstall-replaces-disable.md);
+Windows spells the flag `-Purge`): `uninstall` stops the service and keeps the data under the data
+directory above, `--purge` deletes it and the service account (on Windows, the `PrivacyFenceUsers`
+group; its virtual account goes with the service), and neither moves anything into a home
+directory. On macOS, which has no package manager, `uninstall` is the uninstall: it also removes the
+app the `.pkg` installed. On Windows the uninstaller runs it, adding `-Purge` only when its
+**Delete PrivacyFence data** checkbox is ticked.
 **Every packaged install on all three platforms now separates itself as part of installing**,
 mandatorily rather than opt-in, per ADR 0003. The `.deb`'s `postinst` separates the install itself,
 root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)). Since
@@ -566,7 +570,8 @@ failure, not a silently-opt-in install.
 
 **And a packaged build that ends up unseparated anyway does not serve.** ADR 0003 decision 6 is the
 backstop for the installs the paragraph above doesn't cover — a pre-ADR-0003 install upgrading in
-place, a restored backup, an install where `... disable` was run and forgotten: on startup, a
+place, a restored backup, an install where `... uninstall --purge` was run and the program left
+behind: on startup, a
 packaged local-mode daemon attempts its platform's provisioning (the same mechanisms above, run
 again) and, if it is still unseparated afterward, refuses outright — no `/mcp`, no approvals —
 naming the one command that fixes it. Source checkouts and `pip`/`pipx` installs are not packaged
@@ -597,10 +602,10 @@ stating rather than leaving to be discovered:
   written for, arriving where it was predicted. `enable` refuses to install the daemon half alone.
 
 One thing has no POSIX counterpart at all: **ownership is part of the boundary**. An object's owner
-on Windows can rewrite its ACL regardless of what that ACL says, so `enable` takes ownership of the
-data directory (to `Administrators`) rather than letting the move out of `%LOCALAPPDATA%` leave it
-with you — otherwise every permission above would be advisory against the one account it is meant
-to exclude. `… disable` hands ownership back.
+on Windows can rewrite its ACL regardless of what that ACL says, and any user may create a
+directory under `%ProgramData%` — so `enable` takes ownership of the data directory (to
+`Administrators`) rather than trusting whoever created it — otherwise every permission above would
+be advisory against the one account it is meant to exclude.
 
 One thing is *tighter* on Windows than on POSIX: the shared handoff directory is readable by the
 group, not writable. POSIX has to grant `rwx` there because the companion creates its own socket

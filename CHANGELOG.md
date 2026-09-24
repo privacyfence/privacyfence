@@ -58,6 +58,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Linux: `apt remove` keeps your data, `apt purge` deletes it.** Removing the `.deb` now stops
+  PrivacyFence and leaves its config, credentials and audit log in `/var/lib/privacyfence`, so a
+  reinstall picks them up; it no longer moves them into your home directory. `apt purge` deletes
+  that directory and the `privacyfence` service account and group.
+  `privacyfence-privilege-separation disable` is replaced by `uninstall` (same keep-the-data
+  behavior) and `uninstall --purge`. See ADR 0042.
+
 - **An organization server's Approvals page now updates live**, the way the desktop app's always
   has: a new approval, or one decided from another tab or device, appears or disappears without a
   manual reload, and the header's live indicator shows whether the page is connected. Each person
@@ -69,6 +76,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already required. A bundle with no `server.bind_host` also binds `127.0.0.1` (was `localhost`).
   Pass `--server-bind-host` explicitly when the proxy runs on another host.
 
+- **Uninstalling on macOS keeps your data unless you ask for it to be deleted.** `sudo
+  /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh
+  uninstall` replaces `disable`: it stops PrivacyFence, removes its LaunchDaemon, companion
+  LaunchAgent, staged copy under `/Library/PrivacyFence` and the app the `.pkg` installed, and
+  leaves the data under `/Library/Application Support/PrivacyFence` and the `_privacyfence`
+  account in place, so installing again picks everything up. `uninstall --purge` also deletes the
+  data and the account. `disable` moved the data back into `~/.privacyfence`; nothing does that
+  now. See [ADR 0042](docs/adr/0042-uninstall-replaces-disable.md).
+
+- **Uninstalling on Windows keeps your data unless you ask for it to be deleted.** The uninstaller
+  now runs `privilege-separation.ps1 uninstall`, which replaces `disable`: it stops and removes the
+  `PrivacyFence` service and the companion's sign-in task and leaves `%ProgramData%\PrivacyFence`
+  and the `PrivacyFenceUsers` group in place, so installing again picks everything up. Tick the
+  uninstaller's new **Delete PrivacyFence data** checkbox (unchecked by default) to delete them
+  too, which runs `uninstall -Purge`; a silent uninstall never deletes data. `disable` moved the
+  data back into `%LOCALAPPDATA%`; nothing does that now. See [ADR 0042](docs/adr/0042-uninstall-replaces-disable.md).
+
 - The installers now refuse a system older than PrivacyFence supports instead of installing an
   app that cannot start: the macOS `.pkg` requires macOS 13 on Apple silicon (an Intel Mac is
   refused), the Windows installer Windows 10 / Windows Server 2016, and the `.deb` declares its
@@ -77,6 +101,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   platform's minimum.
 
 ### Removed
+
+- **Linux: the `.deb`'s daemon autostart entry and the separation tool's migration steps.** The
+  package no longer ships `/etc/xdg/autostart/privacyfence.desktop` (the daemon is a system unit),
+  and `privacyfence-privilege-separation enable` no longer moves `~/.privacyfence` into
+  `/var/lib/privacyfence` or disables a pip install's `--user` unit (ADR 0041).
 
 - **The v1 auto-accept settings format is no longer read or converted.** A `settings.yaml` that
   still has an `auto_accept_rules:` or `auto_accept_grants:` section now stops PrivacyFence at
@@ -97,6 +126,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   control channel. Instead it stops with an error asking you to check that PrivacyFence and the
   extension are the same version. On Windows it also no longer looks for PrivacyFence under
   `%LOCALAPPDATA%\Programs`, where no current installer puts it.
+- **The macOS installer no longer moves data from an earlier layout.** `enable` (and so the `.pkg`)
+  no longer moves `~/.privacyfence` into `/Library/Application Support/PrivacyFence`, no longer
+  moves files into `handoff/` from the root of the data directory, and no longer disables a
+  per-user `com.privacyfence.app` LaunchAgent. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+- **The Windows installer no longer registers a daemon sign-in task or moves data from an earlier
+  layout.** The daemon is a Windows service, and the companion's `PrivacyFenceCompanion` task is
+  now the only Scheduled Task an install has (the `PrivacyFence` task the installer used to
+  register and then disable is gone, and `privilege-separation.ps1 status` no longer reports
+  `STILL AUTOSTARTS`). `enable` no longer moves an existing `%LOCALAPPDATA%\PrivacyFence` into
+  `%ProgramData%\PrivacyFence`. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
 
 ### Fixed
 

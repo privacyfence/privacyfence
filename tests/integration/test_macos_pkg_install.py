@@ -356,21 +356,47 @@ def _capture_install_diagnostics(request, uid: int) -> None:
     (dest / "install.log.tail").write_text(install_log.stdout + install_log.stderr, encoding="utf-8")
 
 
+INSTALLED_SCRIPT = INSTALLED_APP_PATH / "Contents/Resources/scripts/macos_privilege_separation.sh"
+# The checkout's copy of the same script, for cleanup when a failed run left
+# no installed app to run it from.
+CHECKOUT_SCRIPT = REPO_ROOT / "scripts" / "macos_privilege_separation.sh"
+
+
 def _uninstall_pkg() -> None:
-    """The only "uninstall" a macOS ``.pkg`` has: remove the app it placed
-    (there is no generated uninstaller) and forget the receipt (``pkgutil
-    --forget``) so a re-run of this module, or of ``test_macos_graphical_
-    session_autostart.py`` sharing the same runner, starts from a state
-    ``pkgutil --pkg-info`` reports as never installed. Mirrors ``test_macos_
-    packaged_smoke.py``'s own step 6 "drag to Trash" gesture, plus the
-    receipt cleanup a real drag-install never has to do."""
-    if _sudo_path_exists(MARKER_PATH) and INSTALLED_APP_PATH.is_dir():
-        _sudo_run(
-            str(INSTALLED_APP_PATH / "Contents/Resources/scripts/macos_privilege_separation.sh"),
-            "disable", "--user", _current_user(), check=False, timeout=60,
-        )
+    """The documented macOS uninstall, with its purge (ADR 0042):
+    ``macos_privilege_separation.sh uninstall --purge`` stops and removes the
+    launchd jobs, the staged image, the app and its receipt, the data and the
+    service account -- so a re-run of this module, or of ``test_macos_
+    graphical_session_autostart.py`` sharing the same runner, starts from a
+    state ``pkgutil --pkg-info`` reports as never installed. The ``rm`` and
+    ``--forget`` after it only matter when the script could not run at all."""
+    script = INSTALLED_SCRIPT if INSTALLED_SCRIPT.is_file() else CHECKOUT_SCRIPT
+    _sudo_run(str(script), "uninstall", "--purge", check=False, timeout=90)
     _sudo_run("rm", "-rf", str(INSTALLED_APP_PATH), check=False)
     _sudo_run("pkgutil", "--forget", PKG_ID, check=False)
+
+
+def _install_pkg(pkg_path: Path) -> subprocess.CompletedProcess:
+    install = _sudo_run("installer", "-verbose", "-pkg", str(pkg_path), "-target", "/", timeout=120)
+    assert _wait_for_app_bundle(INSTALLED_APP_PATH, timeout=10) is not None, (
+        f"installer did not place {INSTALLED_APP_PATH}:\n{install.stdout}{install.stderr}\n"
+        f"{_missing_payload_report(pkg_path)}"
+    )
+    assert _sudo_path_exists(MARKER_PATH), (
+        f"{MARKER_PATH} missing after installing {pkg_path.name}:\n{install.stdout}{install.stderr}"
+    )
+    return install
+
+
+def _sudo_read(path: Path) -> str | None:
+    result = _sudo_run("cat", str(path), check=False, timeout=10)
+    return result.stdout if result.returncode == 0 else None
+
+
+def _dscl_record_exists(record: str) -> bool:
+    return subprocess.run(
+        ["dscl", ".", "-read", record], capture_output=True, timeout=10,
+    ).returncode == 0
 
 
 @pytest.fixture
@@ -466,3 +492,68 @@ def test_pkg_install_enables_privilege_separation_with_no_manual_step(_clean_pkg
     _wait_for_path_as_root(
         companion_socket_path_under(HANDOFF_DIR), timeout=20, what="the companion's own control channel socket",
     )
+
+
+@pytest.mark.timeout(420)
+def test_pkg_uninstall_keeps_data_and_purge_deletes_it(_clean_pkg_state):
+    """ADR 0042 on macOS, driven through the installed copy of the script the
+    user is told to run: ``uninstall`` stops and removes everything that runs
+    PrivacyFence and keeps its data; installing again picks that data up; and
+    ``uninstall --purge`` leaves nothing. Nothing in any of it moves data into
+    the user's home directory (ADR 0041, G3)."""
+    pkg_path = _built_pkgs()[-1]
+    uid = os.getuid()
+    home_data = Path.home() / ".privacyfence"
+    home_data_existed = home_data.exists()
+
+    _install_pkg(pkg_path)
+    _wait_for_running(f"system/{DAEMON_LABEL}", timeout=30)
+    token_path = AUTHORITY_DIR / MCP_TOKEN_FILE_NAME
+    _wait_for_path_as_root(
+        token_path, timeout=20, what="the separated daemon's mcp_token",
+        context=lambda: _separated_daemon_report(f"system/{DAEMON_LABEL}"),
+    )
+    token = _sudo_read(token_path)
+    assert token, f"{token_path} is empty"
+    sentinel = AUTHORITY_DIR / "uninstall-keeps-this"
+    _sudo_run("sh", "-c", f"echo kept > '{sentinel}'")
+
+    # ── uninstall: everything that runs PrivacyFence goes, the data stays ──
+    uninstall = _sudo_run(str(INSTALLED_SCRIPT), "uninstall", timeout=90)
+    report = f"{uninstall.stdout}{uninstall.stderr}"
+    assert _launchctl_print(f"system/{DAEMON_LABEL}") is None, report
+    assert _launchctl_print(f"gui/{uid}/{COMPANION_LABEL}") is None, report
+    for gone in (
+        Path(f"/Library/LaunchDaemons/{DAEMON_LABEL}.plist"),
+        Path(f"/Library/LaunchAgents/{COMPANION_LABEL}.plist"),
+        Path("/Library/PrivacyFence"),
+        INSTALLED_APP_PATH,
+    ):
+        assert not _sudo_path_exists(gone), f"{gone} survived `uninstall`:\n{report}"
+    assert _sudo_run("pkgutil", "--pkg-info", PKG_ID, check=False).returncode != 0, report
+    assert _sudo_path_exists(MARKER_PATH), report
+    assert _sudo_read(sentinel) == "kept\n", report
+    assert _sudo_read(token_path) == token, report
+    assert _dscl_record_exists(f"/Users/{MACOS_SERVICE_ACCOUNT_NAME}"), report
+    assert home_data.exists() == home_data_existed, f"`uninstall` touched {home_data}:\n{report}"
+
+    # ── installing again picks the same data up ──
+    _install_pkg(pkg_path)
+    daemon_pid = _wait_for_running(f"system/{DAEMON_LABEL}", timeout=30)
+    assert _process_owner(daemon_pid) == MACOS_SERVICE_ACCOUNT_NAME
+    _wait_for_path_as_root(
+        socket_path_under(HANDOFF_DIR), timeout=20, what="the reinstalled daemon's control channel socket",
+        context=lambda: _separated_daemon_report(f"system/{DAEMON_LABEL}"),
+    )
+    assert _sudo_read(sentinel) == "kept\n"
+    assert _sudo_read(token_path) == token, "the reinstalled daemon did not keep its own mcp_token"
+
+    # ── uninstall --purge: nothing left ──
+    purge = _sudo_run(str(INSTALLED_SCRIPT), "uninstall", "--purge", timeout=90)
+    report = f"{purge.stdout}{purge.stderr}"
+    assert _launchctl_print(f"system/{DAEMON_LABEL}") is None, report
+    assert not _sudo_path_exists(MACOS_SYSTEM_ROOT), report
+    assert not _sudo_path_exists(INSTALLED_APP_PATH), report
+    assert not _dscl_record_exists(f"/Users/{MACOS_SERVICE_ACCOUNT_NAME}"), report
+    assert not _dscl_record_exists(f"/Groups/{MACOS_SERVICE_ACCOUNT_NAME}"), report
+    assert home_data.exists() == home_data_existed, f"`uninstall --purge` touched {home_data}:\n{report}"
