@@ -43,6 +43,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The org-mode setup guide now explains how to name admins when Google is the sign-in
+  provider.** Google's sign-in tokens carry no groups, so the guide's `groups` example left every
+  user, Workspace admins included, without the admin-only Settings pages (Privacy Filter, AI
+  systems). It now shows naming admins by email address (`--idp-admin-group-claim email`).
+
 ## [4.4.0] — 2026-09-24
 
 ### Added

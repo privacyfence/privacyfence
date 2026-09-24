@@ -50,6 +50,16 @@ Every IdP endpoint must be HTTPS; the daemon refuses a plain-HTTP issuer/discove
 
 Optionally, decide who counts as an admin: an ID token claim (e.g. `groups`) and the value(s) in it that grant admin — `--idp-admin-group-claim`/`--idp-admin-group-value` in [§5](#5-build-the-organization-config-bundle). Leave it unset and nobody is an admin via this mechanism (fail-closed default). Independently, you can restrict *who may sign in at all* by email domain or by a (possibly different) group claim — `--authz-*`, also in [§5](#5-build-the-organization-config-bundle) — layered on top of the IdP's own authentication, not a replacement for it.
 
+**Google as the sign-in IdP: use `email`, not `groups`.** Google's ID tokens carry no group membership and no Workspace admin role, so `--idp-admin-group-claim groups` never matches anyone and every user, Workspace super-admins included, signs in as a non-admin. That hides the admin-only Settings pages (**Privacy Filter**, **AI systems**) without any error. Name the admins by their exact email address instead: the sign-in flow always requests the `email` scope (`org_identity.py`'s `DEFAULT_SCOPE`), and a single-string claim is matched the same way as a list (`principal_from_claims`).
+
+```bash
+  --idp-admin-group-claim email \
+  --idp-admin-group-value alice@acme.example.com \
+  --idp-admin-group-value bob@acme.example.com \
+```
+
+Do not use `hd` (the Workspace domain) as the admin claim: it is the same for every account in the domain and would make all of them admins. Admin status is decided at each sign-in and held in the browser session, so after installing a bundle with a changed admin list and restarting the daemon, an admin signs out and back in at `/login` to pick it up. With `--merge`, the whole `idp` section is rebuilt from the flags of that run, so pass `--mode org`, `--server-issuer-url` and every `--idp-*` flag again, not just the admin ones.
+
 ### 4.2 The Google connector client (optional)
 
 This section is the general pattern every connector's org-mode registration follows — Slack, Salesforce, and Atlassian's own setup guides each link back here for it, substituting their own OAuth console and redirect path.
