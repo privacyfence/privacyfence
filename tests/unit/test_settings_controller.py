@@ -985,7 +985,7 @@ class TestAuthenticateDispatch:
     @pytest.mark.parametrize("cname,method", [
         ("gmail", "_authenticate_google"), ("drive", "_authenticate_google"),
         ("contacts", "_authenticate_google"), ("calendar", "_authenticate_google"),
-        ("tasks", "_authenticate_google"), ("slack", "_authenticate_slack"),
+        ("tasks", "_authenticate_google"), ("apps_script", "_authenticate_google"), ("slack", "_authenticate_slack"),
         ("salesforce", "_authenticate_salesforce"), ("jira", "_authenticate_atlassian"),
         ("confluence", "_authenticate_atlassian"),
     ])
@@ -1077,6 +1077,54 @@ class TestAuthenticateGoogle:
         assert "user closed browser" in controller.error
         assert refresh_calls == []
         assert "gmail" not in controller._busy_connectors
+
+
+    def test_apps_script_uses_its_own_client_and_token_file(self, controller, monkeypatch):
+        from privacyfence.apps_script_client import AppsScriptClient
+
+        assert sc._GOOGLE_CLIENTS["apps_script"] is AppsScriptClient
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: None)
+        token_files = []
+
+        class FakeAppsScriptClient:
+            def __init__(self, client_config, token_file):
+                token_files.append(token_file)
+
+            def authorize_interactive(self):
+                pass
+
+            def check_connection(self):
+                return "me@example.com"
+
+        monkeypatch.setitem(sc._GOOGLE_CLIENTS, "apps_script", FakeAppsScriptClient)
+
+        controller._authenticate_google("apps_script", {"google": {"client_id": "i", "client_secret": "s"}})
+
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert token_files == [str(sc.data_dir() / daemon_main.TOKEN_FILES["apps_script"])]
+        assert controller.error == ""
+
+    def test_failed_apps_script_auth_names_it_by_its_display_label(self, controller, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+
+        class FailingAppsScriptClient:
+            def __init__(self, client_config, token_file):
+                pass
+
+            def authorize_interactive(self):
+                raise RuntimeError("user closed browser")
+
+        monkeypatch.setitem(sc._GOOGLE_CLIENTS, "apps_script", FailingAppsScriptClient)
+
+        controller._authenticate_google("apps_script", {"google": {"client_id": "i", "client_secret": "s"}})
+
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert controller.error.startswith("Apps Script authentication failed: ")
 
 
 class TestAuthenticateSlack:
@@ -1951,6 +1999,13 @@ class TestSnapshotStructure:
     def test_connectors_cover_all_connectors(self, controller):
         state = controller.snapshot()
         assert {c["key"] for c in state["connectors"]} == set(sc.ALL_CONNECTORS)
+
+    def test_apps_script_row_is_a_google_connector_with_its_display_label(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"google": {"client_id": "i"}})
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "apps_script")
+        assert row["label"] == "Apps Script"
+        assert row["has_org"] is True
+        assert row["auth_label"] == "Authenticate…"
 
     def test_auto_accept_state_has_rules_scope_groups_and_connectors(self, controller):
         state = controller.snapshot()

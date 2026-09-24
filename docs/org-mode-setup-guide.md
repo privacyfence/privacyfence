@@ -54,7 +54,7 @@ Optionally, decide who counts as an admin: an ID token claim (e.g. `groups`) and
 
 This section is the general pattern every connector's org-mode registration follows — Slack, Salesforce, and Atlassian's own setup guides each link back here for it, substituting their own OAuth console and redirect path.
 
-Your OIDC sign-in client above (§4.1) is unrelated to whether you offer the Google connector (Gmail/Drive/Calendar/Contacts/Tasks) to users — it's entirely possible, and common, to sign in via Google but still need a *second*, separate Google OAuth client for the connector itself, because the two use different flows:
+Your OIDC sign-in client above (§4.1) is unrelated to whether you offer the Google connector (Gmail/Drive/Calendar/Contacts/Tasks/Apps Script) to users — it's entirely possible, and common, to sign in via Google but still need a *second*, separate Google OAuth client for the connector itself, because the two use different flows:
 
 - Local desktop installs use a **Desktop app** OAuth client with a loopback redirect (`http://127.0.0.1:.../callback`) — see `google-cloud-setup.md`.
 - Org mode needs a **Web application** OAuth client instead, with an explicit HTTPS redirect URI registered up front: `https://pf.acme.example.com/oauth/callback/google` (substituting your own hostname; `web/routes_connect.py` builds this from the daemon's own base URL). The two client types can't be interchanged — a Desktop app client has no field to register this redirect URI, and a Web application client requires one.

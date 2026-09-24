@@ -146,8 +146,8 @@ token then simply can't read your Workspace directory, no matter what.
 4. Quit and reopen PrivacyFence to activate the connector.
 
 **[`org` mode](org-mode-setup-guide.md) deployment** (a server your IT team runs, not a desktop
-install — ask them which applies to you; Apps Script isn't offered here, it stays local-mode-only,
-see [`org-mode-setup-guide.md` §4.2](org-mode-setup-guide.md#42-the-google-connector-client-optional)):
+install — ask them which applies to you; see
+[`org-mode-setup-guide.md` §4.2](org-mode-setup-guide.md#42-the-google-connector-client-optional)):
 
 1. Visit `https://your-server-hostname/login` and sign in with whatever identity provider your
    organization's server uses for sign-in (org mode's IdP is a separate, independent choice from
@@ -155,7 +155,7 @@ see [`org-mode-setup-guide.md` §4.2](org-mode-setup-guide.md#42-the-google-conn
    §4.1](org-mode-setup-guide.md#41-the-oidc-sign-in-client-required) — it's commonly Google too, but
    doesn't have to be). Either way, there's no separate "install a config file" step like local mode's.
 2. On the `/connect` page, click **Connect** next to each Google connector you want (Gmail, Drive,
-   Calendar, Contacts, Tasks). Each redirects to Google, asks for consent to that connector's specific
+   Calendar, Contacts, Tasks, Apps Script). Each redirects to Google, asks for consent to that connector's specific
    scopes, and lands you back on `/connect` showing it connected.
 3. Nothing to quit/reopen, since there's no local app. See [`org-mode-setup-guide.md`
    §8](org-mode-setup-guide.md#8-first-sign-in-and-connecting-a-service).
