@@ -908,3 +908,114 @@ class TestExportIncludesBinderColumns:
         ws = wb["Decisions"]
 
         assert ws.cell(row=2, column=21).value == "'=WEBSERVICE(\"evil\")"
+
+
+class TestAgentFields:
+    """Schema 5 (AGT-2, ADR 0006/0035): agent_id/agent_name/agent_version/agent_source,
+    stamped from agent_identity.current_agent() when a caller leaves them unset."""
+
+    _AGENT_KEYS = ("agent_id", "agent_name", "agent_version", "agent_source")
+
+    def test_schema_version_is_five(self):
+        assert CURRENT_SCHEMA_VERSION == 5
+
+    def test_no_scope_records_unknown_with_empty_source(self, tmp_path):
+        # Invariant 3, audit half: no usable signal is "", never a default.
+        logger = AuditLogger(str(tmp_path))
+        logger.record(make_entry())
+        line = json.loads((tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8"))
+        assert {k: line[k] for k in self._AGENT_KEYS} == dict.fromkeys(self._AGENT_KEYS, "")
+
+    def test_stamped_from_agent_scope(self, tmp_path):
+        from privacyfence.agent_identity import AgentSource, agent_scope, identify
+
+        logger = AuditLogger(str(tmp_path))
+        with agent_scope(identify("claude-code", "2.1.0", AgentSource.CLIENT_INFO)):
+            logger.record(make_entry())
+        line = json.loads((tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8"))
+        assert [line[k] for k in self._AGENT_KEYS] == ["claude-code", "Claude Code", "2.1.0", "client_info"]
+
+    def test_caller_set_fields_are_kept(self, tmp_path):
+        from privacyfence.agent_identity import AgentSource, agent_scope, identify
+
+        logger = AuditLogger(str(tmp_path))
+        entry = make_entry(agent_id="chatgpt", agent_name="ChatGPT", agent_source="oauth_client")
+        with agent_scope(identify("claude-code", "", AgentSource.CLIENT_INFO)):
+            logger.record(entry)
+        assert (entry.agent_id, entry.agent_name, entry.agent_version, entry.agent_source) == (
+            "chatgpt", "ChatGPT", "", "oauth_client",
+        )
+
+    @freeze_time("2026-07-06")
+    def test_v4_entries_without_agent_fields_load_as_empty(self, tmp_path):
+        logger = AuditLogger(str(tmp_path))
+        v4 = {k: v for k, v in make_entry(week=current_week(), schema_version=4).__dict__.items()
+              if k not in self._AGENT_KEYS}
+        (tmp_path / f"{current_week()}.jsonl").write_text(json.dumps(v4) + "\n", encoding="utf-8")
+
+        [entry] = logger.recent_entries()
+        assert entry.schema_version == 4
+        assert (entry.agent_id, entry.agent_name, entry.agent_version, entry.agent_source) == ("", "", "", "")
+
+    def test_verify_chain_accepts_mixed_v4_and_v5_log(self, tmp_path):
+        from dataclasses import asdict
+
+        from privacyfence.agent_identity import AgentSource, agent_scope, identify
+
+        logger = AuditLogger(str(tmp_path))
+        # A genuine schema-4 line, chained exactly as the v4 writer chained it: its hash covers
+        # only the keys it actually has, with no agent fields at all.
+        v4 = {k: v for k, v in asdict(make_entry()).items() if k not in self._AGENT_KEYS}
+        v4.update(schema_version=4, event_id="legacy-v4", prev_hash=logger._last_hash)
+        v4["entry_hash"] = logger._hash_canonical(v4)
+        with open(tmp_path / "2026-W28.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(v4) + "\n")
+        logger._last_hash = v4["entry_hash"]
+
+        with agent_scope(identify("openai-mcp", "", AgentSource.CLIENT_INFO)):
+            logger.record(make_entry())
+        logger.record(make_entry())
+
+        lines = [json.loads(x) for x in (tmp_path / "2026-W28.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert [x["schema_version"] for x in lines] == [4, 5, 5]
+        assert "agent_id" not in lines[0]
+        assert lines[1]["agent_id"] == "chatgpt"
+
+        result = logger.verify_chain("2026-W28")
+        assert result.ok is True
+        assert result.entries_checked == 3
+
+    def test_verify_chain_detects_edited_agent_field(self, tmp_path):
+        from privacyfence.agent_identity import AgentSource, agent_scope, identify
+
+        logger = AuditLogger(str(tmp_path))
+        with agent_scope(identify("openai-mcp", "", AgentSource.CLIENT_INFO)):
+            logger.record(make_entry())
+        week_file = tmp_path / "2026-W28.jsonl"
+        line = json.loads(week_file.read_text(encoding="utf-8"))
+        line["agent_source"] = "oauth_client"  # a claim rewritten as an attestation after the fact
+        week_file.write_text(json.dumps(line) + "\n", encoding="utf-8")
+
+        assert logger.verify_chain("2026-W28").ok is False
+
+    def test_excel_export_appends_agent_columns(self, tmp_path):
+        openpyxl = pytest.importorskip("openpyxl")
+        from privacyfence.agent_identity import AgentSource, agent_scope, identify
+
+        logger = AuditLogger(str(tmp_path))
+        with agent_scope(identify("=cmd|x", "1.0", AgentSource.CLIENT_INFO)):
+            logger.record(make_entry())
+        logger.record(make_entry())
+
+        ws = openpyxl.load_workbook(logger.export_week_to_excel("2026-W28"))["Decisions"]
+        headers = [c.value for c in ws[1]]
+        # Existing column indices stay stable: the four are appended after Rule ID.
+        assert headers.index("Rule ID") == 21
+        assert headers[22:] == [
+            "AI System ID", "AI System", "AI System Version (claimed)",
+            "AI System Source (only override/oauth_client are verified)",
+        ]
+        row = [c.value for c in ws[2]][22:]
+        # A claimed name is caller-supplied, so it goes through formula-injection neutralising.
+        assert row == ["unknown:=cmd|x", "'=cmd|x", "1.0", "client_info"]
+        assert [c.value for c in ws[3]][22:] == [None, None, None, None]

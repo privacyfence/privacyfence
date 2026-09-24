@@ -328,6 +328,18 @@ class OrgOAuthProvider:
             self._save_clients_locked()
             return stored.info
 
+    def client_name(self, client_id: str) -> str | None:
+        """The DCR ``client_name`` registered under ``client_id``, or None -- read-only.
+
+        routes_mcp.py asks this once per tool call to attribute the call to an AI system (ADR
+        0006). Unlike ``get_client`` it neither bumps ``last_used_at`` nor writes
+        ``oauth_clients.json``: a per-call lookup must not turn every tool call into a disk write.
+        The name is whatever the client registered with, so it stays a *claim* -- the caller
+        sanitizes it and records it as ``client_info``, never as an attested source."""
+        with self._lock:
+            stored = self._clients.get(client_id)
+            return stored.info.client_name if stored is not None else None
+
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         metadata_bytes = len(client_info.model_dump_json().encode("utf-8"))
         if metadata_bytes > _MAX_CLIENT_METADATA_BYTES:

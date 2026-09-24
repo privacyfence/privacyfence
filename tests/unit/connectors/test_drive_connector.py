@@ -499,7 +499,7 @@ class TestDownloadFile:
         # Saved to / no-content-returned are new-on-approval facts, not
         # already-known metadata -- see connectors/drive.py's comment.
         assert kwargs["new_info"]["Saved to"] == "/tmp/Q3 Report.pdf"
-        assert "None" in kwargs["new_info"]["Content returned to Claude"]
+        assert "None" in kwargs["new_info"]["Content returned to {agent}"]
         assert kwargs["preview"]["Size"] == "4,096 bytes"
         assert kwargs["args"] == {"file_id": "f1", "destination_dir": "/tmp"}
         assert kwargs["pii_scan_text"] == ""  # empty content, nothing to scan
@@ -854,7 +854,7 @@ class TestOrgModeDownloadDelivery:
         assert get_download_staging_store().pending_count == 0
 
         kwargs = gated_call_spy[0]
-        assert "Yes" in kwargs["new_info"]["Content returned to Claude"]
+        assert "Yes" in kwargs["new_info"]["Content returned to {agent}"]
         assert "Saved to" not in kwargs["new_info"]
         assert kwargs["delivery"] == "inline_base64"
 
@@ -881,8 +881,8 @@ class TestOrgModeDownloadDelivery:
         assert get_download_staging_store().pending_count == 1
 
         kwargs = gated_call_spy[0]
-        assert "None" in kwargs["new_info"]["Content returned to Claude"]
-        assert "one-time link" in kwargs["new_info"]["Content returned to Claude"]
+        assert "None" in kwargs["new_info"]["Content returned to {agent}"]
+        assert "one-time link" in kwargs["new_info"]["Content returned to {agent}"]
 
     async def test_agent_links_false_keeps_the_browser_link(self, gated_call_spy):
         """An org that opts out of Phase 4's default (org_config.json's

@@ -6,6 +6,8 @@
 AI system is calling, and what that knowledge is allowed to be used for. No code has been written,
 and the open questions in *Verification* below are open.
 
+Amended by [ADR 0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md), which answers them.
+
 The `mcp` range quoted below (`>=1.28,<3.0`) was already stale the day this was written:
 `pyproject.toml` had required `mcp>=2.2,<3.0.0` since issue #250, three days before this ADR's own
 commit. `pyproject.toml` is authoritative for the pinned range, as ADR 0009's *Related* section

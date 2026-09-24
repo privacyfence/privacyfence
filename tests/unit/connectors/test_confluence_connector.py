@@ -409,7 +409,7 @@ class TestDownloadAttachment:
         # Will save to / no-content-returned are new-on-approval facts, not
         # already-known metadata -- see connectors/confluence.py's comment.
         assert kwargs["new_info"]["Will save to"] == "/tmp/report.pdf"
-        assert "None" in kwargs["new_info"]["Content returned to Claude"]
+        assert "None" in kwargs["new_info"]["Content returned to {agent}"]
         assert kwargs["details_text"] == "The attachment above will be downloaded to the destination shown."
         assert kwargs["filtered_data"] is None
         assert kwargs["args"] == {"page_id": "p1", "attachment_name": "report.pdf"}
@@ -652,7 +652,7 @@ class TestOrgModeDownloadDelivery:
         client.download_attachment.assert_not_called()
 
         kwargs = gated_call_spy[0]
-        assert "Yes" in kwargs["new_info"]["Content returned to Claude"]
+        assert "Yes" in kwargs["new_info"]["Content returned to {agent}"]
         assert kwargs["delivery"] == "inline_base64"
 
     async def test_large_attachment_is_staged_behind_a_one_time_link(self, gated_call_spy):

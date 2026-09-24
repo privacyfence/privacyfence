@@ -6,6 +6,9 @@ that controller's docstring for the same reasoning these mirror.
 """
 from __future__ import annotations
 
+import html
+import re
+
 from privacyfence import card_builder
 from privacyfence.approval_window_html import NARROW, WIDE
 
@@ -163,3 +166,86 @@ class TestBuildCardHtml:
     def test_seen_count_positive_shows_caption(self):
         html = card_builder.build_card_html(**self._kwargs(seen_count=2))
         assert "Seen 2 times this week" in html
+
+
+class TestAgentDisplayName:
+    """Every string on the card that names the caller of this request comes
+    from one ``agent_display_name`` -- including the rows connectors write
+    with approval_window_html.AGENT_PLACEHOLDER, since connectors never
+    learn who is asking. The default (today's "Claude") is pinned by every
+    other test in this suite rendering unchanged."""
+
+    _NEW_INFO = {
+        "Content returned to {agent}": "None — file bytes are never sent",
+        "Note": "More messages exist -- {agent} will see this too",
+    }
+
+    def _read_card(self, name: str) -> str:
+        return card_builder.build_card_html(
+            title="Read Message", preview={"From": "someone@example.com"},
+            details_text="The message body.", is_read=True, layout=NARROW,
+            claude_reason="to answer the question", visibility={"Body": "block"},
+            new_info=self._NEW_INFO, agent_display_name=name,
+        )
+
+    def _write_card(self, name: str) -> str:
+        return card_builder.build_card_html(
+            title="Send Message", preview={"To": "someone@example.com"},
+            details_text="Hi.", is_read=False, layout=NARROW,
+            claude_reason="the user asked", agent_display_name=name,
+        )
+
+    @staticmethod
+    def _in_scope(name: str) -> tuple[list[str], list[str]]:
+        """(read-card strings, write-card strings), each already escaped the
+        way the card renders it."""
+        n = html.escape(name)
+        read = [
+            f"What {n} already knows",
+            f"Why {n} needs more data",
+            f"{n}’s stated reason · unverified",
+            f"What will be provided to {n}",
+            f"Content returned to {n}",
+            f"More messages exist -- {n} will see this too",
+            f"None — not disclosed to {n}",
+        ]
+        write = [f"Why {n} is doing this", f"{n}’s stated reason · unverified"]
+        return read, write
+
+    @staticmethod
+    def _without_stylesheet(doc: str) -> str:
+        # styles.css's own comments name Claude; they aren't card copy.
+        return re.sub(r"<style[^>]*>.*?</style>", "", doc, flags=re.S)
+
+    def test_default_is_todays_copy(self):
+        read, _ = self._in_scope("Claude")
+        doc = card_builder.build_card_html(
+            title="Read Message", preview={"From": "someone@example.com"},
+            details_text="The message body.", is_read=True, layout=NARROW,
+            claude_reason="to answer the question", visibility={"Body": "block"},
+            new_info=self._NEW_INFO,
+        )
+        for s in read:
+            assert s in doc, s
+
+    def test_another_name_changes_every_in_scope_string(self):
+        read, write = self._in_scope("Gemini")
+        read_html, write_html = self._read_card("Gemini"), self._write_card("Gemini")
+        for s in read:
+            assert s in read_html, s
+        for s in write:
+            assert s in write_html, s
+        assert "{agent}" not in read_html
+        assert "Claude" not in self._without_stylesheet(read_html)
+        assert "Claude" not in self._without_stylesheet(write_html)
+
+    def test_a_hostile_name_renders_escaped_in_every_position(self):
+        name = "<script>alert(1)</script>"
+        read, write = self._in_scope(name)
+        read_html, write_html = self._read_card(name), self._write_card(name)
+        for s in read:
+            assert s in read_html, s
+        for s in write:
+            assert s in write_html, s
+        assert "<script>alert(1)" not in read_html
+        assert "<script>alert(1)" not in write_html

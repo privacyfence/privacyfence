@@ -89,6 +89,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from .agent_identity import UNKNOWN_AGENT, AgentIdentity, current_agent
 from .principal import current_principal
 
 logger = logging.getLogger(__name__)
@@ -257,6 +258,12 @@ class PendingApproval:
     pii_detected: bool = False
     pii_categories: list[str] = field(default_factory=list)
     claude_reason: str = ""
+    # The AI system that made this request, captured from current_agent() at
+    # creation -- the same way claude_reason is carried. Audit rows about this
+    # approval that are written later, from inside some unrelated call (gate.py's
+    # expiry sweep), must use this rather than whatever agent that call runs
+    # as, or they would attribute this request to someone else's.
+    agent: AgentIdentity = UNKNOWN_AGENT
 
     # UI-step state -- see module docstring.
     event: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -517,6 +524,7 @@ class PendingApprovalRegistry:
                 operation_key=operation_key, review_ctx=review_ctx,
                 pii_forces_confirmation=pii_forces_confirmation, pii_detected=pii_detected,
                 pii_categories=list(pii_categories or []), claude_reason=claude_reason,
+                agent=current_agent(),
             )
             self._pending[approval.id] = approval
             self._by_key[key] = approval.id

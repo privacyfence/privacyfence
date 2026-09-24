@@ -796,7 +796,7 @@ class GmailConnector(Connector):
         if self.download_mode == "org":
             if cfg.fits_inline(attachment.size):
                 new_info = {
-                    "Content returned to Claude": (
+                    "Content returned to {agent}": (
                         f"Yes — file bytes are included in the tool result (attachment is "
                         f"{attachment.size:,} bytes, under this org's {cfg.inline_max_bytes:,}-byte "
                         "inline-delivery limit)"
@@ -804,13 +804,13 @@ class GmailConnector(Connector):
                 }
             else:
                 new_info = {
-                    "Content returned to Claude": (
+                    "Content returned to {agent}": (
                         "None — a one-time link is generated for you to open in your own browser"
                     ),
                 }
         else:
             new_info = {
-                "Content returned to Claude": "None — file bytes are never sent",
+                "Content returned to {agent}": "None — file bytes are never sent",
                 "Will save to": displayed_dest,
             }
         details = (
