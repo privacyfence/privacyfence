@@ -1,0 +1,12 @@
+{
+  "sendAs": [
+    {
+      "displayName": "QA Placeholder",
+      "isDefault": true,
+      "isPrimary": true,
+      "replyToAddress": "",
+      "sendAsEmail": "qa-placeholder@example.com",
+      "signature": ""
+    }
+  ]
+}

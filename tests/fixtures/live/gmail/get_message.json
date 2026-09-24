@@ -1,10 +1,11 @@
 {
   "historyId": "qa-placeholder-id-3",
   "id": "qa-placeholder-id-1",
-  "internalDate": "1784183362000",
+  "internalDate": "1789125770000",
   "labelIds": [
-    "Label_7",
-    "SENT"
+    "IMPORTANT",
+    "SENT",
+    "INBOX"
   ],
   "payload": {
     "body": {
@@ -18,15 +19,23 @@
       },
       {
         "name": "Date",
-        "value": "Thu, 16 Jul 2026 08:29:22 +0200"
+        "value": "Fri, 11 Sep 2026 13:22:50 +0200"
+      },
+      {
+        "name": "References",
+        "value": "<CAJosEyuU6edisQYpxyHdNamGjsahZnKoB3HgrbDYsqU+T_DoSw@mail.gmail.com>"
+      },
+      {
+        "name": "In-Reply-To",
+        "value": "<CAJosEyuU6edisQYpxyHdNamGjsahZnKoB3HgrbDYsqU+T_DoSw@mail.gmail.com>"
       },
       {
         "name": "Message-ID",
-        "value": "<CAPfg5gG_Wa-eVxKB9b-Z-vN7upadJEs98+j=ffh6h6H_v2hvLA@mail.gmail.com>"
+        "value": "<CAJosEytzRtPTLwgvpOfdyGGbfmCp29h4w7fxicSOZDPuKgroJA@mail.gmail.com>"
       },
       {
         "name": "Subject",
-        "value": "PrivacyFence QA seed message [QATEST]"
+        "value": "Re: PrivacyFence QA seed message [QATEST]"
       },
       {
         "name": "From",
@@ -38,7 +47,7 @@
       },
       {
         "name": "Content-Type",
-        "value": "multipart/alternative; boundary=\"0000000000009391fe0656b48f75\""
+        "value": "multipart/alternative; boundary=\"00000000000006a042065b334eef\""
       }
     ],
     "mimeType": "multipart/alternative",
@@ -46,14 +55,18 @@
     "parts": [
       {
         "body": {
-          "data": "U3ludGhldGljIFByaXZhY3lGZW5jZSBRQSB0ZXN0IG1lc3NhZ2UuIE5vIHJlYWwgaW5mb3JtYXRpb24uIFNhZmUgdG8gcmVhZCwNCmxhYmVsLCBhcmNoaXZlLCBvciBkZWxldGUgYnkgYW55IGF1dG9tYXRlZCB0ZXN0Lg0K",
-          "size": 126
+          "data": "U3ludGhldGljIFByaXZhY3lGZW5jZSBRQSByZXBseS4gTm8gcmVhbCBpbmZvcm1hdGlvbi4NCg0KT24gRnJpLCBTZXAgMTEsIDIwMjYgYXQgMToyMuKAr1BNIER1bW15IFBGVGVzdCA8dGVzdEBwcml2YWN5ZmVuY2UuZXU-IHdyb3RlOg0KDQo-IFN5bnRoZXRpYyBQcml2YWN5RmVuY2UgUUEgdGVzdCBtZXNzYWdlLiBObyByZWFsIGluZm9ybWF0aW9uLiBTYWZlIHRvIHJlYWQsDQo-IGxhYmVsLCBhcmNoaXZlLCBvciBkZWxldGUgYnkgYW55IGF1dG9tYXRlZCB0ZXN0Lg0KPg0K",
+          "size": 270
         },
         "filename": "",
         "headers": [
           {
             "name": "Content-Type",
             "value": "text/plain; charset=\"UTF-8\""
+          },
+          {
+            "name": "Content-Transfer-Encoding",
+            "value": "quoted-printable"
           }
         ],
         "mimeType": "text/plain",
@@ -61,14 +74,18 @@
       },
       {
         "body": {
-          "data": "PGRpdiBkaXI9Imx0ciI-U3ludGhldGljIFByaXZhY3lGZW5jZSBRQSB0ZXN0IG1lc3NhZ2UuIE5vIHJlYWwgaW5mb3JtYXRpb24uIFNhZmUgdG8gcmVhZCwgbGFiZWwsIGFyY2hpdmUsIG9yIGRlbGV0ZSBieSBhbnkgYXV0b21hdGVkIHRlc3QuPC9kaXY-DQo=",
-          "size": 146
+          "data": "PGRpdiBkaXI9Imx0ciI-PHNwYW4gc3R5bGU9ImNvbG9yOnJnYigzMSwzNSw0MCk7Zm9udC1mYW1pbHk6JnF1b3Q7TW9uYXNwYWNlIE5lb24mcXVvdDssdWktbW9ub3NwYWNlLFNGTW9uby1SZWd1bGFyLCZxdW90O1NGIE1vbm8mcXVvdDssTWVubG8sQ29uc29sYXMsJnF1b3Q7TGliZXJhdGlvbiBNb25vJnF1b3Q7LG1vbm9zcGFjZTtmb250LXNpemU6MTMuNnB4O3doaXRlLXNwYWNlOmJyZWFrLXNwYWNlcztiYWNrZ3JvdW5kLWNvbG9yOnJnYmEoMTI5LDEzOSwxNTIsMC4xMikiPlN5bnRoZXRpYyBQcml2YWN5RmVuY2UgUUEgcmVwbHkuIE5vIHJlYWwgaW5mb3JtYXRpb24uPC9zcGFuPjwvZGl2Pjxicj48ZGl2IGNsYXNzPSJnbWFpbF9xdW90ZSBnbWFpbF9xdW90ZV9jb250YWluZXIiPjxkaXYgZGlyPSJsdHIiIGNsYXNzPSJnbWFpbF9hdHRyIj5PbiBGcmksIFNlcCAxMSwgMjAyNiBhdCAxOjIy4oCvUE0gRHVtbXkgUEZUZXN0ICZsdDs8YSBocmVmPSJtYWlsdG86dGVzdEBwcml2YWN5ZmVuY2UuZXUiPnRlc3RAcHJpdmFjeWZlbmNlLmV1PC9hPiZndDsgd3JvdGU6PGJyPjwvZGl2PjxibG9ja3F1b3RlIGNsYXNzPSJnbWFpbF9xdW90ZSIgc3R5bGU9Im1hcmdpbjowcHggMHB4IDBweCAwLjhleDtib3JkZXItbGVmdDoxcHggc29saWQgcmdiKDIwNCwyMDQsMjA0KTtwYWRkaW5nLWxlZnQ6MWV4Ij48ZGl2IGRpcj0ibHRyIj48c3BhbiBzdHlsZT0iY29sb3I6cmdiKDMxLDM1LDQwKTtmb250LWZhbWlseTomcXVvdDtNb25hc3BhY2UgTmVvbiZxdW90Oyx1aS1tb25vc3BhY2UsU0ZNb25vLVJlZ3VsYXIsJnF1b3Q7U0YgTW9ubyZxdW90OyxNZW5sbyxDb25zb2xhcywmcXVvdDtMaWJlcmF0aW9uIE1vbm8mcXVvdDssbW9ub3NwYWNlO2ZvbnQtc2l6ZToxMy42cHg7d2hpdGUtc3BhY2U6YnJlYWstc3BhY2VzO2JhY2tncm91bmQtY29sb3I6cmdiYSgxMjksMTM5LDE1MiwwLjEyKSI-U3ludGhldGljIFByaXZhY3lGZW5jZSBRQSB0ZXN0IG1lc3NhZ2UuIE5vIHJlYWwgaW5mb3JtYXRpb24uIFNhZmUgdG8gcmVhZCwgbGFiZWwsIGFyY2hpdmUsIG9yIGRlbGV0ZSBieSBhbnkgYXV0b21hdGVkIHRlc3QuPC9zcGFuPjwvZGl2Pg0KPC9ibG9ja3F1b3RlPjwvZGl2Pg0K",
+          "size": 1107
         },
         "filename": "",
         "headers": [
           {
             "name": "Content-Type",
             "value": "text/html; charset=\"UTF-8\""
+          },
+          {
+            "name": "Content-Transfer-Encoding",
+            "value": "quoted-printable"
           }
         ],
         "mimeType": "text/html",
@@ -76,7 +93,7 @@
       }
     ]
   },
-  "sizeEstimate": 819,
-  "snippet": "Synthetic PrivacyFence QA test message. No real information. Safe to read, label, archive, or delete by any automated test.",
+  "sizeEstimate": 2242,
+  "snippet": "Synthetic PrivacyFence QA reply. No real information. On Fri, Sep 11, 2026 at 1:22 PM Dummy PFTest &lt;test@privacyfence.eu&gt; wrote: Synthetic PrivacyFence QA test message. No real information. Safe",
   "threadId": "qa-placeholder-id-2"
 }
