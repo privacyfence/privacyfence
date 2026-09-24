@@ -449,7 +449,7 @@ class SlackConnector(Connector):
         preview = {"Channel": channel_display}
         new_info = {"Messages": str(n)}
         if has_more:
-            new_info["Note"] = "More messages exist -- Claude will see this too"
+            new_info["Note"] = "More messages exist -- {agent} will see this too"
         lines = [
             f"[{d['ts']}] {d['user_name'] or d['user_id'] or 'unknown'}: {d['text']}"
             for d in filtered
@@ -497,7 +497,7 @@ class SlackConnector(Connector):
         preview = {"Channel": channel_display}
         new_info = {"Replies": str(max(0, n - 1))}
         if has_more:
-            new_info["Note"] = "More replies exist -- Claude will see this too"
+            new_info["Note"] = "More replies exist -- {agent} will see this too"
         lines = [
             f"[{d['ts']}] {d['user_name'] or d['user_id'] or 'unknown'}: {d['text']}"
             for d in filtered

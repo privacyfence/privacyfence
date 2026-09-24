@@ -11,10 +11,8 @@ X-GNOME-Autostart-enabled=true
 # #428 Phase 4 (B5b): the other half of the startup inversion ADR 0002
 # describes, and the Linux counterpart of the macOS companion LaunchAgent.
 #
-# Before Phase 4, what autostarted in the user's session was the daemon
-# (/etc/xdg/autostart/privacyfence.desktop, which
-# scripts/linux_privilege_separation.sh moves aside). Afterwards the daemon
-# is a system unit with no session at all, and what autostarts here is
+# The daemon is a system unit with no session at all, so what autostarts in
+# the user's session is
 # `privacyfence-companion --serve`: the companion's control channel and
 # nothing else, so the daemon's connector OAuth flows (oauth_loopback.py)
 # have something in the user's session to hand a browser URL to. Without it,

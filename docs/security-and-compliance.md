@@ -55,8 +55,9 @@ below, which is what [#428](https://github.com/privacyfence/privacyfence/issues/
 and [ADR 0003](adr/0003-separated-installs-only.md) makes mandatory rather than opt-in on any of the
 three. A packaged build that finds itself unseparated does not serve at all (ADR 0003 decision 6 —
 no `/mcp`, no approvals), so the un-separated install the rest of this section describes is not
-something any of the three platforms' installers ship: it is reachable only via `... disable`
-(documented and deliberate — see that subsection), or from a non-packaged source/pip checkout run
+something any of the three platforms' installers ship: it is reachable only via
+`... uninstall --purge` (`-Purge` on Windows) with the package still installed (documented and
+deliberate — see that subsection), or from a non-packaged source/pip checkout run
 with `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` for local development (never a real deployment — see
 that subsection and [ADR 0003](adr/0003-separated-installs-only.md) decision 7). That subsection
 says exactly which of the statements below a separated install changes and which it leaves
@@ -65,8 +66,7 @@ standing.
 A local process running as the signed-in user can:
 
 - read the current sign-in link straight out of `handoff/approvals_url` — **no longer: that file
-  is not written any more** (the self-approval plan's Phase 2), and any left by an older version is
-  deleted on the next start. It was the second of the three paths to a session §02 of that review
+  is not written any more** (the self-approval plan's Phase 2). It was the second of the three paths to a session §02 of that review
   counts, and the only one that took no more than reading a file;
 - connect to the control channel under the data directory's `authority` subdirectory ([#428](https://github.com/privacyfence/privacyfence/issues/428)
   Phase 1 split this, and `config/settings.yaml`, enrolled WebAuthn credentials, and the audit log,
@@ -291,9 +291,9 @@ the one an **Always allow** click raises: both appear only after an approval car
 answered, and that card took both checks. Asking again would be a second passkey tap for one
 decision.
 
-It is not true of the third. `privacyfence_propose_policy_change` (and the deprecated
-`privacyfence_propose_auto_accept_rule_change`) lets an MCP client ask for an auto-accept rule
-directly. No card is shown, because nothing is being approved yet -- the dialog *is* the gate, and
+It is not true of the third. `privacyfence_propose_policy_change` lets an MCP client ask for an
+auto-accept rule directly. No card is shown, because nothing is being approved yet -- the dialog
+*is* the gate, and
 what it writes is a rule that decides what gets approved without asking from then on. That is the
 same kind of change `_SENSITIVE_ACTIONS` names on the Settings page, reached by a different route
 and, until this was closed, without either of that route's two checks.
@@ -439,10 +439,14 @@ protects. Trading the
 code in at `POST /security/recover` needs no WebAuthn ceremony — deliberately, since producing one is
 exactly what a locked-out human cannot do — only the still-valid session that got them to `/security`
 in the first place, which local mode's ordinary sign-in path (a bootstrap link) still provides even
-with `require_passkey` on, since step-up gates *decisions*, not sign-in itself. A successful trade-in
+with `require_passkey` on, since step-up gates *decisions*, not sign-in itself. On a
+privilege-separated install that session must be one opened from the companion (the same
+human-session check approving a decision makes); in org mode the IdP sign-in is that check. Attempts
+are rate-limited — 5 per session and 20 across all sessions in any 15 minutes. A successful trade-in
 removes every credential enrolled for that principal, clearing the stuck state so a fresh passkey can
 be enrolled immediately afterward, and is itself audited (`webauthn_recovery_code_used`) whether or
-not the human goes on to enroll again. The code is single-use: spending it, correctly or not, never
+not the human goes on to enroll again; every refused attempt is audited too
+(`webauthn_recovery_refused`, with the reason but never the code). The code is single-use: spending it, correctly or not, never
 grants a second attempt at the same code. A fresh one is issued at the next successful enrollment
 that finds none on file — or, on a packaged install, whenever the companion is asked for one (see
 below).
@@ -527,12 +531,15 @@ so the daemon leaves your session and the companion app enters it:
 | Data directory | `/Library/Application Support/PrivacyFence` | `/var/lib/privacyfence` | `%ProgramData%\PrivacyFence` |
 | Daemon starts as | a LaunchDaemon | a system systemd unit (`privacyfence-daemon.service`) | a Windows service (`PrivacyFence`) |
 | Companion starts as | a LaunchAgent (the menu-bar app) | an XDG autostart entry running `privacyfence-companion --serve` | a Scheduled Task (`PrivacyFenceCompanion`, the tray app) |
-| Replaces | the login-session LaunchAgent | the `.deb`'s XDG autostart entry and the `--user` unit | the installer's own `PrivacyFence` Scheduled Task, disabled rather than deleted |
+| Replaces | the login-session LaunchAgent | a pip/pipx install's `--user` unit | nothing: the installer registers no daemon task |
 
-All three still ship the manual `enable`/`disable`/`status` subcommands above; the migration moves
-live connector OAuth tokens, so take a backup first if running one by hand. `... disable` reverses
-it on any platform — and, per [ADR 0003](adr/0003-separated-installs-only.md) decision 6, it stops
-being a way to run PrivacyFence: a packaged build finds no marker afterward and refuses to serve.
+All three platforms ship `enable`/`uninstall [--purge]`/`status` ([ADR 0042](adr/0042-uninstall-replaces-disable.md);
+Windows spells the flag `-Purge`): `uninstall` stops the service and keeps the data under the data
+directory above, `--purge` deletes it and the service account (on Windows, the `PrivacyFenceUsers`
+group; its virtual account goes with the service), and neither moves anything into a home
+directory. On macOS, which has no package manager, `uninstall` is the uninstall: it also removes the
+app the `.pkg` installed. On Windows the uninstaller runs it, adding `-Purge` only when its
+**Delete PrivacyFence data** checkbox is ticked.
 **Every packaged install on all three platforms now separates itself as part of installing**,
 mandatorily rather than opt-in, per ADR 0003. The `.deb`'s `postinst` separates the install itself,
 root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)). Since
@@ -563,7 +570,8 @@ failure, not a silently-opt-in install.
 
 **And a packaged build that ends up unseparated anyway does not serve.** ADR 0003 decision 6 is the
 backstop for the installs the paragraph above doesn't cover — a pre-ADR-0003 install upgrading in
-place, a restored backup, an install where `... disable` was run and forgotten: on startup, a
+place, a restored backup, an install where `... uninstall --purge` was run and the program left
+behind: on startup, a
 packaged local-mode daemon attempts its platform's provisioning (the same mechanisms above, run
 again) and, if it is still unseparated afterward, refuses outright — no `/mcp`, no approvals —
 naming the one command that fixes it. Source checkouts and `pip`/`pipx` installs are not packaged
@@ -594,10 +602,10 @@ stating rather than leaving to be discovered:
   written for, arriving where it was predicted. `enable` refuses to install the daemon half alone.
 
 One thing has no POSIX counterpart at all: **ownership is part of the boundary**. An object's owner
-on Windows can rewrite its ACL regardless of what that ACL says, so `enable` takes ownership of the
-data directory (to `Administrators`) rather than letting the move out of `%LOCALAPPDATA%` leave it
-with you — otherwise every permission above would be advisory against the one account it is meant
-to exclude. `… disable` hands ownership back.
+on Windows can rewrite its ACL regardless of what that ACL says, and any user may create a
+directory under `%ProgramData%` — so `enable` takes ownership of the data directory (to
+`Administrators`) rather than trusting whoever created it — otherwise every permission above would
+be advisory against the one account it is meant to exclude.
 
 One thing is *tighter* on Windows than on POSIX: the shared handoff directory is readable by the
 group, not writable. POSIX has to grant `rwx` there because the companion creates its own socket
@@ -846,6 +854,16 @@ The chain's signing key lives next to the `.jsonl` files it protects, at the sam
 Org deployments can use the implemented forwarding/export path for external retention/monitoring. Forwarding does not replace local operational decisions about retention, backup, and access control.
 
 Treat audit data as sensitive: it can reveal which services/tools/resources were used even when protected content itself was not released.
+
+### Which AI system the audit log names, and how far to believe it
+
+Each gated connector call records which AI system made it, and how that was learned (`agent_source`; the fields are in [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#which-ai-system-made-the-request)). The approval card, the approval list and the Audit Log page show the same thing in three forms: **Verified**, **Not verified** ("Says it is ChatGPT"), or **Unrecognised AI system** with the name the client sent.
+
+**Local mode.** Every AI system one OS user runs holds that user's same MCP token ([ADR 0008](adr/0008-one-principal-per-os-user.md)), so nothing the token proves can tell them apart. The name an AI system gives is what it says about itself, and PrivacyFence records it as that: *Not verified*. Local mode has no verified source at all. An `agent_overrides:` entry in `settings.yaml` maps a name an AI system gives to the one it is, but only relabels it: the call stays *Not verified* on every install, privilege-separated or not. The file may be out of the AI system's reach, but the mapping is selected by the name the caller sends, and any process holding the shared token can send a mapped name ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)). A verified local identity needs a credential per AI system, which does not exist yet.
+
+**Organization mode.** An OAuth client's registered name is chosen by whatever registered it, so on its own it is *Not verified*. An administrator can pin a registration to an AI system on the admin-only *AI systems* settings page; pinning and unpinning need a passkey when `step_up.require_passkey` is on ([ADR 0034](adr/0034-sensitive-settings-writes-require-step-up-in-both-modes.md)), and every pin and unpin is audited. Only a call whose access token belongs to a pinned registration is *Verified* — the only verified identity PrivacyFence records in either mode. A pin names one registration: it never moves to another client, including one that registers again under the same name, and it stops applying once the registration expires ([ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md) decision 3).
+
+**In both modes, an unverified name never changes an outcome.** It does not select a rule, auto-accept a call or release data; it is a reporting field. A verified one does not change an outcome today either — the attested tier is only the one a future rule would be allowed to key on ([ADR 0006](adr/0006-attributing-a-request-to-the-ai-system-that-made-it.md) decision 3). The vendor's logo appears only beside a verified identity, and the card's own wording names the AI system only when it is verified; otherwise it says "the AI system" ([ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md)).
 
 ## Dependencies and supply chain
 

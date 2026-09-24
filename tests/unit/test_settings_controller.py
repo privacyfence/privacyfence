@@ -7,13 +7,10 @@ same behavior, now exercised through SettingsController's methods instead of
 PrivacyFenceMenuBar's. Native-picker-specific tests (_osascript_pick-driven
 rule/policy selection, the old int-value/list-value rumps.Window prompts)
 were dropped rather than ported -- there is no native picker left to test.
-The webview-dropdown rule editor #120 replaced them with (rule_type from a
-RULES_BY_OPERATION-constrained <select>, value as plain text) is itself gone
+The webview-dropdown rule editor #120 replaced them with is itself gone
 as of the policy v2 redesign's P6 (see TestAddPolicyRule/TestRemovePolicyRule
-below for its replacement, and settings_controller.py's own "Auto-accept
-(policy v2)" section docstring); RULES_BY_OPERATION/RULES_LIST_VALUE/
-RULES_INT_VALUE survive only because org mode's own separate settings
-surface (web/routes_org_settings.py) still reads them.
+below for its replacement, and settings_controller.py's own "Auto-accept"
+section comment).
 
 Also covers the cross-thread AppHelper.callAfter marshaling contract
 (_run_async/on_change) that used to live in test_menu_bar.py's "P6" module
@@ -83,7 +80,7 @@ def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "data_dir", lambda: data_dir_path)
 
     config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept_rules: {}\nconnectors: {}\n", encoding="utf-8")
+    config_path.write_text("connectors: {}\n", encoding="utf-8")
 
     host_calls = []
     connector_host = SimpleNamespace(set_connectors=lambda conns: host_calls.append(conns))
@@ -333,10 +330,14 @@ class TestConfigHelpers:
         reload_calls = []
         monkeypatch.setattr(sc, "notify_rules_changed", lambda: reload_calls.append(True))
 
-        controller._save_and_reload({"auto_accept_rules": {"gmail.read_message": [{"rule": "i_am_sender"}]}})
+        section = {"version": 2, "rules": [
+            {"id": "r1", "predicate": "i_am_sender", "value": None, "operations": ["gmail.read_message"],
+             "conditions": []},
+        ]}
+        controller._save_and_reload({"auto_accept": section})
 
         assert reload_calls == [True]
-        assert controller._load_config()["auto_accept_rules"] == {"gmail.read_message": [{"rule": "i_am_sender"}]}
+        assert controller._load_config()["auto_accept"] == section
 
     def test_save_and_reload_swallows_reload_failures(self, controller, monkeypatch):
         monkeypatch.setattr(sc, "notify_rules_changed", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
@@ -985,7 +986,7 @@ class TestAuthenticateDispatch:
     @pytest.mark.parametrize("cname,method", [
         ("gmail", "_authenticate_google"), ("drive", "_authenticate_google"),
         ("contacts", "_authenticate_google"), ("calendar", "_authenticate_google"),
-        ("tasks", "_authenticate_google"), ("slack", "_authenticate_slack"),
+        ("tasks", "_authenticate_google"), ("apps_script", "_authenticate_google"), ("slack", "_authenticate_slack"),
         ("salesforce", "_authenticate_salesforce"), ("jira", "_authenticate_atlassian"),
         ("confluence", "_authenticate_atlassian"),
     ])
@@ -1077,6 +1078,54 @@ class TestAuthenticateGoogle:
         assert "user closed browser" in controller.error
         assert refresh_calls == []
         assert "gmail" not in controller._busy_connectors
+
+
+    def test_apps_script_uses_its_own_client_and_token_file(self, controller, monkeypatch):
+        from privacyfence.apps_script_client import AppsScriptClient
+
+        assert sc._GOOGLE_CLIENTS["apps_script"] is AppsScriptClient
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: None)
+        token_files = []
+
+        class FakeAppsScriptClient:
+            def __init__(self, client_config, token_file):
+                token_files.append(token_file)
+
+            def authorize_interactive(self):
+                pass
+
+            def check_connection(self):
+                return "me@example.com"
+
+        monkeypatch.setitem(sc._GOOGLE_CLIENTS, "apps_script", FakeAppsScriptClient)
+
+        controller._authenticate_google("apps_script", {"google": {"client_id": "i", "client_secret": "s"}})
+
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert token_files == [str(sc.data_dir() / daemon_main.TOKEN_FILES["apps_script"])]
+        assert controller.error == ""
+
+    def test_failed_apps_script_auth_names_it_by_its_display_label(self, controller, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+
+        class FailingAppsScriptClient:
+            def __init__(self, client_config, token_file):
+                pass
+
+            def authorize_interactive(self):
+                raise RuntimeError("user closed browser")
+
+        monkeypatch.setitem(sc._GOOGLE_CLIENTS, "apps_script", FailingAppsScriptClient)
+
+        controller._authenticate_google("apps_script", {"google": {"client_id": "i", "client_secret": "s"}})
+
+        assert wait_until(lambda: recorded)
+        _drain_run_async(recorded)
+        assert controller.error.startswith("Apps Script authentication failed: ")
 
 
 class TestAuthenticateSlack:
@@ -1591,10 +1640,10 @@ class TestAddPolicyRule:
         assert "FOLDER1" in rules[0]["value"]
 
         cfg = controller._load_config()
-        assert cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] is True
         assert cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY]["rules"][0]["predicate"] == "approved_folder"
-        # Never *populates* the v1 sections -- a v2-only add writes nothing under auto_accept_rules.
-        assert not cfg.get("auto_accept_rules")
+        # Writes only the current section: nothing a later load_config would refuse, and no marker.
+        assert not set(cfg) & set(policy_store.V1_SECTION_KEYS)
+        assert "migrated_to_policy_v2" not in cfg
 
     def test_adding_more_verbs_for_the_same_value_widens_the_existing_row(self, controller):
         controller.add_policy_rule("drive.folder", "FOLDER1", ["read"])
@@ -1722,63 +1771,6 @@ class TestAutoAcceptRuleUsage:
         assert row["never_matched"] is True
 
 
-class TestPolicyV2MigrationNotice:
-    """P4 of the policy v2 redesign's Settings banner: policy_v2_migration_notice_html() -- see
-    settings_controller.py's own docstring on it for why this is the dismissible-notice mechanism
-    (web_shell.wrap's dismissible_notice_html), not the persistent banner."""
-
-    def _seed(self, controller, *, migrated, rules):
-        cfg = controller._load_config()
-        if migrated:
-            cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] = True
-        cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = {"version": 2, "rules": rules}
-        controller._save_config(cfg)
-
-    def test_no_notice_before_migration_even_with_a_destructive_rule_present(self, controller):
-        self._seed(
-            controller, migrated=False,
-            rules=[{"id": "r1", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]}],
-        )
-        assert controller.policy_v2_migration_notice_html() is None
-
-    def test_no_notice_after_migration_when_nothing_is_destructive_or_send(self, controller):
-        self._seed(
-            controller, migrated=True,
-            rules=[{"id": "r1", "predicate": "approved_folder", "value": ["F1"],
-                     "operations": ["drive.read_file_contents"]}],
-        )
-        assert controller.policy_v2_migration_notice_html() is None
-
-    def test_notice_lists_destructive_rule_after_migration(self, controller):
-        self._seed(
-            controller, migrated=True,
-            rules=[{"id": "r-delete", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]}],
-        )
-        notice = controller.policy_v2_migration_notice_html()
-        assert notice is not None
-        assert "r-delete" in notice
-        assert "1 existing rule" in notice
-
-    def test_notice_lists_send_rule_after_migration(self, controller):
-        self._seed(
-            controller, migrated=True,
-            rules=[{"id": "r-send", "predicate": "always_allow", "operations": ["slack.send_message"]}],
-        )
-        notice = controller.policy_v2_migration_notice_html()
-        assert notice is not None
-        assert "r-send" in notice
-
-    def test_notice_html_escapes_rule_id(self, controller):
-        self._seed(
-            controller, migrated=True,
-            rules=[{"id": "<script>bad</script>", "predicate": "always_allow",
-                     "operations": ["sheets.delete_dimensions"]}],
-        )
-        notice = controller.policy_v2_migration_notice_html()
-        assert "<script>bad</script>" not in notice
-        assert "&lt;script&gt;" in notice
-
-
 class TestResolvedRuleValue:
     """P6: rule values resolve through the same cached-name machinery the old grant rows used,
     reusing RULE_NAME_TO_RESOURCE_TYPE for a predicate whose value is an opaque resource id."""
@@ -1846,6 +1838,19 @@ class TestPrivacyFilter:
 
         assert calls == [1]
 
+
+    def test_toggle_gmail_signature_flips_and_refreshes_connectors(self, controller, monkeypatch):
+        calls = []
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: calls.append(1) or controller.snapshot())
+        assert controller.snapshot()["privacy"]["gmail_append_signature"] is False
+
+        controller.toggle_gmail_signature()
+        assert controller._load_config()["gmail"]["append_signature_to_drafts"] is True
+        assert controller.snapshot()["privacy"]["gmail_append_signature"] is True
+
+        controller.toggle_gmail_signature()
+        assert controller._load_config()["gmail"]["append_signature_to_drafts"] is False
+        assert calls == [1, 1]
 
 class TestAuditLog:
     def test_set_log_level_persists_and_hot_applies(self, controller, monkeypatch):
@@ -1938,6 +1943,13 @@ class TestSnapshotStructure:
     def test_connectors_cover_all_connectors(self, controller):
         state = controller.snapshot()
         assert {c["key"] for c in state["connectors"]} == set(sc.ALL_CONNECTORS)
+
+    def test_apps_script_row_is_a_google_connector_with_its_display_label(self, controller, monkeypatch):
+        monkeypatch.setattr(controller, "_org_config_or_empty", lambda: {"google": {"client_id": "i"}})
+        row = next(c for c in controller.snapshot()["connectors"] if c["key"] == "apps_script")
+        assert row["label"] == "Apps Script"
+        assert row["has_org"] is True
+        assert row["auth_label"] == "Authenticate…"
 
     def test_auto_accept_state_has_rules_scope_groups_and_connectors(self, controller):
         state = controller.snapshot()
@@ -2081,59 +2093,6 @@ class TestStatusConnectors:
         func(*args, **kwargs)
 
         assert self._row(controller, "slack")["blocked_by"] == "not_authenticated"
-
-
-class TestRuleUiCompleteness:
-    """Structural checks tying org mode's per-principal rule UI to auto_accept's
-    v1 rule engine -- see test_menu_bar.py's pre-#120 version of this class for
-    the original regressions these caught (calendar.set_visibility/
-    non_private_event never reachable from the UI, "docs" missing from
-    RULES_MENU_GROUPS).
-
-    P6 replaced the local settings window's per-connector Rules page with one
-    filterable Auto-accept page driven by the v2 catalogue, so the nav-group
-    reachability check that used to live here (every OPERATION_LABELS prefix
-    present in RULES_MENU_GROUPS) went with the table it guarded. The v2
-    equivalents are tests/unit/policy/test_catalogue.py's
-    test_covers_every_propose_group_and_every_extra and test_registry.py's
-    coverage of the six formerly-ungovernable operation keys. RULES_BY_OPERATION
-    and OPERATION_LABELS themselves survive for web/routes_org_settings.py,
-    which still renders v1 rules, so these checks still have a subject."""
-
-    @staticmethod
-    def _all_rule_names() -> set[str]:
-        """Every v1 predicate name ``policy.compat.compile_rule_entry`` (the migration's own v1
-        -> v2 compiler, and P9's sole remaining reader of v1 rule names, now that
-        ``AutoAcceptEvaluator`` is gone) actually recognizes: every v2 scope selector's own id,
-        plus every legacy name a ``ConditionSelector.replaces`` maps onto one -- see that module's
-        own docstring for why a v1 predicate is always exactly one or the other."""
-        from privacyfence.policy import conditions, scopes
-
-        names = set(scopes.SCOPE_SELECTORS)
-        for selector in conditions.CONDITION_SELECTORS.values():
-            names.update(selector.replaces)
-        return names
-
-    @staticmethod
-    def _rules_by_operation_names() -> set[str]:
-        return {rule for rules in sc.RULES_BY_OPERATION.values() for rule in rules}
-
-    def test_every_rule_is_reachable_from_some_operation(self):
-        unreachable = self._all_rule_names() - self._rules_by_operation_names()
-        assert unreachable == set()
-
-    def test_no_stale_rule_names_in_rules_by_operation(self):
-        stale = self._rules_by_operation_names() - self._all_rule_names()
-        assert stale == set()
-
-    def test_every_operation_label_is_a_real_operation_key(self):
-        real_ops = set(auto_accept.TOOL_TO_OPERATION.values())
-        fake = set(sc.OPERATION_LABELS) - real_ops
-        assert fake == set()
-
-    def test_every_rules_by_operation_key_has_a_label(self):
-        unlabeled = set(sc.RULES_BY_OPERATION) - set(sc.OPERATION_LABELS)
-        assert unlabeled == set()
 
 
 class TestAnyConnectorAuthenticated:

@@ -263,3 +263,28 @@ class TestDeferredRegistry:
         t.join(timeout=2)
 
         assert result == ("deny", None)
+
+
+class TestCardNamesTheCapturedAgent:
+    """AGT-4: the card shows the identity the approval captured at
+    registration; a direct call with none uses the calling context's."""
+
+    def test_uses_the_approvals_own_agent(self):
+        from types import SimpleNamespace
+
+        from privacyfence import web_approval_ui
+        from privacyfence.agent_identity import AgentSource, agent_scope, identify
+
+        captured = identify("claude-code", "", AgentSource.CLIENT_INFO)
+        other = identify("openai-mcp", "", AgentSource.CLIENT_INFO)
+        with agent_scope(other):
+            assert web_approval_ui._agent_of(SimpleNamespace(agent=captured)) == captured
+
+    def test_falls_back_to_the_calling_context(self):
+        from privacyfence import web_approval_ui
+        from privacyfence.agent_identity import UNKNOWN_AGENT, AgentSource, agent_scope, identify
+
+        assert web_approval_ui._agent_of(None) == UNKNOWN_AGENT
+        agent = identify("gemini-cli-mcp-client", "", AgentSource.CLIENT_INFO)
+        with agent_scope(agent):
+            assert web_approval_ui._agent_of(None) == agent

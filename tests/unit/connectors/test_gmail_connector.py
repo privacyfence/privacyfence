@@ -26,7 +26,15 @@ import pytest
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connectors import gmail as gmail_module
 from privacyfence.connectors.gmail import GmailConnector
-from privacyfence.gmail_client import Attachment, GmailClient, GmailClientError, GmailMessage, GmailThread
+from privacyfence.gmail_client import (
+    Attachment,
+    GmailClient,
+    GmailClientError,
+    GmailMessage,
+    GmailThread,
+    SendAsAlias,
+    signature_plain_text,
+)
 from privacyfence.privacy_filter import init_privacy_filter
 
 from ...helpers import assert_all_tools_leave_an_audit_trail, assert_no_placeholder_fields
@@ -558,7 +566,7 @@ class TestDownloadAttachment:
         # Will save to / no-content-returned are new-on-approval facts, not
         # already-known metadata -- see connectors/gmail.py's comment.
         assert kwargs["new_info"]["Will save to"] == "/tmp/report.pdf"
-        assert "None" in kwargs["new_info"]["Content returned to Claude"]
+        assert "None" in kwargs["new_info"]["Content returned to {agent}"]
         # MIME type used to only appear in details_text (duplicating the
         # rest of the preview fields); it now lives in preview only.
         assert kwargs["details_text"] == "The attachment above will be downloaded to the destination shown."
@@ -831,7 +839,7 @@ class TestOrgModeDownloadDelivery:
         client.fetch_attachment_bytes.assert_called_once_with("m1", "att-1")
 
         kwargs = gated_call_spy[0]
-        assert "Yes" in kwargs["new_info"]["Content returned to Claude"]
+        assert "Yes" in kwargs["new_info"]["Content returned to {agent}"]
         assert "Will save to" not in kwargs["new_info"]
         assert kwargs["delivery"] == "inline_base64"
 
@@ -873,7 +881,7 @@ class TestOrgModeDownloadDelivery:
         assert get_download_staging_store().pending_count == 1
 
         kwargs = gated_call_spy[0]
-        assert "one-time link" in kwargs["new_info"]["Content returned to Claude"]
+        assert "one-time link" in kwargs["new_info"]["Content returned to {agent}"]
         assert kwargs["delivery"] == "staged_link"
 
     async def test_agent_links_false_keeps_the_browser_link(self, gated_call_spy):
@@ -1527,6 +1535,183 @@ class TestWriteToolsWithAttachmentsGateAndPreview:
         client.create_draft_with_attachments.assert_called_once_with(
             "alice@example.com", "Hi", "body", [str(attachment)], "", "", "", "org",
         )
+
+
+_SIGNATURE_HTML = "<div>Ada Lovelace<br>+36 1 234 5678</div>"
+_DEFAULT_ALIAS = SendAsAlias("me@example.com", "Me", _SIGNATURE_HTML, is_default=True, is_primary=True)
+
+_DRAFT_TOOLS = [
+    # (tool, client method, needs a message to reply to, takes attachments)
+    ("gmail_create_draft", "create_draft", False, False),
+    ("gmail_reply_draft", "create_reply_draft", True, False),
+    ("gmail_reply_all_draft", "create_reply_draft", True, False),
+    ("gmail_create_draft_with_attachments", "create_draft_with_attachments", False, True),
+    ("gmail_reply_draft_with_attachments", "create_reply_draft_with_attachments", True, True),
+    ("gmail_reply_all_draft_with_attachments", "create_reply_draft_with_attachments", True, True),
+]
+
+
+def _draft_args(is_reply: bool, has_attachments: bool, tmp_path, **extra) -> dict:
+    args = {"message_id": "m1"} if is_reply else {"to": "alice@example.com", "subject": "Hi"}
+    args["body"] = "See you then."
+    if has_attachments:
+        attachment = tmp_path / "f.txt"
+        attachment.write_bytes(b"x")
+        args["attachments"] = json.dumps([str(attachment)])
+    args.update(extra)
+    return args
+
+
+def _signature_connector(alias: SendAsAlias = _DEFAULT_ALIAS, **resolve_kwargs):
+    connector, client = make_connector()
+    client.get_message.return_value = GmailMessage(id="m1", thread_id="t1", subject="Re: hi", sender="alice@example.com")
+    for method in ("create_draft", "create_reply_draft", "create_draft_with_attachments",
+                   "create_reply_draft_with_attachments"):
+        getattr(client, method).return_value = {"draft_id": "d1"}
+    client.resolve_send_as.return_value = alias
+    return connector, client
+
+
+class TestDraftSignatureAndSendAs:
+    @pytest.mark.parametrize("tool,method,is_reply,has_attachments", _DRAFT_TOOLS)
+    def test_every_draft_tool_advertises_both_params(self, tool, method, is_reply, has_attachments):
+        connector, _ = make_connector()
+        spec = next(s for s in connector.tool_specs() if s.name == tool)
+        params = {p.name: p for p in spec.params}
+        assert params["include_signature"].annotation == "bool"
+        assert params["include_signature"].default is None
+        assert "signature" in params["include_signature"].description
+        assert params["send_as"].required is False
+
+    @pytest.mark.parametrize("tool,method,is_reply,has_attachments", _DRAFT_TOOLS)
+    async def test_include_signature_shows_and_saves_the_same_signature(
+        self, gated_call_spy, tmp_path, tool, method, is_reply, has_attachments,
+    ):
+        connector, client = _signature_connector()
+
+        await connector.call(tool, _draft_args(is_reply, has_attachments, tmp_path, include_signature=True))
+
+        client.resolve_send_as.assert_called_once_with("")
+        kwargs = gated_call_spy[0]
+        assert kwargs["details_text"] == "See you then." + signature_plain_text(_SIGNATURE_HTML)
+        assert kwargs["preview"]["Signature"] == "Appended (me@example.com)"
+        assert "From" not in kwargs["preview"]
+        assert "Ada Lovelace" not in str(kwargs["preview"])
+        # The user's own signature isn't what the write-content scan is for.
+        assert kwargs["write_content_scan_text"] == "See you then."
+        assert kwargs["raw_data"]["include_signature"] is True
+        assert getattr(client, method).call_args.kwargs == {"signature_html": _SIGNATURE_HTML}
+
+    @pytest.mark.parametrize("tool,method,is_reply,has_attachments", _DRAFT_TOOLS)
+    async def test_send_as_sets_from_and_uses_that_aliases_signature(
+        self, gated_call_spy, tmp_path, tool, method, is_reply, has_attachments,
+    ):
+        alias = SendAsAlias("team@example.com", "Team", "<b>Team sig</b>")
+        connector, client = _signature_connector(alias)
+
+        await connector.call(
+            tool, _draft_args(is_reply, has_attachments, tmp_path, include_signature=True, send_as="team@example.com"),
+        )
+
+        client.resolve_send_as.assert_called_once_with("team@example.com")
+        kwargs = gated_call_spy[0]
+        assert next(iter(kwargs["preview"])) == "From"
+        assert kwargs["preview"]["From"] == "team@example.com"
+        assert kwargs["details_text"].endswith("-- \nTeam sig")
+        assert getattr(client, method).call_args.kwargs == {
+            "signature_html": "<b>Team sig</b>", "from_header": "Team <team@example.com>",
+        }
+
+    async def test_send_as_without_signature_only_sets_from(self, gated_call_spy):
+        connector, client = _signature_connector(SendAsAlias("team@example.com", "", "<b>sig</b>"))
+
+        await connector.call(
+            "gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "b", "send_as": "team@example.com"},
+        )
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["details_text"] == "b"
+        assert kwargs["write_content_scan_text"] is None
+        assert "Signature" not in kwargs["preview"]
+        assert client.create_draft.call_args.kwargs == {"from_header": "team@example.com"}
+
+    async def test_unknown_send_as_is_rejected_before_gating(self, gated_call_spy):
+        connector, client = _signature_connector()
+        client.resolve_send_as.side_effect = GmailClientError("send_as: 'x@y.com' is not one of ...")
+
+        with pytest.raises(RuntimeError, match="not one of"):
+            await connector.call(
+                "gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "b", "send_as": "x@y.com"},
+            )
+        assert gated_call_spy == []
+        client.create_draft.assert_not_called()
+
+    async def test_setting_off_and_param_omitted_costs_no_api_call(self, gated_call_spy):
+        connector, client = _signature_connector()
+
+        await connector.call("gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "b"})
+
+        client.resolve_send_as.assert_not_called()
+        assert "Signature" not in gated_call_spy[0]["preview"]
+        client.create_draft.assert_called_once_with("a@x.com", "s", "b", "", "", "")
+
+    async def test_setting_on_is_the_default_and_the_param_overrides_it(self, gated_call_spy):
+        connector, client = _signature_connector()
+        connector.append_signature = True
+
+        await connector.call("gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "b"})
+        assert client.create_draft.call_args.kwargs == {"signature_html": _SIGNATURE_HTML}
+
+        await connector.call(
+            "gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "b", "include_signature": False},
+        )
+        assert client.create_draft.call_args.kwargs == {}
+        assert gated_call_spy[1]["raw_data"]["include_signature"] is False
+
+    async def test_empty_signature_is_disclosed_and_appends_nothing(self, gated_call_spy):
+        connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html=""))
+
+        await connector.call(
+            "gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "b", "include_signature": True},
+        )
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Signature"] == "None set for me@example.com -- nothing appended"
+        assert kwargs["details_text"] == "b"
+        assert client.create_draft.call_args.kwargs == {}
+
+    async def test_markup_only_signature_counts_as_none(self, gated_call_spy):
+        connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html="<div><br></div>"))
+
+        await connector.call(
+            "gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "b", "include_signature": True},
+        )
+
+        assert gated_call_spy[0]["preview"]["Signature"] == "None set for me@example.com -- nothing appended"
+        assert client.create_draft.call_args.kwargs == {}
+
+    async def test_image_only_signature_is_disclosed_as_such(self, gated_call_spy):
+        logo = '<img src="https://example.com/logo.png">'
+        connector, client = _signature_connector(SendAsAlias("me@example.com", signature_html=logo))
+
+        await connector.call(
+            "gmail_create_draft", {"to": "a@x.com", "subject": "s", "body": "b", "include_signature": True},
+        )
+
+        kwargs = gated_call_spy[0]
+        assert kwargs["preview"]["Signature"] == "Appended (me@example.com; image only, rich-text drafts only)"
+        assert kwargs["details_text"] == "b"
+        assert client.create_draft.call_args.kwargs == {"signature_html": logo}
+
+    async def test_markdown_preview_shows_source_then_signature(self, gated_call_spy):
+        connector, _ = _signature_connector()
+
+        await connector.call(
+            "gmail_create_draft",
+            {"to": "a@x.com", "subject": "s", "body_markdown": "**Hi**", "include_signature": True},
+        )
+
+        assert gated_call_spy[0]["details_text"] == "**Hi**" + signature_plain_text(_SIGNATURE_HTML)
 
 
 class TestWriteToolsWithUploadRefAttachments:

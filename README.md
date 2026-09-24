@@ -298,10 +298,13 @@ time it starts and finds the install unseparated — a decline is an unfinished 
 setting, and a packaged build that stays unseparated refuses to serve at all rather than serve a
 guarantee it cannot keep.) Run
 `sudo ./scripts/macos_privilege_separation.sh enable` any time afterward if you need to re-run it
-by hand (`... disable` reverses the layout, but on a packaged install it stops being a way to keep
-the daemon running — it refuses to serve once it finds no marker). Worth reading
+by hand. To uninstall, run
+`sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh uninstall`:
+it stops PrivacyFence, removes the app and keeps the data under
+`/Library/Application Support/PrivacyFence`; `... uninstall --purge` also deletes the data and the
+`_privacyfence` account. Neither moves anything into your home directory. Worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
-before you run it by hand — the migration moves live connector tokens.
+before you run it by hand.
 
 **Downloading or uploading a file may prompt "Claude would like to access files in your
 Downloads folder"** the first time a tool saves or reads something outside its own working
@@ -338,8 +341,8 @@ Approve it once and it won't ask again for that folder.
    you) and press Enter, then act on the `.mcpb` file there as above.
 4. Open PrivacyFence's tray icon and choose **Open Settings**. (Ask Claude to set up PrivacyFence
    and it will tell you the same thing — see the macOS steps above for why it cannot hand you a
-   link itself. The Start Menu shortcut points at the bare, cookie-authenticated URL, so it only
-   works once you are already signed in — not as the first way in.)
+   link itself. The Start Menu **PrivacyFence** entry opens Approvals through the same tray
+   icon, starting it first if it isn't running.)
 5. Settings opens on its Connectors page: install the organization configuration provided
    by your IT administrator, if any, and authenticate the connectors you want.
 6. **Add a passkey when the companion asks.** A packaged install requires one before it will
@@ -361,22 +364,20 @@ rewrite the policy deciding what it's allowed to do. The installer in step 2 mov
 Windows service
 running under a virtual account of its own — which takes the policy, the audit key and the
 connector credentials out of that client's reach — and starts a tray companion so you still have a
-way in, all while it already has the administrator rights it needs to do that. One thing differs
-from macOS and Linux: your data directory moves to `%ProgramData%\PrivacyFence\`, so run `…
-disable` *before* uninstalling if you ever want it back under your own account. The same command,
-`powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" enable`
-from an elevated PowerShell, remains available for inspecting or re-running it by hand. `…
-disable` reverses the layout, but on a packaged install it stops being a way to keep the daemon
-running — it refuses to serve once it finds no marker. Worth reading
+way in, all while it already has the administrator rights it needs to do that. Your data lives
+in `%ProgramData%\PrivacyFence\`. Uninstalling keeps it there, so a reinstall picks it up again;
+tick **Delete PrivacyFence data** in the uninstaller to remove it as well. The same tool,
+`powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" status`
+from an elevated PowerShell, is how to inspect the separation by hand (`enable` re-runs it). Worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
 either way — the migration moves live connector tokens.
 
 ### Install from the `.deb` (Debian/Ubuntu desktop)
 
 1. Download the latest `privacyfence_<version>_amd64.deb` from [privacyfence.eu/download](https://privacyfence.eu/download/).
-2. `sudo apt install ./privacyfence_<version>_amd64.deb` (resolves any future declared
-   dependencies automatically; a plain `sudo dpkg -i privacyfence_<version>_amd64.deb` works too —
-   the package declares none today, see below).
+2. `sudo apt install ./privacyfence_<version>_amd64.deb` (a plain
+   `sudo dpkg -i privacyfence_<version>_amd64.deb` works too — its only dependencies are the
+   minimum glibc and systemd versions, Ubuntu 24.04 or Debian 13 and newer).
 3. Log out and back in — PrivacyFence starts automatically at the next graphical login (an XDG
    autostart entry, not a menu icon; there's no window to open, all interaction is through the web
    UI). To start it immediately instead of waiting for that, run `privacyfence-app &`.
@@ -395,9 +396,9 @@ either way — the migration moves live connector tokens.
    recovery code it shows you.
 
 The package ships a self-contained PyInstaller build of the daemon — no `python3-*` packages
-required beyond what a normal Debian/Ubuntu desktop already has. `apt remove`/`dpkg -r` leaves
-your `~/.privacyfence` config, credentials, and audit log untouched; only `apt purge` is meant to
-also clean up anything package-owned, and there's no system-wide config here to purge either. See
+required beyond what a normal Debian/Ubuntu desktop already has. `apt remove`/`dpkg -r` stops
+PrivacyFence and leaves its config, credentials and audit log in `/var/lib/privacyfence`, so a
+reinstall picks them up; `apt purge` deletes them and the `privacyfence` service account. See
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging) for the full details, and
 [Platform support](https://github.com/privacyfence/privacyfence/blob/main/docs/platform-support.md#debianubuntu-local-mode) for how the
 package is built.
@@ -414,18 +415,18 @@ org mode is deployed, and the wrong one for a laptop; use the `.deb` above for t
 
 **Privilege separation is mandatory for the `.deb`:** `debian/postinst` separates the install
 itself, on every install and upgrade, moving the daemon to a `privacyfence` system account of its
-own — a system systemd unit in place of the autostart entry — which takes the policy, the audit key
+own — a system systemd unit — which takes the policy, the audit key
 and the connector credentials out of the AI client's reach. That machine-level move always runs and
 a failure of it fails the package install; the one piece that can be left pending is adding *you* to
 the `privacyfence` group, when the install can't safely tell who owns it (an unattended upgrade with
 no `sudo` session behind it) — the companion app closes that the first time you actually log in.
 A source checkout has no such postinst hook and stays opt-in via
 `sudo privacyfence-privilege-separation enable` (installed by the `.deb`; from a source checkout
-it's `sudo ./scripts/linux_privilege_separation.sh enable`). `... disable` reverses it either way,
-and, on a packaged install, stops being a way to keep the daemon running — it refuses to serve once
-it finds no marker. Reversible, and worth reading
+it's `sudo ./scripts/linux_privilege_separation.sh enable`). `... uninstall` stops and unregisters
+the service and keeps the data; `... uninstall --purge` also deletes the data and the service
+account. Neither moves anything into your home directory. Worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
-before you run it by hand — the migration moves live connector tokens.
+before you run it by hand.
 
 ### Run from source
 

@@ -1,9 +1,14 @@
-"""Tests for web/routes_org_approvals.py: the principal-aware /approvals
-surface in org mode (P9), including the WebAuthn/IdP step-up gate on write
-decisions (§10.6, D7).
+"""Tests for org mode's own wiring of the principal-aware /approvals surface
+(P9): web/routes_approvals.py's build_routes() (the list/show/decide/
+preview/stream/batch-decide routes, shared with local mode) plus
+web/routes_org_stepup.py's own IdP step-up routes (the WebAuthn/IdP gate on
+write decisions, §10.6, D7, with no local-mode analogue at all). PSC-2b:
+this file used to test a dedicated routes_org_approvals.py module that no
+longer exists -- re-pointed onto the merged builder here, same tests.
 """
 from __future__ import annotations
 
+import json
 import urllib.parse as up
 from unittest.mock import patch
 
@@ -15,7 +20,7 @@ from privacyfence import org_identity as oi, paths, webauthn_stepup as wa
 from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.step_up_config import StepUpConfig
-from privacyfence.web import org_session, routes_org_approvals as roa
+from privacyfence.web import org_session, routes_approvals, routes_org_stepup
 from privacyfence.web_approval_ui import WebApprovalUI
 
 ISSUER = "https://pf.example.com"
@@ -37,7 +42,10 @@ def _app(*, step_up: StepUpConfig | None = None, sessions=None, idp=None, web_ui
     sessions = sessions or org_session.OrgSessionStore()
     web_ui = web_ui or WebApprovalUI(registry=PendingApprovalRegistry())
     step_up = step_up or StepUpConfig()
-    routes = roa.build_routes(web_ui=web_ui, sessions=sessions, step_up=step_up, idp=idp or _idp(), issuer_url=ISSUER)
+    routes = routes_approvals.build_routes(web_ui=web_ui, sessions=sessions, step_up=step_up, issuer_url=ISSUER)
+    routes += routes_org_stepup.build_routes(
+        web_ui=web_ui, sessions=sessions, step_up=step_up, idp=idp or _idp(), issuer_url=ISSUER,
+    )
     app = Starlette(routes=routes)
     return app, sessions, web_ui
 
@@ -182,15 +190,18 @@ class TestPrincipalScopedList:
         _signed_in(client, sessions, ALICE)
         assert ALICE.email in client.get("/approvals").text
 
-    def test_the_list_claims_no_liveness_it_cannot_deliver(self):
-        # Org mode's app mounts no GET /api/state/stream at all, so a live
-        # indicator here would either lie or sit permanently on an error.
+    def test_the_list_updates_live_from_the_approvals_stream(self):
+        # Org mode mounts no GET /api/state/stream, so the page must not
+        # point at it (a live dot sitting on a 404 would lie) -- it
+        # subscribes to its own principal-scoped /api/approvals/stream
+        # instead, so a new approval shows up without a manual reload.
         app, sessions, web_ui = _app()
         _register(web_ui, ALICE, dedupe_key="a1")
         client = _client(app)
         _signed_in(client, sessions, ALICE)
         r = client.get("/approvals")
-        assert 'id="pf-shell-live-dot"' not in r.text
+        assert 'id="pf-shell-live-dot"' in r.text
+        assert 'new EventSource("/api/approvals/stream")' in r.text
         assert "/api/state/stream" not in r.text
 
     def test_the_old_unstyled_footer_links_are_gone(self):
@@ -243,7 +254,7 @@ class TestPrincipalScopedList:
         *before* its own <script> tag opened, so the helper functions
         (pfB64uToBuf/pfWebauthnCreate/pfWebauthnGet) landed in the document
         as literal visible text at the top of the rendered card instead of
-        executing -- see routes_org_approvals.py's own _org_bridge_shim."""
+        executing -- see web/routes_approvals.py's own _org_bridge_shim."""
         app, sessions, web_ui = _app()
         approval = _register(web_ui, ALICE, dedupe_key="a1")
         client = _client(app)
@@ -253,6 +264,39 @@ class TestPrincipalScopedList:
         body_start = r.text.index("<body>") + len("<body>")
         assert r.text[body_start : body_start + len("<script")] == "<script"
         assert "function pfB64uToBuf" not in r.text.split("<script", 1)[0]
+
+    def test_a_foreign_principal_can_neither_read_nor_decide_the_approval(self):
+        """PSC-2b: one check spanning every surface this class and
+        TestDecideWithoutStepUp/TestBatchDecide otherwise cover individually
+        (list, get, decide, batch-decide) -- a signed-in principal who isn't
+        this approval's owner gets exactly the same answer a truly unknown
+        id would, everywhere, never "exists but you can't touch it"
+        (module docstring, §10.5)."""
+        app, sessions, web_ui = _app()
+        alices = _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, BOB)
+
+        listed = client.get("/approvals")
+        assert listed.status_code == 200
+        assert "a message" not in listed.text and "Get message" not in listed.text
+
+        shown = client.get(f"/approvals/{alices.id}")
+        assert shown.status_code == 200
+        assert "no longer pending" in shown.text
+
+        decided = client.post(
+            f"/api/approvals/{alices.id}/decide", json={"result": "accept", "csrf": session_id},
+        )
+        assert decided.status_code == 409  # indistinguishable from already-decided, never a leak
+
+        batch_decided = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": alices.id, "result": "accept"}],
+        })
+        assert batch_decided.status_code == 200
+        assert batch_decided.json()["results"] == [{"id": alices.id, "outcome": "unknown"}]
+
+        assert not alices.event.is_set()
 
 
 class TestDecideWithoutStepUp:
@@ -737,9 +781,11 @@ class TestIdpStepUp:
         start = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
         qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
 
-        monkeypatch.setattr(roa.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"})
         monkeypatch.setattr(
-            roa.org_identity, "verify_id_token",
+            routes_org_stepup.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"},
+        )
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "verify_id_token",
             lambda idp, token, *, nonce: {"sub": "alice", "nonce": nonce},
         )
         # A fresh, cookie-less client -- mirrors the real cross-site landing.
@@ -769,7 +815,7 @@ class TestIdpStepUp:
         def _boom(*a, **kw):
             raise RuntimeError("IdP unreachable")
 
-        monkeypatch.setattr(roa.org_identity, "exchange_code_for_tokens", _boom)
+        monkeypatch.setattr(routes_org_stepup.org_identity, "exchange_code_for_tokens", _boom)
         cb_client = TestClient(app, base_url=ISSUER, follow_redirects=False)
         r = cb_client.get(f"/oauth/stepup/callback?code=abc&state={qs['state']}")
         assert r.status_code == 302
@@ -784,9 +830,11 @@ class TestIdpStepUp:
         start = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
         qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
 
-        monkeypatch.setattr(roa.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"})
         monkeypatch.setattr(
-            roa.org_identity, "verify_id_token",
+            routes_org_stepup.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"},
+        )
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "verify_id_token",
             lambda idp, token, *, nonce: {"sub": "bob", "nonce": nonce},  # a different human signs in
         )
         cb_client = TestClient(app, base_url=ISSUER, follow_redirects=False)
@@ -805,9 +853,11 @@ class TestIdpStepUp:
         qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
         assert qs["acr_values"] == "phr"
 
-        monkeypatch.setattr(roa.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"})
         monkeypatch.setattr(
-            roa.org_identity, "verify_id_token",
+            routes_org_stepup.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"},
+        )
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "verify_id_token",
             lambda idp, token, *, nonce: {"sub": "alice", "nonce": nonce},  # no "acr" claim at all
         )
         cb_client = TestClient(app, base_url=ISSUER, follow_redirects=False)
@@ -1095,3 +1145,87 @@ class TestSensitiveConfirmDialog:
         r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "confirm", "csrf": session_id})
 
         assert r.status_code == 200
+
+
+class TestApprovalsStream:
+    """GET /api/approvals/stream -- what org mode's list page subscribes to
+    for live updates. Driven by calling the route's endpoint directly and
+    pulling chunks off its body iterator: TestClient fully buffers a
+    streaming response, so it can't read an endless SSE stream."""
+
+    @staticmethod
+    def _stream(app, session_id: str, disconnected=lambda: False):
+        from starlette.requests import Request
+
+        route = next(r for r in app.routes if getattr(r, "path", None) == "/api/approvals/stream")
+        scope = {
+            "type": "http", "method": "GET", "path": "/api/approvals/stream", "query_string": b"",
+            "headers": [(b"cookie", f"{org_session.SESSION_COOKIE}={session_id}".encode())],
+            "scheme": "https", "server": ("pf.example.com", 443),
+        }
+
+        async def receive():
+            return {"type": "http.disconnect"} if disconnected() else {"type": "http.request", "body": b""}
+
+        return route.endpoint, Request(scope, receive)
+
+    async def test_first_event_is_the_principals_own_rows_as_summaries(self):
+        app, sessions, web_ui = _app()
+        mine = _register(web_ui, ALICE, dedupe_key="a1")
+        _register(web_ui, BOB, dedupe_key="b1")
+        endpoint, request = self._stream(app, sessions.create(ALICE))
+        response = await endpoint(request)
+        it = response.body_iterator
+        try:
+            chunk = await it.__anext__()
+        finally:
+            await it.aclose()
+        assert chunk.startswith("event: approvals\ndata: ")
+        rows = json.loads(chunk.split("data: ", 1)[1])
+        assert [row["id"] for row in rows] == [mine.id]
+        assert rows[0]["tool_name"] == "Get message"
+
+    async def test_an_unchanged_tick_sends_nothing_and_a_change_sends_the_new_rows(self, monkeypatch):
+        import asyncio
+
+        monkeypatch.setattr(routes_approvals, "_STREAM_POLL_SECONDS", 0.01)
+        app, sessions, web_ui = _app()
+        first = _register(web_ui, ALICE, dedupe_key="a1")
+        endpoint, request = self._stream(app, sessions.create(ALICE))
+        response = await endpoint(request)
+        it = response.body_iterator
+        try:
+            await it.__anext__()
+            # Several quiet ticks pass before the second approval lands --
+            # none of them may emit a duplicate event.
+            asyncio.get_running_loop().call_later(0.1, lambda: _register(web_ui, ALICE, dedupe_key="a2"))
+            chunk = await asyncio.wait_for(it.__anext__(), timeout=5)
+        finally:
+            await it.aclose()
+        rows = json.loads(chunk.split("data: ", 1)[1])
+        assert len(rows) == 2
+        assert first.id in {row["id"] for row in rows}
+
+    async def test_stream_ends_when_the_client_disconnects(self):
+        app, sessions, web_ui = _app()
+        _register(web_ui, ALICE, dedupe_key="a1")
+        gone = {"value": False}
+        endpoint, request = self._stream(app, sessions.create(ALICE), disconnected=lambda: gone["value"])
+        response = await endpoint(request)
+        it = response.body_iterator
+        await it.__anext__()
+        gone["value"] = True
+        with pytest.raises(StopAsyncIteration):
+            await it.__anext__()
+
+    async def test_stream_ends_once_the_session_is_gone(self):
+        app, sessions, web_ui = _app()
+        _register(web_ui, ALICE, dedupe_key="a1")
+        session_id = sessions.create(ALICE)
+        endpoint, request = self._stream(app, session_id)
+        response = await endpoint(request)
+        it = response.body_iterator
+        await it.__anext__()
+        sessions.destroy(session_id)
+        with pytest.raises(StopAsyncIteration):
+            await it.__anext__()

@@ -1,8 +1,9 @@
 """Shared icon-asset loading for approval surfaces.
 
-Locates the bundled shield/connector PNGs (resources/icon_*.png,
-resources/connector_icons/<name>.png) and returns them as base64 data URIs
-for embedding directly into a card-stack HTML document -- see
+Locates the bundled shield/connector/agent PNGs (resources/icon_*.png,
+resources/connector_icons/<name>.png, resources/agent_icons/<agent_id>.png)
+and returns them as base64 data URIs for embedding directly into a
+card-stack HTML document -- see
 approval_window_html.py's module docstring for why that document must never
 trigger a network fetch to render.
 
@@ -44,6 +45,32 @@ def connector_icon_path(connector: str) -> str | None:
         return None
     p = _RESOURCES / "connector_icons" / f"{connector}.png"
     return str(p) if p.exists() else None
+
+
+def agent_icon_path(agent_id: str) -> str | None:
+    """The bundled brand mark for a registry ``agent_id`` (agent_identity.REGISTRY) -- see
+    resources/agent_icons/README.md for where each comes from. Same silent-skip fallback as
+    connector_icon_path(). Callers pass agent_label.AgentLabel.icon_id, which is "" for every
+    identity that is not attested, so a claimed "ChatGPT" never reaches this at all (ADR 0006
+    decision 4); and nothing here ever reads a caller-supplied icon (clientInfo.icons) -- the
+    only input is an id, and the only output a file this build ships."""
+    if not agent_id:
+        return None
+    p = _RESOURCES / "agent_icons" / f"{agent_id}.png"
+    return str(p) if p.exists() else None
+
+
+def all_agent_icons() -> dict[str, str]:
+    """``{agent_id: data URI}`` for every bundled agent mark -- all_connector_icons()'s
+    counterpart, for approval_list_html.py's live re-render, which renders an attested row's
+    mark from a CSS class rather than carrying image data in every SSE tick."""
+    icons_dir = _RESOURCES / "agent_icons"
+    if not icons_dir.is_dir():
+        return {}
+    return {
+        path.stem: icon_data_uri(str(path))
+        for path in sorted(icons_dir.glob("*.png"))
+    }
 
 
 def all_connector_icons() -> dict[str, str]:

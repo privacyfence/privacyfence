@@ -1,7 +1,7 @@
 """Applying an install-wide privacy/PII policy change from org mode's admin
 settings surface (#400 C3e).
 
-``web/routes_org_settings.py``'s first cut (#400 C3d) rendered this policy
+``web/org_settings_pages.py``'s first cut (#400 C3d) rendered this policy
 read-only and said so on the page, because the issue left one thing
 undecided: "Install-wide writes need a restart story. ``init_privacy_filter``
 runs once at startup. Either the UI writes settings.yaml and says a restart is
@@ -83,15 +83,15 @@ logger = logging.getLogger(__name__)
 _write_lock = threading.Lock()
 
 # The action names this module can apply, deliberately the same strings
-# `org_settings_scope.ADMIN_ONLY_ACTIONS` authorizes (#400 C3b/C3c) and
+# `org_settings_scope.ACTION_SCOPES` marks `admin_only` (#400 C3b/C3c) and
 # `routes_settings._ALLOWED_ACTIONS` dispatches in local mode -- one name per
 # concept across all three, so a route authorizes and applies the same
 # string rather than translating between two vocabularies.
 #
-# `toggle_calendar_free_busy` and `set_log_level` are the two admin-only
-# actions deliberately absent. Both are install-wide and both would belong
-# here eventually, but neither is privacy/PII *policy* and each needs a
-# reload path of its own that doesn't exist yet: the first rebuilds
+# `toggle_calendar_free_busy`, `toggle_gmail_signature` and `set_log_level`
+# are the admin-only actions deliberately absent. All are install-wide and
+# would belong here eventually, but none is privacy/PII *policy* and each
+# needs a reload path of its own that doesn't exist yet: the first two rebuild
 # connectors (per principal, through `ConnectorRegistry`, not the single
 # `refresh_connectors()` local mode calls), the second reconfigures
 # process-wide logging. Adding either is additive -- a mutator below and a

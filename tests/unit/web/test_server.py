@@ -810,27 +810,19 @@ class TestBootstrapFlow:
 
 
 # --------------------------------------------------------------------------- #
-# The bootstrap-link discovery files (approvals_url/settings_url/security_url).
-# The daemon used to write a live sign-in link into one on every startup and
-# every re-mint, because the log line for the same link is always redacted
-# (SEC-10's SecretRedactingFormatter matches the literal word "bootstrap") and
-# the file was the only channel that actually delivered a usable one.
-#
-# The self-approval plan's Phase 2 stopped writing them: handoff/ is
-# group-shared with the logged-in user by design, so that file was a session
-# for the taking, refreshed on every restart, by anything running as that user
-# -- the second of the three silent paths to a session that review counts.
-# What is left here is the cleanup of files an older version wrote.
+# No sign-in link is ever written to a discovery file: handoff/ is
+# group-shared with the logged-in user by design, so such a file would be a
+# session for the taking by anything running as that user.
 # --------------------------------------------------------------------------- #
 
-class TestLegacyBootstrapUrlFiles:
+class TestNoBootstrapUrlFiles:
     def _server(self, tmp_path, monkeypatch):
         from privacyfence import paths
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         return WebServer(WebApprovalUI(), host="localhost", port=0)
 
-    def test_nothing_mints_a_link_into_the_handoff_directory_any_more(self, tmp_path, monkeypatch):
+    def test_nothing_mints_a_link_into_the_handoff_directory(self, tmp_path, monkeypatch):
         server = self._server(tmp_path, monkeypatch)
         server.start()
         try:
@@ -850,25 +842,18 @@ class TestLegacyBootstrapUrlFiles:
             if path.is_file():
                 assert "bootstrap=" not in path.read_text(encoding="utf-8", errors="replace")
 
-    def test_a_file_left_by_an_older_version_is_deleted_on_startup(self, tmp_path, monkeypatch):
-        """The code in it is dead the moment that older daemon exited (the
-        store is in memory), but it reads as a live sign-in link to a human
-        -- and a file this daemon no longer maintains, in the place somebody
-        was taught to look for a working link, is worse than no file."""
+    def test_files_it_does_not_write_are_left_alone(self, tmp_path, monkeypatch):
+        """ADR 0041: the daemon only manages the current layout's files, so
+        a file with an unrelated name in the handoff directory survives a
+        start/stop cycle untouched."""
         server = self._server(tmp_path, monkeypatch)
-        for name in ("approvals_url", "settings_url", "security_url"):
-            (tmp_path / name).write_text("http://localhost:1/x?bootstrap=stale", encoding="utf-8")
+        stray = tmp_path / "approvals_url"
+        stray.write_text("not the daemon's", encoding="utf-8")
 
         server.start()
-        try:
-            leftovers = sorted(
-                p.name for p in tmp_path.iterdir()
-                if p.name.endswith("_url") and p.name != "web_base_url"
-            )
-        finally:
-            server.stop()
+        server.stop()
 
-        assert leftovers == []
+        assert stray.read_text(encoding="utf-8") == "not the daemon's"
 
     def test_the_minting_method_is_gone_from_the_server_itself(self, tmp_path, monkeypatch):
         """Minting is the control channel's business now, and who may ask
@@ -1021,7 +1006,7 @@ def _controller(tmp_path, monkeypatch):
     data_dir_path.mkdir()
     monkeypatch.setattr(sc, "data_dir", lambda: data_dir_path)
     config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept_rules: {}\nconnectors: {}\n", encoding="utf-8")
+    config_path.write_text("auto_accept: {}\nconnectors: {}\n", encoding="utf-8")
     connector_host = SimpleNamespace(set_connectors=lambda conns: None)
     return sc.SettingsController(str(config_path), connectors=[], connector_host=connector_host)
 
@@ -1292,6 +1277,47 @@ class TestLocalModeWiresTheFirstEnrollmentGate:
         )
 
         assert passed["confirm_first_enrollment"] is srv.confirm_first_passkey_enrollment
+
+    @pytest.mark.parametrize("separated", [True, False], ids=["separated", "unseparated"])
+    def test_build_app_gates_recovery_on_a_human_session_only_when_separated(
+        self, tmp_path, monkeypatch, separated,
+    ):
+        """The recovery-code route asks the human-session question on exactly
+        the installs the approvals and settings routes do -- a
+        privilege-separated one -- and not on an unseparated one, which has
+        no companion to mint a human session at all. Driven through the real
+        ``build_app`` so the wiring, not just the route, is what is tested."""
+        from starlette.testclient import TestClient
+
+        from privacyfence import paths, privilege_separation
+        from privacyfence.step_up_config import StepUpConfig
+        from privacyfence.web import server as srv
+        from privacyfence.web.session_auth import PROVENANCE_HUMAN, SESSION_COOKIE
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: separated)
+        sessions = LocalSessionStore()
+        app = srv.build_app(
+            WebApprovalUI(), sessions=sessions,
+            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
+            step_up_issuer_url="http://localhost",
+        )
+        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
+
+        unattested = sessions.create()
+        client.cookies.set(SESSION_COOKIE, unattested)
+        r = client.post("/security/recover", json={"csrf": unattested, "code": "0000-0000-0000-0000"})
+        if separated:
+            assert r.status_code == 403
+            assert r.json()["error"] == "human_session_required"
+        else:
+            # Past the gate: refused only because the code is wrong.
+            assert r.status_code == 401
+
+        human = sessions.create(provenance=PROVENANCE_HUMAN)
+        client.cookies.set(SESSION_COOKIE, human)
+        r = client.post("/security/recover", json={"csrf": human, "code": "0000-0000-0000-0000"})
+        assert r.status_code == 401
 
 
 class TestLocalEnrollmentState:

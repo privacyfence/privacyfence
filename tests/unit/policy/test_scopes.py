@@ -20,7 +20,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from privacyfence.policy.conditions import CONDITION_SELECTORS
 from privacyfence.policy.scopes import (
     NEW_SCOPE_SELECTORS,
     SCOPE_SELECTORS,
@@ -30,7 +29,7 @@ from privacyfence.policy.scopes import (
 )
 
 from ...helpers import make_ctx
-from ._v1_reference import ARGS_ONLY_RULES, DATA_DEPENDENT_RULES, V1Reference
+from ._v1_reference import ARGS_ONLY_RULES, DATA_DEPENDENT_RULES, V1_CONDITION_NAMES, V1Reference
 
 _EV = V1Reference()
 
@@ -307,7 +306,7 @@ class TestVocabularyCompleteness:
         assert set(FIXTURES) == set(SCOPE_SELECTORS)
 
     def test_scopes_and_conditions_together_cover_every_v1_predicate(self):
-        condition_predicates = {p for s in CONDITION_SELECTORS.values() for p in s.replaces}
+        condition_predicates = {p for v1_names in V1_CONDITION_NAMES.values() for p in v1_names}
         covered = set(SCOPE_SELECTORS) | condition_predicates
         assert covered == ARGS_ONLY_RULES | DATA_DEPENDENT_RULES
         assert len(ARGS_ONLY_RULES | DATA_DEPENDENT_RULES) == 47

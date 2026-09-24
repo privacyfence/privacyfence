@@ -94,6 +94,7 @@ from privacyfence.privilege_separation import (
     MACOS_SYSTEM_ROOT,
     MARKER_FILE_NAME,
 )
+from privacyfence.companion import _STATUS_POLL_SECONDS
 from privacyfence.web.control_channel import companion_socket_path_under, socket_path_under
 from tests.diagnostics import failure_dir, suite_name_for, write_environment_info
 
@@ -354,25 +355,29 @@ def _capture_separation_diagnostics(request, uid: int) -> None:
     (dest / "daemon-launchd.log").write_text(daemon_log.stdout + daemon_log.stderr, encoding="utf-8")
 
 
-def _disable_if_separated() -> None:
-    if _sudo_path_exists(MARKER_PATH):
-        _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "disable", "--user", _current_user(), check=False, timeout=60)
+def _purge_installed_state() -> None:
+    """``uninstall --purge`` (ADR 0042): the LaunchDaemon, the companion
+    LaunchAgent, the staged image, the data under ``MACOS_SYSTEM_ROOT`` and
+    the ``_privacyfence`` account and group. Unconditional: it is idempotent,
+    and a run interrupted before ``enable`` wrote its marker can still have
+    left an account or a staged image behind."""
+    _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "uninstall", "--purge", check=False, timeout=90)
 
 
 @pytest.fixture
 def _clean_separation_state(request):
-    """Every test in this module drives ``enable``/``disable`` against real
+    """Every test in this module drives ``enable``/``uninstall`` against real
     machine-wide state (a system account, a LaunchDaemon, a LaunchAgent) --
     global state a ``tmp_path`` cannot isolate, the same reason
     ``test_deb_packaged_lifecycle.py``'s own ``_clean_package_state``
     guarantees a clean slate on both sides. Guaranteed at the start too, in
     case a previous, interrupted run never reached its own teardown."""
-    _disable_if_separated()
+    _purge_installed_state()
     try:
         yield
     finally:
         _capture_separation_diagnostics(request, os.getuid())
-        _disable_if_separated()
+        _purge_installed_state()
 
 
 # --------------------------------------------------------------------------- #
@@ -467,8 +472,18 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
             companion_socket_path_under(HANDOFF_DIR), timeout=20, what="the companion's own control channel socket",
             context=lambda: _separated_job_report(companion_domain),
         )
+
+        # Outlive a few status-poll ticks: a companion that dies after
+        # starting is respawned by KeepAlive under a new pid, and the checks
+        # above cannot tell that crash loop from a healthy companion.
+        time.sleep(3 * _STATUS_POLL_SECONDS)
+        still = _wait_for_running(companion_domain, timeout=5)
+        assert still == companion_pid, (
+            f"{COMPANION_LABEL} died and was respawned (pid {companion_pid} -> {still}) within "
+            f"{3 * _STATUS_POLL_SECONDS:.0f}s:\n{_separated_job_report(companion_domain)}"
+        )
     finally:
         # TRUSTED_IMAGE_DIR itself is root-owned, but its parent (/Library/PrivacyFence) and
-        # everything under it is torn down by `disable` -- see _disable_if_separated(), which
+        # everything under it is torn down by `uninstall` -- see _purge_installed_state(), which
         # _clean_separation_state's own teardown already calls unconditionally.
         shutil.rmtree(app_dir, ignore_errors=True)

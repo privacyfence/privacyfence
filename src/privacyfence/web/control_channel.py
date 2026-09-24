@@ -78,7 +78,8 @@ dialog in front of whoever is at the login session.
 **What that does not make it is authentication of the companion**, and this
 module is the wrong place to pretend otherwise. ``_verify_companion_peer()``
 constrains who may *reach* this server -- on a separated install, the
-daemon's service account and nobody else -- but the address it listens on
+daemon's service account, plus this user's own page ``SHOW`` (ADR 0031) --
+but the address it listens on
 lives under ``handoff_dir()``, which is group-shared with the logged-in user
 by design (``paths.py``: "deliberately *not* a security boundary"), so a
 local process running as that user can bind it first and answer for itself.
@@ -189,8 +190,7 @@ def socket_path_under(authority_dir: Path) -> Path:
     display-only caller (``session_auth.py``'s ``unauthorized_html()``) can
     compute the same fallback logic from a plain ``data_dir() / "authority"``
     join, without going through the real, side-effecting
-    ``paths.authority_dir()`` (which creates the directory and runs its
-    migration-on-first-use) just to render an error page -- the same
+    ``paths.authority_dir()`` (which creates the directory) just to render an error page -- the same
     "pure display string" posture that page's own docstring has always
     taken for the paths it shows."""
     preferred = authority_dir / SOCKET_FILE_NAME
@@ -726,32 +726,55 @@ def current_os_principal_id() -> str:
     return principal_id_for_peer(peer)
 
 
-def _verify_companion_peer(conn: socket.socket) -> str | None:
-    """The companion channel's own gate (#428 B10) -- called before the
-    handler on every connection, POSIX only (Windows named pipes are ACL'd
-    instead, see ``_current_user_security_attributes()``). Before separation
-    this channel is in the same boat ADR 0002 decision 6 describes for the
-    daemon's own MINT/QUIT channel: companion, agent and daemon are all one
-    uid, so no peer check could tell them apart, and none is attempted here
-    either. After separation the daemon moves to its own service account
-    while the companion -- and the agent, sharing the logged-in user's uid
-    and this socket's group -- stay put: the one case in this codebase where
-    a peer's real uid actually distinguishes the caller this channel exists
-    for (the daemon, relaying its own ``oauth_loopback.py`` request) from
-    the one it does not (the agent, reachable through the same ``0660``
-    group). Returns an ``ERROR`` line to send back and refuse the
-    connection without invoking the handler, or None to let it proceed."""
+def _verify_companion_peer(conn: socket.socket, line: str) -> str | None:
+    """The companion channel's own gate (#428 B10) -- called on every
+    connection, after its one request line has been read and before the
+    handler sees it, POSIX only (Windows named pipes are ACL'd instead, see
+    ``_current_user_security_attributes()``). Before separation this channel
+    is in the same boat ADR 0002 decision 6 describes for the daemon's own
+    MINT/QUIT channel: companion, agent and daemon are all one uid, so no
+    peer check could tell them apart, and none is attempted here either.
+    After separation the daemon moves to its own service account while the
+    companion -- and the agent, sharing the logged-in user's uid and this
+    socket's group -- stay put: the one case in this codebase where a peer's
+    real uid actually distinguishes the caller this channel exists for (the
+    daemon, relaying its own ``oauth_loopback.py`` request) from the one it
+    does not (the agent, reachable through the same ``0660`` group).
+
+    One exception, and only one (ADR 0031): ``SHOW /approvals`` and ``SHOW
+    /settings`` are also accepted from this companion's *own* uid. Their
+    caller was always meant to be a one-shot process in the same session --
+    Linux's applications-menu click, and since ADR 0031 the macOS app icon
+    and the Windows Start Menu entry -- and ``_show_page()`` puts a
+    confirmation dialog in front of the human before it mints anything, which
+    is the gate for that command on every platform (Windows' pipe ACL already
+    admitted this user). Every other command, ``SHOW RECOVERY`` included,
+    stays daemon-only, and another group member's uid gets nothing (ADR
+    0027). Returns an ``ERROR`` line to send back and refuse the connection
+    without invoking the handler, or None to let it proceed."""
     if not privilege_separation.is_enabled():
         return None
     expected_uid = privilege_separation.service_account_uid()
     peer_uid = _peer_uid_posix(conn)
-    if expected_uid is None or peer_uid != expected_uid:
-        logger.warning(
-            "Companion channel: refused a connection from uid %r (expected the daemon's "
-            "service account, uid %r).", peer_uid, expected_uid,
-        )
-        return "ERROR peer not authorized\n"
-    return None
+    if expected_uid is not None and peer_uid == expected_uid:
+        return None
+    if peer_uid == os.geteuid() and _is_page_show(line):
+        return None
+    logger.warning(
+        "Companion channel: refused a connection from uid %r (expected the daemon's "
+        "service account, uid %r).", peer_uid, expected_uid,
+    )
+    return "ERROR peer not authorized\n"
+
+
+def _is_page_show(line: str) -> bool:
+    """Whether ``line`` is exactly ``SHOW <one of SHOW_PATHS>`` -- the one
+    request ``_verify_companion_peer()`` lets this companion's own user
+    make. Parsed the same way ``_handle_companion_request()`` will parse it,
+    so what is let through here is what gets dispatched there, and nothing
+    that merely starts with ``SHOW`` (``SHOW RECOVERY <code>``) qualifies."""
+    command, _, argument = line.strip().partition(" ")
+    return command.upper() == "SHOW" and argument.strip() in SHOW_PATHS
 
 
 # ── The companion's own mint nonces ───────────────────────────────────────── #
@@ -1326,7 +1349,7 @@ class _LineProtocolServer:
         socket_path: Callable[[], Path],
         pipe_name: Callable[[], str],
         thread_name: str,
-        verify_peer: Callable[[socket.socket], str | None] | None = None,
+        verify_peer: Callable[[socket.socket, str], str | None] | None = None,
         scope_by_peer_principal: bool = False,
     ) -> None:
         self._handler = handler
@@ -1423,30 +1446,24 @@ class _LineProtocolServer:
 
     def _serve_one_posix(self, conn: socket.socket) -> None:
         conn.settimeout(5.0)
-        if self._verify_peer is not None:
-            refusal = self._verify_peer(conn)
-            if refusal is not None:
-                with contextlib.suppress(OSError):
-                    conn.sendall(refusal.encode(_ENCODING))
-                    # Then drain, before the caller's ``with conn:`` closes.
-                    # A refused peer is typically still mid-send -- it
-                    # connected and is writing its request -- and closing a
-                    # socket whose receive queue still holds unread data
-                    # resets the connection, so that peer's own send() fails
-                    # with EPIPE before it ever gets to read the refusal
-                    # just queued above. Reading it first is what makes the
-                    # diagnostic actually arrive; ``request_open_url()``'s
-                    # caller would otherwise see a broken pipe instead of
-                    # the "ERROR ..." line explaining why it was refused.
-                    # No new worst case: the accepted path's own recv below
-                    # already spends this same 5s budget on a silent client.
-                    conn.recv(_MAX_MESSAGE_BYTES)
-                return
         try:
             data = conn.recv(_MAX_MESSAGE_BYTES)
         except OSError:
             return
         line = data.decode(_ENCODING, errors="replace")
+        # Checked after the read, not before it: the gate needs the request
+        # line (ADR 0031's own-uid ``SHOW`` exception), and a refused peer
+        # that is still mid-send when the connection closes would otherwise
+        # see its own send() fail with EPIPE instead of reading the refusal
+        # -- a socket closed with unread data in its receive queue resets
+        # the connection. Having already read it, there is nothing left to
+        # drain.
+        if self._verify_peer is not None:
+            refusal = self._verify_peer(conn, line)
+            if refusal is not None:
+                with contextlib.suppress(OSError):
+                    conn.sendall(refusal.encode(_ENCODING))
+                return
         peer = peer_identity_posix(conn) if self._scope_by_peer_principal else None
         response = self._dispatch(line, peer)
         with contextlib.suppress(OSError):
@@ -1988,13 +2005,28 @@ def open_attested_url(path: str, *, timeout: float = 5.0) -> tuple[bool, str]:
     return (True, "") if opened else (False, "could not open a browser")
 
 
-def request_show(path: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 20.0) -> bool:
+# What ``show_via_companion()`` found -- three outcomes, not two, because
+# its launcher caller (companion.py's ``_launch()``) acts differently on each:
+# with no companion to ask it starts one, but a companion that answered and
+# did not open the page (the human clicked Deny, the dialog timed out) must
+# not be answered by starting a second one beside it.
+SHOW_OPENED = "opened"
+SHOW_FAILED = "failed"
+SHOW_NO_COMPANION = "no-companion"
+
+
+def show_via_companion(path: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 20.0) -> str:
     """Ask a *running* companion to open ``path`` itself (``SHOW``) -- what a
     one-shot ``--action`` invocation does instead of minting, since the
     session it could mint on its own would be unattested (see
-    ``mint_attested_bootstrap_code()``). False whenever no companion answers,
-    which is the ordinary case on an install where nothing autostarts one:
-    companion.py falls back from there rather than failing the click.
+    ``mint_attested_bootstrap_code()``). Returns one of ``SHOW_OPENED``,
+    ``SHOW_FAILED`` or ``SHOW_NO_COMPANION``; never raises for a companion
+    that is absent, refuses, or errors.
+
+    ``SHOW_NO_COMPANION`` is only a failure to *connect* -- no socket node,
+    nothing listening, no such pipe. Anything that goes wrong after a
+    connection is ``SHOW_FAILED``, a timeout waiting on the dialog included:
+    something is listening there, and it is not this caller's to replace.
 
     The long default timeout is the dialog on the other end (``_show_page``,
     which explains why it is there): the reply does not come back until
@@ -2002,14 +2034,37 @@ def request_show(path: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS +
     fallback to a link that cannot approve."""
     if path not in SHOW_PATHS:  # pragma: no cover -- callers pass this module's own constants
         raise ValueError(f"path must be one of {SHOW_PATHS}, got {path!r}")
-    try:
-        if paths.is_windows():
-            reply = send_line_windows(companion_pipe_name(current_principal().id), f"SHOW {path}\n", timeout=timeout)
-        else:
-            reply = send_line_posix(companion_socket_path(current_principal().id), f"SHOW {path}\n", timeout=timeout)
-    except (OSError, ControlChannelError):
-        return False
-    return reply.startswith("OK")
+    line = f"SHOW {path}\n"
+    # The address this user's own companion binds (``CompanionChannelServer``
+    # resolves it the same way): this runs in a standalone process, where
+    # ``current_principal()`` is always the owner's ``local`` and would send
+    # a second account's click to the owner's companion (ADR 0008).
+    principal_id = current_os_principal_id()
+    if paths.is_windows():
+        try:
+            reply = send_line_windows(companion_pipe_name(principal_id), line, timeout=timeout)
+        except ControlChannelError:
+            return SHOW_FAILED
+        except OSError:
+            # send_line_windows() raises a plain OSError only for its
+            # connection phase -- see its own docstring.
+            return SHOW_NO_COMPANION
+    else:
+        try:
+            reply = send_line_posix(companion_socket_path(principal_id), line, timeout=timeout)
+        except (FileNotFoundError, ConnectionRefusedError):
+            return SHOW_NO_COMPANION
+        except (OSError, ControlChannelError):
+            return SHOW_FAILED
+    return SHOW_OPENED if reply.startswith("OK") else SHOW_FAILED
+
+
+def request_show(path: str, *, timeout: float = CONFIRM_DIALOG_TIMEOUT_SECONDS + 20.0) -> bool:
+    """``show_via_companion()`` as a yes/no: True only when a running
+    companion opened ``path``. False whenever no companion answers, which is
+    the ordinary case on an install where nothing autostarts one:
+    companion.py falls back from there rather than failing the click."""
+    return show_via_companion(path, timeout=timeout) == SHOW_OPENED
 
 
 def request_mint_attestation(nonce: str, *, timeout: float = 2.0) -> bool:

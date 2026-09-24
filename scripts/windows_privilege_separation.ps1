@@ -38,17 +38,22 @@
   # From an elevated PowerShell, against a real install:
   powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privilege-separation.ps1" enable
   ... status
-  ... disable
+  ... uninstall                # stop and remove the service; keep the data
+  ... uninstall -Purge         # ...and delete the data, marker and group too
   ... enable -ForUser alice   # just the per-user half, for a second account
 
 .NOTES
-  Step 4 moves live connector OAuth tokens. `disable` moves them back, but this
-  is still the step to take a backup before: it is the one part of this that
-  touches data you cannot re-mint from a config file.
+  `uninstall` is what the Inno Setup uninstaller runs (ADR 0042, following
+  ADR 0041's "no upgrade path from earlier layouts"). It stops and
+  unregisters the service and the companion task and leaves everything under
+  %ProgramData%\PrivacyFence -- data, marker, $ServiceGroup -- where it is,
+  so a reinstall picks the data straight back up. `-Purge` (the POSIX
+  scripts spell it `--purge`) also deletes that directory and the group.
+  Nothing here ever moves data back into a user profile.
 
-  Adding the owner to $ServiceGroup and migrating their %LOCALAPPDATA% copy
-  are the only two steps here that need to know *which human* this install is
-  for, and ADR 0003 decision 3 splits them out for that reason: an MDM push or
+  Adding the owner to $ServiceGroup is the only step here that needs to know
+  *which human* this install is for, and ADR 0003 decision 3 splits it out
+  for that reason: an MDM push or
   a SYSTEM-context install resolves no owner account, and that used to leave
   the whole install unseparated. It no longer does. `enable` with no
   resolvable owner does everything an administrator can do alone and records
@@ -59,7 +64,7 @@
   No longer opt-in. ADR 0003 decision 4 has installer/privacyfence.iss run
   `enable` itself, elevated, as a step of every install -- so on Windows this
   script is normally something a human runs only to look at an install
-  (`status`) or to unwind one (`disable`), the same way the .deb's postinst
+  (`status`) or to purge one (`uninstall -Purge`), the same way the .deb's postinst
   has run the Linux script since #428 D1. Running `enable` by hand still
   works, and is the documented way to re-provision an install whose service,
   ACLs or companion task have drifted.
@@ -67,14 +72,14 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet('enable', 'disable', 'status', 'daemon')]
+    [ValidateSet('enable', 'uninstall', 'status', 'daemon')]
     [string] $Command,
 
     # The human account that owns this install. Defaults to whoever is running
     # this script, which is right for the ordinary case (UAC's elevation keeps
     # the same user); pass it explicitly when elevating into a *different*
-    # administrator account, or the data migration would look in the wrong
-    # profile.
+    # administrator account, or the wrong account would be added to
+    # $ServiceGroup.
     [string] $User,
 
     # enable only: run *just* the per-user half for this account, against an
@@ -89,6 +94,10 @@ param(
     [string] $DaemonExec,
     [string] $CompanionExec,
 
+    # uninstall only: also delete %ProgramData%\PrivacyFence (data and marker)
+    # and the $ServiceGroup local group. The POSIX scripts' `uninstall --purge`.
+    [switch] $Purge,
+
     # #428 Phase 2: `daemon`'s own sub-verb -- {status|start|stop|restart|
     # ensure-running}. Position = 1 (the only other positional parameter
     # this script has) is what lets `service_control.py`'s elevated
@@ -100,7 +109,7 @@ param(
     # $DaemonExec/$CompanionExec above carry no Position of their own and so
     # are never candidates for positional binding in the first place.
     # ValidateSet only runs against a value PowerShell actually binds, so
-    # leaving this unset for `enable`/`disable`/`status` (its default, an
+    # leaving this unset for `enable`/`uninstall`/`status` (its default, an
     # empty string) never trips it.
     [Parameter(Position = 1)]
     [ValidateSet('status', 'start', 'stop', 'restart', 'ensure-running')]
@@ -194,7 +203,6 @@ $MarkerName = 'privilege-separation.json'
 $MarkerVersion = 1
 $HandoffDirName = 'handoff'
 $AuthorityDirName = 'authority'
-$DaemonTaskName = 'PrivacyFence'
 $CompanionTaskName = 'PrivacyFenceCompanion'
 
 # Well-known SIDs rather than names, everywhere a built-in principal is named.
@@ -225,7 +233,6 @@ if (Test-Path -LiteralPath $CheckoutTemplateDir) {
 
 $script:OwnerUser = $User
 $script:OwnerSid = $null
-$script:OwnerLocalAppData = $null
 # Whether Resolve-Owner actually found a human account, as opposed to leaving
 # $OwnerUser at whatever name it started from. The POSIX scripts express the
 # same thing by leaving $OWNER_USER empty, which they can because their owner
@@ -233,15 +240,6 @@ $script:OwnerLocalAppData = $null
 # so "resolved" has to be its own flag (ADR 0003 decision 3's machine half is
 # the caller that has to be able to tell).
 $script:OwnerResolved = $false
-# Set by Invoke-EnableForUser when it is running for an account other than
-# the marker's recorded owner -- i.e. this install already has one principal
-# and this run is adding a second (or third, ...) one. Move-Data reads this
-# to route that account's own %LOCALAPPDATA%\PrivacyFence into its own
-# per-principal subdirectory (users\os-<sid>\) instead of the shared root,
-# per ADR 0008 ("D2: two identities, not one, per install") -- each Windows
-# account this ever runs -ForUser for gets fully isolated storage, never
-# merged with another account's.
-$script:NonOwnerForUser = $false
 
 # Windows' answer to the POSIX scripts' "root is never the owner" refusal.
 # An install provisioned from a SYSTEM context -- an MDM push, a deployment
@@ -292,27 +290,6 @@ function Resolve-Owner {
         if ($Optional) { return }
         Stop-WithError "-User must be a real sign-in account, not $($script:OwnerUser)"
     }
-    # The owner's own profile, resolved from the SID rather than from
-    # $env:LOCALAPPDATA: an elevated shell running as a *different*
-    # administrator would otherwise migrate that administrator's (empty) data
-    # directory and quietly leave the real one behind, unseparated and still
-    # readable by the agent.
-    $profilePath = $null
-    try {
-        $profilePath = (Get-CimInstance Win32_UserProfile -Filter "SID='$($script:OwnerSid)'" -ErrorAction Stop).LocalPath
-    } catch {
-        $profilePath = $null
-    }
-    if (-not $profilePath) {
-        if ($script:OwnerUser -eq ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name -split '\\')[-1]) {
-            $script:OwnerLocalAppData = $env:LOCALAPPDATA
-            $script:OwnerResolved = $true
-            return
-        }
-        if ($Optional) { return }
-        Stop-WithError "could not resolve $($script:OwnerUser)'s user profile -- has that account ever signed in on this machine?"
-    }
-    $script:OwnerLocalAppData = Join-Path $profilePath 'AppData\Local'
     $script:OwnerResolved = $true
 }
 
@@ -329,11 +306,6 @@ function Get-MarkerOwnerUser {
     } catch {
         return $null
     }
-}
-
-function Get-LegacyDataDir {
-    if (-not $script:OwnerLocalAppData) { return $null }
-    return (Join-Path $script:OwnerLocalAppData 'PrivacyFence')
 }
 
 function Resolve-Executables {
@@ -507,175 +479,6 @@ function Add-OwnerToServiceGroup {
     }
 }
 
-# ── Data migration ───────────────────────────────────────────────────────────
-
-# The files that have to end up inside handoff\ rather than at the root of the
-# data directory once separation is on, because something in the *user's*
-# session reads them: the agent's own credential and the URL it reaches the
-# daemon at (mcp_token/mcp_url, read by the MCPB shim), and the discovery files
-# a human or the companion reads (web_base_url, plus any legacy <page>_url
-# below). Mirrors
-# paths.handoff_dir()'s callers -- see test_privilege_separation.py, which
-# asserts this list matches the file-name constants those call sites use.
-$HandoffFileNames = @('mcp_token', 'mcp_url', 'web_base_url')
-# <page>_url: approvals_url/settings_url/security_url, written by versions
-# before the self-approval plan's Phase 2 stopped putting a live sign-in link
-# in a group-shared directory. Kept in the glob so an upgrade does not strand
-# one outside the handoff directory while it still exists -- the daemon
-# deletes them on its next start (web/server.py's
-# _clear_legacy_bootstrap_url_files).
-$HandoffFileGlob = '*_url'
-
-function Move-Data {
-    # ADR 0008 ("D2: two identities, not one, per install"): an account that
-    # is not this install's recorded owner still gets its own
-    # %LOCALAPPDATA%\PrivacyFence migrated -- just never into the shared root
-    # the recorded owner's data lives in, which would mix a second person's
-    # connector tokens, audit log and policy into the first owner's. Instead
-    # it goes to $SystemRoot\users\os-<sid>, the exact per-principal path
-    # src/privacyfence/paths.py's user_dir() resolves to for a
-    # Principal(id=f"os-{sid}") that isn't the "local" principal -- so the
-    # daemon finds it under the same identity this migrates it as.
-    # Invoke-EnableForUser is the only caller that ever sets
-    # $script:NonOwnerForUser.
-    if ($script:NonOwnerForUser) {
-        $legacy = Get-LegacyDataDir
-        if (-not $legacy -or -not (Test-Path -LiteralPath $legacy)) {
-            Write-Note "no existing $legacy to migrate -- $($script:OwnerUser) starts with no data of their own"
-            return
-        }
-        $target = Join-Path $SystemRoot "users\os-$($script:OwnerSid)"
-        New-Item -ItemType Directory -Force -Path $target | Out-Null
-        # No -Force here, unlike the owner's-own merge below: Copy-Item
-        # without it fails/skips a destination item that already exists
-        # rather than overwriting it, which is the no-clobber contract this
-        # account's own subtree needs on a re-run -- the owner's own case
-        # below clobbers because that merge only ever runs once, against a
-        # source `enable` has already made the sole owner of, whereas
-        # -ForUser is explicitly documented as idempotent and safe to re-run
-        # at every companion start (see Invoke-EnableForUser's own comment).
-        Write-Note "merging $legacy into $target -- kept separate from this install's other principal(s), not merged into $SystemRoot itself (no-clobber: anything already in $target is left as it is)"
-        Copy-Item -Path (Join-Path $legacy '*') -Destination $target -Recurse -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $legacy -Recurse -Force
-        return
-    }
-    $legacy = Get-LegacyDataDir
-    if (-not $legacy -or -not (Test-Path -LiteralPath $legacy)) {
-        Write-Note "no existing $legacy to migrate -- starting the separated install empty"
-        New-Item -ItemType Directory -Force -Path $SystemRoot | Out-Null
-        return
-    }
-    if (Test-Path -LiteralPath $SystemRoot) {
-        # Something is already there (a previous enable, or a hand-made
-        # directory). Merge rather than clobber, then remove the source --
-        # leaving a second copy of live OAuth tokens readable by the agent
-        # would undo the point of the whole exercise.
-        Write-Note "merging $legacy into the existing $SystemRoot"
-        Copy-Item -Path (Join-Path $legacy '*') -Destination $SystemRoot -Recurse -Force
-        Remove-Item -LiteralPath $legacy -Recurse -Force
-    } else {
-        Write-Note "moving $legacy to $SystemRoot"
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $SystemRoot) | Out-Null
-        # Move-Item falls back to a copy across volumes, which is what a
-        # redirected %ProgramData% or a profile on another drive needs.
-        Move-Item -LiteralPath $legacy -Destination $SystemRoot -Force
-    }
-}
-
-function Move-HandoffFilesIn {
-    $target = Join-Path $SystemRoot $HandoffDirName
-    New-Item -ItemType Directory -Force -Path $target | Out-Null
-    foreach ($name in $HandoffFileNames) {
-        $source = Join-Path $SystemRoot $name
-        if (Test-Path -LiteralPath $source) { Move-Item -LiteralPath $source -Destination (Join-Path $target $name) -Force }
-    }
-    Get-ChildItem -Path $SystemRoot -Filter $HandoffFileGlob -File -ErrorAction SilentlyContinue | ForEach-Object {
-        Move-Item -LiteralPath $_.FullName -Destination (Join-Path $target $_.Name) -Force
-    }
-    # Stale POSIX socket files, from a data directory copied off a Mac or a
-    # Linux box. Nothing on Windows binds either name -- both control channels
-    # are named pipes -- so these are dead files rather than dead sockets, but
-    # leaving them would make a `dir` of handoff\ misleading.
-    foreach ($stale in @('companion.sock', (Join-Path $AuthorityDirName 'control.sock'))) {
-        $path = Join-Path $SystemRoot $stale
-        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
-    }
-}
-
-function Move-HandoffFilesOut {
-    # The reverse, for disable: with no marker, handoff_dir() *is* data_dir(),
-    # so every one of these has to be back at the root or the agent loses its
-    # token and the shim loses the daemon.
-    $source = Join-Path $SystemRoot $HandoffDirName
-    if (-not (Test-Path -LiteralPath $source)) { return }
-    Get-ChildItem -Path $source -Force | ForEach-Object {
-        Move-Item -LiteralPath $_.FullName -Destination (Join-Path $SystemRoot $_.Name) -Force
-    }
-    Remove-Item -LiteralPath $source -Force -ErrorAction SilentlyContinue
-}
-
-function Restore-LegacyDataDir {
-    <#
-      Move $SystemRoot back under %LOCALAPPDATA% and hand it to the human
-      again -- the exact reverse of Move-Data, and the last thing `disable`
-      does.
-
-      Shared with Undo-PartialEnable rather than written twice, because the
-      two callers want the identical thing and only one of them is obvious:
-      an `enable` that fails after Move-Data has run is in the same state a
-      `disable` starts from (data under %ProgramData%, nothing pointing at
-      it), and the way out of it is the same walk back.
-
-      -IgnoreFailure on both icacls calls, unlike every icacls call in
-      `enable`: the data has already been moved by the time these run, so
-      aborting here would leave the user with their files back under their
-      own profile and a script that reported failure -- the most confusing
-      outcome available. `/c` already tells icacls to continue past an
-      individual entry it cannot rewrite, so a non-zero exit here means
-      "some entries were skipped", which is a warning worth printing and not
-      a reason to stop.
-    #>
-    $legacy = Get-LegacyDataDir
-    if (-not $legacy) {
-        # Only reachable from Undo-PartialEnable: `enable` resolves its owner
-        # optionally (ADR 0003 decision 3), and with no owner there is no
-        # %LOCALAPPDATA% to move anything back to -- Move-Data will have
-        # started the separated install empty rather than migrating anything,
-        # so there is nothing to walk back either.
-        Write-Note 'no owner account resolved -- there is no %LOCALAPPDATA% to move data back to'
-        return
-    }
-    if (-not (Test-Path -LiteralPath $SystemRoot)) {
-        Write-Note "$SystemRoot is not there -- nothing to move back"
-        return
-    }
-    if (Test-Path -LiteralPath $legacy) {
-        Write-Warn "$legacy already exists -- merging $SystemRoot into it"
-        Copy-Item -Path (Join-Path $SystemRoot '*') -Destination $legacy -Recurse -Force
-        Remove-Item -LiteralPath $SystemRoot -Recurse -Force
-    } else {
-        Write-Note "moving $SystemRoot back to $legacy"
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $legacy) | Out-Null
-        Move-Item -LiteralPath $SystemRoot -Destination $legacy -Force
-    }
-    # Back to what %LOCALAPPDATA% gives an ordinary directory: owned by the
-    # human again and inherited from their own profile, which is what
-    # protected this data before separation and what will protect it again
-    # afterwards. The /setowner is the mirror of Set-Layout's own: without it
-    # the returned tree stays owned by Administrators, and the caller would
-    # hand back a data directory its owner cannot fully control.
-    Invoke-Icacls @($legacy, '/reset', '/t', '/c', '/q') -IgnoreFailure
-    if ($script:OwnerResolved) {
-        Invoke-Icacls @($legacy, '/setowner', $script:OwnerUser, '/t', '/c', '/q') -IgnoreFailure
-    } else {
-        # Only reachable from Undo-PartialEnable: `enable` resolves its owner
-        # optionally (ADR 0003 decision 3), so an MDM push or a SYSTEM-context
-        # install has no human to give the tree back to. /reset above still
-        # restored inheritance, which is the half that matters.
-        Write-Note "no owner account resolved -- leaving $legacy owned by Administrators"
-    }
-}
-
 # ── ACLs: the Windows half of the layout ─────────────────────────────────────
 
 function Invoke-Native {
@@ -808,15 +611,15 @@ function Set-Layout {
     foreach ($dir in @($authority, $handoff, (Join-Path $SystemRoot 'logs'))) {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
     }
-    Move-HandoffFilesIn
 
     # Ownership first, and it matters more than any grant below. An object's
     # owner holds WRITE_DAC implicitly on Windows, whatever its ACL says --
-    # and Move-Data above *moved* this tree out of %LOCALAPPDATA%, which
-    # preserves ownership. Without this line the separated root ends up owned
-    # by the very human account the separation exists to exclude, wearing a
-    # perfect-looking ACL that account can rewrite with one command and no
-    # elevation.
+    # and %ProgramData% lets any user create a subdirectory, which that user
+    # then owns. A PrivacyFence directory created there by the signed-in
+    # account before this ran (or left by anything else that is not this
+    # script) would otherwise stay owned by the very human account the
+    # separation exists to exclude, wearing a perfect-looking ACL that account
+    # can rewrite with one command and no elevation.
     #
     # Administrators rather than the service account, for two reasons: it
     # needs no privilege juggling (an elevated shell can always set it),
@@ -836,17 +639,17 @@ function Set-Layout {
     # an individual entry deep in the tree it cannot rewrite, which is worth
     # tolerating, but the *root's* own owner is the thing everything below
     # depends on. A silent failure there would leave a layout that looks
-    # right in every other respect, so it stops here. The data has moved by
-    # now; Invoke-Enable's own catch is what walks it back (Undo-PartialEnable).
+    # right in every other respect, so it stops here; Invoke-Enable's own
+    # catch is what takes the half-made service and task back down
+    # (Undo-PartialEnable).
     $newOwner = Get-PathOwner -LiteralPath $SystemRoot
     if (-not (Test-TrustedIdentity -Identity $newOwner)) {
         Stop-WithError @"
 could not take ownership of $SystemRoot -- it is still owned by '$newOwner'.
 
 An object's owner can rewrite its access-control list at will, so leaving it
-owned by that account would make every permission below advisory. Your data is
-being moved back to where it was; once it is, re-run 'enable' from a PowerShell
-started with 'Run as administrator'.
+owned by that account would make every permission below advisory. Re-run
+'enable' from a PowerShell started with 'Run as administrator'.
 "@
     }
 
@@ -876,11 +679,11 @@ started with 'Run as administrator'.
     # directory -- it only reads mcp_token and the discovery files.
     Invoke-Icacls @($handoff, '/inheritance:r', '/q')
     Invoke-Icacls @($handoff, '/grant:r', "${ServiceAccount}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", "${ServiceGroup}:(OI)(CI)(RX)", '/q')
-    # Files carried in from %LOCALAPPDATA% keep the ACL they had there -- a
-    # move preserves the security descriptor, unlike a create, which inherits.
-    # mcp_token in particular is reused across restarts and would otherwise
-    # stay unreadable to the agent forever. This is the Windows counterpart of
-    # the POSIX scripts' find -exec chmod 640.
+    # Files already in handoff\ -- a reinstall's, left by `uninstall` -- are
+    # reset to inherit the grants above rather than trusted to still carry
+    # them. mcp_token in particular is reused across restarts and would
+    # otherwise stay unreadable to the agent if its ACL had drifted. This is
+    # the Windows counterpart of the POSIX scripts' find -exec chmod 640.
     Get-ChildItem -Path $handoff -Force -ErrorAction SilentlyContinue | ForEach-Object {
         Invoke-Icacls @($_.FullName, '/reset', '/q')
     }
@@ -896,12 +699,27 @@ function Write-Marker {
     # "group membership pending", and is_enabled() stays true for it, because
     # the install *is* separated. $OwnerUser itself still holds whatever
     # identity this ran as, which is not the same thing as an owner.
+    #
+    # An owner already recorded in the marker is kept, whoever this run
+    # resolved. owner_user is what privilege_separation.owner_sid() maps to the
+    # install's original principal (ADR 0008), so it names the first human only
+    # and is never rewritten: `enable -ForUser <second>` adds that account
+    # alongside the owner and must not hand it the owner's data, and a machine
+    # half with no owner resolved must not unrecord one. `uninstall -Purge` is
+    # the one thing that removes the owner, by removing the marker. See
+    # docs/adr/0043-the-recorded-owner-is-never-rewritten.md.
+    $recordedOwner = Get-MarkerOwnerUser
+    if ($recordedOwner) {
+        Write-Note "keeping the owner already recorded in ${marker}: $recordedOwner"
+    } else {
+        $recordedOwner = $(if ($script:OwnerResolved) { $script:OwnerUser } else { '' })
+    }
     $payload = [ordered]@{
         version         = $MarkerVersion
         platform        = 'win32'
         service_account = $ServiceAccount
         service_group   = $ServiceGroup
-        owner_user      = $(if ($script:OwnerResolved) { $script:OwnerUser } else { '' })
+        owner_user      = [string]$recordedOwner
         enabled_at      = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     }
     # -Encoding ascii, not the default: privilege_separation._parse_marker
@@ -1038,40 +856,17 @@ function Uninstall-DaemonService {
     # it comes from. `sc.exe stop` only *asks*: it returns as soon as the SCM
     # has accepted the request, with the service still STOP_PENDING and the
     # daemon still holding every file it had open under $SystemRoot -- which
-    # Invoke-Disable moves, whole, a few lines later. Returning from here early
-    # is therefore a sharing violation waiting to happen, and one that lands
-    # *after* the marker, the service and the companion task are already gone,
-    # leaving an install that is neither separated nor whole. Observed as
-    # exactly that: `Move-Item ... settings.yaml : The process cannot access
-    # the file because it is being used by another process`, disable exiting 1
-    # with the data still under %ProgramData%.
+    # `uninstall -Purge` deletes a few lines later, and which the Inno Setup
+    # uninstaller needs released before it can remove the image the service
+    # runs. An earlier `disable` that returned here early failed exactly that
+    # way: `The process cannot access the file because it is being used by
+    # another process`.
     $servicePid = (Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue).ProcessId
     Invoke-Sc @('stop', $ServiceName) -IgnoreFailure | Out-Null
     if (-not (Wait-ProcessExit -ProcessId $servicePid -TimeoutSeconds 60)) {
         Write-Warn "the $ServiceName service (pid $servicePid) has not exited after 60s -- continuing, but a file it still holds open may make a later step fail"
     }
     Invoke-Sc @('delete', $ServiceName) -IgnoreFailure | Out-Null
-}
-
-function Disable-DaemonTask {
-    # The installer's own autostart task starts the *daemon* in the logged-in
-    # user's session, which on a separated install now refuses to start rather
-    # than quietly seeding a default policy over the real one
-    # (privilege_separation.check_runtime_identity). Disabled rather than
-    # deleted so `disable` can put it back, and so the uninstaller's own
-    # schtasks /delete still finds it.
-    $task = Get-ScheduledTask -TaskName $DaemonTaskName -ErrorAction SilentlyContinue
-    if (-not $task) { return }
-    if ($task.State -eq 'Disabled') { return }
-    Write-Note "disabling the '$DaemonTaskName' scheduled task (it would start a second daemon in your own session)"
-    Disable-ScheduledTask -TaskName $DaemonTaskName | Out-Null
-}
-
-function Enable-DaemonTask {
-    $task = Get-ScheduledTask -TaskName $DaemonTaskName -ErrorAction SilentlyContinue
-    if (-not $task) { return }
-    Write-Note "re-enabling the '$DaemonTaskName' scheduled task"
-    Enable-ScheduledTask -TaskName $DaemonTaskName | Out-Null
 }
 
 function Install-CompanionTask {
@@ -1082,8 +877,8 @@ function Install-CompanionTask {
     Write-Note "registering the '$CompanionTaskName' scheduled task"
     $xml = (Get-Content -LiteralPath $template -Raw).Replace('__EXEC_PATH__', $script:CompanionExec)
     $xmlFile = Join-Path ([System.IO.Path]::GetTempPath()) 'privacyfence-companion-task.xml'
-    # Same encoding trap privacyfence-task.xml.tmpl's own header comment
-    # documents: schtasks hands the file to MSXML as a Unicode stream, and a
+    # The encoding trap the template's own header comment documents: schtasks
+    # hands the file to MSXML as a Unicode stream, and a
     # declaration that contradicts the stream fails with "unable to switch the
     # encoding". The template declares no encoding and is pure ASCII, so this
     # only has to avoid writing a BOM.
@@ -1128,31 +923,29 @@ function Uninstall-CompanionTask {
 
 function Undo-PartialEnable {
     <#
-      Put a failed `enable` back the way it found the install: data under
-      %LOCALAPPDATA% again, owned by the human, with the daemon's own autostart
-      task re-enabled and nothing left claiming separation.
+      Take a failed `enable` back down to "not separated": no marker, no
+      companion task, no service. Whatever is under $SystemRoot stays there --
+      `enable` moves no data, so a rollback has none to move back either (ADR
+      0042: nothing restores data into a user profile). A re-run `enable`
+      picks it up exactly as a reinstall does.
 
       This is privacyfence/privacyfence#599's counterpart to the `disable`
-      defect fixed in 1d6b13f -- the same defect from the other direction: an
-      operation that is not atomic and does not clean up after itself when it
-      fails midway, leaving an install that is neither separated nor whole.
+      defect fixed in 1d6b13f: an operation that is not atomic and does not
+      clean up after itself when it fails midway leaves an install that is
+      neither separated nor whole -- here, a marker claiming a layout whose
+      service is gone, which paths.py would resolve for nobody.
 
-      Every step is a no-op on the state it was not reached from, which is what
-      lets one function serve every failure point: Uninstall-* return early on
-      what is not there, Move-HandoffFilesOut returns early with no handoff\
-      directory, and Restore-LegacyDataDir returns early with no $SystemRoot to
-      move. An `enable` that died before Move-Data therefore walks all of this
-      and changes only the daemon task Disable-DaemonTask had already turned
-      off.
-
-      Every step is best-effort and none of them may throw, because this runs
-      *inside* a catch whose exception is about to be re-thrown -- that
-      exception is what says why `enable` failed, and a rollback that replaced
-      it with its own would lose the only useful thing in the transcript.
+      Every step is a no-op on the state it was not reached from
+      (Uninstall-* return early on what is not there), which is what lets one
+      function serve every failure point. Every step is best-effort and none
+      of them may throw, because this runs *inside* a catch whose exception
+      is about to be re-thrown -- that exception is what says why `enable`
+      failed, and a rollback that replaced it with its own would lose the
+      only useful thing in the transcript.
     #>
     param([string] $Reason)
 
-    Write-Warn "enable failed ($Reason) -- rolling back to the unseparated layout"
+    Write-Warn "enable failed ($Reason) -- rolling back"
     try {
         $marker = Join-Path $SystemRoot $MarkerName
         if (Test-Path -LiteralPath $marker) {
@@ -1160,21 +953,14 @@ function Undo-PartialEnable {
         }
         Uninstall-CompanionTask
         Uninstall-DaemonService
-        # Set-Layout may have got as far as creating handoff\ and moving the
-        # discovery files into it; with no marker, handoff_dir() *is*
-        # data_dir(), so they have to come back to the root or an unseparated
-        # daemon comes up with no token and no way for the shim to find it.
-        Move-HandoffFilesOut
-        Restore-LegacyDataDir
-        Enable-DaemonTask
-        Write-Note "rolled back -- your data is at $(Get-LegacyDataDir) and this install is not separated"
+        Write-Note "rolled back -- this install is not separated; anything under $SystemRoot is left where it is"
     } catch {
         Write-Warn @"
 the rollback itself failed: $($_.Exception.Message)
 
-This install is now in neither layout. Your data is under $SystemRoot; move it
-back to $(Get-LegacyDataDir) by hand, or re-run '$PSCommandPath enable' from a
-PowerShell started with 'Run as administrator' to finish separating instead.
+Re-run '$PSCommandPath enable' from a PowerShell started with 'Run as
+administrator' to finish separating, or '$PSCommandPath uninstall' to take the
+service and the companion task down.
 "@
     }
 }
@@ -1196,14 +982,13 @@ function Invoke-Enable {
         Write-Note 'already separated -- re-running to refresh the account, ACLs, service and task'
     }
 
-    Disable-DaemonTask
     Uninstall-DaemonService
     # And the companion, for the same reason and with the same wait: a
     # re-run `enable` (an upgrade, or decision 6's automatic one against an
     # install whose previous enable half-finished) finds the companion this
     # script's own Install-CompanionTask started still running, and a live
-    # companion holds the data directory Move-Data is about to move exactly
-    # as effectively as the daemon does. Install-CompanionTask registers and
+    # companion holds files under $SystemRoot open while Set-Layout is about
+    # to rewrite their ACLs. Install-CompanionTask registers and
     # starts it again at the end of this same run, so there is nothing to put
     # back -- the only thing removing it early costs is the seconds it takes
     # to exit.
@@ -1224,15 +1009,16 @@ function Invoke-Enable {
     # no service and no companion task pointing at it, which `paths.py`
     # resolves for nobody.
     #
-    # Install-DaemonService goes before Move-Data for the same reason, and
-    # costs nothing there: it touches no data and starts nothing. It goes
-    # before Set-Layout because it is what brings NT SERVICE\PrivacyFence into
-    # existence, and Set-Layout's grants cannot name an account that does not
-    # exist yet. It does not start the service -- Start-DaemonService below
+    # Install-DaemonService goes first because it is what brings
+    # NT SERVICE\PrivacyFence into existence, and Set-Layout's grants cannot
+    # name an account that does not exist yet. It does not start the service -- Start-DaemonService below
     # does that, once the ACLs are in place. See Start-DaemonService.
     try {
         Install-DaemonService
-        Move-Data
+        # A reinstall finds the directory `uninstall` left and keeps it (ADR
+        # 0042); a fresh install starts it empty. Nothing is migrated in from
+        # a user profile (ADR 0041).
+        New-Item -ItemType Directory -Force -Path $SystemRoot | Out-Null
         Set-Layout
         Write-Marker
         Install-CompanionTask
@@ -1294,8 +1080,7 @@ function Invoke-EnableForUser {
     # `enable` that need to know which human this install is for. Runs against
     # an install the machine half has already separated, and re-runs
     # harmlessly against one that is already complete -- the group add is
-    # idempotent, there is nothing left to migrate once the %LOCALAPPDATA%
-    # copy is gone, and the ACLs and marker are rewritten to the same values.
+    # idempotent, and the ACLs and marker are rewritten to the same values.
     #
     # Deliberately no Resolve-Executables/Assert-ImageProtected: this installs
     # no service and starts nothing, so a second user can be added to the
@@ -1311,24 +1096,18 @@ function Invoke-EnableForUser {
 
     # ADR 0008 ("D2: two identities, not one, per install"): adding another
     # account to $ServiceGroup is the normal, supported way to let more than
-    # one human use this install. $script:OwnerUser is only ever compared
-    # against the marker's recorded owner to decide *where* Move-Data below
-    # sends this account's own data -- into its own isolated
-    # users\os-<sid>\, never merged with anyone else's -- there is nothing to
-    # refuse here.
+    # one human use this install. Each gets its own isolated users\os-<sid>\
+    # storage, which the daemon creates for that account's principal on first
+    # use -- there is nothing to refuse here and nothing to copy.
     $markerOwner = Get-MarkerOwnerUser
     if ($markerOwner -and $markerOwner -ine $script:OwnerUser) {
-        Write-Note "adding $($script:OwnerUser) alongside this install's existing owner $markerOwner -- each gets its own isolated PrivacyFence identity (docs/adr/0008-one-principal-per-os-user.md); $($script:OwnerUser)'s own $(Get-LegacyDataDir) will be migrated into its own storage, not merged with $($markerOwner)'s"
-        $script:NonOwnerForUser = $true
+        Write-Note "adding $($script:OwnerUser) alongside this install's existing owner $markerOwner -- each gets its own isolated PrivacyFence identity (docs/adr/0008-one-principal-per-os-user.md)"
     }
 
     Add-OwnerToServiceGroup
-    # Anything this human accumulated under %LOCALAPPDATA%\PrivacyFence before
-    # the machine half ran -- live connector OAuth tokens included -- still has
-    # to follow the service account, and it merges in carrying their own ACLs.
-    # So the layout is re-asserted rather than assumed, and the marker is
-    # rewritten with the owner it was missing.
-    Move-Data
+    # The layout is re-asserted rather than assumed. The marker records this
+    # account as the owner only if it has none yet; Write-Marker never
+    # replaces one already recorded.
     Set-Layout
     Write-Marker
 
@@ -1344,41 +1123,63 @@ OK  $($script:OwnerUser) is now a member of $ServiceGroup.
 "@
 }
 
-function Invoke-Disable {
+function Invoke-Uninstall {
+    <#
+      ADR 0042's remove/purge split, the Windows spelling. What the Inno Setup
+      uninstaller runs (installer/privacyfence.iss, CurUninstallStepChanged),
+      before it deletes the program files the service runs.
+
+      Without -Purge: stop and unregister the service and the companion task,
+      and leave $SystemRoot -- data, marker -- and $ServiceGroup exactly where
+      they are, so a reinstall's `enable` picks the data straight back up. The
+      NT SERVICE\PrivacyFence virtual account goes with its service; that is
+      Windows, not a choice this script makes, and the same service name
+      brings the same SID back on reinstall, so the ACLs left on $SystemRoot
+      still name the right account.
+
+      With -Purge: also delete $SystemRoot and $ServiceGroup. Nothing ever
+      moves data back into a user profile (ADR 0041): the per-user layout is
+      not a supported one, which is why `disable` is gone.
+
+      Idempotent and tolerant of every piece already being gone, because the
+      uninstaller runs it against whatever an install left -- including one
+      whose `enable` failed and rolled back.
+    #>
     Assert-Windows
     Assert-Administrator
-    Resolve-Owner
 
-    $marker = Join-Path $SystemRoot $MarkerName
-    if (-not (Test-Path -LiteralPath $marker)) {
-        Stop-WithError "this install is not privilege-separated (no $marker)"
+    Uninstall-CompanionTask
+    Uninstall-DaemonService
+
+    if (-not $Purge) {
+        Write-Host @"
+
+OK  The $ServiceName service and the '$CompanionTaskName' task are removed.
+
+    Your data is still at $SystemRoot, and the $ServiceGroup group is kept:
+    reinstalling PrivacyFence picks both up as they are. To delete them:
+      $PSCommandPath uninstall -Purge
+    or, once the program files are gone, delete $SystemRoot by hand from an
+    elevated shell and run: Remove-LocalGroup -Name $ServiceGroup
+"@
+        return
     }
 
-    Uninstall-DaemonService
-    Uninstall-CompanionTask
-
-    # The marker goes first: if anything below fails, what is left behind is an
-    # unseparated install pointing at a directory that still exists, rather
-    # than a separated one whose service is gone.
-    Remove-Item -LiteralPath $marker -Force
-    Move-HandoffFilesOut
-    Restore-LegacyDataDir
-    $legacy = Get-LegacyDataDir
-
-    Enable-DaemonTask
-
+    if (Test-Path -LiteralPath $SystemRoot) {
+        Write-Note "deleting $SystemRoot"
+        # Owned by Administrators with a full-control grant for them
+        # (Set-Layout), so an elevated shell can always do this; no
+        # take-ownership step is needed.
+        Remove-Item -LiteralPath $SystemRoot -Recurse -Force
+    }
+    if (Get-LocalGroup -Name $ServiceGroup -ErrorAction SilentlyContinue) {
+        Write-Note "removing the $ServiceGroup local group"
+        Remove-LocalGroup -Name $ServiceGroup
+    }
     Write-Host @"
 
-OK  Privilege separation is off. Your data is back at $legacy, under your own
-    account again.
-
-    The $ServiceGroup local group is left in place on purpose -- it owns
-    nothing now, and keeping it means re-enabling does not have to re-add
-    anyone. Remove it with:
-      Remove-LocalGroup -Name $ServiceGroup
-
-    The $ServiceAccount virtual account needs no cleanup at all: it existed
-    only for as long as the service did.
+OK  PrivacyFence's service, companion task, data ($SystemRoot) and the
+    $ServiceGroup group are all removed.
 "@
 }
 
@@ -1389,8 +1190,6 @@ function Invoke-Status {
     $marker = Join-Path $SystemRoot $MarkerName
     if (-not (Test-Path -LiteralPath $marker)) {
         Write-Host 'privilege separation: OFF'
-        $legacy = Get-LegacyDataDir
-        if ($legacy) { Write-Host "  data directory: $legacy" }
         Write-Host "  the daemon and the AI agent run as the same account ($($script:OwnerUser))."
         Write-Host '  Run this script with "enable", from an elevated PowerShell, to change that.'
         return 0
@@ -1502,11 +1301,6 @@ function Invoke-Status {
         Write-Host "  ok               the $ServiceName service is running"
     }
 
-    $daemonTask = Get-ScheduledTask -TaskName $DaemonTaskName -ErrorAction SilentlyContinue
-    if ($daemonTask -and $daemonTask.State -ne 'Disabled') {
-        Write-Host "  STILL AUTOSTARTS the '$DaemonTaskName' task would start a second daemon in your own session"
-        $problems = 1
-    }
     if (Get-ScheduledTask -TaskName $CompanionTaskName -ErrorAction SilentlyContinue) {
         Write-Host "  ok               the '$CompanionTaskName' task starts the companion at sign-in"
     } else {
@@ -1524,7 +1318,7 @@ function Invoke-Status {
 # `start`/`stop`/`restart` elevated (src/privacyfence/service_control.py's
 # `run_elevated()`, via `privilege_separation._windows_runas_argv`), only
 # when a human clicks the corresponding menu item. Built on the same
-# Invoke-Sc/Invoke-Native wrappers `enable`/`disable`/`status` already use
+# Invoke-Sc/Invoke-Native wrappers `enable`/`uninstall`/`status` already use
 # above -- deliberately not Get-Service/Start-Service/Stop-Service/
 # Restart-Service, which this script otherwise avoids except for the two
 # read-only existence checks Invoke-Status already makes.
@@ -1629,7 +1423,7 @@ switch ($Command) {
         }
         exit 0
     }
-    'disable' { Invoke-Disable; exit 0 }
+    'uninstall' { Invoke-Uninstall; exit 0 }
     'status' {
         # Coerced through a variable and [int] rather than `exit
         # (Invoke-Status)`: a stray object reaching that function's output

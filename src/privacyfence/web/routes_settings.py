@@ -1,4 +1,42 @@
-"""Settings on the web (W3/W4):
+"""Settings on the web (W3/W4). One module now builds the route list for
+*both* local mode's ~30-action dispatcher and org mode's own settings
+surface (policy surface consolidation, PSC-4b/PSC-5) -- formerly a full
+second module, web/routes_org_settings.py. ``build_routes()`` (below) is
+still local mode's entry point (unchanged signature); ``build_org_routes()``
+is org mode's, replacing ``routes_org_settings.build_routes``.
+
+Org-mode page *rendering* used to live in its own web/org_settings_pages.py
+(PSC-4b moved it there verbatim, deliberately not merging it, since that was
+PSC-5's job) -- PSC-5 deletes that module. Both ``GET /settings`` and
+``GET /settings/privacy`` now serve settings_window_html.build_html(), the
+exact same capability-filtered renderer local mode's own settings page uses
+(``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's own
+docstring for exactly what each combination hides), and org mode's four
+former bespoke POST routes are one generic ``POST /api/settings/{action}``,
+restricted to ``_ORG_ALLOWED_ACTIONS`` -- the same path and JSON body shape
+local mode's own dispatcher already answers, since it's the same JS bridge
+posting either way now.
+
+``web/org_settings_scope.py``'s ``ACTION_SCOPES`` is the one declaration both
+modes project from: which of ``_ALLOWED_ACTIONS`` below has a real route in
+which mode, and which of those need ``principal.is_admin`` in org mode.
+``_ALLOWED_ACTIONS`` itself is now *projected* from that table (every action
+naming ``org_settings_scope.LOCAL_MODE``, which is every one there is --
+local mode's own dispatcher predates the split and was never gated by it),
+rather than being the primary list org mode's own module used to filter.
+Three pieces the two modes shared duplicated copies of before this merge are
+now module-level helpers both call: ``_needs_step_up``/
+``_settings_step_up_response`` (the "does this sensitive action need a fresh
+WebAuthn assertion, and what does asking for one look like" pair -- byte-for-
+byte identical between modes once parameterized by ``principal``) and
+``_apply_step_up_gate`` (built on PSC-2a's shared
+``web/approval_step_up._verify_or_challenge``, the same ceremony primitive
+``web/routes_approvals.py``'s own ``decide()`` already reduces to -- local
+mode's own inline try/except around ``step_up_decide.verify_step_up`` is
+gone, folded into this one call). ``_record_settings_audit`` (org mode's
+own, moved in unchanged) is available to both for the same reason, and both
+modes' dispatch now calls it -- see that function's own docstring.
+
 ``GET /settings`` serves settings_window_html.build_html(), wrapped in
 web_shell.wrap() so it reads as the same application as ``/approvals``;
 ``GET /settings/connectors`` serves the identical document with its
@@ -90,27 +128,45 @@ restart.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import json
 import logging
+import threading
 import typing
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from starlette.responses import (
+    FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response,
+)
 from starlette.routing import BaseRoute, Route
 
-from .. import approval_icons, settings_window_html, webauthn_stepup, web_shell
-from ..principal import LOCAL_PRINCIPAL
-from ..settings_controller import REPO_URL, SettingsController
+from .. import approval_icons, auto_accept, settings_window_html, webauthn_stepup, web_shell
+from ..audit_log import AuditEntry, current_week, get_audit_logger
+from ..policy import catalogue as policy_catalogue
+from ..connector_registry import ConnectorRegistry
+from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
+from ..resource_names import get_resolver
+from ..agent_identity import REGISTRY, entry_for_id, sanitize_client_string
+from ..settings_controller import (
+    REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rules,
+    _parse_value_list, _pii_general_fields, _privacy_state_from_config, _relative_time, _rule_usage_map,
+    audit_rows, cached_rule_value, rule_resource_ids,
+)
 from ..step_up_config import StepUpConfig
-from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
-from . import step_up_decide
+from ..webauthn_stepup import StepUpChallengeStore
+from . import org_install_policy, org_session, step_up_decide
+from .approval_step_up import _verify_or_challenge
 from .csp import nonce_for as _csp_nonce_for
+from .org_session import OrgSessionStore
+from .org_settings_scope import ACTION_SCOPES, LOCAL_MODE, ORG_MODE, is_action_permitted
 from .routes_security import PF_WEBAUTHN_JS
 from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
 from .session_auth import LocalSessionStore
@@ -120,6 +176,9 @@ from .session_auth import check_origin as _origin_ok
 from .session_auth import human_session_required_json as _human_session_required_json
 from .session_auth import is_human_session as _is_human_session
 from .session_auth import unauthorized_html as _unauthorized_response
+
+if TYPE_CHECKING:
+    from .oauth_provider import OrgOAuthProvider
 
 logger = logging.getLogger(__name__)
 
@@ -143,16 +202,14 @@ MAX_ORG_CONFIG_BYTES = 1_000_000
 # bytes no JSON body could carry).
 # ---------------------------------------------------------------------------- #
 
-_ALLOWED_ACTIONS: frozenset[str] = frozenset({
-    "toggle_pii_detection", "toggle_pii_category",
-    "toggle_update_check", "toggle_update_check_beta", "check_for_updates_now",
-    "skip_update", "remind_later_update",
-    "enable_connector", "disable_connector", "refresh_connectors", "authenticate_connector",
-    "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
-    "add_policy_rule", "remove_policy_rule",
-    "set_default_policy", "set_category_policy", "toggle_calendar_free_busy",
-    "set_log_level", "set_notifications_detail", "enable_step_up",
-})
+# Projected from web/org_settings_scope.py's ACTION_SCOPES -- every action
+# naming LOCAL_MODE, which is every action there is except AGT-5's two
+# org-only AI-system pin actions (local mode's own dispatcher predates that
+# module's mode split and was never gated by it). That module is now the primary declaration; this is the
+# view of it local mode's own dispatch below actually consults.
+_ALLOWED_ACTIONS: frozenset[str] = frozenset(
+    action for action, scope in ACTION_SCOPES.items() if LOCAL_MODE in scope.modes
+)
 
 # ---------------------------------------------------------------------------- #
 # #426 Phase 3's own allowlist-within-the-allowlist -- see module docstring.
@@ -198,6 +255,19 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "disable_connector", "refresh_connectors", "authenticate_connector",
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
     "set_log_level", "set_notifications_detail",
+    # Changes what a draft *contains* (the user's own signature), never
+    # whether or how it is gated -- every draft still raises its popup.
+    "toggle_gmail_signature",
+})
+
+# AGT-5 (ADR 0035 decision 3): the org-only actions, classified the same
+# explicit way. Pinning a DCR client to an AI system creates attested
+# identity -- the only kind a rule may key on (ADR 0006 decision 3) -- and
+# unpinning takes it away, so both are sensitive: step-up gated in org mode
+# under ADR 0034. TestOrgOnlyActionsAreClassified fails the moment an
+# ORG_MODE-only ACTION_SCOPES entry lands without a matching entry here.
+_ORG_ONLY_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
+    "pin_agent_client", "unpin_agent_client",
 })
 
 # ---------------------------------------------------------------------------- #
@@ -493,6 +563,113 @@ def _action_fingerprint(action: str, body: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _record_settings_audit(principal: Principal, summary: str) -> None:
+    """Moved in unchanged from the former web/routes_org_settings.py, where
+    #400 called for it by name: "Changing an org's privacy policy is
+    exactly the kind of act that belongs in the audit log under the
+    principal who did it." PSC-4b left local mode's own generic dispatch
+    silent on purpose, flagging the asymmetry as a decision for the
+    maintainer rather than resolving it -- now resolved: ``settings_action``
+    below calls this for every successful mutation and every step-up
+    refusal too, under ``LOCAL_PRINCIPAL``, the same shape org mode's own
+    routes already use."""
+    # Same free-form AuditEntry shape daemon_main.log_org_config_bundle_hash
+    # uses for an install-level event that isn't a connector call -- this is
+    # a settings mutation, not a gated tool call, so "connector"/"tool" stay
+    # empty and "decision" carries a custom, non-approval value.
+    try:
+        get_audit_logger().record(AuditEntry(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            week=current_week(),
+            request_id=uuid.uuid4().hex[:12],
+            connector="", tool="", tool_name="",
+            summary=summary,
+            sender=principal.email or principal.id,
+            decision="settings_change",
+            auto_accept_rule="", latency_seconds=0.0, pii_detected=False,
+        ))
+    except Exception as exc:
+        logger.warning("Audit log write failed for a settings change: %s", exc)
+
+
+def _needs_step_up(action: str, step_up: StepUpConfig | None) -> bool:
+    """Shared by both modes (PSC-4b) -- identical once parameterized by
+    ``step_up``: local mode's own is optional (``None`` until web/server.py
+    resolves one), org mode's is always given, but "no config yet" and "a
+    config that hasn't turned require_passkey on" both mean the same thing
+    here, so one optional-typed check covers both without either caller
+    special-casing the other's default."""
+    return (
+        step_up is not None and step_up.enabled and step_up.require_passkey
+        and (action in _SENSITIVE_ACTIONS or action in _ORG_ONLY_SENSITIVE_ACTIONS)
+    )
+
+
+def _settings_step_up_response(
+    principal: Principal, action: str, fingerprint_body: dict[str, Any], *,
+    step_up: StepUpConfig, challenges: StepUpChallengeStore,
+) -> JSONResponse:
+    """Shared by both modes (PSC-4b, formerly one near-identical copy each:
+    local mode's own hardcoded ``LOCAL_PRINCIPAL``, the former
+    web/routes_org_settings.py's already took ``principal`` as a parameter --
+    this is that shape, made the only one). With no enrolled
+    passkey this hard-fails (``403``) rather than falling through unguarded,
+    since this is only ever reached once ``step_up.require_passkey`` is
+    already on (``_needs_step_up`` above) -- there is no weaker fallback
+    configuration to fall back to here."""
+    fingerprint = _action_fingerprint(action, fingerprint_body)
+    options_json = step_up_decide.begin_step_up(
+        principal, rp_id=step_up.rp_id, subject_key=action, fingerprint=fingerprint, challenges=challenges,
+    )
+    if options_json is None:
+        return JSONResponse(
+            {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
+        )
+    return JSONResponse(
+        {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
+    )
+
+
+def _apply_step_up_gate(
+    principal: Principal, action: str, form_body: dict[str, Any], assertion: object, *,
+    step_up: StepUpConfig | None, step_up_origin: str, challenges: StepUpChallengeStore,
+) -> JSONResponse | None:
+    """The one settings-action step-up check both modes' dispatch reduces
+    to (PSC-4b): ``None`` when ``action`` doesn't need a fresh assertion at
+    all, or (org mode's own former ``_guard_step_up``) once
+    ``approval_step_up._verify_or_challenge`` -- the same ceremony
+    primitive web/routes_approvals.py's own ``decide()`` already
+    uses -- has verified a resubmitted one. Local mode's own former inline
+    try/except around ``step_up_decide.verify_step_up`` reduced to exactly
+    this same primitive too, just never factored out until now.
+
+    ``form_body`` is the request's own body with ``csrf`` already stripped
+    (local: the JSON payload; org: the form fields) -- ``webauthn_assertion``
+    is stripped here, once, for the fingerprint every caller binds the
+    ceremony to. ``assertion`` is the resubmitted assertion itself, already
+    resolved to a ``dict | None`` by the caller: local mode's JSON body
+    carries it natively; org mode's form field is a JSON-encoded string
+    (``_parse_form_assertion``) -- a difference in request shape the two
+    modes still don't share, so left to each call site.
+    """
+    if not _needs_step_up(action, step_up):
+        return None
+    assert step_up is not None  # nosec B101  # _needs_step_up() already proved this before calling us
+    # A fresh, non-Optional-typed name for the lambda below to close over --
+    # mypy strict mode doesn't carry the `assert` above's narrowing into a
+    # nested function's free variables, since it can't prove `step_up`
+    # itself isn't reassigned before the lambda runs.
+    confirmed_step_up: StepUpConfig = step_up
+    fingerprint_body = {k: v for k, v in form_body.items() if k != "webauthn_assertion"}
+    return _verify_or_challenge(
+        principal, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"), subject_key=action,
+        fingerprint=_action_fingerprint(action, fingerprint_body), assertion=assertion, challenges=challenges,
+        step_up_response=lambda: _settings_step_up_response(
+            principal, action, fingerprint_body, step_up=confirmed_step_up, challenges=challenges,
+        ),
+    )
+
+
 def build_routes(
     controller: SettingsController,
     *,
@@ -592,8 +769,6 @@ def build_routes(
             notifications_enabled=general.get("notifications_enabled", notifications_enabled),
             notifications_detail=general.get("notifications_detail", notifications_detail),
             banner_html=_banner_html(),
-            dismissible_notice_html=controller.policy_v2_migration_notice_html(),
-            dismissible_notice_key="pf_policy_v2_migration_dismissed",
         )
         return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
@@ -617,29 +792,6 @@ def build_routes(
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
         return None
 
-    def _settings_step_up_response(action: str, fingerprint_body: dict[str, Any]) -> JSONResponse:
-        """The settings-action counterpart of web/routes_approvals.py's own
-        ``_step_up_response`` -- with no enrolled passkey this hard-fails
-        (``403``) rather than falling through unguarded, since this gate
-        only ever runs when ``step_up.require_passkey`` is already on (see
-        ``_needs_step_up`` below); there is no Phase-2-style "let it through"
-        configuration to fall back to here."""
-        assert step_up is not None  # nosec B101  # _needs_step_up() already proved this before calling us
-        fingerprint = _action_fingerprint(action, fingerprint_body)
-        options_json = step_up_decide.begin_step_up(
-            LOCAL_PRINCIPAL, rp_id=step_up.rp_id, subject_key=action, fingerprint=fingerprint, challenges=challenges,
-        )
-        if options_json is None:
-            return JSONResponse(
-                {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
-            )
-        return JSONResponse(
-            {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
-        )
-
-    def _needs_step_up(action: str) -> bool:
-        return step_up is not None and step_up.enabled and step_up.require_passkey and action in _SENSITIVE_ACTIONS
-
     async def settings_action(request: Request) -> Response:
         if not _authenticated(request):
             return _unauthorized_response(request)
@@ -648,6 +800,11 @@ def build_routes(
         # getattr(controller, action) runs -- an unlisted name (including
         # dunders, _load_config, snapshot itself) is a 404, not a lookup
         # that then gets rejected (§16.2.5/§16.7's own required test).
+        # _ALLOWED_ACTIONS is itself projected from org_settings_scope.
+        # ACTION_SCOPES (PSC-4b) -- local mode has no admin concept to gate
+        # on (that module's own docstring), so consulting the declaration
+        # here is exactly this membership check, not a separate
+        # is_action_permitted(..., mode=LOCAL_MODE) call.
         if action not in _ALLOWED_ACTIONS:
             return JSONResponse({"error": "unknown action"}, status_code=404)
         try:
@@ -665,25 +822,22 @@ def build_routes(
             # refusal than the refusal itself.
             body, status = _human_session_required_json("change this setting")
             return JSONResponse(body, status_code=status)
-        if _needs_step_up(action):
-            fingerprint_body = {k: v for k, v in body.items() if k != "webauthn_assertion"}
-            assertion = payload.get("webauthn_assertion")
-            if not isinstance(assertion, dict):
-                return _settings_step_up_response(action, fingerprint_body)
-            expected_fp = _action_fingerprint(action, fingerprint_body)
-            try:
-                step_up_decide.verify_step_up(
-                    LOCAL_PRINCIPAL, rp_id=step_up.rp_id, origin=step_up_origin.rstrip("/"), subject_key=action,
-                    fingerprint=expected_fp, assertion=assertion, challenges=challenges,
+        step_up_response = _apply_step_up_gate(
+            LOCAL_PRINCIPAL, action, body, payload.get("webauthn_assertion"),
+            step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
+        )
+        if step_up_response is not None:
+            with principal_scope(LOCAL_PRINCIPAL):
+                _record_settings_audit(
+                    LOCAL_PRINCIPAL, f"Step-up required for {action!r}, refused (principal={LOCAL_PRINCIPAL.id})",
                 )
-            except step_up_decide.StepUpExpired:
-                return JSONResponse({"error": "step_up_expired"}, status_code=400)
-            except WebAuthnError as exc:
-                return JSONResponse({"error": str(exc)}, status_code=401)
+            return step_up_response
         try:
             result = _call_action(controller, action, body)
         except _BadAction as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        with principal_scope(LOCAL_PRINCIPAL):
+            _record_settings_audit(LOCAL_PRINCIPAL, f"Changed setting {action!r} (principal={LOCAL_PRINCIPAL.id})")
         state = result if isinstance(result, dict) else controller.snapshot()
         return JSONResponse(_augment_connectors_with_icons(state))
 
@@ -767,21 +921,30 @@ def build_routes(
                 status_code=409,
             )
         if _org_config_step_up_active():
+            assert step_up is not None  # nosec B101  # _org_config_step_up_active() already proved this
+            # See _apply_step_up_gate's own comment on why the lambda below
+            # needs this fresh, non-Optional-typed name rather than closing
+            # over `step_up` directly.
+            confirmed_step_up: StepUpConfig = step_up
             fingerprint_body = {"sha256": hashlib.sha256(raw).hexdigest()}
             assertion = _parse_form_assertion(form.get("webauthn_assertion"))
-            if not isinstance(assertion, dict):
-                return _settings_step_up_response("org_config_upload", fingerprint_body)
-            expected_fp = _action_fingerprint("org_config_upload", fingerprint_body)
-            try:
-                step_up_decide.verify_step_up(
-                    LOCAL_PRINCIPAL, rp_id=step_up.rp_id, origin=step_up_origin.rstrip("/"),
-                    subject_key="org_config_upload", fingerprint=expected_fp, assertion=assertion,
-                    challenges=challenges,
-                )
-            except step_up_decide.StepUpExpired:
-                return JSONResponse({"error": "step_up_expired"}, status_code=400)
-            except WebAuthnError as exc:
-                return JSONResponse({"error": str(exc)}, status_code=401)
+            # org_config_upload has no _ALLOWED_ACTIONS/_SENSITIVE_ACTIONS
+            # membership (module docstring) -- unconditionally sensitive
+            # whenever step-up is active, so this goes straight to
+            # _verify_or_challenge rather than through _apply_step_up_gate,
+            # which gates on that membership.
+            response = _verify_or_challenge(
+                LOCAL_PRINCIPAL, step_up=confirmed_step_up, origin=step_up_origin.rstrip("/"),
+                subject_key="org_config_upload",
+                fingerprint=_action_fingerprint("org_config_upload", fingerprint_body), assertion=assertion,
+                challenges=challenges,
+                step_up_response=lambda: _settings_step_up_response(
+                    LOCAL_PRINCIPAL, "org_config_upload", fingerprint_body,
+                    step_up=confirmed_step_up, challenges=challenges,
+                ),
+            )
+            if response is not None:
+                return response
         controller.install_org_config_bytes(raw)
         return JSONResponse(_snapshot(controller))
 
@@ -847,3 +1010,488 @@ def create_app(
         notifications_detail=notifications_detail, step_up=step_up, step_up_origin=step_up_origin,
         require_human_session=require_human_session,
     ))
+
+
+# How long an org-mode settings render waits for this principal's missing auto-accept rule names
+# (build_org_routes's _await_rule_names) before showing shortened ids instead -- one connector
+# read per unresolved id, normally well under this; anything slower finishes in the background.
+_RULE_NAME_WAIT_SECONDS = 3.0
+
+_ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
+    "add_policy_rule", "remove_policy_rule",
+    "toggle_pii_detection", "toggle_pii_category",
+    "set_default_policy", "set_category_policy",
+    "pin_agent_client", "unpin_agent_client",
+})
+
+
+def build_org_routes(
+    *,
+    sessions: OrgSessionStore,
+    install_wide_settings: dict[str, Any],
+    install_wide_settings_path: str = "",
+    step_up: StepUpConfig,
+    step_up_origin: str,
+    oauth_provider: OrgOAuthProvider | None = None,
+    connector_registry: ConnectorRegistry | None = None,
+) -> list[Route]:
+    """Org mode's own settings route list (#400; PSC-4b merged its dispatch
+    into this module; PSC-5 merges its *rendering* -- both ``GET /settings``
+    and ``GET /settings/privacy`` now serve the exact same settings_window_
+    html.build_html() local mode's own ``_render_settings_page`` above
+    does, capability-filtered for org mode (``mode="org"``,
+    ``is_admin=principal.is_admin`` -- see that function's own docstring),
+    with the former web/org_settings_pages.py deleted).
+
+    That merge folds the four bespoke, form-POSTing routes it used to
+    dispatch through (``add_rule``/``remove_rule``/``set_privacy_policy``/
+    ``set_pii_policy``, one path and payload shape each) into one generic
+    ``POST /api/settings/{action}`` -- the exact same path and JSON body
+    shape local mode's own dispatcher already answers, restricted to
+    ``_ORG_ALLOWED_ACTIONS`` (every action ``org_settings_scope.
+    ACTION_SCOPES`` actually routes for ``ORG_MODE``, which is also
+    everything the shared page's own JS bridge ever posts for a signed-in
+    org principal). That's what closes #579's own remaining follow-up
+    (PSC-4a/PSC-4b both flagged it, see this phase's own PR description):
+    the shared renderer's page now carries the exact same PF_WEBAUTHN_JS/
+    step-up bridge shim local mode's own page does, so a 428/403 step-up
+    refusal here shows the same passkey prompt local mode's does, instead
+    of a raw JSON body replacing the page.
+
+    This module still contributes the auth/CSRF/authorization/step-up/
+    audit machinery, shared with local mode's own ``build_routes`` above
+    where the two modes' dispatch is the same shape (``_needs_step_up``/
+    ``_settings_step_up_response``/``_apply_step_up_gate``,
+    ``_record_settings_audit``, ``org_settings_scope.is_action_permitted``).
+
+    ``install_wide_settings_path`` is the resolved path of the *server's
+    own* settings.yaml -- the file ``install_wide_settings`` was loaded
+    from, threaded down from ``daemon_main.run_app``'s ``--config``. The
+    install-wide privacy/PII write routes need it and nothing else here
+    does, so it defaults to empty: a caller that only wants the read
+    surface (this module's own tests, a hand-built ``OrgAuth``) keeps
+    working, and a policy write attempted without one is rejected with a
+    400 explaining exactly that rather than guessing at a path to
+    overwrite.
+
+    ``step_up``/``step_up_origin`` (#579) close the gap local mode's own
+    dispatch has closed since #426 Phase 3: every org-routed
+    ``_SENSITIVE_ACTIONS`` member below (``add_policy_rule``,
+    ``remove_policy_rule``, and the two install-wide privacy/PII writes)
+    demands the same fresh WebAuthn assertion whenever
+    ``step_up.require_passkey`` is on. Required, as
+    ``routes_approvals.build_routes``'s own ``step_up``/``issuer_url`` pair
+    already is: web/server.py resolves one ``StepUpConfig`` per org and
+    threads it to every step-up-aware org route, this one included, rather
+    than leaving a default that would silently reopen #579 for a caller
+    that forgets to pass it.
+
+    ``oauth_provider`` (AGT-5, ADR 0035 decision 3) backs the admin-only
+    "AI systems" page: its DCR registrations are what an admin pins to a
+    registry AI system (``pin_agent_client``/``unpin_agent_client``, both
+    admin-only and step-up gated), and its ``agent_pins`` store is where the
+    pins land. ``None`` (a caller with no OAuth server, this module's own
+    older tests) shows an empty page and rejects a pin with a 400.
+
+    ``connector_registry`` lets the Auto-accept page show a rule's resource ids (a Drive folder, a
+    task list, a Jira project, ...) by name, the way local mode's page does: an id with no cached
+    name yet is resolved through *this principal's own* connectors (``ConnectorRegistry.get``),
+    into this principal's own ``resource_names.py`` cache -- see ``_await_rule_names`` below.
+    ``None`` (a hand-built ``OrgAuth`` with no registry, this module's own older tests) shows
+    whatever names are already cached and a shortened id otherwise, never a lookup.
+    """
+    challenges = StepUpChallengeStore()
+    # Principals with a name lookup already running, so a reload while one is in flight doesn't
+    # start a second thread doing the same lookups.
+    resolving: set[str] = set()
+    resolving_lock = threading.Lock()
+
+    def _current_principal(request: Request) -> Principal | None:
+        return org_session.authenticated(request, sessions)
+
+    def _guard_step_up(principal: Principal, action: str, form_body: dict[str, Any]) -> JSONResponse | None:
+        """Called after ``is_action_permitted`` already passed -- a passkey
+        prompt for an action this principal isn't authorized to take either
+        way would be a worse refusal than the authorization refusal itself,
+        the same ordering local mode's own ``require_human_session`` check
+        keeps ahead of its step-up check. Returns ``None`` to let the
+        caller proceed; records the refusal in the audit log, under this
+        principal, for every other case before returning the response to
+        send as-is -- the same step local mode's own ``settings_action``
+        above now takes too (see ``_record_settings_audit``'s own
+        docstring), just already factored out here since org mode's
+        dispatch always needed it.
+
+        ``form_body`` is, despite the name, a JSON body's already-decoded
+        dict (PSC-5 -- ``settings_action`` below, this function's only
+        caller since the four bespoke form-POST routes it used to serve
+        are gone) -- ``webauthn_assertion``, if present, is already a
+        ``dict``, the same as local mode's own ``payload.get(
+        "webauthn_assertion")``, not the JSON-encoded *string* a multipart
+        form field carried it as (``_parse_form_assertion``, still used by
+        ``org_config_upload`` above, which is still a real multipart
+        route)."""
+        assertion = form_body.get("webauthn_assertion")
+        response = _apply_step_up_gate(
+            principal, action, form_body, assertion if isinstance(assertion, dict) else None,
+            step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
+        )
+        if response is not None:
+            with principal_scope(principal):
+                _record_settings_audit(
+                    principal, f"Step-up required for {action!r}, refused (principal={principal.id})",
+                )
+        return response
+
+    def _ensure_principal_settings_loaded() -> None:
+        # Lazy import -- daemon_main.py pulls in the whole connector/client
+        # stack at module level, the same reason every other cross-module
+        # call into it from web/*.py (e.g. settings_controller.py's own
+        # telegram_submit_2fa) imports it inside the function that needs it
+        # rather than at module scope.
+        from ..daemon_main import _load_principal_settings
+
+        _load_principal_settings(install_wide_config=install_wide_settings)
+
+    def _org_state(principal: Principal) -> dict[str, Any]:
+        """PSC-5's own org-mode counterpart of ``_snapshot(controller)``
+        above -- the exact same settings_window_html.build_html() shape,
+        built fresh per request (org mode is stateless per request, unlike
+        local mode's single long-lived ``SettingsController``) rather than
+        cached anywhere. General's PII fields and Privacy Filter both read
+        the install-wide config directly (admin-only in this mode, #400's
+        own fail-closed ``"block"`` default for an unconfigured group --
+        unlike local mode's ``"allow"``, see ``_privacy_state_from_config``);
+        Auto-accept reads this principal's own on-disk rules; Audit Log
+        (AGT-5) this principal's own recent decisions; AI systems (AGT-5,
+        admin only) the OAuth provider's registrations and pins. Sections
+        this mode never shows at all (Connectors) get an inert
+        placeholder -- settings_window_html._capabilities_for is what
+        actually keeps them from ever rendering, not the shape of a
+        placeholder nothing reads. Must already be called inside
+        ``with principal_scope(principal):`` -- ``auto_accept.
+        get_policy_v2_rules()``/``_rule_usage_map()`` both read this
+        principal's own on-disk files.
+        """
+        about = _about_state_dict()
+        privacy = _privacy_state_from_config(install_wide_settings, fail_safe_default="block")
+        # toggle_calendar_free_busy is LOCAL_MODE-only, admin_only, and
+        # hardcoded to a single desktop's own config (org_settings_scope.
+        # ACTION_SCOPES's own comment on it) -- Calendar has no install-
+        # wide/org-mode equivalent at all, so it's dropped from the group
+        # list entirely rather than rendered with a control that could
+        # only ever 404.
+        privacy["groups"] = [g for g in privacy["groups"] if g["key"] != "calendar"]
+        # Same for toggle_gmail_signature: the Gmail group stays (its
+        # category policy is install-wide), only the toggle card goes --
+        # settings_window_html renders it only when this key is present.
+        privacy.pop("gmail_append_signature", None)
+
+        resolver = get_resolver()
+        rules = auto_accept.get_policy_v2_rules()
+        # AGT-5: the viewing principal's own recent decisions -- per-principal, exactly like
+        # the Auto-accept rules above (get_audit_logger() resolves this principal's own log),
+        # with the same agent column local mode's page gets.
+        # A log that cannot be read costs the page its list, never the request -- the same
+        # posture _record_settings_audit takes for a write.
+        try:
+            recent = audit_rows(get_audit_logger().recent_entries(20))
+        except Exception as exc:
+            logger.warning("Could not read recent audit entries for %s: %s", principal.id, exc)
+            recent = []
+        return {
+            "error": "",
+            "general": {
+                **_pii_general_fields(install_wide_settings),
+                "update_check_enabled": True, "update_check_beta": False,
+                "org_installed": False, "org_installed_date": "",
+                "org_button_label": "", "version": about["version"],
+                "notifications_enabled": True, "notifications_detail": "minimal",
+                "step_up_available": False, "step_up_on": False, "step_up_has_passkey": False,
+            },
+            "connectors": [],
+            "telegram_auth": {"step": None, "error": ""},
+            "auto_accept": _auto_accept_state_from_rules(
+                rules, _rule_usage_map(), resolve_value=lambda rule: cached_rule_value(rule, resolver),
+            ),
+            "privacy": privacy,
+            "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
+            "agents": _agents_state() if principal.is_admin else {"clients": [], "stale_pins": [], "registry": []},
+            "about": about,
+        }
+
+    def _agents_state() -> dict[str, Any]:
+        """The admin's "AI systems" page (AGT-5): every current DCR registration with its
+        claimed name and pin, every pin whose registration the TTL prune removed (stale --
+        inert, shown so an admin can clear it; ADR 0035 decision 3), and the registry an admin
+        can pin to. ``client_name`` is the caller's own string: sanitized here, escaped by the
+        page."""
+        registry = [{"id": entry.agent_id, "name": entry.display_name} for entry in REGISTRY]
+        if oauth_provider is None:
+            return {"clients": [], "stale_pins": [], "registry": registry}
+        pins = oauth_provider.agent_pins.pins()
+        clients = []
+        for client in sorted(oauth_provider.list_clients(), key=lambda c: -c.last_used_at):
+            pin = pins.get(client.client_id)
+            entry = entry_for_id(pin.agent_id) if pin is not None else None
+            clients.append({
+                "client_id": client.client_id,
+                "client_name": sanitize_client_string(client.client_name),
+                "last_used": _relative_time(datetime.fromtimestamp(client.last_used_at, timezone.utc).isoformat()),
+                "pinned_agent_id": entry.agent_id if entry is not None else "",
+                "pinned_agent_name": entry.display_name if entry is not None else "",
+            })
+        live = {c["client_id"] for c in clients}
+        stale = []
+        for client_id, pin in sorted(pins.items()):
+            entry = entry_for_id(pin.agent_id)
+            if client_id not in live and entry is not None:
+                stale.append({"client_id": client_id, "agent_id": entry.agent_id, "agent_name": entry.display_name})
+        return {"clients": clients, "stale_pins": stale, "registry": registry}
+
+    def _resolve_rule_names(principal: Principal, pending: list[tuple[Any, str]]) -> None:
+        """Worker-thread half of ``_await_rule_names``: resolve each ``(resource type, id)``
+        through this principal's own live connector client, caching the name for the next render.
+        A connector this principal hasn't authorized has no client, so its ids stay unresolved --
+        never an error. Runs under ``principal_scope`` explicitly: an executor thread doesn't
+        inherit the request's context, and both the resolver and its on-disk cache are
+        per-principal."""
+        assert connector_registry is not None  # nosec B101  # only scheduled when a registry exists
+        try:
+            with principal_scope(principal):
+                connectors = connector_registry.get(principal).connectors
+                resolver = get_resolver()
+                for rt, resource_id in pending:
+                    conn = connectors.get(rt.connector)
+                    client = getattr(conn, "client", None) if conn is not None else None
+                    if client is not None:
+                        resolver.resolve(rt, resource_id, client)
+        except Exception as exc:  # noqa: BLE001 - a missing name only costs a label, never the page
+            logger.warning("Could not resolve auto-accept rule names for %s: %s", principal.id, exc)
+        finally:
+            with resolving_lock:
+                resolving.discard(principal.id)
+
+    async def _await_rule_names(principal: Principal) -> None:
+        """Org mode's counterpart of local mode's ``SettingsController._resolve_names_async``.
+        Local mode resolves in the background and pushes a fresh snapshot to the open tab once
+        done; org mode has no live push (``live_updates=False`` below), so this instead waits up
+        to ``_RULE_NAME_WAIT_SECONDS`` for the lookup before the page renders. A slower lookup
+        keeps running and fills the cache for the next load rather than holding the request."""
+        if connector_registry is None:
+            return
+        with principal_scope(principal):
+            resolver = get_resolver()
+            pending: list[tuple[Any, str]] = []
+            for rule in auto_accept.get_policy_v2_rules():
+                rt, resource_ids = rule_resource_ids(rule)
+                if rt is not None:
+                    pending.extend(
+                        (rt, rid) for rid in resource_ids if rid and resolver.cached_name(rt, rid) is None
+                    )
+        if not pending:
+            return
+        with resolving_lock:
+            if principal.id in resolving:
+                return
+            resolving.add(principal.id)
+        # Its own daemon thread rather than the event loop's executor, so the lookup outliving the
+        # wait below never holds up anything that joins that executor (a loop shutting down).
+        done = threading.Event()
+
+        def _run() -> None:
+            try:
+                _resolve_rule_names(principal, pending)
+            finally:
+                done.set()
+
+        threading.Thread(target=_run, name=f"rule-names-{principal.id}", daemon=True).start()
+        await asyncio.to_thread(done.wait, _RULE_NAME_WAIT_SECONDS)
+
+    async def _wrap_org_settings(request: Request, principal: Principal, *, initial_section: str) -> Response:
+        nonce = _csp_nonce_for(request)
+        with principal_scope(principal):
+            _ensure_principal_settings_loaded()
+        await _await_rule_names(principal)
+        with principal_scope(principal):
+            state = _org_state(principal)
+        body = settings_window_html.build_html(
+            state, nonce=nonce, initial_section=initial_section,
+            mode=ORG_MODE, is_admin=principal.is_admin,
+        )
+        csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
+        # PF_WEBAUTHN_JS/_settings_bridge_shim (PSC-5, closing #579's own
+        # remaining follow-up): the exact same ceremony helpers local
+        # mode's own _render_settings_page carries -- see that function's
+        # own comment. Whether it's ever exercised depends on this org's
+        # StepUpConfig, not on whether the helpers exist.
+        body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
+        body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
+        html = web_shell.wrap(
+            body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
+            nav_items=web_shell.ORG_NAV_ITEMS, principal_label=principal.email or principal.display_name or principal.id,
+            # Org mode has no per-request settings push to subscribe a
+            # live stream to (state_stream.py's own StateStream.push_
+            # settings is wired to one local SettingsController's own
+            # on_change, module docstring) -- unchanged from before PSC-5.
+            live_updates=False, notifications_enabled=False,
+        )
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    async def settings_page(request: Request) -> Response:
+        principal = _current_principal(request)
+        if principal is None:
+            return RedirectResponse("/login?next=/settings", status_code=302, headers={"Cache-Control": "no-store"})
+        # Auto-accept is the one section every org principal, admin or
+        # not, always gets (settings_window_html._capabilities_for) --
+        # General itself is empty (hidden entirely) for a non-admin.
+        initial_section = "general" if principal.is_admin else "auto_accept"
+        return await _wrap_org_settings(request, principal, initial_section=initial_section)
+
+    async def privacy_page(request: Request) -> Response:
+        principal = _current_principal(request)
+        if principal is None:
+            return RedirectResponse(
+                "/login?next=/settings/privacy", status_code=302, headers={"Cache-Control": "no-store"},
+            )
+        if not principal.is_admin:
+            return PlainTextResponse("Forbidden -- administrator access required.", status_code=403)
+        return await _wrap_org_settings(request, principal, initial_section="privacy")
+
+    def _current_pii_flag(action: str, body: dict[str, Any]) -> bool:
+        """toggle_pii_detection/toggle_pii_category flip the *current*
+        value -- the same semantics local mode's own menu-item toggle
+        uses, and what the shared JS template's own toggleHtml() call
+        sites for these two actions already post (an empty payload,
+        exactly like local mode's), rather than org_install_policy.
+        apply_change's own explicit-``enabled``-field contract (right for
+        a plain HTML form that could be submitted stale or twice, see that
+        module's own ``_bool_field`` docstring -- not what this bridge-
+        driven control sends). Computing the flip here, once, keeps the
+        shared renderer's own JS unaware of this one mode-specific
+        difference."""
+        pii_cfg = install_wide_settings.get("pii_detection", {}) or {}
+        if action == "toggle_pii_detection":
+            return bool(pii_cfg.get("enabled", True))
+        return bool(pii_cfg.get(str(body.get("category_key", "")), True))
+
+    def _apply_org_action(principal: Principal, action: str, body: dict[str, Any]) -> str | None:
+        """Applies one ``_ORG_ALLOWED_ACTIONS`` mutation, scoped to
+        ``principal`` (already entered by the caller), returning the exact
+        summary string to audit-log, or ``None`` when nothing actually
+        changed -- the same "only audit a real change" behavior the former
+        per-action routes kept before PSC-5 folded them into this one
+        dispatcher. May raise ``org_install_policy.PolicyChangeRejected``/
+        ``OSError``, left for the caller to map to a response the same way
+        the former ``_apply_install_wide`` did.
+        """
+        if action == "add_policy_rule":
+            group = str(body.get("group", ""))
+            verb_enums = policy_catalogue.parse_verbs(body.get("verbs") or [])
+            if not verb_enums:
+                return None
+            value = _parse_value_list(str(body.get("value") or ""))
+            new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
+            if not new_rules or not auto_accept.add_policy_v2_rules(new_rules):
+                return None
+            verb_names = ", ".join(verb.value for verb in verb_enums)
+            return f"Added auto-accept rule ({group!r}, allow {verb_names!r}) (principal={principal.id})"
+        if action == "remove_policy_rule":
+            rule_id = str(body.get("rule_id", ""))
+            if not auto_accept.remove_policy_v2_rule(rule_id):
+                return None
+            return f"Removed auto-accept rule {rule_id!r} (principal={principal.id})"
+        if action == "pin_agent_client":
+            return _pin_agent_client(principal, body)
+        if action == "unpin_agent_client":
+            client_id = str(body.get("client_id", ""))
+            if oauth_provider is None or not oauth_provider.agent_pins.unpin(client_id):
+                return None
+            return f"Unpinned OAuth client {client_id!r} from its AI system (admin={principal.id})"
+        # The remaining four actions are all install-wide admin writes,
+        # applied through the same org_install_policy.apply_change #400
+        # C3e's own routes already used.
+        if action in ("toggle_pii_detection", "toggle_pii_category"):
+            body = {**body, "enabled": not _current_pii_flag(action, body)}
+        summary = org_install_policy.apply_change(
+            install_wide_settings, install_wide_settings_path, action=action, payload=body,
+        )
+        return f"{summary} (admin={principal.id})"
+
+    def _pin_agent_client(principal: Principal, body: dict[str, Any]) -> str | None:
+        """Pin one *current* registration to a registry AI system. Both halves are validated
+        against server-side state, never taken on trust from the body: the ``client_id`` must
+        be a live registration (a pin names a registration, not a name) and the ``agent_id``
+        a registry entry. The audit line carries the registration's claimed name so a
+        reviewer can see what the admin was looking at when they pinned it."""
+        client_id = str(body.get("client_id", ""))
+        agent_id = str(body.get("agent_id", ""))
+        if oauth_provider is None or not oauth_provider.has_client(client_id):
+            raise org_install_policy.PolicyChangeRejected(f"no registered OAuth client {client_id!r}")
+        entry = entry_for_id(agent_id)
+        if entry is None:
+            raise org_install_policy.PolicyChangeRejected(f"{agent_id!r} is not a known AI system")
+        if oauth_provider.agent_pins.pinned_agent_id(client_id) == entry.agent_id:
+            return None
+        oauth_provider.agent_pins.pin(client_id, entry.agent_id, pinned_by=principal.id)
+        claimed = sanitize_client_string(oauth_provider.client_name(client_id))
+        return (
+            f"Pinned OAuth client {client_id!r} (registered as {claimed!r}) to AI system "
+            f"{entry.agent_id!r} (admin={principal.id})"
+        )
+
+    async def settings_action(request: Request) -> Response:
+        """The generic ``POST /api/settings/{action}`` dispatcher PSC-5
+        gives org mode -- the same path and JSON body shape local mode's
+        own ``settings_action`` above answers (this SPA's shared bridge,
+        settings_window_html.py's own ``pfSettingsPost``, posts the same
+        way regardless of mode), restricted to ``_ORG_ALLOWED_ACTIONS``.
+        Gate order mirrors every other mutating route in this module:
+        authenticated, then CSRF, then origin, then authorization, then
+        step-up, then the mutation itself.
+        """
+        principal = _current_principal(request)
+        if principal is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        action = request.path_params["action"]
+        if action not in _ORG_ALLOWED_ACTIONS:
+            return JSONResponse({"error": "unknown action"}, status_code=404)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(payload, dict) or not org_session.check_csrf(request, payload.get("csrf")):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not org_session.check_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
+        if not is_action_permitted(action, principal, mode=ORG_MODE):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        body = {k: v for k, v in payload.items() if k != "csrf"}
+        step_up_response = _guard_step_up(principal, action, body)
+        if step_up_response is not None:
+            return step_up_response
+        with principal_scope(principal):
+            _ensure_principal_settings_loaded()
+            try:
+                summary = _apply_org_action(principal, action, body)
+            except org_install_policy.PolicyChangeRejected as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            except OSError as exc:
+                # The settings.yaml write itself failed -- nothing was
+                # applied (apply_change's own docstring), so this is a 500
+                # with the policy unchanged, not a partially-applied one.
+                logger.error("Could not write the install-wide settings.yaml: %s", exc)
+                return JSONResponse({"error": "could not write settings.yaml"}, status_code=500)
+            if summary is not None:
+                _record_settings_audit(principal, summary)
+        # A rule just added may name an id this principal's page has never resolved.
+        await _await_rule_names(principal)
+        with principal_scope(principal):
+            state = _org_state(principal)
+        return JSONResponse(state)
+
+    return [
+        Route("/settings", settings_page),
+        Route("/settings/privacy", privacy_page),
+        Route("/api/settings/{action}", settings_action, methods=["POST"]),
+    ]

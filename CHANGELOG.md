@@ -43,6 +43,279 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Apps Script can be connected from Settings**, like the other Google connectors: *Connectors →
+  Apps Script → Authenticate…* on a desktop install, and a *Connect* button on an organization
+  server's `/connect` page. Before, the only way to authorize it was running the app with
+  `--apps-script-oauth`, and its "re-authorize" errors now point at Settings instead. An
+  organization server's Google connector client needs
+  `https://<your-server>/oauth/callback/apps_script` added to its registered redirect URIs.
+
+- **`--agent-links` / `--no-agent-links` for `scripts/build_org_bundle.py`**, writing the org
+  bundle's `download_delivery.agent_links` (on by default, unchanged) instead of requiring the
+  bundle to be edited by hand.
+
+### Changed
+
+- **Linux: `apt remove` keeps your data, `apt purge` deletes it.** Removing the `.deb` now stops
+  PrivacyFence and leaves its config, credentials and audit log in `/var/lib/privacyfence`, so a
+  reinstall picks them up; it no longer moves them into your home directory. `apt purge` deletes
+  that directory and the `privacyfence` service account and group.
+  `privacyfence-privilege-separation disable` is replaced by `uninstall` (same keep-the-data
+  behavior) and `uninstall --purge`. See ADR 0042.
+
+- **An organization server's Approvals page now updates live**, the way the desktop app's always
+  has: a new approval, or one decided from another tab or device, appears or disappears without a
+  manual reload, and the header's live indicator shows whether the page is connected. Each person
+  still sees only their own queue.
+
+- **Org bundles bind the daemon to loopback by default.** `scripts/build_org_bundle.py
+  --server-bind-host` now defaults to `127.0.0.1` instead of `0.0.0.0`, so a bundle built without
+  the flag is reachable only by a reverse proxy on the same host, as the org-mode setup guide
+  already required. A bundle with no `server.bind_host` also binds `127.0.0.1` (was `localhost`).
+  Pass `--server-bind-host` explicitly when the proxy runs on another host.
+
+- **Uninstalling on macOS keeps your data unless you ask for it to be deleted.** `sudo
+  /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh
+  uninstall` replaces `disable`: it stops PrivacyFence, removes its LaunchDaemon, companion
+  LaunchAgent, staged copy under `/Library/PrivacyFence` and the app the `.pkg` installed, and
+  leaves the data under `/Library/Application Support/PrivacyFence` and the `_privacyfence`
+  account in place, so installing again picks everything up. `uninstall --purge` also deletes the
+  data and the account. `disable` moved the data back into `~/.privacyfence`; nothing does that
+  now. See [ADR 0042](docs/adr/0042-uninstall-replaces-disable.md).
+
+- **Uninstalling on Windows keeps your data unless you ask for it to be deleted.** The uninstaller
+  now runs `privilege-separation.ps1 uninstall`, which replaces `disable`: it stops and removes the
+  `PrivacyFence` service and the companion's sign-in task and leaves `%ProgramData%\PrivacyFence`
+  and the `PrivacyFenceUsers` group in place, so installing again picks everything up. Tick the
+  uninstaller's new **Delete PrivacyFence data** checkbox (unchecked by default) to delete them
+  too, which runs `uninstall -Purge`; a silent uninstall never deletes data. `disable` moved the
+  data back into `%LOCALAPPDATA%`; nothing does that now. See [ADR 0042](docs/adr/0042-uninstall-replaces-disable.md).
+
+- The installers now refuse a system older than PrivacyFence supports instead of installing an
+  app that cannot start: the macOS `.pkg` requires macOS 13 on Apple silicon (an Intel Mac is
+  refused), the Windows installer Windows 10 / Windows Server 2016, and the `.deb` declares its
+  glibc and systemd floors as package dependencies (glibc 2.38, systemd 242: Ubuntu 24.04 or
+  Debian 13 and newer). The support matrix in `docs/platform-support.md` now lists each
+  platform's minimum.
+
+### Removed
+
+- **Linux: the `.deb`'s daemon autostart entry and the separation tool's migration steps.** The
+  package no longer ships `/etc/xdg/autostart/privacyfence.desktop` (the daemon is a system unit),
+  and `privacyfence-privilege-separation enable` no longer moves `~/.privacyfence` into
+  `/var/lib/privacyfence` or disables a pip install's `--user` unit (ADR 0041).
+
+- **The v1 auto-accept settings format is no longer read or converted.** A `settings.yaml` that
+  still has an `auto_accept_rules:` or `auto_accept_grants:` section now stops PrivacyFence at
+  startup with a configuration error naming the section, instead of being converted to the
+  `auto_accept:` section on first start. Remove the section and recreate its rules on the Settings
+  Auto-accept page. The one-time conversion, its `settings.yaml.bak` backup and the "your
+  auto-accept rules were migrated" Settings notice are gone, and a fresh install's default
+  `settings.yaml` is written in the current format. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+- **Files from earlier data-directory layouts are no longer moved or deleted at startup.** The
+  daemon no longer moves a `config/settings.yaml`, `webauthn_credentials.json`, `web_token`,
+  `web_token_version` or `logs/audit/` it finds directly under the data directory into
+  `authority/`, no longer deletes a leftover shared `handoff/mcp_token` on a privilege-separated
+  install, and no longer deletes old `approvals_url`/`settings_url`/`security_url` files. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+- **The Claude Desktop extension gets its MCP token only from the running PrivacyFence.** It no
+  longer falls back to reading an `mcp_token` file when it cannot get a token over PrivacyFence's
+  control channel. Instead it stops with an error asking you to check that PrivacyFence and the
+  extension are the same version. On Windows it also no longer looks for PrivacyFence under
+  `%LOCALAPPDATA%\Programs`, where no current installer puts it.
+- **The macOS installer no longer moves data from an earlier layout.** `enable` (and so the `.pkg`)
+  no longer moves `~/.privacyfence` into `/Library/Application Support/PrivacyFence`, no longer
+  moves files into `handoff/` from the root of the data directory, and no longer disables a
+  per-user `com.privacyfence.app` LaunchAgent. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+- **The Windows installer no longer registers a daemon sign-in task or moves data from an earlier
+  layout.** The daemon is a Windows service, and the companion's `PrivacyFenceCompanion` task is
+  now the only Scheduled Task an install has (the `PrivacyFence` task the installer used to
+  register and then disable is gone, and `privilege-separation.ps1 status` no longer reports
+  `STILL AUTOSTARTS`). `enable` no longer moves an existing `%LOCALAPPDATA%\PrivacyFence` into
+  `%ProgramData%\PrivacyFence`. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+
+### Fixed
+
+- **Adding a second OS account no longer changes who owns an install.** On macOS, Windows and
+  Linux, `enable --for-user <name>` for another account (ADR 0008) rewrote the install's recorded
+  owner with that account's name. PrivacyFence gives the recorded owner the install's original
+  data — connected accounts, policy and audit log — so after the change the added account was
+  served that data and the original owner got a new, empty identity. Every platform's
+  separation script now keeps an owner that is already recorded and records one only when the
+  install has none yet; a macOS or Windows re-run with nobody signed in also no longer clears it
+  (ADR 0043). An install that was already affected is not changed back automatically; the
+  separation script's `status` shows which account is recorded as the owner.
+
+- **Telegram works on a PyPI install.** The sdist and wheel now carry PrivacyFence's Telegram app
+  credentials, as the macOS, Windows and Linux installers already did, so `pip install
+  privacyfence` no longer needs your own `api_id`/`api_hash` to connect Telegram (ADR 0040).
+
+- **An organization server's Settings → Auto-accept page shows resource names, not IDs.** A rule
+  naming a Drive folder, task list, Slack channel, Jira project or other resource now reads by that
+  resource's name, as it already did on a desktop install, looked up through the signed-in user's
+  own connected accounts. Before, it showed the raw ID.
+
+- **The org-mode setup guide now explains how to name admins when Google is the sign-in
+  provider.** Google's sign-in tokens carry no groups, so the guide's `groups` example left every
+  user, Workspace admins included, without the admin-only Settings pages (Privacy Filter, AI
+  systems). It now shows naming admins by email address (`--idp-admin-group-claim email`).
+
+### Security
+
+- **Recovery-code sign-in is audited, rate-limited and needs a human session.** `POST
+  /security/recover` now records every refused attempt in the audit log
+  (`webauthn_recovery_refused`, with the reason and never the code), not just a successful one. On a
+  privilege-separated install it refuses a session that was not opened from the companion, the same
+  as approving a decision does. Attempts are limited to 5 per session and 20 across all sessions in
+  any 15 minutes; the next one gets a `429` with `Retry-After`.
+
+## [4.4.0] — 2026-09-24
+
+### Added
+
+- **Gmail drafts can carry your Gmail signature** (#643). The six draft tools take an
+  `include_signature` argument, defaulting to a new *Append Gmail signature to drafts* setting
+  (Settings → Privacy Filter → Gmail; `gmail.append_signature_to_drafts` in `settings.yaml`, off by
+  default). The signature is the one Gmail stores for the sending address, appended as HTML to
+  rich-text drafts and as plain text (after a `-- ` line) to plain ones, and it is shown in the
+  approval popup with the rest of the draft. A new `send_as` argument sends from one of the
+  account's Gmail send-as addresses instead of the default, using that address's signature; an
+  address that isn't one of them is refused before any popup. Gmail's separate "new email" and
+  "reply" signature choices aren't available through its API, and a signature image uploaded into
+  Gmail itself (rather than linked) may not display. The user's own signature doesn't trigger the
+  popup's "possible personal data" note (ADR 0038).
+
+- **The audit log and its weekly Excel export gain four columns for which AI system made each
+  request** — `agent_id`, `agent_name`, `agent_version` and `agent_source` (audit schema 5,
+  ADR 0006 / ADR 0035). Nothing fills them yet, so every new entry records them empty, which
+  reads as *unknown*; older entries load with them empty too, and a log mixing old and new
+  entries still verifies. The Excel source column is labelled so a claimed identity reads as a
+  claim: only `override` and `oauth_client` are verified.
+- **Every connector tool call now records which AI system says it made it** — the `clientInfo`
+  name and version from the MCP handshake (or, on a session-less 2026-07-28 request, from that
+  request itself), and in org mode the name the client registered with, falling back to the
+  handshake. All of these are the client's own claim, so they are recorded as `client_info` and
+  never change what is allowed: the same call gets the same decision, rule match and released
+  data whatever name the client gives. Names are sanitized and length-capped; a client that gives
+  none is recorded as unknown. PrivacyFence's own `privacyfence_*` tools are not attributed.
+- **The approval card and the approval list now show which AI system is asking, and how sure
+  PrivacyFence is of it** (ADR 0006 decision 4). A verified identity shows the product's own logo,
+  its name and a *Verified* badge. A name the AI system gave for itself shows no logo, reads
+  "Says it is ChatGPT" and is marked *Not verified*; the card's own wording then says "the AI
+  system" rather than repeating the claimed name. A client that gives no name, or a name
+  PrivacyFence does not recognise, shows "Unrecognised AI system" with the name it sent. The card
+  no longer says "Claude" unless the request was identified as Claude. Logos are bundled with
+  the app, never downloaded, and never taken from what the client sends. Today every identity is
+  one the client gave for itself, so every card shows the *Not verified* form until verified
+  identities arrive.
+- **An administrator can now verify which AI system an OAuth client is** (ADR 0006, ADR 0035
+  decision 3). In organization mode, a new admin-only *AI systems* settings page lists every OAuth
+  client registered with the server and pins one to the AI system it really is. Pinning and
+  unpinning need a passkey when step-up is on, and every change is recorded in the audit log. Only
+  a pinned client is shown and recorded as verified; the name a client registered with never
+  overrides a pin, and a pin never moves to another registration. In local mode, a new optional
+  `settings.yaml` section, `agent_overrides:`, maps the name an AI system gives to the one it is.
+  It only relabels the name: the request is still marked *Not verified* on every install,
+  privilege-separated or not, because the mapping is chosen by the name the AI system sends and
+  every AI system on the machine shares the same local credential (ADR 0037).
+- **The Audit Log settings page shows which AI system made each request, and how sure
+  PrivacyFence is of it**, in both modes. In organization mode every user now sees the page, with
+  their own recent decisions.
+
+### Fixed
+
+- **The Claude Desktop extension no longer fails to connect when PrivacyFence is slow to answer
+  for a moment.** On a separated install, the extension asks the running PrivacyFence for its own
+  MCP token when it starts, and gave up after one second. If PrivacyFence was busy with another
+  request at that moment, the extension fell back to a shared token file that a separated install
+  no longer has, and exited: Claude Desktop showed the PrivacyFence server as failed until it was
+  restarted. It now waits up to five seconds, the same as PrivacyFence's own command-line tools.
+- **macOS: `macos_privilege_separation.sh enable` no longer aborts with "kept starting as 'root'"
+  on a correctly configured install.** It checked which account the daemon was running as the
+  moment launchd reported a process ID, which can be before launchd has switched that process
+  from `root` to the `_privacyfence` service account. It then stopped a daemon that was starting
+  correctly, retried, and gave up after three attempts. It now waits for that switch to finish
+  before checking.
+
+## [4.3.0] — 2026-09-24
+
+### Added
+
+- **Local mode's settings dispatcher now records every settings change — and every step-up
+  refusal of one — in the audit log**, the same way org mode's settings routes already do. Before
+  this, a local install's own `POST /api/settings/{action}` dispatcher never called
+  `_record_settings_audit` at all, so nothing about a local settings change (a policy tweak, a
+  new auto-accept rule, a connector being enabled) showed up in that install's own audit log.
+
+### Changed
+
+- **Org mode's settings pages (`/settings`, `/settings/privacy`) now render through the same
+  capability-filtered `settings_window_html.build_html()` local mode's own settings page uses**,
+  instead of a separate, plain-HTML-forms renderer (`web/org_settings_pages.py`, deleted). Org
+  principals get the same nav/section layout local mode does, filtered to what actually applies:
+  Auto-accept for every signed-in principal; General (its PII Detection Gate card only) and
+  Privacy Filter for an admin only; Connectors and Audit Log, which have no org-mode equivalent,
+  are hidden entirely. This also closes a gap PSC-4a/PSC-4b both flagged and left open: org mode's
+  settings pages now carry the same WebAuthn step-up ceremony UI (a passkey prompt) local mode's
+  own settings page does, instead of a step-up refusal showing raw JSON.
+- Org mode's four bespoke settings-write routes (`/api/settings/rules/add`, `/api/settings/rules/
+  remove`, `/api/settings/privacy/policy`, `/api/settings/privacy/pii`) are now one generic `POST
+  /api/settings/{action}` — the same path and JSON body shape local mode's own settings dispatcher
+  already answers, restricted to the six actions `org_settings_scope.ACTION_SCOPES` permits for org
+  mode. `add_policy_rule` now accepts more than one verb in a single submission, matching the
+  shared page's own "Add a rule" form.
+- **Opening PrivacyFence itself now opens Approvals, on every platform.** On macOS, a
+  double-click on PrivacyFence in `/Applications` used to do nothing visible: it started a second
+  daemon as you, which a separated install refuses. It now runs a launcher that opens Approvals
+  through the companion. If the menu-bar icon isn't running, the launcher starts it first. The
+  daemon keeps running in the background exactly as before. On Windows, the main Start Menu
+  **PrivacyFence** entry now does the same thing instead of opening the bare settings URL, which
+  only worked if the browser was already signed in. When the companion is already running, the
+  click asks you to confirm before opening. ([ADR
+  0031](docs/adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md))
+
+### Removed
+
+- **The deprecated v1-shaped auto-accept meta-tools**, `privacyfence_list_auto_accept_rules` and
+  `privacyfence_propose_auto_accept_rule_change`. They were kept as working aliases for one minor
+  release (ADR 0004 decision 3) after the policy v2 redesign; that grace period was honoured by
+  4.1.2, the first stable 4.1.x. Use `privacyfence_list_policy` and
+  `privacyfence_propose_policy_change` instead.
+
+### Fixed
+
+- **The Linux Applications-menu entry (and its Settings action) can approve again on a separated
+  install.** The companion's channel refused every caller except the daemon's service account. So
+  the menu click's request to the running `--serve` companion never got through, and it fell back
+  to a link that could view Approvals but not approve anything. The companion's own user may now
+  ask it to open Approvals or Settings, with the same confirmation dialog as before. Every other
+  request on that channel is still restricted to the daemon.
+- **macOS: the companion's menu-bar icon no longer vanishes a few seconds after it appears.** The
+  status poll added in 4.2.1 redrew the icon and menu from a background thread, and AppKit kills a
+  process (`trace trap`) that changes its menu bar off the main thread. Redraws are now queued onto
+  the main thread.
+- **macOS: `macos_privilege_separation.sh enable` no longer aborts half-way when
+  `~/.privacyfence` contains a leftover socket** (`ditto: ... Operation not supported on socket`).
+  Stale sockets are dropped before the merge, so the layout and launchd jobs are installed as
+  normal.
+- **macOS: `macos_privilege_separation.sh status` no longer reports a correct `handoff`
+  directory as `WRONG MODE ... 770, expected 3770`.** The check ignored the setgid/sticky digit.
+
+### Security
+
+- **Org mode's own sensitive settings actions — adding or removing an auto-accept rule, and
+  editing the install-wide privacy/PII policy — now go through the same passkey step-up gate
+  local mode's dispatcher has enforced since #426 Phase 3.** Before this, `routes_org_settings.
+  build_routes` took no `step_up` at all, so a step-up-requiring install still let any signed-in
+  principal add an always-allow rule, and any admin flip the install-wide privacy/PII policy, with
+  no fresh WebAuthn assertion — exactly the "what gets gated" bypass `_SENSITIVE_ACTIONS` exists to
+  close, just left open on the org-mode side of the same dispatcher.
+
 ## [4.2.1] — 2026-09-23
 
 *Supersedes 4.2.0, which was tagged but never published. Its release build's `build` (macOS) and
@@ -2307,7 +2580,9 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.2.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...HEAD
+[4.4.0]: https://github.com/privacyfence/privacyfence/compare/v4.3.0...v4.4.0
+[4.3.0]: https://github.com/privacyfence/privacyfence/compare/v4.2.1...v4.3.0
 [4.2.1]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...v4.2.1
 [4.1.5]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.5
 [4.1.2]: https://github.com/privacyfence/privacyfence/compare/v4.0.0...v4.1.2

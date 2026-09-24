@@ -57,10 +57,9 @@ and the `.mcpb`. Download the new `PrivacyFence-<version>.dmg`, mount it, and ru
 **PrivacyFence.pkg** (don't just replace the old `.app` by hand): its `postinstall` script
 provisions privilege separation itself, as root, during the install.
 
-If for some reason you can't run the `.pkg` and end up starting the new daemon against your old,
-unseparated `~/.privacyfence`, the daemon's own startup path attempts the same provisioning itself
-(the admin-password prompt `getting-started.md` describes) and refuses to serve if that doesn't
-succeed. You can also run it yourself ahead of time:
+If the `.pkg`'s provisioning did not finish, the daemon's own startup path attempts the same
+provisioning itself (the admin-password prompt `getting-started.md` describes) and refuses to serve
+if that doesn't succeed. You can also run it yourself:
 
 ```bash
 sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh enable
@@ -74,13 +73,13 @@ session isn't in the `_privacyfence` group and can't reach the daemon — `... s
 sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh status
 ```
 
-Your data directory has moved from `~/.privacyfence` to `/Library/Application Support/PrivacyFence`.
+Your data directory is `/Library/Application Support/PrivacyFence`. The `.pkg` does not move an
+existing `~/.privacyfence` into it ([ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)).
 If you connected Claude Code to the old `/mcp` endpoint directly, re-run `claude mcp add` against
 the new handoff directory's `mcp_url` and `privacyfence-app --print-mcp-token` (ADR 0008: `mcp_token`
 is no longer a shared file under `handoff/` at all — see `getting-started.md`'s own
-"Connect Claude Code (or another HTTP MCP client)" section for the exact command) — the old files
-under `~/.privacyfence` are gone. The `.mcpb` shim for Claude Desktop finds the new location on its
-own.
+"Connect Claude Code (or another HTTP MCP client)" section for the exact command). The `.mcpb` shim
+for Claude Desktop finds the new location on its own.
 
 ### Windows
 
@@ -126,10 +125,10 @@ sudo privacyfence-privilege-separation enable --for-user "$USER"
 sudo privacyfence-privilege-separation status
 ```
 
-Your data directory has moved from `~/.privacyfence` to `/var/lib/privacyfence`. The package moves
-your old autostart entries aside (`.disabled`) rather than leaving two daemons trying to start as
-you; no action needed there. If you connected Claude Code directly, re-run `claude mcp add` against
-the new `/var/lib/privacyfence/handoff/` files.
+Your data directory is `/var/lib/privacyfence`. The package does not move an existing
+`~/.privacyfence` into it ([ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)). If
+you connected Claude Code directly, re-run `claude mcp add` against the
+`/var/lib/privacyfence/handoff/` files.
 
 ## Turn the new hardening on — existing configs don't move by themselves
 
@@ -194,10 +193,9 @@ access), so nothing there needs the per-platform steps above.
    redirected to a file — it has no console) as the break-glass path.
 2. **Expect a confirmation dialog to ask for more than it used to**, if you already had
    `step_up.require_passkey` on before this upgrade. Confirming an auto-accept rule an AI client
-   proposed over MCP (`privacyfence_propose_policy_change` and the older
-   `privacyfence_propose_auto_accept_rule_change`) now needs the same passkey and attributable
-   session that changing the same setting from the Settings page already needed — it previously
-   needed neither. Denying/cancelling is unaffected.
+   proposed over MCP (`privacyfence_propose_policy_change`) now needs the same passkey and
+   attributable session that changing the same setting from the Settings page already needed — it
+   previously needed neither. Denying/cancelling is unaffected.
 3. **Verify the install is actually separated** with the platform's `status` command above — not
    just that it started. `PENDING USER` means one more login is outstanding; anything other than
    fully separated on a packaged build means it isn't serving `/mcp` or approvals at all yet.
@@ -206,9 +204,9 @@ access), so nothing there needs the per-platform steps above.
 
 An older PrivacyFence build does not understand the post-separation data layout (the service
 account's ownership, the `authority`/`handoff` split) or the new session-provenance and recovery-code
-handling. Rolling back a packaged install therefore isn't "reinstall the old package": run
-`... disable` first to move the data directory back out from under the service account, or restore
-it from the backup you took before upgrading. See
+handling. Rolling back a packaged install therefore isn't "reinstall the old package": restore the
+data directory from the backup you took before upgrading. Nothing moves it back out from under the
+service account any more ([ADR 0042](adr/0042-uninstall-replaces-disable.md)). See
 [`org-mode-operational-readiness.md`](org-mode-operational-readiness.md#rollback) for the same
 reasoning applied to a server deployment.
 

@@ -308,6 +308,31 @@ def redact_gmail_message(raw: dict[str, Any]) -> dict[str, Any]:
     return raw
 
 
+# users.settings.sendAs.list names the account (every alias's address,
+# display name and reply-to) and carries the user's real signature -- their
+# name, phone number, postal address. The signature is replaced whole, with a
+# placeholder of the same kind (HTML with a line break) so the fixture still
+# exercises signature rendering; smtpMsa (an alias's outbound relay host and
+# username) is dropped outright rather than placeholdered.
+_REDACTED_SIGNATURE_HTML = '<div dir="ltr">QA Placeholder<br>+00 0 000 0000</div>'
+
+
+def redact_gmail_send_as(raw: dict[str, Any]) -> dict[str, Any]:
+    raw = copy.deepcopy(raw)
+    for alias in raw.get("sendAs", []) or []:
+        if not isinstance(alias, dict):
+            continue
+        alias.pop("smtpMsa", None)
+        for key in ("sendAsEmail", "replyToAddress"):
+            if alias.get(key):
+                alias[key] = _REDACTED_EMAIL
+        if alias.get("displayName"):
+            alias["displayName"] = _REDACTED_NAME
+        if alias.get("signature"):
+            alias["signature"] = _REDACTED_SIGNATURE_HTML
+    return raw
+
+
 # Slack's raw message shape identifies the author via a single generic
 # "user" (or "bot_id") key -- not a distinctively-named field the way
 # Confluence's authorId/Salesforce's OwnerId are, so adding it to the
@@ -1025,6 +1050,23 @@ def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     except GmailClientError as exc:
         results.append(CheckResult("gmail", "get_message", seed_message_id, False, str(exc)))
 
+    # The draft tools' signature/send_as source (#643). Account-level, so no
+    # seed artifact: every account has at least its primary address here.
+    try:
+        with RawCaptureExecute() as cap:
+            aliases = client.list_send_as()
+        ok = any(alias.is_primary for alias in aliases)
+        note = (
+            f"{len(aliases)} send-as address(es), primary present" if ok
+            else "no primary send-as address returned"
+        )
+        raw = None
+        if record and ok and isinstance(cap.captured, dict):
+            raw = deidentify_structural_fields(redact(redact_gmail_send_as(cap.captured)))
+        results.append(CheckResult("gmail", "list_send_as", "(account)", ok, note, raw, "list_send_as.json"))
+    except GmailClientError as exc:
+        results.append(CheckResult("gmail", "list_send_as", "(account)", False, str(exc)))
+
     return results
 
 
@@ -1518,7 +1560,7 @@ EXPECTED_FIXTURES: dict[str, tuple[str, ...]] = {
     "confluence": ("list_spaces.json", "get_page.json"),
     "jira": ("list_projects.json", "get_issue.json"),
     "salesforce": ("list_reports.json", "get_record.json"),
-    "gmail": ("get_message.json",),
+    "gmail": ("get_message.json", "list_send_as.json"),
     "drive": ("get_file_metadata.json",),
     "calendar": ("get_event.json",),
     "contacts": ("get_contact.json",),

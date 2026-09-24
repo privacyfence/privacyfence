@@ -57,7 +57,8 @@ from pypdf import PdfWriter  # noqa: E402
 
 from privacyfence import org_identity as oi  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
-from privacyfence.principal import Principal  # noqa: E402
+from privacyfence.principal import Principal, principal_scope  # noqa: E402
+from privacyfence.settings_controller import SettingsController  # noqa: E402
 from privacyfence.web import org_session  # noqa: E402
 from privacyfence.web.oauth_provider import OrgOAuthProvider  # noqa: E402
 from privacyfence.web.org_session import OrgSessionStore  # noqa: E402
@@ -243,13 +244,22 @@ def local_server(pf_home):
 
 
 @pytest.fixture
-def org_server(pf_home, tmp_path, monkeypatch):
+def org_server(org_server_and_ui):
+    server, sessions, _web_ui = org_server_and_ui
+    return server, sessions
+
+
+@pytest.fixture
+def org_server_and_ui(pf_home, tmp_path, monkeypatch):
+    """``org_server`` plus the ``WebApprovalUI`` it serves, for the tests
+    that need to register an approval against a running org-mode server."""
     monkeypatch.setattr(
         "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "oauth_clients.json"),
     )
     monkeypatch.setattr(
         "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"),
     )
+    monkeypatch.setattr("privacyfence.web.oauth_provider.pins_file_path", lambda: tmp_path / "agent_pins.json")
     port = _free_port()
     issuer_url = f"http://localhost:{port}"
     idp = _idp()
@@ -262,11 +272,12 @@ def org_server(pf_home, tmp_path, monkeypatch):
         # test here, not the write-approval step-up gate itself.
         org_config={"step_up": {"enabled": True}},
     )
-    server = WebServer(WebApprovalUI(), host="localhost", port=port, org=org)
+    web_ui = WebApprovalUI()
+    server = WebServer(web_ui, host="localhost", port=port, org=org)
     server.start()
     try:
         _wait_until_connectable("localhost", port)
-        yield server, sessions
+        yield server, sessions, web_ui
     finally:
         server.stop()
 
@@ -456,10 +467,7 @@ class TestBootstrapLogin:
 def _sign_in_url(server, path: str = "/approvals", *, provenance: str = PROVENANCE_HUMAN) -> str:
     """A one-time sign-in link for a real browser to follow.
 
-    ``WebServer.mint_bootstrap_url()`` used to do this, and wrote the link to
-    a discovery file besides; the self-approval plan's Phase 2 removed both
-    (web/server.py's own ``_clear_legacy_bootstrap_url_files``). Minting is
-    the control channel's business now, and *attested* minting requires a
+    Minting is the control channel's business, and *attested* minting requires a
     companion process to call back to -- which an in-process browser test has
     no reason to stand up, so it reaches into the store the same way the
     daemon's own middleware does. ``provenance`` defaults to ``human`` because
@@ -1738,3 +1746,129 @@ class TestOrgModeWebAuthnUi:
         page.goto(f"{server.base_url}/security")
         page.wait_for_load_state("load")
         assert page.get_by_text("No passkeys added yet.").is_visible()
+
+    def test_approvals_list_refreshes_live_without_a_manual_reload(self, page, context, org_server_and_ui):
+        """Org mode's counterpart of ``test_list_refreshes_live_without_a_
+        manual_reload``: org mode mounts no ``/api/state/stream``, so its
+        list page subscribes to the principal-scoped
+        ``/api/approvals/stream`` instead. An approval registered for the
+        signed-in principal after the page loaded must appear with no
+        reload; one registered for someone else must not."""
+        server, sessions, web_ui = org_server_and_ui
+        alice = Principal(id="alice", email="alice@example.com", display_name="Alice")
+        bob = Principal(id="bob", email="bob@example.com", display_name="Bob")
+        _sign_in_org(context, server, sessions, principal=alice)
+        page.goto(f"{server.base_url}/approvals")
+        page.wait_for_load_state("load")
+        assert page.get_by_text("Nothing is waiting.").is_visible()
+        page.wait_for_function("() => document.getElementById('pf-shell-live-label').textContent === 'live'")
+
+        with principal_scope(bob):
+            theirs, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key="b1", connector="gmail", tool="gmail_get_message", gate_kind="review",
+                request_id="rb", summary="bob's message", tool_name="Get message",
+            )
+        with principal_scope(alice):
+            mine, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key="a1", connector="gmail", tool="gmail_get_message", gate_kind="review",
+                request_id="ra", summary="alice's message", tool_name="Get message",
+            )
+        page.wait_for_selector(f'[data-approval-id="{mine.id}"]', timeout=5000)
+        assert page.locator(f'[data-approval-id="{theirs.id}"]').count() == 0
+
+
+@pytest.fixture
+def local_server_with_settings(pf_home):
+    """``local_server`` above never passes ``controller=``, so ``/settings``
+    (web/server.py's own ``WebServer.__init__`` docstring: ``controller=
+    None`` mounts nothing there) 404s for every existing test in this file
+    -- none of them needs the settings surface. ``TestSettingsPageRendering``
+    below is the one that does, so it gets its own server with a real
+    ``SettingsController``, rather than changing what every other test's
+    own server mounts."""
+    web_ui = WebApprovalUI()
+    config_path = pf_home / ".privacyfence" / "settings.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+    controller = SettingsController(str(config_path), connectors=[], connector_host=None)
+    port = _free_port()
+    server = WebServer(web_ui, host="localhost", port=port, controller=controller)
+    server.start()
+    try:
+        _wait_until_connectable("localhost", port)
+        yield server, web_ui
+    finally:
+        server.stop()
+
+
+class TestSettingsPageRendering:
+    """PSC-5's own review gate: local mode's settings page and org mode's
+    (admin and non-admin) all render through the same settings_window_html.
+    build_html() now -- this drives all three in a real headless browser and
+    saves a full-page screenshot of each, the same evidence this phase's own
+    brief asks for in the PR description."""
+
+    _SCREENSHOT_DIR = Path(__file__).resolve().parents[2] / "test-results" / "psc5-settings-screenshots"
+
+    def _screenshot(self, page, name: str) -> None:
+        self._SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(self._SCREENSHOT_DIR / f"{name}.png"), full_page=True)
+
+    def test_local_settings_page_renders(self, page, local_server_with_settings):
+        server, _web_ui = local_server_with_settings
+        _sign_in_local(page, server)
+        page.goto(f"{server.base_url}/settings")
+        page.wait_for_load_state("load")
+        page.wait_for_selector(".pf-navitem")
+        nav_labels = page.locator(".pf-navitem").all_inner_texts()
+        assert nav_labels == ["General", "Connectors", "Auto-accept", "Privacy Filter", "Audit Log", "About"]
+        assert page.get_by_text("PII Detection Gate").is_visible()
+        self._screenshot(page, "local-settings")
+
+    def test_org_settings_page_renders_for_non_admin(self, page, context, org_server):
+        server, sessions = org_server
+        principal = Principal(id="bob", email="bob@example.com", display_name="Bob")
+        _sign_in_org(context, server, sessions, principal=principal)
+        page.goto(f"{server.base_url}/settings")
+        page.wait_for_load_state("load")
+        page.wait_for_selector(".pf-navitem")
+        nav_labels = page.locator(".pf-navitem").all_inner_texts()
+        # Connectors is never applicable in org mode; General/Privacy
+        # Filter/AI systems are admin-only -- a non-admin gets Auto-accept,
+        # their own Audit Log (AGT-5) and About.
+        assert nav_labels == ["Auto-accept", "Audit Log", "About"]
+        assert page.get_by_text("Auto-accept").first.is_visible()
+        self._screenshot(page, "org-settings-non-admin")
+
+        # AGT-5: read-only in org mode -- the local-only export and log-level
+        # controls have no org route, so they must not be drawn.
+        page.locator('.pf-navitem[data-nav="audit"]').click()
+        page.wait_for_selector(".pf-audit-list")
+        assert page.get_by_text("Recent decisions", exact=True).is_visible()
+        assert page.locator('[data-action="export_audit_log"]').count() == 0
+        assert page.locator('[data-action="set_log_level"]').count() == 0
+        self._screenshot(page, "org-settings-non-admin-audit")
+
+    def test_org_settings_page_renders_for_admin(self, page, context, org_server):
+        server, sessions = org_server
+        principal = Principal(id="carol", email="carol@example.com", display_name="Carol", is_admin=True)
+        _sign_in_org(context, server, sessions, principal=principal)
+        page.goto(f"{server.base_url}/settings")
+        page.wait_for_load_state("load")
+        page.wait_for_selector(".pf-navitem")
+        nav_labels = page.locator(".pf-navitem").all_inner_texts()
+        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "Audit Log", "AI systems", "About"]
+        assert page.get_by_text("PII Detection Gate").is_visible()
+        self._screenshot(page, "org-settings-admin")
+
+        # AGT-5: the admin's AI-system pin page renders (no client has
+        # registered with this fixture's provider, so it lists none).
+        page.locator('.pf-navitem[data-nav="agents"]').click()
+        page.wait_for_selector(".pf-agents-list")
+        assert page.get_by_text("Registered clients").is_visible()
+        self._screenshot(page, "org-settings-admin-agents")
+
+        page.goto(f"{server.base_url}/settings/privacy")
+        page.wait_for_load_state("load")
+        page.wait_for_selector(".pf-navitem")
+        assert page.get_by_text("Privacy Filter").is_visible()
+        self._screenshot(page, "org-settings-admin-privacy")

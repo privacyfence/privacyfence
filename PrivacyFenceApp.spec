@@ -9,6 +9,13 @@
 #                                             embedded web approval/settings UI --
 #                                             P10 retired the native menu bar/dialogs)
 #     Contents/MacOS/privacyfence-app      ← symlink → PrivacyFenceApp (for daemon auto-start)
+#     Contents/MacOS/PrivacyFenceCompanion ← menu-bar companion (ADR 0002)
+#     Contents/MacOS/PrivacyFence          ← launcher: the bundle's CFBundleExecutable, i.e.
+#                                             what a double-click in /Applications runs --
+#                                             opens Approvals, starting the companion if
+#                                             needed (ADR 0031). launchd starts the daemon
+#                                             and the companion by their own explicit paths,
+#                                             never through the bundle.
 #
 # Claude's MCP entry point is the daemon's own /mcp Streamable HTTP endpoint
 # (web/server.py); the stdio<->/mcp shim Claude Desktop actually spawns is
@@ -129,6 +136,47 @@ companion_exe = EXE(
     entitlements_file=None,
 )
 
+# ── launcher (ADR 0031) ───────────────────────────────────────────────────────
+# The bundle's main executable. Before ADR 0031 that was the daemon, so a
+# double-click in /Applications started a second daemon as the logged-in user,
+# which a separated install refuses (privilege_separation.check_runtime_identity)
+# -- invisibly, with LSUIElement set and no console. This is companion.py's
+# --launch instead, and needs exactly the companion's imports (pystray/AppKit
+# included: with no companion running, it becomes the menu-bar companion).
+
+launcher_a = Analysis(
+    ["src/_launcher_entry.py"],
+    pathex=[SRC],
+    binaries=[],
+    datas=datas,
+    hiddenimports=hidden_imports + ["pystray._darwin", "PIL.Image", "objc", "Foundation", "AppKit"],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+)
+
+launcher_pyz = PYZ(launcher_a.pure)
+
+launcher_exe = EXE(
+    launcher_pyz,
+    launcher_a.scripts,
+    [],
+    exclude_binaries=True,
+    name="PrivacyFence",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon=ICON,
+)
+
 # ── bundle into .app ──────────────────────────────────────────────────────────
 
 coll = COLLECT(
@@ -138,6 +186,9 @@ coll = COLLECT(
     companion_exe,
     companion_a.binaries,
     companion_a.datas,
+    launcher_exe,
+    launcher_a.binaries,
+    launcher_a.datas,
     strip=False,
     upx=True,
     upx_exclude=[],
@@ -154,7 +205,10 @@ app = BUNDLE(
         "CFBundleDisplayName": "PrivacyFence",
         "CFBundleShortVersionString": VERSION,
         "CFBundleVersion": "1",
-        "LSUIElement": True,          # headless background daemon — no Dock icon, no menu bar item
+        # Explicit, not PyInstaller's default (the first EXE collected, the daemon): a
+        # double-click opens Approvals through the companion (ADR 0031).
+        "CFBundleExecutable": "PrivacyFence",
+        "LSUIElement": True,          # no Dock icon; the companion's menu-bar item is the only UI
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "13.0",
         # Allow outbound network connections for OAuth + API calls

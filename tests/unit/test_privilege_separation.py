@@ -1007,31 +1007,44 @@ class TestInstallerContract:
         # Python octal literals (0o711) -- same numbers, two notations.
         assert int(self._assign(platform, script_name), 8) == module_constant
 
-    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
-    def test_migrates_every_file_that_moved_into_the_handoff_dir(self, platform):
-        # Each of these sits at the root of a pre-Phase-4 data directory and
-        # has to end up inside handoff/, or something in the user's session
-        # loses track of the daemon: the shim loses mcp_url/mcp_token, the
-        # companion loses web_base_url.
-        names = re.search(r"^HANDOFF_FILE_NAMES=\(([^)]*)\)$", self.SCRIPTS[platform], re.MULTILINE)
-        assert names is not None
-        moved = set(names.group(1).split())
-
-        assert mcp_auth.MCP_TOKEN_FILE_NAME in moved
-        assert control_channel.WEB_BASE_URL_FILE_NAME in moved
-        from privacyfence.web import server
-
-        assert server.MCP_URL_FILE_NAME in moved
-        # The legacy <page>_url files an older version wrote are matched by
-        # the glob rather than named -- see the scripts' own comment, and
-        # web/server.py's _clear_legacy_bootstrap_url_files for what deletes
-        # them once they have been moved.
-        assert all(name.endswith("_url") for name in server._LEGACY_BOOTSTRAP_URL_FILE_NAMES)
-
-    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
-    @pytest.mark.parametrize("subcommand", ["enable", "disable", "status"])
+    @pytest.mark.parametrize(
+        ("platform", "subcommand"),
+        [
+            ("darwin", "enable"), ("darwin", "uninstall"), ("darwin", "status"),
+            ("linux", "enable"), ("linux", "uninstall"), ("linux", "status"),
+        ],
+    )
     def test_documents_each_subcommand(self, platform, subcommand):
         assert f"cmd_{subcommand}()" in self.SCRIPTS[platform]
+        assert f"{subcommand})" in self.SCRIPTS[platform]
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_the_posix_scripts_have_no_disable(self, platform):
+        # ADR 0042: `disable` moved the data back into the owner's home, which
+        # nothing may do any more (ADR 0041). `uninstall` replaces it.
+        script = self.SCRIPTS[platform]
+        assert "cmd_disable" not in script
+        assert "disable)" not in script
+        assert "{enable|uninstall|status}" in script
+
+    @pytest.mark.parametrize(
+        ("platform", "platform_only"),
+        [
+            ("linux", ("stop_legacy_autostart", "LEGACY_AUTOSTART_PATH", "LEGACY_USER_UNIT", "cp -a")),
+            ("darwin", ("stop_legacy_agent", "LEGACY_AGENT_LABEL", "drop_stale_sockets", "ditto \"$entry\"")),
+        ],
+    )
+    def test_the_posix_scripts_move_no_data_between_layouts(self, platform, platform_only):
+        # ADR 0041: only the current layout is supported, so nothing copies
+        # ~/.privacyfence into the system root on `enable`, and (ADR 0042)
+        # nothing copies it back out on uninstall.
+        script = self.SCRIPTS[platform]
+        for gone in (
+            "migrate_data", "move_handoff_files_in", "move_handoff_files_out",
+            "HANDOFF_FILE_NAMES", "HANDOFF_FILE_GLOB", "legacy_data_dir", "NON_OWNER_FOR_USER",
+            "mv ", *platform_only,
+        ):
+            assert gone not in script, gone
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_refuses_to_run_without_the_companion(self, platform):
@@ -1068,18 +1081,19 @@ class TestInstallerContract:
         assert "privacyfence-privilege-separation enable --auto --for-user" in postinst
         assert '[ "$1" = "configure" ]' in postinst
 
-    def test_the_debian_prerm_disables_on_remove(self):
-        # #428 D1's auto-enable (above) needs an undo on the way out, or
-        # `apt remove` stops privacyfence-privilege-separation --auto ever
-        # wrote and strands a separated install's data (including live
-        # connector OAuth tokens) under a directory the user can no longer
-        # read, with the one tool that could reverse it just deleted.
+    def test_the_debian_prerm_uninstalls_on_remove(self):
+        # ADR 0042: `remove` stops and unregisters the unit and the companion
+        # autostart entry the separation tool rendered -- dpkg does not track
+        # either, so without this `apt remove` leaves a unit pointing at a
+        # binary it just deleted -- while the tool still exists.
         prerm = (REPO_ROOT / "debian" / "prerm").read_text(encoding="utf-8")
-        assert "privacyfence-privilege-separation disable" in prerm
-        remove_case = re.search(r"remove\)(.*?);;", prerm, re.DOTALL)
+        assert "disable" not in prerm.split("set -e", 1)[1]
+        remove_case = re.search(r"\bremove\)(.*?);;", prerm, re.DOTALL)
         assert remove_case is not None, "no `remove)` case in debian/prerm"
-        assert "privacyfence-privilege-separation disable" in remove_case.group(1)
-        assert "|| true" in remove_case.group(1)
+        assert "privacyfence-privilege-separation uninstall || true" in remove_case.group(1)
+        # Plain uninstall: prerm cannot tell remove from purge (dpkg passes
+        # `remove` for both), so deleting data is postrm's `purge` case alone.
+        assert "--purge" not in remove_case.group(1)
         # Must not run on a mere upgrade -- that would tear down a running
         # separated install's unit mid-upgrade instead of leaving it alone.
         upgrade_case = re.search(r"\bupgrade\)(.*?);;", prerm, re.DOTALL)
@@ -1185,6 +1199,222 @@ class TestApplyLayoutLeavesSocketsAlone:
         finally:
             listener.close()
             shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the macOS installer's own bash against a real unix socket")
+class TestMacosScriptHelpers:
+    """``macos_privilege_separation.sh`` helpers run for real under bash, with
+    the macOS-only tools they call stubbed on ``PATH``: ``status`` reading
+    ``handoff/``'s 3770 back as 770 (a real 4.2.1 install hit it), the
+    daemon-owner check racing launchd's xpcproxy trampoline (v4.3.0), and
+    ``uninstall [--purge]`` (ADR 0042) keeping or deleting the data."""
+
+    _function = staticmethod(TestApplyLayoutLeavesSocketsAlone._function)
+
+    def _run_uninstall(self, tmp_path, *, purge: bool, receipt: bool):
+        """Runs the real ``cmd_uninstall``/``uninstall_services``/
+        ``gui_session_uids`` against a scratch tree laid out like an installed,
+        separated Mac. Every macOS tool it calls is a stub that logs its
+        arguments; ``rm`` is the real one, confined to ``tmp_path`` by every
+        path the script is given."""
+        root = tmp_path / "Library" / "Application Support" / "PrivacyFence"
+        (root / "authority" / "config").mkdir(parents=True)
+        (root / "authority" / "config" / "settings.yaml").write_text("auto_accept: {}\n", encoding="utf-8")
+        (root / "handoff").mkdir()
+        (root / "handoff" / "mcp_token").write_text("t", encoding="utf-8")
+        marker = root / "privilege-separation.json"
+        marker.write_text('{\n  "owner_user": "alice"\n}\n', encoding="utf-8")
+        image_parent = tmp_path / "Library" / "PrivacyFence"
+        (image_parent / "image" / "PrivacyFenceApp.app").mkdir(parents=True)
+        app = tmp_path / "Applications" / "PrivacyFenceApp.app"
+        (app / "Contents").mkdir(parents=True)
+        daemon_plist = tmp_path / "LaunchDaemons" / "com.privacyfence.daemon.plist"
+        companion_plist = tmp_path / "LaunchAgents" / "com.privacyfence.companion.plist"
+        for plist in (daemon_plist, companion_plist):
+            plist.parent.mkdir()
+            plist.write_text("<plist/>", encoding="utf-8")
+        home = tmp_path / "Users" / "alice"
+        home.mkdir(parents=True)
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        log = tmp_path / "calls.log"
+        stubs = {
+            "launchctl": "exit 0",
+            "dscl": "exit 0",
+            # One GUI session (uid 501) and one process that is not one.
+            "ps": "printf '  501 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow\\n'"
+                  "; printf '  502 /usr/bin/some-daemon\\n'",
+            "pkgutil": f'[ "$1" = --pkg-info ] && exit {0 if receipt else 1}; exit 0',
+        }
+        for tool, body in stubs.items():
+            stub = bin_dir / tool
+            stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> "$CALL_LOG"\n{body}\n', encoding="utf-8")
+            stub.chmod(0o755)
+
+        script = "\n".join([
+            "set -euo pipefail",
+            "note() { :; }",
+            "warn() { :; }",
+            "require_macos() { :; }",
+            "require_root() { :; }",
+            "resolve_owner_optional() { :; }",
+            "wait_for_daemon_unloaded() { :; }",
+            "service_account_exists() { :; }",
+            "service_group_exists() { :; }",
+            f"PURGE={1 if purge else 0}",
+            "OWNER_UID=501",
+            "SERVICE_ACCOUNT=_privacyfence SERVICE_GROUP=_privacyfence",
+            "DAEMON_LABEL=com.privacyfence.daemon COMPANION_LABEL=com.privacyfence.companion",
+            f"SYSTEM_ROOT={shlex.quote(str(root))}",
+            f"TRUSTED_IMAGE_DIR={shlex.quote(str(image_parent / 'image'))}",
+            f"DEFAULT_APP={shlex.quote(str(app))}",
+            f"DAEMON_PLIST={shlex.quote(str(daemon_plist))}",
+            f"COMPANION_PLIST={shlex.quote(str(companion_plist))}",
+            "PKG_ID=com.privacyfence.installer",
+            self._function("darwin", "gui_session_uids"),
+            self._function("darwin", "uninstall_services"),
+            self._function("darwin", "cmd_uninstall"),
+            "cmd_uninstall",
+        ])
+        env = {
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "CALL_LOG": str(log),
+            "HOME": str(home),
+        }
+        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+        return {
+            "root": root, "marker": marker, "image_parent": image_parent, "app": app,
+            "plists": (daemon_plist, companion_plist), "home": home, "calls": calls,
+            "stdout": result.stdout,
+        }
+
+    def test_uninstall_stops_everything_and_keeps_the_data(self, tmp_path):
+        r = self._run_uninstall(tmp_path, purge=False, receipt=True)
+
+        assert "launchctl bootout system/com.privacyfence.daemon" in r["calls"]
+        assert "launchctl bootout gui/501/com.privacyfence.companion" in r["calls"]
+        # Only GUI sessions get a companion bootout, not every process's uid.
+        assert not any("gui/502/" in call for call in r["calls"]), r["calls"]
+        assert not any(plist.exists() for plist in r["plists"])
+        assert not r["image_parent"].exists()
+        assert not r["app"].exists()
+        assert "pkgutil --forget com.privacyfence.installer" in r["calls"]
+
+        # G3: the data, the marker and the account stay where they are...
+        assert (r["root"] / "authority" / "config" / "settings.yaml").read_text(encoding="utf-8")
+        assert (r["root"] / "handoff" / "mcp_token").exists()
+        assert r["marker"].exists()
+        assert not any(call.startswith("dscl . -delete") for call in r["calls"]), r["calls"]
+        # ...and nothing lands in the owner's home directory.
+        assert list(r["home"].iterdir()) == []
+        assert "uninstall --purge" in r["stdout"]
+
+    def test_uninstall_purge_also_deletes_the_data_and_the_account(self, tmp_path):
+        r = self._run_uninstall(tmp_path, purge=True, receipt=True)
+
+        assert not r["root"].exists()
+        assert "dscl . -delete /Groups/_privacyfence" in r["calls"]
+        assert "dscl . -delete /Users/_privacyfence" in r["calls"]
+        assert not any(plist.exists() for plist in r["plists"])
+        assert not r["image_parent"].exists()
+        assert list(r["home"].iterdir()) == []
+
+    def test_uninstall_leaves_an_app_the_pkg_did_not_install(self, tmp_path):
+        # A source install separated with --daemon-exec/--companion-exec has no
+        # receipt, and whatever sits at the default app path is not ours.
+        r = self._run_uninstall(tmp_path, purge=False, receipt=False)
+
+        assert r["app"].exists()
+        assert not any(call.startswith("pkgutil --forget") for call in r["calls"]), r["calls"]
+        assert not r["image_parent"].exists()
+
+    def test_purge_is_refused_outside_uninstall(self):
+        result = subprocess.run(
+            ["bash", str(INSTALLERS["darwin"]), "status", "--purge"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode != 0
+        assert "--purge only applies to uninstall" in result.stderr
+
+    def test_octal_mode_keeps_the_setgid_and_sticky_digit(self, tmp_path):
+        handoff = tmp_path / "handoff"
+        handoff.mkdir()
+        handoff.chmod(0o3770)
+        root = tmp_path / "root"
+        root.mkdir()
+        root.chmod(0o711)
+        marker = tmp_path / "marker"
+        marker.write_text("{}", encoding="utf-8")
+        marker.chmod(0o644)
+
+        env = dict(os.environ)
+        if sys.platform != "darwin":
+            # BSD `stat -f %Op` emulated with GNU stat's raw hex mode, so the
+            # same helper runs here as on the macOS runner.
+            gnu_stat = shutil.which("stat")
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            stub = bin_dir / "stat"
+            stub.write_text(f'#!/bin/sh\nprintf "%o\\n" "0x$({gnu_stat} -c %f "$3")"\n', encoding="utf-8")
+            stub.chmod(0o755)
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+        def mode(path):
+            script = "\n".join([self._function("darwin", "octal_mode"), f"octal_mode {shlex.quote(str(path))}"])
+            return subprocess.run(
+                ["bash", "-c", script], env=env, check=True, capture_output=True, text=True, timeout=30,
+            ).stdout.strip()
+
+        try:
+            assert mode(handoff) == "3770"
+            assert mode(root) == "711"
+            assert mode(marker) == "644"
+        finally:
+            handoff.chmod(0o700)
+
+    def test_daemon_owner_waits_out_the_xpcproxy_trampoline(self, tmp_path):
+        """launchd reports the job's pid while xpcproxy, running as root, is
+        still in it -- before the switch to the plist's UserName and the exec
+        of the app. The owner has to be read after that, or ``enable`` tears
+        down a correctly started daemon as 'started as root' (v4.3.0's
+        post-release build.yml runs)."""
+        counter = tmp_path / "ps-calls"
+        counter.write_text("0", encoding="utf-8")
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        ps = bin_dir / "ps"
+        # The first three calls land in the trampoline, everything after it in
+        # the app, whichever column is asked for -- so a read of the owner
+        # that doesn't wait gets 'root'.
+        ps.write_text(
+            '#!/bin/sh\n'
+            f'n=$(( $(cat {shlex.quote(str(counter))}) + 1 )); echo "$n" > {shlex.quote(str(counter))}\n'
+            'case "$2" in\n'
+            '  comm=) if [ "$n" -le 3 ]; then echo /usr/libexec/xpcproxy;'
+            ' else echo /Library/PrivacyFence/image/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp; fi ;;\n'
+            '  user=) if [ "$n" -le 3 ]; then echo root; else echo _privacyfence; fi ;;\n'
+            'esac\n',
+            encoding="utf-8",
+        )
+        ps.chmod(0o755)
+
+        script = "\n".join([
+            "set -euo pipefail",
+            "DAEMON_PID_TIMEOUT=10",
+            "daemon_pid() { echo 4242; }",
+            self._function("darwin", "owner_of_pid"),
+            self._function("darwin", "daemon_owner"),
+            "daemon_owner",
+        ])
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "_privacyfence"
 
 
 class TestAutoEnableMacos:
@@ -1627,63 +1857,17 @@ class TestSystemdAndAutostartTemplates:
         # autostart-only, exactly like the daemon entry it replaces.
         assert "NoDisplay=true" in self.COMPANION
 
-    def test_installer_moves_the_daemons_own_autostart_entry_aside(self):
-        # Left in place it would start a second daemon as the logged-in user,
-        # which on a separated install refuses to start (check_runtime_
-        # identity) rather than quietly seeding a default policy.
-        assert 'LEGACY_AUTOSTART_PATH="/etc/xdg/autostart/privacyfence.desktop"' in self.SCRIPT
-        assert f'LEGACY_USER_UNIT="{Path("privacyfence.service").name}"' in self.SCRIPT
-        assert "${LEGACY_AUTOSTART_PATH}.disabled" in self.SCRIPT
-
-    def test_the_user_unit_it_disables_is_the_one_this_repo_ships(self):
-        assert (REPO_ROOT / "privacyfence.service").is_file()
-
-    def test_disabling_the_legacy_autostart_entry_also_hides_it(self):
-        # B24: systemd-xdg-autostart-generator does not filter the autostart
-        # directories by filename -- renaming the entry to *.desktop.disabled
-        # alone does not stop it from being turned into a unit and started at
-        # the next login. Hidden=true is the key the generator (and every
-        # other XDG-autostart reader) actually honours, so hiding the entry
-        # -- not just the rename -- has to be what stop_legacy_autostart does.
-        assert "hide_autostart_entry" in self.SCRIPT
-        assert 'hide_autostart_entry "$LEGACY_AUTOSTART_PATH"' in self.SCRIPT
-        # The rename is unconditional in stop_legacy_autostart; hiding has to
-        # run first so the file that lands at .disabled already carries it.
-        hide_call = self.SCRIPT.index('hide_autostart_entry "$LEGACY_AUTOSTART_PATH"')
-        rename_call = self.SCRIPT.index('mv "$LEGACY_AUTOSTART_PATH" "${LEGACY_AUTOSTART_PATH}.disabled"')
-        assert hide_call < rename_call
-
-    def test_an_already_disabled_but_unhidden_entry_is_healed(self):
-        # An install separated by a script version that predates B24 has a
-        # ${LEGACY_AUTOSTART_PATH}.disabled with no Hidden=true -- and
-        # systemd has been autostarting it under its renamed name the whole
-        # time. The postinst's machine half re-runs on every package upgrade
-        # (debian/postinst's own `enable --machine-only` call), so
-        # stop_legacy_autostart must heal that file in place rather than only
-        # handling a fresh entry still at its original path.
-        assert '"${LEGACY_AUTOSTART_PATH}.disabled" ] && ! autostart_entry_is_hidden' in self.SCRIPT
-
-    def test_restoring_the_legacy_entry_undoes_the_hide(self):
-        # `disable` puts the daemon's own autostart entry back in charge of
-        # starting it in the logged-in user's session -- a Hidden=true this
-        # script itself added would silently defeat that.
-        assert "unhide_autostart_entry" in self.SCRIPT
-        restore = self.SCRIPT[self.SCRIPT.index('restoring the daemon\'s XDG autostart entry'):]
-        unhide_call = restore.index('unhide_autostart_entry "${LEGACY_AUTOSTART_PATH}.disabled"')
-        rename_call = restore.index('mv "${LEGACY_AUTOSTART_PATH}.disabled" "$LEGACY_AUTOSTART_PATH"')
-        assert unhide_call < rename_call
-
-    def test_status_checks_the_disabled_entry_for_hidden_too(self):
-        # Before B24's fix, `status` only ever looked at $LEGACY_AUTOSTART_
-        # PATH -- which stop_legacy_autostart always renames away, so the
-        # check reported no problem even when the renamed file was still
-        # autostarting a second daemon. It has to also check the .disabled
-        # file it actually left behind.
-        assert (
-            '"${LEGACY_AUTOSTART_PATH}.disabled" ] && ! autostart_entry_is_hidden "${LEGACY_AUTOSTART_PATH}.disabled"'
-            in self.SCRIPT
-        )
-        assert self.SCRIPT.count('echo "  STILL AUTOSTARTS') == 2
+    def test_the_deb_ships_no_autostart_entry_of_its_own(self):
+        # The daemon is a system unit and the companion's autostart entry is
+        # rendered at `enable` time, so the package has nothing to put under
+        # /etc/xdg/autostart itself -- and with it gone, no conffile either.
+        build = (REPO_ROOT / "scripts" / "build_deb.sh").read_text(encoding="utf-8")
+        install = (REPO_ROOT / "debian" / "install").read_text(encoding="utf-8")
+        assert not (REPO_ROOT / "resources" / "linux" / "privacyfence.desktop").exists()
+        assert "etc/xdg/autostart" not in build
+        assert "conffiles" not in build
+        assert "etc/xdg/autostart" not in install
+        assert "/etc/xdg/autostart/privacyfence.desktop" not in self.SCRIPT
 
     def test_every_placeholder_is_one_the_installer_substitutes(self):
         substituted = set(re.findall(r"-e \"s\|(__[A-Z_]+__)\|", self.SCRIPT))
@@ -1734,8 +1918,7 @@ class TestWindowsInstallerContract:
     """B5c's half of the same contract, against a PowerShell script instead
     of a shell one.
 
-    Windows shares the marker, the directory names and the migration list
-    with macOS and Linux, so those are asserted here exactly as
+    Windows shares the marker and the directory names with macOS and Linux, so those are asserted here exactly as
     ``TestInstallerContract`` asserts them for bash -- only the syntax of the
     assignment differs. What it does *not* share is a single mode: the layout
     is NTFS ACLs, and the checks for those are further down.
@@ -1838,22 +2021,46 @@ class TestWindowsInstallerContract:
 
     def test_a_failed_enable_fails_the_install(self):
         # The whole of decision 1 on this platform. Inno ignores a [Run]
-        # entry's exit code and CurStepChanged's own autostart step
-        # deliberately only warns, so "Setup finished successfully" is the
-        # default outcome of anything that goes wrong in post-install --
-        # which for this step would mean shipping an install whose approval
-        # UI means less than it says. RaiseException is what turns it into a
-        # rollback and a non-zero exit instead.
+        # entry's exit code, so "Setup finished successfully" is the default
+        # outcome of anything that goes wrong in post-install -- which for
+        # this step would mean shipping an install whose approval UI means
+        # less than it says. RaiseException is what turns it into a rollback
+        # instead.
         inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
         post_install = inno.split("procedure CurStepChanged", 1)[1]
 
         assert "if not SeparateInstall(SeparationOutput) then" in post_install
         assert "RaiseException(" in post_install
-        # ...and after the autostart registration, not before: `enable` ends
-        # by disabling that task (Disable-DaemonTask), so registering it
-        # afterwards would re-arm a second daemon in the user's own session
-        # on every fresh install.
-        assert post_install.index("RegisterAutostartTask()") < post_install.index("SeparateInstall(")
+
+    def test_no_code_line_reads_as_a_section_tag_or_a_directive(self):
+        # iscc reads a line whose first non-blank character is '[' as a
+        # section tag and one starting with '#' as an ISPP directive -- even
+        # inside a Pascal (* *) comment in [Code]. Both are compile errors
+        # ("Invalid section tag", "unknown preprocessor directive") that only
+        # the Windows build job would otherwise find: the first sank a
+        # dispatched build of this very cleanup, the second #411's CI.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+        code = inno.split("\n[Code]\n", 1)[1]
+
+        offending = [
+            line for line in code.splitlines()
+            if line.strip().startswith(("[", "#"))
+        ]
+        assert offending == []
+
+    def test_the_installer_registers_no_daemon_task(self):
+        # The installer registers nothing it later disables (ADR 0042's
+        # cleanup): the daemon is a service, and the only Scheduled Task is
+        # the companion's, which `enable` registers. The daemon sign-in task
+        # and its template are gone, with the step that registered them.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        assert "RegisterAutostartTask" not in inno
+        assert "#define TaskName" not in inno
+        assert "privacyfence-task.xml.tmpl" not in inno
+        assert not (REPO_ROOT / "installer" / "privacyfence-task.xml.tmpl").exists()
+        assert "DaemonTaskName" not in self.SCRIPT
+        assert not hasattr(privilege_separation, "WINDOWS_DAEMON_TASK_NAME")
 
     def test_nothing_in_the_installer_starts_the_daemon_directly(self):
         # A separated install's daemon is a service; a copy of it started in
@@ -1886,36 +2093,75 @@ class TestWindowsInstallerContract:
 
     def test_task_names_match_the_module_and_the_uninstaller(self):
         # Three places name these: the script that creates them, the module
-        # that documents them, and the .iss whose [UninstallRun] has to
-        # remove them from a machine that opted in and then uninstalled.
+        # that documents them, and the .iss whose [UninstallRun] floor has to
+        # remove them even if the script could not run.
         inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
 
-        assert self._assign("DaemonTaskName") == privilege_separation.WINDOWS_DAEMON_TASK_NAME
         assert self._assign("CompanionTaskName") == privilege_separation.WINDOWS_COMPANION_TASK_NAME
         assert f'#define CompanionTaskName "{privilege_separation.WINDOWS_COMPANION_TASK_NAME}"' in inno
         assert f'#define ServiceName "{privilege_separation.WINDOWS_SERVICE_NAME}"' in inno
 
     def test_the_uninstaller_removes_the_service_and_the_companion_task(self):
-        # Both exist only on an install that opted in, and both outlive the
-        # program files if nothing removes them -- a service whose binPath no
-        # longer exists, and a task that fails at every sign-in.
+        # Both outlive the program files if nothing removes them -- a service
+        # whose binPath no longer exists, and a task that fails at every
+        # sign-in. The script's `uninstall` does it first; these entries are
+        # the floor under it.
         inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
 
         assert 'Parameters: "/delete /tn ""{#CompanionTaskName}"" /f"' in inno
         assert 'Parameters: "delete ""{#ServiceName}"""' in inno
 
-    def test_migrates_every_file_that_moved_into_the_handoff_dir(self):
-        names = re.search(r"^\$HandoffFileNames = @\(([^)]*)\)$", self.SCRIPT, re.MULTILINE)
-        assert names is not None
-        moved = {part.strip().strip("'") for part in names.group(1).split(",")}
+    def test_the_uninstaller_runs_uninstall_and_purges_only_when_asked(self):
+        # ADR 0042 on Windows: the uninstaller runs the script's `uninstall`,
+        # adding -Purge only when the "Delete PrivacyFence data" checkbox --
+        # unchecked by default -- was ticked. A silent uninstall never asks
+        # and never purges.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+        run = inno.split("function RunSeparationUninstall", 1)[1].split("\nend;", 1)[0]
+        ask = inno.split("function AskDeleteData", 1)[1].split("\nend;", 1)[0]
+        step = inno.split("procedure CurUninstallStepChanged", 1)[1]
 
-        assert mcp_auth.MCP_TOKEN_FILE_NAME in moved
-        assert control_channel.WEB_BASE_URL_FILE_NAME in moved
-        from privacyfence.web import server
+        assert "ScriptPath := ExpandConstant('{app}\\privilege-separation.ps1')" in run
+        assert "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File " in run
+        assert "'\" uninstall' + PurgeArg" in run
+        assert "PurgeArg := ' -Purge'" in run
+        assert "DeleteData.Caption := 'Delete {#AppName} data';" in ask
+        assert "DeleteData.Checked := False;" in ask
+        assert "if CurUninstallStep = usUninstall then" in step
+        assert "Purge := False;" in step
+        assert "if not UninstallSilent() then\n      Purge := AskDeleteData();" in step
+        # Nothing in the uninstaller deletes data on its own account.
+        assert "[UninstallDelete]" not in inno.replace("No [UninstallDelete] section", "")
 
-        assert server.MCP_URL_FILE_NAME in moved
+    def test_uninstall_keeps_data_unless_purged(self):
+        uninstall = self.SCRIPT.split("function Invoke-Uninstall", 1)[1].split("\nfunction ", 1)[0]
+        # Everything before the -Purge check runs on every uninstall and must
+        # not touch the data directory or the group.
+        keep, purge = uninstall.split("if (-not $Purge) {", 1)
+        not_purged = purge.split("\n        return\n", 1)[0]
 
-    @pytest.mark.parametrize("subcommand", ["enable", "disable", "status"])
+        def statements(text):
+            # What runs, not what the here-string tells the user to run.
+            return [line.strip() for line in text.splitlines()]
+
+        for text in (keep, not_purged):
+            assert not any(line.startswith(("Remove-Item", "Remove-LocalGroup")) for line in statements(text))
+        assert "Uninstall-CompanionTask" in statements(keep)
+        assert "Uninstall-DaemonService" in statements(keep)
+        assert "Remove-Item -LiteralPath $SystemRoot -Recurse -Force" in purge
+        assert "Remove-LocalGroup -Name $ServiceGroup" in purge
+        assert "[switch] $Purge" in self.SCRIPT
+
+    def test_nothing_moves_data_into_or_out_of_a_user_profile(self):
+        # ADR 0041/0042: no upgrade path from the per-user layout, and no way
+        # back to it.
+        for gone in (
+            "Move-Data", "Get-LegacyDataDir", "Restore-LegacyDataDir", "Move-HandoffFiles",
+            "Invoke-Disable", "'disable'", "LOCALAPPDATA%\\PrivacyFence", "$HandoffFileGlob",
+        ):
+            assert gone not in self.SCRIPT, gone
+
+    @pytest.mark.parametrize("subcommand", ["enable", "uninstall", "status"])
     def test_documents_each_subcommand(self, subcommand):
         assert f"function Invoke-{subcommand.capitalize()}" in self.SCRIPT
         assert f"'{subcommand}'" in self.SCRIPT
@@ -1958,12 +2204,11 @@ class TestWindowsInstallerContract:
 
         assert "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464" in test_trusted_identity
 
-    def test_takes_ownership_of_the_migrated_tree(self):
-        # The hole a real platform-windows run exposed: Move-Data moves the
-        # data directory out of %LOCALAPPDATA%, and a move preserves
-        # ownership -- so without this the separated root is owned by the
-        # human account being excluded, who can then rewrite every ACL below
-        # it with no elevation at all.
+    def test_takes_ownership_of_the_tree(self):
+        # The hole a real platform-windows run exposed: a directory the human
+        # account owns under %ProgramData% (any user may create one there)
+        # lets that account rewrite every ACL below it with no elevation at
+        # all, however right the ACL looks.
         set_layout = self.SCRIPT.split("function Set-Layout", 1)[1].split("\nfunction ", 1)[0]
 
         assert "'/setowner'" in set_layout
@@ -1973,35 +2218,24 @@ class TestWindowsInstallerContract:
         # that looks right in every other respect.
         assert "could not take ownership" in set_layout
 
-    def test_disable_hands_ownership_back(self):
-        # Through Restore-LegacyDataDir, which Invoke-Disable and the rollback
-        # in Invoke-Enable share -- an `enable` that fails midway owes the
-        # human exactly what `disable` does.
-        disable = self.SCRIPT.split("function Invoke-Disable", 1)[1].split("\nfunction ", 1)[0]
-        restore = self.SCRIPT.split("function Restore-LegacyDataDir", 1)[1].split("\nfunction ", 1)[0]
-
-        assert "Restore-LegacyDataDir" in disable
-        assert "'/setowner', $script:OwnerUser" in restore
-
-    def test_a_failed_enable_leaves_neither_half_of_a_move_behind(self):
+    def test_a_failed_enable_leaves_nothing_claiming_separation(self):
         # privacyfence/privacyfence#599: the observed failure left the daemon's
         # data under %ProgramData% with no marker, no service and no companion
-        # task pointing at it -- a layout paths.py resolves for nobody. Two
-        # things stop that now, and this asserts both: `sc create` (the step
-        # that failed) happens before the data is moved at all, and everything
-        # from there on is inside a catch that walks the move back.
+        # task pointing at it -- a layout paths.py resolves for nobody. `sc
+        # create` (the step that failed) now comes first, and everything from
+        # there on is inside a catch that takes the half-made install down.
         enable = self.SCRIPT.split("function Invoke-Enable", 1)[1].split("\nfunction ", 1)[0]
         # Call sites only. A comment that names a later step to explain an
-        # earlier one is ordinary and correct in this script, and indexing
-        # the raw text made it read as the step itself having moved.
+        # earlier one is ordinary and correct in this script.
         calls = "\n".join(
             line for line in enable.splitlines() if not line.strip().startswith("#")
         )
+        body = calls.split("try {", 1)[1].split("} catch {", 1)[0]
 
-        assert calls.index("Install-DaemonService") < calls.index("Move-Data")
+        assert body.index("Install-DaemonService") < body.index("Set-Layout")
         assert "Undo-PartialEnable" in enable
-        for step in ("Move-Data", "Set-Layout", "Write-Marker", "Install-CompanionTask"):
-            assert step in enable.split("try {", 1)[1].split("} catch {", 1)[0], step
+        for step in ("Set-Layout", "Write-Marker", "Install-CompanionTask"):
+            assert step in body, step
 
     def test_the_rollback_cannot_replace_the_failure_it_is_reporting(self):
         # It runs inside a catch whose exception is about to be re-thrown, and
@@ -2010,8 +2244,10 @@ class TestWindowsInstallerContract:
         undo = self.SCRIPT.split("function Undo-PartialEnable", 1)[1].split("\nfunction ", 1)[0]
 
         assert undo.count("try {") == 1 and "} catch {" in undo
-        assert "Restore-LegacyDataDir" in undo
-        assert "Enable-DaemonTask" in undo
+        assert "Remove-Item -LiteralPath $marker" in undo
+        # ...and it takes the service and task down without moving any data.
+        assert "Uninstall-DaemonService" in undo and "Uninstall-CompanionTask" in undo
+        assert "Move-Item" not in undo and "Copy-Item" not in undo
 
     def test_status_checks_the_owner(self):
         assert "WRONG OWNER" in self.SCRIPT
@@ -2067,17 +2303,6 @@ class TestWindowsCompanionTaskTemplate:
         assert "__EXEC_PATH__" in self.TEMPLATE
         assert "'__EXEC_PATH__'" in script
 
-    def test_the_installer_disables_the_daemons_own_task(self):
-        # Left enabled it would start a second daemon in the logged-in user's
-        # session at every sign-in, which on a separated install refuses to
-        # start (check_runtime_identity) rather than quietly seeding a
-        # default policy -- loud, but still a daemon that is not running for
-        # the reason the log says.
-        script = INSTALLERS["win32"].read_text(encoding="utf-8")
-
-        assert "Disable-ScheduledTask -TaskName $DaemonTaskName" in script
-        assert "Enable-ScheduledTask -TaskName $DaemonTaskName" in script
-
     def test_the_companion_is_reachable_by_hand_as_well(self):
         # The companion has no crash-restart of its own (see the template's
         # own comment on why a repeating trigger is wrong here), so the Start
@@ -2086,6 +2311,46 @@ class TestWindowsCompanionTaskTemplate:
 
         assert '#define CompanionExeName "PrivacyFenceCompanion.exe"' in inno
         assert r'Name: "{group}\{#AppName} Companion"' in inno
+
+    def test_the_main_start_menu_entry_launches_through_the_companion(self):
+        # ADR 0031: the same thing a double-click on the macOS app does --
+        # open Approvals, starting the tray first if it isn't running --
+        # rather than the bare settings URL, which only worked for a browser
+        # that already had a session.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        assert (
+            r'Name: "{group}\{#AppName}"; Filename: "{app}\{#CompanionExeName}"; Parameters: "--launch"'
+            in inno
+        )
+        assert "localhost:8765" not in inno
+
+
+class TestMacosBundleMainExecutable:
+    """ADR 0031: a double-click on PrivacyFenceApp.app runs the launcher,
+    never the daemon. launchd starts the daemon and the companion by their
+    own explicit paths (macos_privilege_separation.sh), so the bundle's
+    CFBundleExecutable is free to be something a human means to click."""
+
+    SPEC = REPO_ROOT / "PrivacyFenceApp.spec"
+
+    def test_the_bundles_main_executable_is_the_launcher(self):
+        spec = self.SPEC.read_text(encoding="utf-8")
+
+        assert '"CFBundleExecutable": "PrivacyFence",' in spec
+        assert '["src/_launcher_entry.py"]' in spec
+        assert 'name="PrivacyFence",' in spec
+
+    def test_the_launcher_runs_the_companions_launch(self):
+        entry = (REPO_ROOT / "src" / "_launcher_entry.py").read_text(encoding="utf-8")
+
+        assert 'main(["--launch"])' in entry
+
+    def test_launchd_still_starts_the_daemon_by_its_own_path(self):
+        script = (REPO_ROOT / "scripts" / "macos_privilege_separation.sh").read_text(encoding="utf-8")
+
+        assert 'DAEMON_EXECUTABLE="${staged_app}/Contents/MacOS/PrivacyFenceApp"' in script
+        assert 'COMPANION_EXECUTABLE="${staged_app}/Contents/MacOS/PrivacyFenceCompanion"' in script
 
 
 class TestWindowsLayoutAudit:
@@ -2552,19 +2817,8 @@ class TestEnableSplitContract:
         assert re.search(
             r'if \[ -n "\$OWNER_USER" \]; then\n\s+add_owner_to_service_group', body
         )
-        for step in ("create_service_account", "migrate_data", "apply_layout", "write_marker"):
+        for step in ("create_service_account", "apply_layout", "write_marker"):
             assert re.search(rf"^  {step}$", body, re.MULTILINE), step
-
-    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
-    def test_the_posix_machine_half_has_nothing_to_migrate(self, platform):
-        # With no owner there is no home directory to read, so migrate_data
-        # reduces to creating the root -- the path it already had for "no
-        # existing ~/.privacyfence".
-        body = re.search(
-            r"^migrate_data\(\) \{\n(.*?)^\}", self.SCRIPTS[platform], re.MULTILINE | re.DOTALL
-        ).group(1)
-        assert re.search(r'if \[ -z "\$OWNER_HOME" \]; then', body)
-        assert 'mkdir -p "$SYSTEM_ROOT"' in body
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_the_posix_scripts_report_the_pending_state_distinctly(self, platform):
@@ -2603,9 +2857,10 @@ class TestEnableSplitContract:
 
     def test_the_windows_marker_records_an_empty_owner_when_none_resolved(self):
         assert (
-            "owner_user      = $(if ($script:OwnerResolved) { $script:OwnerUser } else { '' })"
+            "$recordedOwner = $(if ($script:OwnerResolved) { $script:OwnerUser } else { '' })"
             in self.SCRIPTS["win32"]
         )
+        assert "owner_user      = [string]$recordedOwner" in self.SCRIPTS["win32"]
 
     def test_the_windows_script_reports_the_pending_state_distinctly(self):
         assert "PENDING USER" in self.SCRIPTS["win32"]
@@ -2639,6 +2894,176 @@ class TestEnableSplitContract:
 
         assert 'CONSOLE_USER=""' in postinstall
         assert '"$SEPARATION_SCRIPT" enable --auto --app "$APP_PATH"' in postinstall
+
+
+class TestForUserKeepsTheRecordedOwner:
+    """ADR 0043: the marker's ``owner_user`` is written once and then kept.
+    ``owner_uid()``/``owner_sid()`` map the account it names to
+    ``LOCAL_PRINCIPAL`` -- the install's original data -- so ``enable
+    --for-user`` for a second account (ADR 0008) must leave it alone. Each
+    script used to write the account it had just resolved, which moved the
+    owner's principal to whoever was added last.
+
+    Runs each script's real ``cmd_enable_for_user``/``Invoke-EnableForUser``,
+    ``write_marker``/``Write-Marker`` and marker reader, with the steps that
+    need root or a real account stubbed, then reads the result back through
+    ``privilege_separation.separation()`` -- the daemon's own parser."""
+
+    @staticmethod
+    def _posix_function(platform: str, name: str) -> str:
+        # Not TestApplyLayoutLeavesSocketsAlone._function: write_marker's own
+        # heredoc has a bare "}" line of its own, followed by its terminator.
+        text = INSTALLERS[platform].read_text(encoding="utf-8")
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n(?=\n|\Z)", text, re.MULTILINE | re.DOTALL)
+        assert match is not None, f"no {name}() in {INSTALLERS[platform].name}"
+        return match.group(0)
+
+    def _run_posix(self, platform, tmp_path, *, owner_user, command, recorded=None):
+        root = tmp_path / "root"
+        root.mkdir()
+        marker = root / privilege_separation.MARKER_FILE_NAME
+        if recorded is not None:
+            marker.write_text(json.dumps(_marker_payload(platform, owner_user=recorded), indent=2), encoding="utf-8")
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        for tool in ("chown", "chmod"):
+            stub = bin_dir / tool
+            stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            stub.chmod(0o755)
+        functions = ["marker_owner_user", "write_marker"]
+        if command == "cmd_enable_for_user":
+            functions.append("cmd_enable_for_user")
+        script = "\n".join([
+            "set -euo pipefail",
+            "note() { :; }",
+            "die() { echo \"$*\" >&2; exit 1; }",
+            "require_linux() { :; }",
+            "require_macos() { :; }",
+            "require_root() { :; }",
+            "resolve_owner() { :; }",
+            "add_owner_to_service_group() { :; }",
+            "apply_layout() { :; }",
+            f"SYSTEM_ROOT={shlex.quote(str(root))}",
+            f"MARKER_NAME={privilege_separation.MARKER_FILE_NAME}",
+            f"MARKER_VERSION={privilege_separation.MARKER_VERSION}",
+            f"SERVICE_ACCOUNT={service_account_of(platform)}",
+            f"SERVICE_GROUP={privilege_separation.PLATFORM_LAYOUTS[platform].service_group}",
+            f"OWNER_USER={shlex.quote(owner_user)}",
+            *(self._posix_function(platform, name) for name in functions),
+            command,
+        ])
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        return root
+
+    def _recorded_owner(self, platform, root, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: platform)
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
+        privilege_separation.reset_cache()
+        try:
+            state = privilege_separation.separation()
+            assert state is not None, (root / privilege_separation.MARKER_FILE_NAME).read_text(encoding="utf-8")
+            return state.owner_user
+        finally:
+            privilege_separation.reset_cache()
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1")
+    def test_a_second_for_user_leaves_the_owner_alone(self, platform, tmp_path, monkeypatch):
+        root = self._run_posix(
+            platform, tmp_path, owner_user="bob", command="cmd_enable_for_user", recorded="alice",
+        )
+
+        assert self._recorded_owner(platform, root, monkeypatch) == "alice"
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1")
+    def test_the_first_for_user_on_a_machine_only_install_records_the_owner(self, platform, tmp_path, monkeypatch):
+        root = self._run_posix(
+            platform, tmp_path, owner_user="alice", command="cmd_enable_for_user", recorded="",
+        )
+
+        assert self._recorded_owner(platform, root, monkeypatch) == "alice"
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1")
+    def test_a_first_enable_records_the_resolved_owner(self, platform, tmp_path, monkeypatch):
+        root = self._run_posix(platform, tmp_path, owner_user="alice", command="write_marker")
+
+        assert self._recorded_owner(platform, root, monkeypatch) == "alice"
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1")
+    def test_a_machine_half_with_no_owner_does_not_clear_one(self, platform, tmp_path, monkeypatch):
+        root = self._run_posix(platform, tmp_path, owner_user="", command="write_marker", recorded="alice")
+
+        assert self._recorded_owner(platform, root, monkeypatch) == "alice"
+
+    @staticmethod
+    def _powershell() -> str | None:
+        return shutil.which("powershell") or shutil.which("pwsh")
+
+    def _run_windows(self, tmp_path, *, owner_user, recorded):
+        text = INSTALLERS["win32"].read_text(encoding="utf-8")
+
+        def function(name: str) -> str:
+            match = re.search(rf"^function {name} \{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL)
+            assert match is not None, f"no {name} in {INSTALLERS['win32'].name}"
+            return match.group(0)
+
+        root = tmp_path / "root"
+        root.mkdir()
+        marker = root / privilege_separation.MARKER_FILE_NAME
+        if recorded is not None:
+            marker.write_text(json.dumps(_marker_payload("win32", owner_user=recorded), indent=2), encoding="utf-8")
+
+        def quoted(value: str) -> str:
+            return "'" + value.replace("'", "''") + "'"
+
+        script = "\n".join([
+            "Set-StrictMode -Version Latest",
+            "$ErrorActionPreference = 'Stop'",
+            "function Write-Note { }",
+            "function Invoke-Icacls { }",
+            "function Assert-Windows { }",
+            "function Assert-Administrator { }",
+            "function Resolve-Owner { $script:OwnerResolved = $true }",
+            "function Add-OwnerToServiceGroup { }",
+            "function Set-Layout { }",
+            f"$SystemRoot = {quoted(str(root))}",
+            f"$MarkerName = {quoted(privilege_separation.MARKER_FILE_NAME)}",
+            f"$MarkerVersion = {privilege_separation.MARKER_VERSION}",
+            f"$ServiceAccount = {quoted(service_account_of('win32'))}",
+            f"$ServiceGroup = {quoted(privilege_separation.PLATFORM_LAYOUTS['win32'].service_group)}",
+            "$SidSystem = '*S-1-5-18'; $SidAdministrators = '*S-1-5-32-544'; $SidUsers = '*S-1-5-32-545'",
+            f"$script:OwnerUser = {quoted(owner_user)}",
+            "$script:OwnerResolved = $false",
+            function("Get-MarkerOwnerUser"),
+            function("Write-Marker"),
+            function("Invoke-EnableForUser"),
+            "Invoke-EnableForUser",
+        ])
+        script_path = tmp_path / "run.ps1"
+        script_path.write_text(script, encoding="utf-8")
+        result = subprocess.run(
+            [self._powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+            capture_output=True, text=True, timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return root
+
+    @pytest.mark.skipif(shutil.which("powershell") is None and shutil.which("pwsh") is None, reason="needs PowerShell")
+    def test_a_second_for_user_leaves_the_windows_owner_alone(self, tmp_path, monkeypatch):
+        root = self._run_windows(tmp_path, owner_user="bob", recorded="alice")
+
+        assert self._recorded_owner("win32", root, monkeypatch) == "alice"
+
+    @pytest.mark.skipif(shutil.which("powershell") is None and shutil.which("pwsh") is None, reason="needs PowerShell")
+    def test_the_first_windows_for_user_on_a_machine_only_install_records_the_owner(self, tmp_path, monkeypatch):
+        root = self._run_windows(tmp_path, owner_user="alice", recorded="")
+
+        assert self._recorded_owner("win32", root, monkeypatch) == "alice"
 
 
 class TestDebPostinstFailurePolicy:
@@ -2720,26 +3145,22 @@ class TestDebPostinstFailurePolicy:
             r"^write_marker\(\) \{\n(.*?)^\}", self.SCRIPT, re.MULTILINE | re.DOTALL
         ).group(1)
         assert re.search(
-            r'if \[ -z "\$recorded_owner" \] && \[ -f "\$marker" \]; then\n'
+            r'if \[ -f "\$marker" \]; then\n'
             r'\s+recorded_owner="\$\(marker_owner_user\)"',
             body,
         ), body
         assert '"owner_user": "${recorded_owner}"' in body
 
-    def test_the_per_user_half_bounces_the_daemon_around_a_real_migration(self):
-        # It runs against a *live* separated install by construction now: the
-        # postinst calls it moments after the machine half started the unit.
-        # Merging a legacy ~/.privacyfence into a directory the running daemon
-        # has open would corrupt whichever copy lost.
+    def test_the_per_user_half_leaves_a_running_daemon_alone(self):
+        # With nothing to merge into the data directory (ADR 0041), the
+        # per-user half has no reason to stop a daemon the machine half has
+        # just started -- it only adds a group member and rewrites the marker.
         body = re.search(
             r"^cmd_enable_for_user\(\) \{\n(.*?)^\}", self.SCRIPT, re.MULTILINE | re.DOTALL
         ).group(1)
-        assert 'if [ -d "$(legacy_data_dir)" ] && daemon_unit_is_active; then' in body
-        assert 'systemctl stop "$DAEMON_UNIT"' in body
-        assert 'systemctl start "$DAEMON_UNIT"' in body
-        assert body.index("systemctl stop") < body.index("  migrate_data") < body.index(
-            "systemctl start"
-        )
+        assert "systemctl" not in body
+        assert "add_owner_to_service_group" in body
+        assert body.index("\n  apply_layout\n") < body.index("\n  write_marker\n")
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1"
@@ -2757,6 +3178,131 @@ class TestDebPostinstFailurePolicy:
 
             assert result.returncode != 0
             assert "cannot be combined" in result.stderr, result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the Linux installer's own bash")
+class TestLinuxUninstall:
+    """ADR 0042: ``uninstall`` stops and unregisters the service and keeps the
+    data, marker, account and group; ``uninstall --purge`` deletes those too;
+    nothing moves data into a home directory. The .deb wires ``remove`` to
+    the first and ``purge`` to the second's steps, written out in postrm.
+
+    The behavioural tests run the script's real ``cmd_uninstall`` with
+    ``systemctl``/``getent``/``userdel``/``groupdel`` stubbed on ``PATH`` and
+    every path pointed into ``tmp_path``, so no root is needed."""
+
+    SCRIPT = INSTALLERS["linux"].read_text(encoding="utf-8")
+    POSTRM = (REPO_ROOT / "debian" / "postrm").read_text(encoding="utf-8")
+
+    @classmethod
+    def _function(cls, name: str) -> str:
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", cls.SCRIPT, re.MULTILINE | re.DOTALL)
+        # ...or a one-liner, which service_account_exists() and its sibling are.
+        match = match or re.search(rf"^{name}\(\) \{{ .*\}}$", cls.SCRIPT, re.MULTILINE)
+        assert match is not None, f"no {name}() in the Linux installer"
+        return match.group(0)
+
+    def _run(self, tmp_path: Path, *, purge: bool) -> tuple[Path, Path, list[str]]:
+        root = tmp_path / "var-lib-privacyfence"
+        (root / "authority" / "config").mkdir(parents=True)
+        (root / "authority" / "config" / "settings.yaml").write_text("x: 1\n", encoding="utf-8")
+        (root / "privilege-separation.json").write_text("{}", encoding="utf-8")
+        units = tmp_path / "etc"
+        units.mkdir()
+        unit = units / "privacyfence-daemon.service"
+        companion = units / "privacyfence-companion.desktop"
+        unit.write_text("[Unit]\n", encoding="utf-8")
+        companion.write_text("[Desktop Entry]\n", encoding="utf-8")
+        home = tmp_path / "home"
+        home.mkdir()
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        log = tmp_path / "calls.log"
+        for tool in ("systemctl", "getent", "userdel", "groupdel"):
+            stub = bin_dir / tool
+            stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> "$CALL_LOG"\nexit 0\n', encoding="utf-8")
+            stub.chmod(0o755)
+
+        script = "\n".join([
+            "set -euo pipefail",
+            "note() { :; }",
+            "warn() { :; }",
+            "require_linux() { :; }",
+            "require_root() { :; }",
+            f"SYSTEM_ROOT={shlex.quote(str(root))}",
+            "SERVICE_ACCOUNT=privacyfence SERVICE_GROUP=privacyfence",
+            "DAEMON_UNIT=privacyfence-daemon.service",
+            f"DAEMON_UNIT_PATH={shlex.quote(str(unit))}",
+            f"COMPANION_AUTOSTART_PATH={shlex.quote(str(companion))}",
+            f"PURGE={1 if purge else 0}",
+            self._function("service_account_exists"),
+            self._function("service_group_exists"),
+            self._function("uninstall_services"),
+            self._function("purge_data_and_account"),
+            self._function("cmd_uninstall"),
+            "cmd_uninstall",
+        ])
+        env = {
+            **os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "CALL_LOG": str(log), "HOME": str(home),
+        }
+        subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, timeout=30)
+        calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+        assert not any(home.iterdir()), "uninstall wrote into a home directory"
+        assert not unit.exists() and not companion.exists()
+        return root, home, calls
+
+    def test_uninstall_stops_the_service_and_keeps_the_data(self, tmp_path):
+        root, _home, calls = self._run(tmp_path, purge=False)
+
+        assert "systemctl disable --now privacyfence-daemon.service" in calls
+        assert "systemctl daemon-reload" in calls
+        assert (root / "authority" / "config" / "settings.yaml").read_text(encoding="utf-8") == "x: 1\n"
+        assert (root / "privilege-separation.json").is_file()
+        assert not any(call.startswith(("userdel", "groupdel")) for call in calls), calls
+
+    def test_uninstall_purge_also_deletes_the_data_account_and_group(self, tmp_path):
+        root, _home, calls = self._run(tmp_path, purge=True)
+
+        assert "systemctl disable --now privacyfence-daemon.service" in calls
+        assert not root.exists()
+        assert "userdel privacyfence" in calls and "groupdel privacyfence" in calls
+        # A group cannot be deleted while it is still an account's primary one.
+        assert calls.index("userdel privacyfence") < calls.index("groupdel privacyfence")
+
+    def test_purge_is_refused_on_any_other_command(self):
+        result = subprocess.run(
+            ["bash", str(INSTALLERS["linux"]), "enable", "--purge"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        assert result.returncode != 0
+        assert "--purge only applies to uninstall" in result.stderr, result.stderr
+
+    def test_the_postrm_purges_what_the_script_would(self):
+        # dpkg deletes the tool before postrm runs, so postrm writes the purge
+        # steps out; this keeps its path and names the script's own.
+        purge_case = re.search(r"\bpurge\)(.*?);;", self.POSTRM, re.DOTALL)
+        assert purge_case is not None, "no `purge)` case in debian/postrm"
+        body = purge_case.group(1)
+        root = re.search(r'^SYSTEM_ROOT="([^"]+)"$', self.SCRIPT, re.MULTILINE).group(1)
+        account = re.search(r'^SERVICE_ACCOUNT="([^"]+)"$', self.SCRIPT, re.MULTILINE).group(1)
+        group = re.search(r'^SERVICE_GROUP="([^"]+)"$', self.SCRIPT, re.MULTILINE).group(1)
+        assert root == str(privilege_separation.LINUX_SYSTEM_ROOT)
+        assert f"rm -rf {root}\n" in body
+        assert f"userdel {account} " in body
+        assert f"groupdel {group} " in body
+        assert body.index("userdel") < body.index("groupdel")
+
+    def test_the_postrm_keeps_the_data_on_remove(self):
+        remove_case = re.search(r"^    remove\)(.*?);;", self.POSTRM, re.MULTILINE | re.DOTALL)
+        assert remove_case is not None, "no `remove)` case in debian/postrm"
+        assert remove_case.group(1).strip() == ""
+
+    def test_neither_maintainer_script_reaches_into_a_home_directory(self):
+        for name in ("prerm", "postrm"):
+            body = (REPO_ROOT / "debian" / name).read_text(encoding="utf-8").split("set -e", 1)[1]
+            assert "$HOME" not in body and "~/" not in body and "/home" not in body, name
 
 
 _NET_LOCALGROUP_OUTPUT = """\
@@ -3721,12 +4267,14 @@ class TestEnforceSeparation:
 
 class TestDataDirLogFilesReleased:
     """privacyfence/privacyfence#599's third defect: the elevated ``enable``
-    moves the data directory out from under the process that asked for it.
+    used to move the data directory out from under the process that asked
+    for it. It no longer moves anything (ADR 0041); the release-and-repoint
+    around it stays, and so do these tests of it.
 
     ``enforce_separation()`` runs from inside a packaged daemon that has
     already called ``daemon_main.setup_logging()``, so
     ``<data_dir>/logs/privacyfence.log`` is open for append in that very
-    process for the whole elevated run -- and Windows answers a move of a
+    process for the whole elevated run -- and Windows answered a move of a
     directory holding an open file with a sharing violation rather than a
     POSIX rename. The observed failure is quoted in
     ``_data_dir_log_files_released()``'s own docstring.

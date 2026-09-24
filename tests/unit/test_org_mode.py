@@ -88,14 +88,12 @@ class TestServerConfigFromOrgConfig:
         assert config.tls_configured is False
 
 
-class TestDefaultsMatchLocalModePosture:
-    def test_local_mode_default_bind_host_is_loopback_named(self):
-        # D1 (§15/§10.2): "served on localhost, not a bare 127.0.0.1" --
-        # this default is what a caller gets if it ever asked ServerConfig
-        # for local-mode-shaped values (nothing does today; daemon_main.py
-        # keeps its own hardcoded "localhost" for local mode, unchanged --
-        # but this default has to keep agreeing with it).
-        assert org_mode.ServerConfig().bind_host == "localhost"
+class TestDefaults:
+    def test_default_bind_host_is_loopback(self):
+        # An org bundle with no "bind_host" must never listen on the
+        # network: the same 127.0.0.1 scripts/build_org_bundle.py writes
+        # by default (test_build_org_bundle.py pins the two together).
+        assert org_mode.ServerConfig().bind_host == "127.0.0.1"
 
     def test_default_has_no_tls(self):
         assert org_mode.ServerConfig().tls_configured is False

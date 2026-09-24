@@ -40,18 +40,20 @@ import time
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from privacyfence import approval_ui, auto_accept, gate
 from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.pii_detector import init_pii_detection
-from privacyfence.policy import compat as policy_compat
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import propose as policy_propose
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import TOOL_REGISTRY
 from privacyfence.web_approval_ui import WebApprovalUI
+
+from ..helpers import policy_rules
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -116,15 +118,10 @@ class FakeEvaluator:
         return (ok, rule, rule if ok else "")
 
 
-def install_rules(rules_config: dict) -> None:
-    """Compile a v1-shaped ``{operation_key: [{"rule": name, "value": value}]}`` config into
-    real v2 ``PolicyRule``s (v2 scope predicates keep v1's rule names -- ``policy/scopes.py``'s
-    own docstring) and install them as the current principal's hot-reloaded rule set, exactly the
-    way ``daemon_main.py``'s own startup migration does. Used by the handful of classes below that
-    exercise real rule-matching rather than ``FakeEvaluator``'s canned verdict (P9: there's no
-    more separate ``AutoAcceptEvaluator`` to construct for this)."""
-    compiled = policy_compat.compile_rules(rules_config)
-    auto_accept.set_policy_v2_store_rules(policy_store.merge_rules(compiled))
+def install_rules(table: dict) -> None:
+    """Install ``policy_rules(table)`` as the current principal's hot-reloaded rule set -- what
+    ``gate._evaluate_auto_accept`` reads via ``auto_accept.get_policy_v2_store_rules()``."""
+    auto_accept.set_policy_v2_store_rules(policy_rules(table))
 
 
 def _scope(predicate: str, *, connector: str | None = None, verb=None):
@@ -342,7 +339,7 @@ class TestRuleIdAttribution:
     """
 
     async def test_matched_v2_store_rule_gets_its_own_canonical_id(self, monkeypatch, audit_dir):
-        install_rules({"gmail.read_message": [{"rule": "always_allow"}]})
+        install_rules({"gmail.read_message": [{"predicate": "always_allow"}]})
 
         result = await gate.gated_call(**base_kwargs())
 
@@ -379,7 +376,7 @@ class TestRuleIdAttribution:
         # top-level check see an empty store and the in-branch recheck see the real (installed)
         # one, so this exercises that second call site's own rule_id threading specifically, not
         # just the first (outer) one every other test here reaches.
-        install_rules({"gmail.read_message": [{"rule": "always_allow"}]})
+        install_rules({"gmail.read_message": [{"predicate": "always_allow"}]})
         real_rules = auto_accept.get_policy_v2_store_rules()
         calls = []
 
@@ -402,7 +399,7 @@ class TestRuleIdAttribution:
 
     async def test_write_gates_own_race_recheck_also_carries_a_rule_id(self, monkeypatch, audit_dir):
         # The popup/write branch's own version of the review branch's re-check above.
-        install_rules({"sheets.write_range": [{"rule": "always_allow"}]})
+        install_rules({"sheets.write_range": [{"predicate": "always_allow"}]})
         real_rules = auto_accept.get_policy_v2_store_rules()
         calls = []
 
@@ -994,221 +991,6 @@ class TestAcceptAllWrites:
         assert result is FILTERED
 
 
-class TestProposeRuleChange:
-    """gate.propose_rule_change() -- the deprecated v1-shaped bridge alias for
-    propose_policy_change() (P9): translates target="rule"/"grant" into real v2
-    add_policy_v2_rules()/remove_policy_v2_rule() writes instead of the old
-    auto_accept_rules/auto_accept_grants sections -- see gate.py's own
-    _rules_for_grant/_narrow_or_remove_v2_rule/_remove_v2_grant helpers for exactly how.
-    Exercised here against the real on-disk v2 store (like
-    test_gate_real_evaluator.py's own accept-all tests) rather than mocked, since the
-    translation logic itself -- not just the confirm/deny state machine -- is what's
-    under test. Every proposal reaches the same show_rule_confirmation_popup() dialog;
-    there is no auto-accept short-circuit and no silent no-op for a duplicate proposal --
-    confirming again is cheap, unlike gated_call's regular path."""
-
-    @pytest.fixture(autouse=True)
-    def _setup(self, tmp_path, monkeypatch):
-        self._config_path = tmp_path / "settings.yaml"
-        self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
-        auto_accept.init_config_path(str(self._config_path))
-        auto_accept.set_policy_v2_store_rules([])
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
-
-    def teardown_method(self):
-        auto_accept.set_policy_v2_store_rules([])
-
-    async def test_the_dialog_it_raises_is_marked_sensitive(self, monkeypatch):
-        """The deprecated alias reaches the same dialog as
-        ``propose_policy_change`` and is reachable by the same caller, so it
-        carries the same flag -- see that tool's own test of this, and
-        web/routes_approvals.py's module docstring."""
-        seen = {}
-
-        def confirm(description, *, sensitive=False):
-            seen["sensitive"] = sensitive
-            return True
-
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", confirm)
-        await gate.propose_rule_change(
-            target="rule", operation="add", reason="x",
-            operation_key="gmail.read_message", rule_name="trusted_sender_domain",
-            value=["example.com"],
-        )
-        assert seen["sensitive"] is True
-
-    async def test_confirmed_rule_add_persists_and_audits(self, audit_dir):
-        result = await gate.propose_rule_change(
-            target="rule", operation="add", reason="Trusting example.com.",
-            operation_key="gmail.read_message", rule_name="trusted_sender_domain", value=["example.com"],
-        )
-
-        assert result["confirmed"] is True
-        assert result["changed"] is True
-        rules = auto_accept.get_policy_v2_rules()
-        assert any(
-            r.predicate == "trusted_sender_domain" and r.value == ["example.com"]
-            and "gmail.read_message" in r.operations
-            for r in rules
-        )
-        entries = read_audit_entries(audit_dir)
-        assert entries[0]["decision"] == "rule_changed_via_bridge_proposal"
-        assert entries[0]["claude_reason"] == "Trusting example.com."
-
-    async def test_confirmed_rule_remove_persists_and_audits(self, audit_dir):
-        await gate.propose_rule_change(
-            target="rule", operation="add", reason="setup",
-            operation_key="sheets.format_range", rule_name="approved_sandbox_folder", value=["folder1"],
-        )
-
-        result = await gate.propose_rule_change(
-            target="rule", operation="remove", reason="Cleaning up.",
-            operation_key="sheets.format_range", rule_name="approved_sandbox_folder", value=["folder1"],
-        )
-
-        assert result["confirmed"] is True
-        assert result["changed"] is True
-        assert auto_accept.get_policy_v2_rules() == []
-        entries = read_audit_entries(audit_dir)
-        assert entries[-1]["decision"] == "rule_removed_via_bridge_proposal"
-
-    async def test_confirmed_rule_remove_that_changes_nothing_audits_as_no_op(self, audit_dir):
-        # Nothing was ever added for this (operation_key, rule_name, value) -- the human still
-        # said yes, but config didn't actually change, so this must not be recorded as though a
-        # removal happened.
-        result = await gate.propose_rule_change(
-            target="rule", operation="remove", reason="Cleaning up.",
-            operation_key="sheets.format_range", rule_name="approved_sandbox_folder", value=["folder1"],
-        )
-
-        assert result["confirmed"] is True
-        assert result["changed"] is False
-        entries = read_audit_entries(audit_dir)
-        assert entries[0]["decision"] == "bridge_proposal_no_op"
-
-    async def test_rule_update_removes_old_value_then_adds_new_one(self, audit_dir):
-        await gate.propose_rule_change(
-            target="rule", operation="add", reason="setup",
-            operation_key="gmail.read_message", rule_name="trusted_sender_domain", value=["a.com"],
-        )
-
-        await gate.propose_rule_change(
-            target="rule", operation="update", reason="Replacing.",
-            operation_key="gmail.read_message", rule_name="trusted_sender_domain",
-            value=["b.com"], old_value=["a.com"],
-        )
-
-        rules = auto_accept.get_policy_v2_rules()
-        assert [r.value for r in rules] == [["b.com"]]
-
-    async def test_confirmed_grant_add_persists_and_audits(self, audit_dir):
-        result = await gate.propose_rule_change(
-            target="grant", operation="add", reason="Trusting the sandbox folder.",
-            connector="drive", config_key="sandbox_folders", resource_id="folder1",
-            name="Team sandbox", capabilities={"write": True},
-        )
-
-        assert result["confirmed"] is True
-        assert result["changed"] is True
-        rules = auto_accept.get_policy_v2_rules()
-        assert any(r.predicate == "approved_sandbox_folder" and r.value == ["folder1"] for r in rules)
-        entries = read_audit_entries(audit_dir)
-        assert entries[0]["decision"] == "grant_changed_via_bridge_proposal"
-        assert entries[0]["auto_accept_rule"] == "folder1"
-
-    async def test_confirmed_grant_remove_persists_and_audits(self, audit_dir):
-        await gate.propose_rule_change(
-            target="grant", operation="add", reason="setup",
-            connector="drive", config_key="sandbox_folders", resource_id="folder1",
-            capabilities={"write": True},
-        )
-
-        result = await gate.propose_rule_change(
-            target="grant", operation="remove", reason="No longer needed.",
-            connector="drive", config_key="sandbox_folders", resource_id="folder1",
-        )
-
-        assert result["confirmed"] is True
-        assert result["changed"] is True
-        assert auto_accept.get_policy_v2_rules() == []
-        entries = read_audit_entries(audit_dir)
-        assert entries[-1]["decision"] == "grant_removed_via_bridge_proposal"
-
-    async def test_confirmed_grant_remove_that_changes_nothing_audits_as_no_op(self, audit_dir):
-        result = await gate.propose_rule_change(
-            target="grant", operation="remove", reason="No longer needed.",
-            connector="drive", config_key="sandbox_folders", resource_id="folder1",
-        )
-
-        assert result["confirmed"] is True
-        assert result["changed"] is False
-        entries = read_audit_entries(audit_dir)
-        assert entries[0]["decision"] == "bridge_proposal_no_op"
-
-    async def test_unknown_rule_name_raises_value_error_without_showing_a_popup(self, monkeypatch):
-        # rule_name comes straight from Claude here, unlike the "Always
-        # allow" flow (which only ever offers names proposals_for() itself
-        # produces) -- a misspelled/made-up name must be rejected up front,
-        # not persisted as a rule that silently never matches anything.
-        called = []
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: called.append(1) or True)
-
-        with pytest.raises(ValueError, match="Unknown auto-accept rule"):
-            await gate.propose_rule_change(
-                target="rule", operation="add", reason="x",
-                operation_key="gmail.read_message", rule_name="made_up_rule", value="x",
-            )
-
-        assert called == []
-
-    async def test_unknown_grant_resource_type_raises_value_error(self):
-        with pytest.raises(ValueError, match="Unknown grant resource type"):
-            await gate.propose_rule_change(
-                target="grant", operation="add", reason="x",
-                connector="nope", config_key="nope", resource_id="x",
-            )
-
-    async def test_unknown_target_raises_value_error(self):
-        with pytest.raises(ValueError, match="Unknown target"):
-            await gate.propose_rule_change(target="nope", operation="add", reason="x")
-
-    async def test_unknown_operation_raises_value_error(self):
-        with pytest.raises(ValueError, match="Unknown operation"):
-            await gate.propose_rule_change(
-                target="rule", operation="destroy", reason="x",
-                operation_key="gmail.read_message", rule_name="i_am_sender",
-            )
-
-    async def test_declined_confirmation_raises_and_audits_rejected_without_applying(self, monkeypatch, audit_dir):
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: False)
-
-        with pytest.raises(RuntimeError, match="denied by user"):
-            await gate.propose_rule_change(
-                target="rule", operation="add", reason="x",
-                operation_key="gmail.read_message", rule_name="i_am_sender",
-            )
-
-        assert auto_accept.get_policy_v2_rules() == []
-        entries = read_audit_entries(audit_dir)
-        assert entries[0]["decision"] == "rejected"
-
-    async def test_unattended_connection_denies_without_showing_a_popup(self, monkeypatch, audit_dir):
-        called = []
-        monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: called.append(1) or True)
-
-        with gate.unattended_scope(True):
-            with pytest.raises(RuntimeError, match="unattended session"):
-                await gate.propose_rule_change(
-                    target="rule", operation="add", reason="x",
-                    operation_key="gmail.read_message", rule_name="i_am_sender",
-                )
-
-        assert called == []
-        assert auto_accept.get_policy_v2_rules() == []
-        entries = read_audit_entries(audit_dir)
-        assert entries[0]["decision"] == "denied_unattended"
-
-
 class TestPreflightAutoAccept:
     """gate.preflight_auto_accept() -- backs privacyfence_check_policy's matched_rule_id (P7),
     now reading the v2 store directly (P9: no more evaluator argument, no more v1/v2 shadow left
@@ -1228,7 +1010,7 @@ class TestPreflightAutoAccept:
         assert (verdict, matched_rule, matched_rule_id) == ("requires_review", "", "")
 
     def test_v1_args_only_match_reports_the_same_id_for_both_fields(self):
-        install_rules({"gmail.create_draft": [{"rule": "to_is_myself"}]})
+        install_rules({"gmail.create_draft": [{"predicate": "to_is_myself"}]})
         verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
             "gmail.create_draft", {"to": "me@example.com"}, "me@example.com",
         )
@@ -1242,7 +1024,7 @@ class TestPreflightAutoAccept:
     def test_data_dependent_v1_rule_is_unknown_with_no_ids(self):
         # approved_folder needs the fetched file's parent_ids -- data-dependent, so preflight can
         # never resolve it from args alone.
-        install_rules({"drive.read_file_contents": [{"rule": "approved_folder", "value": ["f1"]}]})
+        install_rules({"drive.read_file_contents": [{"predicate": "approved_folder", "value": ["f1"]}]})
         verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
             "drive.read_file_contents", {},
         )
@@ -1280,15 +1062,12 @@ class TestPreflightAutoAccept:
 
 
 class TestProposePolicyChange:
-    """gate.propose_policy_change() -- the P7 bridge writer for the v2 auto_accept: section,
-    kept distinct from propose_rule_change() (v1, kept as a deprecated alias) rather than folded
-    into it: the two persist into different config sections. Unchanged by P9 (it was already
-    v2-native from an earlier phase)."""
+    """gate.propose_policy_change() -- the MCP bridge writer for the auto_accept: section."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path, monkeypatch):
         self._config_path = tmp_path / "settings.yaml"
-        self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        self._config_path.write_text("auto_accept: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(self._config_path))
         auto_accept.set_policy_v2_store_rules([])
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
@@ -1296,17 +1075,16 @@ class TestProposePolicyChange:
     def teardown_method(self):
         auto_accept.set_policy_v2_store_rules([])
 
-    async def test_confirmed_add_persists_to_the_v2_section_not_v1(self, audit_dir):
+    async def test_confirmed_add_persists_to_the_auto_accept_section(self, audit_dir):
         result = await gate.propose_policy_change(
             operation="add", reason="Trusting the sandbox folder.",
             group="drive.folder", value=["folder1"], verbs=["read", "download"],
         )
         assert result["confirmed"] is True
         assert result["changed"] is True
-        text = self._config_path.read_text(encoding="utf-8")
-        assert "auto_accept:" in text
-        assert "approved_folder" in text
-        assert "auto_accept_rules: {}" in text  # v1 section left untouched
+        cfg = yaml.safe_load(self._config_path.read_text(encoding="utf-8"))
+        assert cfg["auto_accept"]["rules"][0]["predicate"] == "approved_folder"
+        assert "migrated_to_policy_v2" not in cfg
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "policy_rule_changed_via_bridge_proposal"
 
@@ -1866,6 +1644,29 @@ class TestWriteContentFlags:
             details_text="Please wire the deposit to DE89370400440532013000.",
         ))
 
+        assert captured["write_content_flags"] == []
+
+
+    async def test_write_content_scan_text_replaces_details_for_the_flags_only(self, monkeypatch, audit_dir):
+        # gmail's draft tools show the user's signature (their own phone
+        # number) in details but scan only the drafted body.
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        captured = {}
+
+        def fake_show_popup(title, preview, details, temp_accept_eligible=False, claude_reason="", write_content_flags=None, seen_count=0, connector="", accept_all_choices=None, preview_bytes=b"", preview_mime_type="", preview_tables=None, preview_blocks=None, table_only=False, upload_forced=False, layout="narrow", tool=""):
+            captured["details"] = details
+            captured["write_content_flags"] = write_content_flags
+            return "accept", None
+
+        monkeypatch.setattr(gate, "show_popup", fake_show_popup)
+
+        await gate.gated_call(**base_kwargs(
+            gate="popup", tool="gmail_create_draft",
+            details_text="See you then.\n\n-- \nIBAN DE89370400440532013000",
+            write_content_scan_text="See you then.",
+        ))
+
+        assert "DE89370400440532013000" in captured["details"]
         assert captured["write_content_flags"] == []
 
 
@@ -3059,7 +2860,7 @@ class TestApprovedObjectTypesNeverPopsUp:
 
     async def test_approved_object_type_read_never_shows_a_popup(self, monkeypatch, audit_dir):
         install_rules({
-            "salesforce.read_record": [{"rule": "approved_object_types", "value": ["Account"]}],
+            "salesforce.read_record": [{"predicate": "approved_object_types", "value": ["Account"]}],
         })
 
         def fail_if_called(*a, **k):
@@ -3085,7 +2886,7 @@ class TestApprovedObjectTypesNeverPopsUp:
         # the normal interactive path -- proving the guard above is actually
         # meaningful (it can be reached) and not vacuously always-skipped.
         install_rules({
-            "salesforce.read_record": [{"rule": "approved_object_types", "value": ["Account"]}],
+            "salesforce.read_record": [{"predicate": "approved_object_types", "value": ["Account"]}],
         })
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
         popup_calls = []
@@ -3702,3 +3503,58 @@ class TestConfigurePopupExecutor:
             assert seen["thread"].startswith("pf-popup")
         finally:
             gate._popup_executor.shutdown(wait=False)
+
+
+class TestAgentAttribution:
+    """AGT-2: a gated call's audit row carries the agent in scope; an expiry-sweep row carries
+    the agent that created the approval, not the one whose call happens to run the sweep."""
+
+    async def test_gated_call_row_carries_scoped_agent(self, monkeypatch, audit_dir):
+        from privacyfence.agent_identity import AgentSource, agent_scope, identify
+
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "i_am_sender")))
+        with agent_scope(identify("claude-code", "2.1.0", AgentSource.CLIENT_INFO)):
+            assert await gate.gated_call(**base_kwargs()) is FILTERED
+
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["agent_id"], entry["agent_name"], entry["agent_version"], entry["agent_source"]) == (
+            "claude-code", "Claude Code", "2.1.0", "client_info",
+        )
+
+    async def test_gated_call_without_scope_is_unknown(self, monkeypatch, audit_dir):
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "i_am_sender")))
+        await gate.gated_call(**base_kwargs())
+
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["agent_id"] == "" and entry["agent_source"] == ""
+
+    @pytest.mark.parametrize("ledgered", [False, True])
+    def test_expiry_sweep_row_carries_the_creating_agent(self, audit_dir, ledgered):
+        from privacyfence.agent_identity import AgentSource, agent_scope, current_agent, identify
+
+        x = identify("claude-code", "", AgentSource.CLIENT_INFO)
+        y = identify("openai-mcp", "1.0", AgentSource.OAUTH_CLIENT)
+        registry = PendingApprovalRegistry(hold_window=0.0, pending_ttl=300.0, ledger_ttl=300.0)
+        with agent_scope(y):
+            approval, created = registry.register_or_coalesce(
+                dedupe_key="k", connector="gmail", tool="gmail_get_message", gate_kind="review",
+                request_id="req-y", summary="s", tool_name="Read Gmail message",
+            )
+        assert created and approval.agent == y
+        if ledgered:
+            registry.answer(approval.id, "accept")
+            registry.finalize(approval.id, "accept")
+            approval.ledger_expires_at = 0.0
+        else:
+            approval.expires_at = 0.0
+
+        with agent_scope(x):
+            gate._pop_registry_expirations(registry)
+            assert current_agent() == x  # the sweep's own scope is restored
+
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "expired"
+        assert entry["request_id"] == "req-y"
+        assert (entry["agent_id"], entry["agent_name"], entry["agent_version"], entry["agent_source"]) == (
+            "chatgpt", "ChatGPT", "1.0", "oauth_client",
+        )

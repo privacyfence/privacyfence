@@ -161,13 +161,9 @@ WINDOWS_SERVICE_ACCOUNT_NAME = f"NT SERVICE\\{WINDOWS_SERVICE_NAME}"
 # a member of its own group -- the two principals are always listed
 # separately in every ACL and pipe DACL this phase writes.
 WINDOWS_SERVICE_GROUP_NAME = "PrivacyFenceUsers"
-# Windows' own "startup wiring inverts" (ADR 0002): the Scheduled Task the
-# installer registers keeps its name and starts the *companion* on a
-# separated install, while the daemon becomes the service above. The
-# installer script disables the daemon task rather than deleting it, so
-# ``disable`` can put it back and the uninstaller's own
-# ``schtasks /delete`` still finds it.
-WINDOWS_DAEMON_TASK_NAME = "PrivacyFence"
+# Windows' own "startup wiring inverts" (ADR 0002): the daemon is the
+# service above, and the only Scheduled Task is the one that starts the
+# *companion* at sign-in.
 WINDOWS_COMPANION_TASK_NAME = "PrivacyFenceCompanion"
 
 # Where a separated install keeps everything ``paths.data_dir()`` used to put
@@ -1072,12 +1068,15 @@ def _authority_owner_problem(state: Separation) -> str | None:
 # in this module the same way it always has.
 #
 # macOS's own package-manager-equivalent hook is the .pkg's postinstall (#428
-# D2), which the DMG now carries and which every ordinary macOS install goes
-# through -- so this prompt is the fallback rather than the usual path: an
-# install that never ran the installer (an app bundle copied off another
-# machine, a source/pip run) still has nothing root-context behind it, and
-# nothing short of a human answering an admin password prompt can create a
-# system account or a LaunchDaemon. This is that prompt.
+# D2), which the DMG carries and which is the only way PrivacyFence is
+# installed on macOS -- so this prompt is the fallback rather than the usual
+# path. It is still reachable on a fresh install (ADR 0041 decision 4 keeps
+# it for that reason): the postinstall never fails the package install, so
+# an `enable --auto` that did not finish there leaves the app installed and
+# unseparated, and the .mcpb's shim then starts the packaged daemon directly
+# (mcpb/shim/src/daemon.ts spawns it whenever there is no marker). Nothing
+# short of a human answering an admin password prompt can create a system
+# account or a LaunchDaemon from there. This is that prompt.
 #
 # ADR 0003 decision 6 removed the one-shot marker this used to write
 # (``AUTO_ENABLE_ATTEMPTED_MARKER_NAME``): a decline used to be respected
@@ -1272,9 +1271,11 @@ def _run_auto_enable_macos(script: Path) -> None:
 #
 # Decisions 2-5 cover the installs we ship: a .pkg, a Windows installer run
 # and a .deb postinst that each separate at install time. This is the
-# backstop for the installs that exist anyway -- a pre-4.2 DMG install
-# upgrading in place, a restored backup, a hand-copied .app, an install where
-# `disable` was run and forgotten. Called from daemon_main.main(), after
+# backstop for the installs that exist anyway -- a .pkg whose postinstall
+# `enable --auto` did not finish (it never fails the install), a restored
+# backup, a hand-copied .app, a package whose separation was purged by hand
+# while its files stayed (on Linux, `privacyfence-privilege-separation
+# uninstall --purge`, ADR 0042). Called from daemon_main.main(), after
 # check_runtime_identity() and before the daemon opens /mcp or the approvals
 # UI to anything.
 #
@@ -1522,29 +1523,20 @@ def _log_handlers_under(directory: Path) -> list[logging.FileHandler]:
 @contextlib.contextmanager
 def _data_dir_log_files_released() -> Iterator[None]:
     """Close the log files this process holds open inside the data directory
-    the elevated ``enable`` is about to **move**, and let them reopen
-    afterwards.
+    around the elevated ``enable``, and point them at wherever the data
+    directory is afterwards.
 
-    The third sighting of one defect, and the first where the process
-    holding the file is the one that asked for the move. ``disable`` moved
-    ``%ProgramData%\\PrivacyFence`` out from under a service it had only
-    *asked* to stop (fixed in 1d6b13f) and out from under a companion whose
-    task it had deleted without ending the process; ``enable`` moves
-    ``%LOCALAPPDATA%\\PrivacyFence`` out from under **its own caller** --
     ``enforce_separation()`` runs from inside a packaged daemon that has
-    already called ``daemon_main.setup_logging()``, so
-    ``logs/privacyfence.log`` is open for append in this very process for
-    the whole elevated run. Windows has no POSIX rename-over-open-files
-    escape hatch, so that is a sharing violation every time::
-
-        -> moving C:\\Users\\...\\AppData\\Local\\PrivacyFence to C:\\ProgramData\\PrivacyFence
-        Move-Item : The process cannot access the file because it is being used by another process.
-            + CategoryInfo : WriteError: (privacyfence.log:FileInfo) [Move-Item], IOException
-
-    -- after which ``Undo-PartialEnable`` rolls the whole thing back and
-    decision 6 refuses to serve, which is how a Scheduler-started daemon
-    on a hosted runner (and on any machine whose install is not separated
-    yet) produced no control pipe at all.
+    already called ``daemon_main.setup_logging()``, so ``logs/privacyfence.log``
+    is open for append in this very process for the whole elevated run.
+    ``enable`` used to *move* that directory, and on Windows, which has no
+    POSIX rename-over-open-files escape hatch, that was a sharing violation
+    every time (``Move-Item : The process cannot access the file because it
+    is being used by another process``), after which ``Undo-PartialEnable``
+    rolled the whole thing back and decision 6 refused to serve. ``enable``
+    no longer moves anything (ADR 0041), but releasing the handles costs
+    nothing and keeps the elevated run from depending on what this process
+    has open.
 
     Nothing is lost while the window is open: ``FileHandler.emit()``
     reopens ``baseFilename`` by itself whenever ``stream`` is ``None`` --
@@ -1661,9 +1653,10 @@ def _run_full_auto_enable_non_macos() -> None:
                 return
             argv = [pkexec, str(script), "enable", "--auto"]
         try:
-            # The elevated run *moves* this process's own data directory, so
-            # nothing of ours may be holding a file in it while it does --
-            # see _data_dir_log_files_released(), and note that it wraps
+            # Nothing of ours may be holding a file in the data directory
+            # while the elevated run lays out the separated one, and the log
+            # handlers have to follow data_dir() afterwards -- see
+            # _data_dir_log_files_released(), and note that it wraps
             # this call alone rather than the function, because a logger
             # call inside the window would simply reopen the file.
             with _data_dir_log_files_released():

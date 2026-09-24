@@ -31,7 +31,7 @@ there, with its footer ``back_link`` intact.
 
 ``PF_WEBAUTHN_JS`` (the base64url <-> ArrayBuffer conversions and the two
 ``navigator.credentials`` wrapper calls) is defined here and imported by
-web/routes_org_approvals.py's own step-up shim rather than duplicated --
+web/routes_approvals.py's own step-up shim rather than duplicated --
 this module owns it only because enrollment is where the ceremony's shape
 first has to exist; there is nothing enrollment-specific about the helpers
 themselves.
@@ -103,7 +103,11 @@ trading it in removes every credential this principal has enrolled, for
 the case webauthn_stepup.py's own module docstring describes (the only
 authenticator lost to a new machine or a wiped TPM, with no IdP in local
 mode to fall back on). See that module's own docstring for the storage
-side of both.
+side of both. Because that trade-in wipes the credential store, the route
+asks the same human-session question approving a decision does (where the
+caller supplies one), spends a per-session and global attempt budget
+(``RecoveryAttemptLimiter``), and audits every refusal as well as every
+success -- see ``recover_credential``'s own docstring.
 """
 from __future__ import annotations
 
@@ -111,7 +115,11 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
+import threading
+import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from html import escape as _esc
 from typing import Any, Callable
@@ -126,6 +134,7 @@ from ..principal import Principal
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import RegistrationChallengeStore, StepUpChallengeStore, WebAuthnError
 from .csp import nonce_for as _csp_nonce_for
+from .session_auth import human_session_required_json
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +145,74 @@ logger = logging.getLogger(__name__)
 # reader grepping either finds the other.
 _ENROLL_CEREMONY = "enroll-credential"
 
-# Shared with web/routes_org_approvals.py's decide-time step-up shim -- see
+# ``recover_credential``'s attempt budget. A recovery code is 64 random bits,
+# so guessing is not the realistic threat; what these bound is a local
+# process (or a browser tab left open) hammering the one route that clears a
+# principal's whole credential store. Per session: a human retyping a code
+# they misread needs a few tries, not dozens. Globally: minting fresh
+# sessions must not reset the budget. Both count every attempt that presents
+# a code, successful or not, over a sliding window of this length.
+RECOVERY_WINDOW_SECONDS = 15 * 60
+RECOVERY_MAX_ATTEMPTS_PER_SESSION = 5
+RECOVERY_MAX_ATTEMPTS_GLOBAL = 20
+
+
+class RecoveryAttemptLimiter:
+    """An in-memory sliding-window limiter for ``POST /security/recover``:
+    at most ``per_key`` attempts per session and ``global_limit`` across all
+    sessions within any ``window_seconds``. Deliberately process-local and
+    unpersisted -- a daemon restart resets it, which costs an attacker a
+    restart they cannot trigger from a session, and there is no other
+    limiter in this package to share. ``clock`` exists for tests."""
+
+    def __init__(
+        self,
+        *,
+        window_seconds: float = RECOVERY_WINDOW_SECONDS,
+        per_key: int = RECOVERY_MAX_ATTEMPTS_PER_SESSION,
+        global_limit: int = RECOVERY_MAX_ATTEMPTS_GLOBAL,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._window = window_seconds
+        self._per_key = per_key
+        self._global_limit = global_limit
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._global: deque[float] = deque()
+        self._by_key: dict[str, deque[float]] = {}
+
+    def _prune(self, stamps: deque[float], now: float) -> None:
+        while stamps and stamps[0] <= now - self._window:
+            stamps.popleft()
+
+    def try_acquire(self, key: str) -> int | None:
+        """Records an attempt for ``key`` and returns ``None`` when it is
+        within budget; otherwise records nothing and returns the whole
+        seconds until the earliest blocking attempt leaves the window (the
+        ``Retry-After`` value)."""
+        with self._lock:
+            now = self._clock()
+            self._prune(self._global, now)
+            for k in list(self._by_key):
+                self._prune(self._by_key[k], now)
+                if not self._by_key[k]:
+                    del self._by_key[k]
+            mine = self._by_key.get(key, deque())
+            # Each full window frees up once its oldest stamp ages out; when
+            # both are full, the request waits for the later of the two.
+            frees_at = [
+                stamps[0] + self._window
+                for stamps, limit in ((mine, self._per_key), (self._global, self._global_limit))
+                if len(stamps) >= limit
+            ]
+            if frees_at:
+                return max(1, math.ceil(max(frees_at) - now))
+            mine.append(now)
+            self._by_key[key] = mine
+            self._global.append(now)
+            return None
+
+# Shared with web/routes_approvals.py's decide-time step-up shim -- see
 # module docstring. Defines window.pfWebauthnCreate(optionsJson) and
 # window.pfWebauthnGet(optionsJson), each returning a Promise of the plain
 # JSON-shaped credential object webauthn_stepup.py's finish_registration()/
@@ -227,6 +303,8 @@ def build_routes(
     nav_items: tuple[tuple[str, str, str], ...] | None = None,
     confirm_first_enrollment: Callable[[], tuple[bool, str]] | None = None,
     deliver_recovery_code: Callable[[str], tuple[bool, str]] | None = None,
+    is_human_session: Callable[[Request], bool] | None = None,
+    recovery_limiter: RecoveryAttemptLimiter | None = None,
 ) -> list[Route]:
     """``resolve_principal``/``check_csrf``/``check_origin`` are the
     mode-specific half of this module (#426 Phase 1) -- org mode's caller
@@ -283,6 +361,24 @@ def build_routes(
     ``confirm_first_enrollment`` is -- what it does is put a dialog in
     front of a human.
 
+    ``is_human_session`` gates ``recover_credential`` only: when given, a
+    request it answers ``False`` for is refused (403, web/session_auth.py's
+    ``human_session_required_json`` body) and audited, the same check web/
+    routes_approvals.py's decide and web/routes_settings.py's sensitive
+    actions make before they act -- trading in a recovery code wipes every
+    enrolled passkey, which is at least as sensitive as either. Local mode
+    passes session_auth.py's ``is_human_session`` on a privilege-separated
+    install, the same ``require_human_session`` line web/server.py draws for
+    those two routes, and ``None`` elsewhere (an unseparated install has no
+    companion that could mint a human session at all). Org mode passes
+    ``None``: every org session was established by an IdP sign-in (web/
+    routes_org_identity.py's ``/login`` is ``OrgSessionStore.create``'s only
+    caller), which is that mode's equivalent of attestation -- the same
+    reason web/routes_approvals.py keeps ``require_human_session``
+    local-only. ``recovery_limiter`` is the attempt budget for that same
+    route (``RecoveryAttemptLimiter``, above); ``None`` builds a fresh one
+    with the module's default window and limits.
+
     ``dev_unseparated_notice`` (ADR 0003 decision 7) is local mode's own
     ``privilege_separation.dev_unseparated_notice()`` result, shown verbatim
     at the top of the page when not ``None``; org mode's caller leaves it
@@ -300,6 +396,7 @@ def build_routes(
     # the other even if the fingerprints were ever to collide.
     enroll_challenges = StepUpChallengeStore()
     origin = issuer_url.rstrip("/")
+    recovery_attempts = recovery_limiter or RecoveryAttemptLimiter()
 
     def _delete_fingerprint(principal_id: str, credential_id: str) -> str:
         payload = f"delete-credential|{principal_id}|{credential_id}"
@@ -585,8 +682,21 @@ def build_routes(
         slate: every credential on file for them is removed, so /security
         lets them enroll a fresh passkey immediately afterward. The code
         itself is single-use (webauthn_stepup.consume_recovery_code) and
-        this always records who spent it, success or not revealing which
-        specific check failed."""
+        every attempt that gets as far as presenting a code is recorded,
+        refused or not.
+
+        Three guards run before the code is checked: the
+        session must be one ``is_human_session`` attributes to a person
+        where the caller supplies that check (``build_routes``' docstring);
+        the attempt must fit ``recovery_attempts``' budget, per session and
+        across all sessions; and a missing code is a 400 that spends
+        nothing. Each refusal after CSRF/origin -- an unattested session, an
+        exhausted budget, a wrong or spent code -- is audited as
+        ``webauthn_recovery_refused`` with the reason in its summary, never
+        the code itself; a successful trade-in stays
+        ``webauthn_recovery_code_used``. Which check a wrong code failed
+        (none on file, already spent, mismatch) is still not revealed, to
+        the caller or in the log -- ``consume_recovery_code`` does not say."""
         principal = resolve_principal(request)
         if principal is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -597,10 +707,34 @@ def build_routes(
         rejected = _check_post(request, payload.get("csrf") if isinstance(payload, dict) else None)
         if rejected is not None:
             return rejected
+        if is_human_session is not None and not is_human_session(request):
+            _audit(
+                principal, "webauthn_recovery_refused",
+                "Recovery code refused: the session was not opened by a person (unattested)",
+            )
+            body, status = human_session_required_json("use a recovery code")
+            return JSONResponse(body, status_code=status)
         code = payload.get("code") if isinstance(payload, dict) else None
         if not isinstance(code, str) or not code.strip():
             return JSONResponse({"error": "missing recovery code"}, status_code=400)
+        retry_after = recovery_attempts.try_acquire(request.cookies.get(session_cookie_name, ""))
+        if retry_after is not None:
+            _audit(
+                principal, "webauthn_recovery_refused",
+                "Recovery code refused: too many recovery attempts, try again later",
+            )
+            return JSONResponse(
+                {
+                    "error": "too_many_attempts",
+                    "message": f"Too many recovery attempts. Try again in {retry_after} seconds.",
+                },
+                status_code=429, headers={"Retry-After": str(retry_after)},
+            )
         if not webauthn_stepup.consume_recovery_code(principal, code):
+            _audit(
+                principal, "webauthn_recovery_refused",
+                "Recovery code refused: invalid or already-used recovery code",
+            )
             return JSONResponse({"error": "invalid or already-used recovery code"}, status_code=401)
         for cred in webauthn_stepup.list_credentials(principal):
             webauthn_stepup.remove_credential(principal, cred.credential_id)
@@ -750,7 +884,9 @@ document.addEventListener('DOMContentLoaded', function () {
         body: JSON.stringify({csrf: csrf, code: code})
       }).then(function (r) { return r.json().then(function (data) { return {ok: r.ok, data: data}; }); })
         .then(function (result) {
-          if (!result.ok) { throw new Error(result.data.error || 'recovery code was not accepted'); }
+          if (!result.ok) {
+            throw new Error(result.data.message || result.data.error || 'recovery code was not accepted');
+          }
           window.location.reload();
         }).catch(function (err) {
           recoverBtn.disabled = false;

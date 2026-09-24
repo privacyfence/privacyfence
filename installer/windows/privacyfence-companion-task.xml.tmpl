@@ -5,50 +5,62 @@ PrivacyFence *companion* autostart Task Scheduler task definition
 
 scripts/windows_privilege_separation.ps1 substitutes __EXEC_PATH__ with the
 real installed PrivacyFenceCompanion.exe path and registers it via
-`schtasks /create /tn "PrivacyFenceCompanion" /xml <file> /f`. It is written
-only by that script's `enable`, never by the installer: an unseparated
-install autostarts the daemon in the user's own session exactly as it always
-has, and the companion stays opt-in there.
+`schtasks /create /tn "PrivacyFenceCompanion" /xml <file> /f`, from its
+`enable`, which the installer runs on every install. It is the only
+Scheduled Task a PrivacyFence install has.
 
 This is ADR 0002's "startup wiring inverts" on Windows. What used to start
-at sign-in was the daemon (installer/privacyfence-task.xml.tmpl, still
-registered by the installer but disabled by `enable`); what starts at
-sign-in now is the companion, while the daemon has become a service running
-as NT SERVICE\PrivacyFence. On this platform the companion is not merely a
-convenience: a service runs in session 0, so the daemon can no longer call
-webbrowser.open() for a Slack/Salesforce/Atlassian OAuth flow, and the
-companion's own control channel is what opens those pages instead
-(ADR 0002 decision 5, the case that decision was originally written for).
+at sign-in was the daemon, from a task of its own that the installer
+registered and `enable` then disabled; that task is gone (ADR 0042's
+cleanup), and the daemon is a service running as NT SERVICE\PrivacyFence.
+On this platform the companion is not merely a convenience: a service runs
+in session 0, so the daemon cannot call webbrowser.open() for a
+Slack/Salesforce/Atlassian OAuth flow, and the companion's own control
+channel is what opens those pages instead (ADR 0002 decision 5).
 
-Structure deliberately mirrors privacyfence-task.xml.tmpl: same schema
-version, same Principal id / Actions Context pairing, same StartBoundary
-convention, same two inverted battery defaults, and the same
-no-encoding-attribute XML declaration. Every one of those is load bearing
-for the reasons that file's own header comment spells out at length; this
-one does not repeat them.
+The structure follows Microsoft's own "any group member" logon trigger
+example, and several details of it are load bearing; the daemon task this
+replaced shipped without each of them at some point, and every time it
+registered without complaint and then did not work:
 
-Three things differ from the daemon's task, and each one is deliberate:
+  * version="1.2" on the root element. MultipleInstancesPolicy and
+    RestartOnFailure are schema 1.2 constructs; a definition that does not
+    declare the version is validated against 1.0, where they do not exist.
+  * id on Principal and the matching Context on Actions. That id reference
+    is what binds the action set to the security context it runs under;
+    without it the GroupId below is bound to nothing that runs.
+  * StartBoundary on the trigger, the point from which it is live at all.
+  * DisallowStartIfOnBatteries and StopIfGoingOnBatteries set to false. Both
+    default to true, which on a laptop means "do not start at sign in on
+    battery" and "stop when unplugged". Only noticed once a test read the
+    definition back out of Task Scheduler (schtasks /query /xml).
+  * No encoding attribute on the XML declaration. schtasks hands the file to
+    MSXML as a Unicode stream, and a declaration that contradicts the stream
+    fails with "(1,40)::ERROR: unable to switch the encoding". The content is
+    pure ASCII, so every reading of it agrees.
 
-  * No TimeTrigger. The daemon's task carries a repeating PT5M trigger as
-    its real crash-restart mechanism, and relies on the single-instance lock
-    (privacyfence.daemon_main._acquire_instance_lock) to make every
-    redundant tick exit immediately. The companion has no such lock, so a
-    repeating trigger would stack up one tray icon per tick. Crash restart
-    for the *daemon* is now the service's own `sc failure` configuration,
-    which is a better mechanism than the one this replaces; for the
-    companion there is no automatic restart, and the Start Menu shortcut the
-    installer creates is the manual one.
+Two things differ from the daemon task, and each one is deliberate:
+
+  * No TimeTrigger. The daemon task carried a repeating PT5M trigger as its
+    crash-restart mechanism and relied on the daemon's single-instance lock
+    to make every redundant tick exit at once. The companion has no such
+    lock, so a repeating trigger would stack up one tray icon per tick.
+    Crash restart for the daemon is the service's own `sc failure`
+    configuration; for the companion there is no automatic restart, and the
+    Start Menu shortcut the installer creates is the manual one.
 
   * MultipleInstancesPolicy is IgnoreNew, not Parallel. Same reason: a
     second tray icon for the same session is never wanted. It stays correct
-    for multiple simultaneously signed-in users, which is what the daemon's
-    task needed Parallel for, because Task Scheduler scopes that policy per
-    task instance and each user's logon produces its own.
+    for multiple simultaneously signed-in users, because Task Scheduler
+    scopes that policy per task instance and each user's logon produces its
+    own.
 
-  * RestartOnFailure stays, unchanged, for the one narrow thing it does: a
-    launch failure right at the LogonTrigger's own moment (a locked file
-    mid-upgrade) is retried three times a minute apart rather than leaving
-    the user with no way into the web UI until their next sign-in.
+RestartOnFailure is not a keep-alive (measured: Task Scheduler logs a
+killed action as a successfully completed task, so it never engages for an
+action that ran and then died). It stays for the one narrow thing it does:
+a launch failure right at the LogonTrigger's own moment (a locked file
+mid-upgrade) is retried three times a minute apart rather than leaving the
+user with no way into the web UI until their next sign-in.
 
 LogonTrigger with no UserId fires for any interactive logon, and Principal
 uses GroupId (the built-in Users group) rather than UserId, so the companion

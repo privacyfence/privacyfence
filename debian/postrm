@@ -1,27 +1,35 @@
 #!/bin/sh
 # postrm for the privacyfence .deb.
 #
-# Explicitly scoped to do nothing beyond a cosmetic icon-cache refresh -- see
-# the now-removed docs/linux-local-deb-packaging-plan.md P2.2:
+# `apt remove` keeps the data: debian/prerm's `remove` case has already run
+# `privacyfence-privilege-separation uninstall`, which stopped the daemon and removed its unit and
+# the companion autostart entry but left /var/lib/privacyfence (connector tokens, policy, audit
+# log, the separation marker) and the privacyfence account and group in place, so a reinstall picks
+# them up. Nothing here or there touches a user's $HOME.
 #
-#   - `apt remove privacyfence` must leave per-user data (~/.privacyfence/ -- config/settings.yaml,
-#     credentials/, the audit log) alone. That data is created by the app itself on first run
-#     (paths.py), never by this package, so it's outside anything dpkg tracks in the first place --
-#     this is automatic as long as this script never reaches into $HOME, which it doesn't.
-#   - `apt purge` conventionally also cleans up *package-owned* system-wide config (e.g. a
-#     hypothetical /etc/privacyfence/), but there isn't any such config here to purge -- the only
-#     package-owned files outside /opt/privacyfence are the autostart .desktop entry and the icon
-#     files, both removed automatically by dpkg itself on purge (they're regular tracked package
-#     files, not conffiles needing maintainer-script cleanup).
+# `apt purge` deletes what `remove` kept (ADR 0042) -- the same three steps as `uninstall --purge`
+# (scripts/linux_privilege_separation.sh's purge_data_and_account). They are written out here rather
+# than called, because dpkg has deleted /usr/sbin/privacyfence-privilege-separation along with the
+# rest of the package's files before it runs postrm; a copy of the tool kept somewhere dpkg does
+# not track just to be callable here would be a second, unowned installation of it.
+# tests/unit/test_privilege_separation.py holds the path and names below to the script's own. The
+# daemon is already stopped by then: dpkg only purges a package whose prerm `remove` has run, in
+# this invocation or an earlier `apt remove`.
 #
-# If a future edit adds real cleanup logic here, it must keep both of the above true: never touch
-# a user's $HOME, and only ever remove files this package itself installed under a system path.
+# Best-effort, like the rest of purge: a leftover account is reported, not fatal.
 set -e
 
 case "$1" in
     remove)
         ;;
     purge)
+        rm -rf /var/lib/privacyfence
+        if getent passwd privacyfence >/dev/null 2>&1; then
+            userdel privacyfence >/dev/null 2>&1 || echo "privacyfence: could not delete the privacyfence account" >&2
+        fi
+        if getent group privacyfence >/dev/null 2>&1; then
+            groupdel privacyfence >/dev/null 2>&1 || echo "privacyfence: could not delete the privacyfence group" >&2
+        fi
         if command -v gtk-update-icon-cache >/dev/null 2>&1; then
             gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
         fi

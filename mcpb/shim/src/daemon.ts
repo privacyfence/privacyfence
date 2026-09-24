@@ -28,43 +28,21 @@ const PATIENT_RETRY_INTERVAL_MS = 2_000; // polling interval once the initial wi
 // which() lookup below), and the one Linux location that isn't
 // (~/.local/bin, a pipx install) is handled by its own fallback further
 // down instead of a single fixed path, since it's relative to homeDir
-// rather than a constant. Windows has no entry here either, for a similar
-// reason -- see windowsDefaultAppPaths below, which checks two locations
-// instead of one fixed path.
+// rather than a constant. Windows has no entry here either, because its
+// location comes from an env var -- see windowsDefaultAppPaths below.
 const DEFAULT_APP_PATH_BY_PLATFORM: Partial<Record<NodeJS.Platform, string>> = {
   darwin: "/Applications/PrivacyFenceApp.app/Contents/MacOS/privacyfence-app",
 };
 const DEFAULT_APP_PATH = DEFAULT_APP_PATH_BY_PLATFORM.darwin as string;
 
-// Windows install locations for privacyfence-app.exe, checked in this
-// order. installer/privacyfence.iss is now PrivilegesRequired=admin, so a
-// fresh install always lands in %ProgramFiles%\PrivacyFence\ -- but it used
-// to default to a non-admin, per-user install (`PrivilegesRequired=lowest`),
-// which Inno Setup's {autopf} resolved to %LOCALAPPDATA%\Programs\
-// PrivacyFence\ instead. A single hardcoded Program-Files-only path here
-// used to leave the shim's own self-heal spawn unable to find the daemon on
-// that non-admin install whenever the Task Scheduler autostart task didn't
-// fire for any reason, producing a silent hang instead of a clear error
-// (privacyfence/privacyfence#410) -- which, as it turned out, was every
-// time on a non-elevated install, since registering a LogonTrigger task at
-// all needs an elevated token (see docs/platform-support.md's "Known open
-// items"), not just an occasional flake. The LOCALAPPDATA fallback stays
-// here regardless, for whatever install an older, lowest-privilege release
-// already made on a machine before it upgrades to one that only offers an
-// admin install. ProgramFiles and LOCALAPPDATA are real env vars Windows
-// always sets; both are still parameterized here (rather than read via
+// Windows install location for privacyfence-app.exe: installer/
+// privacyfence.iss is PrivilegesRequired=admin, so it always lands in
+// %ProgramFiles%\PrivacyFence\. Nothing else is searched -- only the current
+// install layout is supported (ADR 0041). ProgramFiles is a real env var
+// Windows always sets; it is still parameterized here (rather than read via
 // process.env directly) so tests can exercise this on non-Windows CI hosts.
 function windowsDefaultAppPaths(env: NodeJS.ProcessEnv): string[] {
-  const candidates: string[] = [];
-  if (env.ProgramFiles) {
-    candidates.push(path.join(env.ProgramFiles, "PrivacyFence", "privacyfence-app.exe"));
-  }
-  if (env.LOCALAPPDATA) {
-    candidates.push(
-      path.join(env.LOCALAPPDATA, "Programs", "PrivacyFence", "privacyfence-app.exe")
-    );
-  }
-  return candidates;
+  return env.ProgramFiles ? [path.join(env.ProgramFiles, "PrivacyFence", "privacyfence-app.exe")] : [];
 }
 
 function isExecutable(candidate: string): boolean {
@@ -94,7 +72,7 @@ export interface FindDaemonCmdOptions {
    * win32 has no single default, see windowsDefaultAppPaths); overridable
    * for tests on any platform, including win32. */
   defaultAppPath?: string;
-  /** win32 only: environment consulted for ProgramFiles/LOCALAPPDATA when
+  /** win32 only: environment consulted for ProgramFiles when
    * defaultAppPath isn't overridden. Defaults to process.env; overridable
    * for tests since these are real Windows-only env vars that a non-Windows
    * CI host won't have set. */

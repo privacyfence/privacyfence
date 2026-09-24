@@ -1,8 +1,9 @@
 """Shared decide-time WebAuthn step-up sequence (#426 Phase 2's own
 ceremony, factored out here by the approval binder plan's Phase 2 --
-"Consolidate first"): web/routes_approvals.py, web/routes_org_approvals.py
-and web/routes_settings.py each grew their own copy of "begin a challenge,
-store it, verify a resubmitted assertion against it" -- the batch decide
+"Consolidate first"): web/routes_approvals.py's local-mode routes, its
+org-mode routes, and web/routes_settings.py each grew their own copy of
+"begin a challenge, store it, verify a resubmitted assertion against it" --
+the batch decide
 endpoint (approvals.PendingApprovalRegistry.answer_batch, wired up in this
 same phase) would have been a fourth copy had this module not existed
 first.

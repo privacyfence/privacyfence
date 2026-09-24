@@ -30,6 +30,7 @@ from privacyfence import settings_controller as sc
 from privacyfence import webauthn_stepup as wa
 from privacyfence.principal import LOCAL_PRINCIPAL
 from privacyfence.step_up_config import StepUpConfig
+from privacyfence.web import routes_settings as rs
 from privacyfence.web.routes_settings import (
     _ALLOWED_ACTIONS,
     _BESPOKE_EXEMPT_ROUTE_PATHS,
@@ -75,7 +76,7 @@ def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "data_dir", lambda: data_dir_path)
 
     config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept_rules: {}\nconnectors: {}\n", encoding="utf-8")
+    config_path.write_text("auto_accept: {}\nconnectors: {}\n", encoding="utf-8")
 
     connector_host = SimpleNamespace(set_connectors=lambda conns: None)
     return sc.SettingsController(str(config_path), connectors=[], connector_host=connector_host)
@@ -156,28 +157,17 @@ class TestSettingsPage:
         after = c.get("/settings")
         assert 'NOTIFICATIONS_DETAIL = "detailed"' in after.text
 
-    def test_policy_v2_migration_notice_renders_as_a_dismissible_notice(self, controller, client, sessions):
-        # P4 of the policy v2 redesign: settings_page wires
-        # controller.policy_v2_migration_notice_html() into web_shell.wrap's
-        # dismissible_notice_html, not the persistent banner_html strip --
-        # see settings_controller.py's own docstring on why. pf-shell-notice
-        # is that mechanism's own container id/class (web_shell.py); a
-        # config with no v2 migration marker at all must render neither.
-        _authed(client, sessions)
-        assert 'id="pf-shell-notice"' not in client.get("/settings").text
-
+    def test_a_destructive_rule_raises_no_notice(self, controller, client, sessions):
+        # The one-time v1 -> v2 conversion's "your rules were migrated" notice is gone with the
+        # conversion itself (ADR 0041); a destructive rule on its own is not a reason for one.
         cfg = controller._load_config()
-        cfg["migrated_to_policy_v2"] = True
         cfg["auto_accept"] = {
             "version": 2,
             "rules": [{"id": "r-delete", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]}],
         }
         controller._save_config(cfg)
-
-        r = client.get("/settings")
-        assert 'id="pf-shell-notice"' in r.text
-        assert "r-delete" in r.text
-        assert 'data-dismiss-key="pf_policy_v2_migration_dismissed"' in r.text
+        _authed(client, sessions)
+        assert 'id="pf-shell-notice"' not in client.get("/settings").text
 
 
 class TestConnectorsPage:
@@ -325,6 +315,31 @@ class TestActionDispatch:
         # segmented control only ever sends its own three literals).
         assert r.json()["general"]["notifications_detail"] == "standard"
 
+    def test_a_mutation_is_audit_logged_under_the_local_principal(self, client, sessions, monkeypatch):
+        csrf = _authed(client, sessions)
+        recorded = []
+        monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
+
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+
+        assert r.status_code == 200
+        assert len(recorded) == 1
+        principal, summary = recorded[0]
+        assert principal.id == LOCAL_PRINCIPAL.id
+        assert "toggle_pii_detection" in summary
+
+    def test_a_read_error_from_a_bad_argument_is_not_audited(self, client, sessions, monkeypatch):
+        # _call_action raising _BadAction (400) never reaches the mutation
+        # itself -- nothing changed, so nothing should be recorded.
+        csrf = _authed(client, sessions)
+        recorded = []
+        monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
+
+        r = client.post("/api/settings/add_policy_rule", json={"csrf": csrf})
+
+        assert r.status_code == 400
+        assert recorded == []
+
 
 class TestSensitiveActionsCoverAllAllowedActions:
     """#426 Phase 3's own allowlist-within-the-allowlist -- see module
@@ -392,6 +407,48 @@ class TestSensitiveActionStepUp:
         body = r.json()
         assert body["error"] == "passkey_enrollment_required"
         assert body["enroll_url"] == "/security"
+
+    def test_a_refusal_is_audit_logged_under_the_local_principal(self, controller, sessions, monkeypatch):
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        recorded = []
+        monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
+
+        r = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+
+        assert r.status_code == 403
+        assert len(recorded) == 1
+        principal, summary = recorded[0]
+        assert principal.id == LOCAL_PRINCIPAL.id
+        assert "toggle_pii_detection" in summary
+
+    def test_a_completed_ceremony_is_not_also_recorded_as_a_refusal(self, controller, sessions, monkeypatch):
+        self._enroll()
+        client = _step_up_client(
+            controller, sessions, step_up=StepUpConfig(enabled=True, rp_id="localhost", require_passkey=True),
+        )
+        csrf = _authed(client, sessions)
+        recorded = []
+        monkeypatch.setattr(rs, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
+
+        first = client.post("/api/settings/toggle_pii_detection", json={"csrf": csrf})
+        assert first.status_code == 428
+        assert len(recorded) == 1  # the challenge offer -- still a refusal of *this* request
+
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post("/api/settings/toggle_pii_detection", json={
+                "csrf": csrf, "webauthn_assertion": {"id": "Y3JlZC0x"},
+            })
+        assert second.status_code == 200
+        assert len(recorded) == 2
+        principal, summary = recorded[1]
+        assert "Changed setting" in summary
+        assert "toggle_pii_detection" in summary
 
     def test_with_a_credential_offers_webauthn_options(self, controller, sessions):
         self._enroll()

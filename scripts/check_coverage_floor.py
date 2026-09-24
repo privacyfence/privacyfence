@@ -150,7 +150,6 @@ MODULE_FLOORS: dict[str, float] = {
     # principal -- the same class of thing as the fail-closed load path
     # privacy_filter.py above is pinned at 100 for, just on the write side.
     "src/privacyfence/web/org_install_policy.py": 100.0,
-    "src/privacyfence/web/routes_org_settings.py": 98.0,
     # #428 B10: the daemon's own session-minting interface (MINT/QUIT) and
     # the companion's OPEN channel share this module's accept-loop plumbing,
     # including the peer-uid gate B10 added. 61.0, not a number in the

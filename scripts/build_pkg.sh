@@ -3,7 +3,8 @@
 # macOS install. It provisions privilege separation (#428 D2) automatically at
 # install time, instead of leaving that to the daemon's own admin-password
 # runtime prompt (privilege_separation.maybe_auto_enable_macos(), #428 D1),
-# which now only ever fires for an install that bypassed this package. A .pkg
+# which now only fires when this package's postinstall did not finish
+# separating the install (it never fails the install over that). A .pkg
 # install already runs as root and already asks for an administrator password
 # as part of the normal "Install PrivacyFence" step non-technical users already
 # expect -- so the one unavoidable elevation macOS requires for this (creating
@@ -98,7 +99,25 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-echo "=== Building ${PRODUCT_NAME} ${VERSION} installer package ==="
+# The installer's OS floor is the app's own: PrivacyFenceApp.spec's LSMinimumSystemVersion (the
+# support matrix in docs/platform-support.md; tests/unit/test_minimum_os_versions.py keeps them in
+# step). Read back from the built bundle rather than restated, so the .pkg refuses exactly the
+# systems the app would refuse to launch on -- without it, Installer.app would install an app
+# Launch Services then won't open.
+MIN_MACOS=$(plutil -extract LSMinimumSystemVersion raw "${BUNDLE}/Contents/Info.plist")
+
+# PrivacyFence ships for Apple silicon only (docs/platform-support.md's support matrix):
+# PyInstaller builds for the architecture it runs on, and the release runner is arm64. The .pkg
+# says so through hostArchitectures below, so Installer.app refuses an Intel Mac instead of
+# installing an app it cannot run. Refuse to package a bundle built for anything else.
+HOST_ARCH="arm64"
+BUNDLE_ARCHS=$(lipo -archs "${BUNDLE}/Contents/MacOS/${APP_NAME}")
+[ "$BUNDLE_ARCHS" = "$HOST_ARCH" ] || {
+  echo "error: ${BUNDLE} is built for '${BUNDLE_ARCHS}', but the .pkg ships for ${HOST_ARCH} only -- build on Apple silicon" >&2
+  exit 1
+}
+
+echo "=== Building ${PRODUCT_NAME} ${VERSION} installer package (macOS ${MIN_MACOS}+, ${HOST_ARCH}) ==="
 
 # ── 1. Stage a clean package root ─────────────────────────────────────────
 # Not `--root dist` directly: dist/ also holds the .mcpb this same build
@@ -191,7 +210,10 @@ cat > "$DIST_XML" <<XML
     <title>${PRODUCT_NAME}</title>
     <organization>${PKG_ID}</organization>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
-    <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
+    <options customize="never" require-scripts="true" rootVolumeOnly="true" hostArchitectures="${HOST_ARCH}"/>
+    <allowed-os-versions>
+        <os-version min="${MIN_MACOS}"/>
+    </allowed-os-versions>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
     <choices-outline>

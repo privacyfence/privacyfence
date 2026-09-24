@@ -50,11 +50,21 @@ Every IdP endpoint must be HTTPS; the daemon refuses a plain-HTTP issuer/discove
 
 Optionally, decide who counts as an admin: an ID token claim (e.g. `groups`) and the value(s) in it that grant admin — `--idp-admin-group-claim`/`--idp-admin-group-value` in [§5](#5-build-the-organization-config-bundle). Leave it unset and nobody is an admin via this mechanism (fail-closed default). Independently, you can restrict *who may sign in at all* by email domain or by a (possibly different) group claim — `--authz-*`, also in [§5](#5-build-the-organization-config-bundle) — layered on top of the IdP's own authentication, not a replacement for it.
 
+**Google as the sign-in IdP: use `email`, not `groups`.** Google's ID tokens carry no group membership and no Workspace admin role, so `--idp-admin-group-claim groups` never matches anyone and every user, Workspace super-admins included, signs in as a non-admin. That hides the admin-only Settings pages (**Privacy Filter**, **AI systems**) without any error. Name the admins by their exact email address instead: the sign-in flow always requests the `email` scope (`org_identity.py`'s `DEFAULT_SCOPE`), and a single-string claim is matched the same way as a list (`principal_from_claims`).
+
+```bash
+  --idp-admin-group-claim email \
+  --idp-admin-group-value alice@acme.example.com \
+  --idp-admin-group-value bob@acme.example.com \
+```
+
+Do not use `hd` (the Workspace domain) as the admin claim: it is the same for every account in the domain and would make all of them admins. Admin status is decided at each sign-in and held in the browser session, so after installing a bundle with a changed admin list and restarting the daemon, an admin signs out and back in at `/login` to pick it up. With `--merge`, the whole `idp` section is rebuilt from the flags of that run, so pass `--mode org`, `--server-issuer-url` and every `--idp-*` flag again, not just the admin ones.
+
 ### 4.2 The Google connector client (optional)
 
 This section is the general pattern every connector's org-mode registration follows — Slack, Salesforce, and Atlassian's own setup guides each link back here for it, substituting their own OAuth console and redirect path.
 
-Your OIDC sign-in client above (§4.1) is unrelated to whether you offer the Google connector (Gmail/Drive/Calendar/Contacts/Tasks) to users — it's entirely possible, and common, to sign in via Google but still need a *second*, separate Google OAuth client for the connector itself, because the two use different flows:
+Your OIDC sign-in client above (§4.1) is unrelated to whether you offer the Google connector (Gmail/Drive/Calendar/Contacts/Tasks/Apps Script) to users — it's entirely possible, and common, to sign in via Google but still need a *second*, separate Google OAuth client for the connector itself, because the two use different flows:
 
 - Local desktop installs use a **Desktop app** OAuth client with a loopback redirect (`http://127.0.0.1:.../callback`) — see `google-cloud-setup.md`.
 - Org mode needs a **Web application** OAuth client instead, with an explicit HTTPS redirect URI registered up front: `https://pf.acme.example.com/oauth/callback/google` (substituting your own hostname; `web/routes_connect.py` builds this from the daemon's own base URL). The two client types can't be interchanged — a Desktop app client has no field to register this redirect URI, and a Web application client requires one.
@@ -91,13 +101,13 @@ python3 scripts/build_org_bundle.py \
   -o org_config.json
 ```
 
-Adjust `--server-bind-host`/`--server-port` (default `0.0.0.0:8765` — what the reverse proxy in [§6](#6-reverse-proxy) forwards to) and `--server-tls-cert`/`--server-tls-key` only if the daemon itself terminates TLS instead of the proxy. `--merge` lets you add one more service to an already-distributed bundle later without re-entering everything (re-run with the same `--sign-key`).
+Adjust `--server-bind-host`/`--server-port` (default `127.0.0.1:8765`, loopback only — what a reverse proxy on the same host in [§6](#6-reverse-proxy) forwards to; pass `--server-bind-host` only if the proxy runs on another host) and `--server-tls-cert`/`--server-tls-key` only if the daemon itself terminates TLS instead of the proxy. `--merge` lets you add one more service to an already-distributed bundle later without re-entering everything (re-run with the same `--sign-key`).
 
 Install the resulting `org_config.json` on the server at `~/.privacyfence/org/org_config.json` (the service account's `paths.org_dir()`) before first starting the daemon, by copying it there — that is the only way to install it in org mode. There is no in-app equivalent: the local-mode Settings page's **Install/Update Organization Config…** action lives on `/settings`, which org mode deliberately never mounts (`web/server.py`'s module docstring, and `_build_org_app`'s route set). The daemon validates and pins the signature on startup either way. To rotate a signing key, an administrator deletes the previously pinned `~/.privacyfence/org/org_config_signing_pubkey.txt` on the server first — otherwise the new bundle is rejected as failing verification against the old key.
 
 ## 6. Reverse proxy
 
-Terminate HTTPS at the supported reverse proxy (nginx, Caddy, or similar) and forward traffic to the PrivacyFence daemon on its configured internal `bind_host`/`port` (default `0.0.0.0:8765`, or `localhost:8765` if `org_config.json`'s `server.bind_host` is left unset entirely rather than written by the build script).
+Terminate HTTPS at the supported reverse proxy (nginx, Caddy, or similar) and forward traffic to the PrivacyFence daemon on its configured internal `bind_host`/`port` (default `127.0.0.1:8765`, whether the build script wrote it or `org_config.json`'s `server.bind_host` is left unset).
 
 Do not expose that internal listener directly to the Internet. Set the proxy to forward `X-Forwarded-For`/`X-Forwarded-Proto`, and list the proxy's own IP address(es) with `--server-trusted-proxy` when building the bundle (§5) — those headers are honored only when at least one trusted proxy is configured, never by default, so redirect/origin validation would otherwise see the proxy's own address instead of the real client. Test sign-in/redirect behavior through the same public hostname users will use.
 
@@ -152,7 +162,7 @@ Run a single active daemon per state directory: PrivacyFence takes a `portalocke
 
 ## 9. Where PII policy and auto-accept rules live
 
-`/settings` in org mode (#400) is scoped very differently from local mode's combined settings page — it does **not** mount that page's ~30-action editor (connector management, the update banner, Telegram's interactive auth stay local-mode-only, see `web/org_settings_scope.py`'s `NOT_APPLICABLE_ACTIONS`). What it does give every signed-in principal, linked from `/approvals`'s own footer:
+`/settings` in org mode (#400) is scoped very differently from local mode's combined settings page — it does **not** mount that page's ~30-action editor (connector management, the update banner, Telegram's interactive auth stay local-mode-only; `web/org_settings_scope.py`'s `ACTION_SCOPES` declares, per action, which mode(s) it actually has a route in). What it does give every signed-in principal, linked from `/approvals`'s own footer:
 
 - **`GET /settings`** — that principal's own auto-accept rules (PrivacyFence's single scope+verb
   policy model — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#auto-accept)): a Remove

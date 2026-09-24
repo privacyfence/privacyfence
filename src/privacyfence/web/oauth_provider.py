@@ -87,6 +87,7 @@ from ..org_identity import IdpConfig
 from ..org_mode import AuthzPolicyConfig
 from ..principal import Principal
 from ..secure_files import atomic_write_json
+from .agent_pins import AgentPinStore, pins_file_path
 from .sealed_refresh_store import (
     REFRESH_STORE_FILE_NAME,
     SealedRefreshRecord,
@@ -181,6 +182,16 @@ class _OrgRefreshToken(RefreshToken):
 
 
 @dataclass
+class RegisteredClient:
+    """One DCR registration as the admin's pin page lists it. ``client_name`` is the raw,
+    caller-chosen string -- the page sanitizes and escapes it like any other claim."""
+
+    client_id: str
+    client_name: str
+    last_used_at: float
+
+
+@dataclass
 class _StoredClient:
     """A DCR-registered client plus the bookkeeping SEC-16's stale-client
     pruning needs. ``last_used_at`` starts at registration time and is
@@ -238,6 +249,9 @@ class OrgOAuthProvider:
         self._clients_path = Path(_clients_file_path())
         self._lock = threading.Lock()
         self._clients: dict[str, _StoredClient] = self._load_clients()
+        # ADR 0035 decision 3: the admin's client_id -> AI-system pins, beside oauth_clients.json.
+        # A pin outlives a pruned registration on purpose (agent_pins.py's docstring).
+        self.agent_pins = AgentPinStore(pins_file_path())
         self._pending: dict[str, _PendingAuthorization] = {}
         self._codes: dict[str, _IssuedCode] = {}
         self._access_tokens: dict[str, AccessToken] = {}
@@ -327,6 +341,43 @@ class OrgOAuthProvider:
             stored.last_used_at = time.time()
             self._save_clients_locked()
             return stored.info
+
+    def client_name(self, client_id: str) -> str | None:
+        """The DCR ``client_name`` registered under ``client_id``, or None -- read-only.
+
+        routes_mcp.py asks this once per tool call to attribute the call to an AI system (ADR
+        0006). Unlike ``get_client`` it neither bumps ``last_used_at`` nor writes
+        ``oauth_clients.json``: a per-call lookup must not turn every tool call into a disk write.
+        The name is whatever the client registered with, so it stays a *claim* -- the caller
+        sanitizes it and records it as ``client_info``, never as an attested source."""
+        with self._lock:
+            stored = self._clients.get(client_id)
+            return stored.info.client_name if stored is not None else None
+
+    def pinned_agent_id(self, client_id: str) -> str | None:
+        """The registry ``agent_id`` an admin pinned ``client_id`` to, or None -- read-only, and
+        like ``client_name`` asked once per tool call. Only a registration that still exists
+        counts: a pin left behind by the TTL prune is inert (ADR 0035 decision 3)."""
+        with self._lock:
+            if client_id not in self._clients:
+                return None
+        return self.agent_pins.pinned_agent_id(client_id)
+
+    def list_clients(self) -> list[RegisteredClient]:
+        """Every current DCR registration, for the admin's pin page -- read-only, like
+        ``client_name``: listing them must not count as using them."""
+        with self._lock:
+            return [
+                RegisteredClient(
+                    client_id=client_id, client_name=stored.info.client_name or "",
+                    last_used_at=stored.last_used_at,
+                )
+                for client_id, stored in self._clients.items()
+            ]
+
+    def has_client(self, client_id: str) -> bool:
+        with self._lock:
+            return client_id in self._clients
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         metadata_bytes = len(client_info.model_dump_json().encode("utf-8"))

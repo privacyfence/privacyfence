@@ -40,8 +40,8 @@ one shared secret. Passed to ``build_app``/``WebServer`` as one ``OrgAuth``
 bundle (see that class) rather than four separate parameters, so a caller
 either opts into the whole org-mode picture or none of it.
 
-**`/approvals` in org mode** (P9, web/routes_org_approvals.py) is *not*
-``routes_approvals.create_app``'s local-mode surface -- that one still
+**`/approvals` in org mode** (P9, web/routes_approvals.py's ``build_routes()``)
+is *not* ``routes_approvals.create_app``'s local-mode surface -- that one still
 authenticates with one shared secret and lists *every* pending approval
 with no principal filtering, which is exactly why it was never mounted
 here through P8 (exposing it as-is under org mode, where many principals
@@ -51,27 +51,33 @@ separate, principal-aware route set: every read and write is authorized
 against ``current_principal()`` via ``org_session``, and a *write*
 decision additionally demands a fresh WebAuthn step-up when
 ``org_config.json``'s ``step_up.enabled`` is set (§10.6, D7) --
-web/routes_org_approvals.py's own module docstring covers both.
+web/routes_approvals.py's own module docstring covers both.
 
 **`/settings` in org mode** (#400) is, likewise, *not*
-``routes_settings.py``'s ~30-action local-mode surface -- porting that
-dispatcher wholesale was never the plan (see routes_connect.py's own
-module docstring for why a small, purpose-built page is the shape every
-other org-mode surface here already takes). What is mounted instead
-(web/routes_org_settings.py) is two purpose-built pages:
-``GET /settings``, every signed-in principal's own auto-accept rules and
-resource grants, read-only except for removing a row; and
-``GET /settings/privacy``, an admin-only (``Principal.is_admin`` -- #400
-C3c finally gave that field a real consumer) view of the install-wide
-PII/privacy policy, editable since #400 C3e through two ``POST
-/api/settings/privacy/...`` routes that write the server's own
-settings.yaml and hot-reload it for every principal
-(web/org_install_policy.py). The rest of routes_settings.py's ~30 actions
-(connector management, the update banner, Telegram's interactive auth --
-see web/org_settings_scope.py's own ``NOT_APPLICABLE_ACTIONS`` for the
-ones that only ever meant something on a desktop install) remain
+``routes_settings.py``'s ~30-action local-mode dispatcher opened up
+wholesale -- ``routes_settings.build_org_routes()`` (the former
+web/routes_org_settings.py) mounts a capability-filtered subset instead,
+restricted to ``org_settings_scope.ACTION_SCOPES``'s own ``ORG_MODE``
+members: ``GET /settings``, every signed-in principal's own auto-accept
+rules, read-only except for adding or removing one; and ``GET
+/settings/privacy``, an admin-only (``Principal.is_admin`` -- #400 C3c
+finally gave that field a real consumer) view of the install-wide
+PII/privacy policy, editable since #400 C3e (web/org_install_policy.py).
+PSC-5 makes that subset render through the exact same settings_window_
+html.build_html() local mode's own settings page does (capability-filtered
+per mode/``is_admin``, web/org_settings_pages.py deleted) and dispatches
+every write through the same generic ``POST /api/settings/{action}``
+local mode's own dispatcher answers, restricted to
+``routes_settings._ORG_ALLOWED_ACTIONS``. The rest of routes_settings.py's
+~30 actions (connector management, the update banner, Telegram's
+interactive auth -- see web/org_settings_scope.py's own ``ACTION_SCOPES``
+for the ones that only ever meant something on a desktop install) remain
 unmounted, as do the two admin-only actions that are install-wide but
-aren't privacy policy (``set_log_level``, ``toggle_calendar_free_busy``).
+aren't privacy policy (``set_log_level``, ``toggle_calendar_free_busy``,
+``toggle_gmail_signature``) --
+``ACTION_SCOPES`` is the one place that split is declared now, consulted
+by both ``build_routes``/``build_org_routes`` rather than filtered
+separately by each.
 """
 from __future__ import annotations
 
@@ -98,6 +104,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import __version__, paths, privilege_separation, web_shell, webauthn_stepup
+from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
@@ -132,6 +139,7 @@ from .session_auth import SESSION_COOKIE as _SESSION_COOKIE
 from .session_auth import authenticated as _session_authenticated
 from .session_auth import check_csrf as _csrf_matches
 from .session_auth import check_origin as _origin_ok
+from .session_auth import is_human_session as _is_human_session
 from .session_auth import set_session_cookie as _set_session_cookie
 from .session_auth import unauthorized_html as _unauthorized_response
 from .state_stream import StateStream
@@ -345,39 +353,6 @@ def _write_mcp_url_file(url: str) -> None:
     privilege_separation.write_handoff_file(path, url)
 
 
-# The discovery files this daemon used to write a live sign-in link into, on
-# every startup and every re-mint: ``/approvals`` -> ``approvals_url``,
-# ``/settings`` -> ``settings_url``, ``/security`` -> ``security_url``. They
-# were the answer to a real problem -- SecretRedactingFormatter (SEC-10)
-# scrubs ``bootstrap=<value>`` out of every log line, so "the daemon logs its
-# URL on startup" was quietly false, and this file was the only channel that
-# actually delivered a usable link.
-#
-# The self-approval plan's Phase 2 stops writing them. handoff/ is 3770 and
-# group-shared with the logged-in user by design (paths.py: "deliberately
-# *not* a security boundary"), so a live bootstrap code sitting there was a
-# session for the taking, refreshed on every restart, by anything running as
-# that user -- the agent included, which is what §02 of that review counts as
-# the second of three silent paths to a session.
-#
-# Nothing replaces them, because two things already had: the companion's own
-# Open Approvals/Open Settings items, which are how a human gets an attested
-# session at all now, and ``privacyfence-app --print-sign-in-link`` for a
-# reader whose companion menu is out of reach (daemon_main.py).
-_LEGACY_BOOTSTRAP_URL_FILE_NAMES = ("approvals_url", "settings_url", "security_url")
-
-
-def _clear_legacy_bootstrap_url_files() -> None:
-    """Deletes any of the above left behind by a previous version, on
-    startup. An upgraded install would otherwise keep whatever file the old
-    daemon wrote last: the code in it is dead once that process exits (the
-    store is in memory), but it reads as a live sign-in link to a human, and
-    leaving a file this daemon no longer maintains where somebody was taught
-    to look for a working link is worse than leaving nothing."""
-    for name in _LEGACY_BOOTSTRAP_URL_FILE_NAMES:
-        (paths.handoff_dir() / name).unlink(missing_ok=True)
-
-
 def _clear_mcp_url_file() -> None:
     """Called on WebServer.stop() so a shim launched after this daemon exits
     finds no file rather than a stale, now-dead URL -- the same reasoning
@@ -509,8 +484,9 @@ class OrgAuth:
     connector_registry: ConnectorRegistry | None = None
     org_config: dict = field(default_factory=dict)
     # #400: the server's own install-wide settings.yaml (run_app()'s
-    # ``config``) -- routes_org_settings.py's admin-only privacy-policy view
-    # reads this directly, and daemon_main._start_org_web_server threads the
+    # ``config``) -- routes_settings.build_org_routes()'s admin-only
+    # privacy-policy view reads this directly, and
+    # daemon_main._start_org_web_server threads the
     # same dict into every org principal's own privacy-filter registration
     # (see _load_principal_settings()'s docstring). Defaults to {} for the
     # same "every existing OrgAuth() caller keeps working" reason
@@ -519,8 +495,8 @@ class OrgAuth:
     # #400 C3e: where that dict was loaded from, so the admin privacy page
     # can write it back. Separate from the dict rather than derived from it
     # because nothing in a parsed settings.yaml records its own path.
-    # Empty means "read-only": routes_org_settings.py renders the policy
-    # without edit controls and rejects a hand-written write, which is
+    # Empty means "read-only": routes_settings.build_org_routes() renders
+    # the policy without edit controls and rejects a hand-written write, which is
     # exactly what an OrgAuth built by a test that never had a real
     # settings.yaml on disk should do.
     install_wide_settings_path: str = ""
@@ -840,6 +816,7 @@ def build_app(
     org: OrgAuth | None = None,
     step_up: StepUpConfig | None = None,
     step_up_issuer_url: str = "",
+    agent_overrides: AgentOverrides | None = None,
 ) -> ASGIApp:
     """The approval routes, wrapped with the Host allowlist and security
     headers every real deployment needs -- routes_approvals.create_app()
@@ -925,7 +902,9 @@ def build_app(
         # rest, exactly as it already does for org mode's OrgOAuthProvider.
         if not mcp_token and mcp_verifier is None:
             raise ValueError("mcp_token or mcp_verifier is required when mcp_dispatcher is given")
-        mcp_route, session_manager = mount_mcp(mcp_dispatcher, token=mcp_token, verifier=mcp_verifier)
+        mcp_route, session_manager = mount_mcp(
+            mcp_dispatcher, token=mcp_token, verifier=mcp_verifier, overrides=agent_overrides,
+        )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
         # ADR 0007: the local file bridge's own upload/download endpoints,
@@ -995,6 +974,14 @@ def build_app(
             # comes back in the body exactly as it always did. See
             # present_recovery_code() and routes_security.build_routes.
             deliver_recovery_code=present_recovery_code if paths.is_bundled() else None,
+            # Trading in a recovery code wipes every enrolled passkey, so it
+            # asks the same human-session question as an approving decision,
+            # on the same installs -- see routes_security.build_routes'
+            # docstring on is_human_session. Org mode's call below passes
+            # nothing: an org session is itself an IdP sign-in.
+            is_human_session=(
+                (lambda request: _is_human_session(request, sessions)) if require_human_session else None
+            ),
         ))
 
     if state_stream is not None:
@@ -1036,9 +1023,9 @@ def _build_org_app(
     """org mode's own route set -- see build_app()'s and this module's own
     docstrings for what's deliberately absent (the local-token settings
     surface's ~30-action dispatcher, still -- only its own purpose-built
-    replacement is mounted, see routes_org_settings below).
+    replacement is mounted, see build_org_routes below).
     ``/approvals`` and ``/security`` (P9,
-    web/routes_org_approvals.py/web/routes_security.py) are mounted
+    web/routes_approvals.py/web/routes_security.py) are mounted
     unconditionally here -- unlike ``/connect`` (below), they need nothing
     from ``org.connector_registry``, only ``web_ui`` (already a required
     parameter of build_app() in both modes) and ``org.org_config`` for
@@ -1046,7 +1033,8 @@ def _build_org_app(
     from urllib.parse import urlparse
 
     from ..org_mode import AuthzPolicyConfig
-    from . import routes_org_approvals, routes_org_settings, routes_security
+    from . import routes_approvals, routes_org_stepup, routes_security
+    from .routes_settings import build_org_routes
 
     extra_routes: list[Route] = []
     lifespans = []
@@ -1054,6 +1042,7 @@ def _build_org_app(
         mcp_route, session_manager = mount_mcp(
             mcp_dispatcher, verifier=org.provider,
             resource_metadata_url=protected_resource_metadata_url(org.issuer_url),
+            client_names=org.provider.client_name, pinned_agents=org.provider.pinned_agent_id,
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
@@ -1096,7 +1085,13 @@ def _build_org_app(
 
     issuer_host = urlparse(org.issuer_url).hostname or ""
     step_up = StepUpConfig.from_org_config(org.org_config, default_rp_id=issuer_host)
-    extra_routes.extend(routes_org_approvals.build_routes(
+    # PSC-2b: one approval route module now builds both modes' routes --
+    # only the IdP step-up routes (no local-mode analogue at all) stay a
+    # separate mount, see routes_org_stepup.py's own module docstring.
+    extra_routes.extend(routes_approvals.build_routes(
+        web_ui=web_ui, sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
+    ))
+    extra_routes.extend(routes_org_stepup.build_routes(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
     ))
     if step_up.rp_id:
@@ -1117,9 +1112,20 @@ def _build_org_app(
     # #400: mounted unconditionally, same reasoning as /approvals above --
     # needs only org.sessions and the install-wide settings dict, both
     # already required parameters of this function either way.
-    extra_routes.extend(routes_org_settings.build_routes(
+    # PSC-4b/PSC-5: routes_settings.py now builds both modes' settings
+    # routes and renders both through the same settings_window_html.
+    # build_html() -- see build_org_routes's own docstring.
+    extra_routes.extend(build_org_routes(
         sessions=org.sessions, install_wide_settings=org.install_wide_settings,
         install_wide_settings_path=org.install_wide_settings_path,
+        # #579: the same StepUpConfig/origin routes_approvals.build_routes
+        # above already resolves from org.org_config -- see that call and
+        # this function's own build_org_routes docstring.
+        step_up=step_up, step_up_origin=org.issuer_url,
+        # AGT-5: the admin's "AI systems" pin page lists and pins this provider's DCR clients.
+        oauth_provider=org.provider,
+        # Auto-accept rule values resolve to names through the viewing principal's own connectors.
+        connector_registry=org.connector_registry,
     ))
 
     lifespan = None
@@ -1163,6 +1169,7 @@ class WebServer:
         ssl_keyfile: str | None = None,
         trusted_proxies: tuple[str, ...] = (),
         step_up: StepUpConfig | None = None,
+        agent_overrides: AgentOverrides | None = None,
     ) -> None:
         """``org``, ``ssl_certfile``/``ssl_keyfile`` and ``trusted_proxies``
         are org mode's own additions (P7, §10.2) -- every local-mode caller
@@ -1181,6 +1188,10 @@ class WebServer:
         boot path always passes one (``StepUpConfig.from_local_config``).
         Ignored in org mode, which resolves its own from ``org.org_config``
         (see ``_build_org_app``).
+
+        ``agent_overrides`` (local mode only) is ``settings.yaml``'s ``agent_overrides:`` section,
+        parsed once by daemon_main.py (``agent_overrides.from_config``) -- a relabel only, never
+        an attested source (see that module).
         """
         self.host = host
         self.port = port
@@ -1248,9 +1259,9 @@ class WebServer:
         )
         if self.mcp_verifier is not None:
             # Preload every already-provisioned principal's own persisted
-            # token (a previous run's MINT MCP/ROTATE MCP, or an existing
-            # single-user install's own legacy token -- see mcp_auth.py's
-            # own module docstring), then make sure the local/owner
+            # token (a previous run's MINT MCP/ROTATE MCP, or an unseparated
+            # install's handoff/mcp_token -- see mcp_auth.py's
+            # _mcp_token_path()), then make sure the local/owner
             # principal specifically has one registered even on a install's
             # very first start, before anyone has ever called MINT MCP.
             mcp_auth.preload_verifier(self.mcp_verifier)
@@ -1320,6 +1331,7 @@ class WebServer:
             org=org,
             step_up=step_up,
             step_up_issuer_url=f"http://{host}:{port}",
+            agent_overrides=agent_overrides,
         )
         if trusted_proxies:
             # §10.2: honored only when this explicit list is non-empty --
@@ -1395,9 +1407,6 @@ class WebServer:
         if self.control_channel is not None:
             self.control_channel.start()
             _write_web_base_url_file(self.base_url)
-            # Local mode only: org mode never wrote these (no bootstrap
-            # concept at all), so there is nothing of its own to clean up.
-            _clear_legacy_bootstrap_url_files()
 
     def stop(self) -> None:
         self._server.should_exit = True

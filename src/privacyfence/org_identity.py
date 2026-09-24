@@ -93,7 +93,7 @@ class IdpConfig:
     admin_group_values: tuple[str, ...] = ()
     # P9, §10.6/§15 D7: "IdP acr_values step-up ... where the IdP already
     # does this well." Empty means the IdP has no configured step-up ACR to
-    # ask for -- web/routes_org_approvals.py's IdP step-up flow still works
+    # ask for -- web/routes_org_stepup.py's IdP step-up flow still works
     # (it always sends prompt=login/max_age=0, OIDC re-auth alone is D7's
     # documented fallback for a user with no passkey enrolled), it just
     # never adds an acr_values hint the IdP might not support.
@@ -214,7 +214,7 @@ def build_authorization_url(
     org_session.py, both of which generate one alongside state/PKCE).
 
     ``extra_params`` (P9) is
-    how web/routes_org_approvals.py's IdP step-up flow layers ``prompt``/
+    how web/routes_org_stepup.py's IdP step-up flow layers ``prompt``/
     ``max_age``/``acr_values`` onto the same authorization request this
     function already builds for an ordinary sign-in, rather than a second
     URL-building implementation: a step-up re-auth is not a different

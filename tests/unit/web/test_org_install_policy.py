@@ -50,7 +50,10 @@ class TestActionSurface:
         # is_action_permitted and applies with apply_change, using one
         # string. An action this module could apply but that split doesn't
         # gate on is_admin would be a hole.
-        assert org_install_policy.SUPPORTED_ACTIONS <= org_settings_scope.ADMIN_ONLY_ACTIONS
+        admin_only_actions = frozenset(
+            action for action, scope in org_settings_scope.ACTION_SCOPES.items() if scope.admin_only
+        )
+        assert org_install_policy.SUPPORTED_ACTIONS <= admin_only_actions
 
     def test_an_unsupported_action_is_rejected(self, tmp_path):
         settings: dict = {}

@@ -26,7 +26,6 @@ flows, grant name resolution) runs on a background thread via
 """
 from __future__ import annotations
 
-import html
 import json
 import logging
 import re
@@ -38,8 +37,10 @@ from typing import Any, Callable
 
 import yaml
 
-from . import __version__, dialog_window_html, org_bundle_signing, org_mode, web_prompt
+from . import __version__, agent_label, dialog_window_html, org_bundle_signing, org_mode, web_prompt
+from .agent_identity import AgentIdentity, AgentSource
 from .app_credentials import telegram_app_credentials
+from .apps_script_client import AppsScriptClient
 from .approval_ui import get_approval_ui
 from .audit_log import AuditEntry, AuditLogger, compute_security_config_hash, current_week, get_audit_logger
 from .auto_accept import (
@@ -69,7 +70,7 @@ from .policy.resource_registry import (
     GrantResourceType,
     resource_type as grant_resource_type,
 )
-from .resource_names import get_resolver
+from .resource_names import ResourceNameResolver, get_resolver
 from .secure_files import atomic_write_json, atomic_write_text
 from .step_up_config import LiveStepUpConfig, StepUpConfig
 from . import telegram_auth
@@ -91,147 +92,9 @@ logger = logging.getLogger(__name__)
 REPO_URL = "https://github.com/privacyfence/privacyfence"
 LICENSE_NAME = "Apache-2.0"
 
-# ---------------------------------------------------------------------------- #
-# Rule metadata (moved verbatim from menu_bar.py -- see its pre-#120 history)
-# ---------------------------------------------------------------------------- #
-
-OPERATION_LABELS: dict[str, str] = {
-    "gmail.read_message":          "Gmail – Read message",
-    "gmail.read_thread":           "Gmail – Read thread",
-    "gmail.download_attachment":   "Gmail – Download attachment",
-    "gmail.create_draft":          "Gmail – Create draft",
-    "gmail.add_label":             "Gmail – Add label",
-    "gmail.remove_label":          "Gmail – Remove label",
-    "gmail.archive_message":       "Gmail – Archive message",
-    "gmail.create_label":          "Gmail – Create label",
-    "drive.read_file_contents":    "Drive – Read file",
-    "drive.download_file":         "Drive – Download file",
-    "drive.write_file":            "Drive – Write file",
-    "drive.write_doc":             "Drive – Write Google Doc",
-    "drive.upload_file":           "Drive – Upload file",
-    "drive.move_file":             "Drive – Move file",
-    "drive.comment_file":          "Drive – Add comment",
-    "sheets.read_values":          "Sheets – Read values",
-    "sheets.write_range":          "Sheets – Write range",
-    "sheets.add_sheet":            "Sheets – Add tab",
-    "sheets.rename_sheet":         "Sheets – Rename tab",
-    "sheets.format_range":         "Sheets – Format range",
-    "sheets.insert_dimensions":    "Sheets – Insert rows/columns",
-    "sheets.delete_dimensions":    "Sheets – Delete rows/columns",
-    "docs.edit_content":           "Docs – Edit content",
-    "docs.format_content":         "Docs – Format content",
-    "slack.read_messages":         "Slack – Read messages",
-    "slack.send_message":          "Slack – Send message",
-    "calendar.read_event_details": "Calendar – Read event",
-    "calendar.create_modify_event":"Calendar – Create/modify event",
-    "calendar.set_visibility":     "Calendar – Set event visibility",
-    "calendar.set_color":          "Calendar – Set event color",
-    "calendar.delete_event":       "Calendar – Delete event",
-    "calendar.out_of_office":      "Calendar – Create out-of-office",
-    "calendar.working_location":   "Calendar – Set working location",
-    "salesforce.read_record":      "Salesforce – Read record",
-    "salesforce.run_report":       "Salesforce – Run report",
-    "salesforce.search":           "Salesforce – Search",
-    "contacts.edit":               "Contacts – Update contact",
-    "contacts.create":             "Contacts – Create contact",
-    "contacts.add_label":          "Contacts – Add label",
-    "contacts.remove_label":       "Contacts – Remove label",
-    "jira.read_issue":             "Jira – Read issue",
-    "jira.create_issue":           "Jira – Create issue",
-    "jira.add_comment":            "Jira – Add comment",
-    "jira.update_issue":           "Jira – Update issue",
-    "jira.transition_issue":       "Jira – Transition issue",
-    "confluence.read_page":        "Confluence – Read page",
-    "confluence.download_attachment": "Confluence – Download attachment",
-    "confluence.create_page":      "Confluence – Create page",
-    "confluence.update_page":      "Confluence – Update page",
-    # telegram_search_messages shares this key with telegram_get_messages
-    # (see auto_accept.TOOL_TO_OPERATION) rather than its own
-    # "telegram.search_messages" -- one label covers both tools' rules.
-    "telegram.read_chat_messages": "Telegram – Read/search chat messages",
-    "telegram.send_message":       "Telegram – Send message",
-    "tasks.create_task":           "Tasks – Create task",
-    "tasks.update_task":           "Tasks – Update task",
-    "tasks.complete_task":         "Tasks – Complete task",
-    "tasks.uncomplete_task":       "Tasks – Uncomplete task",
-    "tasks.move_task":             "Tasks – Move task",
-}
-
-RULES_BY_OPERATION: dict[str, list[str]] = {
-    "gmail.read_message":           ["i_am_sender", "i_am_sole_recipient", "trusted_sender_domain", "label_match", "age_threshold_days", "no_attachments"],
-    "gmail.read_thread":            ["i_am_sender", "trusted_sender_domain", "age_threshold_days"],
-    "gmail.download_attachment":    ["i_am_sender", "trusted_sender_domain", "label_match"],
-    "gmail.create_draft":           ["to_is_myself", "approved_recipient_domain", "always_allow"],
-    "gmail.add_label":              ["label_name_allowlist", "i_am_sender", "trusted_sender_domain"],
-    "gmail.remove_label":           ["label_name_allowlist", "i_am_sender", "trusted_sender_domain"],
-    "gmail.archive_message":        ["i_am_sender", "trusted_sender_domain", "label_match"],
-    "gmail.create_label":           ["label_name_allowlist"],
-    "drive.read_file_contents":     ["i_am_owner", "created_by_me", "approved_folder", "file_type_allowlist", "created_this_session", "shared_drive_exclusion"],
-    "drive.download_file":          ["i_am_owner", "approved_folder", "file_type_allowlist", "created_this_session", "shared_drive_exclusion"],
-    "drive.write_file":             ["i_am_owner", "approved_sandbox_folder", "file_type_allowlist", "created_this_session"],
-    "drive.write_doc":              ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "drive.upload_file":            ["parent_folder_allowlist"],
-    "drive.move_file":              ["move_within_approved_folders"],
-    "drive.comment_file":           ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.read_values":           ["i_am_owner", "created_by_me", "approved_folder", "created_this_session", "shared_drive_exclusion"],
-    "sheets.write_range":           ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.add_sheet":             ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.rename_sheet":          ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.format_range":          ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.insert_dimensions":     ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.delete_dimensions":     ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "docs.edit_content":            ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "docs.format_content":          ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "slack.read_messages":          ["dm_with_myself", "group_dm", "approved_channel", "approved_channel_all_results", "public_channels_only", "no_file_attachments"],
-    "slack.send_message":           ["dm_with_myself", "send_to_myself", "approved_channel", "approved_recipient", "reply_in_existing_thread"],
-    "calendar.read_event_details":  ["i_am_organizer", "no_external_attendees", "personal_calendar", "past_event", "time_window_days", "no_conferencing_link", "non_private_event"],
-    "calendar.create_modify_event": ["i_am_organizer", "no_external_attendees", "personal_calendar"],
-    "calendar.set_visibility":      ["i_am_organizer", "no_external_attendees", "personal_calendar"],
-    "calendar.set_color":           ["i_am_organizer", "no_external_attendees", "personal_calendar"],
-    "calendar.delete_event":        ["i_am_organizer", "no_external_attendees", "personal_calendar"],
-    "calendar.out_of_office":       ["always_allow"],
-    "calendar.working_location":    ["always_allow"],
-    "salesforce.read_record":       ["approved_object_types"],
-    "salesforce.run_report":        ["approved_report_ids"],
-    "salesforce.search":            ["approved_object_types"],
-    "contacts.edit":                ["no_contact_info_change"],
-    "contacts.create":              ["no_contact_info_change"],
-    "contacts.add_label":           ["label_name_allowlist"],
-    "contacts.remove_label":        ["label_name_allowlist"],
-    "jira.read_issue":              ["i_am_reporter", "i_am_assignee", "approved_project_keys"],
-    "jira.create_issue":            ["approved_project_keys"],
-    "jira.add_comment":             ["approved_project_keys"],
-    "jira.update_issue":            ["approved_project_keys"],
-    "jira.transition_issue":        ["approved_project_keys"],
-    "confluence.read_page":         ["i_am_author", "approved_space_keys"],
-    "confluence.download_attachment": ["i_am_author", "approved_space_keys"],
-    "confluence.create_page":       ["approved_space_keys"],
-    "confluence.update_page":       ["approved_space_keys"],
-    "telegram.read_chat_messages":  ["approved_chats", "approved_chats_all_results", "no_media_attachments"],
-    "telegram.send_message":        ["approved_chats"],
-    "tasks.create_task":            ["approved_task_list"],
-    "tasks.update_task":            ["approved_task_list"],
-    "tasks.complete_task":          ["approved_task_list"],
-    "tasks.uncomplete_task":        ["approved_task_list"],
-    "tasks.move_task":              ["approved_task_list"],
-}
-
-# Rules that take a list-of-strings value
-RULES_LIST_VALUE: set[str] = {
-    "trusted_sender_domain", "label_match", "send_to_myself",
-    "approved_channel", "approved_channel_all_results", "approved_recipient", "personal_calendar",
-    "approved_object_types", "approved_report_ids", "file_type_allowlist",
-    "approved_folder", "approved_sandbox_folder",
-    "approved_recipient_domain", "label_name_allowlist", "parent_folder_allowlist",
-    "approved_project_keys", "approved_space_keys", "approved_chats",
-    "approved_chats_all_results", "approved_task_list",
-}
-# Rules that take a single integer value
-RULES_INT_VALUE: set[str] = {"age_threshold_days", "time_window_days"}
-
 # All connectors PrivacyFence supports, in display order
 ALL_CONNECTORS: list[str] = [
-    "gmail", "drive", "contacts", "calendar", "tasks",
+    "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
     "slack", "jira", "confluence", "salesforce", "telegram",
 ]
 
@@ -243,7 +106,14 @@ NOTIFICATIONS_DETAIL_LEVELS: tuple[str, ...] = ("minimal", "standard", "detailed
 
 # Connectors authenticated via a shared Google OAuth client (org bundle's
 # "google" section).
-GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks"}
+GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks", "apps_script"}
+
+# Display names for connectors whose key isn't just its label lower-cased.
+_CONNECTOR_LABEL_OVERRIDES: dict[str, str] = {"apps_script": "Apps Script"}
+
+
+def connector_label(cname: str) -> str:
+    return _CONNECTOR_LABEL_OVERRIDES.get(cname, cname.capitalize())
 
 # Which section of the organization config bundle each connector depends on.
 # Jira and Confluence share one Atlassian OAuth grant. Telegram is not part
@@ -251,7 +121,7 @@ GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks"
 # app_credentials.py) and checked separately.
 ORG_CONFIG_SERVICE: dict[str, str] = {
     "gmail": "google", "drive": "google", "contacts": "google",
-    "calendar": "google", "tasks": "google",
+    "calendar": "google", "tasks": "google", "apps_script": "google",
     "slack": "slack",
     "jira": "atlassian", "confluence": "atlassian",
     "salesforce": "salesforce",
@@ -272,6 +142,7 @@ _GOOGLE_CLIENTS: dict[str, type] = {
     "calendar": CalendarClient,
     "contacts": ContactsClient,
     "tasks": TasksClient,
+    "apps_script": AppsScriptClient,
 }
 
 # Display metadata for the Privacy Filter page -- mirrors the group/category
@@ -374,17 +245,9 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------- #
-# Auto-accept (policy v2) -- P6 of the policy v2 redesign's Settings surface: one filterable rule
-# list, sentence-rendered by policy.describe, replacing the per-connector Trusted-*/parallel-rule-
-# row/Sheets-Docs-pointer-page surface this module used to carry (see this file's git history for
-# what stood here through P5). Every rule this page writes lands directly in the on-disk v2
-# ``auto_accept:`` section (policy.store) -- "one config section, one grammar, one writer", the
-# redesign proposal's own top-of-page framing -- never through v1's ``auto_accept_rules``/
-# ``auto_accept_grants``, which stay exactly as the approval popup's own "Always allow" flow
-# (gate.py, still v1-backed pending a later phase's rewiring) and org mode's own separate rule-
-# authoring page (web/routes_org_settings.py, out of this redesign's scope per its own D6 --- see
-# that module's docstring) already leave them: both keep reading RULES_BY_OPERATION/RULES_LIST_
-# VALUE/RULES_INT_VALUE/OPERATION_LABELS below exactly as before.
+# Auto-accept -- one filterable rule list, sentence-rendered by policy.describe. Every rule this
+# page writes lands in the on-disk ``auto_accept:`` section (policy.store), the one config section
+# every surface (this page, the approval popup's "Always allow", the MCP propose tool) writes.
 #
 # gate.py's _evaluate_auto_accept checks a rule written here unconditionally, regardless of which
 # engine ``policy.engine`` names authoritative -- see auto_accept.set_policy_v2_store_rules's own
@@ -531,8 +394,199 @@ def _relative_time(timestamp: str) -> str:
 
 
 # ---------------------------------------------------------------------------- #
+# State builders with no per-instance dependency (no resolver cache, no
+# connector registry) -- pure functions of a config dict, factored out of the
+# instance methods below of the same name (PSC-5) so web/routes_settings.py's
+# own org-mode state builder can share them instead of re-deriving the same
+# PII-field/privacy-policy/about shape a second time. Each instance method
+# further down is now a thin wrapper calling straight through.
+# ---------------------------------------------------------------------------- #
+
+
+def _pii_general_fields(cfg: dict[str, Any]) -> dict[str, Any]:
+    """The General page's PII Detection Gate card, both hardcoded fields --
+    ``pii_detector.optional_category_keys()`` happens to be exactly these
+    two (``detect_ip_addresses``/``detect_financial_figures``) today, which
+    is what makes reusing this fixed shape for org mode's own install-wide
+    ``pii_detection:`` block accurate rather than merely convenient; see
+    that module's own ``_OPTIONAL_CATEGORIES``."""
+    pii_cfg = cfg.get("pii_detection", {}) or {}
+    return {
+        "pii_enabled": pii_cfg.get("enabled", True),
+        "pii_ip": pii_cfg.get("detect_ip_addresses", True),
+        "pii_financial": pii_cfg.get("detect_financial_figures", True),
+    }
+
+
+def _privacy_state_from_config(cfg: dict[str, Any], *, fail_safe_default: str = "allow") -> dict[str, Any]:
+    """``fail_safe_default`` threads straight through to ``_parse_privacy_
+    group`` for a group genuinely absent from ``cfg`` -- local mode's own
+    call below keeps this module's long-standing "allow" default; org
+    mode's caller (web/routes_settings.py's own org state builder) passes
+    "block", the same fail-closed posture the former web/org_settings_
+    pages.py's ``_privacy_policy_view`` used and this function must keep
+    matching now that the two share it."""
+    groups = [{"key": g, "label": label} for g, label in PRIVACY_GROUP_LABELS.items()]
+    groups.append({"key": "calendar", "label": "Calendar"})
+
+    default_policy: dict[str, str] = {}
+    categories: dict[str, list[dict[str, Any]]] = {}
+    for group in PRIVACY_GROUP_LABELS:
+        try:
+            parsed = _parse_privacy_group(cfg.get(group), group=group, fail_safe_default=fail_safe_default)
+        except PrivacyFilterConfigError as exc:
+            # init_privacy_filter (SEC-07) already refused to start the
+            # daemon on a malformed group at startup, so reaching this
+            # is only possible if settings.yaml was hand-edited on disk
+            # to something malformed *after* that -- the live enforced
+            # policy (_REGISTRY, still whatever last validated config
+            # loaded) is unaffected either way. Render the settings page
+            # as "allow" for this group rather than 500ing on it, same
+            # defensive posture _load_config() itself already takes for
+            # a config file that fails to parse at all.
+            logger.warning("Could not render current %s settings: %s", group, exc)
+            parsed = {"default_policy": "allow", "categories": {}}
+        default_policy[group] = parsed["default_policy"]
+        cat_list = []
+        for cat_key, cat_label in PRIVACY_CATEGORY_LABELS.get(group, {}).items():
+            policy = parsed["categories"].get(cat_key, parsed["default_policy"])
+            cat_list.append({"key": cat_key, "label": cat_label, "policy": policy})
+        categories[group] = cat_list
+
+    calendar_cfg = cfg.get("calendar", {}) or {}
+    gmail_cfg = cfg.get("gmail", {}) or {}
+    return {
+        "groups": groups,
+        "default_policy": default_policy,
+        "categories": categories,
+        "calendar_free_busy": bool(calendar_cfg.get("free_busy_full_event_details", True)),
+        "gmail_append_signature": bool(gmail_cfg.get("append_signature_to_drafts", False)),
+    }
+
+
+def _about_state_dict() -> dict[str, Any]:
+    return {
+        "version": __version__,
+        "license": LICENSE_NAME,
+        "repo_url": REPO_URL,
+    }
+
+
+def _rule_usage_map() -> dict[str, Any]:
+    """``AuditLogger.rule_usage()``, grouped by ``rule.id``, off *this*
+    principal's own ``logs/audit/`` directory -- ``authority_root``/
+    ``data_dir`` are themselves principal-scoped (the same contextvar
+    ``principal_scope`` sets), so this already reads whichever principal is
+    currently scoped when called, local mode's single ``LOCAL_PRINCIPAL``
+    or (PSC-5) an org caller's own ``with principal_scope(principal):``
+    block -- see ``_auto_accept_state_from_rules`` below, this function's
+    only caller."""
+    log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
+    return AuditLogger(str(log_dir)).rule_usage() if log_dir.exists() else {}
+
+
+def _rule_row(rule: PolicyRule, usage: dict[str, Any], *, resolved_value: str) -> dict[str, Any]:
+    connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
+    connector = connectors_of_rule[0] if connectors_of_rule else ""
+    return {
+        "id": rule.id,
+        "sentence": policy_describe.rule_sentence(rule, value_display=resolved_value),
+        "connector": connector,
+        "connector_label": policy_describe.connector_label(connector) if connector else "",
+        "scope_type": policy_describe.scope_type_of(rule),
+        "value": resolved_value,
+        # Raw (unresolved) value, for the page's right-click-to-copy affordance -- the
+        # resolved "value" field above may show a friendly name instead of the id/key a
+        # user would actually want to paste elsewhere.
+        "value_ids": [str(v) for v in rule.value] if isinstance(rule.value, list) else (
+            [str(rule.value)] if rule.value else []
+        ),
+        "verbs": [
+            {"verb": verb.value, "family": policy_registry.VERB_FAMILY[verb].value}
+            for verb in policy_describe.rule_verbs(rule)
+        ],
+        "covered_tools": list(policy_describe.covered_tools(rule)),
+        "match_count": usage.get("count", 0),
+        "last_matched": _relative_time(usage["last_matched"]) if usage else "",
+        "never_matched": not usage,
+    }
+
+
+def _auto_accept_state_from_rules(
+    rules: list[PolicyRule], usage_by_rule_id: dict[str, Any], *,
+    resolve_value: Callable[[PolicyRule], str],
+) -> dict[str, Any]:
+    """The Auto-accept page's state, factored out of ``SettingsController.
+    _auto_accept_state`` (PSC-5) so web/routes_settings.py's own org-mode
+    state builder can share it. ``resolve_value`` renders one rule's value; both modes
+    pass ``cached_rule_value`` (resource ids shown by their cached names), and differ only
+    in how a missing name gets resolved -- local's ``_resolved_rule_value`` in the background
+    with a snapshot push, org's ``web/routes_settings.py`` ``_await_rule_names`` before the
+    render, since org mode has no live push."""
+    catalogue = _policy_scope_catalogue()
+    rule_rows = [
+        _rule_row(rule, usage_by_rule_id.get(rule.id) or {}, resolved_value=resolve_value(rule))
+        for rule in rules
+    ]
+    rule_rows.sort(key=lambda row: row["sentence"])
+    connectors = sorted({row["connector"] for row in rule_rows if row["connector"]}
+                         | {entry["connector"] for entry in catalogue})
+    return {"rules": rule_rows, "scope_groups": catalogue, "connectors": connectors}
+
+
+def rule_resource_ids(rule: PolicyRule) -> tuple[GrantResourceType | None, list[str]]:
+    """A rule's own value as a list of strings, plus the resource type that can resolve each one
+    to a display name (``RULE_NAME_TO_RESOURCE_TYPE``) -- ``None`` when the predicate's values are
+    not opaque resource ids (a domain, a label, ...) and are shown as-is."""
+    values = rule.value if isinstance(rule.value, list) else ([rule.value] if rule.value else [])
+    return RULE_NAME_TO_RESOURCE_TYPE.get(rule.predicate), [str(v) for v in values]
+
+
+def cached_rule_value(rule: PolicyRule, resolver: ResourceNameResolver) -> str:
+    """A rule's value as the Auto-accept page's comma-separated display string: each resource id
+    shown by its last-known name (``resolver.cached_name`` -- no network call), or a shortened id
+    until one is known. Shared by local mode's ``SettingsController._resolved_rule_value`` and org
+    mode's ``web/routes_settings.py`` state builder; the two differ only in how a missing name gets
+    resolved, never in how a known one is shown."""
+    rt, str_values = rule_resource_ids(rule)
+    if rt is None:
+        return ", ".join(str_values)
+    return ", ".join(resolver.cached_name(rt, v) or _short_id(v) for v in str_values)
+
+
+# ---------------------------------------------------------------------------- #
 # Controller
 # ---------------------------------------------------------------------------- #
+
+def _entry_agent(entry: AuditEntry) -> AgentIdentity:
+    """The ``AgentIdentity`` an audit entry recorded, rebuilt from its four ``agent_*`` fields. An
+    ``agent_source`` this build does not know (a hand-edited or future log line) reads as no
+    signal at all -- unknown, never promoted to a tier the entry did not earn."""
+    try:
+        source = AgentSource(entry.agent_source or "")
+    except ValueError:
+        source = AgentSource.NONE
+    return AgentIdentity(
+        id=entry.agent_id or "", name=entry.agent_name or "", version=entry.agent_version or "", source=source,
+    )
+
+
+def audit_rows(entries: list[AuditEntry]) -> list[dict[str, Any]]:
+    """The Audit Log page's "Recent decisions" rows (AGT-5) -- shared by local mode's
+    ``_audit_state`` and org mode's own page state, so both show the same columns. ``agent`` is
+    ``agent_label.AgentLabel.to_dict()``: the same tiered wording the approval card and list use
+    (``agent_label.py``), raw text the page escapes."""
+    return [
+        {
+            "connector": entry.connector.capitalize() if entry.connector else "",
+            "tool": entry.tool_name or entry.tool,
+            "decision": entry.decision,
+            "time": _relative_time(entry.timestamp),
+            "agent": agent_label.label_for(_entry_agent(entry)).to_dict(),
+        }
+        for entry in entries
+    ]
+
 
 class SettingsController:
     """Domain logic for the settings page (web/routes_settings.py). One
@@ -653,36 +707,6 @@ class SettingsController:
         other consumer on their very next request, with no daemon restart
         -- see step_up_config.py's own ``LiveStepUpConfig`` docstring."""
         self._step_up = step_up
-
-    def policy_v2_migration_notice_html(self) -> str | None:
-        """P4 of the policy v2 redesign's Settings banner: ``None`` unless this install's config
-        has actually been migrated to the v2 on-disk ``auto_accept:`` schema (``policy.store.
-        MIGRATED_TO_POLICY_V2_MARKER``) *and* at least one migrated rule's expansion now names a
-        destructive (``delete``) or send (``send``/``draft``/``share``) verb -- e.g. F4's sandbox-
-        folder "Write" grant, which today silently includes ``sheets.delete_dimensions``. Those are
-        exactly the rules whose real reach a v1 config never spelled out to the user in those terms.
-
-        web/routes_settings.py renders this as ``web_shell.wrap()``'s ``dismissible_notice_html``,
-        not the persistent ``banner_html`` strip -- like ``step_up_config.StepUpConfig.off_notice``,
-        this is advisory rather than a live problem: once a person has seen which of their existing
-        rules this covers, it should not keep reappearing while nothing about those rules changes.
-        """
-        cfg = self._load_config()
-        if not cfg.get(policy_store.MIGRATED_TO_POLICY_V2_MARKER):
-            return None
-        flagged = policy_store.destructive_or_send_rules(cfg)
-        if not flagged:
-            return None
-        items = "".join(
-            f"<li><code>{html.escape(rule.id)}</code> "
-            f"({html.escape(', '.join(OPERATION_LABELS.get(op, op) for op in sorted(rule.operations)))})</li>"
-            for rule in flagged
-        )
-        return (
-            "Your auto-accept rules were migrated to the new format. "
-            f"{len(flagged)} existing rule(s) allow a <b>destructive</b> or <b>send</b> action "
-            f"without review: <ul>{items}</ul> Review them under Rules."
-        )
 
     def set_connectors_changed_listener(self, callback: Callable[[], None] | None) -> None:
         """``callback`` is ``McpDispatcher.notify_tools_changed`` in
@@ -1221,7 +1245,7 @@ class SettingsController:
                 self.error = ""
                 self.refresh_connectors()
             else:
-                self.error = f"{cname.capitalize()} authentication failed: {result}"
+                self.error = f"{connector_label(cname)} authentication failed: {result}"
                 self._push_snapshot()
 
         _run_async(work, done)
@@ -1494,7 +1518,6 @@ class SettingsController:
         existing = policy_store.compile_rules_from_config(cfg)
         merged = policy_store.merge_rules(existing + new_rules)
         cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(merged)
-        cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] = True
         self._save_and_reload_policy_v2(cfg)
         return self.snapshot()
 
@@ -1573,6 +1596,14 @@ class SettingsController:
         calendar_cfg["free_busy_full_event_details"] = not calendar_cfg.get(
             "free_busy_full_event_details", True
         )
+        self._save_config(cfg)
+        self.refresh_connectors()
+        return self.snapshot()
+
+    def toggle_gmail_signature(self) -> dict[str, Any]:
+        cfg = self._load_config()
+        gmail_cfg = cfg.setdefault("gmail", {})
+        gmail_cfg["append_signature_to_drafts"] = not gmail_cfg.get("append_signature_to_drafts", False)
         self._save_config(cfg)
         self.refresh_connectors()
         return self.snapshot()
@@ -1660,7 +1691,6 @@ class SettingsController:
         }
 
     def _general_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
-        pii_cfg = cfg.get("pii_detection", {}) or {}
         update_cfg = cfg.get("update_check", {}) or {}
         notifications_cfg = (cfg.get("web", {}) or {}).get("notifications", {}) or {}
 
@@ -1681,9 +1711,7 @@ class SettingsController:
 
         latest = self._latest_update
         return {
-            "pii_enabled": pii_cfg.get("enabled", True),
-            "pii_ip": pii_cfg.get("detect_ip_addresses", True),
-            "pii_financial": pii_cfg.get("detect_financial_figures", True),
+            **_pii_general_fields(cfg),
             "update_check_enabled": update_cfg.get("enabled", True),
             "update_check_beta": update_cfg.get("include_beta", False),
             # The Approval Notifications card's segmented control -- see
@@ -1738,7 +1766,7 @@ class SettingsController:
 
             rows.append({
                 "key": cname,
-                "label": cname.capitalize(),
+                "label": connector_label(cname),
                 "icon": cname,
                 "authed": connected,
                 "enabled": enabled,
@@ -1793,43 +1821,7 @@ class SettingsController:
         decisions" -- not the process-wide ``get_audit_logger()`` singleton, which may be a
         different principal's logger by the time this renders (P6, org mode)."""
         rules = policy_store.compile_rules_from_config(cfg)
-        catalogue = _policy_scope_catalogue()
-        log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
-        usage = AuditLogger(str(log_dir)).rule_usage() if log_dir.exists() else {}
-
-        rule_rows: list[dict[str, Any]] = []
-        for rule in rules:
-            connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
-            connector = connectors_of_rule[0] if connectors_of_rule else ""
-            rule_usage = usage.get(rule.id) or {}
-            resolved_value = self._resolved_rule_value(rule)
-            rule_rows.append({
-                "id": rule.id,
-                "sentence": policy_describe.rule_sentence(rule, value_display=resolved_value),
-                "connector": connector,
-                "connector_label": policy_describe.connector_label(connector) if connector else "",
-                "scope_type": policy_describe.scope_type_of(rule),
-                "value": resolved_value,
-                # Raw (unresolved) value, for the page's right-click-to-copy affordance -- the
-                # resolved "value" field above may show a friendly name instead of the id/key a
-                # user would actually want to paste elsewhere.
-                "value_ids": [str(v) for v in rule.value] if isinstance(rule.value, list) else (
-                    [str(rule.value)] if rule.value else []
-                ),
-                "verbs": [
-                    {"verb": verb.value, "family": policy_registry.VERB_FAMILY[verb].value}
-                    for verb in policy_describe.rule_verbs(rule)
-                ],
-                "covered_tools": list(policy_describe.covered_tools(rule)),
-                "match_count": rule_usage.get("count", 0),
-                "last_matched": _relative_time(rule_usage["last_matched"]) if rule_usage else "",
-                "never_matched": not rule_usage,
-            })
-        rule_rows.sort(key=lambda row: row["sentence"])
-
-        connectors = sorted({row["connector"] for row in rule_rows if row["connector"]}
-                             | {entry["connector"] for entry in catalogue})
-        return {"rules": rule_rows, "scope_groups": catalogue, "connectors": connectors}
+        return _auto_accept_state_from_rules(rules, _rule_usage_map(), resolve_value=self._resolved_rule_value)
 
     def _resolved_rule_value(self, rule: PolicyRule) -> str:
         """A rule's own value, as a comma-separated display string, resolving each id through the
@@ -1837,51 +1829,13 @@ class SettingsController:
         ``resource_names.py``) wherever the predicate names an opaque resource id -- a Drive folder,
         a Jira project key, and so on -- rather than showing the raw id, kicking off a background
         resolve for anything not cached yet (``_resolve_names_async``)."""
-        values = rule.value if isinstance(rule.value, list) else ([rule.value] if rule.value else [])
-        if not values:
-            return ""
-        str_values = [str(v) for v in values]
-        rt = RULE_NAME_TO_RESOURCE_TYPE.get(rule.predicate)
-        if rt is None:
-            return ", ".join(str_values)
-        self._resolve_names_async(rt, str_values, self._client_for(rt.connector))
-        return ", ".join(self._resolver.cached_name(rt, v) or _short_id(v) for v in str_values)
+        rt, str_values = rule_resource_ids(rule)
+        if rt is not None:
+            self._resolve_names_async(rt, str_values, self._client_for(rt.connector))
+        return cached_rule_value(rule, self._resolver)
 
     def _privacy_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
-        groups = [{"key": g, "label": label} for g, label in PRIVACY_GROUP_LABELS.items()]
-        groups.append({"key": "calendar", "label": "Calendar"})
-
-        default_policy: dict[str, str] = {}
-        categories: dict[str, list[dict[str, Any]]] = {}
-        for group in PRIVACY_GROUP_LABELS:
-            try:
-                parsed = _parse_privacy_group(cfg.get(group), group=group)
-            except PrivacyFilterConfigError as exc:
-                # init_privacy_filter (SEC-07) already refused to start the
-                # daemon on a malformed group at startup, so reaching this
-                # is only possible if settings.yaml was hand-edited on disk
-                # to something malformed *after* that -- the live enforced
-                # policy (_REGISTRY, still whatever last validated config
-                # loaded) is unaffected either way. Render the settings page
-                # as "allow" for this group rather than 500ing on it, same
-                # defensive posture _load_config() itself already takes for
-                # a config file that fails to parse at all.
-                logger.warning("Could not render current %s settings: %s", group, exc)
-                parsed = {"default_policy": "allow", "categories": {}}
-            default_policy[group] = parsed["default_policy"]
-            cat_list = []
-            for cat_key, cat_label in PRIVACY_CATEGORY_LABELS.get(group, {}).items():
-                policy = parsed["categories"].get(cat_key, parsed["default_policy"])
-                cat_list.append({"key": cat_key, "label": cat_label, "policy": policy})
-            categories[group] = cat_list
-
-        calendar_cfg = cfg.get("calendar", {}) or {}
-        return {
-            "groups": groups,
-            "default_policy": default_policy,
-            "categories": categories,
-            "calendar_free_busy": bool(calendar_cfg.get("free_busy_full_event_details", True)),
-        }
+        return _privacy_state_from_config(cfg)
 
     def _audit_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
         log_cfg = cfg.get("logging", {}) or {}
@@ -1892,13 +1846,7 @@ class SettingsController:
 
         recent: list[dict[str, Any]] = []
         if log_dir.exists():
-            for entry in AuditLogger(str(log_dir)).recent_entries(20):
-                recent.append({
-                    "connector": entry.connector.capitalize() if entry.connector else "",
-                    "tool": entry.tool_name or entry.tool,
-                    "decision": entry.decision,
-                    "time": _relative_time(entry.timestamp),
-                })
+            recent = audit_rows(AuditLogger(str(log_dir)).recent_entries(20))
 
         return {
             "log_level": level,
@@ -1908,8 +1856,4 @@ class SettingsController:
         }
 
     def _about_state(self) -> dict[str, Any]:
-        return {
-            "version": __version__,
-            "license": LICENSE_NAME,
-            "repo_url": REPO_URL,
-        }
+        return _about_state_dict()

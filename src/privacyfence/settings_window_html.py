@@ -49,6 +49,9 @@ from __future__ import annotations
 import json
 import secrets
 from pathlib import Path
+from typing import Any
+
+from .web.org_settings_scope import LOCAL_MODE, ORG_MODE, NOT_APPLICABLE_ACTIONS
 
 # The settings page's own
 # palette is restyled onto the same tokens the approval card already
@@ -318,6 +321,23 @@ select.pf-input { cursor: pointer; }
 .pf-audit-badge.denied { background: var(--pf-danger-tint); color: var(--pf-danger); }
 .pf-audit-badge.auto_accepted { background: rgba(0,113,227,.1); color: var(--pf-accent); }
 .pf-audit-badge.other { background: var(--pf-surface-2); color: var(--pf-text-muted); }
+/* AGT-5: who asked, with its tier -- agent_label.py's wording, the approval list's tiers. */
+.pf-audit-agent { width: 190px; display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--pf-text-muted); flex-shrink: 0; min-width: 0; }
+/* The name gives way, never the tier marker: a truncated claim must still say it is a claim. */
+.pf-audit-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-audit-agent-attested .pf-audit-agent-name { color: var(--pf-text); font-weight: 600; }
+.pf-audit-agent-claimed .pf-audit-agent-name, .pf-audit-agent-unknown .pf-audit-agent-name { font-style: italic; }
+.pf-audit-tier { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; flex-shrink: 0; white-space: nowrap; }
+.pf-audit-tier.attested { background: rgba(0,113,227,.1); color: var(--pf-accent); }
+.pf-audit-tier.claimed, .pf-audit-tier.unknown { background: var(--pf-surface-2); color: var(--pf-text-muted); }
+/* AGT-5: the admin's AI-system pin page. */
+.pf-agents-list { max-width: 640px; border: 1px solid var(--pf-border); border-radius: 10px; overflow: hidden; margin-bottom: 22px; }
+.pf-agents-row { padding: 10px 14px; border-bottom: 1px solid var(--pf-border); }
+.pf-agents-row:last-child { border-bottom: none; }
+.pf-agents-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.pf-agents-name { font-size: 13px; font-weight: 600; color: var(--pf-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-agents-meta { font-size: 11.5px; color: var(--pf-text-dim); font-family: ui-monospace, monospace; }
+.pf-agents-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; font-size: 12px; color: var(--pf-text-muted); }
 .pf-audit-time { width: 70px; text-align: right; font-size: 11.5px; color: var(--pf-text-dim); flex-shrink: 0; }
 
 /* ---- About ---- */
@@ -363,14 +383,36 @@ select.pf-input { cursor: pointer; }
 
 _JS = r"""
 (function () {
+  // PSC-5: window.__pfCapabilities is Python's own settings_window_html.
+  // build_html()/_capabilities_for() -- which inner-nav sections this
+  // (mode, is_admin) combination gets, and which individual actions never
+  // have a real route to post to at all (org_settings_scope.
+  // NOT_APPLICABLE_ACTIONS, plus the handful of local-only bespoke actions
+  // that table doesn't cover -- see that function's own docstring). Every
+  // call site before PSC-5 renders under the fallback below, which hides
+  // nothing -- local mode's own rendering is unaffected by any of this.
+  var CAPS = window.__pfCapabilities || {
+    mode: 'local', is_admin: false,
+    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, about: true },
+    not_applicable_actions: [],
+  };
+
+  function notApplicable(action) {
+    return CAPS.not_applicable_actions.indexOf(action) !== -1;
+  }
+
   var ui = {
     // issue #396 Part C: window.__pfInitialSection lets one specific route
     // (GET /settings/connectors, see web/routes_settings.py) land here with
     // Connectors already selected -- a real, server-decided initial value
     // for what's otherwise purely client-side UI state (see this module's
     // own docstring on `ui`). Every other route omits the script that sets
-    // it, so this falls back to 'general' exactly as before.
-    section: (window.__pfInitialSection || 'general'),
+    // it, so this falls back to 'general' exactly as before -- except in a
+    // mode where General itself is hidden (PSC-5: a non-admin org
+    // principal), where landing on a nav item that isn't drawn at all would
+    // leave the page with no visible selection; Auto-accept is the one
+    // section every org principal, admin or not, always gets.
+    section: (window.__pfInitialSection || (CAPS.sections.general ? 'general' : 'auto_accept')),
     privacyGroup: null,
     // Auto-accept page (P6) -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {},
@@ -469,13 +511,14 @@ _JS = r"""
 
   var NAV_ITEMS = [
     ['general', 'General'], ['connectors', 'Connectors'], ['auto_accept', 'Auto-accept'],
-    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['about', 'About'],
+    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['about', 'About'],
   ];
 
   function renderNav(state) {
     var html = '<div class="pf-nav" role="tablist" aria-label="Settings sections">';
     NAV_ITEMS.forEach(function (item) {
       var key = item[0], label = item[1];
+      if (CAPS.sections[key] === false) { return; }
       var active = ui.section === key;
       html += '<div class="pf-navitem' + (active ? ' active' : '') + '" role="tab" aria-selected="' +
         (active ? 'true' : 'false') + '" tabindex="0" aria-label="' + esc(label) + '" data-nav="' + key + '">' + esc(label) + '</div>';
@@ -569,7 +612,7 @@ _JS = r"""
     // (it's a config value, not a browser grant) -- shown whenever this
     // surface could act on it at all, i.e. whenever the card itself isn't
     // hidden or config-disabled above.
-    if (typeof Notification !== 'undefined' && window.__pfNotificationsEnabled !== false) {
+    if (typeof Notification !== 'undefined' && window.__pfNotificationsEnabled !== false && !notApplicable('set_notifications_detail')) {
       html += renderNotificationsDetailControl(state);
     }
     html += '</div>';
@@ -631,18 +674,24 @@ _JS = r"""
     // yet (the control would just 400/self.error -- hidden, with a hint
     // pointing at the button above instead of a control guaranteed to
     // fail), or ready (the actual button).
-    if (g.step_up_available && g.step_up_on) {
+    // B9's own machinery hardcodes LOCAL_PRINCIPAL throughout
+    // (org_settings_scope.ACTION_SCOPES's own comment on enable_step_up) --
+    // stepUpApplicable is g.step_up_available further gated on this not
+    // being one of the modes/principals that control could never act
+    // correctly for.
+    var stepUpApplicable = g.step_up_available && !notApplicable('enable_step_up');
+    if (stepUpApplicable && g.step_up_on) {
       html += '<div class="pf-divider"></div><div class="pf-card-row"><div>';
       html += '<div class="pf-card-title">Step-up for approvals</div>';
       html += '<div class="pf-card-desc">On -- a write approval or a sensitive settings change demands your passkey. ' +
         'To turn this off, edit <code>step_up.require_passkey</code> in <code>config/settings.yaml</code> and restart PrivacyFence.</div>';
       html += '</div></div>';
-    } else if (g.step_up_available && !g.step_up_has_passkey) {
+    } else if (stepUpApplicable && !g.step_up_has_passkey) {
       html += '<div class="pf-divider"></div><div class="pf-card-row"><div>';
       html += '<div class="pf-card-title">Step-up for approvals</div>';
       html += '<div class="pf-card-desc">Off. Add a passkey above first, then come back here to require it for every write approval.</div>';
       html += '</div></div>';
-    } else if (g.step_up_available) {
+    } else if (stepUpApplicable) {
       html += '<div class="pf-divider"></div><div class="pf-card-row"><div>';
       html += '<div class="pf-card-title">Step-up for approvals</div>';
       html += '<div class="pf-card-desc">Off. Require your passkey for every write approval and every sensitive settings change.</div>';
@@ -651,25 +700,36 @@ _JS = r"""
     }
     html += '</div>';
 
-    html += '<div class="pf-card"><div class="pf-card-row"><div><div class="pf-card-title">Check for Updates</div>';
-    html += '<div class="pf-card-desc">Once-a-day check against GitHub Releases. Never installs anything automatically.</div></div>';
-    html += toggleHtml(g.update_check_enabled, 'toggle_update_check', {}, false, 'Check for Updates');
-    html += '</div><div class="pf-divider"></div>';
-    html += '<div class="pf-subrow" style="opacity:' + (g.update_check_enabled ? 1 : .4) + '"><div class="pf-subrow-label">Receive beta releases</div>';
-    html += toggleHtml(g.update_check_beta, 'toggle_update_check_beta', {}, !g.update_check_enabled, 'Receive beta releases');
-    html += '</div></div>';
-
-    html += '<div class="pf-card"><div class="pf-card-title">Organization Configuration</div>';
-    html += '<div class="pf-card-desc" style="margin-bottom:12px;">OAuth app credentials and unattended-session policy, provided by your IT administrator.</div>';
-    html += '<div style="display:flex;align-items:center;gap:14px;">';
-    html += '<div class="pf-btn-primary" role="button" tabindex="0" aria-label="' + esc(g.org_button_label) + '" ' +
-      dataAttr('install_org_config', {}) + '>' + esc(g.org_button_label) + '</div>';
-    if (g.org_installed && g.org_installed_date) {
-      html += '<div class="pf-export-hint">Installed ' + esc(g.org_installed_date) + '</div>';
-    } else if (!g.org_installed) {
-      html += '<div class="pf-export-hint">Not installed</div>';
+    // PSC-5: both cards below are meaningless on a headless org server --
+    // an update check against GitHub Releases and installing *this org's
+    // own* configuration bundle are both local-desktop-install concepts
+    // (org_settings_scope.NOT_APPLICABLE_ACTIONS covers toggle_update_check;
+    // install_org_config has no ACTION_SCOPES entry at all, since it isn't
+    // one of the generic dispatcher's actions -- both are the same "hidden
+    // for org" decision).
+    if (!notApplicable('toggle_update_check')) {
+      html += '<div class="pf-card"><div class="pf-card-row"><div><div class="pf-card-title">Check for Updates</div>';
+      html += '<div class="pf-card-desc">Once-a-day check against GitHub Releases. Never installs anything automatically.</div></div>';
+      html += toggleHtml(g.update_check_enabled, 'toggle_update_check', {}, false, 'Check for Updates');
+      html += '</div><div class="pf-divider"></div>';
+      html += '<div class="pf-subrow" style="opacity:' + (g.update_check_enabled ? 1 : .4) + '"><div class="pf-subrow-label">Receive beta releases</div>';
+      html += toggleHtml(g.update_check_beta, 'toggle_update_check_beta', {}, !g.update_check_enabled, 'Receive beta releases');
+      html += '</div></div>';
     }
-    html += '</div></div>';
+
+    if (!notApplicable('install_org_config')) {
+      html += '<div class="pf-card"><div class="pf-card-title">Organization Configuration</div>';
+      html += '<div class="pf-card-desc" style="margin-bottom:12px;">OAuth app credentials and unattended-session policy, provided by your IT administrator.</div>';
+      html += '<div style="display:flex;align-items:center;gap:14px;">';
+      html += '<div class="pf-btn-primary" role="button" tabindex="0" aria-label="' + esc(g.org_button_label) + '" ' +
+        dataAttr('install_org_config', {}) + '>' + esc(g.org_button_label) + '</div>';
+      if (g.org_installed && g.org_installed_date) {
+        html += '<div class="pf-export-hint">Installed ' + esc(g.org_installed_date) + '</div>';
+      } else if (!g.org_installed) {
+        html += '<div class="pf-export-hint">Not installed</div>';
+      }
+      html += '</div></div>';
+    }
 
     html += '</div>';
     return html;
@@ -933,6 +993,13 @@ _JS = r"""
         html += policySegHtml(cat.policy, 'set_category_policy', { group: group, category: cat.key }, cat.label + ' policy');
         html += '</div>';
       });
+
+      if (group === 'privacy' && typeof privacy.gmail_append_signature === 'boolean') {
+        html += '<div class="pf-card" style="max-width:560px;margin-top:16px;"><div class="pf-card-row"><div>';
+        html += '<div class="pf-card-title" style="font-size:13.5px;">Append Gmail signature to drafts</div>';
+        html += '<div class="pf-card-desc">Adds your Gmail signature to the end of every draft Claude creates, unless a call says otherwise. It is shown in the approval popup with the rest of the draft.</div>';
+        html += '</div>' + toggleHtml(privacy.gmail_append_signature, 'toggle_gmail_signature', {}, false, 'Append Gmail signature to drafts') + '</div></div>';
+      }
     }
     html += '</div>';
     return html;
@@ -948,21 +1015,29 @@ _JS = r"""
     var audit = state.audit;
     var html = '<div class="pf-page">';
     html += '<div class="pf-page-title">Audit Log</div>';
-    html += '<div class="pf-page-subtitle">Every decision — accepted, denied, or auto-accepted — is recorded locally as JSON lines, then exported weekly to a formatted Excel workbook.</div>';
+    html += notApplicable('export_audit_log')
+      ? '<div class="pf-page-subtitle">Your own recent decisions — accepted, denied, or auto-accepted — and which AI system asked for each.</div>'
+      : '<div class="pf-page-subtitle">Every decision — accepted, denied, or auto-accepted — is recorded locally as JSON lines, then exported weekly to a formatted Excel workbook.</div>';
 
-    html += '<div class="pf-export-row"><div class="pf-btn-primary" role="button" tabindex="0" aria-label="Export Audit Log" ' +
-      dataAttr('export_audit_log', {}) + '>Export Audit Log…</div>';
-    html += '<div class="pf-export-hint">' + esc(audit.export_hint) + '</div></div>';
+    // PSC-5/AGT-5: org mode shows each principal's own recent decisions, but has no export
+    // route and no install log level to set -- both controls are local-only actions.
+    if (!notApplicable('export_audit_log')) {
+      html += '<div class="pf-export-row"><div class="pf-btn-primary" role="button" tabindex="0" aria-label="Export Audit Log" ' +
+        dataAttr('export_audit_log', {}) + '>Export Audit Log…</div>';
+      html += '<div class="pf-export-hint">' + esc(audit.export_hint) + '</div></div>';
+    }
 
-    html += '<div class="pf-card pf-audit-card">';
-    html += '<div class="pf-audit-card-row"><div class="pf-audit-card-title">Log level</div>';
-    html += segGroupHtml(LOG_LEVELS.map(function (lvl) {
-      return { label: lvl, active: audit.log_level === lvl, action: 'set_log_level', payload: { level: lvl } };
-    }), 'Log level');
-    html += '</div>';
-    html += '<div class="pf-audit-card-row"><div class="pf-audit-card-title">Log file</div>';
-    html += '<div class="pf-audit-logfile">' + esc(audit.log_file) + '</div></div>';
-    html += '</div>';
+    if (!notApplicable('set_log_level')) {
+      html += '<div class="pf-card pf-audit-card">';
+      html += '<div class="pf-audit-card-row"><div class="pf-audit-card-title">Log level</div>';
+      html += segGroupHtml(LOG_LEVELS.map(function (lvl) {
+        return { label: lvl, active: audit.log_level === lvl, action: 'set_log_level', payload: { level: lvl } };
+      }), 'Log level');
+      html += '</div>';
+      html += '<div class="pf-audit-card-row"><div class="pf-audit-card-title">Log file</div>';
+      html += '<div class="pf-audit-logfile">' + esc(audit.log_file) + '</div></div>';
+      html += '</div>';
+    }
 
     html += '<div class="pf-group-title">Recent decisions</div>';
     html += '<div class="pf-audit-list">';
@@ -972,6 +1047,7 @@ _JS = r"""
     audit.recent.forEach(function (a) {
       var badgeCls = a.decision === 'denied' || a.decision === 'rejected' ? 'denied' : (a.decision === 'auto_accepted' ? 'auto_accepted' : 'other');
       html += '<div class="pf-audit-row">';
+      html += auditAgentHtml(a.agent);
       html += '<div class="pf-audit-connector">' + esc(a.connector) + '</div>';
       html += '<div class="pf-audit-tool">' + esc(a.tool) + '</div>';
       html += '<div class="pf-audit-badge ' + badgeCls + '">' + esc(a.decision) + '</div>';
@@ -979,6 +1055,77 @@ _JS = r"""
       html += '</div>';
     });
     html += '</div></div>';
+    return html;
+  }
+
+  // AGT-5: settings_controller.audit_rows()'s `agent` -- agent_label.AgentLabel.to_dict(), the
+  // same tiered wording the approval card and list use. A row with no agent (a log line from
+  // before attribution) reads as unknown: never blank, never "Claude". No brand mark here --
+  // the tier marker carries the distinction on a page this dense.
+  var TIER_MARKERS = { attested: 'Verified', claimed: 'Not verified', unknown: 'Unknown' };
+
+  function auditAgentHtml(agent) {
+    agent = agent || {};
+    var tier = TIER_MARKERS.hasOwnProperty(agent.tier) ? agent.tier : 'unknown';
+    var headline = agent.headline || 'Unrecognised AI system';
+    var text = agent.claim ? headline + ' \u201c' + agent.claim + '\u201d' : headline;
+    return '<div class="pf-audit-agent pf-audit-agent-' + tier + '" data-agent-tier="' + tier + '" title="' + esc(text) + '">' +
+      '<span class="pf-audit-agent-name">' + esc(text) + '</span><span class="pf-audit-tier ' + tier + '">' +
+      esc(TIER_MARKERS[tier]) + '</span></div>';
+  }
+
+  // -------------------------------------------------------------------- //
+  // AI systems (AGT-5, org mode, admin only -- ADR 0035 decision 3)
+  // -------------------------------------------------------------------- //
+
+  function renderAgents(state) {
+    var agents = state.agents || { clients: [], stale_pins: [], registry: [] };
+    var html = '<div class="pf-page">';
+    html += '<div class="pf-page-title">AI systems</div>';
+    html += '<div class="pf-page-subtitle">Every OAuth client registered with this server names itself — anything that can reach the server can register as "ChatGPT". Pin a registration you have checked to the AI system it really is: only a pinned client is shown as verified, and a pin never moves to another registration.</div>';
+
+    html += '<div class="pf-group-title">Registered clients</div>';
+    html += '<div class="pf-agents-list">';
+    if (agents.clients.length === 0) {
+      html += '<div class="pf-agents-row"><div class="pf-agents-meta">No OAuth clients are registered yet.</div></div>';
+    }
+    agents.clients.forEach(function (c) {
+      html += '<div class="pf-agents-row" data-agent-client="' + esc(c.client_id) + '">';
+      html += '<div class="pf-agents-head"><div class="pf-agents-name">' +
+        (c.client_name ? 'Registered as \u201c' + esc(c.client_name) + '\u201d' : 'No name registered') + '</div>';
+      html += '<div class="pf-agents-meta">last used ' + esc(c.last_used) + '</div></div>';
+      html += '<div class="pf-agents-meta">' + esc(c.client_id) + '</div>';
+      html += '<div class="pf-agents-controls">';
+      if (c.pinned_agent_id) {
+        html += '<span>Pinned to <strong>' + esc(c.pinned_agent_name) + '</strong></span>';
+        html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Unpin" ' +
+          dataAttr('unpin_agent_client', { client_id: c.client_id }) + '>Unpin</div>';
+      } else {
+        html += '<span>Not verified. Pin to:</span>';
+        agents.registry.forEach(function (r) {
+          html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Pin to ' + esc(r.name) + '" ' +
+            dataAttr('pin_agent_client', { client_id: c.client_id, agent_id: r.id }) + '>' + esc(r.name) + '</div>';
+        });
+      }
+      html += '</div></div>';
+    });
+    html += '</div>';
+
+    if (agents.stale_pins.length > 0) {
+      html += '<div class="pf-group-title">Stale pins</div>';
+      html += '<div class="pf-page-subtitle">These registrations were removed after going unused. Their pins no longer apply to anything; a client that registers again is a new registration and starts unverified.</div>';
+      html += '<div class="pf-agents-list">';
+      agents.stale_pins.forEach(function (p) {
+        html += '<div class="pf-agents-row" data-agent-stale-pin="' + esc(p.client_id) + '">';
+        html += '<div class="pf-agents-head"><div class="pf-agents-name">' + esc(p.agent_name) + '</div></div>';
+        html += '<div class="pf-agents-meta">' + esc(p.client_id) + '</div>';
+        html += '<div class="pf-agents-controls"><div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Remove pin" ' +
+          dataAttr('unpin_agent_client', { client_id: p.client_id }) + '>Remove pin</div></div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
     return html;
   }
 
@@ -997,10 +1144,19 @@ _JS = r"""
       dataAttr('open_repo', {}) + '>' + esc(about.repo_url.replace('https://', '')) + ' ↗</div>';
     html += '<div class="pf-about-license">' + esc(about.license) + '</div>';
     html += '<div class="pf-about-buttons">';
-    html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Check for Updates" ' +
-      dataAttr('check_for_updates', {}) + '>Check for Updates</div>';
-    html += '<div class="pf-btn-danger" role="button" tabindex="0" aria-label="Quit PrivacyFence" ' +
-      dataAttr('quit_app', {}) + '>Quit PrivacyFence</div>';
+    // check_for_updates/quit_app: a version-update check against GitHub
+    // Releases and shutting down the daemon are both local-install
+    // concepts -- neither has an org route (org's own routes_settings.py
+    // never mounts either), so both are unconditionally in this
+    // capability set's not_applicable_actions for org mode.
+    if (!notApplicable('check_for_updates')) {
+      html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Check for Updates" ' +
+        dataAttr('check_for_updates', {}) + '>Check for Updates</div>';
+    }
+    if (!notApplicable('quit_app')) {
+      html += '<div class="pf-btn-danger" role="button" tabindex="0" aria-label="Quit PrivacyFence" ' +
+        dataAttr('quit_app', {}) + '>Quit PrivacyFence</div>';
+    }
     html += '</div></div>';
     return html;
   }
@@ -1010,11 +1166,22 @@ _JS = r"""
   // -------------------------------------------------------------------- //
 
   function renderSection(state) {
-    switch (ui.section) {
+    // PSC-5: a section CAPS itself hides never renders, even if `ui.section`
+    // somehow still names it (e.g. a stale `data-nav` click recorded before
+    // a capabilities-driven re-render, or a route naming it directly via
+    // window.__pfInitialSection) -- falls back to whichever of Auto-accept/
+    // General this mode actually draws, the same choice `ui.section`'s own
+    // initial value above makes.
+    var section = ui.section;
+    if (CAPS.sections[section] === false) {
+      section = CAPS.sections.general ? 'general' : 'auto_accept';
+    }
+    switch (section) {
       case 'connectors': return renderConnectors(state);
       case 'auto_accept': return renderAutoAccept(state);
       case 'privacy': return renderPrivacy(state);
       case 'audit': return renderAudit(state);
+      case 'agents': return renderAgents(state);
       case 'about': return renderAbout(state);
       default: return renderGeneral(state);
     }
@@ -1314,13 +1481,97 @@ _JS = r"""
 """
 
 
-def build_html(state: dict, *, nonce: str | None = None, initial_section: str | None = None) -> str:
-    """Full self-contained HTML document for the settings window's WKWebView.
+_ALL_SECTIONS = ("general", "connectors", "auto_accept", "privacy", "audit", "agents", "about")
+
+# The four actions web/routes_settings.py's own bridge shim intercepts
+# client-side rather than forwarding to the generic dispatcher (that
+# module's own docstring) -- none has an ACTION_SCOPES entry at all (it
+# isn't one of that dispatcher's actions), so org_settings_scope.
+# NOT_APPLICABLE_ACTIONS doesn't cover any of them either. Three are
+# local-desktop-install concepts with no org route or org-mode meaning
+# (checking this *install's* GitHub Releases feed, installing *this org's*
+# own config bundle onto itself, shutting down the whole shared daemon);
+# open_repo (a plain link) is deliberately not included -- equally
+# applicable in every mode. check_for_updates is the About page's own
+# action name for what SettingsController implements as
+# check_for_updates_now -- a naming mismatch that predates this phase (see
+# this phase's own PR description's "Follow-ups noticed"), listed here by
+# the name the JS below actually posts.
+_LOCAL_ONLY_BESPOKE_ACTIONS: frozenset[str] = frozenset({
+    "install_org_config", "export_audit_log", "quit_app", "check_for_updates",
+})
+
+
+def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
+    """PSC-5: which of the inner-nav sections this ``(mode, is_admin)``
+    combination gets, and which individual controls (see ``dataAttr``/
+    ``toggleHtml`` call sites throughout ``_JS``) must never draw at all --
+    kept out of ``state`` itself (a separate ``window.__pfCapabilities``
+    global, see ``build_html``) so ``state`` stays exactly what the caller
+    passed in, byte for byte, the same invariant
+    test_settings_window_html.py's own ``test_state_round_trips_byte_for_
+    byte`` already checks.
+
+    Local mode (every existing caller) gets every section and no
+    suppressed action -- this function must be a no-op for ``mode !=
+    ORG_MODE``, since that's what keeps every currently-shipped local
+    rendering path (webview and web alike) unchanged by this phase.
+
+    Org mode gets ``org_settings_scope.NOT_APPLICABLE_ACTIONS`` (every
+    action with no real org route at all -- see that module for the
+    single source of truth) plus section-level decisions this function
+    itself owns, all narrower than "has an org route": Connectors has no
+    applicable action *and* nothing else worth showing (no read-only
+    connector list exists for org mode today), so the whole section is
+    hidden rather than rendered empty; Audit Log (AGT-5) is shown to every
+    principal as a read-only list of their own recent decisions, its
+    local-only export and log-level controls suppressed through
+    ``not_applicable_actions``; AI systems (AGT-5) is org-admin-only and
+    never shown in local mode; General and Privacy
+    Filter are further gated on ``is_admin`` -- the admin-only privacy/PII
+    split #400 established and this phase keeps (every action either page
+    can post is itself ``admin_only`` in ``ACTION_SCOPES``, so a non-admin
+    who somehow reached one would have every mutation 403 anyway; hiding
+    the page is the same authorization decision, applied to rendering).
+    """
+    if mode != ORG_MODE:
+        return {
+            "mode": LOCAL_MODE, "is_admin": False,
+            # AGT-5: the AI-system pin page is org-only -- local mode has no DCR
+            # registrations to pin (settings.yaml's agent_overrides: only relabels, ADR 0037).
+            "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "agents": False},
+            "not_applicable_actions": [],
+        }
+    return {
+        "mode": ORG_MODE, "is_admin": is_admin,
+        "sections": {
+            "general": is_admin, "connectors": False, "auto_accept": True,
+            "privacy": is_admin, "audit": True, "agents": is_admin, "about": True,
+        },
+        "not_applicable_actions": sorted(NOT_APPLICABLE_ACTIONS | _LOCAL_ONLY_BESPOKE_ACTIONS),
+    }
+
+
+def build_html(
+    state: dict, *, nonce: str | None = None, initial_section: str | None = None,
+    mode: str = LOCAL_MODE, is_admin: bool = False,
+) -> str:
+    """Full self-contained HTML document for the settings window's WKWebView
+    (``mode="local"``, every caller before PSC-5) *and*, since PSC-5, for
+    org mode's own ``GET /settings``/``GET /settings/privacy`` -- one
+    implementation rendering a capability-filtered subset for each, not one
+    page (see ADR 0033 and ADR 0032): the nav items and page content below
+    differ by mode/``is_admin``, but every section both modes keep
+    (Auto-accept; General/Privacy Filter
+    for an org admin) is the exact same template, reading the exact same
+    ``state`` shape, posting through the exact same bridge.
 
     ``state`` is embedded directly as ``window.__pfInitialState`` so the
     first paint needs no round trip to Python -- see this module's
     docstring for the bridge protocol Python's re-renders (``window.
-    __pfRender``) follow afterwards.
+    __pfRender``) follow afterwards. Unchanged by ``mode``/``is_admin``:
+    those two only ever affect the separate ``window.__pfCapabilities``
+    global below, never ``state`` itself.
 
     ``nonce``: the
     current response's CSP nonce (``request.state.csp_nonce``) -- this
@@ -1337,9 +1588,20 @@ def build_html(state: dict, *, nonce: str | None = None, initial_section: str | 
     directly on the screen that unblocks the user, instead of ``/settings``'s
     default General page. ``None`` (every other route) emits no script at
     all, leaving the JS's own ``'general'`` fallback exactly as before.
+    PSC-5's own org-mode callers pass ``"auto_accept"``/``"privacy"`` for
+    the same reason -- org mode's own General page is empty (hidden
+    entirely, in fact) for a non-admin principal, so falling back to it
+    would land every non-admin on a blank nav selection.
+
+    ``mode``/``is_admin`` (PSC-5): see ``_capabilities_for`` above for
+    exactly what each combination hides. Both default to local mode's own
+    values, so every pre-PSC-5 call site (every one of them, until
+    web/routes_settings.py's org routes started passing ``mode="org"``)
+    is unaffected.
     """
     nonce = nonce or secrets.token_urlsafe(18)
     state_json = json.dumps(state)
+    caps_json = json.dumps(_capabilities_for(mode, is_admin=is_admin))
     section_script = ""
     if initial_section is not None:
         section_script = f'<script nonce="{nonce}">window.__pfInitialSection = {json.dumps(initial_section)};</script>'
@@ -1348,6 +1610,7 @@ def build_html(state: dict, *, nonce: str | None = None, initial_section: str | 
         f'<style nonce="{nonce}">{_TOKENS_CSS}{_CSS}</style>'
         '<div id="app"></div>'
         f'<script nonce="{nonce}">window.__pfInitialState = {state_json};</script>'
+        f'<script nonce="{nonce}">window.__pfCapabilities = {caps_json};</script>'
         f"{section_script}"
         f'<script nonce="{nonce}">{_JS}</script>'
     )

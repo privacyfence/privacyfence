@@ -335,7 +335,7 @@ _STREAM_JS = """
     setState('down', "can't reach PrivacyFence");
     return;
   }
-  var es = new EventSource('/api/state/stream');
+  var es = new EventSource(%(stream_url)s);
   es.onopen = function () { setState('live', 'live'); };
   es.onerror = function () {
     // Issue #423: readyState CLOSED means the browser gave up for good --
@@ -367,7 +367,7 @@ _NAV_ITEMS = (("approvals", "Approvals", "/approvals"), ("settings", "Settings",
 
 # Org mode's own route set. It has no local-mode ``/settings`` dispatcher
 # (see web/server.py's module docstring for what org mode deliberately
-# doesn't mount -- ``/settings`` there is routes_org_settings.py's own,
+# doesn't mount -- ``/settings`` there is routes_settings.build_org_routes's own,
 # much smaller surface), and ``/connect``/``/security`` are surfaces local
 # mode has no equivalent of.
 ORG_NAV_ITEMS = (
@@ -394,6 +394,7 @@ def wrap(
     nav_items: tuple[tuple[str, str, str], ...] = _NAV_ITEMS,
     principal_label: str = "",
     live_updates: bool = True,
+    stream_url: str = "/api/state/stream",
 ) -> str:
     """Full ``<!DOCTYPE html>`` document: tokens.css + the shell's own CSS,
     the header (brand, nav between Approvals/Settings, live indicator), and
@@ -475,6 +476,14 @@ def wrap(
     404, is worse than no dot on the one surface whose whole job is to be
     trusted. The post-decision toast is unaffected: it is driven by the
     list page's own script, not this one.
+
+    ``stream_url`` is the SSE endpoint the ``EventSource`` connects to when
+    ``live_updates`` is on. Local mode keeps the default
+    ``/api/state/stream``; org mode's approvals page passes
+    ``/api/approvals/stream`` (web/routes_approvals.py), which carries the
+    same ``approvals`` event for just the signed-in principal and no
+    ``settings`` event -- the org pages with no stream at all (connect,
+    security, settings) still pass ``live_updates=False``.
     """
     if dismissible_notice_html and not dismissible_notice_key:
         raise ValueError("wrap(): dismissible_notice_html needs a dismissible_notice_key")
@@ -484,6 +493,7 @@ def wrap(
         stream_js = _STREAM_JS % {
             "notifications_enabled": "true" if notifications_enabled else "false",
             "notifications_detail": json.dumps(notifications_detail),
+            "stream_url": json.dumps(stream_url),
         }
         stream_script = f'<script nonce="{nonce}">{stream_js}</script>'
     live_html = (

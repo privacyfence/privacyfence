@@ -12,20 +12,14 @@ dist/PrivacyFenceApp/* opt/privacyfence/
 # system package management for its internals belongs under /opt, not /usr/lib.
 resources/linux/privacyfence-app-wrapper usr/bin/privacyfence-app
 
-# XDG autostart entry -- see debian/postinst / resources/linux/privacyfence.desktop and
-# the now-removed docs/linux-local-deb-packaging-plan.md Phase 3 for why this is the packaged default instead of
-# the --user systemd unit privacyfence.service (repo root) already documents for a bare pip/pipx
-# install.
-resources/linux/privacyfence.desktop etc/xdg/autostart/
-
-# #428 Phase 3 (ADR 0002): the companion app's own wrapper and application-menu entry -- a
-# separate .desktop file from the autostart one above (see its own comment for why one file can't
-# serve both roles).
+# The companion app's own wrapper and application-menu entry (ADR 0002). No autostart entry ships
+# with the package: the daemon is a system unit, and the companion's autostart entry is rendered by
+# the separation tool below at `enable` time.
 resources/linux/privacyfence-companion-wrapper usr/bin/privacyfence-companion
 resources/linux/privacyfence-companion.desktop usr/share/applications/
 
-# #428 Phase 4 (B5b): the opt-in privilege-separation tool, plus the systemd unit and XDG autostart
-# templates it renders at `enable` time. /usr/sbin because it refuses to run without root; the
+# The privilege-separation tool, plus the systemd unit and XDG autostart templates it renders at
+# `enable` time. /usr/sbin because it refuses to run without root; the
 # templates under /usr/share because a packaged install has no source checkout for the script to
 # find them next to (see the script's own TEMPLATE_DIR comment). scripts/build_deb.sh additionally
 # renames the script to /usr/sbin/privacyfence-privilege-separation, which dh_install cannot express

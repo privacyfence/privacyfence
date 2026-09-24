@@ -100,6 +100,16 @@ calendar:
   # titles/status in the (auto-approved) free/busy result.
   free_busy_full_event_details: true
 
+gmail:
+  # Append your Gmail signature to drafts created through PrivacyFence (the
+  # Gmail API, unlike Gmail's own compose window, adds none). This is the
+  # default; each draft tool's include_signature argument overrides it per
+  # call. The signature is the one Gmail stores for the sending address
+  # (Settings > See all settings > Signature, per address) -- Gmail's
+  # separate "new email" / "reply" signature defaults aren't exposed through
+  # its API. Shown in the approval popup with the rest of the draft.
+  append_signature_to_drafts: false
+
 # Enable/disable individual connectors (all enabled by default — this section
 # is only needed to turn one off). Toggled automatically when you use
 # Disable/Enable in PrivacyFence Settings. Enabling here isn't enough on its
@@ -160,63 +170,25 @@ update_check:
 # PrivacyFence Settings) — see docs/TECHNICAL_REFERENCE.md's "Scheduled /
 # unattended Cowork tasks" section.
 
-# Trust a specific resource once — a folder, a task list, a channel, ... —
-# instead of adding the same ID to several operation keys under
-# auto_accept_rules below. Each entry is grouped by connector and resource
-# type, with a small set of capability booleans (read / write / create /
-# ...) that decide which operations it actually auto-accepts; every new
-# grant starts with every capability off, so adding one does nothing until
-# you explicitly flip a capability on. This is also the section
-# PrivacyFence Settings' "Auto-accept Rules → <Connector>" page reads and
-# writes — editing it here or from that page are equivalent, and ``name``
-# is a cosmetic label (last resolved from the connector, shown in the page)
-# that the evaluator itself never reads. See "Auto-accept grants" in
-# docs/TECHNICAL_REFERENCE.md for the full per-connector reference.
-# auto_accept_grants:
-#   drive:
-#     sandbox_folders:
-#       # A folder Claude can write into without a popup each time (e.g. a
-#       # scratch space you created for it) — also covers Sheets/Docs writes
-#       # (write_range/add_sheet/rename_sheet/format_range/insert_dimensions/
-#       # delete_dimensions/docs.edit_content/docs.format_content) in that
-#       # folder.
-#       - id: "<drive folder id>"
-#         name: "Claude scratch space"
-#         write: true
-#     folders:
-#       # A folder Claude can read from without a popup (does NOT also grant
-#       # write — that's the separate "sandbox_folders" list above).
-#       - id: "<drive folder id>"
-#         name: "Shared Reports"
-#         read: true
-#   tasks:
-#     task_lists:
-#       - id: "<task list id>"
-#         name: "Personal"
-#         create: true
-#         edit: true
-#         complete: true
-#         move: true
-
-auto_accept_rules:
-  contacts.edit:
+# Auto-accept rules: requests PrivacyFence approves without showing you a
+# card. Managed from PrivacyFence Settings' "Auto-accept" page, the approval
+# card's "Always allow" button, or privacyfence_propose_policy_change -- all
+# three write this section. Prefer them over hand-editing: they validate each
+# rule and mint its "id" from (predicate, value, conditions), which is what
+# the Auto-accept page's usage counts are keyed on. Each rule is a scope
+# ("predicate" + "value": which resources it trusts), the operations it
+# covers, and optional conditions that must also hold. See "Auto-accept" in
+# docs/TECHNICAL_REFERENCE.md for every predicate and condition.
+auto_accept:
+  version: 2
+  rules:
     # Auto-accept contact edits that don't touch emails/phones (name,
-    # organization, or notes-only changes)
-    - rule: no_contact_info_change
-  # sheets.write_range:
-    # Auto-accept writes to spreadsheets created earlier in the same session
-    # (e.g. filling in a sheet PrivacyFence just created for you)
-    # - rule: created_this_session
-  # gmail.create_label:
-    # Auto-accept creating labels whose name is in the allowlist (nested
-    # names match on the full "Parent/Child" string)
-    # - rule: label_name_allowlist
-    #   value: ["Receipts", "Travel/Bookings"]
-  # Trusting a specific folder, task list, channel, project, space, chat,
-  # calendar, or Salesforce report? Use auto_accept_grants
-  # above instead — it's the same underlying mechanism (this is what it
-  # compiles down to) but configured once per resource instead of once per
-  # operation key.
+    # organization, or notes-only changes).
+    - id: r-d76028ec0b
+      predicate: always_allow
+      value: null
+      operations: [contacts.edit]
+      conditions: [[no_contact_info_change, null]]
 
 logging:
   # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
@@ -409,3 +381,14 @@ file_bridge:
   # know this machine has memory to spare for occasional larger files.
   # Uncomment to change it.
   # max_download_bytes: 200000000
+
+# ADR 0006 option D / ADR 0035: name an AI system whose MCP client reports
+# a name PrivacyFence doesn't recognise (its handshake clientInfo.name) as
+# one it does. Values are registry ids: claude-code, claude, chatgpt,
+# gemini-cli, cursor. This only relabels the name: a match is still
+# recorded as "Not verified" (client_info) on every install, because it is
+# selected by the name the AI system itself sends, and every AI system on
+# this machine shares one local credential. Read at startup -- restart
+# after changing it.
+# agent_overrides:
+#   my-internal-wrapper: claude-code

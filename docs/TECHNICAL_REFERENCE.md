@@ -55,11 +55,10 @@ The `initialize` response also advertises `capabilities.tools.listChanged: true`
 
 ## Meta-tools
 
-Alongside the connector-derived tools, the daemon exposes ten `privacyfence_`-prefixed meta-tools over the same `/mcp` endpoint (`web/mcp_tools.py`'s `META_TOOLS`), dispatched by `routes_mcp.py`'s `_dispatch_meta_tool` to `McpDispatcher` methods (`web/mcp_dispatch.py`) that call back into `gate.py`/`auto_accept.py`/the `policy` package — except `privacyfence_create_upload_slot`, dispatched straight to `local_files.build_upload_slot` (below), since it has no `gate.py`/policy involvement at all. Each takes a `reason` string, logged the same self-reported, unverified way as every gated connector tool's own `reason` param.
+Alongside the connector-derived tools, the daemon exposes eight `privacyfence_`-prefixed meta-tools over the same `/mcp` endpoint (`web/mcp_tools.py`'s `META_TOOLS`), dispatched by `routes_mcp.py`'s `_dispatch_meta_tool` to `McpDispatcher` methods (`web/mcp_dispatch.py`) that call back into `gate.py`/`auto_accept.py`/the `policy` package — except `privacyfence_create_upload_slot`, dispatched straight to `local_files.build_upload_slot` (below), since it has no `gate.py`/policy involvement at all. Each takes a `reason` string, logged the same self-reported, unverified way as every gated connector tool's own `reason` param.
 
-- `privacyfence_check_policy` — asks whether a specific `(connector, tool, args)` call would auto-accept or need a human, without making the call or having any side effects. Returns one of `auto_accept`, `requires_review`, or `unknown` (whether it auto-accepts can depend on fetched content this can't see in advance); for `review`-gated tools, `pii_gate_may_apply` is always `true`, since the PII gate scans real content and can never be predicted ahead of time. Since P7 of the policy v2 redesign, the result also carries `matched_rule_id` — the policy engine's own stable id for whatever will let the call through (`null` unless `verdict` is `auto_accept`), checked against the always-on v2-store layer first and the compiled-from-v1 rules second (`gate.preflight_auto_accept`), so it never predicts something the real gated call wouldn't do; pass it straight to `privacyfence_propose_policy_change`'s `rule_id` to narrow or remove that rule. Safe to call as often as needed while planning a task.
+- `privacyfence_check_policy` — asks whether a specific `(connector, tool, args)` call would auto-accept or need a human, without making the call or having any side effects. Returns one of `auto_accept`, `requires_review`, or `unknown` (whether it auto-accepts can depend on fetched content this can't see in advance); for `review`-gated tools, `pii_gate_may_apply` is always `true`, since the PII gate scans real content and can never be predicted ahead of time. Since P7 of the policy v2 redesign, the result also carries `matched_rule_id` — the policy engine's own stable id for whatever will let the call through (`null` unless `verdict` is `auto_accept`), checked against the configured `auto_accept:` rules (`gate.preflight_auto_accept`), so it never predicts something the real gated call wouldn't do; pass it straight to `privacyfence_propose_policy_change`'s `rule_id` to narrow or remove that rule. Safe to call as often as needed while planning a task.
 - `privacyfence_list_policy` / `privacyfence_propose_policy_change` (P7 of the policy v2 redesign) — the current, single scope+verb write path: one rule shape (`policy/store.py`'s on-disk `auto_accept:` section) instead of the older `target: "rule" | "grant"` split. `privacyfence_list_policy` returns `{rules, scope_groups}` — every configured v2 rule, sentence-rendered (`policy/describe.py`) with its stable id, `verbs`/`covered_tools` stating exactly how wide it is, plus the scope catalogue (`policy/catalogue.py`, shared with the Auto-accept Settings page's own "add a rule" form) that `privacyfence_propose_policy_change`'s `group`/`verbs` validate against. `privacyfence_propose_policy_change` adds, updates, or removes a rule by `group` (a scope type, e.g. `drive.folder`)/`value`/`verbs`, or by `rule_id` for `update`/`remove`; a verb the named group cannot govern is rejected — before any popup — rather than silently persisted as a rule nothing could ever render or remove (closing the write-time half of what the redesign proposal's F5 found: three operation groups, `apps_script.*`/`gmail.create_filter`/`gmail.update_filter`/`slack.create_group_chat`, had no configurable rule *and* no validation stopping one from being written anyway). Same confirmation contract as the tool it replaces: always blocks on a native dialog, throws if declined or if the connection is unattended. Since the self-approval review's Phase 4 that dialog is registered as *sensitive* (`approvals.PendingApprovalRegistry.register_confirm`) — nothing gated it first, so confirming one takes what the equivalent Settings action takes: an attributable session, and a passkey wherever `require_passkey` is on. See [`security-and-compliance.md`](security-and-compliance.md#a-confirmation-dialog-is-not-always-a-second-step).
-- `privacyfence_list_auto_accept_rules` / `privacyfence_propose_auto_accept_rule_change` — DEPRECATED as of P7, kept for one minor release as working aliases accepting the older `auto_accept_rules`/`auto_accept_grants` *request* shape (`target: "rule" | "grant"`); new code should use `privacyfence_list_policy`/`privacyfence_propose_policy_change` above instead. Only the *request* shape is v1: `privacyfence_list_auto_accept_rules` returns exactly what `privacyfence_list_policy` returns (reading the old sections directly would show whatever they held before the one-time migration folded them into v2 — stale content, not what actually auto-accepts), and `privacyfence_propose_auto_accept_rule_change` translates its older `target: "rule" | "grant"` request into the same v2 rule `privacyfence_propose_policy_change` would create and writes it to the same `auto_accept:` section. Neither reads or writes `auto_accept_rules`/`auto_accept_grants` any more; nothing does, outside `policy/compat.py`'s one-time migration. Always blocks on a native confirmation dialog a human must approve — there is no way to change this config without one, even for an entry that already exists — and throws if declined, or outright if the connection is in an unattended session.
 - `privacyfence_begin_unattended_session` / `privacyfence_end_unattended_session` — see "Scheduled / unattended Cowork tasks" below.
 - `privacyfence_await_approval` — long-polls one or more `approval_id`s from a gated call's `{status: "approval_pending", approval_id, ...}` result and reports status only (`pending`, `approved`, `denied`, `expired`, or `unknown`), never content — a re-issue of the original gated call with the same arguments is still what actually retrieves data once `approved`. Both this tool's own description and `gate.py`'s `_pending_result` `message` field tell the calling agent, in-band, not to sit on a pending approval silently: relay the `url` to the human first, then either call this tool to wait, or — where the client can schedule a follow-up (a reminder, a background check) — schedule one instead of blocking the conversation.
 - `privacyfence_status` (issue #396) — the one meta-tool guaranteed to answer even when `connectors == []` leaves every other tool missing, so an empty or partial tool list reads as "not set up yet", not "nothing to do here". Returns `{mode, setup_complete, connectors, next_step, message}` and, whenever setup isn't complete, `sign_in_url` (always `null` — see below): `mode` is `"local"` or `"org"`; `connectors` is a list of `{name, enabled, authenticated, blocked_by}` (`blocked_by` is `null` once authenticated or deliberately disabled, otherwise `"no_org_config"`, `"not_authenticated"`, or a short redacted reason — `SettingsController.status_connectors`, sourced from `build_connectors()`'s own per-connector failure map); `setup_complete` is `true` once at least one connector is authenticated. **This tool never mints a sign-in credential itself, and since the self-approval plan's Phase 2 nothing over `/mcp` does** — a threat-model follow-up to the original issue found that a bootstrap code handed back here would be a live credential (code → `pf_session` cookie → a gated approval's own decide route) issued because a *model* decided to check status, not because a human asked. `privacyfence_get_sign_in_link`, which minted exactly that on request, is retired: its own stated justification (the companion app "happens to be running", nothing installs or starts it automatically) expired when [ADR 0003](adr/0003-separated-installs-only.md) made the companion mandatory on all three platforms, and a session is no longer something to hand the party it governs. So when local mode is un-onboarded, `next_step` is `"open_privacyfence_companion"` and `message` tells the model to send the human to the companion's own Open Settings item, with no link for the model to relay; organization mode's `next_step` is `"contact_your_administrator"` instead, since org mode has no bootstrap-link concept at all. A human whose companion menu is out of reach runs `privacyfence-app --print-sign-in-link` themselves — see `daemon_main.run_print_sign_in_link()`. Wired via `McpDispatcher.set_connectors_state_provider`.
@@ -71,7 +70,7 @@ Every tool advertised over `/mcp`, meta-tools included, carries the same uniform
 
 `privacyfence_begin_unattended_session` tells PrivacyFence that the rest of this MCP connection is a scheduled/unattended run — a Cowork Routine firing on a schedule with no human necessarily watching — rather than an interactive conversation. It errors unless an administrator has opted the install into this: `unattended_sessions.enabled` in `org/org_config.json`, a deliberate per-organization setting, not a per-user one.
 
-Once set, the flag is tracked per MCP session (`McpDispatcher._unattended_sessions`) and read by `gate.py`'s `is_unattended()` through every gated call on that connection. It changes exactly one thing: a call that isn't already covered by a configured auto-accept rule is denied immediately (audited as `denied_unattended`) instead of PrivacyFence opening a native approval dialog nobody is there to answer. It never changes what auto-accepts, only what happens when nothing does. `privacyfence_propose_auto_accept_rule_change`/`privacyfence_propose_policy_change` are likewise refused outright in an unattended session, since a config change always requires a human confirmation.
+Once set, the flag is tracked per MCP session (`McpDispatcher._unattended_sessions`) and read by `gate.py`'s `is_unattended()` through every gated call on that connection. It changes exactly one thing: a call that isn't already covered by a configured auto-accept rule is denied immediately (audited as `denied_unattended`) instead of PrivacyFence opening a native approval dialog nobody is there to answer. It never changes what auto-accepts, only what happens when nothing does. `privacyfence_propose_policy_change` is likewise refused outright in an unattended session, since a config change always requires a human confirmation.
 
 `privacyfence_end_unattended_session` clears the flag, restoring normal interactive approval behavior — not strictly required, since it also clears when the connection closes, but useful if the connection might be reused afterward for something interactive. Pairing `privacyfence_check_policy` with a scheduled run lets it plan around steps that would otherwise need a human who isn't there.
 
@@ -117,12 +116,12 @@ layout and optional sections (AI-visibility checklist, PII banner, etc.), see
 | `gmail_get_thread` | read | review | subject, all participants, message count, date range | All messages in thread |
 | `gmail_list_message_attachments` | read | auto | — | — |
 | `gmail_download_attachment` | read | review | from, subject, attachment name, size, save path | — |
-| `gmail_create_draft` | write | popup | — | To, cc, subject, full body (or Markdown source, if `body_markdown` given) |
-| `gmail_reply_draft` | write | popup | — | In reply to, to, cc/bcc, full reply body (or Markdown source, if `body_markdown` given) |
-| `gmail_reply_all_draft` | write | popup | — | In reply to, to, also-to (expanded participants), cc/bcc, full reply body (or Markdown source, if `body_markdown` given) |
-| `gmail_create_draft_with_attachments` | write | popup | — | To, cc, subject, attachment names/sizes, full body (or Markdown source, if `body_markdown` given) |
-| `gmail_reply_draft_with_attachments` | write | popup | — | In reply to, to, cc/bcc, attachment names/sizes, full reply body (or Markdown source, if `body_markdown` given) |
-| `gmail_reply_all_draft_with_attachments` | write | popup | — | In reply to, to, also-to (expanded participants), cc/bcc, attachment names/sizes, full reply body (or Markdown source, if `body_markdown` given) |
+| `gmail_create_draft` | write | popup | — | To, cc, subject, full body (or Markdown source, if `body_markdown` given); `From` when `send_as` given; appended Gmail signature and a `Signature` row when `include_signature` (default: `gmail.append_signature_to_drafts`) |
+| `gmail_reply_draft` | write | popup | — | In reply to, to, cc/bcc, full reply body (or Markdown source, if `body_markdown` given); `From` when `send_as` given; appended Gmail signature and a `Signature` row when `include_signature` (default: `gmail.append_signature_to_drafts`) |
+| `gmail_reply_all_draft` | write | popup | — | In reply to, to, also-to (expanded participants), cc/bcc, full reply body (or Markdown source, if `body_markdown` given); `From` when `send_as` given; appended Gmail signature and a `Signature` row when `include_signature` (default: `gmail.append_signature_to_drafts`) |
+| `gmail_create_draft_with_attachments` | write | popup | — | To, cc, subject, attachment names/sizes, full body (or Markdown source, if `body_markdown` given); `From` when `send_as` given; appended Gmail signature and a `Signature` row when `include_signature` (default: `gmail.append_signature_to_drafts`) |
+| `gmail_reply_draft_with_attachments` | write | popup | — | In reply to, to, cc/bcc, attachment names/sizes, full reply body (or Markdown source, if `body_markdown` given); `From` when `send_as` given; appended Gmail signature and a `Signature` row when `include_signature` (default: `gmail.append_signature_to_drafts`) |
+| `gmail_reply_all_draft_with_attachments` | write | popup | — | In reply to, to, also-to (expanded participants), cc/bcc, attachment names/sizes, full reply body (or Markdown source, if `body_markdown` given); `From` when `send_as` given; appended Gmail signature and a `Signature` row when `include_signature` (default: `gmail.append_signature_to_drafts`) |
 | `gmail_add_label` | write | popup | — | From, subject, label name |
 | `gmail_remove_label` | write | popup | — | From, subject, label name |
 | `gmail_archive_message` | write | popup | — | From, subject, confirmation that message stays in All Mail |
@@ -543,10 +542,10 @@ allow** button, PrivacyFence Settings' **Auto-accept** page, and the MCP bridge'
 
 Through 4.1, trusting a resource meant two different, overlapping config models — a
 per-operation `auto_accept_rules` section and a resource-scoped `auto_accept_grants` section, each
-writable from different surfaces with different width. Both are gone as anything live writes or
-evaluates: every rule, however it was created, now lives in one place, described the same way
-everywhere it's shown. See [Migration from v1](#migration-from-v1) below for what happens to an
-existing hand-edited config.
+writable from different surfaces with different width. Both are gone: every rule, however it was
+created, now lives in one place, described the same way everywhere it's shown. See
+[Earlier config formats](#earlier-config-formats) below for what happens to a config that still
+has either section.
 
 ### The `auto_accept:` schema
 
@@ -558,11 +557,11 @@ auto_accept:
       predicate: approved_sandbox_folder
       value: ["1CdeFghIJKLmnoPQRstuVWxyz0123456789AbCdEfGh"]
       operations: [drive.write_file, sheets.write_range, docs.edit_content]
-      conditions: [[shared_drive_exclusion, null]]
+      conditions: [[not_shared_drive, null]]
 ```
 
 `id` is derived from `(predicate, value, conditions)` — the same triple always mints the same id
-regardless of which operations carry it or how many times a config is (re-)migrated, so a rule's
+regardless of which operations carry it, so a rule's
 identity in the audit log and in Settings doesn't churn on every restart. `predicate` is the scope
 selector (see [Scope catalogue](#scope-catalogue) below); `operations` is the engine's own internal
 address space — the set of connector operation keys this rule governs — never shown to a user
@@ -705,16 +704,15 @@ cannot govern, or a value-needing scope submitted with none, is rejected before 
 than silently persisted. `privacyfence_check_policy` predicts a call's verdict ahead of time and
 returns `matched_rule_id`, so a planning agent can say *why* something will auto-accept.
 
-The two pre-redesign bridge tools (`privacyfence_list_auto_accept_rules`,
-`privacyfence_propose_auto_accept_rule_change`) are kept as deprecated aliases: the list tool now
-returns the identical v2 listing `privacyfence_list_policy` does, and the propose tool translates
-its older `target: "rule" | "grant"` shape into the same v2 rule the new tool would create.
+The two pre-redesign bridge tools were kept as deprecated aliases for one minor release (ADR 0004
+decision 3) and were deleted once 4.1.2 shipped (PSC-3; see that ADR for which tools and why).
 
-Org mode's own per-principal settings page (`web/routes_org_settings.py`) writes the identical
-schema through the identical primitives (`auto_accept.add_policy_v2_rules`/`remove_policy_v2_rule`)
-— a signed-in principal manages their own rules from `/settings` the same way local mode's Auto-
-accept page does, scoped to `current_principal()` throughout so an admin has no more mutation
-power over another principal's rules than that principal does.
+Org mode's own per-principal settings page (`web/routes_settings.py`'s `build_org_routes`, rendered
+by `web/org_settings_pages.py`) writes the identical schema through the identical primitives
+(`auto_accept.add_policy_v2_rules`/`remove_policy_v2_rule`) — a signed-in principal manages their
+own rules from `/settings` the same way local mode's Auto-accept page does, scoped to
+`current_principal()` throughout so an admin has no more mutation power over another principal's
+rules than that principal does.
 
 ### Related but distinct mechanisms
 
@@ -729,23 +727,13 @@ Deliberately *not* offered on `drive_sheets_delete_dimensions` (no undo path) or
 `drive_sheets_add_sheet`/`drive_sheets_rename_sheet` (one-shot per file, not called in a burst) —
 those get a plain Deny/Allow once with no caption at all.
 
-### Migration from v1
+### Earlier config formats
 
-A not-yet-migrated, hand-edited `settings.yaml`'s `auto_accept_rules`/`auto_accept_grants`
-sections are folded into the v2 `auto_accept:` section once, automatically, the next time the
-daemon starts (`policy.compat.migrate_to_policy_v2`, run from `daemon_main.run_app` for the local
-principal and from `daemon_main._load_principal_settings` for every org principal). Migration is
-provably behaviour-preserving: it can only ever produce the *exact* rule set the old two-model
-config would have evaluated, backed by an equivalence harness that checks every predicate and
-every fixture against the pre-redesign implementation. A migration that actually changed anything
-backs up the pre-migration file to `settings.yaml.bak` first and logs a summary naming every rule
-whose expansion carries a destructive or send-family verb — surfacing what a grant's boolean used
-to hide rather than silently dropping it.
-
-`auto_accept_rules`/`auto_accept_grants` are never deleted or written to again after migration —
-they stay on disk, readable, for reference on a hand-edited install. Nothing evaluates them
-directly anymore; the migrated v2 section is the only thing any surface reads or writes going
-forward.
+A `settings.yaml` that still has an `auto_accept_rules` or `auto_accept_grants` section — even an
+empty one — is refused at startup with a configuration error naming the section
+(`policy.store.reject_v1_sections`, from `daemon_main.load_config`, for the local principal and
+every org principal). Nothing converts it: remove the section and recreate its rules on the
+Auto-accept page. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md).
 
 ---
 
@@ -777,6 +765,33 @@ The PII detector and privacy filter are implemented in `pii_detector.py` and `pr
 PrivacyFence records tool/gate decisions to the audit log, including the connector/tool, decision, request metadata, and principal information where applicable. Security-sensitive audit integrity/forwarding behavior is implemented in the audit modules and described in [`security-and-compliance.md`](security-and-compliance.md).
 
 Treat the audit log as security-relevant state: protect its directory, include it in operational backup decisions where required, and do not expose it through connector content paths.
+
+### Which AI system made the request
+
+Since audit schema 5 (`audit_log.CURRENT_SCHEMA_VERSION`), every entry carries four fields naming the AI system a gated connector call came from ([ADR 0006](adr/0006-attributing-a-request-to-the-ai-system-that-made-it.md), [ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)). They are also columns in the weekly Excel export and on the Audit Log settings page.
+
+| Field | Holds |
+|---|---|
+| `agent_id` | A registry id (`claude-code`, `claude`, `chatgpt`, `gemini-cli`, `cursor`), `unknown:<claimed name>` for a name no registry entry matches exactly, or `""` |
+| `agent_name` | The registry display name, or the sanitized claimed name for an unmatched client |
+| `agent_version` | The sanitized version the client claimed in its handshake, or `""` when the identity came from a DCR `client_name` (a registration carries no version). Never verified |
+| `agent_source` | Which signal produced the other three, and so how far to believe them |
+
+`agent_source` has a fixed vocabulary (`agent_identity.AgentSource`). `web/routes_mcp.py`'s `_resolve_agent` takes the first signal present, in this order: an admin pin, a local `agent_overrides:` relabel, an unpinned registration's DCR `client_name`, the handshake name.
+
+| `agent_source` | Tier | Recorded when |
+|---|---|---|
+| `oauth_client` | attested | Org mode only, and the only attested source today: an administrator pinned the access token's OAuth `client_id` to a registry entry on the *AI systems* settings page (`web/agent_pins.py`, `org_dir()/agent_pins.json`) |
+| `client_info` | claimed | Anything the client chose: the `clientInfo` name from the MCP handshake (or a session-less request's own `_meta`), an unpinned registration's DCR `client_name`, or a local `settings.yaml` `agent_overrides:` mapping, which relabels the name on every install but is selected by the name the client sent ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)) |
+| `endpoint` | claimed | Reserved for ADR 0006's deferred `/mcp/a/<agent-id>` alias. Nothing records it today |
+| `override` | attested | Reserved for a per-credential local override (ADR 0006 option D), which needs per-credential local tokens. Nothing records it today: local mode has no attested source ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)) |
+| `""` | unknown | No usable signal. Recorded as unknown, never guessed and never "Claude" |
+
+Like `claude_reason`, `agent_name` is self-reported, unverified text unless `agent_source` is `oauth_client`, and `agent_version` always is, pinned or not. Every caller-supplied string (`clientInfo.name`/`version`, DCR `client_name`) is stripped of control and bidi characters and cut to 64 characters before it is stored (`agent_identity.sanitize_client_string`), and escaped wherever it is rendered. `clientInfo.icons` and `website_url` are never read.
+
+Attribution is reporting only. Nothing may key an outcome on `agent_id` unless `agent_source` is attested, and today nothing keys on it at all: the same call gets the same decision, rule match and released data whatever name the client gives (`tests/unit/test_systemic_gate_invariants.py`). The `privacyfence_*` meta-tools are not attributed, and their entries record all four fields empty. An entry about an earlier request, such as an approval the expiry sweep times out, carries the identity that request's `PendingApproval` captured, not the identity of whatever call ran the sweep.
+
+Entries written before schema 5 load with all four fields empty, which reads as "this install did not yet distinguish", and a log mixing old and new entries still verifies.
 
 ## Web authentication and CSRF
 
@@ -842,73 +857,32 @@ on top of a running daemon restarts it onto the new build rather than needing it
 `installer/privacyfence.iss` (built by `scripts/build_installer.ps1`) installs the PyInstaller
 onedir output under `%ProgramFiles%\PrivacyFence\`, the bundled `.mcpb` alongside it, and a Start
 Menu entry pointing at the embedded web settings UI rather than at the daemon executable directly.
-The installer requires admin elevation (`PrivilegesRequired=admin`) — it used to allow a
-per-user-writable install without elevation (`PrivilegesRequired=lowest`), but that path could
-never register the Task Scheduler autostart task below at all: `schtasks /create /xml` registering
-a task with a `LogonTrigger` needs the `SeCreateGlobalPrivilege` user right, which a non-elevated
-token lacks regardless of the task's principal (see `platform-support.md`'s "Known open items").
+The installer requires admin elevation (`PrivilegesRequired=admin`): its post-install step runs
+`privilege-separation.ps1 enable` ([ADR 0003](adr/0003-separated-installs-only.md) decision 4),
+which creates a Windows service, a local group and an ACL'd `%ProgramData%\PrivacyFence`, and
+refuses to run a service out of a directory the signed-in user can rewrite.
 
-Autostart is a Task Scheduler task (`PrivacyFence`), not a Startup-folder shortcut, registered from
-`installer/privacyfence.iss`'s `[Code]` section (`CurStepChanged(ssPostInstall)` calling
-`RegisterAutostartTask`) rather than a plain `[Run]` entry, and removed by the uninstaller's
-`[UninstallRun]` section (`schtasks /delete`) — visible and removable through normal Windows
-install/uninstall UI, the same way the macOS LaunchAgent plist and the Linux `.deb`'s XDG autostart
-entry are. Registration is a real Task Scheduler XML task definition
-(`installer/privacyfence-task.xml.tmpl`, extracted at install time, `__EXEC_PATH__` substituted for
-the real installed path, registered via `schtasks /create /xml`), not plain `schtasks /create` CLI
-flags — an earlier CLI-flag-only version of this mechanism shipped briefly with two real bugs
-(invalid `/ri`/`/du` flags for an `ONLOGON` schedule, then a trigger scoped to only the installing
-account), both superseded by this XML-based rewrite rather than patched in place; see that
-template's own header comment and `platform-support.md`'s "Known open items" for the full history.
-`<LogonTrigger>` with no `<UserId>` fires for any interactive logon, `<Principal>` uses `GroupId`
-(`Builtin\Users`) rather than a specific account so the task runs as whichever user just signed in,
-in their own session, at the non-elevated `LeastPrivilege` run level.
-`<RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>` was first added as
-parity with the macOS LaunchAgent's `KeepAlive`/`SuccessfulExit=false` and the Linux `.deb`'s systemd
-restart policy, but **does not actually restart a crashed daemon** — Task Scheduler logs an action
-that ran and then died as a successfully completed task, so the setting never engages for that case
-(measured, with the event-log evidence, in `platform-support.md`'s "Known open items"). It stays in
-the definition anyway, for the narrower thing it still does: a faster (`PT1M`) retry of a launch
-failure right at logon. Real crash-restart is a second trigger,
-`<TimeTrigger><StartBoundary>2020-01-01T00:00:00</StartBoundary><Enabled>true</Enabled>
-<Repetition><Interval>PT5M</Interval></Repetition></TimeTrigger>`, alongside the `<LogonTrigger>`: a
-past `StartBoundary` and an indefinite `<Repetition>` make it live immediately rather than waiting for
-a sign-in, and every tick relaunches the daemon (a tick that finds one already running exits at once,
-via the single-instance lock) — `daemon_main.run_app()` logs that case at INFO and exits `0` rather
-than ERROR/`1`, so Task Scheduler logs a clean success on every ordinary tick. `<DisallowStartIfOnBatteries>` and
-`<StopIfGoingOnBatteries>` are both set to `false`, inverting Task Scheduler's own defaults: left at
-the defaults, a laptop on battery power would not start PrivacyFence at sign-in and would stop it
-when unplugged — a privacy gate that quietly isn't running, with the MCP client simply finding no
-daemon. This closes the crash-restart gap in Windows autostart — measured, not assumed, on a real
-`windows-latest` runner: killing the
-Scheduler-started daemon produces a new pid, under the same signed-in account, before the
-`<TimeTrigger>`'s own next tick would otherwise be due. See
-[`platform-support.md`](platform-support.md)'s "Known open items" for this mechanism's current
-verification status. In short: `windows-graphical-session.yml` verifies the definition Task
-Scheduler itself stored, that Task Scheduler really starts the daemon for an account that installed
-nothing, and that it really relaunches it after a crash; the `<LogonTrigger>`'s own firing is a
-human check on a real machine (`release-testing.md`), because a hosted runner cannot produce the
-Terminal Services session logon the trigger subscribes to.
+The daemon is the `PrivacyFence` Windows service, running as the `NT SERVICE\PrivacyFence`
+virtual account, with its own `sc failure` crash-restart; the only Scheduled Task is
+`PrivacyFenceCompanion`, which starts the companion tray app in each user session at sign-in
+(`installer/windows/privacyfence-companion-task.xml.tmpl`, rendered and registered by `enable` via
+`schtasks /create /xml`; see that template's header comment for the load-bearing details of the
+definition). State — credentials, settings, policy, passkeys, the audit log — lives under
+`%ProgramData%\PrivacyFence\`; see `platform-support.md`'s Windows section for the layout and ACLs,
+and its "Known open items" for what `windows-graphical-session.yml` verifies.
 
-Per-user state (credentials, settings, the audit log) lives under `%LOCALAPPDATA%\PrivacyFence\`
-(`paths.py`'s `data_dir()`, via its `_windows_data_dir()` branch — not the same `~/.privacyfence`
-dotfile POSIX uses reused verbatim under `%USERPROFILE%`, since a dot-prefixed name isn't a hiding
-convention Explorer honors the way it is on POSIX; `%LOCALAPPDATA%` rather than the Roaming
-`%APPDATA%` because this directory holds credentials and audit logs that shouldn't follow a roaming
-profile across machines), created by the app on first run — the installer never touches it, and
-uninstalling removes only the program files, the scheduled task(s) and, if one exists, the
-privilege-separation service.
+Uninstalling runs `privilege-separation.ps1 uninstall`, which removes the service and the companion
+task and keeps `%ProgramData%\PrivacyFence\` and the `PrivacyFenceUsers` group, so a reinstall picks
+the data up again; the uninstaller's **Delete PrivacyFence data** checkbox (unchecked by default,
+never offered on a silent uninstall) adds `-Purge`, which deletes both ([ADR 0042](adr/0042-uninstall-replaces-disable.md)). Nothing moves data
+back into `%LOCALAPPDATA%` ([ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)).
 
-**That layout describes a source checkout or `pip`/`pipx` run.** On every packaged Windows install
-— where the installer runs privilege separation itself as a post-install step, and where a daemon
-that finds itself unseparated refuses to serve ([ADR 0003](adr/0003-separated-installs-only.md)
-decisions 4 and 6, see `platform-support.md`'s Windows section) — that state lives at
-`%ProgramData%\PrivacyFence\` under the `NT SERVICE\PrivacyFence` virtual account instead, the
-daemon is a Windows service rather than the Scheduled Task above (which is left registered but
-disabled), and a second task starts the companion tray app in each user session. Uninstall leaves
-`%ProgramData%\PrivacyFence\` in place exactly as it leaves `%LOCALAPPDATA%\PrivacyFence\`, which
-on a separated install means a directory no ordinary account can read afterwards — so
-`privilege-separation.ps1 disable` before uninstalling is the documented order.
+A source checkout or `pip`/`pipx` run is not separated, and keeps its state under
+`%LOCALAPPDATA%\PrivacyFence\` (`paths.py`'s `data_dir()`, via its `_windows_data_dir()` branch —
+not the same `~/.privacyfence` dotfile POSIX uses reused verbatim under `%USERPROFILE%`, since a
+dot-prefixed name isn't a hiding convention Explorer honors the way it is on POSIX; `%LOCALAPPDATA%`
+rather than the Roaming `%APPDATA%` because this directory holds credentials and audit logs that
+shouldn't follow a roaming profile across machines).
 
 **File-permissions caveat, accepted for v1**: elsewhere on this codebase, credential/token files are
 written with `chmod(0o600/0o700)` to lock them down to the owning user. On Windows, `chmod` is a
@@ -939,9 +913,9 @@ comparison:
 
 - **Local desktop mode**: a self-contained `.deb` (`PrivacyFenceApp.linux.spec`,
   `scripts/build_deb.sh`, `debian/`) installing the PyInstaller onedir output under
-  `/opt/privacyfence`, exposing `/usr/bin/privacyfence-app`, and registering an XDG autostart entry
-  under `/etc/xdg/autostart/` — the Linux analogue of the macOS LaunchAgent/Windows Task Scheduler
-  task. Package removal does not delete per-user state from the home directory. Currently `amd64`
+  `/opt/privacyfence`, exposing `/usr/bin/privacyfence-app`, and running the daemon as a system
+  systemd unit under its own account. `apt remove` keeps the data in `/var/lib/privacyfence`;
+  `apt purge` deletes it (ADR 0042). Currently `amd64`
   only; `arm64` is a deliberate, undecided follow-up rather than a gap (see `platform-support.md`'s
   "Architecture and CPU constraints").
 - **Org mode / server deployments**: `pip`/`pipx install privacyfence`, walked end to end by

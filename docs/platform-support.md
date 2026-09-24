@@ -4,13 +4,22 @@ PrivacyFence local mode is packaged for macOS, Windows, and Debian/Ubuntu Linux.
 
 ## Support matrix
 
-| Platform | Distribution | Startup model | Release automation |
-|---|---|---|---|
-| macOS | one signed/notarized DMG, carrying the `.pkg` installer (which holds the PyInstaller app bundle) and the MCPB side by side | installed by the `.pkg`, which provisions a LaunchDaemon under a dedicated account at install time, mandatorily (see below); D1's runtime prompt is the fallback for an install that reached a running state some other way, not a second shipped path | `.github/workflows/build.yml` on `macos-latest` |
-| Windows | Inno Setup installer containing the PyInstaller executable and MCPB | the installer separates the install as part of installing (see below): a Windows service under a virtual service account runs the daemon, a Task Scheduler entry runs the companion | `.github/workflows/build.yml` on `windows-latest` |
-| Debian/Ubuntu local mode | self-contained `.deb` built from the PyInstaller onedir output | `postinst` separates the install unconditionally on every install and upgrade (see below): a system systemd unit under a dedicated account runs the daemon, an XDG autostart desktop entry runs the companion | `.github/workflows/build.yml` on `ubuntu-latest` |
-| Linux Python install | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
-| Linux org mode | Python/system service behind the configured reverse proxy and identity provider | operator-managed service | release smoke coverage in the build/test suite |
+| Platform | Minimum OS | Distribution | Startup model | Release automation |
+|---|---|---|---|---|
+| macOS | macOS 13, Apple silicon | one signed/notarized DMG, carrying the `.pkg` installer (which holds the PyInstaller app bundle) and the MCPB side by side | installed by the `.pkg`, which provisions a LaunchDaemon under a dedicated account at install time, mandatorily (see below); D1's runtime prompt is the fallback for an install that reached a running state some other way, not a second shipped path | `.github/workflows/build.yml` on `macos-latest` |
+| Windows | Windows 10 / Windows Server 2016 (x64) | Inno Setup installer containing the PyInstaller executable and MCPB | the installer separates the install as part of installing (see below): a Windows service under a virtual service account runs the daemon, a Task Scheduler entry runs the companion | `.github/workflows/build.yml` on `windows-latest` |
+| Debian/Ubuntu local mode | glibc 2.38 and systemd 242 (Ubuntu 24.04, Debian 13 or newer) | self-contained `.deb` built from the PyInstaller onedir output | `postinst` separates the install unconditionally on every install and upgrade (see below): a system systemd unit under a dedicated account runs the daemon, an XDG autostart desktop entry runs the companion | `.github/workflows/build.yml` on `ubuntu-latest` |
+| Linux Python install | Python 3.11 | wheel/sdist with `privacyfence-app` console script | operator-managed process or `privacyfence.service` | PyPI publishing workflow |
+| Linux org mode | Python 3.11 | Python/system service behind the configured reverse proxy and identity provider | operator-managed service | release smoke coverage in the build/test suite |
+
+Each installer enforces its own row's floor and refuses an older system instead of installing
+something that cannot start: the `.pkg` through its `allowed-os-versions` (the app's
+`LSMinimumSystemVersion`) and `hostArchitectures="arm64"` (the app is built for Apple silicon
+only, so an Intel Mac is refused), the Windows installer through `MinVersion`, and the `.deb` through its
+`libc6`/`systemd` dependency versions. The `.deb`'s glibc floor is whatever the build runner linked
+the bundled Python against; `scripts/check_deb_glibc_floor.py` fails the build if that ever rises
+above the declared floor. `tests/unit/test_minimum_os_versions.py` keeps all three in step with
+this table.
 
 ## Shared runtime architecture
 
@@ -62,6 +71,27 @@ with that reason, and a recovery code is not issued rather than issued to nobody
 (status/start/stop/restart) needs no dialog to *read* — only the elevation prompt itself, which is
 the OS's own (`osascript`/`pkexec`/UAC), not one of these two.
 
+### Opening PrivacyFence itself opens Approvals
+
+Every platform's visible entry point runs the companion, never the daemon ([ADR
+0031](adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md)). On macOS that is
+the app in `/Applications`, whose bundle's main executable is a launcher
+(`Contents/MacOS/PrivacyFence`, not the daemon's `PrivacyFenceApp`). On Windows it is the main
+Start Menu entry, and on Linux the Applications-menu entry. What happens depends on whether a
+companion is already running:
+
+- **A companion is running:** the click asks it to open Approvals, and it asks the human to
+  confirm first. The request comes from another process running as the same user, so the
+  confirmation cannot be skipped. On a separated POSIX install, this page request is the one
+  thing the companion's own user may send the companion's channel.
+- **No companion is running (macOS, Windows):** the click becomes the tray/menu-bar companion
+  itself and opens Approvals with no dialog.
+- **No companion is running (Linux):** the click falls back to the view-only link, as
+  `--action=open-approvals` always has.
+
+launchd, the Scheduled Task and systemd still start the daemon and the companion by their own
+explicit paths, so none of this touches the service.
+
 ## macOS
 
 The macOS app is defined by `PrivacyFenceApp.spec`. Release builds are produced by `scripts/build_dmg.sh` and the macOS job in `.github/workflows/build.yml`.
@@ -90,15 +120,16 @@ companion app in each user session so a human still has a way in.
 The `.pkg` below runs this itself, as root, during the install — the ordinary macOS path, since
 [ADR 0003](adr/0003-separated-installs-only.md) decision 2 left nothing else to install macOS
 PrivacyFence from. The admin-password dialog (`privilege_separation.maybe_auto_enable_macos()`,
-called from `daemon_main.main()`) is the fallback for an install that reached a running state some
-other way — a copied app bundle, an in-place upgrade from before this ADR — and is asked again on
+called from `daemon_main.main()`) is the fallback for a `.pkg` install whose postinstall did not
+finish separating — the postinstall never fails the install, so the app can land in `/Applications`
+with no marker, and the MCPB shim then starts the packaged daemon directly. It is asked again on
 every start it finds itself still unseparated, not just once: ADR 0003 decision 6 retired the
 one-shot marker that used to make a decline permanent, because under that ADR a decline is not a
-configuration, it is an unfinished install. `enable`/`disable`/`status` remain available by hand for
-inspecting or reversing an install either way — but see ADR 0003 decision 6 below: a **packaged**
-build that ends up unseparated anyway refuses to serve, so `disable` stops being a way to keep
-running PrivacyFence and becomes only the way to get your data back out from under the service
-account first.
+configuration, it is an unfinished install. `enable`/`uninstall`/`status` remain available by hand
+([ADR 0042](adr/0042-uninstall-replaces-disable.md)): `uninstall` stops and unregisters the
+LaunchDaemon and companion and keeps the data under the system root; `uninstall --purge` also
+deletes it. Nothing moves data back into `~/Library` — see ADR 0003 decision 6 below: a
+**packaged** build that ends up unseparated refuses to serve.
 
 Three parts of the layout matter to anything that has to find PrivacyFence's files:
 
@@ -112,11 +143,11 @@ The installing user is added to the `_privacyfence` group, which is what keeps `
 from their session — macOS evaluates group membership at login, so this needs a logout/login to take
 effect. `src/privacyfence/privilege_separation.py` resolves all of it from a marker file the
 installer writes, and the MCPB shim (`mcpb/shim/src/protocol.ts`) reads the same marker so Claude
-Desktop keeps finding the daemon. `… status` audits the result; `… disable` reverses it.
+Desktop keeps finding the daemon. `… status` audits the result; `… uninstall [--purge]` removes it.
 
 Mandatory on every packaged install as of [ADR 0003](adr/0003-separated-installs-only.md) — the
-manual `enable`/`disable`/`status` subcommands above still exist for inspecting or reversing an
-install by hand; the migration moves live connector OAuth tokens. Linux and Windows separate too
+manual `enable`/`uninstall`/`status` subcommands above still exist for inspecting or removing an
+install by hand. Linux and Windows separate too
 (below), the same ADR making all three mandatory rather than leaving any of them opt-in.
 See [`security-and-compliance.md`](security-and-compliance.md#privilege-separation-macos-linux-and-windows) for
 what the separation does and does not buy.
@@ -182,18 +213,22 @@ The installer:
 
 - installs PrivacyFence under Program Files;
 - installs the bundled MCPB/shim assets;
-- creates a Start Menu entry for the settings UI;
-- creates a Task Scheduler entry for user-session startup;
+- creates a Start Menu entry that opens Approvals through the companion (`--launch`, starting
+  the tray icon first if it isn't running; [ADR
+  0031](adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md));
 - creates a Start Menu entry for the companion app;
 - installs the privilege-separation tool as `privilege-separation.ps1` next to the
   application, with the companion autostart task template it renders (see below);
 - **runs `privilege-separation.ps1 enable` itself**, with its own elevated token, as a post-install
-  step — ADR 0003 decision 4. That is what starts the daemon (as its service) and the companion,
-  and it is also why the Task Scheduler entry above is registered and then left *disabled*: it is
-  the unseparated install's autostart, which `privilege-separation.ps1 disable` hands back. A
-  failure of this step fails the install;
-- removes the scheduled task, the companion task and the privilege-separation service on uninstall;
-- preserves the user's PrivacyFence state directory on uninstall.
+  step — ADR 0003 decision 4. That is what installs and starts the daemon (as its service) and
+  registers the companion's sign-in task; there is no daemon sign-in task. A failure of this step
+  fails the install;
+- on uninstall, runs `privilege-separation.ps1 uninstall`, which stops and removes the service and
+  the companion task and keeps `%ProgramData%\PrivacyFence` — data and marker — and the
+  `PrivacyFenceUsers` group, so a reinstall picks the data up again
+  ([ADR 0042](adr/0042-uninstall-replaces-disable.md)). The uninstaller offers a
+  **Delete PrivacyFence data** checkbox, unchecked by default, which adds `-Purge` and deletes those
+  too; a silent uninstall never purges.
 
 Optional signing is configured through `CODESIGNTOOL_DIR`, `ES_USERNAME`, `ES_PASSWORD`, `ES_CREDENTIAL_ID`, and `ES_TOTP_SECRET` — see `scripts/build_installer.ps1`'s header comment. Signing goes through SSL.com's eSigner CodeSignTool rather than a local Authenticode `.pfx`, since CA/B Forum's 2023 key-storage rules mean code-signing private keys can no longer be exported to a portable `.pfx` at all.
 
@@ -201,10 +236,9 @@ Optional signing is configured through `CODESIGNTOOL_DIR`, `ES_USERNAME`, `ES_PA
 
 The same change as macOS's and Linux's, in Windows' own primitives, and the one platform where
 those primitives are genuinely different rather than differently spelled. Without it, the daemon
-starts in the logged-in user's session — the Scheduled Task above — which is also the session the AI
-client it governs runs in; per [ADR 0003](adr/0003-separated-installs-only.md) decision 4 the
-installer now runs this itself, elevated, as an install step, so an ordinary install never ends up
-in that state. The same command remains available for inspecting or re-running it by hand, from an
+and the AI client it governs would run in the same session as the same account; per
+[ADR 0003](adr/0003-separated-installs-only.md) decision 4 the installer runs this itself, elevated,
+as an install step, so an ordinary install never ends up in that state. The same command remains available for inspecting or re-running it by hand, from an
 **elevated** PowerShell:
 
 ```powershell
@@ -212,20 +246,18 @@ powershell -ExecutionPolicy Bypass -File "$env:ProgramFiles\PrivacyFence\privile
 ```
 
 (A source checkout runs the same file as `scripts/windows_privilege_separation.ps1`; `... status`
-audits the result, `... disable` reverses it — and, per ADR 0003 decision 6, stops being a way to
-keep the daemon running on a packaged build: it refuses to serve once it finds no marker.)
+audits the result, `... uninstall [-Purge]` takes the service and the companion task down — see
+"Uninstall" below. There is no `disable`: nothing moves the data back into a user profile
+([ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)).)
 
 That creates a **virtual service account** (`NT SERVICE\PrivacyFence` — materialized by the Service
 Control Manager along with the service, with its own SID and no password anyone has to manage, in
-preference to the shared `LocalService` #428 mentions), moves the data directory from
-`%LOCALAPPDATA%\PrivacyFence` to `%ProgramData%\PrivacyFence` owned by it, and inverts the startup
-wiring — a **Windows service** (`PrivacyFence`, `sc.exe`-registered, with its own `sc failure`
-crash-restart) runs the daemon with no desktop session at all, while a **Scheduled Task**
-(`PrivacyFenceCompanion`, from `installer/windows/privacyfence-companion-task.xml.tmpl`) runs the
-companion tray app in each user session. The installer's own `PrivacyFence` task is *disabled*
-rather than deleted, so `disable` can put it back and uninstall still finds it; left enabled it
-would start a second daemon as the logged-in user, which on a separated install refuses to start
-(`privilege_separation.check_runtime_identity()`) rather than silently seeding a default policy.
+preference to the shared `LocalService` #428 mentions), lays out `%ProgramData%\PrivacyFence` for
+it, and wires startup the separated way — a **Windows service** (`PrivacyFence`,
+`sc.exe`-registered, with its own `sc failure` crash-restart) runs the daemon with no desktop
+session at all, while a **Scheduled Task** (`PrivacyFenceCompanion`, from
+`installer/windows/privacyfence-companion-task.xml.tmpl`) runs the companion tray app in each user
+session. Nothing is migrated in from `%LOCALAPPDATA%`.
 
 Three things carry over unchanged from the POSIX layouts — the marker file every PrivacyFence
 process reads, the three directories, and which files move into `handoff\`. What does not carry
@@ -241,9 +273,9 @@ Two steps before any grant are load-bearing, and both are easy to leave out. `ic
 /inheritance:r` on each directory: `%ProgramData%` grants `Users` read-and-execute by inheritance,
 so a directory created under it is readable by every account on the machine until that inheritance
 is cut. And `icacls /setowner` on the tree to `Administrators`: an object's owner holds `WRITE_DAC`
-implicitly whatever its ACL says, and `enable` *moves* the data directory out of `%LOCALAPPDATA%` —
-a move preserves ownership, so without this the separated root would be owned by the very account
-being excluded, wearing an ACL that account could rewrite with one command and no elevation.
+implicitly whatever its ACL says, and any user may create a directory under `%ProgramData%` — one
+the signed-in account created there first would otherwise stay owned by the very account being
+excluded, wearing an ACL that account could rewrite with one command and no elevation.
 Administrators rather than the service account, deliberately: it needs no privilege juggling, and
 it denies the daemon `WRITE_DAC` on its own boundary. Ownership is checked by `… status` and
 re-checked on every daemon start, alongside the grants. The installing user is added
@@ -283,34 +315,37 @@ executable: Windows' service manager waits for a started process to call
 console entry point calls. Stopping the service takes the same shutdown path the web UI's own Quit
 button does.
 
-**Uninstall order matters here in a way it does not on the other two platforms.** Uninstalling
-PrivacyFence removes the service and both tasks but, like `%LOCALAPPDATA%\PrivacyFence` before it,
-deliberately leaves `%ProgramData%\PrivacyFence` in place — which on a separated install is a
-directory only the (now deleted) service account and `Administrators` could read. Run
-`... disable` *before* uninstalling to move the data back under your own account; an administrator
-can still recover it afterwards by taking ownership.
+**Uninstall** follows [ADR 0042](adr/0042-uninstall-replaces-disable.md), the same split
+as the `.deb`'s `apt remove`/`apt purge`. Uninstalling PrivacyFence runs
+`privilege-separation.ps1 uninstall`: the service and the companion task are removed (the
+`NT SERVICE\PrivacyFence` virtual account goes with its service, and comes back with the same SID
+on reinstall), and `%ProgramData%\PrivacyFence` — data and marker — and `PrivacyFenceUsers` stay
+where they are, so reinstalling picks them straight back up. Ticking **Delete PrivacyFence data**
+in the uninstaller (unchecked by default; a silent uninstall never asks) runs `uninstall -Purge`,
+which deletes the directory and the group as well. After a plain uninstall, an administrator can
+still delete `%ProgramData%\PrivacyFence` by hand.
 
 The `platform-windows` job in `.github/workflows/tests.yml` runs the full core Python suite on `windows-latest` on every PR, alongside the normal Ubuntu suite. Windows packaging itself (the installer build, silent install/autostart/uninstall) is exercised only by the release build workflow (`build.yml`'s `build-windows` job, tag/`workflow_dispatch`-triggered), not per PR — see "Known open items" below for its current live status.
 
 ## Debian/Ubuntu local mode
 
-The local desktop package is defined by `PrivacyFenceApp.linux.spec`, `scripts/build_deb.sh`, `debian/`, and `resources/linux/privacyfence.desktop`.
+The local desktop package is defined by `PrivacyFenceApp.linux.spec`, `scripts/build_deb.sh`, `debian/`, and `resources/linux/`.
 
-The `.deb` installs the self-contained application under `/opt/privacyfence`, exposes `/usr/bin/privacyfence-app` and `/usr/bin/privacyfence-companion`, installs application icons, installs an XDG autostart desktop entry under `/etc/xdg/autostart/`, and installs the privilege-separation tool as `/usr/sbin/privacyfence-privilege-separation` with its templates under `/usr/share/privacyfence/` (see below — as of #428 D1, `debian/postinst` runs it automatically, `configure)` case, on every install and upgrade).
+The `.deb` installs the self-contained application under `/opt/privacyfence`, exposes `/usr/bin/privacyfence-app` and `/usr/bin/privacyfence-companion`, installs application icons and an application-menu entry, and installs the privilege-separation tool as `/usr/sbin/privacyfence-privilege-separation` with its templates under `/usr/share/privacyfence/` (see below — as of #428 D1, `debian/postinst` runs it automatically, `configure)` case, on every install and upgrade).
 
-The XDG desktop autostart path is separate from the repository's `privacyfence.service`, which is the Python/system-service template rather than the desktop `.deb` startup mechanism.
+The repository's `privacyfence.service` is the `--user` unit for a pip/pipx install, not the `.deb`'s startup mechanism.
 
-Package removal does not delete per-user PrivacyFence state from the user's home directory.
+`apt remove` runs `privacyfence-privilege-separation uninstall` from `debian/prerm`: it stops and unregisters the service and keeps `/var/lib/privacyfence`, the marker and the `privacyfence` account, so a reinstall picks the data up. `apt purge` deletes those too, from `debian/postrm`. Nothing is moved into a home directory ([ADR 0042](adr/0042-uninstall-replaces-disable.md)).
 
 ### Privilege separation (mandatory)
 
 The same change as macOS's, above, in Linux's own idioms. Without it, the daemon starts in the
-logged-in user's session — either of the two startup paths above — which is also the session the AI
+logged-in user's session — a pip/pipx install's `--user` unit — which is also the session the AI
 client it governs runs in. `sudo privacyfence-privilege-separation enable` turns that off — the
 `.deb` installs it under that name in `/usr/sbin`, and a source checkout runs the same file as
 `sudo ./scripts/linux_privilege_separation.sh enable`. It
-creates a dedicated `privacyfence` system account (`useradd --system`), moves the data directory
-from `~/.privacyfence` to `/var/lib/privacyfence` owned by that account, and inverts the startup
+creates a dedicated `privacyfence` system account (`useradd --system`), creates the data directory
+`/var/lib/privacyfence` owned by that account, and inverts the startup
 wiring — a **system systemd unit**
 (`installer/linux/privacyfence-daemon.service.tmpl` → `/etc/systemd/system/privacyfence-daemon.service`)
 runs the daemon with no desktop session at all, while an **XDG autostart entry**
@@ -327,8 +362,8 @@ that do not need the same things:
   runs unconditionally and *without* `|| true`. A failure of it fails the package install, loudly,
   leaving dpkg with a half-configured package rather than an installed-looking one whose central
   claim does not hold.
-- **The per-user half** (`enable --auto --for-user "$SUDO_USER"`) — the group membership, and
-  migrating that person's existing `~/.privacyfence` — does need to know, and `$SUDO_USER` is the
+- **The per-user half** (`enable --auto --for-user "$SUDO_USER"`) — the group membership — does
+  need to know, and `$SUDO_USER` is the
   only thing a postinst has that can say. It names a resolvable, non-root account when the `.deb`
   was installed via `sudo apt install`/`sudo dpkg -i`, and nothing when root installed it directly
   or an unattended upgrade did. So it stays conditional and stays non-fatal: an unattended install
@@ -339,13 +374,11 @@ that do not need the same things:
 A pip/pipx source install has no such postinst hook and is not a packaged build in [ADR
 0003](adr/0003-separated-installs-only.md) decision 6's sense (that decision's own "Out of scope" —
 it is how the project is developed and how org mode is deployed), so it stays opt-in via the manual
-command above. `... disable` remains how to turn it back off on any install — and, per ADR 0003
-decision 6, stops being a way to keep a **packaged** daemon running: it refuses to serve once it
-finds no marker.
+command above. `... uninstall [--purge]` takes it down again (see above). A **packaged** daemon
+whose separation was purged refuses to serve on its next start (ADR 0003 decision 6).
 
-Both pre-Phase-4 startup paths are moved aside rather than left in place: `/etc/xdg/autostart/
-privacyfence.desktop` and the `--user` unit each become `.disabled`, because either would start a
-second daemon as the logged-in user — which on a separated install refuses to start (see
+The tool does not touch a pip/pipx install's `--user` unit: disable it before separating, or it
+starts a second daemon as the logged-in user — which on a separated install refuses to start (see
 `privilege_separation.check_runtime_identity()`) rather than silently seeding a default policy.
 
 The layout matches macOS exactly apart from the root and the account name:
@@ -362,8 +395,7 @@ dpkg-owned application bundle. The installing user is added to the `privacyfence
 what keeps `handoff` reachable from their session — group membership is evaluated at login, so this
 needs a logout/login to take effect. `src/privacyfence/privilege_separation.py` resolves all of it
 from a marker file the installer writes, and the MCPB shim (`mcpb/shim/src/protocol.ts`) reads the
-same marker. `… status` audits the result; `… disable` reverses it, restoring both startup paths it
-moved aside.
+same marker. `… status` audits the result; `… uninstall [--purge]` takes it down.
 
 The `--serve` companion is the one piece with no macOS counterpart, and it is not optional: Linux
 has no tray (ADR 0002 decision 4), so without a persistent process in the user's session a
@@ -386,8 +418,8 @@ Installing the `.deb` turns all of this on, and that is the whole of ADR 0003 de
 upgrade — unconditionally, and **a failure of that step fails the package install**, leaving dpkg
 with a half-configured package rather than a silently unseparated PrivacyFence. So the system
 systemd unit and the companion autostart entry are written by the package itself, the data
-directory is `/var/lib/privacyfence` under the service account, and the two pre-separation startup
-paths are moved aside, all without anybody having to know this tool exists.
+directory is `/var/lib/privacyfence` under the service account, all without anybody having to know
+this tool exists.
 
 The per-user half — adding the installing user to the `privacyfence` group — runs second, still
 gated on `$SUDO_USER` resolving to a real account and still allowed to defer: an unattended `apt`
@@ -416,189 +448,23 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
 
 ## Known open items
 
-- **Windows autostart — now actually works, including real crash-restart, verified end to end by real
-  `workflow_dispatch` runs, after a chain of independent bugs, the most recent of which was that the
-  installer never actually needed the elevated token its own registration step required (see "a
-  related wrinkle" below). The one thing CI structurally cannot cover — the `LogonTrigger`'s own
-  firing on a real interactive sign-in — has now been confirmed by hand on a real Windows machine;
-  future Windows-autostart-affecting changes should re-confirm it via the Windows human checks
-  (below), since no hosted runner can ever produce that coverage itself.** This
-  mechanism went through several real, independently-found-and-fixed bugs before
-  landing where it is now — see `installer/privacyfence-task.xml.tmpl`'s own header comment and
-  `installer/privacyfence.iss`'s `[Code]` section for the full detail — and the early ones are worth
-  naming here only because this bullet itself carried wrong theories about them at the time:
-  non-elevation was never the cause of *this specific* early chain of bugs (it turned out, much
-  later, to be the cause of a different one — see "a related wrinkle" below); nor, in the end, was
-  the `/ri`/`/du` and `/RU`-scoping pair of `schtasks /create` CLI-flag bugs this bullet previously
-  described as the fix — those flags were superseded entirely once the mechanism moved to a real Task
-  Scheduler XML task definition (`schtasks /create /xml`), which is what actually ships today.
-  **The real, final blocker in that XML approach** was an `encoding="UTF-8"` declaration in the XML
-  prolog: `schtasks.exe` hands the file to MSXML as a Unicode stream already, so a declaration
-  claiming UTF-8 contradicted the stream the parser was already on and MSXML rejected the whole
-  registration outright (`ERROR: The task XML is malformed. (1,40)::ERROR: unable to switch the
-  encoding`) — on every install, silently, until `[Code]` was changed to actually capture and log
-  `schtasks`'s own output. Fixed by dropping the encoding declaration entirely. Alongside it, the
-  task definition also regained three elements an earlier simplification pass had dropped and that
-  turned out to be load-bearing once registration itself started succeeding: `version="1.2"` on the
-  root `<Task>` element (the schema version `<RestartOnFailure>` and `<MultipleInstancesPolicy>`
-  actually need), `id` on `<Principal>`, and the matching `Context` on `<Actions>` — without that
-  id/Context pair, the registered `GroupId` principal is never actually bound to anything that runs.
-  **The defect that actually kept Windows autostart from ever working was not in the task at all —
-  it was in the daemon, and only a test that let Task Scheduler do the launching could see it.** The
-  Windows build is a windowed executable (`PrivacyFenceApp.win.spec`'s `console=False`, since a
-  console window flashing up at every sign-in would be a bug of its own), and a windowed process
-  started with no console has no standard handles, so CPython sets `sys.stdout`/`sys.stderr` to
-  `None`. uvicorn's default log formatter calls `sys.stdout.isatty()` while `uvicorn.Config(...)` is
-  being built, so the daemon raised `AttributeError: 'NoneType' object has no attribute 'isatty'`,
-  logged `Fatal error`, and exited 1 — before binding its port. Task Scheduler was starting the
-  daemon correctly and the daemon was killing itself; the same would have happened to the installer's
-  own "launch PrivacyFence now" step and to double-clicking the executable. Nothing caught it because
-  every automated start of this app until now — the packaged smoke tests included — ran it from a
-  shell with stdout redirected to a file, which is a perfectly valid stream.
-  `privacyfence/std_streams.py` now repairs the frozen process's streams before anything else runs
-  (the same move as `_daemon_entry.py`'s `SSL_CERT_FILE` fix-up), with
-  `tests/unit/test_daemon_std_streams.py` as a per-PR regression test built around the real failing
-  call.
-  **One more real defect came out of asserting the definition Task Scheduler stored rather than the
-  one this repo ships**: `<DisallowStartIfOnBatteries>` and `<StopIfGoingOnBatteries>` both default
-  to `true` and the template had never mentioned either, so on a laptop the shipped task would not
-  start PrivacyFence at sign-in while on battery, and would stop it the moment the machine was
-  unplugged — a privacy gate quietly not running, with the MCP client simply finding no daemon. Both
-  are now explicitly `false`, and the contract asserts them with no default fallback.
-  **Crash-restart now works, via a different mechanism than the one first shipped — and that first
-  attempt's failure is worth keeping here precisely because it looked like a fix and was not one.**
-  The task shipped carrying `<RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>`,
-  added as the Windows analogue of the macOS LaunchAgent's `KeepAlive`/`SuccessfulExit=false` and the
-  Linux `.deb`'s systemd `Restart=on-failure`. It was not one, and the first test ever to kill a
-  Scheduler-started daemon measured that directly: nothing came back, and Task Scheduler's own
-  operational log said why — it logged the dead action as a *success*:
-
-  ```
-  Event ID 201: Task Scheduler successfully completed task "\PrivacyFence", instance "{63cf2afb-…}",
-                action "…\privacyfence-app.exe" with return code 2147942401.
-  ```
-
-  `2147942401` is `0x80070001`, the action's own non-zero exit surfaced as an HRESULT. The setting
-  answers a task that fails to *run*, not an action that ran and then died, so it never engaged. That
-  measurement was pinned by a deliberately negative test, so the setting could not be re-added and
-  re-declared a fix without measuring it again — until a real fix replaced it.
-  **Real crash-restart is a repeating `<TimeTrigger>`, and it now ships.** `installer/privacyfence-
-  task.xml.tmpl` carries `<TimeTrigger><StartBoundary>2020-01-01T00:00:00</StartBoundary>
-  <Enabled>true</Enabled><Repetition><Interval>PT5M</Interval></Repetition></TimeTrigger>` alongside
-  the existing `<LogonTrigger>` — a past `StartBoundary` and an indefinite `<Repetition>` so it is
-  live without waiting for a sign-in, relaunching the daemon on the next tick after it dies.
-  `<RestartOnFailure>` stays in the definition too, for the narrower thing it still does: a faster
-  (`PT1M`) retry of a launch failure right at logon, ahead of the `TimeTrigger`'s own next tick.
-  `MultipleInstancesPolicy` stays `Parallel`, unchanged: `IgnoreNew` would suppress a redundant tick's
-  spawn but also stop a second user's sign-in from ever getting a daemon.
-  `privacyfence.daemon_main.run_app()`'s "another instance is already running" path — the normal
-  outcome on every tick but the one that actually needed a relaunch, under this design — now logs at
-  INFO and exits `0` instead of ERROR/`1`, so Task Scheduler logs a clean success on every ordinary
-  tick instead of a failed run forever.
-
-  **ADR 0003 moved crash-restart again, to the service.** Every packaged install is
-  privilege-separated now, and on a separated install the daemon is a Windows service rather than
-  anything Task Scheduler starts: `scripts/windows_privilege_separation.ps1`'s
-  `Install-DaemonService` configures `sc failure PrivacyFence reset= 86400 actions=
-  restart/5000/restart/10000/restart/30000`, and that is what answers a crashed daemon. The
-  `<TimeTrigger>` above is not dead — it still covers an install that has not been separated yet,
-  and it stays in the shipped template for that — but it cannot be what answers on a separated one,
-  because `enable` leaves the daemon's own task `Disabled`.
-  `test_windows_graphical_session_autostart.py`'s crash-restart test therefore kills the *service's*
-  process (`taskkill /f`, so its control handler never runs and the SCM sees a failure rather than
-  an orderly stop) and waits for a new service pid. The same module's first test asserts the task is
-  `Disabled` by then, which is what rules the `<TimeTrigger>` out as the thing that answered.
-
-  **Measured on a real `windows-latest` runner, not assumed — including the three specific things this
-  design could not have gotten right by reading documentation alone**: omitting `<Duration>` inside
-  `<Repetition>` really does mean "repeat indefinitely" as Task Scheduler stores it (no `<Duration>` or
-  `<StopAtDurationEnd>` appeared in the registered document); a `<TimeTrigger>` does fire for the
-  `GroupId` principal, and fires effectively immediately given a `StartBoundary` far in the past — the
-  crash-restart test killed the Scheduler-started daemon and saw a new pid, under the same signed-in
-  account, well inside its wait window; and a past `StartBoundary` behaves as intended rather than
-  being normalized or rejected. The one real bug that first `workflow_dispatch` run found was in the
-  test, not the task: the contract required `<TimeTrigger><Enabled>true</Enabled>` verbatim, but Task
-  Scheduler normalizes away `<Enabled>` on either trigger when it is `true` (the schema default) — the
-  same thing it already does for `<LogonTrigger>`, which the contract already tolerated. Fixed to use
-  the same fallback for `<TimeTrigger>`, confirmed by a second, fully green run.
-  **One thing stays outside what CI can observe, not the installer: the `LogonTrigger`'s own
-  firing** — now confirmed once by hand on a real machine (see above), with the Windows human checks
-  in `release-testing.md` as the standing, per-release coverage for it going forward. The test used to claim it drove that, via PowerShell's `Start-Process -Credential`
-  (`CreateProcessWithLogonW`) as a stand-in for signing in, and was red on every run because of it:
-  `schtasks /query /v` reported the task `Enabled`/`Ready`, scoped to the right group, pointing at the
-  right exe, and simply never fired (`Last Result: 267011` / `SCHED_S_TASK_HAS_NOT_RUN`).
-  `CreateProcessWithLogonW` creates a logon session but not the Terminal Services *session* logon a
-  `LogonTrigger` subscribes to, so the trigger was never evaluated — a limitation of the substitution,
-  not a defect in the shipped task definition, and one no task-XML or `[Code]` change could fix.
-  Of the three ways out this note used to list unchosen, the first is now taken: the automated
-  assertions are narrowed to what a hosted runner can actually prove, and the trigger's own firing is
-  covered by the Windows human checks in [`release-testing.md`](release-testing.md) on a machine with
-  a real sign-in. RDP loopback would create a genuine session logon but needs an RDP client that can
-  run without a desktop of its own, which a hosted runner does not have; retiring the workflow would
-  have given up the Scheduler-driven coverage below as well. What CI now proves, every run: the
-  definition **Task Scheduler itself stored** (`schtasks /query /xml`, not this repo's template)
-  matches the autostart contract element by element; Task Scheduler itself starts the daemon, into the
-  real signed-in account's own profile with no injected environment, running as that account, serving
-  the full daemon/MCP/approval/audit round trip and ending on "Quit PrivacyFence"; and the
-  crash-restart above. The one substitution left is asking Task Scheduler to run the task on demand
-  instead of the trigger asking it — everything after that decision (resolving the `Builtin\Users`
-  principal to a signed-in member, its `LeastPrivilege` token, its profile, the action launch) is the
-  same code path. A group principal runs as a member who is *signed in*, so the signed-in account is
-  the only one a hosted runner can have it run for — an attempt with a throwaway account returned
-  `ERROR: Access is denied.` The cheap half of the same coverage also runs on every PR, on any OS:
-  `tests/unit/test_windows_autostart_task_template.py` holds the shipped template to the same
-  contract (`tests/windows_task_contract.py`), so a regression in it no longer waits for a scheduled
-  Windows-only workflow to notice. Check `windows-graphical-session.yml`'s own run history for the
-  current result rather than trusting this note alone — as of this writing it is green for the first
-  time since it was written, with the autostart path exercised end to end.
-  **A related wrinkle, previously written up here as "not currently a defect," was in fact a
-  defect, and the installer no longer allows it to occur.** `installer/privacyfence.iss` used to be
-  `PrivilegesRequired=lowest`, so a silent install with no explicit "Run as administrator" resolved
-  `{autopf}` to `{userpf}` — `%LOCALAPPDATA%\Programs\PrivacyFence`, inside the installing account's
-  own profile — and launched Setup with an ordinary, non-elevated token. This note used to reason
-  that the task's `Builtin\Users` group principal "only composes with a per-machine install" and that
-  nothing was wrong on the single-user desktop this product targets, because the installing and
-  signing-in accounts are the same one. That reasoning addressed the wrong question: it is about
-  which account the `LogonTrigger` fires *for* once the task exists, not about whether registering a
-  `LogonTrigger` task at all requires an elevated token in the first place — it does, unconditionally.
-  `schtasks /create /xml` registering a task with a `LogonTrigger` needs the `SeCreateGlobalPrivilege`
-  user right, which Windows grants by default only to Administrators, `SERVICE`, `LOCAL SERVICE` and
-  `NETWORK SERVICE`; a UAC-filtered admin token — the ordinary, non-elevated token an admin account's
-  own processes run with by default, exactly what a non-elevated `lowest` install launches Setup
-  with — does not carry it, regardless of whether the task's `Principal` names a `GroupId` or the
-  calling user's own `UserId`. So `RegisterAutostartTask()` failed with "Access is denied" on every
-  non-elevated install, deterministically, not occasionally, and the CI test installing to a
-  machine-wide directory (see above) never exercised the failing path at all: `windows-graphical-
-  session.yml`'s own module requires `_is_admin()` before it will even run, and `build.yml`'s
-  packaged-artifact smoke test happens to run on a hosted runner whose account already carries a full
-  admin token with no UAC filtering, so neither ever saw the "Access is denied" a real client-Windows
-  non-admin install gets every time.
-  This wrinkle first stopped being harmless the day a real non-admin user hit two more bugs stacked
-  on top of it (privacyfence/privacyfence#410): `RegisterAutostartTask()`'s own failure was logged to
-  the Inno Setup install log only, with the install still reporting success, so a schtasks failure at
-  install time was invisible until the next reboot silently left no daemon running; and separately,
-  the mcpb shim's own `findDaemonCmd()` self-heal fallback (`daemon.ts`) hardcoded the *admin*
-  `%ProgramFiles%\PrivacyFence\` path only, so on the common non-admin install it couldn't find the
-  daemon at `%LOCALAPPDATA%\Programs\PrivacyFence\` either, whatever autostart did. Those two were
-  fixed at the time: a failed `RegisterAutostartTask()` also raises a dialog (guarded by
-  `WizardSilent` so a scripted/silent install never blocks on it), and `findDaemonCmd()` checks both
-  Windows install locations, preferring `%ProgramFiles%` but falling back to
-  `%LOCALAPPDATA%\Programs`. Neither fix touched the registration failure itself, so the dialog kept
-  firing on every non-admin install — including, later, a second real user hitting exactly the same
-  dialog, screenshots and all. **The actual fix is `PrivilegesRequired=admin`**: Setup's own manifest
-  now requires an elevated token before it runs at all, so `RegisterAutostartTask()` never runs
-  without the privilege `schtasks /create /xml` needs for a `LogonTrigger` task, on any account.
-  This has not yet been measured on a real non-admin client-Windows machine the way the rest of this
-  bullet's history has — check `windows-graphical-session.yml` and `release-testing.md`'s Windows
-  human checks for whether that measurement has happened by the time this is read.
-  None of this needed a dedicated bullet on its own here for the manual-QA/issue-closure part of it:
-  that content now lives in [`release-testing.md`](release-testing.md)'s human-checks list
-  (Windows-specific bullets — a real installer run on a clean Windows VM, OAuth loopback, the
-  sign-out/sign-in check that covers the `LogonTrigger` above, and a clean Add/Remove Programs
-  uninstall) and as a standing comment on
-  [privacyfence/privacyfence#121](https://github.com/privacyfence/privacyfence/issues/121) itself
-  recording that it stays open until a real tagged release ships the signed installer and that QA
-  has run against it — not duplicated here as well.
+- **Windows sign-in and crash-restart.** The daemon is a Windows service (crash-restart is its
+  `sc failure ... actions= restart/5000/restart/10000/restart/30000`), and the only Scheduled Task is
+  the companion's (`PrivacyFenceCompanion`). `windows-graphical-session.yml` verifies the companion
+  task definition **Task Scheduler itself stored** (`schtasks /query /xml`) against
+  `tests/windows_task_contract.py`, has Task Scheduler really start the packaged companion as the
+  signed-in account, and kills the service's process to watch the SCM restart it; the same contract
+  is held against the shipped template on every PR by `tests/unit/test_privilege_separation.py`.
+  What CI cannot cover is the `LogonTrigger`'s own firing on a real interactive sign-in — a hosted
+  runner cannot produce the Terminal Services session logon it subscribes to — so that is a Windows
+  human check in [`release-testing.md`](release-testing.md), tracked on
+  [privacyfence/privacyfence#121](https://github.com/privacyfence/privacyfence/issues/121). The
+  daemon's own sign-in task that preceded all this, and the chain of real bugs it went through
+  (a UTF-8 encoding declaration `schtasks` rejected, a missing `version="1.2"`, an unbound
+  `Principal`/`Actions` pair, inverted battery defaults, `<RestartOnFailure>` measured not to restart
+  a crashed action, `SeCreateGlobalPrivilege` for a `LogonTrigger` making `PrivilegesRequired=admin`
+  necessary — #410), is in this file's git history; the lessons that still apply are in the companion
+  template's header comment.
 - **Linux org mode's real end-to-end deployment path has now been run once for real**: a fresh Ubuntu
   host following `org-mode-setup-guide.md` verbatim, a real OIDC round trip against a real identity
   provider, and at least one live connector (Gmail) exercised through a real MCP client hitting the
@@ -628,11 +494,11 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   every platform, and `tests/platform/test_windows_acls.py` proves on the `platform-windows` job
   that real `icacls` output reads back the way all of that assumes — including the two behaviors the
   installer's own structure depends on: that a file created in the handoff directory inherits its
-  grants, and that a file *moved* there does not (which is why `enable` runs `icacls /reset` over it
-  after the migration). What none of that reaches is the service, the virtual account, or the
+  grants, and that a file *moved* there does not (which is why `enable` runs `icacls /reset` over
+  whatever a previous install left there). What none of that reaches is the service, the virtual account, or the
   logon-token group membership. The remaining half — enable on a real machine, confirm the daemon comes up under the
   service account, confirm the companion and the MCPB shim still reach it after a logout/login,
-  confirm `disable` restores the previous layout with connector tokens intact — is a manual check,
+  confirm uninstall keeps the data and a reinstall picks connector tokens back up — is a manual check,
   and belongs with the other per-platform human checks in
   [`release-testing.md`](release-testing.md). **This manual real-machine verification still has not
   run against a release build.** #428 D1 (4.1) turned privilege separation on by default on macOS

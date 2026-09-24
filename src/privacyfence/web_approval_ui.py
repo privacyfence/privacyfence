@@ -18,6 +18,7 @@ several can now be pending, decided in any order, at once.
 from __future__ import annotations
 
 from . import dialog_window_html, web_prompt
+from .agent_identity import AgentIdentity, current_agent
 from .approval_ui import ApprovalUI
 from .approvals import PendingApproval, PendingApprovalRegistry
 from .card_builder import build_card_html
@@ -60,7 +61,7 @@ class WebApprovalUI(ApprovalUI):
         which is also what makes a decision POST idempotent ("the first
         accepted decision for an id wins; any later one is
         rejected"). ``principal_id``
-        (P9) is web/routes_org_approvals.py's own authorization check --
+        (P9) is web/routes_approvals.py's own authorization check --
         see approvals.PendingApprovalRegistry.answer's own docstring."""
         return self._registry.answer(card_id, result, choice, principal_id=principal_id)
 
@@ -109,6 +110,7 @@ class WebApprovalUI(ApprovalUI):
             # write_effects.py. Write gate only: a read card's §3 already
             # states what approving releases.
             tool=tool,
+            agent=_agent_of(approval),
         )
         return self._run_card(html, approval)
 
@@ -140,6 +142,7 @@ class WebApprovalUI(ApprovalUI):
             claude_reason=claude_reason, seen_count=seen_count, pdf_bytes=pdf_bytes, connector=connector,
             preview_bytes=preview_bytes, preview_mime_type=preview_mime_type, new_info=new_info,
             preview_tables=preview_tables, preview_blocks=preview_blocks, table_only=table_only,
+            agent=_agent_of(approval),
         )
         return self._run_card(html, approval)
 
@@ -184,6 +187,15 @@ class WebApprovalUI(ApprovalUI):
 
     def _run_confirm(self, html: str, *, sensitive: bool = False) -> bool:
         return web_prompt.block_on_confirm(self._registry, html, sensitive=sensitive)
+
+
+def _agent_of(approval: PendingApproval | None) -> AgentIdentity:
+    """Who the card says is asking: the identity ``approval`` captured at
+    registration (approvals.PendingApproval.agent), or -- for a direct call
+    with no pre-registered approval -- the calling context's own
+    ``current_agent()``, which gate.py's _run_in_popup_executor carries into
+    this worker thread. Unknown when neither has one, never "Claude"."""
+    return approval.agent if approval is not None else current_agent()
 
 
 _INSTANCE: WebApprovalUI | None = None

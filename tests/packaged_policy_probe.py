@@ -10,16 +10,16 @@ Each module's own docstring explains why it makes that substitution; this module
 substitution itself, so the four of them name one tool rather than four copies of one.
 
 The probe is ``privacyfence_propose_policy_change`` (``gate.propose_policy_change``, P7 of the
-policy v2 redesign). It was ``privacyfence_propose_auto_accept_rule_change`` -- gate.py's
-deprecated v1-shaped alias -- until #580 came to delete that tool, which would have left the
-release gate driving code that no longer exists. Both register their confirmation with
-``sensitive=True`` (gate.py carries the same comment verbatim at both sites), so the dialog class,
-the unattended-session refusal and the step-up posture a packaged install imposes on it are all
-unchanged by the move; what changes is the request shape and, with it, what the audit log and
-settings.yaml assertions on the other side have to be keyed on:
+policy v2 redesign). It was gate.py's deprecated v1-shaped alias for it -- until #580/PSC-3 came
+to delete that tool (see ADR 0004), which would have left the release gate driving code that no
+longer exists. Both register their confirmation with ``sensitive=True`` (gate.py carries the same
+comment verbatim at both sites), so the dialog class, the unattended-session refusal and the
+step-up posture a packaged install imposes on it are all unchanged by the move; what changes is
+the request shape and, with it, what the audit log and settings.yaml assertions on the other side
+have to be keyed on:
 
 =========================  ==============================================  ==========================================
-                           v1 (``propose_auto_accept_rule_change``)        v2 (``propose_policy_change``)
+                           v1 (the deleted alias)                          v2 (``propose_policy_change``)
 =========================  ==============================================  ==========================================
 request                    ``{target, operation_key, rule_name, value}``   ``{operation, group, verbs, value}``
 validated against          nothing before the popup                        ``policy.catalogue.scope_catalogue()``

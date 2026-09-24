@@ -10,9 +10,10 @@ from starlette.testclient import TestClient
 
 from privacyfence import org_identity as oi
 from privacyfence.connector_registry import ConnectorRegistry
+from privacyfence.principal import Principal
 from privacyfence.web.mcp_dispatch import McpDispatcher
 from privacyfence.web.oauth_provider import OrgOAuthProvider
-from privacyfence.web.org_session import OrgSessionStore
+from privacyfence.web.org_session import SESSION_COOKIE, OrgSessionStore
 from privacyfence.web.server import OrgAuth, WebServer, build_app
 from privacyfence.web_approval_ui import WebApprovalUI
 
@@ -95,18 +96,30 @@ class TestBuildAppOrgMode:
         # /settings' ~30-action local-mode dispatcher surface stays out of
         # org mode (see server.py's module docstring) -- unlike /approvals,
         # which P9 (below) mounts as its own principal-aware route set.
-        # /api/settings/{action} (the generic dispatcher endpoint) must 404;
-        # /settings itself is real now (#400, see the read-only-surface test
-        # below), so this only checks the local-mode dispatcher's own path.
+        # PSC-5: org mode now mounts its own POST /api/settings/{action}
+        # (routes_settings.py's own build_org_routes, restricted to
+        # _ORG_ALLOWED_ACTIONS -- see that module's own docstring), the
+        # same path local mode's ~30-action dispatcher answers, so this
+        # path existing at all no longer proves local's surface isn't
+        # mounted. quit_app is one of the ~24 local-only actions
+        # _ORG_ALLOWED_ACTIONS never includes -- POSTing it still 404s
+        # (an unauthenticated request 401s before the action name is even
+        # checked, so this signs in first); /settings itself is real now
+        # (#400, see the read-only-surface test below), so this only
+        # checks the local-mode dispatcher's own unrestricted action
+        # surface stays unreachable.
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
-        client = TestClient(app, base_url=ISSUER)
-        assert client.get("/api/settings/quit_app").status_code == 404
+        client = TestClient(app, base_url=ISSUER, follow_redirects=False)
+        session_id = org.sessions.create(Principal(id="alice", email="alice@example.com"))
+        client.cookies.set(SESSION_COOKIE, session_id)
+        r = client.post("/api/settings/quit_app", json={"csrf": session_id})
+        assert r.status_code == 404
         assert client.get("/api/state/stream").status_code == 404
 
     def test_readonly_settings_surface_is_mounted(self, tmp_path, monkeypatch):
         # #400: /settings and /settings/privacy are real routes now -- a
-        # small, purpose-built read-only surface (web/routes_org_settings.py),
+        # small, purpose-built surface (web/routes_settings.py's build_org_routes),
         # not the local-mode dispatcher above. An unauthenticated request is
         # redirected to /login, same as /approvals.
         org = _org_auth(tmp_path, monkeypatch)
@@ -117,9 +130,9 @@ class TestBuildAppOrgMode:
         assert r.headers["location"] == "/login?next=/settings"
 
     def test_local_mode_approval_surface_is_not_what_gets_mounted(self, tmp_path, monkeypatch):
-        # /approvals exists (P9), but it's web/routes_org_approvals.py's
-        # principal-aware route set, not routes_approvals.create_app's
-        # shared-secret one -- an unauthenticated request is redirected to
+        # /approvals exists (P9), but it's web/routes_approvals.py's
+        # build_routes() principal-aware route set, not that module's
+        # create_app() shared-secret one -- an unauthenticated request is redirected to
         # /login, never served the (local-mode-only) card content directly.
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
@@ -199,7 +212,7 @@ class TestApprovalsAndSecuritySurfaceOrgMode:
         assert r.headers["location"] == "/login?next=/security"
 
     def test_step_up_config_section_reaches_the_decide_endpoint(self, tmp_path, monkeypatch):
-        # A thin end-to-end wiring check -- web/routes_org_approvals.py's
+        # A thin end-to-end wiring check -- web/routes_approvals.py's
         # own test file covers the step-up protocol itself in depth; this
         # only proves server.py actually threads org_config.json's
         # "step_up" section through StepUpConfig.from_org_config into the

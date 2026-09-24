@@ -69,6 +69,7 @@ def _make_state(**overrides):
             "default_policy": {"privacy": "block"},
             "categories": {"privacy": [{"key": "body", "label": "Message body", "policy": "allow"}]},
             "calendar_free_busy": True,
+            "gmail_append_signature": False,
         },
         "audit": {
             "log_level": "INFO", "log_file": "logs/privacyfence.log",
@@ -171,7 +172,7 @@ class TestToggleTemplate:
             # present as source text regardless of any connector's actual
             # state (see settings_window_html.py's renderConnectors).
             "enable_connector", "disable_connector",
-            "toggle_calendar_free_busy",
+            "toggle_calendar_free_busy", "toggle_gmail_signature",
         ):
             assert f"'{action}'" in html, f"missing toggle wiring for {action}"
 
@@ -202,8 +203,13 @@ class TestInitialSection:
         assert 'window.__pfInitialSection = "connectors";' in html
 
     def test_js_falls_back_to_general_when_unset(self):
+        # PSC-5: the literal fallback is now capability-aware (org mode's
+        # own non-admin principal falls back to Auto-accept instead, see
+        # TestOrgCapabilities below) -- local mode's own capabilities
+        # (CAPS.sections.general always true) still resolve this to
+        # 'general', which is what this test is actually about.
         html = build_html(_make_state())
-        assert "section: (window.__pfInitialSection || 'general')" in html
+        assert "section: (window.__pfInitialSection || (CAPS.sections.general ? 'general' : 'auto_accept'))" in html
 
 
 class TestWelcomeBanner:
@@ -279,7 +285,7 @@ class TestAutoAcceptTemplate:
 
     def test_old_rule_and_grant_row_actions_are_gone(self):
         # add_rule_row/remove_rule_row/remove_grant_row still exist as SettingsController methods
-        # (see their own docstring), but only web/routes_org_settings.py's separate org-mode page
+        # (see their own docstring), but only web/org_settings_pages.py's separate org-mode page
         # -- a different module, with its own HTML template -- ever reaches them; this module's
         # own JS bridge (build_html's output) must never reference any of the seven again.
         html = build_html(_make_state())
@@ -477,3 +483,88 @@ class TestStepUpCard:
         embedded = _extract_initial_state(build_html(state))
         assert embedded["general"]["step_up_on"] is True
         assert embedded["general"]["step_up_has_passkey"] is True
+
+
+class TestOrgCapabilities:
+    """PSC-5: window.__pfCapabilities is a separate embedded global from
+    window.__pfInitialState -- state itself must stay exactly what the
+    caller passed (TestStateEmbedding.test_state_round_trips_byte_for_
+    byte), so capability data can't live there. These tests read the
+    second global the same way _extract_initial_state reads the first."""
+
+    def _extract_capabilities(self, html: str) -> dict:
+        match = re.search(r"window\.__pfCapabilities = (\{.*?\});</script>", html, re.DOTALL)
+        assert match, "window.__pfCapabilities assignment not found in build_html() output"
+        return json.loads(match.group(1))
+
+    def test_local_mode_default_hides_nothing(self):
+        caps = self._extract_capabilities(build_html(_make_state()))
+        assert caps["mode"] == "local"
+        assert caps["is_admin"] is False
+        # AGT-5: AI systems is org-only (no DCR registrations to pin locally);
+        # every other section stays.
+        assert caps["sections"]["agents"] is False
+        assert all(v for k, v in caps["sections"].items() if k != "agents")
+        assert caps["not_applicable_actions"] == []
+
+    def test_local_state_is_unaffected_by_capabilities(self):
+        # The byte-for-byte invariant (TestStateEmbedding) must hold
+        # regardless of mode/is_admin -- capabilities never leak into state.
+        state = _make_state()
+        html = build_html(state, mode="org", is_admin=True)
+        assert _extract_initial_state(html) == state
+
+    def test_org_admin_sees_general_and_privacy(self):
+        caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))
+        assert caps["mode"] == "org"
+        assert caps["is_admin"] is True
+        assert caps["sections"]["general"] is True
+        assert caps["sections"]["privacy"] is True
+        assert caps["sections"]["auto_accept"] is True
+        assert caps["sections"]["about"] is True
+
+    def test_org_non_admin_does_not_see_general_or_privacy(self):
+        caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))
+        assert caps["sections"]["general"] is False
+        assert caps["sections"]["privacy"] is False
+        # Per-principal, not admin-gated -- every org principal keeps this.
+        assert caps["sections"]["auto_accept"] is True
+
+    def test_org_mode_never_shows_connectors(self):
+        for is_admin in (True, False):
+            caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=is_admin))
+            assert caps["sections"]["connectors"] is False
+
+    def test_org_mode_shows_audit_to_every_principal_without_its_local_only_controls(self):
+        # AGT-5: each principal's own recent decisions, read-only -- export and
+        # log level have no org route, so the page must not draw them.
+        for is_admin in (True, False):
+            caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=is_admin))
+            assert caps["sections"]["audit"] is True
+            assert {"export_audit_log", "set_log_level"} <= set(caps["not_applicable_actions"])
+
+    def test_ai_systems_page_is_org_admin_only(self):
+        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]["agents"] is True
+        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]["agents"] is False
+
+    def test_not_applicable_actions_match_org_settings_scope(self):
+        from privacyfence.web.org_settings_scope import NOT_APPLICABLE_ACTIONS
+
+        caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))
+        not_applicable = set(caps["not_applicable_actions"])
+        assert NOT_APPLICABLE_ACTIONS <= not_applicable
+        # The four bespoke, no-ACTION_SCOPES-entry actions the bridge shim
+        # intercepts client-side (see settings_window_html._LOCAL_ONLY_
+        # BESPOKE_ACTIONS) are also covered, open_repo deliberately excluded.
+        assert {"install_org_config", "export_audit_log", "quit_app", "check_for_updates"} <= not_applicable
+        assert "open_repo" not in not_applicable
+        # Actions org mode genuinely keeps must never be marked inapplicable.
+        assert not {"add_policy_rule", "remove_policy_rule", "toggle_pii_detection",
+                    "toggle_pii_category", "set_default_policy", "set_category_policy"} & not_applicable
+
+    def test_nav_filters_hidden_sections(self):
+        html_non_admin = build_html(_make_state(), mode="org", is_admin=False)
+        nav_fn_start = html_non_admin.index("function renderNav")
+        nav_fn_end = html_non_admin.index("function renderNotificationsDetailControl")
+        nav_fn = html_non_admin[nav_fn_start:nav_fn_end]
+        assert "CAPS.sections[key] === false" in nav_fn

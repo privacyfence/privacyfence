@@ -63,3 +63,29 @@ class TestAllConnectorIcons:
 
     def test_excludes_a_connector_with_no_bundled_icon(self):
         assert "not-a-real-connector" not in approval_icons.all_connector_icons()
+
+
+class TestAgentIcons:
+    """resources/agent_icons/ -- one bundled mark per agent_identity.REGISTRY
+    entry (ADR 0035 decision 4), never fetched and never caller-supplied."""
+
+    def test_every_registry_entry_has_a_bundled_png(self):
+        from privacyfence.agent_identity import REGISTRY
+
+        icons = approval_icons.all_agent_icons()
+        assert set(icons) == {entry.agent_id for entry in REGISTRY}
+        for agent_id, uri in icons.items():
+            assert uri.startswith("data:image/png;base64,"), agent_id
+            assert uri == approval_icons.icon_data_uri(approval_icons.agent_icon_path(agent_id))
+
+    def test_empty_id_returns_no_path(self):
+        # agent_label.AgentLabel.icon_id is "" for every non-attested tier.
+        assert approval_icons.agent_icon_path("") is None
+
+    def test_unknown_id_returns_no_path(self):
+        assert approval_icons.agent_icon_path("unknown:claude") is None
+
+    def test_no_bundled_directory_is_an_empty_set(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(approval_icons, "_RESOURCES", tmp_path)
+        assert approval_icons.all_agent_icons() == {}
+        assert approval_icons.all_connector_icons() == {}

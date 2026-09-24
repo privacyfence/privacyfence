@@ -1612,8 +1612,8 @@ class TestSensitiveConfirmDialog:
 class TestPerPrincipalIsolation:
     """ADR 0008: local mode is no longer guaranteed to have exactly one
     principal, so every route here has to filter/authorize against
-    ``current_principal()`` the same way web/routes_org_approvals.py's own
-    routes always have. Exercised end to end through the real
+    ``current_principal()`` the same way web/routes_approvals.py's own
+    org-mode routes always have. Exercised end to end through the real
     ``_PrincipalScopeMiddleware`` (server.py) -- the same wrapping
     ``build_app()`` applies in production -- rather than by calling
     ``current_principal()``/``principal_scope`` directly, so this proves

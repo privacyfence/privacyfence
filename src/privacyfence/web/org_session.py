@@ -7,10 +7,11 @@ everyone in the install has": org mode has more than one user, so each
 session has to carry its own, distinct identity.
 
 As of P9 this backs a real, principal-scoped ``/approvals``/``/security``
-surface for org mode -- web/routes_org_approvals.py, not the local-mode
-``routes_approvals.py``, which still authenticates with one shared secret
-and has no principal filtering (see that module's own docstring for why it
-was never mounted under org mode as-is). ``/settings``
+surface for org mode -- web/routes_approvals.py's ``build_routes()``, not
+that same module's local-mode ``create_app()``, which still authenticates
+with one shared secret and has no principal filtering (see that module's
+own docstring for why the shared-secret surface was never mounted under
+org mode as-is). ``/settings``
 (routes_settings.py's ~30-action surface) is the one still not wired into
 this session model -- still local-mode-only for now, a documented
 follow-up (see web/server.py's own module docstring's "Still deliberately
@@ -19,7 +20,7 @@ identity.py deliver is the session mechanism itself, real and tested end
 to end, plus web/server.py's ``_PrincipalScopeMiddleware`` resolving
 ``current_principal()`` from it (P6's own seam) -- so any route built
 against it from here on gets per-principal scoping for free, exactly as
-routes_org_approvals.py already does.
+web/routes_approvals.py's org-mode routes already do.
 """
 from __future__ import annotations
 

@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from . import paths
+from .agent_identity import current_agent
 from .principal import LOCAL_PRINCIPAL_ID, Principal, PrincipalRegistry, current_principal, principal_scope
 from .secure_files import atomic_write_bytes, atomic_write_json, secure_mkdir
 
@@ -63,7 +64,9 @@ logger = logging.getLogger(__name__)
 #        security_config_hash, prev_hash, entry_hash
 #   3 -- approval binder Phase 2: + decided_via, batch_id
 #   4 -- policy v2 redesign P8 (rule attribution and staleness): + rule_id
-CURRENT_SCHEMA_VERSION = 4
+#   5 -- agent attribution AGT-2 (ADR 0006, ADR 0035): + agent_id, agent_name,
+#        agent_version, agent_source
+CURRENT_SCHEMA_VERSION = 5
 
 # The hash chain's own root -- what the very first entry this install ever
 # records (or the first one after a chain-state file goes missing, e.g. a
@@ -113,6 +116,7 @@ class AuditEntry:
                             # "approval_pending" | "expired" |
                             # "webauthn_credential_enrolled" | "webauthn_credential_removed" |
                             # "webauthn_enrollment_refused" | "webauthn_recovery_code_used" |
+                            # "webauthn_recovery_refused" |
                             # "sign_in_code_minted" |
                             # "step_up_requirement_enabled" | "step_up_requirement_disabled"
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed": #426
@@ -158,6 +162,12 @@ class AuditEntry:
                             #  file for that principal. Always recorded on a successful trade-in --
                             #  see webauthn_stepup.py's own module docstring for why the code itself
                             #  is single-use.)
+                            # ("webauthn_recovery_refused": the same route's refusals, one entry per
+                            #  attempt that got past CSRF/origin and was turned away -- a session not
+                            #  attributed to a person (where the caller checks that), an exhausted
+                            #  attempt budget, or a wrong/already-used code. The summary names which;
+                            #  the code itself is never recorded. Without it, guessing at a principal's
+                            #  recovery code left no trace until a guess succeeded.)
                             # ("step_up_requirement_enabled"/"step_up_requirement_disabled": #426
                             #  Phase 4 -- daemon_main.py, recorded once per daemon startup that finds
                             #  local mode's effective ``step_up.enabled and step_up.require_passkey``
@@ -195,8 +205,10 @@ class AuditEntry:
                             # ("policy_check": web/mcp_dispatch.py's McpDispatcher.check_policy --
                             #  a preflight question, not a real decision; recorded for
                             #  pattern-spotting only)
-                            # ("rules_listed": web/mcp_dispatch.py's McpDispatcher.list_rules -- not
-                            #  a decision either, but the full current rule/grant set was disclosed,
+                            # ("rules_listed": web/mcp_dispatch.py's McpDispatcher.list_rules
+                            #  (deleted along with the meta-tool it backed in PSC-3, once ADR 0004
+                            #  decision 3's one-minor-release grace period was honoured) -- not a
+                            #  decision either, but the full current rule/grant set was disclosed,
                             #  worth its own record for the same pattern-spotting reason as
                             #  "policy_check")
                             # ("org_config_startup": SEC-05 interim -- daemon_main.py's
@@ -240,9 +252,9 @@ class AuditEntry:
                             # ("policy_listed": web/mcp_dispatch.py's McpDispatcher.list_policy (P7
                             #  of the policy v2 redesign) -- privacyfence_list_policy's own
                             #  disclosure of the current v2 auto_accept: rule set, kept distinct from
-                            #  "rules_listed" (privacyfence_list_auto_accept_rules' older v1
-                            #  auto_accept_rules/auto_accept_grants disclosure) since they list two
-                            #  different config sections, not two names for the same event)
+                            #  "rules_listed" (the older v1 auto_accept_rules/auto_accept_grants
+                            #  disclosure the now-PSC-3-deleted list-rules meta-tool gave) since they
+                            #  list two different config sections, not two names for the same event)
                             # ("policy_rule_changed_via_bridge_proposal"/
                             #  "policy_rule_removed_via_bridge_proposal"/"policy_bridge_proposal_no_op":
                             #  gate.py's propose_policy_change() (P7) -- the v2-store counterpart of
@@ -336,12 +348,23 @@ class AuditEntry:
                               # a compliance report) group every audit entry a single passkey
                               # assertion released (Phase 3 of the binder plan) back into the one
                               # human action that authorized them. Genuinely server-minted, not just
-                              # documented as such: routes_approvals.py's and
-                              # routes_org_approvals.py's own batch_decide only keep a
+                              # documented as such: routes_approvals.py's own batch_decide only keeps a
                               # client-supplied value here when the WebAuthn challenge-store lookup
                               # inside verify_step_up() proves it names a live challenge this server
                               # began; every other path mints a fresh uuid4 instead of trusting the
                               # request body.
+    # ---- Agent attribution (schema 5, ADR 0006 / ADR 0035) ----
+    # Which AI system made this request, stamped by AuditLogger.record() from
+    # agent_identity.current_agent() when a caller left all four unset. "" in
+    # every one for an entry recorded before these fields existed, and for a
+    # request with no usable signal at all (ADR 0006 Invariant 3: unknown says
+    # so, never a default). agent_source says how much to believe the other
+    # three: only "override" and "oauth_client" are attested; "client_info" and
+    # "endpoint" are the caller's own claim -- see agent_identity.AgentSource.
+    agent_id: str = ""       # registry id ("claude-code", ...), "unknown:<claimed name>", or ""
+    agent_name: str = ""     # display name, or the sanitized claimed name for an unmatched client
+    agent_version: str = ""  # sanitized claimed version; never verified
+    agent_source: str = ""   # "override" | "oauth_client" | "client_info" | "endpoint" | ""
 
     # ---- SEC-23 fields ----
     # All six below default to a value meaning "not yet stamped" and are
@@ -508,6 +531,17 @@ class AuditLogger:
             entry.deployment_id = self._deployment_id
         if not entry.security_config_hash:
             entry.security_config_hash = self._security_config_hash
+        # Only when a caller left all four unset: an entry about an earlier
+        # request (gate.py's expiry sweep) is recorded inside agent_scope()
+        # of that request's own stored identity, so the ambient one here is
+        # already the right one -- but a caller that set them explicitly
+        # keeps what it set.
+        if not (entry.agent_id or entry.agent_name or entry.agent_version or entry.agent_source):
+            agent = current_agent()
+            entry.agent_id = agent.id
+            entry.agent_name = agent.name
+            entry.agent_version = agent.version
+            entry.agent_source = agent.source.value
         # Always overwritten (not "only if unset" like the three above):
         # schema_version and the chain fields describe *this recording*,
         # not something a caller could meaningfully pre-supply.
@@ -674,8 +708,17 @@ class AuditLogger:
             "Decided Via", "Batch ID",
             # P8 (policy v2 redesign): appended last, same reason again.
             "Rule ID",
+            # Agent attribution (schema 5): appended last, same reason again. The
+            # source column is labelled so a claimed identity reads as a claim,
+            # the way "Claude's Reason (unverified)" does -- only "override" and
+            # "oauth_client" are attested.
+            "AI System ID", "AI System", "AI System Version (claimed)",
+            "AI System Source (only override/oauth_client are verified)",
         ]
-        COL_WIDTHS = [22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22, 14, 30, 14]
+        COL_WIDTHS = [
+            22, 10, 12, 30, 22, 55, 30, 14, 22, 12, 12, 30, 55, 55, 16, 34, 34, 22, 22, 14, 30, 14,
+            24, 24, 16, 22,
+        ]
 
         hdr_font  = Font(bold=True, color="FFFFFF")
         hdr_fill  = PatternFill("solid", fgColor="2D4A6B")
@@ -726,6 +769,8 @@ class AuditLogger:
                 entry.security_config_hash or "", entry.entry_hash or "",
                 entry.decided_via or "", _excel_literal(entry.batch_id or ""),
                 entry.rule_id or "",
+                _excel_literal(entry.agent_id or ""), _excel_literal(entry.agent_name or ""),
+                _excel_literal(entry.agent_version or ""), entry.agent_source or "",
             ])
             fill = decision_fills.get(entry.decision, PatternFill())
             for col in range(1, len(HEADERS) + 1):

@@ -7,8 +7,8 @@ singleton deliberately ... in org mode one instance still serves every
 principal (its ``PendingApprovalRegistry`` gains the principal dimension
 internally instead)" -- but nothing actually needed it until now, since
 ``/approvals`` was never mounted in org mode through P8 (web/server.py's
-own module docstring). web/routes_org_approvals.py (P9) is what finally
-reaches this registry from more than one principal at once, so every
+own module docstring). web/routes_approvals.py's org-mode routes (P9) are
+what finally reach this registry from more than one principal at once, so every
 ``PendingApproval`` now stamps ``principal_id`` at registration time (from
 ``current_principal()`` -- the same contextvar pattern every other
 per-principal registry in this codebase already uses, so gate.py's own
@@ -18,8 +18,8 @@ signature change), and every read/write method below takes an optional
 everywhere) means "no filter" -- gate.py's own internal calls, and every
 pre-P9 caller/test, keep seeing every approval regardless of principal,
 which is also exactly correct for local mode's single implicit principal.
-web/routes_org_approvals.py is the one real caller that ever passes a real
-``principal_id``, and it does so on every method it calls (§10.5: "every
+web/routes_approvals.py's org-mode routes are the one real caller that ever
+passes a real ``principal_id``, and they do so on every method they call (§10.5: "every
 approval, card, preview, decision ... read is authorized against
 current_principal()").
 
@@ -89,6 +89,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from .agent_identity import UNKNOWN_AGENT, AgentIdentity, current_agent
+from .agent_label import label_for
 from .principal import current_principal
 
 logger = logging.getLogger(__name__)
@@ -257,6 +259,12 @@ class PendingApproval:
     pii_detected: bool = False
     pii_categories: list[str] = field(default_factory=list)
     claude_reason: str = ""
+    # The AI system that made this request, captured from current_agent() at
+    # creation -- the same way claude_reason is carried. Audit rows about this
+    # approval that are written later, from inside some unrelated call (gate.py's
+    # expiry sweep), must use this rather than whatever agent that call runs
+    # as, or they would attribute this request to someone else's.
+    agent: AgentIdentity = UNKNOWN_AGENT
 
     # UI-step state -- see module docstring.
     event: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -375,6 +383,11 @@ class PendingApproval:
             # allowed to at its own detail level; web_shell.py's notification
             # body never reads it below "detailed".
             "summary": self.summary,
+            # Who is asking, as a tiered label (agent_label.AgentLabel.to_dict():
+            # tier, headline, claim, icon_id) -- the approval list's live
+            # re-render shows it on every row. Never gated content: it names
+            # the caller, which the card itself already shows.
+            "agent": label_for(self.agent).to_dict(),
             "created_at": _iso(self.created_at),
             "expires_at": _iso(self.expires_at),
             "decided": self.is_finalized(),
@@ -517,6 +530,7 @@ class PendingApprovalRegistry:
                 operation_key=operation_key, review_ctx=review_ctx,
                 pii_forces_confirmation=pii_forces_confirmation, pii_detected=pii_detected,
                 pii_categories=list(pii_categories or []), claude_reason=claude_reason,
+                agent=current_agent(),
             )
             self._pending[approval.id] = approval
             self._by_key[key] = approval.id
@@ -530,8 +544,7 @@ class PendingApprovalRegistry:
 
         ``sensitive`` (the self-approval review's Phase 4) marks the one
         kind of confirm dialog that sentence is *not* true of: the one an
-        MCP meta-tool raises (``gate.propose_policy_change`` /
-        ``propose_rule_change``), where no card came first and confirming is
+        MCP meta-tool raises (``gate.propose_policy_change``), where no card came first and confirming is
         the whole of the gate on a change to what auto-accepts in future.
         web/routes_approvals.py's decide route holds those to the same two
         checks web/routes_settings.py already holds its own
@@ -562,13 +575,13 @@ class PendingApprovalRegistry:
         self, approval_id: str, result: str, chosen_index: int | None = None, *,
         principal_id: str | None = None, decided_via: str = "", batch_id: str = "",
     ) -> bool:
-        """Resolve one UI step -- called by web/routes_approvals.py's/
-        web/routes_org_approvals.py's decide endpoint when a human clicks a
-        button. See PendingApproval.answer.
+        """Resolve one UI step -- called by web/routes_approvals.py's
+        decide endpoint when a human clicks a button. See
+        PendingApproval.answer.
 
-        ``principal_id``, when given (web/routes_org_approvals.py always
-        passes one -- see module docstring), rejects a decision on an
-        approval belonging to a *different* principal exactly as if it
+        ``principal_id``, when given (web/routes_approvals.py's org-mode
+        routes always pass one -- see module docstring), rejects a
+        decision on an approval belonging to a *different* principal exactly as if it
         didn't exist -- §10.5's "every ... decision ... is authorized
         against current_principal()", defense in depth on top of the
         approval id's own 128 bits of entropy.
@@ -590,8 +603,8 @@ class PendingApprovalRegistry:
         decided_via: str = "", batch_id: str = "",
     ) -> list[dict[str, str]]:
         """The approval binder's own batch decide endpoint (Phase 2),
-        shared between web/routes_approvals.py and web/
-        routes_org_approvals.py so neither reimplements this classify-then-
+        shared between web/routes_approvals.py's local-mode and org-mode
+        routes so neither reimplements this classify-then-
         answer sequence. ``items`` is ``(approval_id, result)`` pairs, each
         ``result`` already validated by the caller to be one of
         BATCH_RESULTS.
@@ -734,7 +747,7 @@ class PendingApprovalRegistry:
     def get(self, approval_id: str, *, principal_id: str | None = None) -> PendingApproval | None:
         """``principal_id``, when given, makes a mismatched approval
         indistinguishable from a nonexistent one -- the authorization check
-        web/routes_org_approvals.py's card/preview routes and
+        web/routes_approvals.py's card/preview routes and
         web/mcp_dispatch.py's ``privacyfence_await_approval`` (P9) rely on.
         ``None`` (every pre-P9 caller, and gate.py's own internal use) means
         "no filter", unchanged from before this parameter existed."""
