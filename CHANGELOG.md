@@ -99,6 +99,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   credentials, as the macOS, Windows and Linux installers already did, so `pip install
   privacyfence` no longer needs your own `api_id`/`api_hash` to connect Telegram (ADR 0040).
 
+- **The org-mode setup guide now explains how to name admins when Google is the sign-in
+  provider.** Google's sign-in tokens carry no groups, so the guide's `groups` example left every
+  user, Workspace admins included, without the admin-only Settings pages (Privacy Filter, AI
+  systems). It now shows naming admins by email address (`--idp-admin-group-claim email`).
+
 ### Security
 
 - **Recovery-code sign-in is audited, rate-limited and needs a human session.** `POST
