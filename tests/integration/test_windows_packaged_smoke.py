@@ -636,6 +636,23 @@ def _log_tail(log_path: Path | None) -> str:
     return "\n".join(lines[-_INSTALL_LOG_TAIL_LINES:])
 
 
+# `installer/privacyfence.iss`'s SeparateInstall runs `enable` through
+# `cmd /C "... > "<is-XXXXX.tmp>\privilege-separation.out" 2>&1"` and copies
+# that file into the /LOG= file only once `enable` returns -- so for an install
+# that hangs *in* `enable`, the log's last line is "SeparateInstall: running"
+# and what `enable` was doing is only in the redirect target, which a killed
+# installer leaves behind in its temp directory.
+_REDIRECT_TARGET = re.compile(r'>\s*"([^"]+)"')
+
+
+def _redirect_tails(tree: list[_Process]) -> str:
+    sections = []
+    for member in tree:
+        for target in _REDIRECT_TARGET.findall(member.command_line or ""):
+            sections.append(f"---- last {_INSTALL_LOG_TAIL_LINES} lines of {target} ----\n{_log_tail(Path(target))}")
+    return "\n".join(sections)
+
+
 def _kill_installer_tree(process: subprocess.Popen, timeout: float, log_path: Path | None) -> NoReturn:
     """Ends an installer run that outlived ``timeout``, all of it, and fails
     with what it was doing.
@@ -675,7 +692,8 @@ def _kill_installer_tree(process: subprocess.Popen, timeout: float, log_path: Pa
         + ("\n".join(str(p) for p in survivors) or "(none)")
         + "\n---- Inno Setup processes still alive after that ----\n"
         + ("\n".join(str(p) for p in still_alive) or "(none)")
-        + f"\n---- last {_INSTALL_LOG_TAIL_LINES} lines of the install log ----\n{_log_tail(log_path)}"
+        + f"\n---- last {_INSTALL_LOG_TAIL_LINES} lines of the install log ----\n{_log_tail(log_path)}\n"
+        + _redirect_tails(tree)
     )
 
 
