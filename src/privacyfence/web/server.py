@@ -54,13 +54,14 @@ decision additionally demands a fresh WebAuthn step-up when
 web/routes_approvals.py's own module docstring covers both.
 
 **`/settings` in org mode** (#400) is, likewise, *not*
-``routes_settings.py``'s ~30-action local-mode surface -- porting that
-dispatcher wholesale was never the plan (see routes_connect.py's own
+``routes_settings.py``'s ~30-action local-mode surface wholesale -- porting
+that dispatcher's *page* was never the plan (see routes_connect.py's own
 module docstring for why a small, purpose-built page is the shape every
-other org-mode surface here already takes). What is mounted instead
-(web/routes_org_settings.py) is two purpose-built pages:
-``GET /settings``, every signed-in principal's own auto-accept rules and
-resource grants, read-only except for removing a row; and
+other org-mode surface here already takes). PSC-4b folded the *dispatch*
+half into one module, though: ``routes_settings.build_org_routes()`` (the
+former web/routes_org_settings.py) mounts two purpose-built pages, rendered
+by web/org_settings_pages.py: ``GET /settings``, every signed-in principal's
+own auto-accept rules, read-only except for adding or removing a rule; and
 ``GET /settings/privacy``, an admin-only (``Principal.is_admin`` -- #400
 C3c finally gave that field a real consumer) view of the install-wide
 PII/privacy policy, editable since #400 C3e through two ``POST
@@ -68,10 +69,13 @@ PII/privacy policy, editable since #400 C3e through two ``POST
 settings.yaml and hot-reload it for every principal
 (web/org_install_policy.py). The rest of routes_settings.py's ~30 actions
 (connector management, the update banner, Telegram's interactive auth --
-see web/org_settings_scope.py's own ``NOT_APPLICABLE_ACTIONS`` for the
-ones that only ever meant something on a desktop install) remain
-unmounted, as do the two admin-only actions that are install-wide but
-aren't privacy policy (``set_log_level``, ``toggle_calendar_free_busy``).
+see web/org_settings_scope.py's own ``ACTION_SCOPES`` for the ones that
+only ever meant something on a desktop install) remain unmounted, as do the
+two admin-only actions that are install-wide but aren't privacy policy
+(``set_log_level``, ``toggle_calendar_free_busy``) -- ``ACTION_SCOPES`` is
+the one place that split is declared now, consulted by both
+``build_routes``/``build_org_routes`` rather than filtered separately by
+each.
 """
 from __future__ import annotations
 
@@ -509,8 +513,9 @@ class OrgAuth:
     connector_registry: ConnectorRegistry | None = None
     org_config: dict = field(default_factory=dict)
     # #400: the server's own install-wide settings.yaml (run_app()'s
-    # ``config``) -- routes_org_settings.py's admin-only privacy-policy view
-    # reads this directly, and daemon_main._start_org_web_server threads the
+    # ``config``) -- routes_settings.build_org_routes()'s admin-only
+    # privacy-policy view reads this directly, and
+    # daemon_main._start_org_web_server threads the
     # same dict into every org principal's own privacy-filter registration
     # (see _load_principal_settings()'s docstring). Defaults to {} for the
     # same "every existing OrgAuth() caller keeps working" reason
@@ -519,8 +524,8 @@ class OrgAuth:
     # #400 C3e: where that dict was loaded from, so the admin privacy page
     # can write it back. Separate from the dict rather than derived from it
     # because nothing in a parsed settings.yaml records its own path.
-    # Empty means "read-only": routes_org_settings.py renders the policy
-    # without edit controls and rejects a hand-written write, which is
+    # Empty means "read-only": routes_settings.build_org_routes() renders
+    # the policy without edit controls and rejects a hand-written write, which is
     # exactly what an OrgAuth built by a test that never had a real
     # settings.yaml on disk should do.
     install_wide_settings_path: str = ""
@@ -1036,7 +1041,7 @@ def _build_org_app(
     """org mode's own route set -- see build_app()'s and this module's own
     docstrings for what's deliberately absent (the local-token settings
     surface's ~30-action dispatcher, still -- only its own purpose-built
-    replacement is mounted, see routes_org_settings below).
+    replacement is mounted, see build_org_routes below).
     ``/approvals`` and ``/security`` (P9,
     web/routes_approvals.py/web/routes_security.py) are mounted
     unconditionally here -- unlike ``/connect`` (below), they need nothing
@@ -1046,7 +1051,8 @@ def _build_org_app(
     from urllib.parse import urlparse
 
     from ..org_mode import AuthzPolicyConfig
-    from . import routes_approvals, routes_org_settings, routes_org_stepup, routes_security
+    from . import routes_approvals, routes_org_stepup, routes_security
+    from .routes_settings import build_org_routes
 
     extra_routes: list[Route] = []
     lifespans = []
@@ -1123,12 +1129,16 @@ def _build_org_app(
     # #400: mounted unconditionally, same reasoning as /approvals above --
     # needs only org.sessions and the install-wide settings dict, both
     # already required parameters of this function either way.
-    extra_routes.extend(routes_org_settings.build_routes(
+    # PSC-4b: routes_settings.py now builds both modes' settings routes --
+    # only the former web/routes_org_settings.py's route/handler half moved
+    # here (as build_org_routes); its page rendering lives in
+    # web/org_settings_pages.py, unchanged.
+    extra_routes.extend(build_org_routes(
         sessions=org.sessions, install_wide_settings=org.install_wide_settings,
         install_wide_settings_path=org.install_wide_settings_path,
-        # #579: the same StepUpConfig/origin routes_org_approvals.build_routes
+        # #579: the same StepUpConfig/origin routes_approvals.build_routes
         # above already resolves from org.org_config -- see that call and
-        # this function's own build_routes docstring.
+        # this function's own build_org_routes docstring.
         step_up=step_up, step_up_origin=org.issuer_url,
     ))
 

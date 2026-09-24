@@ -1,108 +1,128 @@
-"""Org-mode ownership split for routes_settings.py's `_ALLOWED_ACTIONS` (#400).
+"""Per-action mode/authorization declaration for the settings surface (#400,
+PSC-4b).
 
-SettingsController is bound at construction to one principal's own
-`config/settings.yaml` -- every action mutates or reads that one file. Local
-mode gets away with a single instance because there is only ever one
-principal. Org mode has many, so reusing routes_settings.py's dispatcher
-wholesale is not an option: an action meaningful per-principal there (a rule
-row, a grant, a connector toggle -- `ConnectorRegistry` already caches
-connector hosts per principal, see security-and-compliance.md) needs a
-controller scoped to `current_principal()`, rebuilt per request the way
-`daemon_main._load_principal_settings()` already does for auto-accept rules.
-An install-wide action (the PII/privacy policy, the log level) instead needs
-exactly one admin-gated instance bound to the server's own `settings.yaml`,
-never the per-principal one. Mixing the two under one dispatcher, as local
-mode does, would let any signed-in principal flip the install-wide PII
-policy for the whole org.
+Through PSC-4a, `web/routes_settings.py`'s `_ALLOWED_ACTIONS` was the
+primary list (every action the local desktop-app-shaped `SettingsController`
+exposes) and this module held four frozensets that filtered it for org
+mode -- a filter bolted onto local's own list, checked against it by this
+module's own test so a newly added local-mode action couldn't silently go
+unclassified. PSC-4b merges `web/routes_settings.py` and the former
+`web/routes_org_settings.py` into one dispatcher (`routes_settings.py`'s
+`build_routes`/`build_org_routes`), and that inverts the relationship:
+`ACTION_SCOPES` below is now the primary declaration, and `_ALLOWED_ACTIONS`
+is *projected* from it (every action whose scope names `LOCAL_MODE`, which
+is every action there is -- local mode's own dispatcher predates this
+split and was never itself gated by it).
 
-A third group is neither: actions this desktop-app-shaped controller exposes
-that mean nothing once the process is a headless server -- the update-
-checker banner, Telegram's interactive phone/2FA login, and the per-viewer
-notification-detail preference. Those never get an org-mode route, under any
-of the allowlists below, ever.
+Each action declares, in one place:
 
-These frozensets are that split. `web/routes_org_settings.py` is what
-consumes it: a read+add+remove surface for the per-principal half, and,
-since #400 C3e, a real editor for the privacy/PII members of the admin-only
-half (`web/org_install_policy.py`'s `SUPPORTED_ACTIONS`, a strict subset of
-`ADMIN_ONLY_ACTIONS` -- `set_log_level` and `toggle_calendar_free_busy` are
-install-wide too but aren't privacy policy, and each needs a reload path of
-its own). This module's own test checks the split against
-`routes_settings._ALLOWED_ACTIONS` so a newly added local-mode action can't
-silently go unclassified.
+- which modes (`LOCAL_MODE`/`ORG_MODE`) it has an actual route in -- not
+  merely "meaningful in", the same distinction the old
+  `PER_PRINCIPAL_ACTIONS`/`PER_PRINCIPAL_ACTIONS_UNROUTED` split drew (#B20
+  in the 4.1 security review: an allow-list claiming an action no route
+  consumes is the bug -- see the per-action comments below for exactly
+  which actions are "meaningful per-principal/admin-wide in concept" but
+  still `LOCAL_MODE`-only because no org route exists for them yet);
+- whether it's `admin_only` -- gated on `Principal.is_admin` in org mode.
+  `admin_only` is meaningless for local mode: `SettingsController` is bound
+  at construction to one principal's own `config/settings.yaml`, so "admin"
+  has never been a local-mode concept (`LOCAL_PRINCIPAL.is_admin` is always
+  `False`, see `principal.py`) -- `is_action_permitted` below only ever
+  consults it when `mode=ORG_MODE`.
 
-`PER_PRINCIPAL_ACTIONS` is deliberately narrower than "every action this
-desktop-app-shaped controller exposes that is meaningful per-principal" --
-it's exactly the subset `routes_org_settings.py` has an actual route for
-(today: adding a policy rule, removing a policy rule). A connector toggle,
-connector refresh, or connector authentication flow is just as meaningful
-per-principal in org mode in principle, but no route wires any of them yet,
-so they live in `PER_PRINCIPAL_ACTIONS_UNROUTED` instead: still not
-`NOT_APPLICABLE_ACTIONS` (they're not meaningless or wrong the way
-`enable_step_up` is -- an org-mode route for them is exactly the kind of
-thing a later PR adds), but `is_action_permitted` denies them until that
-route exists and moves them into `PER_PRINCIPAL_ACTIONS` alongside it.
-Letting this allow-list claim an action no route consumes was the bug
-(#B20 in the 4.1 security review): the allow-list had run ahead of the
-routes, so `is_action_permitted` would happily say yes to an action for a
-signed-in principal with nothing on the other end to say no -- exactly the
-kind of gap a route added later, in good faith, could have trusted without
-noticing it was never actually wired for. `add_policy_rule`/
-`remove_policy_rule` themselves lived in `PER_PRINCIPAL_ACTIONS_UNROUTED`
-for exactly that reason (P6 of the policy v2 redesign built the writer
-before org mode had a route for it) until P9 rebuilt the org-settings page
-on the v2 schema and moved them here alongside its own routes -- see
-`routes_org_settings.py`'s own docstring. The v1-shaped
-`add_rule_row`/`remove_rule_row`/`remove_grant_row` this set used to carry
-are gone with the v1 `SettingsController` methods P9 deleted.
-
-`is_action_permitted` is the other half: `Principal.is_admin` is already
-resolved from the IdP and carried end to end (`org_identity.
-principal_from_claims` -> `OrgSessionStore` / `OrgOAuthProvider.
-_mint_tokens` -> `mcp_auth.principal_from_access_token`), but until now
-nothing consumed it for an authorization decision anywhere in this
-codebase. This is that decision, in one place, so the eventual org-mode
-settings route calls it instead of re-deriving "is this action gated"
-from the three sets itself.
+`is_action_permitted` is the authorization decision built on top of this
+table: `mode not in scope.modes` covers both "not a real action" and "no
+route for this action in this mode" with one check (the caller is expected
+to 404 either the same way `routes_settings.py`'s own allowlist check
+always has, not distinguish them); `admin_only` is checked only for
+`ORG_MODE`, since `Principal.is_admin` is already resolved from the IdP and
+carried end to end (`org_identity.principal_from_claims` ->
+`OrgSessionStore`/`OrgOAuthProvider._mint_tokens` ->
+`mcp_auth.principal_from_access_token`) but local mode has no admin
+concept to gate on at all -- every action valid for `LOCAL_MODE` is
+permitted for whichever principal is asking, once mode membership itself
+has passed.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from ..principal import Principal
 
-PER_PRINCIPAL_ACTIONS: frozenset[str] = frozenset({
-    "add_policy_rule", "remove_policy_rule",
-})
+LOCAL_MODE = "local"
+ORG_MODE = "org"
 
-# Per-principal in concept (see module docstring), but routes_org_settings.py
-# doesn't wire a route for any of these yet -- `is_action_permitted` denies
-# them, not permits them, until one does. Move an action to
-# `PER_PRINCIPAL_ACTIONS` in the same PR that adds its route, never ahead of
-# it.
-#
-# P6 of the policy v2 redesign retired update_rule_row/toggle_grant_capability/
-# add_grant_row/update_grant_row from routes_settings._ALLOWED_ACTIONS
-# entirely (SettingsController.add_policy_rule/remove_policy_rule are the
-# local Auto-accept page's own replacements) -- they had no route here
-# either, so nothing moved, nothing broke, and there is simply nothing left
-# to unblock for them.
-PER_PRINCIPAL_ACTIONS_UNROUTED: frozenset[str] = frozenset({
-    "enable_connector", "disable_connector", "refresh_connectors", "authenticate_connector",
-})
 
-ADMIN_ONLY_ACTIONS: frozenset[str] = frozenset({
-    "toggle_pii_detection", "toggle_pii_category",
-    "set_default_policy", "set_category_policy",
-    "toggle_calendar_free_busy", "set_log_level",
-})
+@dataclass(frozen=True)
+class ActionScope:
+    """`modes` -- the subset of `{LOCAL_MODE, ORG_MODE}` a real route exists
+    for. `admin_only` -- whether `ORG_MODE` additionally requires
+    `principal.is_admin`; ignored for `LOCAL_MODE` (see module docstring)."""
 
-# Meaningless, or actively wrong, on a headless server -- unlike
-# PER_PRINCIPAL_ACTIONS_UNROUTED above, never wired into an org-mode route
-# under any allowlist here, ever.
-NOT_APPLICABLE_ACTIONS: frozenset[str] = frozenset({
-    "toggle_update_check", "toggle_update_check_beta", "check_for_updates_now",
-    "skip_update", "remind_later_update",
-    "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
-    "set_notifications_detail",
+    modes: frozenset[str]
+    admin_only: bool = False
+
+
+ACTION_SCOPES: dict[str, ActionScope] = {
+    # ---------------------------------------------------------------- #
+    # Per-principal, routed in both modes: a rule row, scoped to
+    # current_principal() everywhere it's evaluated -- an admin has no
+    # more mutation power here over another principal's rules than that
+    # principal does over their own.
+    # ---------------------------------------------------------------- #
+    "add_policy_rule": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE})),
+    "remove_policy_rule": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE})),
+
+    # ---------------------------------------------------------------- #
+    # Admin-only, routed in both modes: the install-wide PII/privacy
+    # policy (web/org_install_policy.py's own SUPPORTED_ACTIONS, a strict
+    # subset of the admin-only actions below, is exactly these four).
+    # ---------------------------------------------------------------- #
+    "toggle_pii_detection": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE}), admin_only=True),
+    "toggle_pii_category": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE}), admin_only=True),
+    "set_default_policy": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE}), admin_only=True),
+    "set_category_policy": ActionScope(modes=frozenset({LOCAL_MODE, ORG_MODE}), admin_only=True),
+
+    # Admin-only in concept -- install-wide, not per-principal -- but
+    # neither is privacy policy, and each needs a reload path of its own
+    # that web/org_install_policy.py doesn't have yet (that module's own
+    # docstring). LOCAL_MODE-only until one of those lands with its own
+    # route, the same way the per-principal actions below are.
+    "toggle_calendar_free_busy": ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True),
+    "set_log_level": ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True),
+
+    # ---------------------------------------------------------------- #
+    # Per-principal in concept -- a connector toggle, refresh, or auth
+    # flow is just as meaningful per-principal in org mode in principle as
+    # add_policy_rule/remove_policy_rule above -- but no org-mode route
+    # wires any of them yet, so is_action_permitted denies them until one
+    # does (#B20: an allow-list entry with no route behind it is the bug
+    # this table exists to make impossible to reintroduce by construction
+    # -- move an action's ORG_MODE membership in the same PR that adds its
+    # route, never ahead of it).
+    # ---------------------------------------------------------------- #
+    "enable_connector": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "disable_connector": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "refresh_connectors": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "authenticate_connector": ActionScope(modes=frozenset({LOCAL_MODE})),
+
+    # ---------------------------------------------------------------- #
+    # Meaningless, or actively wrong, on a headless server -- the
+    # update-checker banner, Telegram's interactive phone/2FA login, and
+    # the per-viewer notification-detail preference. LOCAL_MODE-only,
+    # under any classification, ever -- unlike the two groups above, these
+    # never get an org-mode route no matter what else lands.
+    # ---------------------------------------------------------------- #
+    "toggle_update_check": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "toggle_update_check_beta": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "check_for_updates_now": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "skip_update": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "remind_later_update": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "telegram_start_auth": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "telegram_submit_code": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "telegram_submit_2fa": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "telegram_cancel_auth": ActionScope(modes=frozenset({LOCAL_MODE})),
+    "set_notifications_detail": ActionScope(modes=frozenset({LOCAL_MODE})),
     # B9: hardcodes LOCAL_PRINCIPAL throughout (the credential check, the
     # config/settings.yaml section it writes, the LiveStepUpConfig it
     # updates) -- local mode's own single-principal, file-based step_up
@@ -110,21 +130,26 @@ NOT_APPLICABLE_ACTIONS: frozenset[str] = frozenset({
     # bundle-driven one. Wiring this into an org-mode route would be
     # actively wrong (it would gate on, and mutate state for, the wrong
     # principal), not merely unavailable.
-    "enable_step_up",
-})
+    "enable_step_up": ActionScope(modes=frozenset({LOCAL_MODE})),
+}
 
 
-def is_action_permitted(action: str, principal: Principal) -> bool:
-    """Whether `principal` may invoke `action` on an org-mode settings
-    surface. A `PER_PRINCIPAL_ACTIONS` member is permitted for any signed-in
-    principal -- every one of them already resolves against
-    `current_principal()` inside the controller/registry it touches, so
-    there is nothing further to check here. An `ADMIN_ONLY_ACTIONS` member
-    needs `principal.is_admin`. Anything else -- a `PER_PRINCIPAL_ACTIONS_
-    UNROUTED` or `NOT_APPLICABLE_ACTIONS` member, or a name in none of the
-    four sets at all -- is never permitted; the caller is expected to 404
-    those the same way `routes_settings.py`'s own allowlist check does, not
-    reach this function with them."""
-    if action in ADMIN_ONLY_ACTIONS:
+def is_action_permitted(action: str, principal: Principal, *, mode: str) -> bool:
+    """Whether `principal` may invoke `action` on a settings surface running
+    in `mode` (`LOCAL_MODE`/`ORG_MODE`). `mode` is required, not defaulted:
+    the same action name can be permitted in one mode and not the other
+    (see module docstring), so a caller must always say which surface it's
+    asking about.
+
+    An action with no entry in `ACTION_SCOPES`, or one whose `modes` doesn't
+    include `mode` at all, is never permitted -- the caller is expected to
+    404 that the same way `routes_settings.py`'s own allowlist check always
+    has, not reach this function expecting a reason. `admin_only` is only
+    ever consulted for `ORG_MODE` -- see module docstring for why local mode
+    has nothing to gate on there."""
+    scope = ACTION_SCOPES.get(action)
+    if scope is None or mode not in scope.modes:
+        return False
+    if mode == ORG_MODE and scope.admin_only:
         return principal.is_admin
-    return action in PER_PRINCIPAL_ACTIONS
+    return True

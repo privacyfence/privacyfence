@@ -367,7 +367,7 @@ _NAV_ITEMS = (("approvals", "Approvals", "/approvals"), ("settings", "Settings",
 
 # Org mode's own route set. It has no local-mode ``/settings`` dispatcher
 # (see web/server.py's module docstring for what org mode deliberately
-# doesn't mount -- ``/settings`` there is routes_org_settings.py's own,
+# doesn't mount -- ``/settings`` there is routes_settings.build_org_routes's own,
 # much smaller surface), and ``/connect``/``/security`` are surfaces local
 # mode has no equivalent of.
 ORG_NAV_ITEMS = (

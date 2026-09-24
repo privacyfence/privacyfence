@@ -13,7 +13,7 @@ as of the policy v2 redesign's P6 (see TestAddPolicyRule/TestRemovePolicyRule
 below for its replacement, and settings_controller.py's own "Auto-accept
 (policy v2)" section docstring); RULES_BY_OPERATION/RULES_LIST_VALUE/
 RULES_INT_VALUE survive only because org mode's own separate settings
-surface (web/routes_org_settings.py) still reads them.
+surface (web/org_settings_pages.py) still reads them.
 
 Also covers the cross-thread AppHelper.callAfter marshaling contract
 (_run_async/on_change) that used to live in test_menu_bar.py's "P6" module
@@ -2097,7 +2097,7 @@ class TestRuleUiCompleteness:
     equivalents are tests/unit/policy/test_catalogue.py's
     test_covers_every_propose_group_and_every_extra and test_registry.py's
     coverage of the six formerly-ungovernable operation keys. RULES_BY_OPERATION
-    and OPERATION_LABELS themselves survive for web/routes_org_settings.py,
+    and OPERATION_LABELS themselves survive for web/org_settings_pages.py,
     which still renders v1 rules, so these checks still have a subject."""
 
     @staticmethod
