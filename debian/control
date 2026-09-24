@@ -13,7 +13,12 @@ Architecture: amd64 arm64
 # scripts/build_deb.sh only actually builds for the host it runs on, and CI (P5.1) currently runs
 # only an amd64 leg -- arm64 is a follow-up once there's a concrete request, not a build-script
 # code change (PyInstaller needs a real arm64 build host; it doesn't cross-compile).
-Depends: ${misc:Depends}
+# The OS floor (docs/platform-support.md's support matrix; tests/unit/test_minimum_os_versions.py
+# keeps the two in step). The bundle carries its own Python, so glibc is the one system library it
+# links against: the build host's, which scripts/check_deb_glibc_floor.py checks against this
+# floor on every build. systemd 242 is the oldest that knows every directive the daemon's unit
+# uses (RestrictSUIDSGID=), and the separation tool refuses to run without systemd as PID 1.
+Depends: libc6 (>= 2.38), systemd (>= 242), ${misc:Depends}
 Description: Privacy proxy between Claude (MCP) and your personal data
  PrivacyFence sits between Claude (or any other MCP client) and your personal
  data -- Gmail, Google Drive, Calendar, Contacts, Tasks, Slack, Telegram,
