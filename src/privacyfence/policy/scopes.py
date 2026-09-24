@@ -29,8 +29,8 @@ its `.scope_type` is a tuple of both rather than picking one arbitrarily.
 (see D4 in the redesign proposal: model it as an explicit, honestly-unconditional "anything in this
 connector" scope rather than hiding it behind a rule name). Its `.scope_type` is the literal
 `"<connector>.anything"` placeholder the proposal itself uses -- resolving that to a concrete
-`gmail.anything`/`calendar.anything` per rule is config-authoring work for a later phase
-(`policy/compat.py`'s migration, P4), not something this module's `matches()` needs to know.
+`gmail.anything`/`calendar.anything` per rule is config-authoring work, not something this
+module's `matches()` needs to know.
 
 Two scope types the redesign proposal's §04 catalogue adds -- `drive.file` and
 `apps_script.project` -- have no v1 predicate at all (apps_script's tools were previously

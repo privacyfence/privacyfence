@@ -40,18 +40,20 @@ import time
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from privacyfence import approval_ui, auto_accept, gate
 from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.audit_log import get_audit_logger, init_audit_logger
 from privacyfence.pii_detector import init_pii_detection
-from privacyfence.policy import compat as policy_compat
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import propose as policy_propose
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule
 from privacyfence.policy.registry import TOOL_REGISTRY
 from privacyfence.web_approval_ui import WebApprovalUI
+
+from ..helpers import policy_rules
 
 
 def wait_until(predicate, timeout=2.0, interval=0.005) -> bool:
@@ -116,15 +118,10 @@ class FakeEvaluator:
         return (ok, rule, rule if ok else "")
 
 
-def install_rules(rules_config: dict) -> None:
-    """Compile a v1-shaped ``{operation_key: [{"rule": name, "value": value}]}`` config into
-    real v2 ``PolicyRule``s (v2 scope predicates keep v1's rule names -- ``policy/scopes.py``'s
-    own docstring) and install them as the current principal's hot-reloaded rule set, exactly the
-    way ``daemon_main.py``'s own startup migration does. Used by the handful of classes below that
-    exercise real rule-matching rather than ``FakeEvaluator``'s canned verdict (P9: there's no
-    more separate ``AutoAcceptEvaluator`` to construct for this)."""
-    compiled = policy_compat.compile_rules(rules_config)
-    auto_accept.set_policy_v2_store_rules(policy_store.merge_rules(compiled))
+def install_rules(table: dict) -> None:
+    """Install ``policy_rules(table)`` as the current principal's hot-reloaded rule set -- what
+    ``gate._evaluate_auto_accept`` reads via ``auto_accept.get_policy_v2_store_rules()``."""
+    auto_accept.set_policy_v2_store_rules(policy_rules(table))
 
 
 def _scope(predicate: str, *, connector: str | None = None, verb=None):
@@ -342,7 +339,7 @@ class TestRuleIdAttribution:
     """
 
     async def test_matched_v2_store_rule_gets_its_own_canonical_id(self, monkeypatch, audit_dir):
-        install_rules({"gmail.read_message": [{"rule": "always_allow"}]})
+        install_rules({"gmail.read_message": [{"predicate": "always_allow"}]})
 
         result = await gate.gated_call(**base_kwargs())
 
@@ -379,7 +376,7 @@ class TestRuleIdAttribution:
         # top-level check see an empty store and the in-branch recheck see the real (installed)
         # one, so this exercises that second call site's own rule_id threading specifically, not
         # just the first (outer) one every other test here reaches.
-        install_rules({"gmail.read_message": [{"rule": "always_allow"}]})
+        install_rules({"gmail.read_message": [{"predicate": "always_allow"}]})
         real_rules = auto_accept.get_policy_v2_store_rules()
         calls = []
 
@@ -402,7 +399,7 @@ class TestRuleIdAttribution:
 
     async def test_write_gates_own_race_recheck_also_carries_a_rule_id(self, monkeypatch, audit_dir):
         # The popup/write branch's own version of the review branch's re-check above.
-        install_rules({"sheets.write_range": [{"rule": "always_allow"}]})
+        install_rules({"sheets.write_range": [{"predicate": "always_allow"}]})
         real_rules = auto_accept.get_policy_v2_store_rules()
         calls = []
 
@@ -1013,7 +1010,7 @@ class TestPreflightAutoAccept:
         assert (verdict, matched_rule, matched_rule_id) == ("requires_review", "", "")
 
     def test_v1_args_only_match_reports_the_same_id_for_both_fields(self):
-        install_rules({"gmail.create_draft": [{"rule": "to_is_myself"}]})
+        install_rules({"gmail.create_draft": [{"predicate": "to_is_myself"}]})
         verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
             "gmail.create_draft", {"to": "me@example.com"}, "me@example.com",
         )
@@ -1027,7 +1024,7 @@ class TestPreflightAutoAccept:
     def test_data_dependent_v1_rule_is_unknown_with_no_ids(self):
         # approved_folder needs the fetched file's parent_ids -- data-dependent, so preflight can
         # never resolve it from args alone.
-        install_rules({"drive.read_file_contents": [{"rule": "approved_folder", "value": ["f1"]}]})
+        install_rules({"drive.read_file_contents": [{"predicate": "approved_folder", "value": ["f1"]}]})
         verdict, matched_rule, matched_rule_id, _reason = gate.preflight_auto_accept(
             "drive.read_file_contents", {},
         )
@@ -1065,14 +1062,12 @@ class TestPreflightAutoAccept:
 
 
 class TestProposePolicyChange:
-    """gate.propose_policy_change() -- the P7 bridge writer for the v2 auto_accept: section, and
-    the sole write path since PSC-3 deleted its v1-shaped predecessor, propose_rule_change().
-    Unchanged by P9 (it was already v2-native from an earlier phase)."""
+    """gate.propose_policy_change() -- the MCP bridge writer for the auto_accept: section."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path, monkeypatch):
         self._config_path = tmp_path / "settings.yaml"
-        self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        self._config_path.write_text("auto_accept: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(self._config_path))
         auto_accept.set_policy_v2_store_rules([])
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
@@ -1080,17 +1075,16 @@ class TestProposePolicyChange:
     def teardown_method(self):
         auto_accept.set_policy_v2_store_rules([])
 
-    async def test_confirmed_add_persists_to_the_v2_section_not_v1(self, audit_dir):
+    async def test_confirmed_add_persists_to_the_auto_accept_section(self, audit_dir):
         result = await gate.propose_policy_change(
             operation="add", reason="Trusting the sandbox folder.",
             group="drive.folder", value=["folder1"], verbs=["read", "download"],
         )
         assert result["confirmed"] is True
         assert result["changed"] is True
-        text = self._config_path.read_text(encoding="utf-8")
-        assert "auto_accept:" in text
-        assert "approved_folder" in text
-        assert "auto_accept_rules: {}" in text  # v1 section left untouched
+        cfg = yaml.safe_load(self._config_path.read_text(encoding="utf-8"))
+        assert cfg["auto_accept"]["rules"][0]["predicate"] == "approved_folder"
+        assert "migrated_to_policy_v2" not in cfg
         entries = read_audit_entries(audit_dir)
         assert entries[0]["decision"] == "policy_rule_changed_via_bridge_proposal"
 
@@ -2866,7 +2860,7 @@ class TestApprovedObjectTypesNeverPopsUp:
 
     async def test_approved_object_type_read_never_shows_a_popup(self, monkeypatch, audit_dir):
         install_rules({
-            "salesforce.read_record": [{"rule": "approved_object_types", "value": ["Account"]}],
+            "salesforce.read_record": [{"predicate": "approved_object_types", "value": ["Account"]}],
         })
 
         def fail_if_called(*a, **k):
@@ -2892,7 +2886,7 @@ class TestApprovedObjectTypesNeverPopsUp:
         # the normal interactive path -- proving the guard above is actually
         # meaningful (it can be reached) and not vacuously always-skipped.
         install_rules({
-            "salesforce.read_record": [{"rule": "approved_object_types", "value": ["Account"]}],
+            "salesforce.read_record": [{"predicate": "approved_object_types", "value": ["Account"]}],
         })
         monkeypatch.setattr(gate.policy_propose, "proposals_for", lambda *a, **k: [])
         popup_calls = []

@@ -544,8 +544,7 @@ class PendingApprovalRegistry:
 
         ``sensitive`` (the self-approval review's Phase 4) marks the one
         kind of confirm dialog that sentence is *not* true of: the one an
-        MCP meta-tool raises (``gate.propose_policy_change`` /
-        ``propose_rule_change``), where no card came first and confirming is
+        MCP meta-tool raises (``gate.propose_policy_change``), where no card came first and confirming is
         the whole of the gate on a change to what auto-accepts in future.
         web/routes_approvals.py's decide route holds those to the same two
         checks web/routes_settings.py already holds its own

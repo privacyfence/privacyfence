@@ -58,7 +58,7 @@ Configuration is split into two files (see paths.py):
     for the schema, or build a bundle with ``scripts/build_org_bundle.py
     --mode org ...``.
   - ``config/settings.yaml``   — per-user settings: privacy policy,
-    connectors{enabled}, auto_accept_rules,
+    connectors{enabled}, auto_accept (the policy rules),
     pii_detection{enabled, detect_ip_addresses, detect_financial_figures,
     audit_match_details}, step_up{enabled, scope, rp_id, rp_name,
     require_passkey} (#426 Phase 1 -- local mode's own WebAuthn passkey
@@ -77,7 +77,6 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import sys
 import threading
 import uuid
@@ -97,7 +96,6 @@ from . import (
     privilege_separation,
     step_up_config,
 )
-from .policy import compat as policy_compat
 from .policy import store as policy_store
 from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
@@ -115,7 +113,6 @@ from .audit_log import (
 )
 from .auto_accept import (
     init_config_path,
-    migrate_telegram_search_operation_key,
     set_policy_v2_store_rules,
 )
 from .pii_detector import init_pii_detection
@@ -337,6 +334,7 @@ def load_config(config_path: str) -> dict[str, Any]:
         config = yaml.safe_load(fh) or {}
     if not isinstance(config, dict):
         raise ValueError(f"Config file {resolved} did not parse to a mapping")
+    policy_store.reject_v1_sections(config, resolved)
     return config
 
 
@@ -913,57 +911,6 @@ def _maybe_start_web_server(
     return server
 
 
-def _migrate_settings_to_policy_v2(config: dict[str, Any], resolved_config_path: str) -> dict[str, Any]:
-    """Fold a not-yet-migrated ``settings.yaml``'s v1 sections into the v2 ``auto_accept:``
-    section, in place on disk -- shared by ``run_app`` (the local principal) and
-    ``_load_principal_settings`` (every org principal, P9: this used to only run for local mode,
-    silently leaving every org principal's v1 rules/grants un-migrated and therefore un-evaluated
-    once P9 retired the v1 evaluator that read them directly -- the same class of "ran once, for
-    the wrong principal" omission this function's own caller already fixed for
-    ``init_config_path``/``set_policy_v2_store_rules``).
-
-    Runs ``migrate_telegram_search_operation_key`` first (an older, v1-internal rename) so the v2
-    migration below compiles from its result, not a stale pre-rename snapshot. Never runs twice
-    (``policy.store.MIGRATED_TO_POLICY_V2_MARKER``), and never touches ``auto_accept_rules``/
-    ``auto_accept_grants`` themselves, which stay on disk for a hand-edited install. Returns
-    ``config`` unchanged (by value) if nothing needed migrating -- both migrations report "there is
-    something to persist", not "this ran", so a config with nothing to migrate is never written,
-    backed up, or logged about.
-    """
-    config, telegram_search_migrated = migrate_telegram_search_operation_key(config)
-    config, policy_v2_migrated = policy_compat.migrate_to_policy_v2(config)
-    if not (telegram_search_migrated or policy_v2_migrated):
-        return config
-    if policy_v2_migrated:
-        # A real, deterministic (unversioned) .bak -- the redesign proposal's own P4 scope calls
-        # for one specifically for this migration, since it's the one that introduces a whole new
-        # on-disk schema, so a config as it stood immediately before this run touched it at all is
-        # worth keeping. Best-effort: a failed backup must never block the migration itself from
-        # being persisted (same fail-soft posture as the atomic_write_text below).
-        try:
-            shutil.copy2(resolved_config_path, resolved_config_path + ".bak")
-        except OSError as exc:
-            logger.warning("Could not back up config before policy v2 migration: %s", exc)
-    try:
-        atomic_write_text(
-            resolved_config_path, yaml.safe_dump(config, default_flow_style=False, allow_unicode=True),
-        )
-        if telegram_search_migrated:
-            logger.info(
-                "Auto-accept config migrated: telegram.search_messages rules "
-                "moved onto telegram.read_chat_messages"
-            )
-        if policy_v2_migrated:
-            rule_count = len(config.get(policy_store.AUTO_ACCEPT_CONFIG_KEY, {}).get("rules", []))
-            logger.info(
-                "Auto-accept config migrated to the policy v2 on-disk format (%d rule(s)); "
-                "original backed up to %s.bak", rule_count, resolved_config_path,
-            )
-    except OSError as exc:
-        logger.warning("Could not persist auto-accept config migration: %s", exc)
-    return config
-
-
 def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Load ``settings.yaml`` for whichever principal is currently scoped,
     and make it *live* for that principal -- three halves of what run_app()
@@ -989,15 +936,6 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
       rule for that principal -- ``add_policy_v2_rules``/``remove_policy_v2_rule``
       (gate.py's "Always allow"/propose-policy-change paths) would raise
       "auto_accept config path not initialized" instead.
-    - ``_migrate_settings_to_policy_v2()`` (P9) -- without it, every org principal whose
-      ``settings.yaml`` still carried a hand-edited v1 ``auto_accept_rules``/``auto_accept_grants``
-      section (never migrated, since only ``run_app()`` used to call this) would find those rules
-      silently inert forever: P9 retired the v1 evaluator that used to read those sections
-      directly, so a principal whose rules were never folded into the v2 ``auto_accept:`` section
-      has nothing evaluating them at all. Fail-safe, never fail-open -- every call routes to a
-      human popup instead -- but it made a hand-edited config unusable for every org principal
-      until their next visit to this same code path re-ran the migration (idempotent, so it's
-      always safe to call unconditionally here, same as ``run_app()`` does for local mode).
     - ``set_policy_v2_store_rules()`` (P6 of the policy v2 redesign) -- without it, every org
       principal's ``_AutoAcceptState.policy_v2_store_rules`` stayed at its dataclass default
       (``[]``), so no rule -- migrated or authored directly against the v2 schema -- would ever
@@ -1045,7 +983,6 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     resolved_path = _resolve_authority_path("config/settings.yaml")
     cfg = load_config(resolved_path)
     init_config_path(resolved_path)
-    cfg = _migrate_settings_to_policy_v2(cfg, resolved_path)
     set_policy_v2_store_rules(policy_store.compile_rules_from_config(cfg))
     install_wide = install_wide_config if install_wide_config is not None else cfg
     init_privacy_filter(install_wide, org_managed=True)
@@ -1834,7 +1771,6 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
     _mcp_auth.delete_legacy_shared_mcp_token()
 
-    config = _migrate_settings_to_policy_v2(config, _resolve_path(config_path))
     set_policy_v2_store_rules(policy_store.compile_rules_from_config(config))
     # Issue #151 retired the settings.yaml-configurable rule_suggestion_priority
     # (every matching auto-accept rule now gets its own "Always allow" button, so

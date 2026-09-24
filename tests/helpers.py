@@ -6,6 +6,24 @@ import json
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.auto_accept import ReviewContext
 from privacyfence.connector import Connector, ToolSpec
+from privacyfence.policy import store as policy_store
+from privacyfence.policy.engine import PolicyRule
+
+
+def policy_rules(table: dict[str, list[dict]]) -> list[PolicyRule]:
+    """Build ``PolicyRule``s from a compact per-operation table --
+    ``{operation_key: [{"predicate": p, "value": v, "conditions": [(name, value)]}, ...]}``,
+    ``value``/``conditions`` optional -- merged exactly as the on-disk ``auto_accept:`` section
+    stores them, so every rule carries its canonical ``policy.store.rule_id_for`` id."""
+    rules = [
+        PolicyRule(
+            id="", predicate=entry["predicate"], value=entry.get("value"),
+            operations=frozenset({operation_key}), conditions=tuple(entry.get("conditions", ())),
+        )
+        for operation_key, entries in table.items()
+        for entry in entries
+    ]
+    return policy_store.merge_rules(rules)
 
 
 def make_ctx(**overrides) -> ReviewContext:

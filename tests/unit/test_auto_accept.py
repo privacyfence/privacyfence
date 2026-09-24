@@ -11,11 +11,10 @@ The v2 replacements have their own, already-existing test suites:
 - Rule evaluation (``policy.engine.evaluate``/``preflight``): tests/unit/policy/test_engine.py.
 - Popup/Settings/bridge rule proposals and the one writer: tests/unit/policy/test_propose.py,
   test_describe.py, test_catalogue.py.
-- The on-disk v2 schema: tests/unit/policy/test_store.py, test_compat.py.
+- The on-disk v2 schema: tests/unit/policy/test_store.py.
 
 What's left here is exactly what's left in auto_accept.py itself: the tool/gate tables, the
-same-file temp-accept grace window, the rules-changed listener broadcast, and the one v1-internal
-migration (telegram's search-key rename) that's unrelated to the v1/v2 engine split.
+same-file temp-accept grace window, and the rules-changed listener broadcast.
 """
 from __future__ import annotations
 
@@ -42,12 +41,11 @@ from privacyfence.auto_accept import (
     set_rules_changed_listener,
     temp_accept_key,
 )
-from privacyfence.policy import compat as policy_compat
 from privacyfence.policy import store as policy_store
 from privacyfence.policy.engine import PolicyRule, evaluate
 from privacyfence.policy.resource_registry import DRIVE_SANDBOX_WRITE_TARGETS
 
-from ..helpers import make_ctx
+from ..helpers import make_ctx, policy_rules
 
 
 # --------------------------------------------------------------------------- #
@@ -71,13 +69,13 @@ class TestToolToOperationMapping:
         # jira_transition_issue reuses the same generic scope selector jira_update_issue/
         # jira_get_issue already rely on -- no new selector code needed, just the operation-key
         # mapping above so a configured rule actually gets looked up.
-        rule = policy_compat.compile_rule_entry(
-            TOOL_TO_OPERATION["jira_transition_issue"], "approved_project_keys", ["ENG"],
-        )
+        rules = policy_rules({
+            TOOL_TO_OPERATION["jira_transition_issue"]: [{"predicate": "approved_project_keys", "value": ["ENG"]}],
+        })
         ctx = make_ctx(tool="jira_transition_issue", args={"issue_key": "ENG-42", "transition_name": "Done"})
-        ok, matched = evaluate([rule], TOOL_TO_OPERATION["jira_transition_issue"], ctx)
+        ok, matched = evaluate(rules, TOOL_TO_OPERATION["jira_transition_issue"], ctx)
         assert ok is True
-        assert matched == "approved_project_keys"
+        assert matched == rules[0].id
 
     def test_sheets_dimension_tools_map_to_clean_operation_keys(self):
         assert TOOL_TO_OPERATION["drive_sheets_insert_dimensions"] == "sheets.insert_dimensions"
@@ -468,82 +466,3 @@ class TestConcurrentRulePersistence:
         )
         live = auto_accept.get_policy_v2_store_rules()
         assert sorted(r.id for r in live) == sorted(r.id for r in on_disk)
-
-
-# --------------------------------------------------------------------------- #
-# telegram.search_messages -> telegram.read_chat_messages: a one-time,
-# v1-internal migration, unrelated to the v1/v2 engine split -- it just
-# renames an operation key inside auto_accept_rules before that section is
-# read (by policy.compat.migrate_to_policy_v2, at startup, or directly by
-# hand-edited-config tooling).
-# --------------------------------------------------------------------------- #
-
-class TestMigrateTelegramSearchOperationKey:
-    """telegram_search_messages now shares telegram.read_chat_messages with
-    telegram_get_messages (see TOOL_TO_OPERATION) instead of its own
-    telegram.search_messages key -- this one-time migration moves any
-    existing hand-authored rules onto the new key."""
-
-    def test_entries_move_onto_the_shared_key(self):
-        cfg = {
-            "auto_accept_rules": {
-                "telegram.search_messages": [{"rule": "no_media_attachments"}],
-                "telegram.read_chat_messages": [{"rule": "approved_chats", "value": ["111"]}],
-            }
-        }
-        new_cfg, moved = auto_accept.migrate_telegram_search_operation_key(cfg)
-        assert moved is True
-        assert "telegram.search_messages" not in new_cfg["auto_accept_rules"]
-        assert new_cfg["auto_accept_rules"]["telegram.read_chat_messages"] == [
-            {"rule": "approved_chats", "value": ["111"]},
-            {"rule": "no_media_attachments"},
-        ]
-
-    def test_no_op_when_no_search_messages_key_present(self):
-        cfg = {"auto_accept_rules": {"telegram.read_chat_messages": [{"rule": "approved_chats", "value": ["111"]}]}}
-        new_cfg, moved = auto_accept.migrate_telegram_search_operation_key(cfg)
-        assert moved is False
-        assert new_cfg["auto_accept_rules"] == cfg["auto_accept_rules"]
-
-    def test_duplicate_entry_is_dropped_not_duplicated(self):
-        cfg = {
-            "auto_accept_rules": {
-                "telegram.search_messages": [{"rule": "approved_chats", "value": ["111"]}],
-                "telegram.read_chat_messages": [{"rule": "approved_chats", "value": ["111"]}],
-            }
-        }
-        new_cfg, moved = auto_accept.migrate_telegram_search_operation_key(cfg)
-        assert moved is False
-        assert new_cfg["auto_accept_rules"]["telegram.read_chat_messages"] == [
-            {"rule": "approved_chats", "value": ["111"]},
-        ]
-
-    def test_empty_config_has_no_rules_key_afterward(self):
-        new_cfg, moved = auto_accept.migrate_telegram_search_operation_key({})
-        assert moved is False
-        assert "auto_accept_rules" not in new_cfg
-
-    def test_migration_marker_is_set(self):
-        new_cfg, _ = auto_accept.migrate_telegram_search_operation_key({})
-        assert new_cfg[auto_accept.TELEGRAM_SEARCH_OPERATION_KEY_MIGRATION_MARKER] is True
-
-    def test_already_marked_config_is_returned_unchanged(self):
-        cfg = {
-            auto_accept.TELEGRAM_SEARCH_OPERATION_KEY_MIGRATION_MARKER: True,
-            "auto_accept_rules": {"telegram.search_messages": [{"rule": "no_media_attachments"}]},
-        }
-        new_cfg, moved = auto_accept.migrate_telegram_search_operation_key(cfg)
-        assert new_cfg is cfg
-        assert moved is False
-
-    def test_idempotent_second_run_is_a_no_op(self):
-        cfg = {
-            "auto_accept_rules": {
-                "telegram.search_messages": [{"rule": "no_media_attachments"}],
-                "telegram.read_chat_messages": [{"rule": "approved_chats", "value": ["111"]}],
-            }
-        }
-        migrated_once, _ = auto_accept.migrate_telegram_search_operation_key(cfg)
-        migrated_twice, moved_twice = auto_accept.migrate_telegram_search_operation_key(migrated_once)
-        assert moved_twice is False
-        assert migrated_twice == migrated_once

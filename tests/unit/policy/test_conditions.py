@@ -15,10 +15,16 @@ from types import SimpleNamespace
 import pytest
 from freezegun import freeze_time
 
-from privacyfence.policy.conditions import CONDITION_SELECTORS, ResolvesFrom, condition_for_predicate
+from privacyfence.policy.conditions import CONDITION_SELECTORS, ResolvesFrom
 
 from ...helpers import make_ctx
-from ._v1_reference import ARGS_ONLY_RULES, DATA_DEPENDENT_RULES, V1Reference
+from ._v1_reference import (
+    ARGS_ONLY_RULES,
+    DATA_DEPENDENT_RULES,
+    V1_CONDITION_NAMES,
+    V1Reference,
+    condition_name_for_v1_predicate,
+)
 
 _EV = V1Reference()
 
@@ -120,8 +126,9 @@ class TestEverySelectorAgreesWithItsCounterpart:
     @freeze_time("2026-07-06 12:00:00", tz_offset=0)
     @pytest.mark.parametrize("predicate", sorted(FIXTURES))
     def test_agrees_on_every_fixture(self, predicate):
-        selector = condition_for_predicate(predicate)
-        assert selector is not None, f"{predicate} has no ConditionSelector"
+        name = condition_name_for_v1_predicate(predicate)
+        assert name is not None, f"{predicate} has no ConditionSelector"
+        selector = CONDITION_SELECTORS[name]
         old_fn = _old(predicate)
         for value, ctx in FIXTURES[predicate]:
             old_result = old_fn(value, ctx)
@@ -145,21 +152,24 @@ class TestNoAttachmentsUnknownConnector:
 
 class TestVocabularyCompleteness:
     def test_every_condition_predicate_is_classified_upstream(self):
-        for selector in CONDITION_SELECTORS.values():
-            for predicate in selector.replaces:
+        for v1_names in V1_CONDITION_NAMES.values():
+            for predicate in v1_names:
                 assert predicate in ARGS_ONLY_RULES or predicate in DATA_DEPENDENT_RULES
 
     def test_resolves_from_matches_old_classification(self):
-        for selector in CONDITION_SELECTORS.values():
-            for predicate in selector.replaces:
+        for name, selector in CONDITION_SELECTORS.items():
+            for predicate in V1_CONDITION_NAMES[name]:
                 if selector.resolves_from is ResolvesFrom.ARGS:
                     assert predicate in ARGS_ONLY_RULES, predicate
                 else:
                     assert predicate in DATA_DEPENDENT_RULES, predicate
 
     def test_every_fixture_predicate_has_a_selector(self):
-        assert set(FIXTURES) == {p for s in CONDITION_SELECTORS.values() for p in s.replaces}
+        assert set(FIXTURES) == {p for v1_names in V1_CONDITION_NAMES.values() for p in v1_names}
 
-    def test_condition_for_predicate_returns_none_for_a_scope_predicate(self):
-        assert condition_for_predicate("approved_folder") is None
-        assert condition_for_predicate("no_such_predicate") is None
+    def test_every_condition_has_a_v1_mapping(self):
+        assert set(V1_CONDITION_NAMES) == set(CONDITION_SELECTORS)
+
+    def test_condition_name_for_v1_predicate_returns_none_for_a_scope_predicate(self):
+        assert condition_name_for_v1_predicate("approved_folder") is None
+        assert condition_name_for_v1_predicate("no_such_predicate") is None

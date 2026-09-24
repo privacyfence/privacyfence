@@ -52,6 +52,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   organization server's Google connector client needs
   `https://<your-server>/oauth/callback/apps_script` added to its registered redirect URIs.
 
+### Removed
+
+- **The v1 auto-accept settings format is no longer read or converted.** A `settings.yaml` that
+  still has an `auto_accept_rules:` or `auto_accept_grants:` section now stops PrivacyFence at
+  startup with a configuration error naming the section, instead of being converted to the
+  `auto_accept:` section on first start. Remove the section and recreate its rules on the Settings
+  Auto-accept page. The one-time conversion, its `settings.yaml.bak` backup and the "your
+  auto-accept rules were migrated" Settings notice are gone, and a fresh install's default
+  `settings.yaml` is written in the current format. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+
 ### Security
 
 - **Recovery-code sign-in is audited, rate-limited and needs a human session.** `POST
