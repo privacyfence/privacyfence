@@ -150,14 +150,14 @@ MARKER_PATH = WINDOWS_SYSTEM_ROOT / MARKER_FILE_NAME
 INSTALL_DIR_NAME = "Program Folder"
 
 # How long one silent Setup / uninstaller run may take before it is treated as
-# hung, from five build.yml runs on fresh windows-latest runners (2026-09-24,
-# runs 36050325275/..28453/..30979/..33575/..36567, before `sc start` stopped
-# waiting on daemon_main's imports -- see src/_daemon_entry.py):
+# hung, from eight build.yml runs on fresh windows-latest runners (2026-09-24,
+# runs 36050325275/..28453/..30979/..33575/..36567 and 36052978158/..81808/
+# ..84943):
 #
-#   first (cold) install    35.3 / 36.1 / 42.8 / 48.2 / 54.9 s   p100 54.9 s
-#     of which `sc start`   18.5-24.4 s, PowerShell's cold start 2.0-12.6 s
-#   every later install     9.5-19.0 s
-#   uninstaller             1.7-12.9 s (the first one on a runner is slowest)
+#   first (cold) install    28.2-54.9 s (median 37.0)          p100 54.9 s
+#     of which `sc start`   16.6-24.4 s, PowerShell's cold start 0.4-12.6 s
+#   every later install     8.5-19.0 s
+#   uninstaller             1.6-12.9 s (the first one on a runner is slowest)
 #
 # The installer gets ~4x the cold p100 rather than 3x because v4.5.0a1's tag
 # run had a first install exceed the old 120 s. The uninstaller keeps 120 s --

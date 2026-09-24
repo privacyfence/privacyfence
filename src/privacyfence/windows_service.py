@@ -77,10 +77,10 @@ def _service_class():  # noqa: ANN202 -- the base class only exists on Windows
     import win32serviceutil
 
     # daemon_main is imported inside the two methods rather than here: this
-    # runs before StartServiceCtrlDispatcher (run_service() below), and the
-    # SCM gives that call 30 seconds. Importing daemon_main -- every connector
-    # and its client library -- took 18-24s of it on a fresh Windows runner.
-    # By SvcDoRun the framework has already reported SERVICE_RUNNING.
+    # runs before StartServiceCtrlDispatcher (run_service() below), the SCM
+    # gives that call 30 seconds, and importing daemon_main -- every connector
+    # and its client library -- is not needed to make it. By SvcDoRun the
+    # framework has already reported SERVICE_RUNNING.
     class PrivacyFenceService(win32serviceutil.ServiceFramework):
         _svc_name_ = WINDOWS_SERVICE_NAME
         _svc_display_name_ = SERVICE_DISPLAY_NAME

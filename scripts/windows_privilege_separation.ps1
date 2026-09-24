@@ -820,6 +820,15 @@ function Start-DaemonService {
     #>
     Write-Note "starting the $ServiceName service"
     Invoke-Sc @('start', $ServiceName) | Out-Null
+    # `sc start` returns once the service has called StartServiceCtrlDispatcher,
+    # and on a fresh machine that took 17-24s. The process's own start time
+    # splits it: before it is the SCM (logging the virtual account on, creating
+    # its profile), after it is the executable getting as far as the dispatcher.
+    $servicePid = (Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue).ProcessId
+    $process = if ($servicePid) { Get-Process -Id $servicePid -ErrorAction SilentlyContinue }
+    if ($process -and $process.StartTime) {
+        Write-Note "the $ServiceName service is running; its process started at $($process.StartTime.ToString('HH:mm:ss.fff'))"
+    }
 }
 
 function Wait-ProcessExit {

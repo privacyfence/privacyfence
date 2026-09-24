@@ -2703,9 +2703,9 @@ class TestWindowsServiceHost:
 
     def test_the_frozen_entry_reaches_the_dispatcher_without_importing_the_daemon(self):
         # The SCM kills a service that has not called StartServiceCtrlDispatcher
-        # within 30 seconds (error 1053), and importing daemon_main took 18-24s
-        # of that on a fresh Windows runner. src/_daemon_entry.py is the frozen
-        # build's entry point, so it is where the flag has to be routed first.
+        # within 30 seconds (error 1053), and importing daemon_main is not
+        # needed to make that call. src/_daemon_entry.py is the frozen build's
+        # entry point, so it is where the flag has to be routed first.
         output = self._run_isolated(
             "import runpy, sys\n"
             "import privacyfence.windows_service as ws\n"

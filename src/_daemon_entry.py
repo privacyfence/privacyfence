@@ -25,10 +25,11 @@ ensure_std_streams()
 # The Windows service's binPath (scripts/windows_privilege_separation.ps1's
 # Install-DaemonService), routed before daemon_main is imported: the Service
 # Control Manager kills a process that has not called StartServiceCtrlDispatcher
-# within 30 seconds (error 1053), and importing daemon_main -- every connector
-# and its client library -- took 18-24s of that on a fresh Windows runner
-# (build.yml's packaged smoke test, measured). daemon_main.main() routes the
-# same flag too, for every other way it is reached.
+# within 30 seconds (error 1053), and nothing in daemon_main -- every connector
+# and its client library -- is needed to get there. Measured on build.yml's
+# packaged smoke test, that import was ~1s of every `sc start` (1.3-1.8s ->
+# 0.3-0.5s). daemon_main.main() routes the same flag too, for every other way
+# it is reached.
 if sys.argv[1:] == ["--windows-service"]:
     from privacyfence.windows_service import run_service  # noqa: E402
 
