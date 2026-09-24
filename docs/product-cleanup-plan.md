@@ -436,6 +436,9 @@ both dispatched runs are green.
 - Uninstall follows ADR 0042: `uninstall [-Purge]` (PowerShell spelling). The uninstaller runs it and offers a **Delete PrivacyFence data** checkbox, unchecked by default; a silent uninstall never purges.
 - `installer/privacyfence-task.xml.tmpl` was used only by the removed step and went, with its test; its lessons moved into the companion template's header.
 - New unit test: no Inno `[Code]` line may start with `[` or `#` (it broke the first dispatched build).
+- Also removed: `Disable-DaemonTask`/`Enable-DaemonTask`, `Move-HandoffFilesIn/Out`, `$HandoffFileNames` and the `*_url` pattern, `status`'s `STILL AUTOSTARTS` check, `privilege_separation.WINDOWS_DAEMON_TASK_NAME`, and the daemon-task contract in `tests/windows_task_contract.py`. `enable` now creates `%ProgramData%\PrivacyFence` instead of migrating into it.
+- `test_windows_graphical_session_autostart.py` was **re-scoped**: the old test undid separation so the daemon task could redo it, and neither exists now. It checks the companion task against its contract and that `PrivacyFenceCompanion.exe` runs as the signed-in user, and keeps the service crash-restart test.
+- **Manual check owed:** the uninstaller's "Delete PrivacyFence data" checkbox has only been compiled in CI, never clicked. It is in `release-testing.md`'s manual Windows checks; do it before the next stable release.
 
 ### X1 — Pre-flight and alpha tag
 
@@ -478,7 +481,9 @@ belong to [`website-plan.md`](website-plan.md) Wave 1; code items need their own
 
 - **Code: `enable --for-user` overwrites the marker's owner** (L4, [#672](https://github.com/privacyfence/privacyfence/pull/672)):
   `cmd_enable_for_user` rewrites `owner_user` with the `--for-user` account even when that account
-  is a second ADR 0008 principal, not the recorded owner. Pre-existing; follow-up pending with the maintainer.
+  is a second ADR 0008 principal, not the recorded owner. Pre-existing, on all three platforms; the recorded owner maps to
+  the local principal, so this is a trust-boundary fix. Being fixed before X1 (branch
+  `fix/for-user-keeps-recorded-owner`).
 - **Code: org registered-clients format conversion** (L2, [#671](https://github.com/privacyfence/privacyfence/pull/671)):
   `web/oauth_provider.py` (≈l.286) still reads the pre-SEC-16 top-level format of org mode's
   registered-clients file, a format conversion ADR 0041 would also retire.
@@ -489,8 +494,8 @@ belong to [`website-plan.md`](website-plan.md) Wave 1; code items need their own
 - **Docs: `README.md` ≈l.337** (L2): points Windows users at `%LOCALAPPDATA%\Programs\PrivacyFence\`; the installer is admin-only.
 - **Docs: `TECHNICAL_REFERENCE.md`** (L5, [#674](https://github.com/privacyfence/privacyfence/pull/674)): says the Start Menu entry opens the
   web settings UI; since ADR 0031 it launches the companion.
-- **Docs: leftover macOS/Linux `disable` mentions** (L5): `platform-support.md` ≈l.127–148 and
-  `release-testing.md` ≈l.26/34. Check whether L3/L4 already fixed them before rewriting.
+- **Docs: leftover macOS/Linux `disable` mentions** (L5; still present on `main` after L3/L4):
+  `platform-support.md` ≈l.127–148, `release-testing.md` ≈l.26/34, `security-and-compliance.md` ≈l.58.
 - **Packaging: `debian/control`** (P5, [#665](https://github.com/privacyfence/privacyfence/pull/665)): lists `Architecture: amd64 arm64`; only amd64 is built.
 - **Comments: `audit_log.py` / `connector_host.py`** (L1): historical mentions of the deleted v1
   tools, deliberately left (history, not false present-tense claims).
