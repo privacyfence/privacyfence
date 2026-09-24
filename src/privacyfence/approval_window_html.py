@@ -147,10 +147,31 @@ _WIDE_LEFT_COLUMN_WIDTH = 420
 # this module's docstring for why the exact wording isn't tool-specific.
 _DISCLOSURE_ALLOW = "Full {label_lower}"
 _DISCLOSURE_REDACT = "{label}, with some fields redacted"
-_DISCLOSURE_BLOCK = "None — not disclosed to Claude"
+_DISCLOSURE_BLOCK = "None — not disclosed to {agent}"
+
+# Every string on the card that names *the caller of this request* (as
+# opposed to Claude the product, in setup and help copy) is written with
+# AGENT_PLACEHOLDER and filled in from one ``agent_display_name`` at render
+# time. Connectors write the placeholder too -- in their ``new_info`` rows --
+# so no connector ever learns which agent is asking; card_builder fills
+# those rows in before they reach this module. The default is today's copy.
+DEFAULT_AGENT_DISPLAY_NAME = "Claude"
+AGENT_PLACEHOLDER = "{agent}"
 
 
-def disclosure_rows_from_visibility(visibility: dict[str, str]) -> list[tuple[str, str]]:
+def fill_agent_placeholder(text: str, agent_display_name: str) -> str:
+    """``text`` with every AGENT_PLACEHOLDER replaced by the raw name.
+
+    Plain ``str.replace``, never ``str.format``: the text may carry other
+    braces, and the name is caller data. The result is unescaped on purpose
+    -- every place that renders it escapes it, and escaping here as well
+    would show a name containing ``&`` or ``<`` double-escaped."""
+    return text.replace(AGENT_PLACEHOLDER, agent_display_name)
+
+
+def disclosure_rows_from_visibility(
+    visibility: dict[str, str], *, agent_display_name: str = DEFAULT_AGENT_DISPLAY_NAME,
+) -> list[tuple[str, str]]:
     """Translate the existing ``{label: allow/redact/block}`` policy dict
     (privacy_filter.category_policy()'s ground truth, unchanged) into §3's
     plain "what's disclosed" sentence per field (prose, not per-row icons),
@@ -163,7 +184,7 @@ def disclosure_rows_from_visibility(visibility: dict[str, str]) -> list[tuple[st
         elif policy == "redact":
             sentence = _DISCLOSURE_REDACT.format(label=label)
         else:
-            sentence = _DISCLOSURE_BLOCK
+            sentence = fill_agent_placeholder(_DISCLOSURE_BLOCK, agent_display_name)
         rows.append((label, sentence))
     return rows
 
@@ -465,40 +486,43 @@ def _card(kicker: str, inner_html: str, *, style: str = "", kicker_color: str = 
 _WRITE_KICKER_COLOR = "var(--color-accent-2-700)"
 
 
-def _section_1_html(is_read: bool, preview: dict[str, str]) -> str:
+def _section_1_html(is_read: bool, preview: dict[str, str], agent_display_name: str) -> str:
     if not preview:
         return ""
-    kicker = "What Claude already knows" if is_read else "Action to perform"
+    kicker = f"What {agent_display_name} already knows" if is_read else "Action to perform"
     return _card(
         kicker, _kv_rows_html(list(preview.items())),
         kicker_color="" if is_read else _WRITE_KICKER_COLOR,
     )
 
 
-def _section_2_html(is_read: bool, claude_reason: str) -> str:
+def _section_2_html(is_read: bool, claude_reason: str, agent_display_name: str) -> str:
     if not claude_reason:
         return ""
     # §2 always shows Claude's stated *reason* (the quote below), on both
     # read and write. "Why Claude is doing this" matches what's actually
     # on screen -- the real write payload lives in §1/the right pane, not
     # here -- same as read's "Why Claude needs more data".
-    kicker = "Why Claude needs more data" if is_read else "Why Claude is doing this"
+    kicker = (
+        f"Why {agent_display_name} needs more data" if is_read
+        else f"Why {agent_display_name} is doing this"
+    )
     # title="..." tooltip, same reasoning as _kv_rows_html's own -- shows
     # the full reason on hover with no JS, harmless when it isn't actually
     # clamped.
     body = (
         f'<p class="pf-quote" title="{_html_escape(claude_reason)}">“{_html_escape(claude_reason)}”</p>'
-        f'<div class="card-meta">Claude’s stated reason · unverified</div>'
+        f'<div class="card-meta">{_html_escape(agent_display_name)}’s stated reason · unverified</div>'
     )
     return _card(kicker, body, kicker_color="" if is_read else _WRITE_KICKER_COLOR)
 
 
-def _section_3_html(disclosure_rows: list[tuple[str, str]]) -> str:
+def _section_3_html(disclosure_rows: list[tuple[str, str]], agent_display_name: str) -> str:
     # Read-gate only. Absent (not just empty) when a tool has nothing new to
     # disclose -- see module docstring for where disclosure_rows comes from.
     if not disclosure_rows:
         return ""
-    return _card("What will be provided to Claude", _kv_rows_html(disclosure_rows))
+    return _card(f"What will be provided to {agent_display_name}", _kv_rows_html(disclosure_rows))
 
 
 def _tag_html(label: str, *, bg: str, color: str) -> str:
@@ -720,6 +744,7 @@ def build_card_stack_html(
     preview_body_html: str,
     accept_all_labels: list[str],
     nonce: str | None = None,
+    agent_display_name: str = DEFAULT_AGENT_DISPLAY_NAME,
 ) -> str:
     """Build the full HTML document for one approval window's content area.
 
@@ -804,17 +829,22 @@ def build_card_stack_html(
     cryptographically random one; a caller re-rendering (never happens
     today, but kept explicit rather than accidental) can pass one through
     to keep it stable.
+
+    ``agent_display_name`` is the name the card's own copy uses for the
+    caller of this request -- §1/§2/§3's kickers and §2's attribution line
+    (see AGENT_PLACEHOLDER). Rendered escaped everywhere it appears.
+    ``disclosure_rows`` arrive with it already filled in.
     """
     nonce = nonce or _new_nonce()
     width = CONTENT_WIDTH[layout]
     pinned_html = []  # header, §1, §2, risk card -- always fully visible
     scrollable_html = []  # §3 alone -- the only card that ever scrolls
 
-    sec1 = _section_1_html(is_read, preview)
+    sec1 = _section_1_html(is_read, preview, agent_display_name)
     if sec1:
         pinned_html.append(sec1)
 
-    sec2 = _section_2_html(is_read, claude_reason)
+    sec2 = _section_2_html(is_read, claude_reason, agent_display_name)
     if sec2:
         pinned_html.append(sec2)
 
@@ -833,7 +863,7 @@ def build_card_stack_html(
 
     if is_read:
         # Write-gate calls never get §3 at all.
-        sec3 = _section_3_html(disclosure_rows)
+        sec3 = _section_3_html(disclosure_rows, agent_display_name)
         if sec3:
             scrollable_html.append(sec3)
 

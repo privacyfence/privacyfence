@@ -94,15 +94,27 @@ def _pii_highlighter(
 
 def _disclosure_rows(
     is_read: bool, new_info: dict[str, str] | None, visibility: dict[str, str] | None,
+    agent_display_name: str = approval_window_html.DEFAULT_AGENT_DISPLAY_NAME,
 ) -> list[tuple[str, str]]:
     """§3's rows -- see ApprovalWindowController._disclosure_rows's own
     docstring for the same (new_info first, then visibility-derived policy
-    sentences) merge this mirrors."""
+    sentences) merge this mirrors.
+
+    Connectors write ``new_info`` with approval_window_html.AGENT_PLACEHOLDER
+    where they mean the caller ("Content returned to {agent}"), since they
+    never learn who that is; it is filled in here, raw, and escaped by the
+    row renderer like every other row."""
     if not is_read:
         return []
-    rows = list((new_info or {}).items())
+    fill = approval_window_html.fill_agent_placeholder
+    rows = [
+        (fill(label, agent_display_name), fill(value, agent_display_name))
+        for label, value in (new_info or {}).items()
+    ]
     if visibility:
-        rows += approval_window_html.disclosure_rows_from_visibility(visibility)
+        rows += approval_window_html.disclosure_rows_from_visibility(
+            visibility, agent_display_name=agent_display_name,
+        )
     return rows
 
 
@@ -130,6 +142,7 @@ def build_card_html(
     upload_forced: bool = False,
     temp_accept_eligible: bool = False,
     tool: str = "",
+    agent_display_name: str = approval_window_html.DEFAULT_AGENT_DISPLAY_NAME,
 ) -> str:
     """Build the full card-stack HTML document for one approval -- the web
     host's counterpart to ApprovalWindowController._build_content_view,
@@ -139,6 +152,10 @@ def build_card_html(
     ``content_kind`` is accepted by show_read_popup's own signature but
     (like the native host) has no effect on rendering -- see that
     function's docstring -- so it's deliberately not a parameter here.
+
+    ``agent_display_name`` is what the card calls the caller of this
+    request, everywhere its copy names one -- see
+    approval_window_html.AGENT_PLACEHOLDER.
     """
     pdf_data_uri = ""
     if pdf_bytes:
@@ -186,7 +203,7 @@ def build_card_html(
         seen_count_text=_seen_count_text(seen_count),
         preview=section_1,
         claude_reason=claude_reason or "",
-        disclosure_rows=_disclosure_rows(is_read, new_info, visibility),
+        disclosure_rows=_disclosure_rows(is_read, new_info, visibility, agent_display_name),
         pii_categories=pii_categories or [],
         write_content_flags=write_content_flags or [],
         upload_forced=upload_forced,
@@ -194,4 +211,5 @@ def build_card_html(
         preview_kicker=f"Preview ({_reading_time_label(details_text)})",
         preview_body_html=preview_body_html,
         accept_all_labels=accept_all_labels,
+        agent_display_name=agent_display_name,
     )

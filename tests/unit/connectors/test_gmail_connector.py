@@ -558,7 +558,7 @@ class TestDownloadAttachment:
         # Will save to / no-content-returned are new-on-approval facts, not
         # already-known metadata -- see connectors/gmail.py's comment.
         assert kwargs["new_info"]["Will save to"] == "/tmp/report.pdf"
-        assert "None" in kwargs["new_info"]["Content returned to Claude"]
+        assert "None" in kwargs["new_info"]["Content returned to {agent}"]
         # MIME type used to only appear in details_text (duplicating the
         # rest of the preview fields); it now lives in preview only.
         assert kwargs["details_text"] == "The attachment above will be downloaded to the destination shown."
@@ -831,7 +831,7 @@ class TestOrgModeDownloadDelivery:
         client.fetch_attachment_bytes.assert_called_once_with("m1", "att-1")
 
         kwargs = gated_call_spy[0]
-        assert "Yes" in kwargs["new_info"]["Content returned to Claude"]
+        assert "Yes" in kwargs["new_info"]["Content returned to {agent}"]
         assert "Will save to" not in kwargs["new_info"]
         assert kwargs["delivery"] == "inline_base64"
 
@@ -873,7 +873,7 @@ class TestOrgModeDownloadDelivery:
         assert get_download_staging_store().pending_count == 1
 
         kwargs = gated_call_spy[0]
-        assert "one-time link" in kwargs["new_info"]["Content returned to Claude"]
+        assert "one-time link" in kwargs["new_info"]["Content returned to {agent}"]
         assert kwargs["delivery"] == "staged_link"
 
     async def test_agent_links_false_keeps_the_browser_link(self, gated_call_spy):
