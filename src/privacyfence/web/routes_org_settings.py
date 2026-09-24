@@ -59,6 +59,7 @@ one org-mode page a signed-in principal can navigate into and get stuck on.
 from __future__ import annotations
 
 import html
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -76,11 +77,15 @@ from ..principal import Principal, principal_scope
 from ..privacy_filter import VALID_POLICIES, PrivacyFilterConfigError
 from ..privacy_filter import _parse_group as _parse_privacy_group
 from ..settings_controller import PRIVACY_CATEGORY_LABELS, PRIVACY_GROUP_LABELS
+from ..step_up_config import StepUpConfig
+from ..webauthn_stepup import StepUpChallengeStore
 from .. import web_shell
-from . import org_install_policy, org_session
+from . import org_install_policy, org_session, step_up_decide
+from .approval_step_up import _verify_or_challenge
 from .csp import nonce_for as _csp_nonce_for
 from .org_session import OrgSessionStore
 from .org_settings_scope import is_action_permitted
+from .routes_settings import _SENSITIVE_ACTIONS, _action_fingerprint, _parse_form_assertion
 
 logger = logging.getLogger(__name__)
 
@@ -422,6 +427,8 @@ def build_routes(
     sessions: OrgSessionStore,
     install_wide_settings: dict[str, Any],
     install_wide_settings_path: str = "",
+    step_up: StepUpConfig,
+    step_up_origin: str,
 ) -> list[Route]:
     """``install_wide_settings_path`` is the resolved path of the *server's
     own* settings.yaml -- the file ``install_wide_settings`` was loaded
@@ -431,9 +438,77 @@ def build_routes(
     tests, a hand-built ``OrgAuth``) keeps working, and a policy write
     attempted without one is rejected with a 400 explaining exactly that
     rather than guessing at a path to overwrite.
+
+    ``step_up``/``step_up_origin`` (#579) close the gap local mode's own
+    ``routes_settings.build_routes`` has closed since #426 Phase 3: every
+    org-routed ``_SENSITIVE_ACTIONS`` member below (``add_policy_rule``,
+    ``remove_policy_rule``, and the two install-wide privacy/PII writes)
+    now demands the same fresh WebAuthn assertion whenever
+    ``step_up.require_passkey`` is on, imported from ``routes_settings``
+    rather than re-derived here -- see that module's own docstring for why
+    the set is exactly the actions that can change *what a future write
+    reaches decide() at all*. Required, as ``routes_org_approvals.
+    build_routes``'s own ``step_up``/``issuer_url`` pair already is:
+    server.py resolves one ``StepUpConfig`` per org and threads it to every
+    step-up-aware org route, this one included, rather than leaving a
+    default that would silently reopen #579 for a caller that forgets to
+    pass it. The verify-or-challenge ceremony itself is
+    ``approval_step_up._verify_or_challenge`` (PSC-2a) -- the same
+    primitive ``routes_org_approvals.py``'s own decide() reduces to,
+    imported rather than copied here too.
     """
+    challenges = StepUpChallengeStore()
+    origin = step_up_origin.rstrip("/")
+
     def _current_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
+
+    def _needs_step_up(action: str) -> bool:
+        return step_up.enabled and step_up.require_passkey and action in _SENSITIVE_ACTIONS
+
+    def _settings_step_up_response(principal: Principal, action: str, fingerprint_body: dict[str, Any]) -> JSONResponse:
+        """The org counterpart of ``routes_settings._settings_step_up_response``
+        -- same hard-fail-on-no-passkey shape (``_needs_step_up`` above only
+        ever fires once ``step_up.require_passkey`` is already on, so there is
+        no weaker fallback to offer), keyed to ``principal`` rather than
+        ``LOCAL_PRINCIPAL`` since org mode's credentials are per-principal."""
+        fingerprint = _action_fingerprint(action, fingerprint_body)
+        options_json = step_up_decide.begin_step_up(
+            principal, rp_id=step_up.rp_id, subject_key=action, fingerprint=fingerprint, challenges=challenges,
+        )
+        if options_json is None:
+            return JSONResponse(
+                {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
+            )
+        return JSONResponse(
+            {"error": "step_up_required", "webauthn_options": json.loads(options_json)}, status_code=428,
+        )
+
+    def _guard_step_up(principal: Principal, action: str, form_body: dict[str, Any]) -> JSONResponse | None:
+        """Called after ``is_action_permitted`` already passed -- a passkey
+        prompt for an action this principal isn't authorized to take either
+        way would be a worse refusal than the authorization refusal itself,
+        the same ordering ``routes_settings.py``'s own ``require_human_session``
+        check keeps ahead of its step-up check. Returns ``None`` to let the
+        caller proceed (step-up not required, or a resubmitted assertion
+        verified); records the refusal in the audit log, under this
+        principal, for every other case before returning the response to
+        send as-is."""
+        if not _needs_step_up(action):
+            return None
+        assertion = _parse_form_assertion(form_body.get("webauthn_assertion"))
+        fingerprint_body = {k: v for k, v in form_body.items() if k != "webauthn_assertion"}
+        response = _verify_or_challenge(
+            principal, step_up=step_up, origin=origin, subject_key=action,
+            fingerprint=_action_fingerprint(action, fingerprint_body), assertion=assertion, challenges=challenges,
+            step_up_response=lambda: _settings_step_up_response(principal, action, fingerprint_body),
+        )
+        if response is not None:
+            with principal_scope(principal):
+                _record_settings_audit(
+                    principal, f"Step-up required for {action!r}, refused (principal={principal.id})",
+                )
+        return response
 
     def _ensure_principal_settings_loaded() -> None:
         # Lazy import -- daemon_main.py pulls in the whole connector/client
@@ -513,6 +588,10 @@ def build_routes(
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
         if not is_action_permitted("add_policy_rule", principal):
             return JSONResponse({"error": "forbidden"}, status_code=403)
+        form_body = {k: v for k, v in form.items() if k != "csrf" and isinstance(v, str)}
+        step_up_response = _guard_step_up(principal, "add_policy_rule", form_body)
+        if step_up_response is not None:
+            return step_up_response
         group, _, verb_name = str(form.get("rule_choice", "")).partition("|")
         verb_enums = policy_catalogue.parse_verbs([verb_name])
         value = _parse_value_field(str(form.get("value", "")))
@@ -539,6 +618,10 @@ def build_routes(
             return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
         if not is_action_permitted("remove_policy_rule", principal):
             return JSONResponse({"error": "forbidden"}, status_code=403)
+        form_body = {k: v for k, v in form.items() if k != "csrf" and isinstance(v, str)}
+        step_up_response = _guard_step_up(principal, "remove_policy_rule", form_body)
+        if step_up_response is not None:
+            return step_up_response
         rule_id = str(form.get("rule_id", ""))
         with principal_scope(principal):
             _ensure_principal_settings_loaded()
@@ -586,6 +669,9 @@ def build_routes(
         # a pure dict-of-strings consumer rather than one that has to know
         # what an UploadFile is.
         payload = {key: value for key, value in form.items() if key != "csrf" and isinstance(value, str)}
+        step_up_response = _guard_step_up(principal, action, payload)
+        if step_up_response is not None:
+            return step_up_response
         try:
             summary = org_install_policy.apply_change(
                 install_wide_settings, install_wide_settings_path, action=action, payload=payload,
