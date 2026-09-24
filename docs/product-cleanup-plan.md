@@ -19,6 +19,7 @@ PR that describes the same behavior.
 - [Dependency graph](#dependency-graph)
 - [Phase briefs](#phase-briefs) — one per session / PR
 - [ADRs this plan creates](#adrs-this-plan-creates)
+- [Found during implementation, not fixed](#found-during-implementation-not-fixed)
 - [Inputs needed from the maintainer](#inputs-needed-from-the-maintainer)
 - [Retiring this plan](#retiring-this-plan)
 
@@ -92,16 +93,16 @@ Carried over from `website-plan.md` (question IDs kept so the two plans stay cro
 
 | ID | Phase | Lane | Depends on | Status |
 |---|---|---|---|---|
-| P1 | Apps Script connectable from Settings | A | — | not started |
-| P2 | Recovery-code route hardening | B | — | not started |
-| P3 | Org bundle: bind `127.0.0.1` by default, `agent_links` flag | C | — | not started |
-| P4 | Telegram credentials in the PyPI build | D | maintainer input | not started |
-| P5 | Declare minimum OS versions | E | — | not started |
-| L1 | Remove policy v1 settings conversion (+ ADR) | A | P1 | not started |
-| L2 | Remove legacy file-location moves (Python + shim) | B | L1, P2 | not started |
-| L3 | Linux: installer cleanup and remove/purge semantics | E | L2, P5 | not started |
-| L4 | macOS: installer cleanup and uninstall semantics | E | L3 | not started |
-| L5 | Windows: installer cleanup and uninstall semantics | E | L4 | not started |
+| P1 | Apps Script connectable from Settings | A | — | merged ([#662](https://github.com/privacyfence/privacyfence/pull/662)) |
+| P2 | Recovery-code route hardening | B | — | merged ([#663](https://github.com/privacyfence/privacyfence/pull/663)) |
+| P3 | Org bundle: bind `127.0.0.1` by default, `agent_links` flag | C | — | merged ([#661](https://github.com/privacyfence/privacyfence/pull/661)) |
+| P4 | Telegram credentials in the PyPI build | D | — (input resolved) | merged ([#664](https://github.com/privacyfence/privacyfence/pull/664)) |
+| P5 | Declare minimum OS versions | E | — | merged ([#665](https://github.com/privacyfence/privacyfence/pull/665)) |
+| L1 | Remove policy v1 settings conversion (+ ADR) | A | P1 | merged ([#670](https://github.com/privacyfence/privacyfence/pull/670)) |
+| L2 | Remove legacy file-location moves (Python + shim) | B | L1, P2 | merged ([#671](https://github.com/privacyfence/privacyfence/pull/671)) |
+| L3 | Linux: installer cleanup and remove/purge semantics | E | L2, P5 | merged ([#673](https://github.com/privacyfence/privacyfence/pull/673)) |
+| L4 | macOS: installer cleanup and uninstall semantics | E | L3 | merged ([#672](https://github.com/privacyfence/privacyfence/pull/672)) |
+| L5 | Windows: installer cleanup and uninstall semantics | E | L4 | merged ([#674](https://github.com/privacyfence/privacyfence/pull/674)) |
 | X1 | Pre-flight and alpha tag | — | all above | not started |
 | X2 | Retire this plan | — | X1 | not started |
 
@@ -168,6 +169,11 @@ connector dispatch needed unless the fixture for Apps Script changes.
 the other Google connectors; no user-facing string mentions `--apps-script-oauth` unless it still
 exists.
 
+**As landed ([#662](https://github.com/privacyfence/privacyfence/pull/662)) — corrections to this brief:**
+
+- `daemon_main.py` never told users to run `--apps-script-oauth`; it only defines the flag next to its five Google siblings. The flag stays: `scripts/qa_authenticate_connectors.py` uses it.
+- The org bundle's single `google` section already covered Apps Script; no bundle or script change was needed. Org admins must register `https://<server>/oauth/callback/apps_script` (CHANGELOG says so).
+
 ### P2 — Recovery-code route hardening
 
 **Problem.** The step-up recovery-code route (`POST /security/recover`) audits only a successful
@@ -195,6 +201,11 @@ the maintainer's review explicitly.
 
 **Done when.** Failed attempts appear in the audit log; an unattested session is refused; the
 N+1th attempt in the window is refused.
+
+**As landed ([#663](https://github.com/privacyfence/privacyfence/pull/663)) — corrections to this brief:**
+
+- On an unseparated local install the route still accepts a non-attested session on purpose — no human session can exist there (the existing `require_human_session` rule). On a separated install it is refused.
+- There was no existing limiter in `src/`; a new in-memory one was added.
 
 ### P3 — Org bundle: bind `127.0.0.1` by default, `agent_links` flag
 
@@ -241,6 +252,11 @@ X1's alpha; say so in the PR.
 **Done when.** A wheel built with the secrets contains the credentials module; one built without
 them builds cleanly and doesn't.
 
+**As landed ([#664](https://github.com/privacyfence/privacyfence/pull/664)) — corrections to this brief:**
+
+- There was no shared generator to reuse: each build script (including `build_installer.ps1`) had its own heredoc. P4 added one shared generator and switched all of them to it, which is why `build.yml` was dispatched.
+- ADR is **0040**.
+
 ### P5 — Declare minimum OS versions
 
 **Problem.** Minimum OS versions aren't declared in the installers, so an unsupported system gets
@@ -262,6 +278,13 @@ an install that fails at runtime instead of a clear refusal.
 jobs must be green.
 
 **Done when.** All three installers state a floor that matches the support matrix, enforced by test.
+
+**As landed ([#665](https://github.com/privacyfence/privacyfence/pull/665)) — corrections to this brief:**
+
+- `platform-support.md` had no floors to confirm from; P5 added the Minimum OS column.
+- The `.deb`'s real floor is glibc, set by the build runner, so P5 added a build-time check to stop it drifting on runner-image bumps.
+- The macOS floor includes the CPU architecture (arm64 only), at the maintainer's request.
+- P5 needed an ADR of its own (distribution path): **0039**.
 
 ### L1 — Remove policy v1 settings conversion
 
@@ -296,6 +319,12 @@ on percentage). `scripts/qa_web_smoke.py` locally.
 **Done when.** `policy/compat.py` is gone, nothing in `src/` calls a `migrate_*` policy function,
 and a v1-format `settings.yaml` is refused with a clear message.
 
+**As landed ([#670](https://github.com/privacyfence/privacyfence/pull/670)) — corrections to this brief:**
+
+- `settings_controller.GRANT_RESOURCE_TYPES` is not a v1 table — it is `resource_registry`'s manifest used for name resolution — and stays. The v1 tables removed were `RULES_BY_OPERATION`, `RULES_LIST_VALUE`, `RULES_INT_VALUE` and `OPERATION_LABELS`.
+- The shipped `resources/settings.yaml.example` was itself in v1 format and had to be converted, or every fresh install would have been refused.
+- ADR is **0041**.
+
 ### L2 — Remove legacy file-location moves (Python and shim)
 
 **Removes.** `paths._migrate_path`, `_migrate_legacy_authority_files`,
@@ -314,6 +343,12 @@ phase finds it.
 Dispatch `build.yml` against the branch — the shim change ships in every `.mcpb`.
 
 **Done when.** No Python or TypeScript code reads or moves a pre-current-layout path.
+
+**As landed ([#671](https://github.com/privacyfence/privacyfence/pull/671)) — corrections to this brief:**
+
+- Also removed: `paths._LEGACY_AUDIT_LOG_RELATIVE`, the `_authority_migration_attempted`/`_audit_log_migration_attempted` memos, and `authority_root()`'s `migrate_audit_log` kwarg.
+- Two test seeds wrote the pre-`authority/` layout and depended on the migration; they were rewritten.
+- The legacy lines left for L3–L5 included `mcp_token` in each script's `HANDOFF_FILE_NAMES`.
 
 ### L3 — Linux: installer cleanup and remove/purge semantics
 
@@ -339,6 +374,14 @@ which moves `/var/lib/privacyfence` into the owner's home. After this phase:
 **Done when.** Install → remove → reinstall keeps data; purge leaves nothing; no XDG autostart file
 ships.
 
+**As landed ([#673](https://github.com/privacyfence/privacyfence/pull/673)) — corrections to this brief:**
+
+- **`disable` decision (maintainer, option C): `disable` is replaced by `uninstall [--purge]` on all three platforms — [ADR 0042](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0042-uninstall-replaces-disable.md).** `uninstall` stops and unregisters the service and keeps the data, marker and service account; `--purge` also deletes them.
+- `postrm purge` deletes the data and account itself: by then dpkg has removed the tool. A test keeps postrm's paths in step with the script.
+- `move_handoff_files_in/out` and `HANDOFF_FILE_NAMES`/`HANDOFF_FILE_GLOB` all went (only migration and `disable` reached them); `migrate_data` also carried ADR 0008's non-owner copy, gone too.
+- With the XDG entry gone the `.deb` has no conffiles; `build_deb.sh`'s `DEBIAN/conffiles` step went.
+- `privilege_separation.py` had no shared `disable` code path, only comments.
+
 ### L4 — macOS: installer cleanup and uninstall semantics
 
 **Removes.** `macos_privilege_separation.sh` `stop_legacy_agent`, `migrate_data`, the remaining
@@ -353,7 +396,7 @@ packaged install that isn't separated yet (`privilege_separation.py` ≈l.1735, 
 is unreachable on a fresh install and goes, with `enforce_separation` then refusing to serve
 instead; if any fresh-install path relies on it, it stays under H1. Show which in the PR.
 
-**Changes (G3).** Uninstall follows the `disable` decision recorded by L3. macOS has no package
+**Changes (G3).** Uninstall follows ADR 0042 (`uninstall [--purge]`, the `disable` decision recorded by L3). macOS has no package
 manager purge: provide the documented equivalent (the uninstall command the user runs, with a
 "delete data" option) and make sure no step moves data back into `~/Library`.
 
@@ -364,6 +407,13 @@ manager purge: provide the documented equivalent (the uninstall command the user
 **Done when.** The `.pkg` installs the current layout only; uninstall keeps data unless asked to
 delete it; both dispatched runs are green.
 
+**As landed ([#672](https://github.com/privacyfence/privacyfence/pull/672)) — corrections to this brief:**
+
+- Uninstall follows ADR 0042: `sudo …/macos_privilege_separation.sh uninstall [--purge]` is the documented macOS uninstall; the `.pkg` welcome screen names it.
+- Also removed: `HANDOFF_FILE_NAMES`/`HANDOFF_FILE_GLOB` and `drop_stale_sockets` (#638's socket fix lived inside `migrate_data`). `build_dmg.sh` had no migration step.
+- `maybe_auto_enable_macos` **stays under H1**: the `.pkg` postinstall never fails, so an install can finish with no marker; the shim then spawns the packaged daemon, and `enforce_separation()` → `maybe_auto_enable_macos()` is the only remaining path to finish separation.
+- L4 also took the darwin halves of the shared POSIX tests L3 narrowed.
+
 ### L5 — Windows: installer cleanup and uninstall semantics
 
 **Removes.** `installer/privacyfence.iss` `RegisterAutostartTask` and `Disable-DaemonTask` steps;
@@ -371,7 +421,7 @@ delete it; both dispatched runs are green.
 (if the template is only used by the removed step — verify); `windows_privilege_separation.ps1`
 `Move-Data`, `Get-LegacyDataDir`, `Restore-LegacyDataDir` and the legacy-bootstrap cleanup left by L2.
 
-**Changes (G3).** Uninstall follows the `disable` decision recorded by L3: the uninstaller stops
+**Changes (G3).** Uninstall follows ADR 0042 (`uninstall [--purge]`, the `disable` decision recorded by L3): the uninstaller stops
 the service and leaves data under the system root; a documented option (uninstaller checkbox or
 command) deletes it. Nothing restores data to `%LOCALAPPDATA%`.
 
@@ -380,6 +430,12 @@ and `windows-graphical-session.yml` (`test_windows_graphical_session_autostart.p
 
 **Done when.** The installer registers nothing it later disables; uninstall keeps data unless asked;
 both dispatched runs are green.
+
+**As landed ([#674](https://github.com/privacyfence/privacyfence/pull/674)) — corrections to this brief:**
+
+- Uninstall follows ADR 0042: `uninstall [-Purge]` (PowerShell spelling). The uninstaller runs it and offers a **Delete PrivacyFence data** checkbox, unchecked by default; a silent uninstall never purges.
+- `installer/privacyfence-task.xml.tmpl` was used only by the removed step and went, with its test; its lessons moved into the companion template's header.
+- New unit test: no Inno `[Code]` line may start with `[` or `#` (it broke the first dispatched build).
 
 ### X1 — Pre-flight and alpha tag
 
@@ -406,20 +462,44 @@ this file's Status table.
 
 ## ADRs this plan creates
 
-Next free number when each PR lands.
+All landed; numbers as merged.
 
 | ADR | Phase |
 |---|---|
-| Only the current install layout is supported; no upgrade path from earlier layouts (G1, G3, H1) | L1 |
-| Telegram app credentials ship in every distribution, including PyPI (G4) | P4 |
+| [0039](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0039-installers-refuse-an-os-below-the-support-matrix.md) Installers refuse an OS below the support matrix | P5 (not in the original list; added by the phase) |
+| [0040](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0040-telegram-app-credentials-ship-in-every-distribution.md) Telegram app credentials ship in every distribution, including PyPI (G4) | P4 |
+| [0041](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0041-only-the-current-install-layout-is-supported.md) Only the current install layout is supported; no upgrade path from earlier layouts (G1, G3, H1) | L1 |
+| [0042](https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0042-uninstall-replaces-disable.md) `uninstall [--purge]` replaces `disable` (option C; rejects A and B) | L3 (macOS/Windows status lines added by L4/L5) |
 
-If L3's `disable` decision rejects an alternative for a non-obvious reason, L3 adds its own ADR;
-otherwise the L1 ADR covers it.
+## Found during implementation, not fixed
+
+Recorded in the phase PRs' "Found, not fixed" sections; none is in this plan's scope. Doc items
+belong to [`website-plan.md`](website-plan.md) Wave 1; code items need their own issue or PR.
+
+- **Code: `enable --for-user` overwrites the marker's owner** (L4, [#672](https://github.com/privacyfence/privacyfence/pull/672)):
+  `cmd_enable_for_user` rewrites `owner_user` with the `--for-user` account even when that account
+  is a second ADR 0008 principal, not the recorded owner. Pre-existing; follow-up pending with the maintainer.
+- **Code: org registered-clients format conversion** (L2, [#671](https://github.com/privacyfence/privacyfence/pull/671)):
+  `web/oauth_provider.py` (≈l.286) still reads the pre-SEC-16 top-level format of org mode's
+  registered-clients file, a format conversion ADR 0041 would also retire.
+- **Docs: `security-and-compliance.md`** (P2, [#663](https://github.com/privacyfence/privacyfence/pull/663)): says a recovery code,
+  "correctly or not, never grants a second attempt"; a wrong code does not consume the stored one.
+- **Docs: `org-mode-setup-guide.md` §4.2** (P1, [#662](https://github.com/privacyfence/privacyfence/pull/662)): gives one
+  `/oauth/callback/google` redirect URI; the code builds one per service (`/oauth/callback/gmail`, …, `/apps_script`).
+- **Docs: `README.md` ≈l.337** (L2): points Windows users at `%LOCALAPPDATA%\Programs\PrivacyFence\`; the installer is admin-only.
+- **Docs: `TECHNICAL_REFERENCE.md`** (L5, [#674](https://github.com/privacyfence/privacyfence/pull/674)): says the Start Menu entry opens the
+  web settings UI; since ADR 0031 it launches the companion.
+- **Docs: leftover macOS/Linux `disable` mentions** (L5): `platform-support.md` ≈l.127–148 and
+  `release-testing.md` ≈l.26/34. Check whether L3/L4 already fixed them before rewriting.
+- **Packaging: `debian/control`** (P5, [#665](https://github.com/privacyfence/privacyfence/pull/665)): lists `Architecture: amd64 arm64`; only amd64 is built.
+- **Comments: `audit_log.py` / `connector_host.py`** (L1): historical mentions of the deleted v1
+  tools, deliberately left (history, not false present-tense claims).
 
 ## Inputs needed from the maintainer
 
-- **Telegram secrets (P4):** *"Are `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` available to
-  `publish-pypi.yml` — as repository secrets, or in the `pypi`/`testpypi` environments?"*
+- ~~**Telegram secrets (P4)**~~: resolved 2026-09-24. They are repository secrets, the same ones
+  `build.yml` reads.
+- ~~**`disable` (L3)**~~: decided 2026-09-24, option C; see ADR 0042.
 - **Reviews:** P2 (trust boundary) and L3 (uninstall semantics, the `disable` decision) need an
   explicit read, not a skim.
 - **Alpha (X1):** the go-ahead to cut the alpha after the dry run.
