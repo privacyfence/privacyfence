@@ -1095,6 +1095,35 @@ class TestTrayLoop:
         assert tray.icon.update_menu_calls >= 1
         assert tray.icon.image.label.startswith("grey:")  # the poll's own redraw, not the initial one
 
+    def test_the_poll_loop_hands_macos_redraws_to_the_main_thread(self, tray, monkeypatch):
+        # AppKit SIGTRAPs when an NSStatusItem/NSMenu is changed off the main
+        # thread, and pystray's darwin backend does no marshalling of its own
+        # -- so on macOS the poll thread may only queue the redraw.
+        monkeypatch.setattr(companion, "_STATUS_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(companion.sys, "platform", "darwin")
+        stopped_status = companion.daemon_status.DaemonStatus(
+            state="stopped", version=None, pid=None, detail="PrivacyFence is not running.",
+        )
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: stopped_status)
+        queued = []
+        tray.run_until = threading.Event()
+
+        class _MainQueue:
+            def addOperationWithBlock_(self, block):
+                queued.append(block)
+                tray.run_until.set()
+
+        foundation = SimpleNamespace(NSOperationQueue=SimpleNamespace(mainQueue=_MainQueue))
+        monkeypatch.setitem(sys.modules, "Foundation", foundation)
+
+        assert companion._run_tray() == 0
+
+        assert queued, "the poll never queued a redraw"
+        assert tray.icon.update_menu_calls == 0
+        queued[0]()
+        assert tray.icon.update_menu_calls == 1
+        assert tray.icon.icon.label.startswith("grey:")
+
     def test_open_items_dispatch_to_open_path(self, tray, monkeypatch):
         opened = []
         monkeypatch.setattr(companion, "_open_path", opened.append)

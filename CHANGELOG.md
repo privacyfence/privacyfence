@@ -61,6 +61,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   4.1.2, the first stable 4.1.x. Use `privacyfence_list_policy` and
   `privacyfence_propose_policy_change` instead.
 
+### Fixed
+
+- **macOS: the companion's menu-bar icon no longer vanishes a few seconds after it appears.** The
+  status poll added in 4.2.1 redrew the icon and menu from a background thread, and AppKit kills a
+  process (`trace trap`) that changes its menu bar off the main thread. Redraws are now queued onto
+  the main thread.
+- **macOS: `macos_privilege_separation.sh enable` no longer aborts half-way when
+  `~/.privacyfence` contains a leftover socket** (`ditto: ... Operation not supported on socket`).
+  Stale sockets are dropped before the merge, so the layout and launchd jobs are installed as
+  normal.
+- **macOS: `macos_privilege_separation.sh status` no longer reports a correct `handoff`
+  directory as `WRONG MODE ... 770, expected 3770`.** The check ignored the setgid/sticky digit.
+
 ## [4.2.1] — 2026-09-23
 
 *Supersedes 4.2.0, which was tagged but never published. Its release build's `build` (macOS) and

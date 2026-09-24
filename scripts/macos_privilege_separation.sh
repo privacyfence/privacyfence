@@ -454,6 +454,14 @@ marker_owner_user() {
 
 legacy_data_dir() { printf '%s/.privacyfence' "$OWNER_HOME"; }
 
+drop_stale_sockets() {
+  # A socket is a live process's rendezvous point, not data: nothing can
+  # listen on one copied to a new path, and ditto refuses to copy one at all
+  # ("Operation not supported on socket"), which under `set -e` aborted
+  # `enable` half-way -- before apply_layout() and install_services().
+  find "$1" -type s -exec rm -f {} +
+}
+
 migrate_data() {
   local legacy target
   # ADR 0008 ("D2: two identities, not one, per install"): an account that is
@@ -472,6 +480,7 @@ migrate_data() {
       note "no existing ${legacy} to migrate -- '${OWNER_USER}' starts with no data of their own"
       return
     fi
+    drop_stale_sockets "$legacy"
     target="${SYSTEM_ROOT}/users/os-${OWNER_UID}"
     # Same provisioning idiom apply_layout() uses for the top-level
     # directories below, at the mode paths.py's secure_mkdir() itself
@@ -514,6 +523,7 @@ migrate_data() {
     mkdir -p "$SYSTEM_ROOT"
     return
   fi
+  drop_stale_sockets "$legacy"
   if [ -e "$SYSTEM_ROOT" ]; then
     # Something is already there (a previous enable, or a hand-made
     # directory). Merge rather than clobber, then remove the source --
@@ -1275,6 +1285,16 @@ resolve_owner_optional() {
   OWNER_HOME="$(dscl . -read "/Users/${OWNER_USER}" NFSHomeDirectory 2>/dev/null | sed 's/^NFSHomeDirectory: //')"
 }
 
+# Permission bits *including* setuid/setgid/sticky, as `chmod` takes them
+# (711, 3770). `%OLp` alone drops the leading digit, so handoff/'s 3770 always
+# read back as 770 and `status` reported a correct install as WRONG MODE.
+octal_mode() {
+  local mode
+  mode="$(stat -f '%Op' "$1")" || return 1
+  mode="${mode: -4}"
+  printf '%s\n' "${mode#0}"
+}
+
 cmd_status() {
   require_macos
   resolve_owner_optional
@@ -1307,7 +1327,7 @@ cmd_status() {
   fi
   _check_mode() {
     local path="$1" expected="$2" actual
-    actual="$(stat -f '%OLp' "$path" 2>/dev/null || true)"
+    actual="$(octal_mode "$path" 2>/dev/null || true)"
     if [ -z "$actual" ]; then
       echo "  MISSING          ${path}"
       problems=1
