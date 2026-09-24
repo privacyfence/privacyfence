@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.4.0] — 2026-09-24
+
 ### Added
 
 - **Gmail drafts can carry your Gmail signature** (#643). The six draft tools take an
@@ -2447,7 +2449,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.3.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...HEAD
+[4.4.0]: https://github.com/privacyfence/privacyfence/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/privacyfence/privacyfence/compare/v4.2.1...v4.3.0
 [4.2.1]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...v4.2.1
 [4.1.5]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.5
