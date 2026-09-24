@@ -43,6 +43,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.3.0] — 2026-09-24
+
 ### Added
 
 - **Local mode's settings dispatcher now records every settings change — and every step-up
@@ -68,19 +70,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already answers, restricted to the six actions `org_settings_scope.ACTION_SCOPES` permits for org
   mode. `add_policy_rule` now accepts more than one verb in a single submission, matching the
   shared page's own "Add a rule" form.
-
-### Security
-
-- **Org mode's own sensitive settings actions — adding or removing an auto-accept rule, and
-  editing the install-wide privacy/PII policy — now go through the same passkey step-up gate
-  local mode's dispatcher has enforced since #426 Phase 3.** Before this, `routes_org_settings.
-  build_routes` took no `step_up` at all, so a step-up-requiring install still let any signed-in
-  principal add an always-allow rule, and any admin flip the install-wide privacy/PII policy, with
-  no fresh WebAuthn assertion — exactly the "what gets gated" bypass `_SENSITIVE_ACTIONS` exists to
-  close, just left open on the org-mode side of the same dispatcher.
-
-### Changed
-
 - **Opening PrivacyFence itself now opens Approvals, on every platform.** On macOS, a
   double-click on PrivacyFence in `/Applications` used to do nothing visible: it started a second
   daemon as you, which a separated install refuses. It now runs a launcher that opens Approvals
@@ -90,15 +79,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only worked if the browser was already signed in. When the companion is already running, the
   click asks you to confirm before opening. ([ADR
   0031](docs/adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md))
-
-### Fixed
-
-- **The Linux Applications-menu entry (and its Settings action) can approve again on a separated
-  install.** The companion's channel refused every caller except the daemon's service account. So
-  the menu click's request to the running `--serve` companion never got through, and it fell back
-  to a link that could view Approvals but not approve anything. The companion's own user may now
-  ask it to open Approvals or Settings, with the same confirmation dialog as before. Every other
-  request on that channel is still restricted to the daemon.
 
 ### Removed
 
@@ -110,6 +90,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The Linux Applications-menu entry (and its Settings action) can approve again on a separated
+  install.** The companion's channel refused every caller except the daemon's service account. So
+  the menu click's request to the running `--serve` companion never got through, and it fell back
+  to a link that could view Approvals but not approve anything. The companion's own user may now
+  ask it to open Approvals or Settings, with the same confirmation dialog as before. Every other
+  request on that channel is still restricted to the daemon.
 - **macOS: the companion's menu-bar icon no longer vanishes a few seconds after it appears.** The
   status poll added in 4.2.1 redrew the icon and menu from a background thread, and AppKit kills a
   process (`trace trap`) that changes its menu bar off the main thread. Redraws are now queued onto
@@ -120,6 +106,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   normal.
 - **macOS: `macos_privilege_separation.sh status` no longer reports a correct `handoff`
   directory as `WRONG MODE ... 770, expected 3770`.** The check ignored the setgid/sticky digit.
+
+### Security
+
+- **Org mode's own sensitive settings actions — adding or removing an auto-accept rule, and
+  editing the install-wide privacy/PII policy — now go through the same passkey step-up gate
+  local mode's dispatcher has enforced since #426 Phase 3.** Before this, `routes_org_settings.
+  build_routes` took no `step_up` at all, so a step-up-requiring install still let any signed-in
+  principal add an always-allow rule, and any admin flip the install-wide privacy/PII policy, with
+  no fresh WebAuthn assertion — exactly the "what gets gated" bypass `_SENSITIVE_ACTIONS` exists to
+  close, just left open on the org-mode side of the same dispatcher.
 
 ## [4.2.1] — 2026-09-23
 
@@ -2385,7 +2381,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.2.1...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.3.0...HEAD
+[4.3.0]: https://github.com/privacyfence/privacyfence/compare/v4.2.1...v4.3.0
 [4.2.1]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...v4.2.1
 [4.1.5]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.5
 [4.1.2]: https://github.com/privacyfence/privacyfence/compare/v4.0.0...v4.1.2
