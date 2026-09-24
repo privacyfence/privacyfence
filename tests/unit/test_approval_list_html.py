@@ -623,3 +623,13 @@ class TestAgentOnTheRow:
         assert approval.to_summary_dict()["agent"] == {
             "tier": "claimed", "headline": "Says it is ChatGPT", "claim": "", "icon_id": "",
         }
+
+    def test_an_agent_icon_with_an_unsafe_id_gets_no_css_rule(self, monkeypatch):
+        # The id is interpolated into a CSS selector, so anything that isn't
+        # a plain slug is dropped rather than escaped -- same as connectors.
+        from privacyfence import approval_icons
+
+        monkeypatch.setattr(approval_icons, "all_agent_icons", lambda: {
+            'x"}body{color:red': "data:image/png;base64,AAAA", "claude": "data:image/png;base64,BBBB",
+        })
+        assert approval_list_html._agent_icon_uris() == {"claude": "data:image/png;base64,BBBB"}
