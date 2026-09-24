@@ -90,18 +90,10 @@ img.save('$IcoPath', sizes=[(16, 16), (32, 32), (48, 48), (256, 256)])
 # Telegram (not an organization -- see docs/telegram-setup.md), and this repo
 # is public, so they're never committed. CI supplies them as
 # TELEGRAM_API_ID/TELEGRAM_API_HASH env vars; a local build without them set
-# just ships without Telegram support.
-$CredsFile = "src/privacyfence/_telegram_credentials.py"
-if ($env:TELEGRAM_API_ID -and $env:TELEGRAM_API_HASH) {
-    Write-Host "-> Writing Telegram app credentials..."
-    @"
-API_ID = $($env:TELEGRAM_API_ID)
-API_HASH = "$($env:TELEGRAM_API_HASH)"
-"@ | Set-Content -Path $CredsFile -Encoding utf8NoBOM
-} else {
-    Write-Host "-> TELEGRAM_API_ID/TELEGRAM_API_HASH not set; building without Telegram app credentials."
-    Remove-Item -Force -ErrorAction SilentlyContinue $CredsFile
-}
+# just ships without Telegram support. scripts/telegram_credentials.py is the
+# one generator every build shares.
+python scripts/telegram_credentials.py write
+if ($LASTEXITCODE -ne 0) { throw "Writing Telegram app credentials failed" }
 
 # -- 3. Build the onedir daemon with PyInstaller -----------------------------
 # --clean forces a fresh module analysis every time, same reasoning as
