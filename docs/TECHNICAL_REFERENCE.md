@@ -776,6 +776,33 @@ PrivacyFence records tool/gate decisions to the audit log, including the connect
 
 Treat the audit log as security-relevant state: protect its directory, include it in operational backup decisions where required, and do not expose it through connector content paths.
 
+### Which AI system made the request
+
+Since audit schema 5 (`audit_log.CURRENT_SCHEMA_VERSION`), every entry carries four fields naming the AI system a gated connector call came from ([ADR 0006](adr/0006-attributing-a-request-to-the-ai-system-that-made-it.md), [ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md)). They are also columns in the weekly Excel export and on the Audit Log settings page.
+
+| Field | Holds |
+|---|---|
+| `agent_id` | A registry id (`claude-code`, `claude`, `chatgpt`, `gemini-cli`, `cursor`), `unknown:<claimed name>` for a name no registry entry matches exactly, or `""` |
+| `agent_name` | The registry display name, or the sanitized claimed name for an unmatched client |
+| `agent_version` | The sanitized version the client claimed in its handshake, or `""` when the identity came from a DCR `client_name` (a registration carries no version). Never verified |
+| `agent_source` | Which signal produced the other three, and so how far to believe them |
+
+`agent_source` has a fixed vocabulary (`agent_identity.AgentSource`). `web/routes_mcp.py`'s `_resolve_agent` takes the first signal present, in this order: an admin pin, a local `agent_overrides:` relabel, an unpinned registration's DCR `client_name`, the handshake name.
+
+| `agent_source` | Tier | Recorded when |
+|---|---|---|
+| `oauth_client` | attested | Org mode only, and the only attested source today: an administrator pinned the access token's OAuth `client_id` to a registry entry on the *AI systems* settings page (`web/agent_pins.py`, `org_dir()/agent_pins.json`) |
+| `client_info` | claimed | Anything the client chose: the `clientInfo` name from the MCP handshake (or a session-less request's own `_meta`), an unpinned registration's DCR `client_name`, or a local `settings.yaml` `agent_overrides:` mapping, which relabels the name on every install but is selected by the name the client sent ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)) |
+| `endpoint` | claimed | Reserved for ADR 0006's deferred `/mcp/a/<agent-id>` alias. Nothing records it today |
+| `override` | attested | Reserved for a per-credential local override (ADR 0006 option D), which needs per-credential local tokens. Nothing records it today: local mode has no attested source ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)) |
+| `""` | unknown | No usable signal. Recorded as unknown, never guessed and never "Claude" |
+
+Like `claude_reason`, `agent_name` is self-reported, unverified text unless `agent_source` is `oauth_client`, and `agent_version` always is, pinned or not. Every caller-supplied string (`clientInfo.name`/`version`, DCR `client_name`) is stripped of control and bidi characters and cut to 64 characters before it is stored (`agent_identity.sanitize_client_string`), and escaped wherever it is rendered. `clientInfo.icons` and `website_url` are never read.
+
+Attribution is reporting only. Nothing may key an outcome on `agent_id` unless `agent_source` is attested, and today nothing keys on it at all: the same call gets the same decision, rule match and released data whatever name the client gives (`tests/unit/test_systemic_gate_invariants.py`). The `privacyfence_*` meta-tools are not attributed, and their entries record all four fields empty. An entry about an earlier request, such as an approval the expiry sweep times out, carries the identity that request's `PendingApproval` captured, not the identity of whatever call ran the sweep.
+
+Entries written before schema 5 load with all four fields empty, which reads as "this install did not yet distinguish", and a log mixing old and new entries still verifies.
+
 ## Web authentication and CSRF
 
 Local browser sessions are established from the one-time bootstrap exchange and then represented by the HttpOnly session cookie. Mutating browser requests require same-origin/session checks plus the CSRF value carried by the page/request flow.
