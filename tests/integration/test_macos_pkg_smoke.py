@@ -36,6 +36,7 @@ What this proves, all without installing anything:
    about what got installed.
 5. The ``Distribution`` XML refuses a macOS older than the payload app's own
    ``LSMinimumSystemVersion``.
+   It also refuses a non-``arm64`` Mac, matching the payload's executables.
 6. Signature: same optional-and-skip-if-unsigned posture as
    ``test_macos_packaged_smoke.py``'s own ``test_packaged_app_signature_
    and_notarization`` -- a local dev build with no ``--sign`` is legitimate
@@ -169,6 +170,28 @@ def test_pkg_refuses_macos_older_than_the_app_supports(expanded_pkg):
     with open(app_bundle / "Contents" / "Info.plist", "rb") as f:
         app_floor = plistlib.load(f)["LSMinimumSystemVersion"]
     assert os_versions[0].get("min") == app_floor
+
+
+def test_pkg_refuses_a_mac_the_app_is_not_built_for(expanded_pkg):
+    """PrivacyFence ships for Apple silicon only: the ``Distribution`` XML
+    restricts the install to ``arm64`` hosts, and the payload's executables
+    really are ``arm64`` -- so an Intel Mac is refused by Installer.app rather
+    than handed an app it cannot run."""
+    pkg_path = _built_pkgs()[-1]
+    root = ET.fromstring((expanded_pkg / "Distribution").read_text(encoding="utf-8"))
+    options = root.find("./options")
+    assert options is not None and options.get("hostArchitectures") == "arm64", (
+        f"{pkg_path.name}'s Distribution doesn't restrict the install to arm64 hosts"
+    )
+
+    app_bundle = next(expanded_pkg.glob("**/Payload/PrivacyFenceApp.app"))
+    for binary in ("PrivacyFenceApp", "PrivacyFence"):
+        result = subprocess.run(
+            ["lipo", "-archs", str(app_bundle / "Contents" / "MacOS" / binary)],
+            capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.split() == ["arm64"], f"{binary} is built for {result.stdout.strip()!r}"
 
 
 def test_pkg_payload_is_not_relocatable(expanded_pkg):

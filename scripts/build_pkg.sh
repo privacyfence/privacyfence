@@ -105,7 +105,18 @@ done
 # Launch Services then won't open.
 MIN_MACOS=$(plutil -extract LSMinimumSystemVersion raw "${BUNDLE}/Contents/Info.plist")
 
-echo "=== Building ${PRODUCT_NAME} ${VERSION} installer package (macOS ${MIN_MACOS}+) ==="
+# PrivacyFence ships for Apple silicon only (docs/platform-support.md's support matrix):
+# PyInstaller builds for the architecture it runs on, and the release runner is arm64. The .pkg
+# says so through hostArchitectures below, so Installer.app refuses an Intel Mac instead of
+# installing an app it cannot run. Refuse to package a bundle built for anything else.
+HOST_ARCH="arm64"
+BUNDLE_ARCHS=$(lipo -archs "${BUNDLE}/Contents/MacOS/${APP_NAME}")
+[ "$BUNDLE_ARCHS" = "$HOST_ARCH" ] || {
+  echo "error: ${BUNDLE} is built for '${BUNDLE_ARCHS}', but the .pkg ships for ${HOST_ARCH} only -- build on Apple silicon" >&2
+  exit 1
+}
+
+echo "=== Building ${PRODUCT_NAME} ${VERSION} installer package (macOS ${MIN_MACOS}+, ${HOST_ARCH}) ==="
 
 # ── 1. Stage a clean package root ─────────────────────────────────────────
 # Not `--root dist` directly: dist/ also holds the .mcpb this same build
@@ -198,7 +209,7 @@ cat > "$DIST_XML" <<XML
     <title>${PRODUCT_NAME}</title>
     <organization>${PKG_ID}</organization>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
-    <options customize="never" require-scripts="true" rootVolumeOnly="true"/>
+    <options customize="never" require-scripts="true" rootVolumeOnly="true" hostArchitectures="${HOST_ARCH}"/>
     <allowed-os-versions>
         <os-version min="${MIN_MACOS}"/>
     </allowed-os-versions>

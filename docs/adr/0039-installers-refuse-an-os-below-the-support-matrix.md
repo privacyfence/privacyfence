@@ -20,6 +20,9 @@ which rises whenever `ubuntu-latest` moves to a newer image.
    refuses a system below its row, in its own native mechanism:
    - macOS `.pkg`: `allowed-os-versions` in the distribution XML, read back from the built app's
      `LSMinimumSystemVersion` (`scripts/build_pkg.sh`) rather than restated.
+     It also sets `hostArchitectures="arm64"`: the app is built for Apple silicon only (PyInstaller
+     builds for the runner's architecture), so the `.pkg` refuses an Intel Mac, and
+     `scripts/build_pkg.sh` refuses to package a bundle built for any other architecture.
    - Windows: `MinVersion=10.0` in `installer/privacyfence.iss` (Windows 10 / Server 2016).
    - `.deb`: dependency versions, not a distribution-name check — `libc6 (>= X)` for the glibc the
      bundle is linked against and `systemd (>= 242)` for the unit's newest directive.
@@ -53,7 +56,8 @@ which rises whenever `ubuntu-latest` moves to a newer image.
 - `tests/unit/test_minimum_os_versions.py` reads `PrivacyFenceApp.spec`, `scripts/build_pkg.sh`,
   `installer/privacyfence.iss`, `debian/control` and the matrix and fails if they disagree.
 - `tests/integration/test_macos_pkg_smoke.py` checks the built `.pkg`'s `allowed-os-versions`
-  against its own payload's `LSMinimumSystemVersion` (`build.yml`'s `build` job).
+  against its own payload's `LSMinimumSystemVersion`, and its `hostArchitectures` against the
+  payload's executables (`build.yml`'s `build` job).
 - `scripts/check_deb_glibc_floor.py` gates `build.yml`'s `build-deb` job.
 
 ## Related

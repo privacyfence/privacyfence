@@ -51,7 +51,15 @@ def test_macos_app_floor_matches_matrix():
     spec = (REPO_ROOT / "PrivacyFenceApp.spec").read_text(encoding="utf-8")
     declared = re.findall(r'"LSMinimumSystemVersion":\s*"([\d.]+)"', spec)
     assert len(declared) == 1, declared
-    assert _matrix_floor("macOS") == f"macOS {declared[0].removesuffix('.0')}"
+    assert _matrix_floor("macOS") == f"macOS {declared[0].removesuffix('.0')}, Apple silicon"
+
+
+def test_macos_pkg_ships_for_apple_silicon_only():
+    script = (REPO_ROOT / "scripts" / "build_pkg.sh").read_text(encoding="utf-8")
+    assert re.search(r'^HOST_ARCH="arm64"$', script, flags=re.MULTILINE)
+    assert 'hostArchitectures="${HOST_ARCH}"' in script
+    # ...and refuses to package a bundle built for anything else.
+    assert re.search(r'\[ "\$BUNDLE_ARCHS" = "\$HOST_ARCH" \] \|\| \{', script)
 
 
 def test_macos_pkg_takes_its_floor_from_the_app_bundle():
