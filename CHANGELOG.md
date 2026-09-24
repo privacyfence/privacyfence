@@ -51,6 +51,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reads as *unknown*; older entries load with them empty too, and a log mixing old and new
   entries still verifies. The Excel source column is labelled so a claimed identity reads as a
   claim: only `override` and `oauth_client` are verified.
+- **Every connector tool call now records which AI system says it made it** — the `clientInfo`
+  name and version from the MCP handshake (or, on a session-less 2026-07-28 request, from that
+  request itself), and in org mode the name the client registered with, falling back to the
+  handshake. All of these are the client's own claim, so they are recorded as `client_info` and
+  never change what is allowed: the same call gets the same decision, rule match and released
+  data whatever name the client gives. Names are sanitized and length-capped; a client that gives
+  none is recorded as unknown. PrivacyFence's own `privacyfence_*` tools are not attributed.
 
 ### Fixed
 
