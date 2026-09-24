@@ -127,8 +127,11 @@ def test_the_local_principal_is_never_admin_but_may_still_act_on_its_own_setting
     # action stays permitted for LOCAL_PRINCIPAL under LOCAL_MODE.
     assert LOCAL_PRINCIPAL.is_admin is False
     assert is_action_permitted(next(iter(_ORG_ROUTED_PER_PRINCIPAL_ACTIONS)), LOCAL_PRINCIPAL, mode=LOCAL_MODE) is True
-    assert is_action_permitted(next(iter(_ORG_ROUTED_ADMIN_ONLY_ACTIONS)), LOCAL_PRINCIPAL, mode=LOCAL_MODE) is True
+    # Picked from the admin-only actions that also have a local route --
+    # AGT-5's org-only pin actions are admin-only but never local.
+    admin_only_local = min(_ORG_ROUTED_ADMIN_ONLY_ACTIONS & _LOCAL_ROUTED_ACTIONS)
+    assert is_action_permitted(admin_only_local, LOCAL_PRINCIPAL, mode=LOCAL_MODE) is True
     # ...but the same admin-only action, asked about ORG_MODE for a
     # principal who (like LOCAL_PRINCIPAL) isn't an admin, is still denied
     # -- the two modes' answers genuinely differ for the same action name.
-    assert is_action_permitted(next(iter(_ORG_ROUTED_ADMIN_ONLY_ACTIONS)), LOCAL_PRINCIPAL, mode=ORG_MODE) is False
+    assert is_action_permitted(admin_only_local, LOCAL_PRINCIPAL, mode=ORG_MODE) is False
