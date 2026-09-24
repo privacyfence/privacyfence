@@ -260,6 +260,11 @@ for line in pkg_stanza.splitlines():
     if stripped.startswith("#"):
         continue
     if line.startswith("Architecture:"):
+        # Only package for an architecture debian/control declares -- and it declares only what CI
+        # builds and tests (#679) -- so an arm64 host can't quietly produce an untested arm64 .deb.
+        declared = line.partition(":")[2].split()
+        if arch not in declared:
+            sys.exit(f"host architecture {arch!r} is not in debian/control's Architecture: {' '.join(declared)}")
         out.append(f"Architecture: {arch}")
         continue
     if "${" in line:

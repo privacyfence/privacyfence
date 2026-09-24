@@ -8,6 +8,8 @@ Accepted (recorded retroactively on 2026-09-23; decided around 2026-09-09 in
 has since changed under [ADR 0003](0003-separated-installs-only.md); see Consequences.
 Amended by [ADR 0039](0039-installers-refuse-an-os-below-the-support-matrix.md): `debian/control` now
 declares `libc6`/`systemd` floors.
+Amended by [ADR 0044](0044-the-deb-declares-only-the-architectures-ci-builds.md): `debian/control`
+now declares `amd64` only.
 
 ## Context
 
