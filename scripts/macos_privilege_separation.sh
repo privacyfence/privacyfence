@@ -752,11 +752,24 @@ owner_of_pid() {
 daemon_owner() {
   # The account the daemon is *actually* running as, "" if it has no live pid
   # to read one off. Waits for a pid, because `launchctl bootstrap` returns
-  # before RunAtLoad has finished spawning the job.
-  local deadline=$((SECONDS + DAEMON_PID_TIMEOUT)) pid=""
+  # before RunAtLoad has finished spawning the job -- and then for that pid to
+  # stop being launchd's xpcproxy trampoline, because launchd reports the pid
+  # while xpcproxy is still running in it as root, before it switches to the
+  # plist's UserName and execs the app. Reading the owner in that window
+  # reports 'root' for a job launchd resolved perfectly well, and the caller
+  # then tears a correct daemon down three times and gives up: v4.3.0's
+  # post-release build.yml runs hit exactly that, with `launchctl print`
+  # showing `state = xpcproxy` next to `username = _privacyfence`.
+  local deadline=$((SECONDS + DAEMON_PID_TIMEOUT)) pid="" comm=""
   while [ "$SECONDS" -lt "$deadline" ]; do
     pid="$(daemon_pid)"
-    [ -n "$pid" ] && break
+    if [ -n "$pid" ]; then
+      comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+      case "$comm" in
+        xpcproxy|*/xpcproxy) ;;
+        *) break ;;
+      esac
+    fi
     sleep 0.2
   done
   owner_of_pid "$pid"
