@@ -1,6 +1,6 @@
-"""One step-up orchestration for both approval route modules (policy surface
-consolidation, PSC-2a): web/routes_approvals.py and web/routes_org_approvals.py
-each grew their own copy of the sequence around an approval decision --
+"""One step-up orchestration for both approval modes (policy surface
+consolidation, PSC-2a): web/routes_approvals.py's local-mode and org-mode
+routes each grew their own copy of the sequence around an approval decision --
 "does a sensitive confirm or an ordinary approving decision need a fresh
 WebAuthn assertion, and if so, challenge or verify one" -- built on top of the
 ceremony primitives step_up_decide.py already shares (see that module's own

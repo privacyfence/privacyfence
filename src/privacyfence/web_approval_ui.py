@@ -60,7 +60,7 @@ class WebApprovalUI(ApprovalUI):
         which is also what makes a decision POST idempotent ("the first
         accepted decision for an id wins; any later one is
         rejected"). ``principal_id``
-        (P9) is web/routes_org_approvals.py's own authorization check --
+        (P9) is web/routes_approvals.py's own authorization check --
         see approvals.PendingApprovalRegistry.answer's own docstring."""
         return self._registry.answer(card_id, result, choice, principal_id=principal_id)
 

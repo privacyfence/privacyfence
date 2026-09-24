@@ -117,9 +117,9 @@ class TestBuildAppOrgMode:
         assert r.headers["location"] == "/login?next=/settings"
 
     def test_local_mode_approval_surface_is_not_what_gets_mounted(self, tmp_path, monkeypatch):
-        # /approvals exists (P9), but it's web/routes_org_approvals.py's
-        # principal-aware route set, not routes_approvals.create_app's
-        # shared-secret one -- an unauthenticated request is redirected to
+        # /approvals exists (P9), but it's web/routes_approvals.py's
+        # build_routes() principal-aware route set, not that module's
+        # create_app() shared-secret one -- an unauthenticated request is redirected to
         # /login, never served the (local-mode-only) card content directly.
         org = _org_auth(tmp_path, monkeypatch)
         app = build_app(WebApprovalUI(), org=org, allowed_hosts=frozenset({"pf.example.com"}))
@@ -199,7 +199,7 @@ class TestApprovalsAndSecuritySurfaceOrgMode:
         assert r.headers["location"] == "/login?next=/security"
 
     def test_step_up_config_section_reaches_the_decide_endpoint(self, tmp_path, monkeypatch):
-        # A thin end-to-end wiring check -- web/routes_org_approvals.py's
+        # A thin end-to-end wiring check -- web/routes_approvals.py's
         # own test file covers the step-up protocol itself in depth; this
         # only proves server.py actually threads org_config.json's
         # "step_up" section through StepUpConfig.from_org_config into the

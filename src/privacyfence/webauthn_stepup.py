@@ -23,7 +23,7 @@ resolves *who* (``Principal``) and *what RP*
   enrolling a new passkey, from web/routes_security.py's own ``/security``
   page.
 - **Assertion** (``begin_assertion``/``verify_assertion``) -- proving
-  possession of an already-enrolled one, from web/routes_org_approvals.py's
+  possession of an already-enrolled one, from web/routes_approvals.py's
   decide endpoint.
 
 Five things from §10.6 this module exists to get right, not just the happy
@@ -159,7 +159,7 @@ class WebAuthnError(Exception):
     """Raised by finish_registration()/verify_assertion() on any ceremony
     failure -- an unverifiable signature, a challenge/RP-ID/origin
     mismatch, user verification not satisfied, or an unknown credential.
-    Callers (web/routes_security.py, web/routes_org_approvals.py) turn this
+    Callers (web/routes_security.py, web/routes_approvals.py) turn this
     into a plain 401/400, never a stack trace reaching the browser."""
 
 
@@ -367,7 +367,7 @@ def finish_registration(
 
 def begin_assertion(principal: Principal, *, rp_id: str) -> tuple[str, bytes] | None:
     """``None`` when this principal has no enrolled credential -- the
-    caller (web/routes_org_approvals.py) falls back to offering the IdP
+    caller (web/routes_approvals.py) falls back to offering the IdP
     step-up/re-auth path instead (§10.6: "OIDC re-auth as the fallback for
     a user with no passkey enrolled")."""
     creds = list_credentials(principal)
@@ -422,7 +422,7 @@ def verify_assertion(
 # --------------------------------------------------------------------- #
 # Decision binding -- §10.6: "make it a server nonce bound to the
 # approval_id and a hash of the decision payload, and verify that
-# server-side." web/routes_org_approvals.py's decide endpoint is the one
+# server-side." web/routes_approvals.py's decide endpoint is the one
 # caller of both halves below.
 # --------------------------------------------------------------------- #
 

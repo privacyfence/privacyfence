@@ -7,8 +7,8 @@ singleton deliberately ... in org mode one instance still serves every
 principal (its ``PendingApprovalRegistry`` gains the principal dimension
 internally instead)" -- but nothing actually needed it until now, since
 ``/approvals`` was never mounted in org mode through P8 (web/server.py's
-own module docstring). web/routes_org_approvals.py (P9) is what finally
-reaches this registry from more than one principal at once, so every
+own module docstring). web/routes_approvals.py's org-mode routes (P9) are
+what finally reach this registry from more than one principal at once, so every
 ``PendingApproval`` now stamps ``principal_id`` at registration time (from
 ``current_principal()`` -- the same contextvar pattern every other
 per-principal registry in this codebase already uses, so gate.py's own
@@ -18,8 +18,8 @@ signature change), and every read/write method below takes an optional
 everywhere) means "no filter" -- gate.py's own internal calls, and every
 pre-P9 caller/test, keep seeing every approval regardless of principal,
 which is also exactly correct for local mode's single implicit principal.
-web/routes_org_approvals.py is the one real caller that ever passes a real
-``principal_id``, and it does so on every method it calls (§10.5: "every
+web/routes_approvals.py's org-mode routes are the one real caller that ever
+passes a real ``principal_id``, and they do so on every method they call (§10.5: "every
 approval, card, preview, decision ... read is authorized against
 current_principal()").
 
@@ -562,13 +562,13 @@ class PendingApprovalRegistry:
         self, approval_id: str, result: str, chosen_index: int | None = None, *,
         principal_id: str | None = None, decided_via: str = "", batch_id: str = "",
     ) -> bool:
-        """Resolve one UI step -- called by web/routes_approvals.py's/
-        web/routes_org_approvals.py's decide endpoint when a human clicks a
-        button. See PendingApproval.answer.
+        """Resolve one UI step -- called by web/routes_approvals.py's
+        decide endpoint when a human clicks a button. See
+        PendingApproval.answer.
 
-        ``principal_id``, when given (web/routes_org_approvals.py always
-        passes one -- see module docstring), rejects a decision on an
-        approval belonging to a *different* principal exactly as if it
+        ``principal_id``, when given (web/routes_approvals.py's org-mode
+        routes always pass one -- see module docstring), rejects a
+        decision on an approval belonging to a *different* principal exactly as if it
         didn't exist -- §10.5's "every ... decision ... is authorized
         against current_principal()", defense in depth on top of the
         approval id's own 128 bits of entropy.
@@ -590,8 +590,8 @@ class PendingApprovalRegistry:
         decided_via: str = "", batch_id: str = "",
     ) -> list[dict[str, str]]:
         """The approval binder's own batch decide endpoint (Phase 2),
-        shared between web/routes_approvals.py and web/
-        routes_org_approvals.py so neither reimplements this classify-then-
+        shared between web/routes_approvals.py's local-mode and org-mode
+        routes so neither reimplements this classify-then-
         answer sequence. ``items`` is ``(approval_id, result)`` pairs, each
         ``result`` already validated by the caller to be one of
         BATCH_RESULTS.
@@ -734,7 +734,7 @@ class PendingApprovalRegistry:
     def get(self, approval_id: str, *, principal_id: str | None = None) -> PendingApproval | None:
         """``principal_id``, when given, makes a mismatched approval
         indistinguishable from a nonexistent one -- the authorization check
-        web/routes_org_approvals.py's card/preview routes and
+        web/routes_approvals.py's card/preview routes and
         web/mcp_dispatch.py's ``privacyfence_await_approval`` (P9) rely on.
         ``None`` (every pre-P9 caller, and gate.py's own internal use) means
         "no filter", unchanged from before this parameter existed."""

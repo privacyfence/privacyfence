@@ -74,7 +74,7 @@ def set_nonce(request: Request, nonce: str) -> None:
     across every ``GET`` of the same approval until it's decided -- see
     that module's own docstring), the nonce is fixed at render time, not
     at request time -- the route serving it back (web/routes_approvals.py's
-    ``show_approval``, web/routes_org_approvals.py's own equivalent) calls
+    ``show_approval``, which serves both modes) calls
     this to make the ``Content-Security-Policy`` header
     ``_SecurityHeadersMiddleware`` is about to emit match whatever nonce is
     already baked into that document's body, instead of the fresh
