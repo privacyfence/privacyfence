@@ -7,11 +7,6 @@
  *   embedded HTTP server is actually bound, cleared on stop(). The direct
  *   successor of ipc.py's PORT_FILE (see bridge/src/protocol.ts) for a
  *   client that talks to /mcp instead of the old IPC socket.
- * - <data dir>/mcp_token -- the bearer secret for /mcp
- *   (web/mcp_auth.py's load_or_create_mcp_token()), deliberately a
- *   *different* secret than the approval surface's own session cookie or
- *   the retired ipc_token (§10.3's audience separation) -- see that
- *   module's own docstring.
  *
  * ``<data dir>`` mirrors paths.py's ``data_dir()``: ``~/.privacyfence`` on
  * POSIX, ``%LOCALAPPDATA%\PrivacyFence`` on Windows (not the same dotfile
@@ -21,13 +16,13 @@
  * Desktop never spawns it out of a source tree -- so it always resolves the
  * per-user data dir, matching paths.py's bundled/installed branch.
  *
- * #428 Phase 4 adds one more branch, and it is the reason these two paths go
+ * Privilege separation adds one more branch, and it is the reason this path goes
  * through ``handoffDir()`` rather than ``dataDir()`` directly: on an install
  * that has opted into privilege separation -- any of the three platforms,
  * since B5c -- the daemon runs as its own account and its data directory
  * moves to a system location that account owns (``%ProgramData%\PrivacyFence``
  * on Windows, which is also why the ``%LOCALAPPDATA%`` branch above is not
- * the whole answer there). The two files this shim reads are exactly the two
+ * the whole answer there). ``mcp_url`` is one of the files
  * that stay reachable from the user's session, in ``<system root>/handoff``. See
  * src/privacyfence/privilege_separation.py -- this is a port of its marker
  * discovery, deliberately a small and permissive one: anything unreadable,
@@ -63,7 +58,7 @@ export function dataDir(): string {
 
 /** Each platform's default separated root, keyed exactly like
  * privilege_separation.PLATFORM_LAYOUTS. A platform absent from here has no
- * #428 Phase 4 installer, so nothing can have written a marker for it and
+ * privilege-separation installer, so nothing can have written a marker for it and
  * this must not go looking for one; as of B5c all three are present.
  *
  * Windows' entry is spelled with forward slashes on purpose. It is only ever
@@ -144,7 +139,7 @@ export function privilegeSeparationRoot(env: NodeJS.ProcessEnv = process.env): s
   return root;
 }
 
-/** Where mcp_url/mcp_token live: ``dataDir()`` normally, and the
+/** Where mcp_url lives: ``dataDir()`` normally, and the
  * user-reachable handoff subdirectory of the service-owned root on a
  * privilege-separated install. Exported only for tests. */
 export function handoffDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -153,7 +148,6 @@ export function handoffDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 export const MCP_URL_FILE = path.join(handoffDir(), "mcp_url");
-export const MCP_TOKEN_FILE = path.join(handoffDir(), "mcp_token");
 
 /**
  * ADR 0008 (docs/adr/0008-one-principal-per-os-user.md, D3): the address of
@@ -161,18 +155,16 @@ export const MCP_TOKEN_FILE = path.join(handoffDir(), "mcp_token");
  * ``MINT``/``MINT COMPANION``/``STATUS``/``QUIT`` over (web/control_channel.
  * py) -- ported to TypeScript for the first time, because Phase 3 gives this
  * shim its own reason to open a connection there: minting its own ``MINT
- * MCP`` token instead of reading the shared ``mcp_token`` file (see
- * controlChannel.ts). Every function below is a line-for-line port of that
+ * MCP`` token (see controlChannel.ts). Every function below is a line-for-line port of that
  * module's own address-resolution functions, kept in this file rather than
  * controlChannel.ts because it is pure path arithmetic with the exact same
- * shape as MCP_URL_FILE/MCP_TOKEN_FILE just above -- controlChannel.ts is
+ * shape as MCP_URL_FILE just above -- controlChannel.ts is
  * only the socket/pipe I/O that talks to the address this section computes.
  *
  * These addresses have to match the daemon's own computation byte for byte,
- * or the shim connects to nothing and MINT MCP always falls through to the
- * legacy token file (index.ts's fallback) even on an install new enough to
- * answer it -- a silent "wrong version" symptom worth avoiding by porting
- * the arithmetic exactly rather than approximating it.
+ * or the shim connects to nothing and MINT MCP always fails -- the shim then
+ * exits with a "same version?" error that would be misleading, which is
+ * why the arithmetic is ported exactly rather than approximated.
  */
 
 /** ``control_channel.py``'s ``SOCKET_FILE_NAME`` -- the file this shim looks
@@ -206,11 +198,11 @@ export const MAX_SUN_PATH_BYTES = 100;
  * NOT ``handoffDir()`` unconditionally: on a separated install ``authority``
  * and ``handoff`` are two different subdirectories of the same system root,
  * and only the control *socket*'s own address moves to the companion-
- * reachable one -- everything else this shim reads (``mcp_url``,
- * ``mcp_token``) already lives under ``handoffDir()`` for an unrelated
- * reason (the #428 Phase 4 doc comment at the top of this file), so the two
- * "when do I use handoffDir()" answers happen to coincide for those files
- * without being the same question. */
+ * reachable one -- the other file this shim reads (``mcp_url``) already
+ * lives under ``handoffDir()`` for an unrelated reason (the privilege
+ * separation doc comment at the top of this file), so the two "when do I
+ * use handoffDir()" answers happen to coincide for it without being the
+ * same question. */
 export function controlSocketDir(env: NodeJS.ProcessEnv = process.env): string {
   return privilegeSeparationRoot(env) !== null ? handoffDir(env) : path.join(dataDir(), "authority");
 }
@@ -289,8 +281,4 @@ export function readMcpUrl(mcpUrlFile = MCP_URL_FILE): string {
   }
   new URL(text); // throws SyntaxError / TypeError if not a valid absolute URL
   return text;
-}
-
-export function readMcpToken(mcpTokenFile = MCP_TOKEN_FILE): string {
-  return fs.readFileSync(mcpTokenFile, "utf8").trim();
 }

@@ -81,6 +81,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   auto-accept rules were migrated" Settings notice are gone, and a fresh install's default
   `settings.yaml` is written in the current format. See
   [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+- **Files from earlier data-directory layouts are no longer moved or deleted at startup.** The
+  daemon no longer moves a `config/settings.yaml`, `webauthn_credentials.json`, `web_token`,
+  `web_token_version` or `logs/audit/` it finds directly under the data directory into
+  `authority/`, no longer deletes a leftover shared `handoff/mcp_token` on a privilege-separated
+  install, and no longer deletes old `approvals_url`/`settings_url`/`security_url` files. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+- **The Claude Desktop extension gets its MCP token only from the running PrivacyFence.** It no
+  longer falls back to reading an `mcp_token` file when it cannot get a token over PrivacyFence's
+  control channel. Instead it stops with an error asking you to check that PrivacyFence and the
+  extension are the same version. On Windows it also no longer looks for PrivacyFence under
+  `%LOCALAPPDATA%\Programs`, where no current installer puts it.
 
 ### Fixed
 

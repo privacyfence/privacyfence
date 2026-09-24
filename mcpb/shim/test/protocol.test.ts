@@ -12,7 +12,6 @@ import {
   pipeNameFor,
   posixControlSocketPath,
   privilegeSeparationRoot,
-  readMcpToken,
   readMcpUrl,
   socketPathUnder,
   SYSTEM_ROOTS,
@@ -88,15 +87,6 @@ describe("readMcpUrl", () => {
 
   it("throws when the file doesn't exist", () => {
     assert.throws(() => readMcpUrl("/definitely/does/not/exist/mcp_url"));
-  });
-});
-
-describe("readMcpToken", () => {
-  it("returns the trimmed token text", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-proto-"));
-    const file = path.join(dir, "mcp_token");
-    fs.writeFileSync(file, "abc123\n");
-    assert.equal(readMcpToken(file), "abc123");
   });
 });
 

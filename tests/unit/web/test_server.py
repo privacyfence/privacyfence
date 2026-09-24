@@ -810,27 +810,19 @@ class TestBootstrapFlow:
 
 
 # --------------------------------------------------------------------------- #
-# The bootstrap-link discovery files (approvals_url/settings_url/security_url).
-# The daemon used to write a live sign-in link into one on every startup and
-# every re-mint, because the log line for the same link is always redacted
-# (SEC-10's SecretRedactingFormatter matches the literal word "bootstrap") and
-# the file was the only channel that actually delivered a usable one.
-#
-# The self-approval plan's Phase 2 stopped writing them: handoff/ is
-# group-shared with the logged-in user by design, so that file was a session
-# for the taking, refreshed on every restart, by anything running as that user
-# -- the second of the three silent paths to a session that review counts.
-# What is left here is the cleanup of files an older version wrote.
+# No sign-in link is ever written to a discovery file: handoff/ is
+# group-shared with the logged-in user by design, so such a file would be a
+# session for the taking by anything running as that user.
 # --------------------------------------------------------------------------- #
 
-class TestLegacyBootstrapUrlFiles:
+class TestNoBootstrapUrlFiles:
     def _server(self, tmp_path, monkeypatch):
         from privacyfence import paths
 
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
         return WebServer(WebApprovalUI(), host="localhost", port=0)
 
-    def test_nothing_mints_a_link_into_the_handoff_directory_any_more(self, tmp_path, monkeypatch):
+    def test_nothing_mints_a_link_into_the_handoff_directory(self, tmp_path, monkeypatch):
         server = self._server(tmp_path, monkeypatch)
         server.start()
         try:
@@ -850,25 +842,18 @@ class TestLegacyBootstrapUrlFiles:
             if path.is_file():
                 assert "bootstrap=" not in path.read_text(encoding="utf-8", errors="replace")
 
-    def test_a_file_left_by_an_older_version_is_deleted_on_startup(self, tmp_path, monkeypatch):
-        """The code in it is dead the moment that older daemon exited (the
-        store is in memory), but it reads as a live sign-in link to a human
-        -- and a file this daemon no longer maintains, in the place somebody
-        was taught to look for a working link, is worse than no file."""
+    def test_files_it_does_not_write_are_left_alone(self, tmp_path, monkeypatch):
+        """ADR 0041: the daemon only manages the current layout's files, so
+        a file with an unrelated name in the handoff directory survives a
+        start/stop cycle untouched."""
         server = self._server(tmp_path, monkeypatch)
-        for name in ("approvals_url", "settings_url", "security_url"):
-            (tmp_path / name).write_text("http://localhost:1/x?bootstrap=stale", encoding="utf-8")
+        stray = tmp_path / "approvals_url"
+        stray.write_text("not the daemon's", encoding="utf-8")
 
         server.start()
-        try:
-            leftovers = sorted(
-                p.name for p in tmp_path.iterdir()
-                if p.name.endswith("_url") and p.name != "web_base_url"
-            )
-        finally:
-            server.stop()
+        server.stop()
 
-        assert leftovers == []
+        assert stray.read_text(encoding="utf-8") == "not the daemon's"
 
     def test_the_minting_method_is_gone_from_the_server_itself(self, tmp_path, monkeypatch):
         """Minting is the control channel's business now, and who may ask
