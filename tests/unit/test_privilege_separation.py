@@ -1184,58 +1184,142 @@ class TestApplyLayoutLeavesSocketsAlone:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="runs the macOS installer's own bash against a real unix socket")
 class TestMacosScriptHelpers:
-    """Two ``macos_privilege_separation.sh`` defects a real 4.2.1 install hit:
-    ``migrate_data()`` handing a stale socket to ``ditto`` (which refuses one,
-    aborting ``enable`` before the layout or launchd jobs), and ``status``
-    reading ``handoff/``'s 3770 back as 770."""
+    """``macos_privilege_separation.sh`` helpers run for real under bash, with
+    the macOS-only tools they call stubbed on ``PATH``: ``status`` reading
+    ``handoff/``'s 3770 back as 770 (a real 4.2.1 install hit it), the
+    daemon-owner check racing launchd's xpcproxy trampoline (v4.3.0), and
+    ``uninstall [--purge]`` (ADR 0042) keeping or deleting the data."""
 
     _function = staticmethod(TestApplyLayoutLeavesSocketsAlone._function)
 
-    def test_migrate_data_merges_past_a_stale_socket(self, tmp_path):
-        base = Path(tempfile.mkdtemp(prefix="pf-migrate-", dir="/tmp"))
-        try:
-            legacy = base / "legacy"
-            (legacy / "sub").mkdir(parents=True)
-            (legacy / "settings.yaml").write_text("x", encoding="utf-8")
-            (legacy / "sub" / "kept").write_text("y", encoding="utf-8")
-            for path in (legacy / "companion.sock", legacy / "sub" / "control.sock"):
-                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                listener.bind(str(path))
-                listener.close()  # leaves the node behind, exactly like a dead companion
-            root = base / "root"
-            root.mkdir()
+    def _run_uninstall(self, tmp_path, *, purge: bool, receipt: bool):
+        """Runs the real ``cmd_uninstall``/``uninstall_services``/
+        ``gui_session_uids`` against a scratch tree laid out like an installed,
+        separated Mac. Every macOS tool it calls is a stub that logs its
+        arguments; ``rm`` is the real one, confined to ``tmp_path`` by every
+        path the script is given."""
+        root = tmp_path / "Library" / "Application Support" / "PrivacyFence"
+        (root / "authority" / "config").mkdir(parents=True)
+        (root / "authority" / "config" / "settings.yaml").write_text("auto_accept: {}\n", encoding="utf-8")
+        (root / "handoff").mkdir()
+        (root / "handoff" / "mcp_token").write_text("t", encoding="utf-8")
+        marker = root / "privilege-separation.json"
+        marker.write_text('{\n  "owner_user": "alice"\n}\n', encoding="utf-8")
+        image_parent = tmp_path / "Library" / "PrivacyFence"
+        (image_parent / "image" / "PrivacyFenceApp.app").mkdir(parents=True)
+        app = tmp_path / "Applications" / "PrivacyFenceApp.app"
+        (app / "Contents").mkdir(parents=True)
+        daemon_plist = tmp_path / "LaunchDaemons" / "com.privacyfence.daemon.plist"
+        companion_plist = tmp_path / "LaunchAgents" / "com.privacyfence.companion.plist"
+        for plist in (daemon_plist, companion_plist):
+            plist.parent.mkdir()
+            plist.write_text("<plist/>", encoding="utf-8")
+        home = tmp_path / "Users" / "alice"
+        home.mkdir(parents=True)
 
-            bin_dir = tmp_path / "bin"
-            bin_dir.mkdir()
-            ditto = bin_dir / "ditto"
-            ditto.write_text(
-                '#!/bin/sh\n'
-                'if [ -n "$(find "$1" -type s)" ]; then echo "Operation not supported on socket" >&2; exit 1; fi\n'
-                'cp -R "$1" "$2"\n',
-                encoding="utf-8",
-            )
-            ditto.chmod(0o755)
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        log = tmp_path / "calls.log"
+        stubs = {
+            "launchctl": "exit 0",
+            "dscl": "exit 0",
+            # One GUI session (uid 501) and one process that is not one.
+            "ps": "printf '  501 /System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow\\n'"
+                  "; printf '  502 /usr/bin/some-daemon\\n'",
+            "pkgutil": f'[ "$1" = --pkg-info ] && exit {0 if receipt else 1}; exit 0',
+        }
+        for tool, body in stubs.items():
+            stub = bin_dir / tool
+            stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> "$CALL_LOG"\n{body}\n', encoding="utf-8")
+            stub.chmod(0o755)
 
-            script = "\n".join([
-                "set -euo pipefail",
-                "note() { :; }",
-                f"legacy_data_dir() {{ printf '%s' {shlex.quote(str(legacy))}; }}",
-                f"SYSTEM_ROOT={shlex.quote(str(root))}",
-                "NON_OWNER_FOR_USER=0 OWNER_HOME=/nonexistent-home",
-                self._function("darwin", "drop_stale_sockets"),
-                self._function("darwin", "migrate_data"),
-                "migrate_data",
-            ])
-            env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
-            result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+        script = "\n".join([
+            "set -euo pipefail",
+            "note() { :; }",
+            "warn() { :; }",
+            "require_macos() { :; }",
+            "require_root() { :; }",
+            "resolve_owner_optional() { :; }",
+            "wait_for_daemon_unloaded() { :; }",
+            "service_account_exists() { :; }",
+            "service_group_exists() { :; }",
+            f"PURGE={1 if purge else 0}",
+            "OWNER_UID=501",
+            "SERVICE_ACCOUNT=_privacyfence SERVICE_GROUP=_privacyfence",
+            "DAEMON_LABEL=com.privacyfence.daemon COMPANION_LABEL=com.privacyfence.companion",
+            f"SYSTEM_ROOT={shlex.quote(str(root))}",
+            f"TRUSTED_IMAGE_DIR={shlex.quote(str(image_parent / 'image'))}",
+            f"DEFAULT_APP={shlex.quote(str(app))}",
+            f"DAEMON_PLIST={shlex.quote(str(daemon_plist))}",
+            f"COMPANION_PLIST={shlex.quote(str(companion_plist))}",
+            "PKG_ID=com.privacyfence.installer",
+            self._function("darwin", "gui_session_uids"),
+            self._function("darwin", "uninstall_services"),
+            self._function("darwin", "cmd_uninstall"),
+            "cmd_uninstall",
+        ])
+        env = {
+            **os.environ,
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "CALL_LOG": str(log),
+            "HOME": str(home),
+        }
+        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+        return {
+            "root": root, "marker": marker, "image_parent": image_parent, "app": app,
+            "plists": (daemon_plist, companion_plist), "home": home, "calls": calls,
+            "stdout": result.stdout,
+        }
 
-            assert result.returncode == 0, result.stderr
-            assert (root / "settings.yaml").read_text(encoding="utf-8") == "x"
-            assert (root / "sub" / "kept").read_text(encoding="utf-8") == "y"
-            assert not any(stat.S_ISSOCK(p.lstat().st_mode) for p in root.rglob("*"))
-            assert not legacy.exists()
-        finally:
-            shutil.rmtree(base, ignore_errors=True)
+    def test_uninstall_stops_everything_and_keeps_the_data(self, tmp_path):
+        r = self._run_uninstall(tmp_path, purge=False, receipt=True)
+
+        assert "launchctl bootout system/com.privacyfence.daemon" in r["calls"]
+        assert "launchctl bootout gui/501/com.privacyfence.companion" in r["calls"]
+        # Only GUI sessions get a companion bootout, not every process's uid.
+        assert not any("gui/502/" in call for call in r["calls"]), r["calls"]
+        assert not any(plist.exists() for plist in r["plists"])
+        assert not r["image_parent"].exists()
+        assert not r["app"].exists()
+        assert "pkgutil --forget com.privacyfence.installer" in r["calls"]
+
+        # G3: the data, the marker and the account stay where they are...
+        assert (r["root"] / "authority" / "config" / "settings.yaml").read_text(encoding="utf-8")
+        assert (r["root"] / "handoff" / "mcp_token").exists()
+        assert r["marker"].exists()
+        assert not any(call.startswith("dscl . -delete") for call in r["calls"]), r["calls"]
+        # ...and nothing lands in the owner's home directory.
+        assert list(r["home"].iterdir()) == []
+        assert "uninstall --purge" in r["stdout"]
+
+    def test_uninstall_purge_also_deletes_the_data_and_the_account(self, tmp_path):
+        r = self._run_uninstall(tmp_path, purge=True, receipt=True)
+
+        assert not r["root"].exists()
+        assert "dscl . -delete /Groups/_privacyfence" in r["calls"]
+        assert "dscl . -delete /Users/_privacyfence" in r["calls"]
+        assert not any(plist.exists() for plist in r["plists"])
+        assert not r["image_parent"].exists()
+        assert list(r["home"].iterdir()) == []
+
+    def test_uninstall_leaves_an_app_the_pkg_did_not_install(self, tmp_path):
+        # A source install separated with --daemon-exec/--companion-exec has no
+        # receipt, and whatever sits at the default app path is not ours.
+        r = self._run_uninstall(tmp_path, purge=False, receipt=False)
+
+        assert r["app"].exists()
+        assert not any(call.startswith("pkgutil --forget") for call in r["calls"]), r["calls"]
+        assert not r["image_parent"].exists()
+
+    def test_purge_is_refused_outside_uninstall(self):
+        result = subprocess.run(
+            ["bash", str(INSTALLERS["darwin"]), "status", "--purge"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode != 0
+        assert "--purge only applies to uninstall" in result.stderr
 
     def test_octal_mode_keeps_the_setgid_and_sticky_digit(self, tmp_path):
         handoff = tmp_path / "handoff"

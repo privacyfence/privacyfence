@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# #428 Phase 4 (B5a): opt into -- or back out of -- running the PrivacyFence
-# daemon under its own macOS account.
+# #428 Phase 4 (B5a): run the PrivacyFence daemon under its own macOS account
+# -- and, because macOS has no package manager to do it, uninstall it again.
 #
 # Until this runs, the daemon and the AI agent it exists to govern are the same
 # OS user, which is the root cause of all four weaknesses issue #428 describes:
@@ -8,17 +8,17 @@
 # rules and PII policy that decide what it is allowed to do, forge a WebAuthn
 # credential into the store a local passkey would be checked against, and read
 # the audit log's HMAC key. One change closes all four -- a dedicated account
-# owning those files -- and this script is that change, made reversible.
+# owning those files -- and this script is that change.
 #
 #   sudo ./scripts/macos_privilege_separation.sh enable
 #   sudo ./scripts/macos_privilege_separation.sh status
-#   sudo ./scripts/macos_privilege_separation.sh disable
+#   sudo ./scripts/macos_privilege_separation.sh uninstall [--purge]
 #
 # What `enable` does, in order:
 #   1. creates the _privacyfence system user and group;
 #   2. adds you to that group, so the companion app can still reach the daemon;
-#   3. moves ~/.privacyfence to /Library/Application Support/PrivacyFence and
-#      re-owns it -- authority/ at 0700, handoff/ at 3770, the root at 0711;
+#   3. creates /Library/Application Support/PrivacyFence and owns it to that
+#      account -- authority/ at 0700, handoff/ at 3770, the root at 0711;
 #   4. copies the daemon/companion image (from --app, normally /Applications/
 #      PrivacyFenceApp.app) into a fresh root:wheel-owned copy under
 #      /Library/PrivacyFence/image -- see stage_trusted_image()'s own comment
@@ -27,30 +27,37 @@
 #      without this;
 #   5. writes the marker file every PrivacyFence process reads to agree on that
 #      layout (src/privacyfence/privilege_separation.py);
-#   6. replaces the login-session LaunchAgent with a LaunchDaemon for the
-#      daemon and a LaunchAgent for the companion app -- ADR 0002's "startup
-#      wiring inverts" -- both pointed at step 4's staged copy, not the
-#      original image.
+#   6. installs a LaunchDaemon for the daemon and a LaunchAgent for the
+#      companion app -- ADR 0002's "startup wiring inverts" -- both pointed at
+#      step 4's staged copy, not the original image.
 #
-# Steps 2 and 3 are the only two that need to know *which human* this install
-# is for, and ADR 0003 decision 3 splits them out for that reason: an MDM
-# push, a .pkg installed with nobody at the console, or a plain root shell
-# resolves no owner account, and that used to leave the whole install
-# unseparated. It no longer does. `enable` with no resolvable owner runs
-# everything root can do alone and records the group membership as pending;
-# `enable --for-user <name>` closes that half later, idempotently, and is
-# what the companion app runs by itself at the first real login session.
+# Step 2 is the only one that needs to know *which human* this install is
+# for, and ADR 0003 decision 3 splits it out for that reason: an MDM push, a
+# .pkg installed with nobody at the console, or a plain root shell resolves no
+# owner account, and that used to leave the whole install unseparated. It no
+# longer does. `enable` with no resolvable owner runs everything root can do
+# alone and records the group membership as pending; `enable --for-user
+# <name>` closes that half later, idempotently, and is what the companion app
+# runs by itself at the first real login session.
 #
-# Step 3 moves live connector OAuth tokens. `disable` moves them back, but this
-# is still the step to take a backup before: it is the one part of this that
-# touches data you cannot re-mint from a config file.
+# `enable` only ever provisions the current layout. Nothing here reads, moves
+# or merges data from an earlier location such as ~/.privacyfence (ADR 0041).
 #
-# Ships opt-in by hand via the three subcommands above. #428 D1 (4.1, moved up
-# from the original 4.2 plan) additionally auto-runs `enable --auto` once from
-# the daemon's own startup path when it finds itself unseparated -- see
-# privilege_separation.py's maybe_auto_enable_macos(). `--auto` is the same
-# `enable`, made safe to run unattended and non-interactively: anywhere it
-# would otherwise die() on something a human would resolve by hand (no
+# `uninstall` is macOS's equivalent of a package manager's remove (ADR 0042):
+# it stops and unregisters the LaunchDaemon and the companion LaunchAgent,
+# deletes the staged image and the app the .pkg installed, and leaves the
+# data under /Library/Application Support/PrivacyFence, the marker and the
+# _privacyfence account in place, so installing again picks everything up.
+# `uninstall --purge` is the equivalent of a purge: it also deletes that data
+# (live connector OAuth tokens included), the marker and the account and
+# group. Neither moves anything into a home directory.
+#
+# The .pkg's postinstall runs `enable --auto` at install time (installer/
+# macos/pkg/postinstall), and the daemon's own startup runs it again through
+# an admin-password prompt when it finds a packaged install still unseparated
+# -- see privilege_separation.py's maybe_auto_enable_macos(). `--auto` is the
+# same `enable`, made safe to run unattended and non-interactively: anywhere
+# it would otherwise die() on something a human would resolve by hand (no
 # installed executables), it instead logs why and exits 0 rather than leaving
 # a half-finished separation behind. A human running this by hand never wants
 # that silent behavior, which is why --auto isn't the default -- and it still
@@ -93,12 +100,6 @@ DAEMON_LABEL="com.privacyfence.daemon"
 COMPANION_LABEL="com.privacyfence.companion"
 DAEMON_PLIST="/Library/LaunchDaemons/${DAEMON_LABEL}.plist"
 COMPANION_PLIST="/Library/LaunchAgents/${COMPANION_LABEL}.plist"
-# The per-user LaunchAgent this replaces (com.privacyfence.app.plist in the
-# repo root). Left installed, it would start a *second* daemon as the logged-in
-# user -- which, on a separated install, now refuses to start rather than
-# quietly seeding a default policy (privilege_separation.check_runtime_identity).
-LEGACY_AGENT_LABEL="com.privacyfence.app"
-
 DEFAULT_APP="/Applications/PrivacyFenceApp.app"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE_DIR="${REPO_ROOT}/installer/macos"
@@ -117,7 +118,7 @@ warn() { printf 'warning: %s\n' "$*" >&2; }
 
 usage() {
   cat >&2 <<USAGE
-usage: sudo $0 {enable|disable|status} [options]
+usage: sudo $0 {enable|uninstall|status} [options]
        sudo $0 daemon {status|start|stop|restart|ensure-running}
 
   --user <name>       the human account that owns this install
@@ -126,9 +127,9 @@ usage: sudo $0 {enable|disable|status} [options]
                       leaves the group membership pending -- see --for-user.
   --for-user <name>   enable only: run *just* the per-user half against an
                       install the machine half has already separated -- add
-                      <name> to ${SERVICE_GROUP} and migrate their
-                      ~/.privacyfence. Idempotent, and what the companion app
-                      runs when it finds that membership still pending. Works
+                      <name> to ${SERVICE_GROUP}. Idempotent, and what the
+                      companion app runs when it finds that membership still
+                      pending. Works
                       for any number of accounts on the same machine, not
                       just this install's first (recorded) owner -- each gets
                       its own isolated PrivacyFence identity, never merged
@@ -141,6 +142,10 @@ usage: sudo $0 {enable|disable|status} [options]
                       (both together let a source/venv install be separated:
                        --daemon-exec .venv/bin/privacyfence-app
                        --companion-exec .venv/bin/privacyfence-companion)
+  --purge             uninstall only: also delete the data under
+                      ${SYSTEM_ROOT}, the marker, and the ${SERVICE_ACCOUNT}
+                      account and group. Without it, uninstall keeps all
+                      three so installing again picks the data back up.
   --auto              enable only: never die(), never prompt -- log and exit 0
                       instead of failing when this can't safely tell who owns
                       the install or find the app bundle. For the daemon's own
@@ -167,17 +172,7 @@ USAGE
 
 AUTO=0
 FOR_USER_ONLY=0
-# Set by cmd_enable_for_user() when it is running for an account other than
-# the marker's recorded owner -- i.e. this install already has one principal
-# and this run is adding a second (or third, ...) one. migrate_data() reads
-# this to route that account's own ~/.privacyfence into its own per-principal
-# subdirectory (users/os-<uid>/) instead of the shared root, per ADR 0008
-# ("D2: two identities, not one, per install") -- each OS account PrivacyFence
-# ever runs `enable --for-user` for gets fully isolated storage, never merged
-# with another account's. #428 Phase 2 §2.6's interim guard used to refuse
-# this outright rather than isolate it; ADR 0008 is what let the refusal be
-# replaced with a real per-user destination instead of just being deleted.
-NON_OWNER_FOR_USER=0
+PURGE=0
 # The sub-verb of `daemon {status|start|stop|restart|ensure-running}`,
 # pulled off the argument list before the generic option-parsing loop below
 # ever sees it -- see the "── Argument parsing ──" section at the bottom for
@@ -450,173 +445,9 @@ marker_owner_user() {
     "${SYSTEM_ROOT}/${MARKER_NAME}" 2>/dev/null | head -n 1
 }
 
-# ── Data migration ────────────────────────────────────────────────────────────
-
-legacy_data_dir() { printf '%s/.privacyfence' "$OWNER_HOME"; }
-
-drop_stale_sockets() {
-  # A socket is a live process's rendezvous point, not data: nothing can
-  # listen on one copied to a new path, and ditto refuses to copy one at all
-  # ("Operation not supported on socket"), which under `set -e` aborted
-  # `enable` half-way -- before apply_layout() and install_services().
-  find "$1" -type s -exec rm -f {} +
-}
-
-migrate_data() {
-  local legacy target
-  # ADR 0008 ("D2: two identities, not one, per install"): an account that is
-  # not this install's recorded owner still gets its own ~/.privacyfence
-  # migrated -- just never into the shared root the recorded owner's data
-  # lives in, which would mix a second person's connector tokens, audit log
-  # and policy into the first owner's. Instead it goes to
-  # ${SYSTEM_ROOT}/users/os-<uid>, the exact per-principal path
-  # src/privacyfence/paths.py's user_dir() resolves to for a
-  # Principal(id=f"os-{uid}") that isn't the "local" principal -- so the
-  # daemon finds it under the same identity this migrates it as. cmd_enable_
-  # for_user() is the only caller that ever sets NON_OWNER_FOR_USER.
-  if [ "$NON_OWNER_FOR_USER" = "1" ]; then
-    legacy="$(legacy_data_dir)"
-    if [ ! -d "$legacy" ]; then
-      note "no existing ${legacy} to migrate -- '${OWNER_USER}' starts with no data of their own"
-      return
-    fi
-    drop_stale_sockets "$legacy"
-    target="${SYSTEM_ROOT}/users/os-${OWNER_UID}"
-    # Same provisioning idiom apply_layout() uses for the top-level
-    # directories below, at the mode paths.py's secure_mkdir() itself
-    # defaults a per-principal root to (0700) -- not SYSTEM_ROOT_MODE/
-    # HANDOFF_DIR_MODE, which exist to let the *shared* root and handoff
-    # directory be entered/written by every group member; a single
-    # account's own subtree has no such requirement; it is read and written
-    # by the daemon alone.
-    mkdir -p "$target"
-    chown -R "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" "$target"
-    chmod 700 "$target"
-    # Same by-hand no-clobber merge as the owner's own case below (ditto has
-    # no no-clobber flag of its own) -- reused verbatim, just retargeted at
-    # this account's own subtree instead of the shared root.
-    note "merging ${legacy} into ${target} -- kept separate from this install's other principal(s), not merged into ${SYSTEM_ROOT} itself (no-clobber: anything already in ${target} is left as it is)"
-    local entry name
-    for entry in "$legacy"/*; do
-      [ -e "$entry" ] || continue
-      name="$(basename "$entry")"
-      if [ -e "${target}/${name}" ]; then
-        note "  ${name} already exists in ${target} -- not overwriting it from ${legacy}"
-      else
-        ditto "$entry" "${target}/${name}"
-      fi
-    done
-    rm -rf "$legacy"
-    return
-  fi
-  # The machine half (ADR 0003 decision 3) runs with no owner resolved, and a
-  # machine with no human account has no per-user data directory to move --
-  # so this reduces to creating the root the rest of `enable` provisions.
-  if [ -z "$OWNER_HOME" ]; then
-    note "no owner account resolved -- nothing to migrate, creating ${SYSTEM_ROOT} empty"
-    mkdir -p "$SYSTEM_ROOT"
-    return
-  fi
-  legacy="$(legacy_data_dir)"
-  if [ ! -d "$legacy" ]; then
-    note "no existing ${legacy} to migrate -- starting the separated install empty"
-    mkdir -p "$SYSTEM_ROOT"
-    return
-  fi
-  drop_stale_sockets "$legacy"
-  if [ -e "$SYSTEM_ROOT" ]; then
-    # Something is already there (a previous enable, or a hand-made
-    # directory). Merge rather than clobber, then remove the source --
-    # leaving a second copy of live OAuth tokens readable by the agent would
-    # undo the point of the whole exercise.
-    #
-    # `ditto` has no documented no-clobber flag -- its man page describes it
-    # as a recursive copy that preserves metadata, not one that skips
-    # existing destination entries, and testing that assumption at merge
-    # time (when what is already in $SYSTEM_ROOT may be live daemon state)
-    # is not somewhere to find out it guessed wrong. So the no-clobber
-    # contract the plan asks for ("ditto with a pre-check") is implemented
-    # by hand instead: walk $legacy's own top-level entries, and `ditto`
-    # in only the ones $SYSTEM_ROOT does not already have. Anything
-    # $SYSTEM_ROOT already has -- from a previous enable, or from this same
-    # guard having already run once -- is left exactly as it is.
-    note "merging ${legacy} into the existing ${SYSTEM_ROOT} (no-clobber: anything already in ${SYSTEM_ROOT} is left as it is)"
-    local entry name
-    for entry in "$legacy"/*; do
-      [ -e "$entry" ] || continue
-      name="$(basename "$entry")"
-      if [ -e "${SYSTEM_ROOT}/${name}" ]; then
-        note "  ${name} already exists in ${SYSTEM_ROOT} -- not overwriting it from ${legacy}"
-      else
-        ditto "$entry" "${SYSTEM_ROOT}/${name}"
-      fi
-    done
-    rm -rf "$legacy"
-  else
-    # Same volume in every default macOS install, so this is a rename: atomic,
-    # and it leaves nothing behind to clean up or to leak.
-    note "moving ${legacy} to ${SYSTEM_ROOT}"
-    mkdir -p "$(dirname "$SYSTEM_ROOT")"
-    mv "$legacy" "$SYSTEM_ROOT"
-  fi
-}
-
-# The files that have to end up inside handoff/ rather than at the root of
-# the data directory once separation is on, because something in the *user's*
-# session reads them: the agent's own credential and the URL it reaches the
-# daemon at (mcp_token/mcp_url, read by the MCPB shim), and the discovery
-# files a human or the companion reads (web_base_url, plus any legacy
-# <page>_url below). Mirrors
-# paths.handoff_dir()'s callers -- see test_privilege_separation.py, which
-# asserts this list matches the file-name constants those call sites use.
-HANDOFF_FILE_NAMES=(mcp_token mcp_url web_base_url)
-# <page>_url: approvals_url/settings_url/security_url, written by versions
-# before the self-approval plan's Phase 2 stopped putting a live sign-in link
-# in a group-shared directory. Kept in the glob so an upgrade does not strand
-# one outside the handoff directory while it still exists. The daemon no
-# longer deletes them (ADR 0041: no upgrade path from earlier layouts).
-HANDOFF_FILE_GLOB='*_url'
-
-move_handoff_files_in() {
-  local name target="${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}"
-  mkdir -p "$target"
-  for name in "${HANDOFF_FILE_NAMES[@]}"; do
-    if [ -e "${SYSTEM_ROOT}/${name}" ]; then
-      mv -f "${SYSTEM_ROOT}/${name}" "${target}/${name}"
-    fi
-  done
-  for name in "${SYSTEM_ROOT}"/${HANDOFF_FILE_GLOB}; do
-    if [ -e "$name" ]; then
-      mv -f "$name" "${target}/$(basename "$name")"
-    fi
-  done
-  # Both control channels' sockets are recreated on the next start, at new
-  # paths (paths.control_socket_dir()), and a stale socket file at the old one
-  # is just a dead inode. Phase 2's own bind() unlinks whatever it finds, but
-  # not at a path it no longer looks at.
-  rm -f "${SYSTEM_ROOT}/companion.sock" "${SYSTEM_ROOT}/authority/control.sock"
-  return 0
-}
-
-move_handoff_files_out() {
-  # The reverse, for disable: with no marker, handoff_dir() *is* data_dir(),
-  # so every one of these has to be back at the root or the agent loses its
-  # token and the shim loses the daemon.
-  local source="${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" entry
-  [ -d "$source" ] || return 0
-  for entry in "$source"/*; do
-    [ -e "$entry" ] || continue
-    mv -f "$entry" "${SYSTEM_ROOT}/$(basename "$entry")"
-  done
-  rmdir "$source" 2>/dev/null || true
-  rm -f "${SYSTEM_ROOT}/companion.sock" "${SYSTEM_ROOT}/control.sock"
-  return 0
-}
-
 apply_layout() {
   note "re-owning ${SYSTEM_ROOT} to ${SERVICE_ACCOUNT}:${SERVICE_GROUP}"
   mkdir -p "${SYSTEM_ROOT}/authority" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" "${SYSTEM_ROOT}/logs"
-  move_handoff_files_in
   # Everything except sockets (ADR 0029). A socket belongs to the process that
   # bound it, at the mode it chose: re-owning a live companion's
   # handoff/companion.sock on a re-run -- every .pkg upgrade is one -- leaves
@@ -633,8 +464,9 @@ apply_layout() {
   chmod "$AUTHORITY_DIR_MODE" "${SYSTEM_ROOT}/authority"
   chmod "$HANDOFF_DIR_MODE" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}"
   # The discovery files the daemon rewrites on every start would fix
-  # themselves, but mcp_token is reused across restarts -- a migrated one
-  # would stay 0600 and the agent would never read its own credential again.
+  # themselves, but mcp_token is reused across restarts -- one left at 0600
+  # (by a hand-edited tree, or a daemon started before this re-run) would
+  # stay that way and the agent would never read its own credential again.
   # (privilege_separation.ensure_handoff_file_mode() re-asserts this too; doing
   # it here as well means a correct install doesn't depend on that fix-up.)
   find "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" -type f -exec chmod "$HANDOFF_FILE_MODE" {} +
@@ -677,19 +509,6 @@ render_template() {
   chown root:wheel "$destination"
   chmod 644 "$destination"
   plutil -lint "$destination" >/dev/null || die "rendered ${destination} is not a valid plist"
-}
-
-stop_legacy_agent() {
-  # Nothing to do with no owner resolved (ADR 0003 decision 3's machine half):
-  # the per-user LaunchAgent this replaces lives in a home directory, and
-  # there is no GUI session to bootout of either.
-  [ -n "$OWNER_HOME" ] || return 0
-  local legacy_plist="${OWNER_HOME}/Library/LaunchAgents/${LEGACY_AGENT_LABEL}.plist"
-  launchctl bootout "gui/${OWNER_UID}/${LEGACY_AGENT_LABEL}" 2>/dev/null || true
-  if [ -f "$legacy_plist" ]; then
-    note "disabling the old per-user LaunchAgent (${legacy_plist} -> .disabled)"
-    mv "$legacy_plist" "${legacy_plist}.disabled"
-  fi
 }
 
 install_services() {
@@ -931,8 +750,27 @@ start_daemon_as_service_account() {
 
 uninstall_services() {
   launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
-  launchctl bootout "gui/${OWNER_UID}/${COMPANION_LABEL}" 2>/dev/null || true
+  wait_for_daemon_unloaded 15 \
+    || warn "${DAEMON_LABEL} still looked loaded 15s after bootout -- removing its plist anyway"
+  # The companion LaunchAgent is bootstrapped into every GUI session, not
+  # just the recorded owner's (ADR 0008: any member of ${SERVICE_GROUP} runs
+  # one), so take it out of each session that has it. `launchctl print`
+  # failing is "not loaded there", which is the state being asked for.
+  local uid
+  for uid in $(gui_session_uids); do
+    launchctl bootout "gui/${uid}/${COMPANION_LABEL}" 2>/dev/null || true
+  done
   rm -f "$DAEMON_PLIST" "$COMPANION_PLIST"
+}
+
+gui_session_uids() {
+  # Every uid with a loginwindow process is a GUI session launchd has a
+  # gui/<uid> domain for -- the same set /Library/LaunchAgents is loaded into.
+  # Plus the resolved owner, in case its session is mid-login.
+  {
+    ps -axo uid=,comm= 2>/dev/null | awk '$2 ~ /(^|\/)loginwindow$/ {print $1}'
+    [ -z "$OWNER_UID" ] || printf '%s\n' "$OWNER_UID"
+  } | sort -u
 }
 
 # ── Daemon manager (#428 Phase 2) ─────────────────────────────────────────────
@@ -1091,7 +929,6 @@ cmd_enable() {
     note "already separated -- re-running to refresh the account, layout and launchd jobs"
   fi
 
-  stop_legacy_agent
   launchctl bootout "system/${DAEMON_LABEL}" 2>/dev/null || true
 
   create_service_account
@@ -1104,7 +941,6 @@ cmd_enable() {
   else
     note "no owner account resolved -- leaving the ${SERVICE_GROUP} membership pending"
   fi
-  migrate_data
   apply_layout
   # After apply_layout(), never before -- see stage_trusted_image()'s own
   # comment on why (apply_layout() recursively re-owns SYSTEM_ROOT itself,
@@ -1174,11 +1010,10 @@ DONE
 
 cmd_enable_for_user() {
   # ADR 0003 decision 3's per-user half, on its own: the two steps of `enable`
-  # that need to know which human this install is for. Runs against an install
-  # the machine half has already separated, and re-runs harmlessly against one
-  # that is already complete -- dseditgroup is idempotent, there is nothing
-  # left to migrate once ~/.privacyfence is gone, and the layout and marker
-  # are rewritten to the same values.
+  # that needs to know which human this install is for. Runs against an
+  # install the machine half has already separated, and re-runs harmlessly
+  # against one that is already complete -- dseditgroup is idempotent, and
+  # the layout and marker are rewritten to the same values.
   #
   # Deliberately no resolve_executables()/stage_trusted_image(): this installs
   # no launchd jobs and starts nothing, so an install whose .app has moved can
@@ -1190,32 +1025,21 @@ cmd_enable_for_user() {
   [ -f "${SYSTEM_ROOT}/${MARKER_NAME}" ] \
     || die "this install is not privilege-separated yet -- run 'sudo $0 enable' first"
 
-  # #428 Phase 2 §2.6's interim multi-user guard used to refuse this outright
-  # for anyone but the recorded owner, because the only alternative on offer
-  # at the time was merging a second account's ~/.privacyfence into data the
-  # first owner's connectors already lived in. ADR 0008 ("D2: two identities,
-  # not one, per install") replaces that refusal with a real second identity
-  # instead: adding another OS account to ${SERVICE_GROUP} is now the normal,
-  # supported way to let more than one human use this install, and
-  # migrate_data() below sends that account's own data into its own isolated
-  # users/os-<uid>/ rather than the shared root, so nothing merges. There is
-  # no override flag to pass here any more -- this always was the interim
-  # guard's job, and now that the isolation exists, the guard has nothing
-  # left to guard against.
+  # ADR 0008 ("D2: two identities, not one, per install"): adding another OS
+  # account to ${SERVICE_GROUP} is the normal, supported way to let more than
+  # one human use this install. Each gets its own principal -- the daemon
+  # keeps a non-owner's data under ${SYSTEM_ROOT}/users/os-<uid>/
+  # (paths.user_dir()), created the first time that account connects -- so
+  # nothing is merged with the recorded owner's data.
   local recorded_owner
   recorded_owner="$(marker_owner_user)"
   if [ -n "$recorded_owner" ] && [ "$recorded_owner" != "$OWNER_USER" ]; then
-    note "adding '${OWNER_USER}' alongside this install's existing owner '${recorded_owner}' -- each gets its own isolated PrivacyFence identity (docs/adr/0008-one-principal-per-os-user.md); '${OWNER_USER}'s own $(legacy_data_dir) will be migrated into its own storage, not merged with '${recorded_owner}'s"
-    NON_OWNER_FOR_USER=1
+    note "adding '${OWNER_USER}' alongside this install's existing owner '${recorded_owner}' -- each gets its own isolated PrivacyFence identity (docs/adr/0008-one-principal-per-os-user.md)"
   fi
 
   add_owner_to_service_group
-  # Anything this human accumulated under ~/.privacyfence before the machine
-  # half ran -- live connector OAuth tokens included -- still has to follow
-  # the service account, and it merges in owned by them at their own modes.
-  # So the layout is re-asserted rather than assumed, and the marker is
+  # The layout is re-asserted rather than assumed, and the marker is
   # rewritten with the owner it was missing.
-  migrate_data
   apply_layout
   write_marker
 
@@ -1231,53 +1055,76 @@ cmd_enable_for_user() {
 DONE
 }
 
-cmd_disable() {
+# The .pkg's receipt identifier (scripts/build_pkg.sh's PKG_ID). `uninstall`
+# removes the app bundle only when this receipt says the .pkg put it there --
+# a source install separated with --daemon-exec/--companion-exec has no
+# bundle of ours to remove.
+PKG_ID="com.privacyfence.installer"
+
+cmd_uninstall() {
+  # macOS has no package manager, so this is its remove and its purge (ADR
+  # 0042; G3 in ADR 0041). Plain `uninstall` stops PrivacyFence and removes
+  # what runs it, and keeps what it knows: the data under ${SYSTEM_ROOT}, the
+  # marker and the ${SERVICE_ACCOUNT} account stay, so installing again picks
+  # all of it up. `--purge` deletes those too. Neither moves anything into a
+  # home directory -- the data belongs to ${SERVICE_ACCOUNT}, and handing
+  # live connector tokens back to the agent's own account is exactly what
+  # separation exists to prevent.
+  #
+  # Idempotent, and fine to run on a machine where some or none of this is
+  # installed: every step removes something only if it is there.
   require_macos
   require_root
-  resolve_owner
-
-  [ -f "${SYSTEM_ROOT}/${MARKER_NAME}" ] || die "this install is not privilege-separated (no ${SYSTEM_ROOT}/${MARKER_NAME})"
+  resolve_owner_optional
 
   note "stopping and removing the LaunchDaemon and companion LaunchAgent"
   uninstall_services
+  note "removing the staged image under $(dirname "$TRUSTED_IMAGE_DIR")"
   rm -rf "$(dirname "$TRUSTED_IMAGE_DIR")"
 
-  local legacy
-  legacy="$(legacy_data_dir)"
-  # The marker goes first: if anything below fails, what is left behind is an
-  # unseparated install pointing at a directory that still exists, rather than
-  # a separated one whose services are gone.
-  rm -f "${SYSTEM_ROOT}/${MARKER_NAME}"
-  move_handoff_files_out
-  if [ -e "$legacy" ]; then
-    warn "${legacy} already exists -- merging ${SYSTEM_ROOT} into it"
-    ditto "$SYSTEM_ROOT" "$legacy"
-    rm -rf "$SYSTEM_ROOT"
-  else
-    note "moving ${SYSTEM_ROOT} back to ${legacy}"
-    mv "$SYSTEM_ROOT" "$legacy"
+  # Last among the removals: this script normally runs from inside that
+  # bundle (Contents/Resources/scripts/). bash has already opened it, so
+  # deleting it here does not stop the run, but nothing below may need a
+  # file from it.
+  if pkgutil --pkg-info "$PKG_ID" >/dev/null 2>&1; then
+    if [ -d "$DEFAULT_APP" ]; then
+      note "removing ${DEFAULT_APP}"
+      rm -rf "$DEFAULT_APP"
+    fi
+    pkgutil --forget "$PKG_ID" >/dev/null 2>&1 || true
   fi
-  chown -R "${OWNER_USER}" "$legacy"
-  chmod -R go-rwx "$legacy"
-  chmod 700 "$legacy"
 
-  local legacy_plist="${OWNER_HOME}/Library/LaunchAgents/${LEGACY_AGENT_LABEL}.plist"
-  if [ -f "${legacy_plist}.disabled" ]; then
-    note "restoring the old per-user LaunchAgent"
-    mv "${legacy_plist}.disabled" "$legacy_plist"
-    launchctl bootstrap "gui/${OWNER_UID}" "$legacy_plist" 2>/dev/null || true
+  if [ "$PURGE" != "1" ]; then
+    cat <<DONE
+
+✓ PrivacyFence is uninstalled. Its data is kept at ${SYSTEM_ROOT},
+  owned by ${SERVICE_ACCOUNT}, together with that account and group --
+  installing PrivacyFence again picks all of it up.
+
+  To delete the data (connector sign-ins, policy, audit log) and the
+  account as well:
+    sudo $0 uninstall --purge
+DONE
+    return 0
+  fi
+
+  note "deleting ${SYSTEM_ROOT}"
+  rm -rf "$SYSTEM_ROOT"
+  # The group first: deleting it drops every member's membership with it,
+  # and the account's PrimaryGroupID then names nothing.
+  if service_group_exists; then
+    note "deleting the ${SERVICE_GROUP} group"
+    dscl . -delete "/Groups/${SERVICE_GROUP}"
+  fi
+  if service_account_exists; then
+    note "deleting the ${SERVICE_ACCOUNT} account"
+    dscl . -delete "/Users/${SERVICE_ACCOUNT}"
   fi
 
   cat <<DONE
 
-✓ Privilege separation is off. Your data is back at ${legacy}, owned by
-  ${OWNER_USER} again.
-
-  The ${SERVICE_ACCOUNT} account and group are left in place on purpose -- they
-  own nothing now, and keeping them means re-enabling doesn't have to pick a
-  new uid. Remove them with:
-    sudo dscl . -delete /Users/${SERVICE_ACCOUNT}
-    sudo dscl . -delete /Groups/${SERVICE_GROUP}
+✓ PrivacyFence is uninstalled and its data is deleted: ${SYSTEM_ROOT},
+  the ${SERVICE_ACCOUNT} account and the ${SERVICE_GROUP} group are gone.
 DONE
 }
 
@@ -1313,7 +1160,6 @@ cmd_status() {
 
   if [ ! -f "${SYSTEM_ROOT}/${MARKER_NAME}" ]; then
     echo "privilege separation: OFF"
-    if [ -n "$OWNER_HOME" ]; then echo "  data directory: $(legacy_data_dir)"; fi
     echo "  the daemon and the AI agent run as the same account (${OWNER_USER:-this one})."
     echo "  Run 'sudo $0 enable' to change that."
     return 0
@@ -1384,16 +1230,13 @@ cmd_status() {
     || { echo "  NOT LOADED       ${DAEMON_LABEL}"; problems=1; }
 
   # ADR 0008: the recorded `owner_user` above is only this install's *first*
-  # principal, not its only one -- `enable --for-user` for a second account
-  # gives it its own users/os-<uid>/ instead of touching the owner's data at
-  # all (see migrate_data()'s ADR 0008 comment), so it never shows up as an
-  # "owner" and would otherwise be invisible here. This lists whichever of
-  # those subdirectories actually exist, which is a report of who has
-  # finished the per-user half, not of who is merely in ${SERVICE_GROUP} --
-  # a group member who hasn't yet run `enable --for-user` (or the companion
-  # app hasn't done it for them) has no directory here yet and is still
-  # "pending" in the same sense the very first owner_membership_pending()
-  # case always was.
+  # principal, not its only one -- a second account the install was extended
+  # to with `enable --for-user` gets its own users/os-<uid>/ (paths.user_dir())
+  # instead of sharing the owner's data, so it never shows up as an "owner"
+  # and would otherwise be invisible here. This lists whichever of those
+  # subdirectories actually exist, which the daemon creates the first time
+  # that account connects -- a report of who has used this install, not of
+  # who is merely in ${SERVICE_GROUP}.
   if [ -d "${SYSTEM_ROOT}/users" ]; then
     local other_dir other_uid other_name printed_header=0
     for other_dir in "${SYSTEM_ROOT}/users"/os-*; do
@@ -1440,10 +1283,15 @@ while [ $# -gt 0 ]; do
     --daemon-exec) DAEMON_EXECUTABLE="${2:-}"; shift 2 ;;
     --companion-exec) COMPANION_EXECUTABLE="${2:-}"; shift 2 ;;
     --auto) AUTO=1; shift ;;
+    --purge) PURGE=1; shift ;;
     -h|--help) usage ;;
     *) die "unknown option: $1" ;;
   esac
 done
+
+if [ "$PURGE" = "1" ] && [ "$COMMAND" != "uninstall" ]; then
+  die "--purge only applies to uninstall"
+fi
 
 case "$COMMAND" in
   enable)
@@ -1472,7 +1320,7 @@ case "$COMMAND" in
       "$ENABLE_COMMAND"
     fi
     ;;
-  disable) cmd_disable ;;
+  uninstall) cmd_uninstall ;;
   status) cmd_status ;;
   daemon) cmd_daemon "$DAEMON_SUBCOMMAND" ;;
   *) usage ;;

@@ -20,8 +20,9 @@ password anyway, also sets it up to run independently of any AI client on this M
   <li>A menu-bar item (PrivacyFence) starts at login, giving you Open Approvals and
   Open Settings without going through the AI client at all.</li>
 </ul>
-<p>This is the same change described in this project's ADR 0002 and issue #428 — it can
-be reversed at any time from Terminal with
-<code>sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh disable</code>.</p>
+<p>This is the change described in this project's ADR 0002 and issue #428. To uninstall
+PrivacyFence later, run this from Terminal — your data is kept unless you add
+<code>--purge</code>:
+<code>sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh uninstall</code>.</p>
 </body>
 </html>

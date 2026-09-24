@@ -1,21 +1,23 @@
 #!/bin/bash
 # PrivacyFence.pkg postinstall — provisions privilege separation (#428 D2,
-# Phase 4) at install time instead of leaving it to the daemon's own
-# admin-password runtime prompt (privilege_separation.maybe_auto_enable_macos(),
-# which a drag-installed DMG still depends on because a DMG has no root-context
-# install step of its own to run this from). This script IS that root-context
-# install step: Apple's installer already verified this package's signature
-# before running it and always runs package scripts as root, so by the time
-# this runs, "provision the _privacyfence account and hand it the daemon" is
-# exactly as safe to do unconditionally as scripts/macos_privilege_separation.sh
-# enable --auto already assumes its caller has confirmed.
+# Phase 4) at install time. The .pkg is the only way PrivacyFence is installed
+# on macOS (scripts/build_dmg.sh ships it, and nothing else that installs,
+# inside the DMG), so this is where every install becomes separated: Apple's
+# installer already verified this package's signature before running it and
+# always runs package scripts as root, so by the time this runs, "provision
+# the _privacyfence account and hand it the daemon" is exactly as safe to do
+# unconditionally as scripts/macos_privilege_separation.sh enable --auto
+# already assumes its caller has confirmed. It provisions the current layout
+# only; there is nothing from an earlier install to move (ADR 0041).
 #
 # Must never fail the package install over this: a hiccup here is a reason to
-# leave privilege separation opt-in (the daemon's own runtime prompt will offer
-# it again once someone is logged in and starts the daemon), never a reason to
-# roll back installing the app at all. Every exit path below is therefore
-# explicit and this script always exits 0 -- no `set -e`, so one unexpected
-# failure can't accidentally take the whole install down with it.
+# finish separating later, never a reason to roll back installing the app at
+# all. The daemon's own startup does that later -- privilege_separation.
+# maybe_auto_enable_macos(), an admin-password prompt, reached when something
+# (the .mcpb's shim, say) starts the packaged daemon on an install this left
+# unseparated. Every exit path below is therefore explicit and this script
+# always exits 0 -- no `set -e`, so one unexpected failure can't accidentally
+# take the whole install down with it.
 set -uo pipefail
 
 APP_PATH="/Applications/PrivacyFenceApp.app"
@@ -46,9 +48,8 @@ fi
 
 if [ ! -x "$SEPARATION_SCRIPT" ]; then
   # Should not happen from a package this script itself ships inside of, but
-  # this postinstall's only job is a convenience layered on the opt-in path --
-  # never worth failing the install over.
-  log "${SEPARATION_SCRIPT} not found or not executable -- leaving privilege separation opt-in."
+  # never worth failing the install over; the daemon's own start retries it.
+  log "${SEPARATION_SCRIPT} not found or not executable -- not provisioning privilege separation now."
   exit 0
 fi
 
