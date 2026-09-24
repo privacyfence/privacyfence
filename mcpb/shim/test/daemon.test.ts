@@ -98,7 +98,7 @@ describe("findDaemonCmd", () => {
     assert.deepEqual(cmd, ["python", "-m", "privacyfence.daemon_main"]);
   });
 
-  it("falls through to python when neither Windows default location exists, with no defaultAppPath override given", () => {
+  it("falls through to python when the Windows default location doesn't exist, with no defaultAppPath override given", () => {
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-default-"));
     // No defaultAppPath override, and a windowsEnv naming directories that
     // don't exist: exercises the platform-conditional default falling
@@ -136,20 +136,15 @@ describe("findDaemonCmd", () => {
     assert.deepEqual(cmd, [exe]);
   });
 
-  it("falls back to the non-admin LOCALAPPDATA install location when Program Files doesn't have it", () => {
-    // installer/privacyfence.iss is PrivilegesRequired=admin now, so a fresh
-    // install always lands in Program Files -- but this was the installer's
-    // default (PrivilegesRequired=lowest, no elevation) location until that
-    // was fixed, and this is the case that regressed before
-    // privacyfence/privacyfence#410's own fixes, since the shim's old
-    // fallback only ever checked Program Files. Kept so an existing install
-    // made by an older, lowest-privilege release still self-heals.
+  it("does not look under LOCALAPPDATA\\Programs, which no current installer writes to", () => {
+    // ADR 0041: only the current install layout is supported. The installer
+    // is PrivilegesRequired=admin, so an exe under %LOCALAPPDATA%\Programs
+    // is not one this shim should ever launch.
     const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-lad-"));
     const localAppData = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-lad-root-"));
     const appDir = path.join(localAppData, "Programs", "PrivacyFence");
     fs.mkdirSync(appDir, { recursive: true });
-    const exe = path.join(appDir, "privacyfence-app.exe");
-    fs.writeFileSync(exe, "", { mode: 0o755 });
+    fs.writeFileSync(path.join(appDir, "privacyfence-app.exe"), "", { mode: 0o755 });
 
     const cmd = findDaemonCmd({
       scriptPath: path.join(emptyDir, "shim.js"),
@@ -160,27 +155,7 @@ describe("findDaemonCmd", () => {
         LOCALAPPDATA: localAppData,
       },
     });
-    assert.deepEqual(cmd, [exe]);
-  });
-
-  it("prefers Program Files over LOCALAPPDATA when both have the exe", () => {
-    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-both-"));
-    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-both-pf-"));
-    const localAppData = fs.mkdtempSync(path.join(os.tmpdir(), "pf-shim-daemon-win32-both-lad-"));
-    const pfExe = path.join(programFiles, "PrivacyFence", "privacyfence-app.exe");
-    const ladExe = path.join(localAppData, "Programs", "PrivacyFence", "privacyfence-app.exe");
-    fs.mkdirSync(path.dirname(pfExe), { recursive: true });
-    fs.mkdirSync(path.dirname(ladExe), { recursive: true });
-    fs.writeFileSync(pfExe, "", { mode: 0o755 });
-    fs.writeFileSync(ladExe, "", { mode: 0o755 });
-
-    const cmd = findDaemonCmd({
-      scriptPath: path.join(emptyDir, "shim.js"),
-      pathEnv: emptyDir,
-      platform: "win32",
-      windowsEnv: { ProgramFiles: programFiles, LOCALAPPDATA: localAppData },
-    });
-    assert.deepEqual(cmd, [pfExe]);
+    assert.deepEqual(cmd, ["python", "-m", "privacyfence.daemon_main"]);
   });
 
   it("ignores windowsEnv on non-Windows platforms", () => {

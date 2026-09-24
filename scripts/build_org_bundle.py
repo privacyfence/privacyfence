@@ -201,9 +201,10 @@ def build_parser() -> argparse.ArgumentParser:
              "<issuer-url>/oauth/idp/login-callback).",
     )
     mode.add_argument(
-        "--server-bind-host", default="0.0.0.0",
-        help="Address the embedded server listens on (default: 0.0.0.0 -- every interface; "
-             "narrow this if the host has one you'd rather bind specifically).",
+        "--server-bind-host", default="127.0.0.1",
+        help="Address the embedded server listens on (default: 127.0.0.1 -- loopback only, for a "
+             "reverse proxy on the same host to forward to). Never expose the listener directly; "
+             "pass another address only when the proxy runs on a different host.",
     )
     mode.add_argument("--server-port", type=int, default=8765, help="Default: 8765.")
     mode.add_argument(
@@ -351,6 +352,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Refuse (rather than stage to disk, encrypted) a download too large for "
              "--downloads-inline-max-bytes. Off by default -- see the plan doc's \"Org-level "
              "opt-out\" section for when to turn this on.",
+    )
+    downloads.add_argument(
+        "--agent-links", action=argparse.BooleanOptionalAction, default=None,
+        help="Staged-download links an agent can fetch itself (/mcp-files/fetch/<token>, the "
+             "token is the credential). On by default; --no-agent-links writes "
+             "download_delivery.agent_links=false, so a staged download is served only through "
+             "the signed-in browser route (/downloads/<token>) instead.",
     )
 
     audit_forwarding = parser.add_argument_group(
@@ -552,10 +560,11 @@ def main(argv: list[str] | None = None) -> int:
         args.downloads_inline_max_bytes is not None
         or args.downloads_link_ttl_seconds is not None
         or args.downloads_disable_staging
+        or args.agent_links is not None
     ):
         if bundle.get("mode") != "org":
             raise SystemExit(
-                "--downloads-* flags require --mode org (or --merge against an existing org-mode bundle)."
+                "--downloads-*/--agent-links flags require --mode org (or --merge against an existing org-mode bundle)."
             )
         downloads_section: dict[str, Any] = dict(bundle.get("download_delivery") or {})
         if args.downloads_inline_max_bytes is not None:
@@ -564,6 +573,8 @@ def main(argv: list[str] | None = None) -> int:
             downloads_section["link_ttl_seconds"] = args.downloads_link_ttl_seconds
         if args.downloads_disable_staging:
             downloads_section["allow_disk_staging"] = False
+        if args.agent_links is not None:
+            downloads_section["agent_links"] = args.agent_links
         bundle["download_delivery"] = downloads_section
 
     if args.authz_allowed_domains or args.authz_groups_claim or args.authz_required_groups:
@@ -660,6 +671,7 @@ def main(argv: list[str] | None = None) -> int:
             summary += ", step_up.require_passkey=True"
     if "download_delivery" in bundle:
         summary += f", download_delivery.allow_disk_staging={bundle['download_delivery'].get('allow_disk_staging', True)}"
+        summary += f", download_delivery.agent_links={bundle['download_delivery'].get('agent_links', True)}"
     if "authz" in bundle:
         n_domains = len(bundle["authz"].get("allowed_domains") or [])
         n_groups = len(bundle["authz"].get("required_groups") or [])

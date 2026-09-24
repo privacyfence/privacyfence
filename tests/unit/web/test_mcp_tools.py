@@ -360,7 +360,7 @@ class TestListAndProposePolicyOverRealTransport:
         init_audit_logger(str(tmp_path))
         self._audit_dir = tmp_path
         config_path = tmp_path / "settings.yaml"
-        config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        config_path.write_text("auto_accept: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(config_path))
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 

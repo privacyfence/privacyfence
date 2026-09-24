@@ -58,7 +58,7 @@ Configuration is split into two files (see paths.py):
     for the schema, or build a bundle with ``scripts/build_org_bundle.py
     --mode org ...``.
   - ``config/settings.yaml``   — per-user settings: privacy policy,
-    connectors{enabled}, auto_accept_rules,
+    connectors{enabled}, auto_accept (the policy rules),
     pii_detection{enabled, detect_ip_addresses, detect_financial_figures,
     audit_match_details}, step_up{enabled, scope, rp_id, rp_name,
     require_passkey} (#426 Phase 1 -- local mode's own WebAuthn passkey
@@ -77,7 +77,6 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import sys
 import threading
 import uuid
@@ -97,7 +96,6 @@ from . import (
     privilege_separation,
     step_up_config,
 )
-from .policy import compat as policy_compat
 from .policy import store as policy_store
 from .paths import authority_dir, authority_root, data_dir, handoff_dir, org_dir, user_dir
 from .std_streams import ensure_std_streams
@@ -115,7 +113,6 @@ from .audit_log import (
 )
 from .auto_accept import (
     init_config_path,
-    migrate_telegram_search_operation_key,
     set_policy_v2_store_rules,
 )
 from .pii_detector import init_pii_detection
@@ -302,8 +299,7 @@ def _resolve_path(path: str) -> str:
 
 def _resolve_authority_path(path: str) -> str:
     """Like ``_resolve_path()``, but rooted at the ``authority`` subtree
-    rather than ``user_dir()``/``PROJECT_ROOT`` directly -- #428 Phase 1's
-    split for the files that back the *human's* authority (today, just
+    rather than ``user_dir()``/``PROJECT_ROOT`` directly -- the split for the files that back the *human's* authority (today, just
     ``config/settings.yaml``) rather than the agent's own operational data.
     Mirrors ``_resolve_path()``'s own local-vs-other-principal branching,
     including anchoring the local principal on ``PROJECT_ROOT`` rather than
@@ -337,6 +333,7 @@ def load_config(config_path: str) -> dict[str, Any]:
         config = yaml.safe_load(fh) or {}
     if not isinstance(config, dict):
         raise ValueError(f"Config file {resolved} did not parse to a mapping")
+    policy_store.reject_v1_sections(config, resolved)
     return config
 
 
@@ -882,15 +879,11 @@ def _maybe_start_web_server(
             "wasn't done deliberately, treat this install as compromised (see "
             "docs/security-and-compliance.md's Local-mode trust boundary section)",
         )
-    # No link in these lines any more, and no discovery file behind them
-    # either (the self-approval plan's Phase 2 -- see web/server.py's own
-    # _clear_legacy_bootstrap_url_files). Both channels were already
-    # half-broken by design: SEC-10's SecretRedactingFormatter scrubs
-    # bootstrap=<value> out of every line this process logs, so the log line
-    # itself never carried a usable link, and the file that did sat in a
-    # group-shared directory where anything running as this user could take
-    # the session out of it. What a human does instead is open the companion
-    # app, which is also the only route to a session that may approve
+    # No sign-in link in these lines, and no discovery file carrying one:
+    # SecretRedactingFormatter scrubs bootstrap=<value> out of every line
+    # this process logs, and a file in the group-shared handoff directory
+    # would hand the session to anything running as this user. What a human
+    # does instead is open the companion app, which is also the only route to a session that may approve
     # (web/session_auth.py's PROVENANCE_HUMAN), or run the break-glass
     # command these lines name.
     logger.info(
@@ -911,57 +904,6 @@ def _maybe_start_web_server(
             server.mcp_url,
         )
     return server
-
-
-def _migrate_settings_to_policy_v2(config: dict[str, Any], resolved_config_path: str) -> dict[str, Any]:
-    """Fold a not-yet-migrated ``settings.yaml``'s v1 sections into the v2 ``auto_accept:``
-    section, in place on disk -- shared by ``run_app`` (the local principal) and
-    ``_load_principal_settings`` (every org principal, P9: this used to only run for local mode,
-    silently leaving every org principal's v1 rules/grants un-migrated and therefore un-evaluated
-    once P9 retired the v1 evaluator that read them directly -- the same class of "ran once, for
-    the wrong principal" omission this function's own caller already fixed for
-    ``init_config_path``/``set_policy_v2_store_rules``).
-
-    Runs ``migrate_telegram_search_operation_key`` first (an older, v1-internal rename) so the v2
-    migration below compiles from its result, not a stale pre-rename snapshot. Never runs twice
-    (``policy.store.MIGRATED_TO_POLICY_V2_MARKER``), and never touches ``auto_accept_rules``/
-    ``auto_accept_grants`` themselves, which stay on disk for a hand-edited install. Returns
-    ``config`` unchanged (by value) if nothing needed migrating -- both migrations report "there is
-    something to persist", not "this ran", so a config with nothing to migrate is never written,
-    backed up, or logged about.
-    """
-    config, telegram_search_migrated = migrate_telegram_search_operation_key(config)
-    config, policy_v2_migrated = policy_compat.migrate_to_policy_v2(config)
-    if not (telegram_search_migrated or policy_v2_migrated):
-        return config
-    if policy_v2_migrated:
-        # A real, deterministic (unversioned) .bak -- the redesign proposal's own P4 scope calls
-        # for one specifically for this migration, since it's the one that introduces a whole new
-        # on-disk schema, so a config as it stood immediately before this run touched it at all is
-        # worth keeping. Best-effort: a failed backup must never block the migration itself from
-        # being persisted (same fail-soft posture as the atomic_write_text below).
-        try:
-            shutil.copy2(resolved_config_path, resolved_config_path + ".bak")
-        except OSError as exc:
-            logger.warning("Could not back up config before policy v2 migration: %s", exc)
-    try:
-        atomic_write_text(
-            resolved_config_path, yaml.safe_dump(config, default_flow_style=False, allow_unicode=True),
-        )
-        if telegram_search_migrated:
-            logger.info(
-                "Auto-accept config migrated: telegram.search_messages rules "
-                "moved onto telegram.read_chat_messages"
-            )
-        if policy_v2_migrated:
-            rule_count = len(config.get(policy_store.AUTO_ACCEPT_CONFIG_KEY, {}).get("rules", []))
-            logger.info(
-                "Auto-accept config migrated to the policy v2 on-disk format (%d rule(s)); "
-                "original backed up to %s.bak", rule_count, resolved_config_path,
-            )
-    except OSError as exc:
-        logger.warning("Could not persist auto-accept config migration: %s", exc)
-    return config
 
 
 def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -989,15 +931,6 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
       rule for that principal -- ``add_policy_v2_rules``/``remove_policy_v2_rule``
       (gate.py's "Always allow"/propose-policy-change paths) would raise
       "auto_accept config path not initialized" instead.
-    - ``_migrate_settings_to_policy_v2()`` (P9) -- without it, every org principal whose
-      ``settings.yaml`` still carried a hand-edited v1 ``auto_accept_rules``/``auto_accept_grants``
-      section (never migrated, since only ``run_app()`` used to call this) would find those rules
-      silently inert forever: P9 retired the v1 evaluator that used to read those sections
-      directly, so a principal whose rules were never folded into the v2 ``auto_accept:`` section
-      has nothing evaluating them at all. Fail-safe, never fail-open -- every call routes to a
-      human popup instead -- but it made a hand-edited config unusable for every org principal
-      until their next visit to this same code path re-ran the migration (idempotent, so it's
-      always safe to call unconditionally here, same as ``run_app()`` does for local mode).
     - ``set_policy_v2_store_rules()`` (P6 of the policy v2 redesign) -- without it, every org
       principal's ``_AutoAcceptState.policy_v2_store_rules`` stayed at its dataclass default
       (``[]``), so no rule -- migrated or authored directly against the v2 schema -- would ever
@@ -1045,7 +978,6 @@ def _load_principal_settings(*, install_wide_config: dict[str, Any] | None = Non
     resolved_path = _resolve_authority_path("config/settings.yaml")
     cfg = load_config(resolved_path)
     init_config_path(resolved_path)
-    cfg = _migrate_settings_to_policy_v2(cfg, resolved_path)
     set_policy_v2_store_rules(policy_store.compile_rules_from_config(cfg))
     install_wide = install_wide_config if install_wide_config is not None else cfg
     init_privacy_filter(install_wide, org_managed=True)
@@ -1825,16 +1757,6 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
 
     init_config_path(_resolve_path(config_path))
 
-    # ADR 0008: a leftover handoff/mcp_token predates per-principal MCP
-    # tokens and is the shared credential that let every OS user's caller
-    # resolve to LOCAL_PRINCIPAL -- removed here, once, at the top of every
-    # separated startup, before anything else in this function runs. A
-    # no-op on an unseparated install (see that function's own docstring).
-    from .web import mcp_auth as _mcp_auth
-
-    _mcp_auth.delete_legacy_shared_mcp_token()
-
-    config = _migrate_settings_to_policy_v2(config, _resolve_path(config_path))
     set_policy_v2_store_rules(policy_store.compile_rules_from_config(config))
     # Issue #151 retired the settings.yaml-configurable rule_suggestion_priority
     # (every matching auto-accept rule now gets its own "Always allow" button, so
@@ -1883,14 +1805,9 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
             logger.warning("Could not start audit-log forwarding -- continuing without it: %s", exc)
 
     audit_logger = init_audit_logger(
-        # #428 Phase 1: the audit log (plus its HMAC key) is one of the
-        # human-authority files -- authority_root(), not data_dir() itself.
-        # migrate_audit_log=True only here: this is the one call site that
-        # also reads the local principal's audit log back from the new
-        # location afterwards -- see authority_root()'s own docstring for
-        # why every other authority_root()/authority_dir() call defaults to
-        # leaving the audit directory alone.
-        str(authority_root(Path(data_dir()), migrate_audit_log=True) / "logs" / "audit"),
+        # The audit log (plus its HMAC key) is one of the human-authority
+        # files -- authority_root(), not data_dir() itself.
+        str(authority_root(Path(data_dir())) / "logs" / "audit"),
         deployment_id=get_or_create_deployment_id(),
         security_config_hash=compute_security_config_hash(config),
         forwarder=audit_forwarder,
@@ -2048,9 +1965,9 @@ def run_print_mcp_token() -> int:
     """ADR 0008's own break-glass-style path for ``/mcp``: a direct HTTP
     MCP client with no ``.mcpb`` shim of its own (Claude Code, a hand-
     rolled script) has nowhere to read a bearer token from any more on a
-    privilege-separated install -- ``handoff/mcp_token``, the one shared
-    file every OS user's caller used to read, no longer exists once
-    separated (``mcp_auth.delete_legacy_shared_mcp_token()``). This runs the
+    privilege-separated install, where each principal's token lives in its
+    own service-owned ``authority_dir()`` (``mcp_auth._mcp_token_path()``).
+    This runs the
     identical ``MINT MCP`` mint the shim itself does
     (``mcpb/shim/src/controlChannel.ts``), as this OS account, and prints
     the result -- the same token this account gets back every time it asks,
@@ -2092,7 +2009,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="privacyfence-app",
         description="PrivacyFence daemon — governance UI and connector host.",
     )
-    # #428 Phase 1: authority_root(), not PROJECT_ROOT directly -- settings.yaml
+    # authority_root(), not PROJECT_ROOT directly -- settings.yaml
     # is the human's privacy policy, not the agent's own operational data.
     default_config = str(authority_root(Path(PROJECT_ROOT)) / "config" / "settings.yaml")
     parser.add_argument("--config", default=default_config)

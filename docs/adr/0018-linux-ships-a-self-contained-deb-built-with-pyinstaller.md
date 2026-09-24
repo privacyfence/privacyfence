@@ -6,6 +6,8 @@ Accepted (recorded retroactively on 2026-09-23; decided around 2026-09-09 in
 `docs/linux-local-deb-packaging-plan.md` and `docs/windows-linux-support-plan.md`, both deleted in
 `be78e7ee`). Implemented in `ebb7c8ee` (2026-09-09). The autostart wiring that plan also decided
 has since changed under [ADR 0003](0003-separated-installs-only.md); see Consequences.
+Amended by [ADR 0039](0039-installers-refuse-an-os-below-the-support-matrix.md): `debian/control` now
+declares `libc6`/`systemd` floors.
 
 ## Context
 

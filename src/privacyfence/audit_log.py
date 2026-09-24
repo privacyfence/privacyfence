@@ -116,6 +116,7 @@ class AuditEntry:
                             # "approval_pending" | "expired" |
                             # "webauthn_credential_enrolled" | "webauthn_credential_removed" |
                             # "webauthn_enrollment_refused" | "webauthn_recovery_code_used" |
+                            # "webauthn_recovery_refused" |
                             # "sign_in_code_minted" |
                             # "step_up_requirement_enabled" | "step_up_requirement_disabled"
                             # ("webauthn_credential_enrolled"/"webauthn_credential_removed": #426
@@ -161,6 +162,12 @@ class AuditEntry:
                             #  file for that principal. Always recorded on a successful trade-in --
                             #  see webauthn_stepup.py's own module docstring for why the code itself
                             #  is single-use.)
+                            # ("webauthn_recovery_refused": the same route's refusals, one entry per
+                            #  attempt that got past CSRF/origin and was turned away -- a session not
+                            #  attributed to a person (where the caller checks that), an exhausted
+                            #  attempt budget, or a wrong/already-used code. The summary names which;
+                            #  the code itself is never recorded. Without it, guessing at a principal's
+                            #  recovery code left no trace until a guess succeeded.)
                             # ("step_up_requirement_enabled"/"step_up_requirement_disabled": #426
                             #  Phase 4 -- daemon_main.py, recorded once per daemon startup that finds
                             #  local mode's effective ``step_up.enabled and step_up.require_passkey``

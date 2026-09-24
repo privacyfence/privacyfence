@@ -76,7 +76,7 @@ def controller(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "data_dir", lambda: data_dir_path)
 
     config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept_rules: {}\nconnectors: {}\n", encoding="utf-8")
+    config_path.write_text("auto_accept: {}\nconnectors: {}\n", encoding="utf-8")
 
     connector_host = SimpleNamespace(set_connectors=lambda conns: None)
     return sc.SettingsController(str(config_path), connectors=[], connector_host=connector_host)
@@ -157,28 +157,17 @@ class TestSettingsPage:
         after = c.get("/settings")
         assert 'NOTIFICATIONS_DETAIL = "detailed"' in after.text
 
-    def test_policy_v2_migration_notice_renders_as_a_dismissible_notice(self, controller, client, sessions):
-        # P4 of the policy v2 redesign: settings_page wires
-        # controller.policy_v2_migration_notice_html() into web_shell.wrap's
-        # dismissible_notice_html, not the persistent banner_html strip --
-        # see settings_controller.py's own docstring on why. pf-shell-notice
-        # is that mechanism's own container id/class (web_shell.py); a
-        # config with no v2 migration marker at all must render neither.
-        _authed(client, sessions)
-        assert 'id="pf-shell-notice"' not in client.get("/settings").text
-
+    def test_a_destructive_rule_raises_no_notice(self, controller, client, sessions):
+        # The one-time v1 -> v2 conversion's "your rules were migrated" notice is gone with the
+        # conversion itself (ADR 0041); a destructive rule on its own is not a reason for one.
         cfg = controller._load_config()
-        cfg["migrated_to_policy_v2"] = True
         cfg["auto_accept"] = {
             "version": 2,
             "rules": [{"id": "r-delete", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]}],
         }
         controller._save_config(cfg)
-
-        r = client.get("/settings")
-        assert 'id="pf-shell-notice"' in r.text
-        assert "r-delete" in r.text
-        assert 'data-dismiss-key="pf_policy_v2_migration_dismissed"' in r.text
+        _authed(client, sessions)
+        assert 'id="pf-shell-notice"' not in client.get("/settings").text
 
 
 class TestConnectorsPage:

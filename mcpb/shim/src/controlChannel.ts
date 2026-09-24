@@ -2,11 +2,9 @@
  * A minimal client for the daemon's own control channel -- the Unix domain
  * socket (macOS/Linux) or named pipe (Windows) that ``web/control_channel.
  * py`` listens on, and that ``companion.py`` already speaks
- * ``MINT``/``MINT COMPANION``/``STATUS``/``QUIT`` over. Nothing in this shim
- * has ever opened a connection to it before Phase 3 of ADR 0008 (``docs/
- * adr/0008-one-principal-per-os-user.md``, D3): the shim used to be purely a
- * consumer of files the daemon wrote (protocol.ts's ``mcp_url``/``mcp_token``
- * discovery files), never a client of anything the daemon *listens* on.
+ * ``MINT``/``MINT COMPANION``/``STATUS``/``QUIT`` over. ADR 0008 (``docs/
+ * adr/0008-one-principal-per-os-user.md``, D3) is why the shim is a client
+ * of it at all: its /mcp bearer token comes from here, not from a file.
  *
  * ``MINT MCP`` is the one command this file speaks. It is the exact same
  * request/response shape every other control-channel client in this
@@ -29,14 +27,9 @@
  * that is exactly the point; the peer credential is read by the kernel, not
  * asserted on the wire the way every other field in this protocol is.
  *
- * index.ts's fallback posture (module docstring there): mint over this
- * channel first, and only read the legacy shared ``mcp_token`` file
- * (protocol.ts's ``readMcpToken()``) when the mint itself fails -- an
- * unseparated install predating this change has nothing wired up to answer
- * ``MINT MCP`` at all yet is running a daemon old enough to have never heard
- * of it, and a daemon too old to answer the command is indistinguishable,
- * from this file's point of view, from no daemon listening at all. Either
- * way this module throws and lets the caller decide what "no mint" means.
+ * A failed mint throws and lets the caller decide what "no mint" means --
+ * index.ts exits with a user-facing error, since there is no other source
+ * for the token (ADR 0041: only the current install layout is supported).
  */
 import net from "node:net";
 import { posixControlSocketPath, windowsControlPipeName } from "./protocol.js";
@@ -45,11 +38,10 @@ import { posixControlSocketPath, windowsControlPipeName } from "./protocol.js";
  * giving up, when the caller doesn't override it. Generous relative to the
  * ordinary case (a local socket round trip on a running daemon answers in
  * well under a second) because the alternative -- giving up too early on a
- * daemon that is merely busy -- silently downgrades a caller onto the
- * legacy shared token instead of its own, which is exactly the failure mode
- * ADR 0008 exists to close. A daemon that isn't running, or is too old to
- * know ``MINT MCP``, never waits this out: the first refuses the connection
- * and the second answers ``ERROR`` immediately. */
+ * daemon that is merely busy -- makes the shim exit instead of connecting.
+ * A daemon that isn't running, or one that refuses the mint, never waits
+ * this out: the first refuses the connection and the second answers
+ * ``ERROR`` immediately. */
 const DEFAULT_TIMEOUT_MS = 5000;
 
 export interface MintMcpTokenOptions {
@@ -66,11 +58,10 @@ export interface MintMcpTokenOptions {
  * answered and said no" (this class, there and here) and "nothing was
  * listening at all" (a plain connection error -- ``ENOENT``/``ECONNREFUSED``
  * on POSIX, the pipe-not-found case on Windows -- surfaced as an ordinary
- * ``Error``/``NodeJS.ErrnoException``, never this one). index.ts's fallback
- * treats both the same way (fall back to the token file either way), but
- * logs a different message for each, since "this install has never heard
- * of MINT MCP" and "this install refused this mint for a reason" call for
- * different next steps from whoever reads the log. */
+ * ``Error``/``NodeJS.ErrnoException``, never this one). index.ts treats
+ * both the same way (the shim exits), but the message differs, since
+ * "nothing is listening" and "this install refused this mint for a reason"
+ * call for different next steps from whoever reads the log. */
 export class ControlChannelError extends Error {
   constructor(message: string) {
     super(message);
@@ -83,10 +74,8 @@ export class ControlChannelError extends Error {
  * a well-formed ``OK <token>\n`` reply. Throws ``ControlChannelError`` on an
  * ``ERROR <reason>\n`` reply or any other malformed one; throws a plain
  * connection error (whatever ``net`` raised -- ``ENOENT``, ``ECONNREFUSED``,
- * or this call's own timeout) when nothing answered at all. Callers
- * (index.ts) catch both and fall back to the legacy token file, matching
- * the daemon side's own "mint over the control channel, read the file only
- * when that fails" posture -- see this module's own docstring and ADR 0008.
+ * or this call's own timeout) when nothing answered at all. The caller
+ * (index.ts) turns either into a ``ShimExitError``.
  */
 export async function mintMcpToken(opts: MintMcpTokenOptions = {}): Promise<string> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;

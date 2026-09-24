@@ -1,6 +1,7 @@
 """Tests for web/routes_security.py: passkey enrollment (P9; mode-agnostic since #426 Phase 1)."""
 from __future__ import annotations
 
+import json
 from unittest.mock import patch
 
 import pytest
@@ -33,7 +34,7 @@ def _fake_data_dir(monkeypatch, tmp_path):
     return tmp_path
 
 
-def _app(*, step_up=None, sessions=None):
+def _app(*, step_up=None, sessions=None, recovery_limiter=None):
     """org mode's own wiring -- org_session's three functions bound to an
     ``OrgSessionStore``, and a redirect to ``/login`` when unauthenticated,
     exactly what web/server.py's ``_build_org_app`` passes -- including
@@ -51,6 +52,7 @@ def _app(*, step_up=None, sessions=None):
         session_cookie_name=org_session.SESSION_COOKIE,
         step_up=step_up, issuer_url=ISSUER,
         nav_items=web_shell.ORG_NAV_ITEMS,
+        recovery_limiter=recovery_limiter,
     )
     app = Starlette(routes=routes)
     return app, sessions
@@ -58,7 +60,7 @@ def _app(*, step_up=None, sessions=None):
 
 def _local_app(
     *, step_up=None, sessions=None, dev_unseparated_notice=None, confirm_first_enrollment=None,
-    deliver_recovery_code=None,
+    deliver_recovery_code=None, require_human_session=False,
 ):
     """local mode's own wiring -- session_auth's three functions bound to a
     ``LocalSessionStore``, always resolving to ``LOCAL_PRINCIPAL``, exactly
@@ -91,6 +93,12 @@ def _local_app(
         # anything but a packaged build (web/server.py's build_app) -- the
         # companion path is driven by the tests that pass one.
         deliver_recovery_code=deliver_recovery_code,
+        # web/server.py passes session_auth.is_human_session on a
+        # privilege-separated install only; the default here is the
+        # unseparated shape, and TestRecoverCredentialHardening drives the other.
+        is_human_session=(
+            (lambda request: session_auth.is_human_session(request, sessions)) if require_human_session else None
+        ),
     )
     app = Starlette(routes=routes)
     return app, sessions
@@ -888,6 +896,184 @@ class TestRecoverCredential:
         r = bob_client.post("/security/recover", json={"csrf": bob_session_id, "code": data["recovery_code"]})
         assert r.status_code == 401
         assert wa.list_credentials(ALICE) != []
+
+
+def _audit_entries(tmp_path) -> list[dict]:
+    """Every whole audit record this week -- for the recovery tests, which
+    assert on more than one field of the same entry."""
+    path = tmp_path / "audit" / f"{current_week()}.jsonl"
+    if not path.exists():
+        return []
+    import json as _json
+    return [_json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+@pytest.mark.unit
+class TestRecoverCredentialHardening:
+    """POST /security/recover's three guards: every attempt is audited, an
+    unattested local session is refused where the caller asks, and attempts
+    are rate-limited per session and globally."""
+
+    WRONG = "0000-0000-0000-0000"
+
+    def test_a_wrong_code_is_audited_with_who_and_why_but_not_the_code(self, tmp_path):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        _register_first_credential(client, session_id)
+
+        r = client.post("/security/recover", json={"csrf": session_id, "code": self.WRONG})
+
+        assert r.status_code == 401
+        refused = [e for e in _audit_entries(tmp_path) if e["decision"] == "webauthn_recovery_refused"]
+        assert len(refused) == 1
+        assert refused[0]["sender"] == "alice@example.com"
+        assert refused[0]["summary"] == "Recovery code refused: invalid or already-used recovery code"
+        assert self.WRONG not in json.dumps(_audit_entries(tmp_path))
+
+    def test_a_successful_trade_in_is_audited_and_the_code_is_not_logged(self, tmp_path):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        code = _register_first_credential(client, session_id)["recovery_code"]
+
+        r = client.post("/security/recover", json={"csrf": session_id, "code": code})
+
+        assert r.status_code == 200
+        used = [e for e in _audit_entries(tmp_path) if e["decision"] == "webauthn_recovery_code_used"]
+        assert [e["sender"] for e in used] == ["alice@example.com"]
+        assert "webauthn_recovery_refused" not in _audit_decisions(tmp_path)
+        assert code not in json.dumps(_audit_entries(tmp_path))
+
+    def test_a_missing_code_is_neither_audited_nor_counted(self, tmp_path):
+        app, sessions = _app(recovery_limiter=rs.RecoveryAttemptLimiter(per_key=1))
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+
+        for _ in range(3):
+            assert client.post("/security/recover", json={"csrf": session_id}).status_code == 400
+        assert "webauthn_recovery_refused" not in _audit_decisions(tmp_path)
+        r = client.post("/security/recover", json={"csrf": session_id, "code": self.WRONG})
+        assert r.status_code == 401
+
+    def test_an_unattested_local_session_is_refused_and_audited(self, tmp_path):
+        app, sessions = _local_app(require_human_session=True)
+        client = _client(app)
+        session_id = _signed_in_local(client, sessions)
+        code = _register_first_credential(client, session_id)["recovery_code"]
+
+        r = client.post("/security/recover", json={"csrf": session_id, "code": code})
+
+        assert r.status_code == 403
+        assert r.json()["error"] == "human_session_required"
+        assert "use a recovery code" in r.json()["message"]
+        assert wa.list_credentials(LOCAL_PRINCIPAL) != []
+        # Refused before the code was looked at, so it is still good.
+        assert wa.has_recovery_code(LOCAL_PRINCIPAL) is True
+        summaries = [e["summary"] for e in _audit_entries(tmp_path) if e["decision"] == "webauthn_recovery_refused"]
+        assert summaries == ["Recovery code refused: the session was not opened by a person (unattested)"]
+
+    def test_a_human_local_session_may_recover(self):
+        app, sessions = _local_app(require_human_session=True)
+        client = _client(app)
+        session_id = sessions.create(provenance=session_auth.PROVENANCE_HUMAN)
+        client.cookies.set(session_auth.SESSION_COOKIE, session_id)
+        code = _register_first_credential(client, session_id)["recovery_code"]
+
+        r = client.post("/security/recover", json={"csrf": session_id, "code": code})
+
+        assert r.status_code == 200
+        assert wa.list_credentials(LOCAL_PRINCIPAL) == []
+
+    def test_without_the_check_an_unattested_session_is_not_refused(self):
+        # Org mode and an unseparated local install pass no is_human_session.
+        app, sessions = _local_app()
+        client = _client(app)
+        session_id = _signed_in_local(client, sessions)
+        code = _register_first_credential(client, session_id)["recovery_code"]
+
+        r = client.post("/security/recover", json={"csrf": session_id, "code": code})
+
+        assert r.status_code == 200
+
+    def test_the_attempt_after_the_per_session_budget_is_refused_even_with_the_right_code(self, tmp_path):
+        app, sessions = _app()
+        client = _client(app)
+        session_id = _signed_in(client, sessions, ALICE)
+        code = _register_first_credential(client, session_id)["recovery_code"]
+
+        for _ in range(rs.RECOVERY_MAX_ATTEMPTS_PER_SESSION):
+            assert client.post("/security/recover", json={"csrf": session_id, "code": self.WRONG}).status_code == 401
+        r = client.post("/security/recover", json={"csrf": session_id, "code": code})
+
+        assert r.status_code == 429
+        assert r.json()["error"] == "too_many_attempts"
+        assert 0 < int(r.headers["Retry-After"]) <= rs.RECOVERY_WINDOW_SECONDS
+        assert wa.list_credentials(ALICE) != []
+        assert wa.has_recovery_code(ALICE) is True
+        assert _audit_summaries(tmp_path)[-1] == "Recovery code refused: too many recovery attempts, try again later"
+
+    def test_a_fresh_session_does_not_reset_the_global_budget(self):
+        limiter = rs.RecoveryAttemptLimiter(per_key=10, global_limit=2)
+        app, sessions = _app(recovery_limiter=limiter)
+        for _ in range(2):
+            client = _client(app)
+            session_id = _signed_in(client, sessions, ALICE)
+            assert client.post("/security/recover", json={"csrf": session_id, "code": self.WRONG}).status_code == 401
+
+        client = _client(app)
+        session_id = _signed_in(client, sessions, BOB)
+        r = client.post("/security/recover", json={"csrf": session_id, "code": self.WRONG})
+
+        assert r.status_code == 429
+
+
+@pytest.mark.unit
+class TestRecoveryAttemptLimiter:
+    def _limiter(self, **kwargs):
+        now = {"t": 1000.0}
+        return rs.RecoveryAttemptLimiter(clock=lambda: now["t"], **kwargs), now
+
+    def test_per_key_budget_and_retry_after(self):
+        limiter, now = self._limiter(window_seconds=60, per_key=2, global_limit=100)
+        assert limiter.try_acquire("a") is None
+        now["t"] += 10
+        assert limiter.try_acquire("a") is None
+        now["t"] += 5
+        # The first attempt (t=1000) leaves the window at t=1060.
+        assert limiter.try_acquire("a") == 45
+        # Another key is unaffected.
+        assert limiter.try_acquire("b") is None
+
+    def test_a_refused_attempt_is_not_recorded_and_the_window_slides(self):
+        limiter, now = self._limiter(window_seconds=60, per_key=1, global_limit=100)
+        assert limiter.try_acquire("a") is None
+        now["t"] += 30
+        assert limiter.try_acquire("a") == 30
+        now["t"] += 30
+        assert limiter.try_acquire("a") is None
+
+    def test_global_budget_spans_keys(self):
+        limiter, now = self._limiter(window_seconds=60, per_key=5, global_limit=2)
+        assert limiter.try_acquire("a") is None
+        assert limiter.try_acquire("b") is None
+        assert limiter.try_acquire("c") == 60
+        now["t"] += 60
+        assert limiter.try_acquire("c") is None
+
+    def test_when_both_budgets_are_full_the_later_one_decides(self):
+        limiter, now = self._limiter(window_seconds=60, per_key=1, global_limit=2)
+        assert limiter.try_acquire("b") is None
+        now["t"] += 20
+        assert limiter.try_acquire("a") is None
+        # Global frees at t=1060, "a"'s own budget only at t=1080.
+        assert limiter.try_acquire("a") == 60
+
+    def test_retry_after_is_at_least_one_second(self):
+        limiter, now = self._limiter(window_seconds=60, per_key=1, global_limit=100)
+        assert limiter.try_acquire("a") is None
+        now["t"] += 59.9
+        assert limiter.try_acquire("a") == 1
 
 
 # ===================================================================== #

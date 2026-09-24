@@ -1,16 +1,10 @@
 """Auto-accept: the v2 policy store's hot-reloaded per-principal cache, plus the tool/gate/
 temp-accept infrastructure every gated call needs regardless of engine.
 
-Through P8 of the policy v2 redesign this module also housed the v1 rule engine
-(``AutoAcceptEvaluator`` and its ~50 ``_rule_*`` predicates), the five suggestion tables the popup's
-"Always allow" button read (``SUGGESTION_FAMILIES``, ``WRITE_RULE_SUGGESTIONS``, ...), the v1
-``auto_accept_rules``/``auto_accept_grants`` writers (``add_auto_accept_rule``, ``mutate_grants``),
-and the ``policy.engine: v1 | v2`` shadow-mode switch. P9 removes all of it: ``gate.py`` evaluates
-against the v2 ``auto_accept:`` section exclusively now (``get_policy_v2_store_rules`` below), the
-popup writes through ``policy.propose``/``policy.describe`` the same way Settings and the MCP bridge
-already do (``add_policy_v2_rules``), and a not-yet-migrated, hand-edited ``settings.yaml`` gets
-folded into v2 once at startup (``policy.compat.migrate_to_policy_v2``) rather than evaluated
-directly forever.
+``gate.py`` evaluates against the ``auto_accept:`` section exclusively (``get_policy_v2_store_rules``
+below), and every surface -- Settings, the MCP propose tool, the popup's "Always allow" -- writes
+through ``add_policy_v2_rules``. A config still carrying the earlier ``auto_accept_rules``/
+``auto_accept_grants`` sections is refused at startup (``policy.store.reject_v1_sections``).
 
 What's left here is genuinely engine-agnostic:
 
@@ -23,8 +17,6 @@ What's left here is genuinely engine-agnostic:
 - ``ReviewContext`` and the small parsing helpers (``_file_from``, ``_domain_of``, ``_address_of``,
   ``_attendee_email``) P2's scope/condition selectors (``policy/scopes.py``, ``policy/conditions.py``)
   and P5's proposal builder (``policy/propose.py``) import directly.
-- ``migrate_telegram_search_operation_key`` -- a v1-internal, pre-redesign rename, unrelated to
-  grants/engine choice.
 - ``_AutoAcceptState``/the ``PrincipalRegistry`` it lives in -- per-principal config path, the
   temp-accept store, the hot-reloaded v2 rule cache, and the rules-changed listener broadcast that
   lets a pending approval re-resolve the moment a rule changes.
@@ -34,7 +26,6 @@ import logging
 import threading
 import time
 import yaml
-from copy import deepcopy
 from dataclasses import dataclass, field
 from email.utils import parseaddr
 from typing import TYPE_CHECKING, Any, Callable
@@ -156,9 +147,7 @@ TOOL_TO_OPERATION: dict[str, str] = {
     # than its own telegram.search_messages key) so a "trusted chats" rule
     # only needs configuring once per chat, not once per Telegram read tool
     # -- matching slack.read_messages, which slack_search_messages already
-    # shares with slack_get_channel_history/slack_get_thread_replies. See
-    # migrate_telegram_search_operation_key() for the one-time settings.yaml
-    # migration this rename requires.
+    # shares with slack_get_channel_history/slack_get_thread_replies.
     "telegram_search_messages":       "telegram.read_chat_messages",
     "telegram_send_message":          "telegram.send_message",
     "tasks_create_task":              "tasks.create_task",
@@ -395,47 +384,6 @@ def _attendee_email(attendee: Any) -> str:
 
 
 
-# ── One-time config migrations ───────────────────────────────────────────────
-
-TELEGRAM_SEARCH_OPERATION_KEY_MIGRATION_MARKER = "migrated_telegram_search_op_key_v1"
-
-
-def migrate_telegram_search_operation_key(cfg: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """One-time rename of any ``auto_accept_rules["telegram.search_messages"]``
-    entries onto ``"telegram.read_chat_messages"``, now that
-    ``telegram_search_messages`` shares that operation key (see
-    TOOL_TO_OPERATION) the same way ``slack_search_messages`` already shares
-    ``slack.read_messages`` with Slack's other read tools -- one "trusted
-    chats" rule then covers both Telegram read tools instead of needing
-    configuring twice.
-
-    Idempotent (checks/sets its own marker) and never runs twice, mirroring
-    resource_grants.migrate_rules_to_grants's own marker/idempotency shape.
-    Entries already present under the destination key are left as-is (no
-    duplicates); an old entry identical to an existing one is dropped rather
-    than duplicated. Returns the updated config and whether anything actually
-    moved, for a one-time log line.
-    """
-    if cfg.get(TELEGRAM_SEARCH_OPERATION_KEY_MIGRATION_MARKER):
-        return cfg, False
-    cfg = deepcopy(cfg)
-    rules_cfg: dict[str, list[dict[str, Any]]] = cfg.get("auto_accept_rules") or {}
-    old_entries = rules_cfg.pop("telegram.search_messages", None)
-    moved = False
-    if old_entries:
-        merged = rules_cfg.setdefault("telegram.read_chat_messages", [])
-        for entry in old_entries:
-            if entry not in merged:
-                merged.append(entry)
-                moved = True
-    if rules_cfg:
-        cfg["auto_accept_rules"] = rules_cfg
-    else:
-        cfg.pop("auto_accept_rules", None)
-    cfg[TELEGRAM_SEARCH_OPERATION_KEY_MIGRATION_MARKER] = True
-    return cfg, moved
-
-
 # ── Per-principal state ──────────────────────────────────────────────────────
 #
 # One PrincipalRegistry entry per principal (local mode has exactly one; org mode one per signed-in
@@ -559,7 +507,6 @@ def add_policy_v2_rules(rules: "list[PolicyRule]") -> bool:
         if merged == existing:
             return False
         cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(merged)
-        cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] = True
         atomic_write_text(state.config_path, yaml.safe_dump(cfg, default_flow_style=False, allow_unicode=True))
         set_policy_v2_store_rules(merged)
     notify_rules_changed()
@@ -645,7 +592,6 @@ __all__ = [
     "get_policy_v2_store_rules",
     "init_config_path",
     "is_temp_accepted",
-    "migrate_telegram_search_operation_key",
     "notify_rules_changed",
     "register_temp_accept",
     "remove_policy_v2_rule",

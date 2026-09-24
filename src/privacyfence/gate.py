@@ -1266,11 +1266,8 @@ async def propose_policy_change(
     value: Any = None,
     verbs: list[str] | None = None,
 ) -> dict[str, Any]:
-    """The one-shape bridge writer P7 of the policy v2 redesign adds -- the sole write path now
-    that the deprecated v1 ``propose_rule_change`` has been deleted (PSC-3; ADR 0004 decision 3's
-    one-minor-release grace period was honoured by 4.1.2). Writes go straight into the on-disk v2
-    ``auto_accept:`` section (``auto_accept.add_policy_v2_rules``/``remove_policy_v2_rule``), never
-    through v1's ``auto_accept_rules``. Blocks on ``show_rule_confirmation_popup()``, and is
+    """The MCP bridge's one rule-writing path. Writes go straight into the on-disk
+    ``auto_accept:`` section (``auto_accept.add_policy_v2_rules``/``remove_policy_v2_rule``). Blocks on ``show_rule_confirmation_popup()``, and is
     refused outright (``GateDeniedError``) in an unattended session, since a config change always
     needs a human present.
 
@@ -1287,8 +1284,7 @@ async def propose_policy_change(
     ``group``/``verbs`` combination that derives no operation key at all: a verb the scope type
     named by ``group`` cannot govern, or a value-needing group given none. This is P7's write-time
     validation (the redesign proposal's own exit criterion): a rule the UI cannot render or remove
-    is refused here rather than silently persisted the way F5/P0·3 found ``propose_rule_change``
-    would let one through for ``always_allow`` under an ungoverned operation key.
+    is refused here rather than silently persisted.
     """
     if operation not in ("add", "update", "remove"):
         raise ValueError(f"Unknown operation: {operation!r}")

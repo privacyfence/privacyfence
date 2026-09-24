@@ -1,12 +1,9 @@
 """Unit tests for privacyfence.policy.resource_registry -- the connector resource-type manifest
-that survives resource_grants.py's deletion at P9 (policy v2 redesign), for its three remaining
-live callers: migration, resource_names.py's display-name resolvers, and gate.py's deprecated
-target="grant" bridge alias.
+resource_names.py's display-name resolvers read.
 
 test_resource_names.py already exercises the "drive"/"folders" resolver (_resolve_drive_file) end
 to end through ResourceNameResolver; this file covers the other seven resolvers directly (each
-duck-types against a different connector client shape) and expand_grants' capability-filtering
-branches, which nothing else in the suite reaches.
+duck-types against a different connector client shape), which nothing else in the suite reaches.
 """
 from __future__ import annotations
 
@@ -91,43 +88,3 @@ class TestResolvers:
     def test_resolve_salesforce_report_swallows_a_client_error(self):
         client = SimpleNamespace(list_reports=lambda: (_ for _ in ()).throw(RuntimeError("boom")))
         assert _resolver_for("salesforce", "reports")(client, "R1") is None
-
-
-class TestGrantResourceTypeIdOf:
-    def test_id_of_reads_the_configured_id_field(self):
-        rt = rg.resource_type("jira", "projects")
-        assert rt is not None
-        assert rt.id_of({"key": "ENG", "read": True}) == "ENG"
-
-    def test_id_of_missing_field_is_empty_string(self):
-        rt = rg.resource_type("jira", "projects")
-        assert rt is not None
-        assert rt.id_of({}) == ""
-
-
-class TestExpandGrants:
-    def test_disabled_capability_contributes_nothing(self):
-        # A grant entry with "read" on but "send" off must not produce a send-family rule --
-        # this is the branch expand_grants' own docstring calls out ("Both are gone as anything
-        # live writes or evaluates") as the reason a grant's booleans matter at all.
-        grants_cfg = {"slack": {"channels": [{"id": "C1", "read": True, "send": False}]}}
-        compiled = rg.expand_grants(grants_cfg)
-        assert compiled.get("slack.send_message") is None
-        assert compiled["slack.read_messages"] == [
-            {"rule": "approved_channel", "value": ["C1"]},
-            {"rule": "approved_channel_all_results", "value": ["C1"]},
-        ]
-
-    def test_no_entries_enable_a_given_capability_at_all(self):
-        # Every entry has every capability off -- the capability's own bucket must never appear,
-        # not appear with an empty value list.
-        grants_cfg = {"jira": {"projects": [{"key": "ENG", "read": False, "create": False}]}}
-        compiled = rg.expand_grants(grants_cfg)
-        assert compiled == {}
-
-    def test_multiple_entries_merge_into_one_rule_s_value_list(self):
-        grants_cfg = {"jira": {"projects": [
-            {"key": "ENG", "read": True}, {"key": "OPS", "read": True},
-        ]}}
-        compiled = rg.expand_grants(grants_cfg)
-        assert compiled["jira.read_issue"] == [{"rule": "approved_project_keys", "value": ["ENG", "OPS"]}]

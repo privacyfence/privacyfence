@@ -65,8 +65,7 @@ standing.
 A local process running as the signed-in user can:
 
 - read the current sign-in link straight out of `handoff/approvals_url` — **no longer: that file
-  is not written any more** (the self-approval plan's Phase 2), and any left by an older version is
-  deleted on the next start. It was the second of the three paths to a session §02 of that review
+  is not written any more** (the self-approval plan's Phase 2). It was the second of the three paths to a session §02 of that review
   counts, and the only one that took no more than reading a file;
 - connect to the control channel under the data directory's `authority` subdirectory ([#428](https://github.com/privacyfence/privacyfence/issues/428)
   Phase 1 split this, and `config/settings.yaml`, enrolled WebAuthn credentials, and the audit log,
@@ -439,10 +438,14 @@ protects. Trading the
 code in at `POST /security/recover` needs no WebAuthn ceremony — deliberately, since producing one is
 exactly what a locked-out human cannot do — only the still-valid session that got them to `/security`
 in the first place, which local mode's ordinary sign-in path (a bootstrap link) still provides even
-with `require_passkey` on, since step-up gates *decisions*, not sign-in itself. A successful trade-in
+with `require_passkey` on, since step-up gates *decisions*, not sign-in itself. On a
+privilege-separated install that session must be one opened from the companion (the same
+human-session check approving a decision makes); in org mode the IdP sign-in is that check. Attempts
+are rate-limited — 5 per session and 20 across all sessions in any 15 minutes. A successful trade-in
 removes every credential enrolled for that principal, clearing the stuck state so a fresh passkey can
 be enrolled immediately afterward, and is itself audited (`webauthn_recovery_code_used`) whether or
-not the human goes on to enroll again. The code is single-use: spending it, correctly or not, never
+not the human goes on to enroll again; every refused attempt is audited too
+(`webauthn_recovery_refused`, with the reason but never the code). The code is single-use: spending it, correctly or not, never
 grants a second attempt at the same code. A fresh one is issued at the next successful enrollment
 that finds none on file — or, on a packaged install, whenever the companion is asked for one (see
 below).

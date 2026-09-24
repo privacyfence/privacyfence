@@ -52,12 +52,66 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   organization server's Google connector client needs
   `https://<your-server>/oauth/callback/apps_script` added to its registered redirect URIs.
 
+- **`--agent-links` / `--no-agent-links` for `scripts/build_org_bundle.py`**, writing the org
+  bundle's `download_delivery.agent_links` (on by default, unchanged) instead of requiring the
+  bundle to be edited by hand.
+
 ### Changed
 
 - **An organization server's Approvals page now updates live**, the way the desktop app's always
   has: a new approval, or one decided from another tab or device, appears or disappears without a
   manual reload, and the header's live indicator shows whether the page is connected. Each person
   still sees only their own queue.
+
+- **Org bundles bind the daemon to loopback by default.** `scripts/build_org_bundle.py
+  --server-bind-host` now defaults to `127.0.0.1` instead of `0.0.0.0`, so a bundle built without
+  the flag is reachable only by a reverse proxy on the same host, as the org-mode setup guide
+  already required. A bundle with no `server.bind_host` also binds `127.0.0.1` (was `localhost`).
+  Pass `--server-bind-host` explicitly when the proxy runs on another host.
+
+- The installers now refuse a system older than PrivacyFence supports instead of installing an
+  app that cannot start: the macOS `.pkg` requires macOS 13 on Apple silicon (an Intel Mac is
+  refused), the Windows installer Windows 10 / Windows Server 2016, and the `.deb` declares its
+  glibc and systemd floors as package dependencies (glibc 2.38, systemd 242: Ubuntu 24.04 or
+  Debian 13 and newer). The support matrix in `docs/platform-support.md` now lists each
+  platform's minimum.
+
+### Removed
+
+- **The v1 auto-accept settings format is no longer read or converted.** A `settings.yaml` that
+  still has an `auto_accept_rules:` or `auto_accept_grants:` section now stops PrivacyFence at
+  startup with a configuration error naming the section, instead of being converted to the
+  `auto_accept:` section on first start. Remove the section and recreate its rules on the Settings
+  Auto-accept page. The one-time conversion, its `settings.yaml.bak` backup and the "your
+  auto-accept rules were migrated" Settings notice are gone, and a fresh install's default
+  `settings.yaml` is written in the current format. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+- **Files from earlier data-directory layouts are no longer moved or deleted at startup.** The
+  daemon no longer moves a `config/settings.yaml`, `webauthn_credentials.json`, `web_token`,
+  `web_token_version` or `logs/audit/` it finds directly under the data directory into
+  `authority/`, no longer deletes a leftover shared `handoff/mcp_token` on a privilege-separated
+  install, and no longer deletes old `approvals_url`/`settings_url`/`security_url` files. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+- **The Claude Desktop extension gets its MCP token only from the running PrivacyFence.** It no
+  longer falls back to reading an `mcp_token` file when it cannot get a token over PrivacyFence's
+  control channel. Instead it stops with an error asking you to check that PrivacyFence and the
+  extension are the same version. On Windows it also no longer looks for PrivacyFence under
+  `%LOCALAPPDATA%\Programs`, where no current installer puts it.
+
+### Fixed
+
+- **Telegram works on a PyPI install.** The sdist and wheel now carry PrivacyFence's Telegram app
+  credentials, as the macOS, Windows and Linux installers already did, so `pip install
+  privacyfence` no longer needs your own `api_id`/`api_hash` to connect Telegram (ADR 0040).
+
+### Security
+
+- **Recovery-code sign-in is audited, rate-limited and needs a human session.** `POST
+  /security/recover` now records every refused attempt in the audit log
+  (`webauthn_recovery_refused`, with the reason and never the code), not just a successful one. On a
+  privilege-separated install it refuses a session that was not opened from the companion, the same
+  as approving a decision does. Attempts are limited to 5 per session and 20 across all sessions in
+  any 15 minutes; the next one gets a `429` with `Retry-After`.
 
 ## [4.4.0] — 2026-09-24
 

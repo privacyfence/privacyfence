@@ -467,10 +467,7 @@ class TestBootstrapLogin:
 def _sign_in_url(server, path: str = "/approvals", *, provenance: str = PROVENANCE_HUMAN) -> str:
     """A one-time sign-in link for a real browser to follow.
 
-    ``WebServer.mint_bootstrap_url()`` used to do this, and wrote the link to
-    a discovery file besides; the self-approval plan's Phase 2 removed both
-    (web/server.py's own ``_clear_legacy_bootstrap_url_files``). Minting is
-    the control channel's business now, and *attested* minting requires a
+    Minting is the control channel's business, and *attested* minting requires a
     companion process to call back to -- which an in-process browser test has
     no reason to stand up, so it reaches into the store the same way the
     daemon's own middleware does. ``provenance`` defaults to ``human`` because
