@@ -272,9 +272,9 @@ end;
    Setup's own log file, one line per log entry, tagged with which step ran
    it.
 
-   Everything a [Code] Exec() runs is otherwise invisible: Inno logs its own
-   [Run] entries automatically but says nothing at all about an Exec() call
-   made from [Code], and Exec() captures neither stream. A run of consecutive
+   Everything a [Code] Exec() runs is otherwise invisible: Inno logs its
+   own [Run] entries automatically but says nothing at all about an Exec()
+   call made from [Code], and Exec() captures neither stream. A run of consecutive
    real windows-graphical-session.yml runs once established only that a task
    was missing afterwards, never why, until this carried schtasks' own stderr
    into the log -- which named the defect outright. *)
@@ -611,7 +611,7 @@ end;
    Bypass invocation, for the same reasons, as SeparateInstall above.
 
    Never fails the uninstall: the program files are going regardless, and
-   [UninstallRun]'s floor still stops and deletes the service and the
+   the [UninstallRun] floor still stops and deletes the service and the
    companion task if this could not. A failed *purge* is reported
    interactively, because then data the user asked to delete is still on
    disk and they need to know where. *)

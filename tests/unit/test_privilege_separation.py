@@ -2032,6 +2032,22 @@ class TestWindowsInstallerContract:
         assert "if not SeparateInstall(SeparationOutput) then" in post_install
         assert "RaiseException(" in post_install
 
+    def test_no_code_line_reads_as_a_section_tag_or_a_directive(self):
+        # iscc reads a line whose first non-blank character is '[' as a
+        # section tag and one starting with '#' as an ISPP directive -- even
+        # inside a Pascal (* *) comment in [Code]. Both are compile errors
+        # ("Invalid section tag", "unknown preprocessor directive") that only
+        # the Windows build job would otherwise find: the first sank a
+        # dispatched build of this very cleanup, the second #411's CI.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+        code = inno.split("\n[Code]\n", 1)[1]
+
+        offending = [
+            line for line in code.splitlines()
+            if line.strip().startswith(("[", "#"))
+        ]
+        assert offending == []
+
     def test_the_installer_registers_no_daemon_task(self):
         # The installer registers nothing it later disables (ADR 0042's
         # cleanup): the daemon is a service, and the only Scheduled Task is
