@@ -126,7 +126,7 @@ class TestDisclosureRowsFromVisibility:
 
     def test_block_discloses_nothing(self):
         rows = disclosure_rows_from_visibility({"Attachments": "block"})
-        assert rows == [("Attachments", "None — not disclosed to Claude")]
+        assert rows == [("Attachments", "None — not disclosed to the AI system")]
 
     def test_preserves_input_order(self):
         rows = disclosure_rows_from_visibility(
@@ -157,10 +157,10 @@ class TestSectionPresenceAndOrder:
             pii_categories=["Phone number"],
         ))
         for label in (
-            "What Claude already knows",
-            "Why Claude needs more data",
+            "What the AI system already knows",
+            "Why the AI system needs more data",
             "Possible PII detected",
-            "What will be provided to Claude",
+            "What will be provided to the AI system",
         ):
             assert label in html
         for number in ("01 ·", "02 ·", "03 ·", "04 ·"):
@@ -171,14 +171,14 @@ class TestSectionPresenceAndOrder:
             disclosure_rows=[("Cell values", "Full cell values")],
             pii_categories=["Phone number"],
         ))
-        assert html.index("Possible PII detected") < html.index("What will be provided to Claude")
+        assert html.index("Possible PII detected") < html.index("What will be provided to the AI system")
 
     def test_a_read_call_with_no_disclosure_still_gets_its_risk_card(self):
         # A tool with nothing to disclose in §3 (empty disclosure_rows)
         # whose content still matched the PII detector.
         html = build_card_stack_html(**_minimal_kwargs(pii_categories=["Phone number"]))
         assert "Possible PII detected" in html
-        assert "What will be provided to Claude" not in html
+        assert "What will be provided to the AI system" not in html
 
     def test_write_call_never_gets_section_3_even_with_a_visibility_like_dict(self):
         # disclosure_rows is only ever consulted when is_read=True -- a
@@ -190,7 +190,7 @@ class TestSectionPresenceAndOrder:
             disclosure_rows=[("Should not appear", "Full should not appear")],
             write_content_flags=["Email address"],
         ))
-        assert "What will be provided to Claude" not in html
+        assert "What will be provided to the AI system" not in html
         assert "Possible PII detected" in html
 
     def test_no_risk_card_when_neither_pii_list_is_populated(self):
@@ -199,12 +199,12 @@ class TestSectionPresenceAndOrder:
 
     def test_section_1_is_skipped_entirely_when_preview_is_empty(self):
         html = build_card_stack_html(**_minimal_kwargs(preview={}))
-        assert "What Claude already knows" not in html
-        assert "Why Claude needs more data" in html
+        assert "What the AI system already knows" not in html
+        assert "Why the AI system needs more data" in html
 
     def test_section_2_is_skipped_entirely_when_claude_reason_is_empty(self):
         html = build_card_stack_html(**_minimal_kwargs(claude_reason=""))
-        assert "Why Claude needs more data" not in html
+        assert "Why the AI system needs more data" not in html
 
     def test_risk_section_html_returns_empty_string_for_no_categories(self):
         # Defense in depth: build_card_stack_html() never calls this with an
@@ -349,7 +349,7 @@ class TestLayoutShapes:
 
     def test_wide_preview_pane_still_renders_after_the_left_column(self):
         html = build_card_stack_html(**_minimal_kwargs(layout=WIDE))
-        assert html.index("Preview (~2 sec read)") > html.index("What Claude already knows")
+        assert html.index("Preview (~2 sec read)") > html.index("What the AI system already knows")
 
     def test_neither_layout_leaves_a_duplicate_class_attribute(self):
         # The one silent-failure trap: leaving the original
@@ -569,7 +569,7 @@ class TestButtonRow:
 
     def test_button_row_is_appended_after_the_scrollable_content(self):
         html = build_card_stack_html(**_minimal_kwargs())
-        assert html.index("What Claude already knows") < html.index('class="pf-btn-row"')
+        assert html.index("What the AI system already knows") < html.index('class="pf-btn-row"')
 
     def test_bridge_script_is_present(self):
         # The click/keyboard-dispatch bridge (window.webkit.messageHandlers

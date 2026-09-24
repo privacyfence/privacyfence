@@ -94,7 +94,11 @@ from datetime import datetime, timezone
 from html import escape as _html_escape
 from typing import Any
 
-from . import approval_icons
+from . import agent_label, approval_icons
+from .agent_identity import UNKNOWN_AGENT, UNRECOGNISED_LABEL
+from .agent_label import NOT_VERIFIED, TIER_ATTESTED, TIER_CLAIMED, TIER_UNKNOWN, UNKNOWN_AGENT_LABEL
+
+_AGENT_TIERS = (TIER_ATTESTED, TIER_CLAIMED, TIER_UNKNOWN)
 
 _EMPTY_STATE = (
     '<div class="pf-approvals-empty">'
@@ -210,6 +214,25 @@ _CSS = """
   overflow: hidden; text-overflow: ellipsis;
 }
 .pf-approval-kicker { font-size: 12px; color: var(--color-neutral-600); }
+/* Who is asking -- the card header's .pf-agent in miniature, with the same
+   tier rule (ADR 0006 decision 4): only an attested row draws the vendor's
+   mark; a claimed or unknown one gets a dashed "?" and "not verified". */
+.pf-approval-agent {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--color-neutral-600);
+  min-width: 0; overflow-wrap: anywhere;
+}
+.pf-approval-agent-mark {
+  width: 16px; height: 16px; flex-shrink: 0; box-sizing: border-box; border-radius: 4px;
+  background-color: #fff; background-size: 12px 12px; background-repeat: no-repeat; background-position: center;
+  box-shadow: 0 0 0 1px var(--color-divider);
+}
+.pf-approval-agent-glyph {
+  display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px;
+  flex-shrink: 0; box-sizing: border-box; border-radius: 4px; border: 1px dashed var(--color-neutral-500);
+  font: 600 10px ui-monospace, Menlo, monospace;
+}
+.pf-approval-agent-attested .pf-approval-agent-name { font-weight: 600; color: var(--color-text); }
+.pf-approval-agent-unverified { font-style: italic; }
 /* Read/write direction, from gate_kind -- the same two token families and
    the same wording as the card's own .pf-pill, so a row and the card it
    opens agree on sight. Both pairs invert in tokens.css's dark block. */
@@ -354,6 +377,9 @@ _JS = """
   // (see approval_list_html._icon_css), so a live-re-rendered row draws
   // the real mark by naming the same class the first paint did.
   var pfIconConnectors = %(icon_connectors)s;
+  var pfIconAgents = %(icon_agents)s;
+  var pfUnrecognised = %(unrecognised)s;
+  var pfNotVerified = %(not_verified)s;
 
   // Mirrors approval_list_html._icon_html.
   function iconHtml(connector, initial) {
@@ -368,6 +394,28 @@ _JS = """
     if (gateKind === 'review') { return '<span class="pf-approval-pill pf-approval-pill-read">Read</span>'; }
     if (gateKind === 'popup') { return '<span class="pf-approval-pill pf-approval-pill-write">Write</span>'; }
     return '';
+  }
+
+  // Mirrors approval_list_html._agent_html -- see that function. Only an
+  // attested row draws a mark, and only one this page baked a rule for.
+  function agentHtml(agent) {
+    agent = agent || {};
+    var tier = ['attested', 'claimed', 'unknown'].indexOf(agent.tier) !== -1 ? agent.tier : 'unknown';
+    var headline = agent.headline || pfUnrecognised;
+    var mark = '';
+    if (tier === 'attested') {
+      if (pfIconAgents.indexOf(agent.icon_id) !== -1) {
+        mark = '<span class="pf-approval-agent-mark pf-approval-agent-mark-' + agent.icon_id +
+          '" aria-hidden="true"></span>';
+      }
+    } else {
+      mark = '<span class="pf-approval-agent-glyph" aria-hidden="true">?</span>';
+    }
+    var text = agent.claim ? headline + ' \u201c' + agent.claim + '\u201d' : headline;
+    var unverified = tier === 'attested' ? ''
+      : '<span class="pf-approval-agent-unverified">\u00b7 ' + esc(pfNotVerified) + '</span>';
+    return '<span class="pf-approval-agent pf-approval-agent-' + tier + '" data-agent-tier="' + tier + '">' +
+      mark + '<span class="pf-approval-agent-name">' + esc(text) + '</span>' + unverified + '</span>';
   }
 
   function rowHtml(row) {
@@ -389,7 +437,7 @@ _JS = """
       iconHtml(row.connector || '', initial) +
       '<div class="pf-approval-main">' +
       '<div class="pf-approval-meta">' + pillHtml(row.gate_kind || '') +
-      '<span class="pf-approval-kicker">' + esc(kicker) + '</span></div>' +
+      '<span class="pf-approval-kicker">' + esc(kicker) + '</span>' + agentHtml(row.agent) + '</div>' +
       '<div class="pf-approval-title">' + title + '</div>' + blockedNote + '</div>' +
       '<div class="pf-approval-actions">' +
       '<button type="button" class="pf-btn-details" data-details="' + esc(row.id) + '">Details</button>' +
@@ -848,6 +896,7 @@ def row_from_approval(card: Any) -> dict[str, Any]:
         "created_at": _iso(card.created_at),
         "batchable": batchable,
         "blocked_reason": blocked_reason,
+        "agent": agent_label.label_for(getattr(card, "agent", UNKNOWN_AGENT)).to_dict(),
     }
 
 
@@ -982,6 +1031,57 @@ def _pill_html(gate_kind: str) -> str:
     return f'<span class="pf-approval-pill pf-approval-pill-{modifier}">{text}</span>'
 
 
+def _agent_html(agent: dict[str, Any] | None) -> str:
+    """The row's "who is asking" label, from ``agent_label.AgentLabel.to_dict()``
+    (``row_from_approval``'s and ``to_summary_dict()``'s ``agent`` field).
+    A row with no ``agent`` at all renders as unknown -- never blank and
+    never "Claude". The mark is drawn from a per-agent CSS class, like the
+    connector icon, and only for the attested tier: a claimed row's
+    ``icon_id`` is "" already, and a tier other than attested is refused
+    here as well. The JS mirror is ``agentHtml``."""
+    agent = agent or UNKNOWN_AGENT_LABEL.to_dict()
+    tier = agent.get("tier") or TIER_UNKNOWN
+    if tier not in _AGENT_TIERS:
+        tier = TIER_UNKNOWN
+    headline = agent.get("headline") or UNRECOGNISED_LABEL
+    slug = _icon_slug(agent.get("icon_id") or "")
+    if tier == TIER_ATTESTED and slug in _agent_icon_uris():
+        mark = f'<span class="pf-approval-agent-mark pf-approval-agent-mark-{slug}" aria-hidden="true"></span>'
+    elif tier == TIER_ATTESTED:
+        mark = ""
+    else:
+        mark = '<span class="pf-approval-agent-glyph" aria-hidden="true">?</span>'
+    claim = agent.get("claim") or ""
+    text = f"{headline} “{claim}”" if claim else headline
+    unverified = (
+        "" if tier == TIER_ATTESTED
+        else f'<span class="pf-approval-agent-unverified">· {NOT_VERIFIED.lower()}</span>'
+    )
+    return (
+        f'<span class="pf-approval-agent pf-approval-agent-{tier}" data-agent-tier="{tier}">'
+        f'{mark}<span class="pf-approval-agent-name">{_html_escape(text)}</span>{unverified}</span>'
+    )
+
+
+def _agent_icon_uris() -> dict[str, str]:
+    """``{agent_id: data URI}`` for every bundled agent mark -- the
+    ``_icon_connectors()`` counterpart, for the same reason: the live
+    re-render names a class and never carries image data."""
+    uris: dict[str, str] = {}
+    for agent_id, uri in approval_icons.all_agent_icons().items():
+        slug = _icon_slug(agent_id)
+        if slug and uri:
+            uris[slug] = uri
+    return uris
+
+
+def _agent_icon_css(icon_uris: dict[str, str]) -> str:
+    return "".join(
+        f'.pf-approval-agent-mark-{slug}{{background-image:url("{uri}")}}'
+        for slug, uri in sorted(icon_uris.items())
+    )
+
+
 def _row_html(row: dict[str, Any]) -> str:
     label = "Confirmation" if row.get("kind") != "card" else "Approval"
     # The object is the headline; the tool that touches it is the meta
@@ -1022,6 +1122,7 @@ def _row_html(row: dict[str, Any]) -> str:
         '<div class="pf-approval-meta">'
         f'{_pill_html(row.get("gate_kind") or "")}'
         f'<span class="pf-approval-kicker">{_html_escape(kicker)}</span>'
+        f'{_agent_html(row.get("agent"))}'
         "</div>"
         f'<div class="pf-approval-title">{_html_escape(title)}</div>'
         f"{blocked_html}"
@@ -1153,6 +1254,7 @@ def build_list_html(
     # element the live re-render can't create later (issue #576, bug 1).
     toolbar = _toolbar_html(any_batchable=any(r.get("batchable") for r in rows), hidden=not rows)
     icon_uris = _icon_connectors()
+    agent_icon_uris = _agent_icon_uris()
     js = _JS % {
         # Already branched: whether a connector is authenticated is fixed
         # for this document's lifetime, so render() needs the resolved
@@ -1161,9 +1263,12 @@ def build_list_html(
         "csrf": json.dumps(csrf),
         # Names only -- the image data is in the <style> block below, once.
         "icon_connectors": json.dumps(sorted(icon_uris)),
+        "icon_agents": json.dumps(sorted(agent_icon_uris)),
+        "unrecognised": json.dumps(UNRECOGNISED_LABEL),
+        "not_verified": json.dumps(NOT_VERIFIED.lower()),
     }
     return (
-        f'<style nonce="{nonce}">{_CSS}{_icon_css(icon_uris)}</style>'
+        f'<style nonce="{nonce}">{_CSS}{_icon_css(icon_uris)}{_agent_icon_css(agent_icon_uris)}</style>'
         '<div class="pf-approvals-page">'
         # Always emitted, even with nothing pending: render() below updates
         # it on every SSE tick, and an element that only exists when the

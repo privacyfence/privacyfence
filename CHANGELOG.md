@@ -58,6 +58,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never change what is allowed: the same call gets the same decision, rule match and released
   data whatever name the client gives. Names are sanitized and length-capped; a client that gives
   none is recorded as unknown. PrivacyFence's own `privacyfence_*` tools are not attributed.
+- **The approval card and the approval list now show which AI system is asking, and how sure
+  PrivacyFence is of it** (ADR 0006 decision 4). A verified identity shows the product's own logo,
+  its name and a *Verified* badge. A name the AI system gave for itself shows no logo, reads
+  "Says it is ChatGPT" and is marked *Not verified*; the card's own wording then says "the AI
+  system" rather than repeating the claimed name. A client that gives no name, or a name
+  PrivacyFence does not recognise, shows "Unrecognised AI system" with the name it sent. The card
+  no longer says "Claude" unless the request was identified as Claude. Logos are bundled with
+  the app, never downloaded, and never taken from what the client sends. Today every identity is
+  one the client gave for itself, so every card shows the *Not verified* form until verified
+  identities arrive.
 
 ### Fixed
 
