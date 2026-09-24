@@ -932,7 +932,7 @@ class DriveConnector(Connector):
         if self.download_mode == "org":
             if cfg.fits_inline(drive_file.size):
                 new_info = {
-                    "Content returned to Claude": (
+                    "Content returned to {agent}": (
                         f"Yes — file bytes are included in the tool result (file is "
                         f"{drive_file.size:,} bytes, under this org's {cfg.inline_max_bytes:,}-byte "
                         "inline-delivery limit)"
@@ -940,13 +940,13 @@ class DriveConnector(Connector):
                 }
             else:
                 new_info = {
-                    "Content returned to Claude": (
+                    "Content returned to {agent}": (
                         "None — a one-time link is generated for you to open in your own browser"
                     ),
                 }
         else:
             new_info = {
-                "Content returned to Claude": "None — file bytes are never sent",
+                "Content returned to {agent}": "None — file bytes are never sent",
                 "Saved to": displayed_dest,
             }
         details = (
