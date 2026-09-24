@@ -35,10 +35,12 @@ Each was checked against the tree on 2026-09-24.
   "every AI system on that machine holds the same credential" therefore now reads "every AI system
   *one OS user* runs holds the same credential". The argument is unchanged: the adversary is still
   an agent running as that user, and it can still read that user's token.
-- **The "Claude" count is 154 occurrences in 40 modules, not 142 in 35** (`grep -ro Claude
-  src/privacyfence --include=*.py | wc -l`, and `grep -rl` for the module count). The
-  user-visible, per-request ones are still the `approval_window_html.py` card copy ADR 0006
-  lists.
+- **The "Claude" count is 139 occurrences in 40 modules, not 142 in 35** (`grep -ro Claude
+  src/privacyfence --include=*.py | wc -l`, and `grep -rl` for the module count). It was 154
+  before #648, which did the copy change ADR 0006 asked to land before detection: the
+  `approval_window_html.py` card copy ADR 0006 lists is now written with an `{agent}`
+  placeholder and filled from one `agent_display_name`, which defaults to
+  `DEFAULT_AGENT_DISPLAY_NAME = "Claude"` until attribution supplies a resolved name.
 
 ### Open question 1: is the handshake reachable without parsing the body?
 
