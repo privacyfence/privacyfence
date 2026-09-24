@@ -1,0 +1,6 @@
+# The Telegram app credentials module is git-ignored (generated at build time from CI secrets by
+# scripts/telegram_credentials.py), and setuptools_scm's file finder only packages tracked files,
+# so without this line it never reaches the sdist -- or the wheel, which `python -m build` builds
+# from the sdist. Absent (a local build without the secrets), this matches nothing and is skipped.
+# See ADR 0040.
+include src/privacyfence/_telegram_credentials.py

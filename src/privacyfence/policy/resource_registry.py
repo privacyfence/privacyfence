@@ -1,30 +1,17 @@
 """The connector resource-type manifest -- one row per kind of resource a rule can name an identity
-of (a Drive folder, a Jira project, a Slack channel, ...), shared by three callers that each need a
-different slice of it (P9 of the policy v2 redesign):
+of (a Drive folder, a Jira project, a Slack channel, ...).
 
-- ``policy.compat.migrate_to_policy_v2`` reads ``expand_grants``/``effective_v1_rules`` to fold a
-  not-yet-migrated, hand-edited ``settings.yaml``'s v1 ``auto_accept_grants`` section into v2 rules
-  at startup -- "v1 sections stay readable indefinitely for hand-edited installs" (the redesign
-  proposal's P4 exit note). Before P9, this same manifest lived in ``resource_grants.py`` as a live,
-  writable module: add/remove/describe a grant, resolve a grant row's display name, three surfaces
-  (local Settings' old per-connector page, the popup's own bridge alias, org mode's settings page)
-  writing to ``auto_accept_grants`` directly. None of that survives -- every rule, wherever it
-  originated, now lives in the v2 ``auto_accept:`` section (``policy/store.py``), and every surface
-  writes exactly that -- but the manifest itself (which resource types exist, which capability
-  compiles to which (operation_key, rule_name) pairs, how to resolve an id to a display name) is
-  still the single source of truth for the two live things below.
+Two live callers read it:
+
 - ``resource_names.py``'s ``ResourceNameResolver`` calls a ``GrantResourceType``'s ``resolver`` to
   turn an opaque id (a folder id, a project key) into the display name the Auto-accept Settings page
-  shows next to a v2 rule's own value (``settings_controller.SettingsController.
-  _resolved_rule_value``) -- the same predicate names double as v2 scope predicates
-  (``policy/scopes.py``), so the same resource-type manifest resolves either one's value.
-- ``gate.propose_rule_change``'s deprecated ``target="grant"`` alias builds v2 rules straight from
-  ``GRANT_RESOURCE_TYPES`` the same way migration does, rather than through a grant-entry CRUD API
-  that has no live config section to write into anymore.
+  shows next to a rule's value (``settings_controller.SettingsController._resolved_rule_value``,
+  keyed through ``settings_controller.RULE_NAME_TO_RESOURCE_TYPE``, which is built from each
+  capability's target predicates).
+- ``auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS`` derives its operation list from
+  ``DRIVE_SANDBOX_WRITE_TARGETS``.
 
-A new grant-*shaped* feature belongs in ``policy/scopes.py`` as a v2 scope, not as a new entry here
--- this module only ever grows to keep migration and name resolution correct for what v1 could
-already express.
+A new grant-*shaped* feature belongs in ``policy/scopes.py`` as a scope, not as a new entry here.
 """
 from __future__ import annotations
 
@@ -34,7 +21,7 @@ from typing import Any, Callable
 
 @dataclass(frozen=True)
 class GrantCapability:
-    """One toggleable capability of a v1 grant (e.g. "read auto-accept").
+    """One capability of a resource type (e.g. "read auto-accept").
 
     ``targets`` is the list of (operation_key, rule_name) pairs a capability compiles to -- almost
     always one pair, but e.g. a sandbox folder's "write" capability spans several Drive/Sheets/Docs
@@ -113,19 +100,6 @@ def _resolve_salesforce_report(client: Any, resource_id: str) -> str | None:
         return None
 
 
-def _identity_value_of(entry: dict[str, Any]) -> Any:
-    """``GrantResourceType.value_of``'s default: the whole v1 grant entry.
-
-    A module-level function rather than the inline ``lambda entry: entry`` this used to be. The
-    lambda was correct -- a dataclass field default is assigned onto the instance by the generated
-    ``__init__``, so it never became a bound method and ``rt.value_of(entry)`` always passed
-    exactly one argument -- but it sits in a class body, which every static analyzer reads as a
-    method definition and then flags the one-argument call as passing too many. Naming it here
-    says the same thing to a reader and to an analyzer at once, and retires an ``E731`` waiver.
-    """
-    return entry
-
-
 @dataclass(frozen=True)
 class GrantResourceType:
     """One kind of resource a rule can name the identity of (a Drive folder, a Jira project, ...).
@@ -135,35 +109,22 @@ class GrantResourceType:
     connector dependencies installed (google-api-python-client, slack_sdk, atlassian-python-api).
     """
 
-    connector: str  # top-level key in v1 auto_accept_grants, e.g. "drive"
-    config_key: str  # nested key, e.g. "folders", "task_lists"
-    id_field: str  # "id" for most resources; "key" for Jira/Confluence
+    connector: str  # e.g. "drive"
+    config_key: str  # resource kind within the connector, e.g. "folders", "task_lists"
     capabilities: dict[str, GrantCapability]
     # (client, resource_id) -> display name, or None if not resolvable right now.
     resolver: Callable[[Any, str], str | None]
-    # Build the rule value contributed by one v1 grant entry. Defaults to just the id.
-    value_of: Callable[[dict[str, Any]], Any] = _identity_value_of
-
-    def id_of(self, entry: dict[str, Any]) -> str:
-        return str(entry.get(self.id_field, ""))
 
 
-def _plain_value_of(id_field: str) -> Callable[[dict[str, Any]], Any]:
-    return lambda entry: entry.get(id_field, "")
-
-
-# Canonical enumeration of every (operation_key, rule_name) pair a trusted Drive folder's *read*
-# auto-accept covered under v1 -- see the redesign proposal's F1: three v1 rule names
-# (approved_folder here, approved_sandbox_folder/parent_folder_allowlist/
-# move_within_approved_folders below) for what v2 collapses onto one drive.folder scope type.
+# Every (operation_key, rule_name) pair a trusted Drive folder's *read* auto-accept covers.
 DRIVE_FOLDER_READ_TARGETS: tuple[tuple[str, str], ...] = (
     ("drive.read_file_contents", "approved_folder"),
     ("drive.download_file", "approved_folder"),
     ("sheets.read_values", "approved_folder"),
 )
 
-# Canonical enumeration of every (operation_key, rule_name) pair a trusted Drive "sandbox" folder's
-# *write* auto-accept covered under v1, spanning all three tool families that write into a Drive
+# Every (operation_key, rule_name) pair a trusted Drive "sandbox" folder's *write* auto-accept
+# covers, spanning all three tool families that write into a Drive
 # file: Drive's own writes, every Sheets write tool, and every Docs write tool. Still the single
 # source of truth ``auto_accept.TEMP_ACCEPT_ELIGIBLE_OPERATIONS`` derives its own list from -- that
 # grace window is unrelated to grants as a *storage* concept but happens to cover the same tool set.
@@ -185,17 +146,17 @@ DRIVE_SANDBOX_WRITE_TARGETS: tuple[tuple[str, str], ...] = (
 
 GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
     GrantResourceType(
-        connector="drive", config_key="folders", id_field="id",
+        connector="drive", config_key="folders",
         capabilities={"read": GrantCapability("Read auto-accept", DRIVE_FOLDER_READ_TARGETS)},
-        resolver=_resolve_drive_file, value_of=_plain_value_of("id"),
+        resolver=_resolve_drive_file,
     ),
     GrantResourceType(
-        connector="drive", config_key="sandbox_folders", id_field="id",
+        connector="drive", config_key="sandbox_folders",
         capabilities={"write": GrantCapability("Write auto-accept", DRIVE_SANDBOX_WRITE_TARGETS)},
-        resolver=_resolve_drive_file, value_of=_plain_value_of("id"),
+        resolver=_resolve_drive_file,
     ),
     GrantResourceType(
-        connector="tasks", config_key="task_lists", id_field="id",
+        connector="tasks", config_key="task_lists",
         capabilities={
             "create": GrantCapability("Auto-accept new tasks", (("tasks.create_task", "approved_task_list"),)),
             "edit": GrantCapability("Auto-accept edits", (("tasks.update_task", "approved_task_list"),)),
@@ -205,10 +166,10 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
             )),
             "move": GrantCapability("Auto-accept moves", (("tasks.move_task", "approved_task_list"),)),
         },
-        resolver=_resolve_task_list, value_of=_plain_value_of("id"),
+        resolver=_resolve_task_list,
     ),
     GrantResourceType(
-        connector="slack", config_key="channels", id_field="id",
+        connector="slack", config_key="channels",
         capabilities={
             "read": GrantCapability("Read auto-accept", (
                 ("slack.read_messages", "approved_channel"),
@@ -216,10 +177,10 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
             )),
             "send": GrantCapability("Send auto-accept", (("slack.send_message", "approved_recipient"),)),
         },
-        resolver=_resolve_slack_channel, value_of=_plain_value_of("id"),
+        resolver=_resolve_slack_channel,
     ),
     GrantResourceType(
-        connector="telegram", config_key="chats", id_field="id",
+        connector="telegram", config_key="chats",
         capabilities={
             "read": GrantCapability("Read auto-accept", (
                 ("telegram.read_chat_messages", "approved_chats"),
@@ -227,10 +188,10 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
             )),
             "send": GrantCapability("Send auto-accept", (("telegram.send_message", "approved_chats"),)),
         },
-        resolver=_resolve_telegram_chat, value_of=_plain_value_of("id"),
+        resolver=_resolve_telegram_chat,
     ),
     GrantResourceType(
-        connector="jira", config_key="projects", id_field="key",
+        connector="jira", config_key="projects",
         capabilities={
             "read": GrantCapability("Read auto-accept", (("jira.read_issue", "approved_project_keys"),)),
             "create": GrantCapability("Auto-accept new issues", (("jira.create_issue", "approved_project_keys"),)),
@@ -240,10 +201,10 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
                 ("jira.transition_issue", "approved_project_keys"),
             )),
         },
-        resolver=_resolve_jira_project, value_of=_plain_value_of("key"),
+        resolver=_resolve_jira_project,
     ),
     GrantResourceType(
-        connector="confluence", config_key="spaces", id_field="key",
+        connector="confluence", config_key="spaces",
         capabilities={
             "read": GrantCapability("Read auto-accept", (
                 ("confluence.read_page", "approved_space_keys"),
@@ -252,10 +213,10 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
             "create": GrantCapability("Auto-accept new pages", (("confluence.create_page", "approved_space_keys"),)),
             "update": GrantCapability("Auto-accept updates", (("confluence.update_page", "approved_space_keys"),)),
         },
-        resolver=_resolve_confluence_space, value_of=_plain_value_of("key"),
+        resolver=_resolve_confluence_space,
     ),
     GrantResourceType(
-        connector="calendar", config_key="calendars", id_field="id",
+        connector="calendar", config_key="calendars",
         capabilities={
             "read": GrantCapability("Read auto-accept", (("calendar.read_event_details", "personal_calendar"),)),
             "write": GrantCapability("Create/modify auto-accept", (
@@ -265,12 +226,12 @@ GRANT_RESOURCE_TYPES: tuple[GrantResourceType, ...] = (
                 ("calendar.delete_event", "personal_calendar"),
             )),
         },
-        resolver=_resolve_calendar, value_of=_plain_value_of("id"),
+        resolver=_resolve_calendar,
     ),
     GrantResourceType(
-        connector="salesforce", config_key="reports", id_field="id",
+        connector="salesforce", config_key="reports",
         capabilities={"run": GrantCapability("Read auto-accept", (("salesforce.run_report", "approved_report_ids"),))},
-        resolver=_resolve_salesforce_report, value_of=_plain_value_of("id"),
+        resolver=_resolve_salesforce_report,
     ),
 )
 
@@ -283,63 +244,11 @@ def resource_type(connector: str, config_key: str) -> GrantResourceType | None:
     return _BY_CONNECTOR_AND_KEY.get((connector, config_key))
 
 
-def get_grant_entries(grants_cfg: dict[str, Any], rt: GrantResourceType) -> list[dict[str, Any]]:
-    return list((grants_cfg.get(rt.connector) or {}).get(rt.config_key) or [])
-
-
-def expand_grants(grants_cfg: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Compile a v1 ``auto_accept_grants`` section into the ``{operation_key: [{"rule", "value"},
-    ...]}`` shape ``policy.compat.compile_rules`` already knows how to turn into v2 ``PolicyRule``s
-    -- migration's read of a grant is otherwise identical to its read of a plain
-    ``auto_accept_rules`` entry."""
-    buckets: dict[tuple[str, str], list[Any]] = {}
-    for rt in GRANT_RESOURCE_TYPES:
-        entries = get_grant_entries(grants_cfg, rt)
-        if not entries:
-            continue
-        for capability_key, capability in rt.capabilities.items():
-            values = []
-            for entry in entries:
-                if not entry.get(capability_key):
-                    continue
-                value = rt.value_of(entry)
-                if value not in values:
-                    values.append(value)
-            if not values:
-                continue
-            for op_key, rule_name in capability.targets:
-                bucket = buckets.setdefault((op_key, rule_name), [])
-                for value in values:
-                    if value not in bucket:
-                        bucket.append(value)
-
-    compiled: dict[str, list[dict[str, Any]]] = {}
-    for (op_key, rule_name), values in buckets.items():
-        compiled.setdefault(op_key, []).append({"rule": rule_name, "value": values})
-    return compiled
-
-
-def effective_v1_rules(cfg: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Everything a not-yet-migrated config's ``auto_accept_rules`` plus grant-expanded
-    ``auto_accept_grants`` amount to -- what ``policy.compat.migrate_to_policy_v2`` compiles from.
-    Replaces ``resource_grants.build_effective_rules``, read-only and migration-only."""
-    rules: dict[str, list[dict[str, Any]]] = {
-        op_key: [dict(r) for r in (op_rules or [])]
-        for op_key, op_rules in (cfg.get("auto_accept_rules") or {}).items()
-    }
-    for op_key, entries in expand_grants(cfg.get("auto_accept_grants") or {}).items():
-        rules.setdefault(op_key, []).extend(entries)
-    return rules
-
-
 __all__ = [
     "DRIVE_FOLDER_READ_TARGETS",
     "DRIVE_SANDBOX_WRITE_TARGETS",
     "GRANT_RESOURCE_TYPES",
     "GrantCapability",
     "GrantResourceType",
-    "effective_v1_rules",
-    "expand_grants",
-    "get_grant_entries",
     "resource_type",
 ]
