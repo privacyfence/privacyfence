@@ -42,7 +42,8 @@ def test_write_generates_importable_module(tmp_path: Path) -> None:
     creds = tmp_path / "_telegram_credentials.py"
     env = {"TELEGRAM_API_ID": "12345", "TELEGRAM_API_HASH": "0123456789abcdef"}
 
-    assert telegram_credentials.write(creds, env) == 0
+    rc = telegram_credentials.write(creds, env)
+    assert rc == 0
 
     namespace: dict[str, object] = {}
     exec(creds.read_text(encoding="utf-8"), namespace)  # noqa: S102 -- file this test just wrote
@@ -54,7 +55,8 @@ def test_write_quotes_the_hash_rather_than_interpolating_it(tmp_path: Path) -> N
     creds = tmp_path / "_telegram_credentials.py"
     hostile = 'abc"\nimport os\nx = "'
 
-    assert telegram_credentials.write(creds, {"TELEGRAM_API_ID": "1", "TELEGRAM_API_HASH": hostile}) == 0
+    rc = telegram_credentials.write(creds, {"TELEGRAM_API_ID": "1", "TELEGRAM_API_HASH": hostile})
+    assert rc == 0
 
     namespace: dict[str, object] = {}
     exec(creds.read_text(encoding="utf-8"), namespace)  # noqa: S102 -- file this test just wrote
@@ -70,15 +72,18 @@ def test_write_without_both_secrets_removes_stale_module(tmp_path: Path, env: di
     creds = tmp_path / "_telegram_credentials.py"
     creds.write_text("API_ID = 1\nAPI_HASH = 'stale'\n", encoding="utf-8")
 
-    assert telegram_credentials.write(creds, env) == 0
+    rc = telegram_credentials.write(creds, env)
+    assert rc == 0
     assert not creds.exists()
-    assert telegram_credentials.write(creds, env) == 0  # nothing to remove is fine too
+    rc = telegram_credentials.write(creds, env)
+    assert rc == 0  # nothing to remove is fine too
 
 
 def test_write_rejects_non_integer_api_id(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     creds = tmp_path / "_telegram_credentials.py"
 
-    assert telegram_credentials.write(creds, {"TELEGRAM_API_ID": "12a", "TELEGRAM_API_HASH": "x"}) == 2
+    rc = telegram_credentials.write(creds, {"TELEGRAM_API_ID": "12a", "TELEGRAM_API_HASH": "x"})
+    assert rc == 2
     assert not creds.exists()
     assert "not an integer" in capsys.readouterr().err
 
@@ -94,14 +99,16 @@ def test_check_dist_passes_when_every_archive_has_the_module(tmp_path: Path) -> 
     whl = _wheel(tmp_path / "p-1-py3-none-any.whl", ["privacyfence/__init__.py", MODULE])
     sdist = _sdist(tmp_path / "p-1.tar.gz", ["p-1/src/privacyfence/__init__.py", f"p-1/src/{MODULE}"])
 
-    assert telegram_credentials.check_dist([whl, sdist], require=True) == 0
+    rc = telegram_credentials.check_dist([whl, sdist], require=True)
+    assert rc == 0
 
 
 def test_check_dist_fails_on_stable_when_missing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     whl = _wheel(tmp_path / "p-1-py3-none-any.whl", [MODULE])
     sdist = _sdist(tmp_path / "p-1.tar.gz", ["p-1/src/privacyfence/__init__.py"])
 
-    assert telegram_credentials.check_dist([whl, sdist], require=True) == 1
+    rc = telegram_credentials.check_dist([whl, sdist], require=True)
+    assert rc == 1
     out = capsys.readouterr().out
     assert out.count("::error::") == 1
     assert "p-1.tar.gz" in out.split("::error::")[1]
@@ -111,12 +118,14 @@ def test_check_dist_fails_on_stable_when_missing(tmp_path: Path, capsys: pytest.
 def test_check_dist_only_warns_otherwise(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     whl = _wheel(tmp_path / "p-1-py3-none-any.whl", ["privacyfence/__init__.py"])
 
-    assert telegram_credentials.check_dist([whl], require=False) == 0
+    rc = telegram_credentials.check_dist([whl], require=False)
+    assert rc == 0
     assert "::warning::" in capsys.readouterr().out
 
 
 def test_check_dist_with_no_files_is_an_error() -> None:
-    assert telegram_credentials.check_dist([], require=False) == 2
+    rc = telegram_credentials.check_dist([], require=False)
+    assert rc == 2
 
 
 def test_check_dist_rejects_unknown_archive(tmp_path: Path) -> None:
@@ -129,11 +138,13 @@ def test_main_dispatches_both_subcommands(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(telegram_credentials, "CREDS_PATH", creds)
     monkeypatch.setenv("TELEGRAM_API_ID", "7")
     monkeypatch.setenv("TELEGRAM_API_HASH", "abc")
-    assert telegram_credentials.main(["write"]) == 0
+    rc = telegram_credentials.main(["write"])
+    assert rc == 0
     assert creds.exists()
 
     whl = _wheel(tmp_path / "p-1-py3-none-any.whl", [])
-    assert telegram_credentials.main(["check-dist", "--require", str(whl)]) == 1
+    rc = telegram_credentials.main(["check-dist", "--require", str(whl)])
+    assert rc == 1
 
 
 def test_generated_module_is_git_ignored_but_packaged() -> None:
