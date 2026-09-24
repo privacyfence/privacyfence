@@ -118,7 +118,7 @@ class TestPerPrincipalTokenStorage:
     """ADR 0008: each principal's own persisted token, and where it lives
     depending on whether this install is separated."""
 
-    def test_unseparated_uses_the_legacy_handoff_path(self, tmp_path, monkeypatch):
+    def test_unseparated_uses_the_handoff_path(self, tmp_path, monkeypatch):
         monkeypatch.setattr(mcp_auth.privilege_separation, "is_enabled", lambda: False)
         monkeypatch.setattr(mcp_auth.paths, "handoff_dir", lambda: tmp_path)
 
@@ -164,30 +164,24 @@ class TestPerPrincipalTokenStorage:
         assert rotated != original
         assert await verifier.verify_token(original) is None
 
-    def test_delete_legacy_shared_mcp_token_is_a_noop_when_unseparated(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(mcp_auth.privilege_separation, "is_enabled", lambda: False)
-        monkeypatch.setattr(mcp_auth.paths, "handoff_dir", lambda: tmp_path)
-        (tmp_path / mcp_auth.MCP_TOKEN_FILE_NAME).write_text("stillhere", encoding="utf-8")
-
-        mcp_auth.delete_legacy_shared_mcp_token()
-
-        assert (tmp_path / mcp_auth.MCP_TOKEN_FILE_NAME).read_text(encoding="utf-8") == "stillhere"
-
-    def test_delete_legacy_shared_mcp_token_removes_it_when_separated(self, tmp_path, monkeypatch):
+    def test_separated_never_reads_a_handoff_mcp_token(self, tmp_path, monkeypatch):
+        # ADR 0041: a separated install's tokens live only under
+        # authority_dir(). A file at the unseparated handoff path is neither
+        # read nor touched -- it is not this daemon's state.
+        handoff = tmp_path / "handoff"
+        authority = tmp_path / "authority"
+        handoff.mkdir()
+        authority.mkdir()
         monkeypatch.setattr(mcp_auth.privilege_separation, "is_enabled", lambda: True)
-        monkeypatch.setattr(mcp_auth.paths, "handoff_dir", lambda: tmp_path)
-        legacy = tmp_path / mcp_auth.MCP_TOKEN_FILE_NAME
-        legacy.write_text("shared-secret", encoding="utf-8")
+        monkeypatch.setattr(mcp_auth.paths, "handoff_dir", lambda: handoff)
+        monkeypatch.setattr(mcp_auth.paths, "authority_dir", lambda principal=None: authority)
+        stray = handoff / mcp_auth.MCP_TOKEN_FILE_NAME
+        stray.write_text("shared-secret", encoding="utf-8")
 
-        mcp_auth.delete_legacy_shared_mcp_token()
+        token = mcp_auth.load_or_create_mcp_token()
 
-        assert not legacy.exists()
-
-    def test_delete_legacy_shared_mcp_token_handles_a_missing_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(mcp_auth.privilege_separation, "is_enabled", lambda: True)
-        monkeypatch.setattr(mcp_auth.paths, "handoff_dir", lambda: tmp_path)
-
-        mcp_auth.delete_legacy_shared_mcp_token()  # must not raise
+        assert token != "shared-secret"
+        assert stray.read_text(encoding="utf-8") == "shared-secret"
 
 
 class TestPreloadVerifier:

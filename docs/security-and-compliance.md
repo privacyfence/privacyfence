@@ -65,8 +65,7 @@ standing.
 A local process running as the signed-in user can:
 
 - read the current sign-in link straight out of `handoff/approvals_url` — **no longer: that file
-  is not written any more** (the self-approval plan's Phase 2), and any left by an older version is
-  deleted on the next start. It was the second of the three paths to a session §02 of that review
+  is not written any more** (the self-approval plan's Phase 2). It was the second of the three paths to a session §02 of that review
   counts, and the only one that took no more than reading a file;
 - connect to the control channel under the data directory's `authority` subdirectory ([#428](https://github.com/privacyfence/privacyfence/issues/428)
   Phase 1 split this, and `config/settings.yaml`, enrolled WebAuthn credentials, and the audit log,
