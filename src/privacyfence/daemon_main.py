@@ -619,6 +619,19 @@ def setup_logging(config: dict[str, Any]) -> None:
 # always starts.
 # ---------------------------------------------------------------------------- #
 
+def _local_agent_overrides(config: dict[str, Any], config_path: str) -> Any:
+    """``settings.yaml``'s ``agent_overrides:`` section (ADR 0006 option D), attested only when
+    ``config_path`` is the separated install's service-owned authority copy -- see
+    ``agent_overrides.overrides_are_attested``. An empty ``config_path`` (a caller that never
+    said where ``config`` came from) can vouch for nothing, so it relabels only."""
+    from . import agent_overrides
+
+    attested = bool(config_path) and agent_overrides.overrides_are_attested(
+        config_path, authority_root(Path(PROJECT_ROOT)),
+    )
+    return agent_overrides.from_config(config, attested=attested)
+
+
 def _maybe_start_web_server(
     config: dict[str, Any],
     connector_host: ConnectorHost,
@@ -850,6 +863,7 @@ def _maybe_start_web_server(
         notifications_detail=str(notifications_config.get("detail", "minimal")),
         # #426 Phase 1: mounts /security for local-mode passkey enrollment.
         step_up=local_step_up,
+        agent_overrides=_local_agent_overrides(config, config_path),
     )
     server.start()
     # The pending-result URL gate.py hands back to Claude (§5.2 point 4) is
