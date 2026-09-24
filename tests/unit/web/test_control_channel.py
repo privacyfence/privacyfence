@@ -1119,6 +1119,65 @@ class TestCompanionChannelPeerVerification:
         finally:
             server.stop()
 
+    def _separated_as_someone_else(self, monkeypatch):
+        """Separated, with the service account some other uid -- so this
+        test process connects as the companion's *own* user, which is what
+        a click-launched one-shot is."""
+        from privacyfence import privilege_separation
+
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)
+        monkeypatch.setattr(privilege_separation, "service_account_uid", lambda: os.getuid() + 1)
+
+    def test_the_companions_own_user_may_ask_for_a_page(self, tmp_path, monkeypatch):
+        """ADR 0031: ``SHOW /approvals``/``SHOW /settings`` from this user --
+        the macOS app icon, the Windows Start Menu entry, Linux's
+        applications menu -- reaches the handler, whose dialog is the gate.
+        Before ADR 0031 this was refused on a separated POSIX install, so
+        every such click fell back to a link that could not approve."""
+        self._separated_as_someone_else(monkeypatch)
+        shown = []
+        monkeypatch.setattr(cc, "_show_page", lambda path: shown.append(path) or "OK\n")
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="SHOW /approvals\n").startswith("OK")
+            assert _mint(server.address, message="SHOW /settings\n").startswith("OK")
+            assert shown == ["/approvals", "/settings"]
+        finally:
+            server.stop()
+
+    @pytest.mark.parametrize("message", [
+        "SHOW RECOVERY ABCD-EFGH-IJKL-MNOP\n",
+        "SHOW /security\n",
+        "SHOW\n",
+        "OPEN https://example.com/callback\n",
+        "CONFIRM ENROLL\n",
+        "CONFIRM MINT some-nonce\n",
+    ])
+    def test_nothing_else_is_open_to_the_companions_own_user(self, tmp_path, monkeypatch, message):
+        """The exception is exactly the two page ``SHOW``s. ``SHOW RECOVERY``
+        puts a recovery code on screen and ``OPEN``/``CONFIRM`` are the
+        daemon's own call-backs -- none of them carries a dialog of its own
+        that would make a same-user caller safe."""
+        self._separated_as_someone_else(monkeypatch)
+        monkeypatch.setattr(cc, "_handle_companion_request", lambda line: pytest.fail(f"dispatched {line!r}"))
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message=message) == "ERROR peer not authorized\n"
+        finally:
+            server.stop()
+
+    def test_another_group_members_uid_may_not_ask_for_a_page(self, tmp_path, monkeypatch):
+        """ADR 0027: the socket is group-shared, so a different member can
+        connect -- but a page ``SHOW`` is this user's own and nobody else's."""
+        self._separated_as_someone_else(monkeypatch)
+        monkeypatch.setattr(cc, "_peer_uid_posix", lambda conn: os.getuid() + 2)
+        monkeypatch.setattr(cc, "_show_page", lambda path: pytest.fail("showed a page"))
+        server = self._server(tmp_path, monkeypatch)
+        try:
+            assert _mint(server.address, message="SHOW /approvals\n") == "ERROR peer not authorized\n"
+        finally:
+            server.stop()
+
     def test_control_channel_server_never_checks_peer_identity(self, tmp_path, monkeypatch):
         """ADR 0002 decision 6: the daemon's own MINT/QUIT channel is
         deliberately not gated this way, separated or not -- companion and
@@ -1642,6 +1701,17 @@ class TestAttestedMintClientHelpers:
         assert cc.request_show("/approvals", timeout=10.0) is True
         assert shown == ["/approvals"]
 
+    def test_a_companion_that_answered_without_opening_is_a_failure_not_an_absence(
+        self, both_channels, monkeypatch,
+    ):
+        """A Deny is not "no companion": --launch must not start a second
+        tray beside one that just answered (ADR 0031)."""
+        monkeypatch.setattr(cc, "_confirm_linux", lambda prompt, *, timeout: False)
+        monkeypatch.setattr(cc.privilege_separation, "current_platform", lambda: "linux")
+
+        assert cc.show_via_companion("/approvals", timeout=10.0) == cc.SHOW_FAILED
+        assert cc.request_show("/approvals", timeout=10.0) is False
+
     def test_request_mint_attestation_is_true_only_for_a_live_nonce(self, both_channels):
         nonce = cc.issue_mint_nonce()
 
@@ -1679,6 +1749,44 @@ class TestAttestedMintWithNoCompanion:
     def test_request_show_is_false_rather_than_raising(self):
         # companion.py falls back from here rather than failing the click.
         assert cc.request_show("/approvals", timeout=1.0) is False
+
+    def test_show_via_companion_asks_this_users_own_companion(self, monkeypatch):
+        """ADR 0008: a second account's companion binds ``os-<uid>``, not the
+        owner's ``local`` -- and a standalone process's ``current_principal()``
+        is always ``local``, so resolving from it would send that account's
+        click to the owner's companion instead."""
+        asked = []
+        monkeypatch.setattr(cc, "current_os_principal_id", lambda: "os-4242")
+        monkeypatch.setattr(cc, "companion_socket_path", lambda principal_id: asked.append(principal_id) or "/nonexistent/pf.sock")
+        assert cc.show_via_companion("/approvals", timeout=1.0) == cc.SHOW_NO_COMPANION
+        assert asked == ["os-4242"]
+
+    @pytest.mark.parametrize(("outcome", "expected"), [
+        (OSError("no such pipe"), cc.SHOW_NO_COMPANION),
+        (cc.ControlChannelError("broken pipe"), cc.SHOW_FAILED),
+        ("OK\n", cc.SHOW_OPENED),
+        ("ERROR opening PrivacyFence was denied\n", cc.SHOW_FAILED),
+    ])
+    def test_show_via_companion_on_windows(self, monkeypatch, outcome, expected):
+        """``send_line_windows()`` raises a plain ``OSError`` only when it
+        cannot connect, and ``ControlChannelError`` for anything after."""
+        from privacyfence import paths
+
+        monkeypatch.setattr(paths, "is_windows", lambda: True)
+        monkeypatch.setattr(cc, "current_os_principal_id", lambda: "local")
+
+        def _send(pipe_name, message, *, timeout):
+            assert message == "SHOW /approvals\n"
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        monkeypatch.setattr(cc, "send_line_windows", _send)
+        assert cc.show_via_companion("/approvals", timeout=1.0) == expected
+
+    def test_show_via_companion_says_there_is_no_companion(self):
+        # What lets --launch (ADR 0031) become the tray: nothing to connect to.
+        assert cc.show_via_companion("/approvals", timeout=1.0) == cc.SHOW_NO_COMPANION
 
     def test_request_mint_attestation_is_false_rather_than_raising(self):
         assert cc.request_mint_attestation("some-nonce", timeout=1.0) is False

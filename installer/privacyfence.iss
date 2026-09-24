@@ -38,11 +38,6 @@
 #define AppName "PrivacyFence"
 #define AppExeName "PrivacyFenceApp.exe"
 #define AliasExeName "privacyfence-app.exe"
-; Where the embedded web settings/approval UI listens by default -- see
-; web/server.py's DEFAULT_PORT / default host. Not user-configurable at
-; install time (no settings UI toggle exists for this on any platform
-; today, same as Phase 3.3's autostart decision).
-#define SettingsUrl "http://localhost:8765/settings"
 ; Matches daemon.ts's Windows DEFAULT_APP_PATH (docs/windows-support-
 ; plan.md Phase 7 / B6) -- keep these in sync if this changes.
 #define InstallDirName "PrivacyFence"
@@ -140,11 +135,13 @@ Source: "..\scripts\windows_privilege_separation.ps1"; DestDir: "{app}"; \
 Source: "windows\privacyfence-companion-task.xml.tmpl"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-; Points at the web settings UI in the default browser, not at the daemon
-; executable directly -- there's nothing useful to show for double-clicking
-; a headless background daemon (same reasoning as the Linux .deb plan's
-; P3.2 for its own .desktop entry).
-Name: "{group}\{#AppName}"; Filename: "{#SettingsUrl}"; IconFilename: "{app}\{#AppExeName}"
+; ADR 0031: opens Approvals through the companion (--launch), which starts
+; the tray icon first if it isn't running -- the same thing a double-click on
+; the macOS app does. Not the daemon executable (a headless service; nothing
+; to show), and no longer the bare settings URL it used to be, which only
+; worked for a browser that already had a session cookie.
+Name: "{group}\{#AppName}"; Filename: "{app}\{#CompanionExeName}"; Parameters: "--launch"; \
+    IconFilename: "{app}\{#AppExeName}"
 ; #428 Phase 4 (B5c): the companion app (ADR 0002), as a thing a human can
 ; start by hand. On a privilege-separated install it is started at sign-in by
 ; its own Scheduled Task and this shortcut is the recovery path when that tray
@@ -152,7 +149,9 @@ Name: "{group}\{#AppName}"; Filename: "{#SettingsUrl}"; IconFilename: "{app}\{#A
 ; there is nothing else in the user's session that can mint a sign-in link or
 ; open a browser for a connector's OAuth flow. On an ordinary install it is
 ; simply the opt-in way to run it, which is what ADR 0002 Phase 3 always
-; intended; the Start Menu entry above still opens the settings page directly.
+; intended. The entry above covers the same recovery (--launch starts the
+; tray when none is running) and opens Approvals as well; this one only
+; starts the tray.
 Name: "{group}\{#AppName} Companion"; Filename: "{app}\{#CompanionExeName}"; \
     IconFilename: "{app}\{#CompanionExeName}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
