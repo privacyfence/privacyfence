@@ -157,6 +157,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
 
+from .agent_identity import agent_scope
 from .approval_ui import get_approval_ui
 from .approval_window_html import NARROW, WIDE
 from .approvals import DEFAULT_MAX_PENDING, PendingApproval, PendingApprovalRegistry, canonical_key
@@ -547,20 +548,27 @@ def _pop_registry_expirations(registry: PendingApprovalRegistry | None) -> None:
     docstring on why "expired" covers that case too)."""
     if registry is None:
         return
+    # Each audit below runs inside agent_scope() of the identity the approval
+    # captured when it was created: this sweep runs inside whatever unrelated
+    # gated call happened to come next, and that call's agent is not the one
+    # that made the request now expiring.
     for approval in registry.pop_expired_events():
-        _audit(
-            created_at=approval.created_at, request_id=approval.request_id, connector=approval.connector,
-            tool=approval.tool, tool_name=approval.tool_name, summary=approval.summary, sender="",
-            decision="expired", auto_accept_rule="", pii_detected=approval.pii_detected,
-            pii_categories=approval.pii_categories, claude_reason=approval.claude_reason,
-        )
+        with agent_scope(approval.agent):
+            _audit(
+                created_at=approval.created_at, request_id=approval.request_id, connector=approval.connector,
+                tool=approval.tool, tool_name=approval.tool_name, summary=approval.summary, sender="",
+                decision="expired", auto_accept_rule="", pii_detected=approval.pii_detected,
+                pii_categories=approval.pii_categories, claude_reason=approval.claude_reason,
+            )
     for approval in registry.pop_expired_ledger_events():
-        _audit(
-            created_at=approval.created_at, request_id=approval.request_id, connector=approval.connector,
-            tool=approval.tool, tool_name=approval.tool_name, summary=approval.summary, sender="",
-            decision="expired", auto_accept_rule=approval.final_rule_name, pii_detected=approval.pii_detected,
-            pii_categories=approval.pii_categories, claude_reason=approval.claude_reason,
-        )
+        with agent_scope(approval.agent):
+            _audit(
+                created_at=approval.created_at, request_id=approval.request_id, connector=approval.connector,
+                tool=approval.tool, tool_name=approval.tool_name, summary=approval.summary, sender="",
+                decision="expired", auto_accept_rule=approval.final_rule_name,
+                pii_detected=approval.pii_detected, pii_categories=approval.pii_categories,
+                claude_reason=approval.claude_reason,
+            )
 
 
 def _on_rules_changed() -> None:

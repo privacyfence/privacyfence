@@ -43,6 +43,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The audit log and its weekly Excel export gain four columns for which AI system made each
+  request** — `agent_id`, `agent_name`, `agent_version` and `agent_source` (audit schema 5,
+  ADR 0006 / ADR 0035). Nothing fills them yet, so every new entry records them empty, which
+  reads as *unknown*; older entries load with them empty too, and a log mixing old and new
+  entries still verifies. The Excel source column is labelled so a claimed identity reads as a
+  claim: only `override` and `oauth_client` are verified.
+
 ### Fixed
 
 - **The Claude Desktop extension no longer fails to connect when PrivacyFence is slow to answer
