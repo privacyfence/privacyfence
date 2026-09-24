@@ -38,7 +38,10 @@ from privacyfence.gmail_client import (
     GmailClient,
     GmailClientError,
     GmailMessage,
+    SendAsAlias,
     resolve_attachment_destination,
+    signature_has_content,
+    signature_plain_text,
 )
 from privacyfence.local_files import LocalFileAccessError
 from googleapiclient.errors import HttpError
@@ -1262,6 +1265,190 @@ class TestCreateReplyDraftWithAttachmentsRichText:
 # Label operations
 # ---------------------------------------------------------------------------- #
 
+_SIGNATURE_HTML = '<div dir="ltr">Ada Lovelace<br>Analytical Engines Ltd</div>'
+
+
+def _send_as_service(entries: list[dict]) -> MagicMock:
+    service = MagicMock()
+    service.users.return_value.settings.return_value.sendAs.return_value.list.return_value.execute.return_value = {
+        "sendAs": entries,
+    }
+    service.users.return_value.drafts.return_value.create.return_value.execute.return_value = {"id": "d1"}
+    return service
+
+
+def _draft_parts(service: MagicMock):
+    raw = service.users.return_value.drafts.return_value.create.call_args.kwargs["body"]["message"]["raw"]
+    parsed, _ = _extract_parts(raw)
+    by_type = {
+        part.get_content_type(): part.get_payload(decode=True).decode()
+        for part in parsed.walk()
+        if part.get_content_maintype() == "text" and part.get_filename() is None
+    }
+    return parsed, by_type
+
+
+class TestListSendAs:
+    def test_normalizes_entries_and_skips_ones_without_an_address(self):
+        service = _send_as_service([
+            {"sendAsEmail": "me@x.com", "displayName": "Me", "signature": _SIGNATURE_HTML,
+             "isDefault": True, "isPrimary": True},
+            {"sendAsEmail": "alias@x.com"},
+            {"displayName": "no address"},
+        ])
+        aliases = make_client(service).list_send_as()
+
+        assert aliases == [
+            SendAsAlias("me@x.com", "Me", _SIGNATURE_HTML, True, True),
+            SendAsAlias("alias@x.com"),
+        ]
+
+    def test_cached_within_ttl_refetched_after(self, monkeypatch):
+        service = _send_as_service([{"sendAsEmail": "me@x.com"}])
+        client = make_client(service)
+        now = [1000.0]
+        monkeypatch.setattr("privacyfence.gmail_client.time.monotonic", lambda: now[0])
+        list_call = service.users.return_value.settings.return_value.sendAs.return_value.list
+
+        client.list_send_as()
+        client.list_send_as()
+        assert list_call.call_count == 1
+
+        now[0] += 301
+        client.list_send_as()
+        assert list_call.call_count == 2
+
+    def test_http_error_becomes_gmail_client_error(self):
+        service = MagicMock()
+        service.users.return_value.settings.return_value.sendAs.return_value.list.return_value.execute.side_effect = (
+            http_error(403)
+        )
+        with pytest.raises(GmailClientError, match="list_send_as failed"):
+            make_client(service).list_send_as()
+
+
+class TestResolveSendAs:
+    ENTRIES = [
+        {"sendAsEmail": "me@x.com", "isPrimary": True},
+        {"sendAsEmail": "Team@X.com", "displayName": "Team", "isDefault": True},
+    ]
+
+    def test_empty_picks_the_default_alias(self):
+        assert make_client(_send_as_service(self.ENTRIES)).resolve_send_as().email == "Team@X.com"
+
+    def test_falls_back_to_primary_then_first(self):
+        client = make_client(_send_as_service([{"sendAsEmail": "a@x.com"}, {"sendAsEmail": "p@x.com", "isPrimary": True}]))
+        assert client.resolve_send_as().email == "p@x.com"
+        client = make_client(_send_as_service([{"sendAsEmail": "a@x.com"}]))
+        assert client.resolve_send_as().email == "a@x.com"
+
+    def test_matches_case_insensitively_and_accepts_a_display_name_form(self):
+        client = make_client(_send_as_service(self.ENTRIES))
+        assert client.resolve_send_as("team@x.com").email == "Team@X.com"
+        assert client.resolve_send_as("Whoever <ME@x.com>").email == "me@x.com"
+
+    def test_unknown_address_is_rejected_listing_the_known_ones(self):
+        client = make_client(_send_as_service(self.ENTRIES))
+        with pytest.raises(GmailClientError, match=r"not one of .*me@x.com, Team@X.com"):
+            client.resolve_send_as("stranger@y.com")
+
+    def test_no_aliases_at_all_raises(self):
+        with pytest.raises(GmailClientError, match="no send-as addresses"):
+            make_client(_send_as_service([])).resolve_send_as()
+
+    def test_from_header_encodes_only_the_display_name(self):
+        header = SendAsAlias("zs@x.com", "Zsófia Kovács").from_header()
+        assert header.endswith("<zs@x.com>")
+        assert "Zsófia" not in header
+
+
+class TestDraftSignature:
+    def test_signature_plain_text_has_the_rfc3676_separator(self):
+        assert signature_plain_text(_SIGNATURE_HTML) == "\n\n-- \nAda Lovelace\nAnalytical Engines Ltd"
+
+    @pytest.mark.parametrize("signature", ["", "   ", "<div><br></div>"])
+    def test_empty_signature_appends_nothing(self, signature):
+        assert signature_plain_text(signature) == ""
+        service = _send_as_service([])
+        make_client(service).create_draft(to="a@x.com", subject="s", body="Hello", signature_html=signature)
+        parsed, parts = _draft_parts(service)
+        assert parts == {"text/plain": "Hello"}
+
+    def test_image_only_signature_reaches_the_html_part_only(self):
+        logo = '<img src="https://example.com/logo.png">'
+        assert signature_has_content(logo)
+        service = _send_as_service([])
+        make_client(service).create_draft(
+            to="a@x.com", subject="s", body="", body_markdown="Hi", signature_html=logo,
+        )
+        _, parts = _draft_parts(service)
+        assert parts["text/plain"] == "Hi"
+        assert parts["text/html"].endswith(f'<div class="gmail_signature">{logo}</div>')
+
+    def test_plain_body_gets_the_text_signature_and_stays_plain(self):
+        service = _send_as_service([])
+        make_client(service).create_draft(to="a@x.com", subject="s", body="Hello", signature_html=_SIGNATURE_HTML)
+
+        parsed, parts = _draft_parts(service)
+        assert not parsed.is_multipart()
+        assert parts["text/plain"] == "Hello" + signature_plain_text(_SIGNATURE_HTML)
+
+    def test_markdown_body_gets_html_and_text_signatures(self):
+        service = _send_as_service([])
+        make_client(service).create_draft(
+            to="a@x.com", subject="s", body="", body_markdown="**Hi**", signature_html=_SIGNATURE_HTML,
+        )
+
+        _, parts = _draft_parts(service)
+        assert parts["text/plain"].endswith(signature_plain_text(_SIGNATURE_HTML))
+        assert parts["text/html"].endswith(f'<br><div class="gmail_signature">{_SIGNATURE_HTML}</div>')
+        assert parts["text/html"].startswith("<p><b>Hi</b></p>")
+
+    def test_from_header_set_only_when_given(self):
+        service = _send_as_service([])
+        client = make_client(service)
+        client.create_draft(to="a@x.com", subject="s", body="b")
+        assert _draft_parts(service)[0]["from"] is None
+
+        client.create_draft(to="a@x.com", subject="s", body="b", from_header="Team <team@x.com>")
+        assert _draft_parts(service)[0]["from"] == "Team <team@x.com>"
+
+    def test_reply_draft_appends_signature_and_sets_from(self):
+        service = make_reply_service({"Subject": "Original", "From": "sender@x.com", "Message-ID": "<o@x.com>"})
+        make_client(service).create_reply_draft(
+            "m1", body="Thanks", my_email="me@x.com",
+            signature_html=_SIGNATURE_HTML, from_header="Team <team@x.com>",
+        )
+        parsed, parts = _draft_parts(service)
+        assert parsed["from"] == "Team <team@x.com>"
+        assert parts["text/plain"] == "Thanks" + signature_plain_text(_SIGNATURE_HTML)
+
+    def test_draft_with_attachments_appends_signature_and_sets_from(self, tmp_path):
+        attachment = tmp_path / "f.txt"
+        attachment.write_bytes(b"x")
+        service = _send_as_service([])
+        make_client(service).create_draft_with_attachments(
+            to="a@x.com", subject="s", body="Hello", attachments=[str(attachment)],
+            signature_html=_SIGNATURE_HTML, from_header="team@x.com",
+        )
+        parsed, parts = _draft_parts(service)
+        assert parsed["from"] == "team@x.com"
+        assert parts["text/plain"] == "Hello" + signature_plain_text(_SIGNATURE_HTML)
+
+    def test_reply_draft_with_attachments_appends_signature_and_sets_from(self, tmp_path):
+        attachment = tmp_path / "f.txt"
+        attachment.write_bytes(b"x")
+        service = make_reply_service({"Subject": "Original", "From": "sender@x.com"})
+        make_client(service).create_reply_draft_with_attachments(
+            "m1", body="", body_markdown="Thanks", attachments=[str(attachment)], my_email="me@x.com",
+            signature_html=_SIGNATURE_HTML, from_header="team@x.com",
+        )
+        parsed, parts = _draft_parts(service)
+        assert parsed["from"] == "team@x.com"
+        assert parts["text/plain"].endswith(signature_plain_text(_SIGNATURE_HTML))
+        assert 'class="gmail_signature"' in parts["text/html"]
+
+
 class TestAddLabel:
     def test_reuses_existing_label_id(self):
         service = MagicMock()
@@ -1868,3 +2055,19 @@ class TestLiveFixtureParsing:
         message = client._parse_message(raw)
 
         assert message.sender and message.date and message.subject
+
+    def test_list_send_as_fixture_resolves_a_default_alias_and_renders_its_signature(self):
+        path = LIVE_FIXTURES_DIR / "list_send_as.json"
+        if not path.exists():
+            pytest.skip(
+                f"{path} not recorded yet -- run "
+                "`python3 scripts/qa_fixture_recorder.py --record gmail` locally first"
+            )
+        client = make_client(_send_as_service(json.loads(path.read_text(encoding="utf-8"))["sendAs"]))
+
+        alias = client.resolve_send_as()
+
+        assert any(a.is_primary for a in client.list_send_as())
+        assert alias.email
+        if alias.signature_html:
+            assert signature_plain_text(alias.signature_html).startswith("\n\n-- \n")

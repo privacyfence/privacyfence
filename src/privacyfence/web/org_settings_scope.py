@@ -89,6 +89,7 @@ ACTION_SCOPES: dict[str, ActionScope] = {
     # docstring). LOCAL_MODE-only until one of those lands with its own
     # route, the same way the per-principal actions below are.
     "toggle_calendar_free_busy": ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True),
+    "toggle_gmail_signature": ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True),
     "set_log_level": ActionScope(modes=frozenset({LOCAL_MODE}), admin_only=True),
 
     # ---------------------------------------------------------------- #

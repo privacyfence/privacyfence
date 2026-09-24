@@ -976,6 +976,13 @@ _JS = r"""
         html += policySegHtml(cat.policy, 'set_category_policy', { group: group, category: cat.key }, cat.label + ' policy');
         html += '</div>';
       });
+
+      if (group === 'privacy' && typeof privacy.gmail_append_signature === 'boolean') {
+        html += '<div class="pf-card" style="max-width:560px;margin-top:16px;"><div class="pf-card-row"><div>';
+        html += '<div class="pf-card-title" style="font-size:13.5px;">Append Gmail signature to drafts</div>';
+        html += '<div class="pf-card-desc">Adds your Gmail signature to the end of every draft Claude creates, unless a call says otherwise. It is shown in the approval popup with the rest of the draft.</div>';
+        html += '</div>' + toggleHtml(privacy.gmail_append_signature, 'toggle_gmail_signature', {}, false, 'Append Gmail signature to drafts') + '</div></div>';
+      }
     }
     html += '</div>';
     return html;

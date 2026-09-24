@@ -763,6 +763,11 @@ async def gated_call(
         # gate="popup" calls.
     details_text: str = "",       # full text shown inline or via TextEdit
     pii_scan_text: str | None = None,  # content-only text for the PII scan; defaults to details_text
+    write_content_scan_text: str | None = None,  # popup (write) gate only: the text the
+        # informational write_content_flags scan reads; defaults to details. For a caller whose
+        # details_text carries the user's own boilerplate next to Claude's drafted content (a
+        # Gmail draft's appended signature, with the user's own phone number/address in it),
+        # so that boilerplate doesn't flag every single draft.
     visibility: dict[str, str] | None = None,  # {label: "allow"|"redact"|"block"} -- the review
         # gate's "AI will receive" checklist, from privacy_filter.category_policy(). Read-only
         # (gate="review") calls only: a popup-gate write already shows exactly what's being sent,
@@ -868,7 +873,8 @@ async def gated_call(
     # confirmation is coming. Exists as its own signal rather than reusing
     # pii_categories's machinery.
     if gate == "popup":
-        write_content_flags = await asyncio.to_thread(detect_pii_categories, details)
+        write_scan_source = details if write_content_scan_text is None else write_content_scan_text
+        write_content_flags = await asyncio.to_thread(detect_pii_categories, write_scan_source)
     else:
         write_content_flags = []
     # The one deliberate exception to the comment above: drive_upload_file's

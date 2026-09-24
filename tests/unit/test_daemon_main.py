@@ -746,6 +746,24 @@ class TestBuildConnectorsCalendarFreeBusySetting:
         assert connectors[0].free_busy_full_details is True
 
 
+class TestBuildConnectorsGmailSignatureSetting:
+    """settings.yaml's gmail.append_signature_to_drafts is plumbed onto the
+    built GmailConnector as the draft tools' include_signature default."""
+
+    @pytest.mark.parametrize("config,expected", [
+        ({}, False),
+        ({"gmail": None}, False),
+        ({"gmail": {"append_signature_to_drafts": True}}, True),
+        ({"gmail": {"append_signature_to_drafts": False}}, False),
+    ])
+    def test_read_from_config(self, monkeypatch, config, expected):
+        monkeypatch.setattr(daemon_main, "GmailClient", fake_client_class(result="user@example.com"))
+
+        connectors, _failures = daemon_main.build_connectors(config, GOOGLE_ORG_CONFIG)
+
+        assert connectors[0].append_signature is expected
+
+
 # ---------------------------------------------------------------------------- #
 # build_connectors: Slack
 # ---------------------------------------------------------------------------- #

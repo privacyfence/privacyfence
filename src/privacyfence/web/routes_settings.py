@@ -246,6 +246,9 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "disable_connector", "refresh_connectors", "authenticate_connector",
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
     "set_log_level", "set_notifications_detail",
+    # Changes what a draft *contains* (the user's own signature), never
+    # whether or how it is gated -- every draft still raises its popup.
+    "toggle_gmail_signature",
 })
 
 # ---------------------------------------------------------------------------- #
@@ -1131,6 +1134,10 @@ def build_org_routes(
         # list entirely rather than rendered with a control that could
         # only ever 404.
         privacy["groups"] = [g for g in privacy["groups"] if g["key"] != "calendar"]
+        # Same for toggle_gmail_signature: the Gmail group stays (its
+        # category policy is install-wide), only the toggle card goes --
+        # settings_window_html renders it only when this key is present.
+        privacy.pop("gmail_append_signature", None)
 
         def _resolve_raw(rule: Any) -> str:
             values = rule.value if isinstance(rule.value, list) else ([rule.value] if rule.value else [])

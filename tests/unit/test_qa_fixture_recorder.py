@@ -971,6 +971,70 @@ class TestCheckGmail:
         assert get_message.raw is None
 
 
+    def _seeded_client(self, monkeypatch, send_as: list[dict]):
+        # _offline_google_service answers every request with the same body,
+        # so one dict carries both the seed message and the sendAs list.
+        raw = {
+            "id": "m1", "threadId": "t1",
+            "payload": {"headers": [
+                {"name": "From", "value": "real@company.com"},
+                {"name": "Subject", "value": "PrivacyFence QA seed message [QATEST]"},
+                {"name": "Date", "value": "Wed, 15 Jul 2026 10:00:00 +0000"},
+            ]},
+            "sendAs": send_as,
+        }
+        client = GmailClient(client_config={}, token_file="/tmp/unused-token.json")
+        client._local.service = self._service(raw)
+        monkeypatch.setattr(recorder, "_build_gmail_client", lambda: client)
+
+    def test_send_as_identity_signature_and_smtp_settings_redacted(self, monkeypatch):
+        self._seeded_client(monkeypatch, [
+            {"sendAsEmail": "real@company.com", "displayName": "Real Person", "replyToAddress": "real@company.com",
+             "signature": "<div>Real Person<br>+36 30 123 4567</div>", "isPrimary": True, "isDefault": True},
+            {"sendAsEmail": "alias@company.com", "signature": "",
+             "smtpMsa": {"host": "smtp.company.com", "port": 587, "username": "real"}},
+        ])
+
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+
+        send_as = next(r for r in results if r.method == "list_send_as")
+        assert send_as.ok
+        assert send_as.fixture_relpath == "list_send_as.json"
+        primary, alias = send_as.raw["sendAs"]
+        assert primary["sendAsEmail"] == primary["replyToAddress"] == recorder._REDACTED_EMAIL
+        assert primary["displayName"] == recorder._REDACTED_NAME
+        assert primary["signature"] == recorder._REDACTED_SIGNATURE_HTML
+        assert primary["isPrimary"] is True
+        assert alias["signature"] == ""
+        assert "smtpMsa" not in alias
+        assert "real" not in json.dumps(send_as.raw["sendAs"]).lower()
+
+    def test_send_as_without_a_primary_address_is_not_recorded(self, monkeypatch):
+        self._seeded_client(monkeypatch, [{"sendAsEmail": "alias@company.com"}])
+
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+
+        send_as = next(r for r in results if r.method == "list_send_as")
+        assert not send_as.ok
+        assert send_as.raw is None
+
+    def test_send_as_api_error_is_a_failed_check(self, monkeypatch):
+        client = GmailClient(client_config={}, token_file="/tmp/unused-token.json")
+        monkeypatch.setattr(client, "get_message", MagicMock(side_effect=recorder.GmailClientError("x")))
+        monkeypatch.setattr(client, "list_send_as", MagicMock(side_effect=recorder.GmailClientError("403")))
+        monkeypatch.setattr(recorder, "_build_gmail_client", lambda: client)
+
+        results = recorder.check_gmail(record=True, manifest={"gmail": {"seed_message_id": "m1"}})
+
+        send_as = next(r for r in results if r.method == "list_send_as")
+        assert not send_as.ok
+        assert send_as.note == "403"
+
+    def test_redact_gmail_send_as_tolerates_odd_shapes(self):
+        assert recorder.redact_gmail_send_as({}) == {}
+        assert recorder.redact_gmail_send_as({"sendAs": None}) == {"sendAs": None}
+        assert recorder.redact_gmail_send_as({"sendAs": ["x", {}]}) == {"sendAs": ["x", {}]}
+
 class TestCheckDrive:
     def test_owner_identity_redacted_when_targeted_by_id(self, monkeypatch):
         raw_file = {

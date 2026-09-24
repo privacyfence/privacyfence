@@ -45,6 +45,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Gmail drafts can carry your Gmail signature** (#643). The six draft tools take an
+  `include_signature` argument, defaulting to a new *Append Gmail signature to drafts* setting
+  (Settings → Privacy Filter → Gmail; `gmail.append_signature_to_drafts` in `settings.yaml`, off by
+  default). The signature is the one Gmail stores for the sending address, appended as HTML to
+  rich-text drafts and as plain text (after a `-- ` line) to plain ones, and it is shown in the
+  approval popup with the rest of the draft. A new `send_as` argument sends from one of the
+  account's Gmail send-as addresses instead of the default, using that address's signature; an
+  address that isn't one of them is refused before any popup. Gmail's separate "new email" and
+  "reply" signature choices aren't available through its API, and a signature image uploaded into
+  Gmail itself (rather than linked) may not display. The user's own signature doesn't trigger the
+  popup's "possible personal data" note (ADR 0036).
+
 - **The audit log and its weekly Excel export gain four columns for which AI system made each
   request** — `agent_id`, `agent_name`, `agent_version` and `agent_source` (audit schema 5,
   ADR 0006 / ADR 0035). Nothing fills them yet, so every new entry records them empty, which

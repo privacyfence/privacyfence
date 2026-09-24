@@ -141,3 +141,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md) | One route layer per surface (approvals, settings), with an auth adapter per mode, not a second module | Accepted |
 | [0034](0034-sensitive-settings-writes-require-step-up-in-both-modes.md) | Sensitive settings writes require WebAuthn step-up in both local and org mode | Accepted |
 | [0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md) | Agent attribution reads the handshake on every call; org mode attests only admin-pinned OAuth clients | Accepted; not implemented |
+| [0036](0036-gmail-draft-signature-is-shown-but-not-write-scanned.md) | A Gmail draft's appended signature is shown in the approval popup but not write-scanned | Accepted |

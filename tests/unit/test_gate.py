@@ -1653,6 +1653,29 @@ class TestWriteContentFlags:
         assert captured["write_content_flags"] == []
 
 
+    async def test_write_content_scan_text_replaces_details_for_the_flags_only(self, monkeypatch, audit_dir):
+        # gmail's draft tools show the user's signature (their own phone
+        # number) in details but scan only the drafted body.
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator())
+        captured = {}
+
+        def fake_show_popup(title, preview, details, temp_accept_eligible=False, claude_reason="", write_content_flags=None, seen_count=0, connector="", accept_all_choices=None, preview_bytes=b"", preview_mime_type="", preview_tables=None, preview_blocks=None, table_only=False, upload_forced=False, layout="narrow", tool=""):
+            captured["details"] = details
+            captured["write_content_flags"] = write_content_flags
+            return "accept", None
+
+        monkeypatch.setattr(gate, "show_popup", fake_show_popup)
+
+        await gate.gated_call(**base_kwargs(
+            gate="popup", tool="gmail_create_draft",
+            details_text="See you then.\n\n-- \nIBAN DE89370400440532013000",
+            write_content_scan_text="See you then.",
+        ))
+
+        assert "DE89370400440532013000" in captured["details"]
+        assert captured["write_content_flags"] == []
+
+
 class TestTempAccept:
     """The 5-minute, in-memory-only grace window that used to require a
     distinct "Allow for 5 min" popup button -- for the operations expected

@@ -184,6 +184,17 @@ class TestPrivacyPageAdminGating:
         r = client.get("/settings/privacy")
         assert r.status_code == 200
 
+    def test_gmail_signature_toggle_is_left_out_of_orgs_state(self, tmp_path, monkeypatch):
+        # toggle_gmail_signature is LOCAL_MODE-only, like the calendar
+        # toggle -- the page renders its card only when this key exists.
+        _seed(tmp_path, monkeypatch, "carol")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ADMIN)
+        body = client.get("/settings/privacy").text
+        assert '"gmail_append_signature"' not in body
+        assert '"calendar_free_busy"' in body
+
 
 class TestPrivacyStateFromConfig:
     """PSC-5: org mode's own Privacy Filter state now comes from the exact

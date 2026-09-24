@@ -591,11 +591,13 @@ def _privacy_state_from_config(cfg: dict[str, Any], *, fail_safe_default: str = 
         categories[group] = cat_list
 
     calendar_cfg = cfg.get("calendar", {}) or {}
+    gmail_cfg = cfg.get("gmail", {}) or {}
     return {
         "groups": groups,
         "default_policy": default_policy,
         "categories": categories,
         "calendar_free_busy": bool(calendar_cfg.get("free_busy_full_event_details", True)),
+        "gmail_append_signature": bool(gmail_cfg.get("append_signature_to_drafts", False)),
     }
 
 
@@ -1714,6 +1716,14 @@ class SettingsController:
         calendar_cfg["free_busy_full_event_details"] = not calendar_cfg.get(
             "free_busy_full_event_details", True
         )
+        self._save_config(cfg)
+        self.refresh_connectors()
+        return self.snapshot()
+
+    def toggle_gmail_signature(self) -> dict[str, Any]:
+        cfg = self._load_config()
+        gmail_cfg = cfg.setdefault("gmail", {})
+        gmail_cfg["append_signature_to_drafts"] = not gmail_cfg.get("append_signature_to_drafts", False)
         self._save_config(cfg)
         self.refresh_connectors()
         return self.snapshot()

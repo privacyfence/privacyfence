@@ -69,6 +69,7 @@ def _make_state(**overrides):
             "default_policy": {"privacy": "block"},
             "categories": {"privacy": [{"key": "body", "label": "Message body", "policy": "allow"}]},
             "calendar_free_busy": True,
+            "gmail_append_signature": False,
         },
         "audit": {
             "log_level": "INFO", "log_file": "logs/privacyfence.log",
@@ -171,7 +172,7 @@ class TestToggleTemplate:
             # present as source text regardless of any connector's actual
             # state (see settings_window_html.py's renderConnectors).
             "enable_connector", "disable_connector",
-            "toggle_calendar_free_busy",
+            "toggle_calendar_free_busy", "toggle_gmail_signature",
         ):
             assert f"'{action}'" in html, f"missing toggle wiring for {action}"
 

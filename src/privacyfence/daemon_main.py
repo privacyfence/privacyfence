@@ -1320,6 +1320,9 @@ def build_connectors(config: dict[str, Any], org_config: dict[str, Any]) -> tupl
             logger.info("Gmail connector ready for %s", email)
             connector = GmailConnector(client)
             connector.my_email = email
+            connector.append_signature = bool(
+                (config.get("gmail", {}) or {}).get("append_signature_to_drafts", False)
+            )
             connector.download_mode = download_mode
             connector.download_config = download_config
             connector.download_base_url = download_base_url
