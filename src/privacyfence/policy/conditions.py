@@ -22,11 +22,8 @@ to preflight but is exactly what a rule that already matched during a real, full
 to check -- see `auto_accept.DATA_DEPENDENT_RULES`'s own docstring). `resolves_from` is read off
 those two existing sets, not duplicated by hand, so this module can't drift from them the way F6
 describes. `test_conditions.py` asserts every selector here agrees with its old counterpart on every
-fixture, including each absence check with `raw_data=None` -- this module changes nothing about what
-gets auto-accepted today.
-
-Nothing outside `tests/` consumes this module yet -- see the redesign proposal's P3 for the engine
-that will.
+fixture, including each absence check with `raw_data=None`. `policy.engine` resolves a rule's
+`conditions` through `CONDITION_SELECTORS` by v2 name; the old predicate names are not accepted.
 """
 from __future__ import annotations
 
@@ -55,16 +52,11 @@ class ResolvesFrom(str, Enum):
 
 @dataclass(frozen=True)
 class ConditionSelector:
-    """One `when:` predicate: a name, where it resolves from, and how it's checked.
-
-    `replaces` names every v1 rule this condition subsumes -- more than one for `no_attachments`,
-    which absorbs the three connector-specific "nothing attached" predicates.
-    """
+    """One `when:` predicate: a name, where it resolves from, and how it's checked."""
 
     name: str
     resolves_from: ResolvesFrom
     holds: Callable[[Any, ReviewContext], bool]
-    replaces: tuple[str, ...]
 
 
 # Field a connector's fetched item carries its attachments/files/media under -- see
@@ -165,68 +157,51 @@ CONDITION_SELECTORS: dict[str, ConditionSelector] = {
         name="older_than_days",
         resolves_from=ResolvesFrom.FETCHED,
         holds=_older_than_days_holds,
-        replaces=("age_threshold_days",),
     ),
     "within_days": ConditionSelector(
         name="within_days",
         resolves_from=ResolvesFrom.FETCHED,
         holds=_within_days_holds,
-        replaces=("time_window_days",),
     ),
     "past_only": ConditionSelector(
         name="past_only",
         resolves_from=ResolvesFrom.FETCHED,
         holds=_past_only_holds,
-        replaces=("past_event",),
     ),
     "no_attachments": ConditionSelector(
         name="no_attachments",
         resolves_from=ResolvesFrom.FETCHED,
         holds=_no_attachments_holds,
-        replaces=("no_attachments", "no_file_attachments", "no_media_attachments"),
     ),
     "no_external_attendees": ConditionSelector(
         name="no_external_attendees",
         resolves_from=ResolvesFrom.FETCHED,
         holds=_no_external_attendees_holds,
-        replaces=("no_external_attendees",),
     ),
     "no_conferencing_link": ConditionSelector(
         name="no_conferencing_link",
         resolves_from=ResolvesFrom.FETCHED,
         holds=_no_conferencing_link_holds,
-        replaces=("no_conferencing_link",),
     ),
     "not_private": ConditionSelector(
         name="not_private",
         resolves_from=ResolvesFrom.FETCHED,
         holds=_not_private_holds,
-        replaces=("non_private_event",),
     ),
     "not_shared_drive": ConditionSelector(
         name="not_shared_drive",
         resolves_from=ResolvesFrom.FETCHED,
         holds=_not_shared_drive_holds,
-        replaces=("shared_drive_exclusion",),
     ),
     "no_contact_info_change": ConditionSelector(
         name="no_contact_info_change",
         resolves_from=ResolvesFrom.ARGS,
         holds=_no_contact_info_change_holds,
-        replaces=("no_contact_info_change",),
     ),
     "in_existing_thread": ConditionSelector(
         name="in_existing_thread",
         resolves_from=ResolvesFrom.ARGS,
         holds=_in_existing_thread_holds,
-        replaces=("reply_in_existing_thread",),
     ),
 }
 
-
-def condition_for_predicate(predicate: str) -> ConditionSelector | None:
-    """The `ConditionSelector` whose `replaces` names `predicate`, or `None` if it isn't one."""
-    for selector in CONDITION_SELECTORS.values():
-        if predicate in selector.replaces:
-            return selector
-    return None

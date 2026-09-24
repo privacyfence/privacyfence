@@ -12,6 +12,10 @@ the phases that got here. Decision 3's deferred deletion (the two-tool grace per
 2026-09-24 — see [ADR 0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md)'s
 own Related section for the plan that tracked it alongside #579.
 
+**Superseded in part by [ADR 0041](0041-only-the-current-install-layout-is-supported.md),
+2026-09-24.** Decisions 4–5's one-time v1 → v2 settings conversion is removed; a v1-format
+`settings.yaml` is now refused at startup instead.
+
 ## Context
 
 Through 4.1, PrivacyFence had two overlapping ways to trust a resource: `auto_accept_rules`, a

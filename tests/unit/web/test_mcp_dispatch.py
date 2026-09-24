@@ -27,6 +27,8 @@ from privacyfence.gate import is_unattended
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.web.mcp_dispatch import McpDispatcher
 
+from ...helpers import policy_rules
+
 
 class FakeConnector(Connector):
     def __init__(
@@ -373,21 +375,17 @@ class TestCheckPolicy:
 
     def test_popup_tool_matching_args_only_rule_is_auto_accept(self):
         from privacyfence import auto_accept
-        from privacyfence.policy import compat
 
-        auto_accept.set_policy_v2_store_rules(
-            compat.compile_rules({"gmail.create_draft": [{"rule": "to_is_myself"}]})
-        )
+        rules = policy_rules({"gmail.create_draft": [{"predicate": "to_is_myself"}]})
+        auto_accept.set_policy_v2_store_rules(rules)
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail", my_email="me@example.com")})
         result = dispatcher.check_policy(
             "gmail", "gmail_create_draft", {"to": "me@example.com", "subject": "x", "body": "y"},
         )
         assert result["gate"] == "popup"
         assert result["verdict"] == "auto_accept"
-        assert result["matched_rule"] == "to_is_myself"
-        # P7: the v2 engine agrees on the same match, so the id it compiles to comes back too --
-        # policy.compat.compile_rule_entry mints a compiled rule's id from the v1 rule name itself.
-        assert result["matched_rule_id"] == "to_is_myself"
+        assert result["matched_rule"] == rules[0].id
+        assert result["matched_rule_id"] == rules[0].id
 
     def test_matched_rule_id_is_none_when_no_rule_configured_at_all(self):
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail")})
@@ -429,7 +427,7 @@ class TestListPolicy:
         init_audit_logger(str(tmp_path / "audit"))
         self._audit_dir = tmp_path / "audit"
         config_path = tmp_path / "settings.yaml"
-        config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        config_path.write_text("auto_accept: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(config_path))
 
     def _read_entries(self):
@@ -470,7 +468,7 @@ class TestProposePolicyChangeDispatch:
         from privacyfence import auto_accept, gate
         init_audit_logger(str(tmp_path / "audit"))
         self._config_path = tmp_path / "settings.yaml"
-        self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        self._config_path.write_text("auto_accept: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(self._config_path))
         monkeypatch.setattr(gate, "show_rule_confirmation_popup", lambda description, *, sensitive=False: True)
 

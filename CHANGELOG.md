@@ -43,12 +43,60 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Apps Script can be connected from Settings**, like the other Google connectors: *Connectors →
+  Apps Script → Authenticate…* on a desktop install, and a *Connect* button on an organization
+  server's `/connect` page. Before, the only way to authorize it was running the app with
+  `--apps-script-oauth`, and its "re-authorize" errors now point at Settings instead. An
+  organization server's Google connector client needs
+  `https://<your-server>/oauth/callback/apps_script` added to its registered redirect URIs.
+
+- **`--agent-links` / `--no-agent-links` for `scripts/build_org_bundle.py`**, writing the org
+  bundle's `download_delivery.agent_links` (on by default, unchanged) instead of requiring the
+  bundle to be edited by hand.
+
+### Changed
+
+- **Org bundles bind the daemon to loopback by default.** `scripts/build_org_bundle.py
+  --server-bind-host` now defaults to `127.0.0.1` instead of `0.0.0.0`, so a bundle built without
+  the flag is reachable only by a reverse proxy on the same host, as the org-mode setup guide
+  already required. A bundle with no `server.bind_host` also binds `127.0.0.1` (was `localhost`).
+  Pass `--server-bind-host` explicitly when the proxy runs on another host.
+
+- The installers now refuse a system older than PrivacyFence supports instead of installing an
+  app that cannot start: the macOS `.pkg` requires macOS 13 on Apple silicon (an Intel Mac is
+  refused), the Windows installer Windows 10 / Windows Server 2016, and the `.deb` declares its
+  glibc and systemd floors as package dependencies (glibc 2.38, systemd 242: Ubuntu 24.04 or
+  Debian 13 and newer). The support matrix in `docs/platform-support.md` now lists each
+  platform's minimum.
+
+### Removed
+
+- **The v1 auto-accept settings format is no longer read or converted.** A `settings.yaml` that
+  still has an `auto_accept_rules:` or `auto_accept_grants:` section now stops PrivacyFence at
+  startup with a configuration error naming the section, instead of being converted to the
+  `auto_accept:` section on first start. Remove the section and recreate its rules on the Settings
+  Auto-accept page. The one-time conversion, its `settings.yaml.bak` backup and the "your
+  auto-accept rules were migrated" Settings notice are gone, and a fresh install's default
+  `settings.yaml` is written in the current format. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+
 ### Fixed
 
 - **The org-mode setup guide now explains how to name admins when Google is the sign-in
   provider.** Google's sign-in tokens carry no groups, so the guide's `groups` example left every
   user, Workspace admins included, without the admin-only Settings pages (Privacy Filter, AI
   systems). It now shows naming admins by email address (`--idp-admin-group-claim email`).
+
+### Security
+
+- **Recovery-code sign-in is audited, rate-limited and needs a human session.** `POST
+  /security/recover` now records every refused attempt in the audit log
+  (`webauthn_recovery_refused`, with the reason and never the code), not just a successful one. On a
+  privilege-separated install it refuses a session that was not opened from the companion, the same
+  as approving a decision does. Attempts are limited to 5 per session and 20 across all sessions in
+  any 15 minutes; the next one gets a `429` with `Retry-After`.
 
 ## [4.4.0] — 2026-09-24
 

@@ -57,7 +57,7 @@ The `initialize` response also advertises `capabilities.tools.listChanged: true`
 
 Alongside the connector-derived tools, the daemon exposes eight `privacyfence_`-prefixed meta-tools over the same `/mcp` endpoint (`web/mcp_tools.py`'s `META_TOOLS`), dispatched by `routes_mcp.py`'s `_dispatch_meta_tool` to `McpDispatcher` methods (`web/mcp_dispatch.py`) that call back into `gate.py`/`auto_accept.py`/the `policy` package — except `privacyfence_create_upload_slot`, dispatched straight to `local_files.build_upload_slot` (below), since it has no `gate.py`/policy involvement at all. Each takes a `reason` string, logged the same self-reported, unverified way as every gated connector tool's own `reason` param.
 
-- `privacyfence_check_policy` — asks whether a specific `(connector, tool, args)` call would auto-accept or need a human, without making the call or having any side effects. Returns one of `auto_accept`, `requires_review`, or `unknown` (whether it auto-accepts can depend on fetched content this can't see in advance); for `review`-gated tools, `pii_gate_may_apply` is always `true`, since the PII gate scans real content and can never be predicted ahead of time. Since P7 of the policy v2 redesign, the result also carries `matched_rule_id` — the policy engine's own stable id for whatever will let the call through (`null` unless `verdict` is `auto_accept`), checked against the always-on v2-store layer first and the compiled-from-v1 rules second (`gate.preflight_auto_accept`), so it never predicts something the real gated call wouldn't do; pass it straight to `privacyfence_propose_policy_change`'s `rule_id` to narrow or remove that rule. Safe to call as often as needed while planning a task.
+- `privacyfence_check_policy` — asks whether a specific `(connector, tool, args)` call would auto-accept or need a human, without making the call or having any side effects. Returns one of `auto_accept`, `requires_review`, or `unknown` (whether it auto-accepts can depend on fetched content this can't see in advance); for `review`-gated tools, `pii_gate_may_apply` is always `true`, since the PII gate scans real content and can never be predicted ahead of time. Since P7 of the policy v2 redesign, the result also carries `matched_rule_id` — the policy engine's own stable id for whatever will let the call through (`null` unless `verdict` is `auto_accept`), checked against the configured `auto_accept:` rules (`gate.preflight_auto_accept`), so it never predicts something the real gated call wouldn't do; pass it straight to `privacyfence_propose_policy_change`'s `rule_id` to narrow or remove that rule. Safe to call as often as needed while planning a task.
 - `privacyfence_list_policy` / `privacyfence_propose_policy_change` (P7 of the policy v2 redesign) — the current, single scope+verb write path: one rule shape (`policy/store.py`'s on-disk `auto_accept:` section) instead of the older `target: "rule" | "grant"` split. `privacyfence_list_policy` returns `{rules, scope_groups}` — every configured v2 rule, sentence-rendered (`policy/describe.py`) with its stable id, `verbs`/`covered_tools` stating exactly how wide it is, plus the scope catalogue (`policy/catalogue.py`, shared with the Auto-accept Settings page's own "add a rule" form) that `privacyfence_propose_policy_change`'s `group`/`verbs` validate against. `privacyfence_propose_policy_change` adds, updates, or removes a rule by `group` (a scope type, e.g. `drive.folder`)/`value`/`verbs`, or by `rule_id` for `update`/`remove`; a verb the named group cannot govern is rejected — before any popup — rather than silently persisted as a rule nothing could ever render or remove (closing the write-time half of what the redesign proposal's F5 found: three operation groups, `apps_script.*`/`gmail.create_filter`/`gmail.update_filter`/`slack.create_group_chat`, had no configurable rule *and* no validation stopping one from being written anyway). Same confirmation contract as the tool it replaces: always blocks on a native dialog, throws if declined or if the connection is unattended. Since the self-approval review's Phase 4 that dialog is registered as *sensitive* (`approvals.PendingApprovalRegistry.register_confirm`) — nothing gated it first, so confirming one takes what the equivalent Settings action takes: an attributable session, and a passkey wherever `require_passkey` is on. See [`security-and-compliance.md`](security-and-compliance.md#a-confirmation-dialog-is-not-always-a-second-step).
 - `privacyfence_begin_unattended_session` / `privacyfence_end_unattended_session` — see "Scheduled / unattended Cowork tasks" below.
 - `privacyfence_await_approval` — long-polls one or more `approval_id`s from a gated call's `{status: "approval_pending", approval_id, ...}` result and reports status only (`pending`, `approved`, `denied`, `expired`, or `unknown`), never content — a re-issue of the original gated call with the same arguments is still what actually retrieves data once `approved`. Both this tool's own description and `gate.py`'s `_pending_result` `message` field tell the calling agent, in-band, not to sit on a pending approval silently: relay the `url` to the human first, then either call this tool to wait, or — where the client can schedule a follow-up (a reminder, a background check) — schedule one instead of blocking the conversation.
@@ -542,10 +542,10 @@ allow** button, PrivacyFence Settings' **Auto-accept** page, and the MCP bridge'
 
 Through 4.1, trusting a resource meant two different, overlapping config models — a
 per-operation `auto_accept_rules` section and a resource-scoped `auto_accept_grants` section, each
-writable from different surfaces with different width. Both are gone as anything live writes or
-evaluates: every rule, however it was created, now lives in one place, described the same way
-everywhere it's shown. See [Migration from v1](#migration-from-v1) below for what happens to an
-existing hand-edited config.
+writable from different surfaces with different width. Both are gone: every rule, however it was
+created, now lives in one place, described the same way everywhere it's shown. See
+[Earlier config formats](#earlier-config-formats) below for what happens to a config that still
+has either section.
 
 ### The `auto_accept:` schema
 
@@ -557,11 +557,11 @@ auto_accept:
       predicate: approved_sandbox_folder
       value: ["1CdeFghIJKLmnoPQRstuVWxyz0123456789AbCdEfGh"]
       operations: [drive.write_file, sheets.write_range, docs.edit_content]
-      conditions: [[shared_drive_exclusion, null]]
+      conditions: [[not_shared_drive, null]]
 ```
 
 `id` is derived from `(predicate, value, conditions)` — the same triple always mints the same id
-regardless of which operations carry it or how many times a config is (re-)migrated, so a rule's
+regardless of which operations carry it, so a rule's
 identity in the audit log and in Settings doesn't churn on every restart. `predicate` is the scope
 selector (see [Scope catalogue](#scope-catalogue) below); `operations` is the engine's own internal
 address space — the set of connector operation keys this rule governs — never shown to a user
@@ -727,23 +727,13 @@ Deliberately *not* offered on `drive_sheets_delete_dimensions` (no undo path) or
 `drive_sheets_add_sheet`/`drive_sheets_rename_sheet` (one-shot per file, not called in a burst) —
 those get a plain Deny/Allow once with no caption at all.
 
-### Migration from v1
+### Earlier config formats
 
-A not-yet-migrated, hand-edited `settings.yaml`'s `auto_accept_rules`/`auto_accept_grants`
-sections are folded into the v2 `auto_accept:` section once, automatically, the next time the
-daemon starts (`policy.compat.migrate_to_policy_v2`, run from `daemon_main.run_app` for the local
-principal and from `daemon_main._load_principal_settings` for every org principal). Migration is
-provably behaviour-preserving: it can only ever produce the *exact* rule set the old two-model
-config would have evaluated, backed by an equivalence harness that checks every predicate and
-every fixture against the pre-redesign implementation. A migration that actually changed anything
-backs up the pre-migration file to `settings.yaml.bak` first and logs a summary naming every rule
-whose expansion carries a destructive or send-family verb — surfacing what a grant's boolean used
-to hide rather than silently dropping it.
-
-`auto_accept_rules`/`auto_accept_grants` are never deleted or written to again after migration —
-they stay on disk, readable, for reference on a hand-edited install. Nothing evaluates them
-directly anymore; the migrated v2 section is the only thing any surface reads or writes going
-forward.
+A `settings.yaml` that still has an `auto_accept_rules` or `auto_accept_grants` section — even an
+empty one — is refused at startup with a configuration error naming the section
+(`policy.store.reject_v1_sections`, from `daemon_main.load_config`, for the local principal and
+every org principal). Nothing converts it: remove the section and recreate its rules on the
+Auto-accept page. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md).
 
 ---
 

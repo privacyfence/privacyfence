@@ -26,7 +26,6 @@ flows, grant name resolution) runs on a background thread via
 """
 from __future__ import annotations
 
-import html
 import json
 import logging
 import re
@@ -41,6 +40,7 @@ import yaml
 from . import __version__, agent_label, dialog_window_html, org_bundle_signing, org_mode, web_prompt
 from .agent_identity import AgentIdentity, AgentSource
 from .app_credentials import telegram_app_credentials
+from .apps_script_client import AppsScriptClient
 from .approval_ui import get_approval_ui
 from .audit_log import AuditEntry, AuditLogger, compute_security_config_hash, current_week, get_audit_logger
 from .auto_accept import (
@@ -92,147 +92,9 @@ logger = logging.getLogger(__name__)
 REPO_URL = "https://github.com/privacyfence/privacyfence"
 LICENSE_NAME = "Apache-2.0"
 
-# ---------------------------------------------------------------------------- #
-# Rule metadata (moved verbatim from menu_bar.py -- see its pre-#120 history)
-# ---------------------------------------------------------------------------- #
-
-OPERATION_LABELS: dict[str, str] = {
-    "gmail.read_message":          "Gmail – Read message",
-    "gmail.read_thread":           "Gmail – Read thread",
-    "gmail.download_attachment":   "Gmail – Download attachment",
-    "gmail.create_draft":          "Gmail – Create draft",
-    "gmail.add_label":             "Gmail – Add label",
-    "gmail.remove_label":          "Gmail – Remove label",
-    "gmail.archive_message":       "Gmail – Archive message",
-    "gmail.create_label":          "Gmail – Create label",
-    "drive.read_file_contents":    "Drive – Read file",
-    "drive.download_file":         "Drive – Download file",
-    "drive.write_file":            "Drive – Write file",
-    "drive.write_doc":             "Drive – Write Google Doc",
-    "drive.upload_file":           "Drive – Upload file",
-    "drive.move_file":             "Drive – Move file",
-    "drive.comment_file":          "Drive – Add comment",
-    "sheets.read_values":          "Sheets – Read values",
-    "sheets.write_range":          "Sheets – Write range",
-    "sheets.add_sheet":            "Sheets – Add tab",
-    "sheets.rename_sheet":         "Sheets – Rename tab",
-    "sheets.format_range":         "Sheets – Format range",
-    "sheets.insert_dimensions":    "Sheets – Insert rows/columns",
-    "sheets.delete_dimensions":    "Sheets – Delete rows/columns",
-    "docs.edit_content":           "Docs – Edit content",
-    "docs.format_content":         "Docs – Format content",
-    "slack.read_messages":         "Slack – Read messages",
-    "slack.send_message":          "Slack – Send message",
-    "calendar.read_event_details": "Calendar – Read event",
-    "calendar.create_modify_event":"Calendar – Create/modify event",
-    "calendar.set_visibility":     "Calendar – Set event visibility",
-    "calendar.set_color":          "Calendar – Set event color",
-    "calendar.delete_event":       "Calendar – Delete event",
-    "calendar.out_of_office":      "Calendar – Create out-of-office",
-    "calendar.working_location":   "Calendar – Set working location",
-    "salesforce.read_record":      "Salesforce – Read record",
-    "salesforce.run_report":       "Salesforce – Run report",
-    "salesforce.search":           "Salesforce – Search",
-    "contacts.edit":               "Contacts – Update contact",
-    "contacts.create":             "Contacts – Create contact",
-    "contacts.add_label":          "Contacts – Add label",
-    "contacts.remove_label":       "Contacts – Remove label",
-    "jira.read_issue":             "Jira – Read issue",
-    "jira.create_issue":           "Jira – Create issue",
-    "jira.add_comment":            "Jira – Add comment",
-    "jira.update_issue":           "Jira – Update issue",
-    "jira.transition_issue":       "Jira – Transition issue",
-    "confluence.read_page":        "Confluence – Read page",
-    "confluence.download_attachment": "Confluence – Download attachment",
-    "confluence.create_page":      "Confluence – Create page",
-    "confluence.update_page":      "Confluence – Update page",
-    # telegram_search_messages shares this key with telegram_get_messages
-    # (see auto_accept.TOOL_TO_OPERATION) rather than its own
-    # "telegram.search_messages" -- one label covers both tools' rules.
-    "telegram.read_chat_messages": "Telegram – Read/search chat messages",
-    "telegram.send_message":       "Telegram – Send message",
-    "tasks.create_task":           "Tasks – Create task",
-    "tasks.update_task":           "Tasks – Update task",
-    "tasks.complete_task":         "Tasks – Complete task",
-    "tasks.uncomplete_task":       "Tasks – Uncomplete task",
-    "tasks.move_task":             "Tasks – Move task",
-}
-
-RULES_BY_OPERATION: dict[str, list[str]] = {
-    "gmail.read_message":           ["i_am_sender", "i_am_sole_recipient", "trusted_sender_domain", "label_match", "age_threshold_days", "no_attachments"],
-    "gmail.read_thread":            ["i_am_sender", "trusted_sender_domain", "age_threshold_days"],
-    "gmail.download_attachment":    ["i_am_sender", "trusted_sender_domain", "label_match"],
-    "gmail.create_draft":           ["to_is_myself", "approved_recipient_domain", "always_allow"],
-    "gmail.add_label":              ["label_name_allowlist", "i_am_sender", "trusted_sender_domain"],
-    "gmail.remove_label":           ["label_name_allowlist", "i_am_sender", "trusted_sender_domain"],
-    "gmail.archive_message":        ["i_am_sender", "trusted_sender_domain", "label_match"],
-    "gmail.create_label":           ["label_name_allowlist"],
-    "drive.read_file_contents":     ["i_am_owner", "created_by_me", "approved_folder", "file_type_allowlist", "created_this_session", "shared_drive_exclusion"],
-    "drive.download_file":          ["i_am_owner", "approved_folder", "file_type_allowlist", "created_this_session", "shared_drive_exclusion"],
-    "drive.write_file":             ["i_am_owner", "approved_sandbox_folder", "file_type_allowlist", "created_this_session"],
-    "drive.write_doc":              ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "drive.upload_file":            ["parent_folder_allowlist"],
-    "drive.move_file":              ["move_within_approved_folders"],
-    "drive.comment_file":           ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.read_values":           ["i_am_owner", "created_by_me", "approved_folder", "created_this_session", "shared_drive_exclusion"],
-    "sheets.write_range":           ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.add_sheet":             ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.rename_sheet":          ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.format_range":          ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.insert_dimensions":     ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "sheets.delete_dimensions":     ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "docs.edit_content":            ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "docs.format_content":          ["i_am_owner", "approved_sandbox_folder", "created_this_session"],
-    "slack.read_messages":          ["dm_with_myself", "group_dm", "approved_channel", "approved_channel_all_results", "public_channels_only", "no_file_attachments"],
-    "slack.send_message":           ["dm_with_myself", "send_to_myself", "approved_channel", "approved_recipient", "reply_in_existing_thread"],
-    "calendar.read_event_details":  ["i_am_organizer", "no_external_attendees", "personal_calendar", "past_event", "time_window_days", "no_conferencing_link", "non_private_event"],
-    "calendar.create_modify_event": ["i_am_organizer", "no_external_attendees", "personal_calendar"],
-    "calendar.set_visibility":      ["i_am_organizer", "no_external_attendees", "personal_calendar"],
-    "calendar.set_color":           ["i_am_organizer", "no_external_attendees", "personal_calendar"],
-    "calendar.delete_event":        ["i_am_organizer", "no_external_attendees", "personal_calendar"],
-    "calendar.out_of_office":       ["always_allow"],
-    "calendar.working_location":    ["always_allow"],
-    "salesforce.read_record":       ["approved_object_types"],
-    "salesforce.run_report":        ["approved_report_ids"],
-    "salesforce.search":            ["approved_object_types"],
-    "contacts.edit":                ["no_contact_info_change"],
-    "contacts.create":              ["no_contact_info_change"],
-    "contacts.add_label":           ["label_name_allowlist"],
-    "contacts.remove_label":        ["label_name_allowlist"],
-    "jira.read_issue":              ["i_am_reporter", "i_am_assignee", "approved_project_keys"],
-    "jira.create_issue":            ["approved_project_keys"],
-    "jira.add_comment":             ["approved_project_keys"],
-    "jira.update_issue":            ["approved_project_keys"],
-    "jira.transition_issue":        ["approved_project_keys"],
-    "confluence.read_page":         ["i_am_author", "approved_space_keys"],
-    "confluence.download_attachment": ["i_am_author", "approved_space_keys"],
-    "confluence.create_page":       ["approved_space_keys"],
-    "confluence.update_page":       ["approved_space_keys"],
-    "telegram.read_chat_messages":  ["approved_chats", "approved_chats_all_results", "no_media_attachments"],
-    "telegram.send_message":        ["approved_chats"],
-    "tasks.create_task":            ["approved_task_list"],
-    "tasks.update_task":            ["approved_task_list"],
-    "tasks.complete_task":          ["approved_task_list"],
-    "tasks.uncomplete_task":        ["approved_task_list"],
-    "tasks.move_task":              ["approved_task_list"],
-}
-
-# Rules that take a list-of-strings value
-RULES_LIST_VALUE: set[str] = {
-    "trusted_sender_domain", "label_match", "send_to_myself",
-    "approved_channel", "approved_channel_all_results", "approved_recipient", "personal_calendar",
-    "approved_object_types", "approved_report_ids", "file_type_allowlist",
-    "approved_folder", "approved_sandbox_folder",
-    "approved_recipient_domain", "label_name_allowlist", "parent_folder_allowlist",
-    "approved_project_keys", "approved_space_keys", "approved_chats",
-    "approved_chats_all_results", "approved_task_list",
-}
-# Rules that take a single integer value
-RULES_INT_VALUE: set[str] = {"age_threshold_days", "time_window_days"}
-
 # All connectors PrivacyFence supports, in display order
 ALL_CONNECTORS: list[str] = [
-    "gmail", "drive", "contacts", "calendar", "tasks",
+    "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
     "slack", "jira", "confluence", "salesforce", "telegram",
 ]
 
@@ -244,7 +106,14 @@ NOTIFICATIONS_DETAIL_LEVELS: tuple[str, ...] = ("minimal", "standard", "detailed
 
 # Connectors authenticated via a shared Google OAuth client (org bundle's
 # "google" section).
-GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks"}
+GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks", "apps_script"}
+
+# Display names for connectors whose key isn't just its label lower-cased.
+_CONNECTOR_LABEL_OVERRIDES: dict[str, str] = {"apps_script": "Apps Script"}
+
+
+def connector_label(cname: str) -> str:
+    return _CONNECTOR_LABEL_OVERRIDES.get(cname, cname.capitalize())
 
 # Which section of the organization config bundle each connector depends on.
 # Jira and Confluence share one Atlassian OAuth grant. Telegram is not part
@@ -252,7 +121,7 @@ GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks"
 # app_credentials.py) and checked separately.
 ORG_CONFIG_SERVICE: dict[str, str] = {
     "gmail": "google", "drive": "google", "contacts": "google",
-    "calendar": "google", "tasks": "google",
+    "calendar": "google", "tasks": "google", "apps_script": "google",
     "slack": "slack",
     "jira": "atlassian", "confluence": "atlassian",
     "salesforce": "salesforce",
@@ -273,6 +142,7 @@ _GOOGLE_CLIENTS: dict[str, type] = {
     "calendar": CalendarClient,
     "contacts": ContactsClient,
     "tasks": TasksClient,
+    "apps_script": AppsScriptClient,
 }
 
 # Display metadata for the Privacy Filter page -- mirrors the group/category
@@ -375,17 +245,9 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------- #
-# Auto-accept (policy v2) -- P6 of the policy v2 redesign's Settings surface: one filterable rule
-# list, sentence-rendered by policy.describe, replacing the per-connector Trusted-*/parallel-rule-
-# row/Sheets-Docs-pointer-page surface this module used to carry (see this file's git history for
-# what stood here through P5). Every rule this page writes lands directly in the on-disk v2
-# ``auto_accept:`` section (policy.store) -- "one config section, one grammar, one writer", the
-# redesign proposal's own top-of-page framing -- never through v1's ``auto_accept_rules``/
-# ``auto_accept_grants``, which stay exactly as the approval popup's own "Always allow" flow
-# (gate.py, still v1-backed pending a later phase's rewiring) and org mode's own separate rule-
-# authoring page (web/org_settings_pages.py, out of this redesign's scope per its own D6 --- see
-# that module's docstring) already leave them: both keep reading RULES_BY_OPERATION/RULES_LIST_
-# VALUE/RULES_INT_VALUE/OPERATION_LABELS below exactly as before.
+# Auto-accept -- one filterable rule list, sentence-rendered by policy.describe. Every rule this
+# page writes lands in the on-disk ``auto_accept:`` section (policy.store), the one config section
+# every surface (this page, the approval popup's "Always allow", the MCP propose tool) writes.
 #
 # gate.py's _evaluate_auto_accept checks a rule written here unconditionally, regardless of which
 # engine ``policy.engine`` names authoritative -- see auto_accept.set_policy_v2_store_rules's own
@@ -827,36 +689,6 @@ class SettingsController:
         other consumer on their very next request, with no daemon restart
         -- see step_up_config.py's own ``LiveStepUpConfig`` docstring."""
         self._step_up = step_up
-
-    def policy_v2_migration_notice_html(self) -> str | None:
-        """P4 of the policy v2 redesign's Settings banner: ``None`` unless this install's config
-        has actually been migrated to the v2 on-disk ``auto_accept:`` schema (``policy.store.
-        MIGRATED_TO_POLICY_V2_MARKER``) *and* at least one migrated rule's expansion now names a
-        destructive (``delete``) or send (``send``/``draft``/``share``) verb -- e.g. F4's sandbox-
-        folder "Write" grant, which today silently includes ``sheets.delete_dimensions``. Those are
-        exactly the rules whose real reach a v1 config never spelled out to the user in those terms.
-
-        web/routes_settings.py renders this as ``web_shell.wrap()``'s ``dismissible_notice_html``,
-        not the persistent ``banner_html`` strip -- like ``step_up_config.StepUpConfig.off_notice``,
-        this is advisory rather than a live problem: once a person has seen which of their existing
-        rules this covers, it should not keep reappearing while nothing about those rules changes.
-        """
-        cfg = self._load_config()
-        if not cfg.get(policy_store.MIGRATED_TO_POLICY_V2_MARKER):
-            return None
-        flagged = policy_store.destructive_or_send_rules(cfg)
-        if not flagged:
-            return None
-        items = "".join(
-            f"<li><code>{html.escape(rule.id)}</code> "
-            f"({html.escape(', '.join(OPERATION_LABELS.get(op, op) for op in sorted(rule.operations)))})</li>"
-            for rule in flagged
-        )
-        return (
-            "Your auto-accept rules were migrated to the new format. "
-            f"{len(flagged)} existing rule(s) allow a <b>destructive</b> or <b>send</b> action "
-            f"without review: <ul>{items}</ul> Review them under Rules."
-        )
 
     def set_connectors_changed_listener(self, callback: Callable[[], None] | None) -> None:
         """``callback`` is ``McpDispatcher.notify_tools_changed`` in
@@ -1395,7 +1227,7 @@ class SettingsController:
                 self.error = ""
                 self.refresh_connectors()
             else:
-                self.error = f"{cname.capitalize()} authentication failed: {result}"
+                self.error = f"{connector_label(cname)} authentication failed: {result}"
                 self._push_snapshot()
 
         _run_async(work, done)
@@ -1668,7 +1500,6 @@ class SettingsController:
         existing = policy_store.compile_rules_from_config(cfg)
         merged = policy_store.merge_rules(existing + new_rules)
         cfg[policy_store.AUTO_ACCEPT_CONFIG_KEY] = policy_store.rules_to_config(merged)
-        cfg[policy_store.MIGRATED_TO_POLICY_V2_MARKER] = True
         self._save_and_reload_policy_v2(cfg)
         return self.snapshot()
 
@@ -1917,7 +1748,7 @@ class SettingsController:
 
             rows.append({
                 "key": cname,
-                "label": cname.capitalize(),
+                "label": connector_label(cname),
                 "icon": cname,
                 "authed": connected,
                 "enabled": enabled,

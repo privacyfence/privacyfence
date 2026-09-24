@@ -98,7 +98,7 @@ def _build_server(tmp_dir: Path, port: int):
     daemon_main.load_org_config = lambda: {}
 
     config_path = tmp_dir / "settings.yaml"
-    config_path.write_text("auto_accept_rules: {}\nconnectors: {}\n", encoding="utf-8")
+    config_path.write_text("auto_accept: {}\nconnectors: {}\n", encoding="utf-8")
     connector_host = SimpleNamespace(set_connectors=lambda c: None)
     controller = sc.SettingsController(str(config_path), connectors=[], connector_host=connector_host)
 

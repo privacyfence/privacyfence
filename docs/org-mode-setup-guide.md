@@ -64,7 +64,7 @@ Do not use `hd` (the Workspace domain) as the admin claim: it is the same for ev
 
 This section is the general pattern every connector's org-mode registration follows — Slack, Salesforce, and Atlassian's own setup guides each link back here for it, substituting their own OAuth console and redirect path.
 
-Your OIDC sign-in client above (§4.1) is unrelated to whether you offer the Google connector (Gmail/Drive/Calendar/Contacts/Tasks) to users — it's entirely possible, and common, to sign in via Google but still need a *second*, separate Google OAuth client for the connector itself, because the two use different flows:
+Your OIDC sign-in client above (§4.1) is unrelated to whether you offer the Google connector (Gmail/Drive/Calendar/Contacts/Tasks/Apps Script) to users — it's entirely possible, and common, to sign in via Google but still need a *second*, separate Google OAuth client for the connector itself, because the two use different flows:
 
 - Local desktop installs use a **Desktop app** OAuth client with a loopback redirect (`http://127.0.0.1:.../callback`) — see `google-cloud-setup.md`.
 - Org mode needs a **Web application** OAuth client instead, with an explicit HTTPS redirect URI registered up front: `https://pf.acme.example.com/oauth/callback/google` (substituting your own hostname; `web/routes_connect.py` builds this from the daemon's own base URL). The two client types can't be interchanged — a Desktop app client has no field to register this redirect URI, and a Web application client requires one.
@@ -101,13 +101,13 @@ python3 scripts/build_org_bundle.py \
   -o org_config.json
 ```
 
-Adjust `--server-bind-host`/`--server-port` (default `0.0.0.0:8765` — what the reverse proxy in [§6](#6-reverse-proxy) forwards to) and `--server-tls-cert`/`--server-tls-key` only if the daemon itself terminates TLS instead of the proxy. `--merge` lets you add one more service to an already-distributed bundle later without re-entering everything (re-run with the same `--sign-key`).
+Adjust `--server-bind-host`/`--server-port` (default `127.0.0.1:8765`, loopback only — what a reverse proxy on the same host in [§6](#6-reverse-proxy) forwards to; pass `--server-bind-host` only if the proxy runs on another host) and `--server-tls-cert`/`--server-tls-key` only if the daemon itself terminates TLS instead of the proxy. `--merge` lets you add one more service to an already-distributed bundle later without re-entering everything (re-run with the same `--sign-key`).
 
 Install the resulting `org_config.json` on the server at `~/.privacyfence/org/org_config.json` (the service account's `paths.org_dir()`) before first starting the daemon, by copying it there — that is the only way to install it in org mode. There is no in-app equivalent: the local-mode Settings page's **Install/Update Organization Config…** action lives on `/settings`, which org mode deliberately never mounts (`web/server.py`'s module docstring, and `_build_org_app`'s route set). The daemon validates and pins the signature on startup either way. To rotate a signing key, an administrator deletes the previously pinned `~/.privacyfence/org/org_config_signing_pubkey.txt` on the server first — otherwise the new bundle is rejected as failing verification against the old key.
 
 ## 6. Reverse proxy
 
-Terminate HTTPS at the supported reverse proxy (nginx, Caddy, or similar) and forward traffic to the PrivacyFence daemon on its configured internal `bind_host`/`port` (default `0.0.0.0:8765`, or `localhost:8765` if `org_config.json`'s `server.bind_host` is left unset entirely rather than written by the build script).
+Terminate HTTPS at the supported reverse proxy (nginx, Caddy, or similar) and forward traffic to the PrivacyFence daemon on its configured internal `bind_host`/`port` (default `127.0.0.1:8765`, whether the build script wrote it or `org_config.json`'s `server.bind_host` is left unset).
 
 Do not expose that internal listener directly to the Internet. Set the proxy to forward `X-Forwarded-For`/`X-Forwarded-Proto`, and list the proxy's own IP address(es) with `--server-trusted-proxy` when building the bundle (§5) — those headers are honored only when at least one trusted proxy is configured, never by default, so redirect/origin validation would otherwise see the proxy's own address instead of the real client. Test sign-in/redirect behavior through the same public hostname users will use.
 
