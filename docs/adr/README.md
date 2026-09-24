@@ -107,7 +107,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | # | Decision | Status |
 |---|---|---|
 | [0001](0001-remove-macos-native-extra.md) | No macOS-native (AppKit/PyObjC) runtime extra | Accepted; superseded in part by 0002 |
-| [0002](0002-local-mode-trust-boundary-and-companion-app.md) | Local mode's trust boundary is the OS user account; a companion app replaces the agent as the sign-in channel | Accepted; superseded in part by 0003; amended by 0008, 0026, 0027 |
+| [0002](0002-local-mode-trust-boundary-and-companion-app.md) | Local mode's trust boundary is the OS user account; a companion app replaces the agent as the sign-in channel | Accepted; superseded in part by 0003; amended by 0008, 0026, 0027, 0031 |
 | [0003](0003-separated-installs-only.md) | Every shipped local-mode install is privilege-separated | Accepted |
 | [0004](0004-retire-the-v1-auto-accept-config-model.md) | Retire the v1 auto-accept config model | Accepted |
 | [0005](0005-moving-the-approval-decision-off-the-device.md) | Moving the approval decision off the device | Proposed |
@@ -136,4 +136,5 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0028](0028-clients-without-the-shim-get-capability-urls.md) | Clients without the shim move files through single-use capability URLs | Accepted |
 | [0029](0029-the-layout-step-never-re-owns-a-socket.md) | The installers' layout step never re-owns a socket | Accepted |
 | [0030](0030-preflight-dispatches-build-yml-before-tagging.md) | Cutting a release first dispatches `build.yml` on the untagged commit | Accepted |
-| [0031](0031-org-settings-share-locals-generic-action-dispatcher.md) | Org mode's settings writes route through local mode's generic action dispatcher | Accepted |
+| [0031](0031-clicking-privacyfence-opens-approvals-through-the-companion.md) | Clicking PrivacyFence opens Approvals through the companion | Accepted |
+| [0032](0032-org-settings-share-locals-generic-action-dispatcher.md) | Org mode's settings writes route through local mode's generic action dispatcher | Accepted |

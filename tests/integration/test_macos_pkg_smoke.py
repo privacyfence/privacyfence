@@ -46,6 +46,7 @@ Skipped entirely unless running on real macOS with a just-built
 from __future__ import annotations
 
 import platform
+import plistlib
 import shutil
 import subprocess
 import tempfile
@@ -134,6 +135,15 @@ def test_pkg_contains_postinstall_and_app_payload(expanded_pkg):
     app_bundle = app_bundles[0]
     daemon_binary = app_bundle / "Contents" / "MacOS" / "PrivacyFenceApp"
     assert daemon_binary.is_file(), f"{daemon_binary} missing from the package payload"
+
+    # ADR 0031: a double-click in /Applications runs the launcher (open
+    # Approvals through the companion), not the daemon, which launchd starts
+    # by its own explicit path and which refuses to run as the clicking user.
+    with open(app_bundle / "Contents" / "Info.plist", "rb") as f:
+        info = plistlib.load(f)
+    assert info["CFBundleExecutable"] == "PrivacyFence", info.get("CFBundleExecutable")
+    launcher_binary = app_bundle / "Contents" / "MacOS" / "PrivacyFence"
+    assert launcher_binary.is_file(), f"{launcher_binary} missing from the package payload"
 
     separation_script = app_bundle / "Contents" / "Resources" / "scripts" / "macos_privilege_separation.sh"
     assert separation_script.is_file(), (

@@ -1,4 +1,4 @@
-# ADR 0031: Org mode's settings writes route through local mode's generic action dispatcher
+# ADR 0032: Org mode's settings writes route through local mode's generic action dispatcher
 
 ## Status
 

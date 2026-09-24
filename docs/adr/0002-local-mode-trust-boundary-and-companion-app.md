@@ -52,6 +52,12 @@ are unchanged. The interim one-owner guard shipped in the same change is superse
 [ADR 0008](0008-one-principal-per-os-user.md), which also amends decision 6's reach to one
 principal per OS user.
 
+**Amended by [ADR 0031](0031-clicking-privacyfence-opens-approvals-through-the-companion.md),
+2026-09-24.** The macOS bundle's main executable becomes a launcher that opens Approvals through
+the companion (starting the tray if none is running), and so does Windows' Start Menu entry. On a
+separated POSIX install, the companion channel also admits the companion's own user for the two
+page `SHOW`s. Decision 2's menu and decisions 3 and 4 are unchanged.
+
 ## Context
 
 P10 left local mode headless. The daemon has no window, no menu bar item and no dock icon; every

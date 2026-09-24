@@ -43,6 +43,12 @@ Platform behavior:
     this and ``oauth_loopback.py``'s direct ``webbrowser.open()`` fallback
     keeps working exactly as before.
 
+``--launch`` (ADR 0031) is what clicking PrivacyFence itself runs -- the
+macOS app icon, whose bundle's main executable is a launcher rather than the
+daemon, and the Windows Start Menu entry. It opens Approvals through a
+running companion, or becomes the tray itself when none is running; see
+``_launch()``.
+
 Startup wiring (what autostarts the daemon vs. the companion, on each
 platform) did not change in Phase 3 -- that inversion is #428 Phase 4's
 job (ADR 0002's own "Consequences"), and has now happened on macOS (a
@@ -109,6 +115,9 @@ from .web.control_channel import (
     request_quit,
     request_recovery_code,
     request_show,
+    show_via_companion,
+    SHOW_FAILED,
+    SHOW_OPENED,
 )
 
 logger = logging.getLogger("privacyfence.companion")
@@ -430,6 +439,42 @@ def _run_action(action: str) -> bool:
     raise ValueError(f"Unknown companion action: {action!r}")  # pragma: no cover -- argparse restricts choices
 
 
+def _launch() -> int:
+    """``--launch``: what clicking PrivacyFence itself does -- the macOS app
+    icon (the bundle's main executable, ``src/_launcher_entry.py``) and the
+    Windows Start Menu entry (ADR 0031). Opens Approvals, making sure a
+    companion is running to do it:
+
+    1. **A companion is running**: ask it to open Approvals (``SHOW``), the
+       same route Linux's applications-menu click takes. It asks the human
+       to confirm first -- see ``control_channel._show_page`` for why that
+       dialog cannot be skipped for a request arriving from another process.
+    2. **It answered but did not open it** (Deny, a dialog nobody answered,
+       a daemon it could not reach): stop there. Starting a second companion
+       beside one that is plainly running would only fight it for its
+       address.
+    3. **No companion is running**: on macOS/Windows, *become* it -- run the
+       tray here, and open Approvals from it once its channel is up. That
+       needs no dialog: this process owns the channel the daemon calls back,
+       exactly as a click on the tray's own Open Approvals does. On Linux,
+       which has no tray (ADR 0002 decision 4), this is ``--action
+       open-approvals``'s own fallback.
+
+    Returns the process exit code: the tray's own when this became it."""
+    outcome = show_via_companion("/approvals")
+    if outcome == SHOW_OPENED:
+        return 0
+    if outcome == SHOW_FAILED:
+        logger.error(
+            "PrivacyFence's companion is running but did not open Approvals (the request was "
+            "declined, or it could not reach PrivacyFence). Use its menu-bar/tray icon instead.",
+        )
+        return 1
+    if sys.platform in _TRAY_PLATFORMS:
+        return _run_tray(initial_path="/approvals")
+    return 0 if _open_path("/approvals") else 1
+
+
 def _complete_pending_separation() -> None:
     """ADR 0003 decision 3's second half: if this install is separated but
     this session's account is not in its service group yet, ask for the
@@ -619,7 +664,7 @@ def _on_ui_thread(fn: Callable[[], None]) -> None:
     NSOperationQueue.mainQueue().addOperationWithBlock_(fn)
 
 
-def _run_tray() -> int:
+def _run_tray(initial_path: str | None = None) -> int:
     """macOS/Windows only -- a persistent process with a tray/menu-bar icon
     and this process's own ``CompanionChannelServer`` (decision 5), both
     torn down together on Quit. ``pystray``/``Pillow`` are imported here,
@@ -634,6 +679,10 @@ def _run_tray() -> int:
     each a small callable reading ``_menu_model(_state.status)[index]``, so
     a background poll thread can redraw the whole menu (``icon.
     update_menu()``) without rebuilding it.
+
+    ``initial_path`` (``--launch``, ADR 0031) is opened once the channel is
+    up, as if its menu item had been clicked -- on its own thread, since
+    minting waits on the daemon calling this process back.
     """
     import pystray
     from PIL import Image
@@ -642,6 +691,10 @@ def _run_tray() -> int:
     channel = CompanionChannelServer()
     channel.start()
     _channel_running.set()
+    if initial_path is not None:
+        threading.Thread(
+            target=_open_path, args=(initial_path,), name="privacyfence-launch-open", daemon=True,
+        ).start()
 
     base_image = Image.open(_TRAY_ICON_PATH)
 
@@ -856,13 +909,24 @@ def main(argv: list[str] | None = None) -> int:
             "scripts/linux_privilege_separation.sh."
         ),
     )
+    parser.add_argument(
+        "--launch", action="store_true",
+        help=(
+            "Open Approvals, starting the tray/menu-bar companion first if none is running -- "
+            "what clicking PrivacyFence itself runs (the macOS app icon, the Windows Start Menu "
+            "entry; ADR 0031)."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    if args.action is not None and args.serve:
-        # One runs and exits, the other stays up forever; there is no
+    if sum((args.action is not None, args.serve, args.launch)) > 1:
+        # One runs and exits, another stays up forever; there is no
         # sensible order for "both", and silently picking one would make a
         # mis-written .desktop Exec= look like it worked.
-        parser.error("--action and --serve are mutually exclusive")
+        parser.error("--action, --serve and --launch are mutually exclusive")
+
+    if args.launch:
+        return _launch()
 
     if args.action is not None:
         return 0 if _run_action(args.action) else 1

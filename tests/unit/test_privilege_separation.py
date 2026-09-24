@@ -2179,6 +2179,46 @@ class TestWindowsCompanionTaskTemplate:
         assert '#define CompanionExeName "PrivacyFenceCompanion.exe"' in inno
         assert r'Name: "{group}\{#AppName} Companion"' in inno
 
+    def test_the_main_start_menu_entry_launches_through_the_companion(self):
+        # ADR 0031: the same thing a double-click on the macOS app does --
+        # open Approvals, starting the tray first if it isn't running --
+        # rather than the bare settings URL, which only worked for a browser
+        # that already had a session.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        assert (
+            r'Name: "{group}\{#AppName}"; Filename: "{app}\{#CompanionExeName}"; Parameters: "--launch"'
+            in inno
+        )
+        assert "localhost:8765" not in inno
+
+
+class TestMacosBundleMainExecutable:
+    """ADR 0031: a double-click on PrivacyFenceApp.app runs the launcher,
+    never the daemon. launchd starts the daemon and the companion by their
+    own explicit paths (macos_privilege_separation.sh), so the bundle's
+    CFBundleExecutable is free to be something a human means to click."""
+
+    SPEC = REPO_ROOT / "PrivacyFenceApp.spec"
+
+    def test_the_bundles_main_executable_is_the_launcher(self):
+        spec = self.SPEC.read_text(encoding="utf-8")
+
+        assert '"CFBundleExecutable": "PrivacyFence",' in spec
+        assert '["src/_launcher_entry.py"]' in spec
+        assert 'name="PrivacyFence",' in spec
+
+    def test_the_launcher_runs_the_companions_launch(self):
+        entry = (REPO_ROOT / "src" / "_launcher_entry.py").read_text(encoding="utf-8")
+
+        assert 'main(["--launch"])' in entry
+
+    def test_launchd_still_starts_the_daemon_by_its_own_path(self):
+        script = (REPO_ROOT / "scripts" / "macos_privilege_separation.sh").read_text(encoding="utf-8")
+
+        assert 'DAEMON_EXECUTABLE="${staged_app}/Contents/MacOS/PrivacyFenceApp"' in script
+        assert 'COMPANION_EXECUTABLE="${staged_app}/Contents/MacOS/PrivacyFenceCompanion"' in script
+
 
 class TestWindowsLayoutAudit:
     """``audit_layout()``'s Windows branch, driven through a synthetic DACL.
