@@ -72,6 +72,12 @@ Two problems with that:
   retry and the hash check.
 - The step's log line `CodeSignTool-<version>-windows.zip verified: sha256 <hash>`, and the
   "Build installer" step's CodeSignTool output, on every `build.yml` run with eSigner secrets.
+- First verified in `build.yml` runs
+  [36062143025](https://github.com/privacyfence/privacyfence/actions/runs/36062143025),
+  [36062145619](https://github.com/privacyfence/privacyfence/actions/runs/36062145619) and
+  [36062148281](https://github.com/privacyfence/privacyfence/actions/runs/36062148281) (hash
+  verified, all four executables signed, every job green). The refusal path was verified in run
+  [36061561100](https://github.com/privacyfence/privacyfence/actions/runs/36061561100).
 
 ## Related
 
