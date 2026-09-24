@@ -1,7 +1,7 @@
 """Systemic per-call-site invariants: extends
 tests/unit/connectors/test_readme_manifest_alignment.py's
 own parameterized, source-scanning pattern -- one assertion per tool/site,
-generated from the real code rather than a hand-maintained list -- to three
+generated from the real code rather than a hand-maintained list -- to four
 more properties, none of which had a mechanical regression
 guard before this module existed:
 
@@ -34,9 +34,14 @@ guard before this module existed:
   review was written; see ``TOKEN_WRITE_SITES``'s own comment for why
   ``room_directory_client.py``'s site doesn't count against this specific
   check anymore -- it's still covered, just separately.)
+- Nothing that decides a gated call -- a ``CONDITION_SELECTORS`` entry,
+  ``auto_accept.ReviewContext``, any ``policy/`` module -- reads agent
+  identity: ADR 0006 Invariant 1, a claimed identity never changes an
+  outcome (see ``TestNoOutcomeKeysOnAgentIdentity``).
 """
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import inspect
 from pathlib import Path
@@ -44,7 +49,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from privacyfence.auto_accept import TOOL_TO_GATE
+from privacyfence.auto_accept import TOOL_TO_GATE, ReviewContext
 from privacyfence.connector import ToolSpec
 from privacyfence.connectors.apps_script import AppsScriptConnector
 from privacyfence.connectors.calendar import CalendarConnector
@@ -57,6 +62,7 @@ from privacyfence.connectors.salesforce import SalesforceConnector
 from privacyfence.connectors.slack import SlackConnector
 from privacyfence.connectors.tasks import TasksConnector
 from privacyfence.connectors.telegram import TelegramConnector
+from privacyfence.policy.conditions import CONDITION_SELECTORS
 
 # Source-scanning assertions over real code, no I/O -- unit per
 # testing-policy.md's seven-layer taxonomy.
@@ -290,4 +296,52 @@ class TestTokenSitesUseTheSharedSecureWriteHelper:
         assert "os.chmod(" in func_source or ", mode)" in func_source, (
             f"{_SYNC_ROOM_DIRECTORY_PATH}'s _atomic_write_text no longer sets restrictive permissions on the "
             "OAuth token file it writes."
+        )
+
+
+# --------------------------------------------------------------------------- #
+# ADR 0006 Invariant 1: a claimed identity never changes an outcome. Every
+# identity routes_mcp.py captures today is a claim (agent_identity.AgentSource
+# .CLIENT_INFO), so nothing that decides a gated call -- a `when:` condition,
+# an auto-accept rule's ReviewContext, the policy engine -- may read agent
+# identity at all. Whichever later phase adds an attested source (ADR 0006's
+# override or oauth_client) and genuinely needs to key on it must change this
+# guard deliberately, gated on AgentSource.is_attested(), not slip past it.
+# --------------------------------------------------------------------------- #
+
+_AGENT_IDENTITY_MARKERS = (
+    "agent_identity", "current_agent", "AgentIdentity", "AgentSource", "agent_id", "agent_source",
+    "agent_name", "agent_version",
+)
+
+
+def _agent_markers_in(source: str) -> list[str]:
+    return [marker for marker in _AGENT_IDENTITY_MARKERS if marker in source]
+
+
+class TestNoOutcomeKeysOnAgentIdentity:
+    @pytest.mark.parametrize("name", sorted(CONDITION_SELECTORS))
+    def test_condition_selector_does_not_reference_agent_identity(self, name):
+        selector = CONDITION_SELECTORS[name]
+        assert "agent" not in selector.name.lower()
+        assert not any("agent" in replaced.lower() for replaced in selector.replaces)
+        assert _agent_markers_in(inspect.getsource(selector.holds)) == [], (
+            f"`when: {name}` reads agent identity -- ADR 0006 Invariant 1 forbids keying an outcome on "
+            "a claimed identity."
+        )
+
+    def test_review_context_carries_no_agent_identity(self):
+        field_names = [f.name for f in dataclasses.fields(ReviewContext)]
+        assert not [n for n in field_names if "agent" in n.lower()], field_names
+        assert _agent_markers_in(inspect.getsource(ReviewContext)) == []
+
+    @pytest.mark.parametrize(
+        "path",
+        [SRC_ROOT / "auto_accept.py", *sorted((SRC_ROOT / "policy").glob("*.py"))],
+        ids=lambda p: str(p.relative_to(SRC_ROOT)),
+    )
+    def test_decision_modules_do_not_read_agent_identity(self, path):
+        assert _agent_markers_in(path.read_text(encoding="utf-8")) == [], (
+            f"{path.relative_to(SRC_ROOT)} references agent identity -- ADR 0006 Invariant 1: nothing that "
+            "decides a gated call may key on a claimed agent_id."
         )

@@ -3486,3 +3486,58 @@ class TestConfigurePopupExecutor:
             assert seen["thread"].startswith("pf-popup")
         finally:
             gate._popup_executor.shutdown(wait=False)
+
+
+class TestAgentAttribution:
+    """AGT-2: a gated call's audit row carries the agent in scope; an expiry-sweep row carries
+    the agent that created the approval, not the one whose call happens to run the sweep."""
+
+    async def test_gated_call_row_carries_scoped_agent(self, monkeypatch, audit_dir):
+        from privacyfence.agent_identity import AgentSource, agent_scope, identify
+
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "i_am_sender")))
+        with agent_scope(identify("claude-code", "2.1.0", AgentSource.CLIENT_INFO)):
+            assert await gate.gated_call(**base_kwargs()) is FILTERED
+
+        [entry] = read_audit_entries(audit_dir)
+        assert (entry["agent_id"], entry["agent_name"], entry["agent_version"], entry["agent_source"]) == (
+            "claude-code", "Claude Code", "2.1.0", "client_info",
+        )
+
+    async def test_gated_call_without_scope_is_unknown(self, monkeypatch, audit_dir):
+        monkeypatch.setattr(gate, "_evaluate_auto_accept", FakeEvaluator((True, "i_am_sender")))
+        await gate.gated_call(**base_kwargs())
+
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["agent_id"] == "" and entry["agent_source"] == ""
+
+    @pytest.mark.parametrize("ledgered", [False, True])
+    def test_expiry_sweep_row_carries_the_creating_agent(self, audit_dir, ledgered):
+        from privacyfence.agent_identity import AgentSource, agent_scope, current_agent, identify
+
+        x = identify("claude-code", "", AgentSource.CLIENT_INFO)
+        y = identify("openai-mcp", "1.0", AgentSource.OAUTH_CLIENT)
+        registry = PendingApprovalRegistry(hold_window=0.0, pending_ttl=300.0, ledger_ttl=300.0)
+        with agent_scope(y):
+            approval, created = registry.register_or_coalesce(
+                dedupe_key="k", connector="gmail", tool="gmail_get_message", gate_kind="review",
+                request_id="req-y", summary="s", tool_name="Read Gmail message",
+            )
+        assert created and approval.agent == y
+        if ledgered:
+            registry.answer(approval.id, "accept")
+            registry.finalize(approval.id, "accept")
+            approval.ledger_expires_at = 0.0
+        else:
+            approval.expires_at = 0.0
+
+        with agent_scope(x):
+            gate._pop_registry_expirations(registry)
+            assert current_agent() == x  # the sweep's own scope is restored
+
+        [entry] = read_audit_entries(audit_dir)
+        assert entry["decision"] == "expired"
+        assert entry["request_id"] == "req-y"
+        assert (entry["agent_id"], entry["agent_name"], entry["agent_version"], entry["agent_source"]) == (
+            "chatgpt", "ChatGPT", "1.0", "oauth_client",
+        )

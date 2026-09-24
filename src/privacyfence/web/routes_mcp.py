@@ -29,13 +29,13 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from mcp import types
 from mcp.server.auth.middleware.auth_context import AuthContextMiddleware, get_access_token
 from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAuthMiddleware
-from mcp.server.auth.provider import TokenVerifier
+from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.server.auth.routes import build_resource_metadata_url, create_auth_routes, create_protected_resource_routes
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
 from mcp.server.connection import Connection
@@ -53,6 +53,7 @@ from starlette.types import ASGIApp
 
 from .. import __version__ as PRIVACYFENCE_VERSION
 from .. import local_files
+from ..agent_identity import UNKNOWN_AGENT, AgentIdentity, AgentSource, agent_scope, identify
 from ..connector import Connector
 from ..principal import Principal, principal_scope
 from ..safe_errors import public_message
@@ -133,6 +134,43 @@ def _connection_of(ctx: ServerRequestContext) -> Connection | None:
     """
     connection = getattr(ctx.session, "_connection", None)
     return connection if isinstance(connection, Connection) else None
+
+
+# Looks up the DCR ``client_name`` registered under an access token's ``client_id``, or None.
+# Org mode passes ``OrgOAuthProvider.client_name`` -- read-only by contract, since it runs on every
+# tool call; local mode has no DCR registrations and passes nothing.
+ClientNameLookup = Callable[[str], str | None]
+
+
+def _claimed_client_info(ctx: ServerRequestContext) -> tuple[object, object]:
+    """The ``clientInfo`` name and version this request's client claimed, or ``(None, None)``.
+
+    ``ctx.session.client_params`` is the handshake's ``initialize`` params on a session, and the
+    SDK's synthesized equivalent of a 2026-07-28 request's own ``_meta`` envelope on a
+    session-less request (``Connection.from_envelope``) -- so one read covers both eras. Same
+    "degrade, never raise" posture as ``_connection_of``: a client that sent no ``clientInfo``, or
+    an SDK that moved the attribute, costs the call its attribution, never the call itself."""
+    params = getattr(ctx.session, "client_params", None)
+    info = getattr(params, "client_info", None)
+    return getattr(info, "name", None), getattr(info, "version", None)
+
+
+def _resolve_agent(
+    ctx: ServerRequestContext, access_token: AccessToken | None, client_names: ClientNameLookup | None,
+) -> AgentIdentity:
+    """The AI system a gated tool call is attributed to (ADR 0006, ADR 0035) -- always a *claim*.
+
+    Org mode's DCR ``client_name`` is tried first and the handshake ``clientInfo`` is the
+    fallback. Both are strings the client chose, so both record ``AgentSource.CLIENT_INFO``
+    (ADR 0035 / gate G1: an unpinned DCR name is claimed) and neither can ever be attested here
+    -- nothing on this path produces ``override`` or ``oauth_client``. ``identify`` sanitizes
+    every string and gives ``UNKNOWN_AGENT`` when no usable name is left."""
+    if client_names is not None and access_token is not None:
+        dcr_agent = identify(client_names(access_token.client_id), "", AgentSource.CLIENT_INFO)
+        if dcr_agent is not UNKNOWN_AGENT:
+            return dcr_agent
+    name, version = _claimed_client_info(ctx)
+    return identify(name, version, AgentSource.CLIENT_INFO)
 
 
 def _session_key(ctx: ServerRequestContext) -> str:
@@ -226,7 +264,7 @@ class _PrivacyFenceServer(MCPServer):
         )
 
 
-def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
+def build_mcp_server(dispatcher: McpDispatcher, *, client_names: ClientNameLookup | None = None) -> MCPServer:
     """Builds the low-level MCP ``Server``, wired to ``dispatcher`` for both
     tool listing and tool calls. A fresh ``Server`` per daemon process
     (there's exactly one dispatcher, and its connector set can change live --
@@ -347,15 +385,24 @@ def build_mcp_server(dispatcher: McpDispatcher) -> MCPServer:
         # real signed-in human -- see
         # mcp_auth.principal_from_access_token's own docstring for how each
         # is resolved.
-        principal = principal_from_access_token(get_access_token())
+        access_token = get_access_token()
+        principal = principal_from_access_token(access_token)
+        # ADR 0006: which AI system made this call, entered beside the
+        # principal for everything downstream (audit rows, a pending
+        # approval's captured identity) to read back via current_agent().
+        # Meta-tools stay unattributed (plan Invariant 5): they are not
+        # gated calls. Never read from the request body -- see
+        # _is_initialize for why that line is drawn.
+        is_meta_tool = name in mcp_tools.META_TOOL_NAMES
+        agent = UNKNOWN_AGENT if is_meta_tool else _resolve_agent(ctx, access_token, client_names)
         bridge_available = _request_header(ctx, _FILE_BRIDGE_HEADER) is not None
         uploads = _file_bridge_uploads(params)
         base_url = str(ctx.request.base_url) if ctx.request is not None else ""
-        with principal_scope(principal), local_files.call_context(
+        with principal_scope(principal), agent_scope(agent), local_files.call_context(
             bridge_available=bridge_available, uploads=uploads, base_url=base_url,
         ) as call_state:
             try:
-                if name in mcp_tools.META_TOOL_NAMES:
+                if is_meta_tool:
                     result = await _dispatch_meta_tool(dispatcher, session_key, name, arguments, principal, base_url)
                 else:
                     result = await _dispatch_connector_tool(dispatcher, session_key, name, arguments)
@@ -686,7 +733,7 @@ class _RehomeStaleInitialize:
 
 def build_mcp_asgi_app(
     dispatcher: McpDispatcher, *, token: str | None = None, verifier: TokenVerifier | None = None,
-    resource_metadata_url: AnyHttpUrl | None = None,
+    resource_metadata_url: AnyHttpUrl | None = None, client_names: ClientNameLookup | None = None,
 ) -> tuple[ASGIApp, StreamableHTTPSessionManager]:
     """Builds the ``/mcp`` endpoint app -- bearer-token authenticated,
     audience-separated from the approval surface's session cookie (§10.3).
@@ -705,8 +752,11 @@ def build_mcp_asgi_app(
     401 response's ``WWW-Authenticate`` header so a client that gets one
     knows where to discover this server's authorization server; local
     mode has no such document to point to, so it stays ``None`` there.
+    ``client_names`` (org mode only) is ``OrgOAuthProvider.client_name``,
+    which attributes each tool call to its DCR client's claimed name --
+    see ``_resolve_agent``.
     """
-    server = build_mcp_server(dispatcher)
+    server = build_mcp_server(dispatcher, client_names=client_names)
     session_manager = StreamableHTTPSessionManager(app=server, json_response=False, stateless=False)
 
     if verifier is None:
@@ -726,7 +776,7 @@ def build_mcp_asgi_app(
 
 def mount_mcp(
     dispatcher: McpDispatcher, *, token: str | None = None, verifier: TokenVerifier | None = None,
-    resource_metadata_url: AnyHttpUrl | None = None,
+    resource_metadata_url: AnyHttpUrl | None = None, client_names: ClientNameLookup | None = None,
 ) -> tuple[Route, StreamableHTTPSessionManager]:
     """The ``/mcp`` route -- an exact-path ``Route`` with no ``methods``
     restriction (matches GET/POST/DELETE alike, exactly like the official
@@ -736,6 +786,7 @@ def mount_mcp(
     """
     app, session_manager = build_mcp_asgi_app(
         dispatcher, token=token, verifier=verifier, resource_metadata_url=resource_metadata_url,
+        client_names=client_names,
     )
     return Route(MCP_PATH, endpoint=app), session_manager
 
