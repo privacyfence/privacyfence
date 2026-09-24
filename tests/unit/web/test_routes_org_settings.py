@@ -1,7 +1,10 @@
-"""Tests for web/routes_org_settings.py -- org mode's settings surface
-(#400): every signed-in principal's own auto-accept rules (read + add +
-remove), and the admin-only install-wide PII/privacy policy, read (C3d) and
-edited (C3e).
+"""Tests for org mode's settings surface (#400): every signed-in principal's
+own auto-accept rules (read + add + remove), and the admin-only install-wide
+PII/privacy policy, read (C3d) and edited (C3e). Exercises
+web/routes_settings.py's ``build_org_routes`` (PSC-4b folded the former
+web/routes_org_settings.py's routes in there; its page rendering moved to
+web/org_settings_pages.py) rather than the module this file is still named
+for.
 
 P9 of the policy v2 redesign rebuilt the rules half of this page onto the v2
 ``auto_accept:`` on-disk section (``policy/store.py``) exclusively, via
@@ -29,7 +32,8 @@ from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import store as policy_store
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.step_up_config import StepUpConfig
-from privacyfence.web import org_session, routes_org_settings as ros
+from privacyfence.web import org_session, org_settings_pages
+from privacyfence.web import routes_settings as ros
 
 
 BASE_URL = "https://pf.example.com"
@@ -77,7 +81,7 @@ def _app(
     step_up: StepUpConfig | None = None,
 ):
     sessions = sessions or org_session.OrgSessionStore()
-    routes = ros.build_routes(
+    routes = ros.build_org_routes(
         sessions=sessions, install_wide_settings=install_wide_settings if install_wide_settings is not None else {},
         install_wide_settings_path=install_wide_settings_path,
         step_up=step_up or StepUpConfig(), step_up_origin=BASE_URL,
@@ -146,13 +150,13 @@ class TestPrivacyPageAdminGating:
 
 class TestPrivacyPolicyView:
     def test_a_group_absent_from_install_wide_settings_is_flagged_as_falling_back(self):
-        groups = ros._privacy_policy_view({})
+        groups = org_settings_pages._privacy_policy_view({})
         privacy = next(g for g in groups if g["key"] == "privacy")
         assert privacy["default_policy"] == "block"
         assert privacy["falls_back_to_block_default"] is True
 
     def test_an_explicitly_configured_group_is_not_flagged(self):
-        groups = ros._privacy_policy_view({"privacy": {"default_policy": "allow"}})
+        groups = org_settings_pages._privacy_policy_view({"privacy": {"default_policy": "allow"}})
         privacy = next(g for g in groups if g["key"] == "privacy")
         assert privacy["default_policy"] == "allow"
         assert privacy["falls_back_to_block_default"] is False
@@ -171,7 +175,7 @@ class TestPrivacyPolicyView:
         # daemon on a malformed group, so reaching this here only happens if
         # settings.yaml was hand-edited after that -- render "block", the
         # fail-closed default, rather than raising.
-        groups = ros._privacy_policy_view({"privacy": {"default_policy": "not_a_real_policy"}})
+        groups = org_settings_pages._privacy_policy_view({"privacy": {"default_policy": "not_a_real_policy"}})
         privacy = next(g for g in groups if g["key"] == "privacy")
         assert privacy["default_policy"] == "block"
 
@@ -361,7 +365,7 @@ class TestAddRule:
         csrf = _signed_in(client, sessions, ALICE)
         recorded = []
 
-        def _deny(action, principal):
+        def _deny(action, principal, *, mode):
             recorded.append(action)
             return False
 
@@ -374,7 +378,7 @@ class TestAddRule:
         assert r.status_code == 403
         assert _on_disk_rules(tmp_path, "alice") == []
         # Gated under the new, moved-in action name (org_settings_scope.py's
-        # PER_PRINCIPAL_ACTIONS), not the old add_rule_row it replaced.
+        # ACTION_SCOPES), not the old add_rule_row it replaced.
         assert recorded == ["add_policy_rule"]
 
 
@@ -482,7 +486,7 @@ class TestRemoveRule:
         csrf = _signed_in(client, sessions, ALICE)
         recorded = []
 
-        def _deny(action, principal):
+        def _deny(action, principal, *, mode):
             recorded.append(action)
             return False
 
@@ -495,7 +499,7 @@ class TestRemoveRule:
         assert r.status_code == 403
         assert len(_on_disk_rules(tmp_path, "alice")) == 1
         # Gated under the new, moved-in action name (org_settings_scope.py's
-        # PER_PRINCIPAL_ACTIONS), not the old remove_rule_row it replaced.
+        # ACTION_SCOPES), not the old remove_rule_row it replaced.
         assert recorded == ["remove_policy_rule"]
 
 

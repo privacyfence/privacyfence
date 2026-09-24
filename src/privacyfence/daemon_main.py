@@ -1063,7 +1063,7 @@ def _start_org_web_server(
 ) -> Any:
     """org mode's own boot path (P7) -- a real OAuth 2.1 authorization server on ``/mcp``
     instead of the local shared-secret ``StaticTokenVerifier``. The
-    read-only settings surface (#400, web/routes_org_settings.py) is
+    settings surface (#400, web/routes_settings.py's build_org_routes) is
     mounted here too now -- see web/server.py's own module docstring for
     exactly what it does and does not cover. Raises ``org_mode.
     ConfigurationError`` (SEC-04; surfaced as a startup failure, the same
@@ -1093,7 +1093,7 @@ def _start_org_web_server(
     privacy-filter registry entry reflects the real install-wide policy,
     not their own unconfigured per-user file -- see that function's own
     docstring) and carried on ``OrgAuth.install_wide_settings`` for
-    web/routes_org_settings.py's admin-only policy view to read directly,
+    web/routes_settings.py's admin-only policy view (build_org_routes) to read directly,
     with no daemon_main import of its own needed there.
     """
     from .approvals import PendingApprovalRegistry

@@ -382,7 +382,7 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
 # redesign proposal's own top-of-page framing -- never through v1's ``auto_accept_rules``/
 # ``auto_accept_grants``, which stay exactly as the approval popup's own "Always allow" flow
 # (gate.py, still v1-backed pending a later phase's rewiring) and org mode's own separate rule-
-# authoring page (web/routes_org_settings.py, out of this redesign's scope per its own D6 --- see
+# authoring page (web/org_settings_pages.py, out of this redesign's scope per its own D6 --- see
 # that module's docstring) already leave them: both keep reading RULES_BY_OPERATION/RULES_LIST_
 # VALUE/RULES_INT_VALUE/OPERATION_LABELS below exactly as before.
 #

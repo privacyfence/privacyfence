@@ -106,7 +106,7 @@ class TestBuildAppOrgMode:
 
     def test_readonly_settings_surface_is_mounted(self, tmp_path, monkeypatch):
         # #400: /settings and /settings/privacy are real routes now -- a
-        # small, purpose-built read-only surface (web/routes_org_settings.py),
+        # small, purpose-built surface (web/routes_settings.py's build_org_routes),
         # not the local-mode dispatcher above. An unauthenticated request is
         # redirected to /login, same as /approvals.
         org = _org_auth(tmp_path, monkeypatch)

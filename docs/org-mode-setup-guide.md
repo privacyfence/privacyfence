@@ -152,7 +152,7 @@ Run a single active daemon per state directory: PrivacyFence takes a `portalocke
 
 ## 9. Where PII policy and auto-accept rules live
 
-`/settings` in org mode (#400) is scoped very differently from local mode's combined settings page — it does **not** mount that page's ~30-action editor (connector management, the update banner, Telegram's interactive auth stay local-mode-only, see `web/org_settings_scope.py`'s `NOT_APPLICABLE_ACTIONS`). What it does give every signed-in principal, linked from `/approvals`'s own footer:
+`/settings` in org mode (#400) is scoped very differently from local mode's combined settings page — it does **not** mount that page's ~30-action editor (connector management, the update banner, Telegram's interactive auth stay local-mode-only; `web/org_settings_scope.py`'s `ACTION_SCOPES` declares, per action, which mode(s) it actually has a route in). What it does give every signed-in principal, linked from `/approvals`'s own footer:
 
 - **`GET /settings`** — that principal's own auto-accept rules (PrivacyFence's single scope+verb
   policy model — see [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#auto-accept)): a Remove

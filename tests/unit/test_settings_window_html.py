@@ -279,7 +279,7 @@ class TestAutoAcceptTemplate:
 
     def test_old_rule_and_grant_row_actions_are_gone(self):
         # add_rule_row/remove_rule_row/remove_grant_row still exist as SettingsController methods
-        # (see their own docstring), but only web/routes_org_settings.py's separate org-mode page
+        # (see their own docstring), but only web/org_settings_pages.py's separate org-mode page
         # -- a different module, with its own HTML template -- ever reaches them; this module's
         # own JS bridge (build_html's output) must never reference any of the seven again.
         html = build_html(_make_state())
