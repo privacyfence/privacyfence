@@ -285,7 +285,7 @@ class TestAuthorityDir:
             assert paths.authority_dir() == tmp_path / "authority"
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, the now-removed windows-linux-support-plan.md's Track B3)",
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, `git show be78e7ee^:docs/windows-linux-support-plan.md`'s Track B3)",
     )
     def test_created_at_0700(self, monkeypatch, tmp_path):
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
@@ -368,6 +368,27 @@ class TestAuthorityDir:
 
         assert result.is_dir()
         assert not (result / "web_token").exists()
+        assert "web_token" in caplog.text
+
+    def test_a_permission_error_checking_the_destination_is_logged_not_raised(self, monkeypatch, tmp_path, caplog):
+        # privacyfence/privacyfence#613: a plain checkout resolving to a
+        # system-wide, privilege-separated data_dir() the current uid can't
+        # stat into raises PermissionError from Path.exists() itself (unlike
+        # "doesn't exist", which exists() swallows) -- that must log and
+        # continue exactly like the failed-rename case above, not crash
+        # daemon startup.
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        (tmp_path / "web_token").write_text("legacy", encoding="utf-8")
+
+        def _raise_exists(self):
+            raise PermissionError("permission denied")
+
+        monkeypatch.setattr(Path, "exists", _raise_exists)
+
+        with caplog.at_level("WARNING"):
+            result = paths.authority_dir()
+
+        assert result.is_dir()
         assert "web_token" in caplog.text
 
 

@@ -43,6 +43,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.2.1] — 2026-09-23
+
+*Supersedes 4.2.0, which was tagged but never published. Its release build's `build` (macOS) and
+`build-deb` jobs both failed the same packaged-artifact smoke-test assertion — "attested control
+channel mint failed: 'ERROR that mint was not confirmed by the companion'" — because the smoke-test
+helpers still minted their stand-in bootstrap code as root, and this same cycle's ADR 0008 change
+(per-peer `principal_id` resolved from the real connecting uid) resolves root to its own `os-0`
+principal rather than the install's owner, so the daemon's mint call reached an address nothing was
+listening on. A false positive in the test harness, not a defect in the built `.pkg`/`.deb`/DMG;
+`finalize-release` never ran, so no GitHub Release or PyPI/TestPyPI publish happened. Both smoke-test
+helpers now connect as the install's owner instead of root, matching how a real companion connects.
+Everything 4.2.0 would have carried is folded in below: from the outside this is a single
+4.1.5 → 4.2.1 change.*
+
 ### Added
 
 - The companion app (the menu-bar/tray icon on macOS and Windows; Applications-menu entries on
@@ -67,6 +81,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- macOS: enabling privilege separation (the `.pkg` installer, or
+  `macos_privilege_separation.sh enable`) no longer occasionally leaves the companion app not
+  running until the next login. Restarting the companion in an already-logged-in session now waits
+  for the previous instance to unload and retries through launchd's bootout/bootstrap race, the
+  same way the daemon's own restart already did.
+- `scripts/qa_authenticate_connectors.py --org-config <path>` no longer crashes with
+  `shutil.SameFileError` when `<path>` already resolves to `org/org_config.json` (e.g. re-running
+  the command with the default install location) — it now recognizes the bundle is already
+  installed and skips the backup-and-copy instead of trying to copy the file onto itself.
+- `daemon_main.py` (and anything invoking it, e.g. `scripts/qa_authenticate_connectors.py`) no
+  longer crashes with an unhandled `PermissionError` on a machine that has #428 Phase 4 privilege
+  separation enabled system-wide, even when the invocation passes its own explicit `--config` and
+  never needed the (unusable) system-root default in the first place. `paths.py`'s legacy-file
+  migration now logs and continues on a permission error from the destination's own `.exists()`
+  check, the same as it already did for a failed `rename`.
+- The Slack/Salesforce/Atlassian browser sign-in flow (`oauth_loopback.py`'s `run_browser_oauth()`,
+  used by their `--*-oauth` CLI flags and the local-mode settings UI) no longer aborts outright on
+  a host that can't auto-launch a browser (e.g. a headless SSH session with no `DISPLAY`) — it now
+  always prints the authorize URL up front and keeps its local callback listener running and
+  waiting, the same as when a browser does open, so a person can still complete sign-in by visiting
+  that URL manually (typically through an SSH tunnel or SOCKS proxy). Previously it raised and tore
+  the listener down in the same breath as telling the person to "visit manually," which made that
+  instruction impossible to follow; Google's connectors (via `google-auth-oauthlib`) already
+  behaved this way and were unaffected.
 - A privilege-separated macOS install's daemon could be left unloaded after a `.pkg` upgrade, with
   no visible symptom (a `launchctl bootstrap`/`bootout` race). `enable` and the installer's own
   `postinstall` script now retry the bootstrap with backoff and verify the daemon actually came up
@@ -93,6 +131,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Security
 
+- The bespoke-settings-route classification guard (`routes_settings.build_routes()` — every
+  non-dispatcher POST route must be listed as sensitive or explicitly exempt, see
+  [ADR 0014](docs/adr/0014-every-bespoke-route-is-classified-or-the-app-refuses-to-start.md)) is
+  now an explicit `raise RuntimeError(...)` instead of a plain `assert`. Python strips `assert`
+  under `python -O`/`PYTHONOPTIMIZE`, which would have let a daemon started that way mount an
+  unclassified route without the `_SENSITIVE_ACTIONS`-shaped gating the guard exists to enforce;
+  nothing shipped today is known to run with `-O`, but nothing prevented it either.
 - **A second OS user added to a privilege-separated install's service group now gets their own
   isolated PrivacyFence identity, not the owner's.** Before this, every `/mcp` caller on such a
   machine — any account's Claude Desktop, Claude Code, or other MCP client — resolved to the same
@@ -2262,7 +2307,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.2.1...HEAD
+[4.2.1]: https://github.com/privacyfence/privacyfence/compare/v4.1.5...v4.2.1
 [4.1.5]: https://github.com/privacyfence/privacyfence/compare/v4.1.2...v4.1.5
 [4.1.2]: https://github.com/privacyfence/privacyfence/compare/v4.0.0...v4.1.2
 [4.0.0]: https://github.com/privacyfence/privacyfence/compare/v3.4.7...v4.0.0

@@ -190,3 +190,8 @@ generator with a CI drift guard makes that impossible rather than merely discour
   redesign's phases in order.
 - `docs/TECHNICAL_REFERENCE.md#auto-accept` — the single model this ADR's docs decision produced.
 - `docs/always-allow-rules-reference.md` — the generated per-tool reference this phase introduced.
+- [Issue #580](https://github.com/privacyfence/privacyfence/issues/580) — the deletion this ADR's
+  decision 3 deferred ("kept ... for one minor release"): removing the two deprecated bridge
+  aliases (`privacyfence_list_auto_accept_rules`/`privacyfence_propose_auto_accept_rule_change`)
+  themselves, once a minor release has shipped with them present as v2-backed translators. Tracked
+  as Phase 3 of the "Policy Surface Consolidation" plan alongside issue #579.

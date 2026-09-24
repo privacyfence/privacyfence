@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Keep a protected branch's required-status-checks list in sync with the `.github/workflows/
 tests.yml` jobs that actually run on every PR and are meant to gate correctness
-(`docs/automated-test-strategy-plan.md` Phase 11).
+(added by Phase 11 of the CI test-suite buildout -- see `docs/testing-policy.md`).
 
 Targets `main` by default, but `--branch` also accepts a glob pattern such as `releases/**` --
 CLAUDE.md's "Branching & PRs" section documents `releases/*` as a long-lived, cross-cycle

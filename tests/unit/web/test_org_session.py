@@ -164,8 +164,8 @@ class TestCsrfAndOrigin:
         assert os_.check_origin(Request(scope)) is False
 
     def test_check_csrf_compares_via_hmac_compare_digest(self, monkeypatch):
-        # Mirrors web/session_auth.py's own equivalent spy (docs/security-
-        # remediation-plan.md TST-04): pins that this module's check_csrf
+        # Mirrors web/session_auth.py's own equivalent spy (`git show ba1ec76e^:docs/
+        # security-remediation-plan.md` TST-04): pins that this module's check_csrf
         # keeps using a genuine constant-time compare, not just that it
         # happens to return the right bool for a matching/mismatched pair.
         calls = []

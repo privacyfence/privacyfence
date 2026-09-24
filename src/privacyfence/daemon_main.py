@@ -655,8 +655,8 @@ def _maybe_start_web_server(
     refresh_connectors (-> ConnectorHost.set_connectors) reaches the
     ``/mcp`` endpoint too, with nothing here needing a second push. Note
     that this connector set is the *local* principal's own (org mode's
-    real per-user connectors are P8's job, per docs/https-connector-
-    refactor-plan.md's own phase dependency chart -- P7 delivers identity,
+    real per-user connectors are P8's job, per `git show 96cd5af4^:docs/https-
+    connector-refactor-plan.md`'s own phase dependency chart -- P7 delivers identity,
     P8 the per-user service authorization that makes a second principal's
     connectors buildable at all); every principal authenticated via org
     mode's OAuth 2.1 AS dispatches against this same shared connector set
@@ -1834,8 +1834,8 @@ def run_app(config: dict[str, Any], config_path: str) -> int:
     # (every matching auto-accept rule now gets its own "Always allow" button, so
     # there's nothing left to prioritize or exclude) and this function logged an
     # explicit "ignoring this key" notice for anyone with a pre-existing config
-    # block for it. That notice has served its purpose (docs/security-
-    # remediation-plan.md Phase 3 PR3.9, ORP-04) and is gone -- a leftover
+    # block for it. That notice has served its purpose (`git show ba1ec76e^:docs/
+    # security-remediation-plan.md` Phase 3 PR3.9, ORP-04) and is gone -- a leftover
     # rule_suggestion_priority block in an old settings.yaml now falls through to
     # the same silent "unknown key is inert" handling as any other retired
     # settings.yaml key, per auto_accept.py's SUGGESTION_FAMILIES comment.

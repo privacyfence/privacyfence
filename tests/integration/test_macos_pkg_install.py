@@ -261,7 +261,7 @@ def _launchctl_print(domain: str) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
-def _wait_for_running(domain: str, *, timeout: float) -> str:
+def _wait_for_running(domain: str, *, timeout: float, context: Callable[[], str] | None = None) -> str:
     deadline = time.monotonic() + timeout
     last: str | None = None
     while time.monotonic() < deadline:
@@ -271,7 +271,57 @@ def _wait_for_running(domain: str, *, timeout: float) -> str:
             if match:
                 return match.group(1)
         time.sleep(0.2)
-    raise AssertionError(f"{domain} never reported a running pid within {timeout}s:\n{last}")
+    detail = f"\n{context()}" if context is not None else ""
+    raise AssertionError(f"{domain} never reported a running pid within {timeout}s:\n{last}{detail}")
+
+
+def _companion_report(uid: int) -> str:
+    """Why the companion LaunchAgent is not running in ``gui/<uid>``.
+
+    ``launchctl print gui/<uid>/<label>`` failing outright (the ``None`` a
+    failed ``_wait_for_running()`` prints) means the job was never loaded
+    into the session at all, which has exactly two causes in
+    ``install_services()``: the postinstall resolved no console user and so
+    had no GUI domain to bootstrap into, or ``launchctl bootstrap`` itself
+    failed -- and ``enable`` reports that only as a warning on the
+    postinstall's stderr, which lands in ``/var/log/install.log`` and nowhere
+    this test reads by default. So this collects the three things that tell
+    those apart: who the console user is, whether the plist is on disk, and
+    what the postinstall and ``enable`` actually said.
+
+    Quoted into the assertion message for the same reason as
+    ``_missing_payload_report()``: the diagnostics artifact is not reachable
+    from every place this run gets read (run 35871051261 is the one that
+    failed here with nothing but ``None`` to go on)."""
+    sections = []
+    console = subprocess.run(
+        ["stat", "-f", "%Su", "/dev/console"], capture_output=True, text=True, timeout=10,
+    )
+    sections.append(
+        f"---- console user (stat -f %Su /dev/console) ----\n{console.stdout}{console.stderr}"
+        f"test runs as {_current_user()!r}, uid {uid}"
+    )
+    plist = Path("/Library/LaunchAgents") / f"{COMPANION_LABEL}.plist"
+    listed = subprocess.run(["ls", "-l", str(plist)], capture_output=True, text=True, timeout=10)
+    sections.append(f"---- {plist} ----\n{listed.stdout}{listed.stderr}")
+    domain = _sudo_run("launchctl", "print", f"gui/{uid}", check=False)
+    matching = [line for line in domain.stdout.splitlines() if "privacyfence" in line.lower()]
+    sections.append(
+        f"---- launchctl print gui/{uid} (exit {domain.returncode}; privacyfence lines) ----\n"
+        + ("\n".join(matching) or "(none)") + domain.stderr
+    )
+    install_log = subprocess.run(
+        ["tail", "-n", "400", "/var/log/install.log"], capture_output=True, text=True, timeout=30,
+    )
+    postinstall = [
+        line for line in install_log.stdout.splitlines()
+        if "PrivacyFence postinstall" in line or "warning:" in line or "error:" in line or "→" in line
+    ]
+    sections.append(
+        "---- /var/log/install.log (postinstall/enable lines) ----\n"
+        + ("\n".join(postinstall[-120:]) or "(none)") + install_log.stderr
+    )
+    return "\n".join(sections)
 
 
 def _process_owner(pid: str) -> str:
@@ -401,7 +451,7 @@ def test_pkg_install_enables_privilege_separation_with_no_manual_step(_clean_pkg
     # like a real human's own console session -- see this module's own
     # docstring for why that's what makes it reachable in CI at all. ──
     companion_domain = f"gui/{uid}/{COMPANION_LABEL}"
-    companion_pid = _wait_for_running(companion_domain, timeout=30)
+    companion_pid = _wait_for_running(companion_domain, timeout=30, context=lambda: _companion_report(uid))
     companion_owner = _process_owner(companion_pid)
     assert companion_owner == user, (
         f"{COMPANION_LABEL} (pid {companion_pid}) should run as {user!r} (the console user), "

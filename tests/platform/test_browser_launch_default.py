@@ -19,6 +19,8 @@ reaches the real stdlib entry point," not "some callable gets called."
 from __future__ import annotations
 
 import socket
+import threading
+import time
 import webbrowser
 
 import pytest
@@ -85,19 +87,36 @@ def test_default_opener_falls_through_to_webbrowser_open(monkeypatch):
     assert result == {"access_token": "tok-123"}
 
 
-def test_default_opener_surfaces_a_clear_error_when_webbrowser_cannot_open_anything(monkeypatch):
+def test_default_opener_falling_through_keeps_waiting_for_a_manual_visit(monkeypatch):
     """webbrowser.open() returns False (rather than raising) when it could
     not find any browser controller to hand the URL to -- e.g. a headless
     Linux box with no $BROWSER and no known GUI browser installed. The
-    default path must turn that into OAuthLoopbackError, same as an
-    injected opener returning False already does."""
-    from privacyfence.oauth_loopback import OAuthLoopbackError
-
+    default path must not treat that as fatal: the printed authorize URL is
+    exactly what a person on such a host still needs to complete sign-in
+    manually (typically through an SSH tunnel), so the local listener stays
+    up and waiting the same as when a browser does open -- simulated here by
+    a background thread standing in for "a person, moments later, through a
+    tunnel" instead of webbrowser.open() itself ever completing anything."""
     monkeypatch.setattr(webbrowser, "open", lambda url: False)
 
     port = _free_port()
-    with pytest.raises(OAuthLoopbackError, match="Could not open a browser"):
-        run_browser_oauth(
-            lambda uri, state, challenge: "https://provider.example/authorize",
-            lambda code, uri, verifier: {}, port=port, timeout=2,
-        )
+    redirect_uri = f"http://127.0.0.1:{port}/callback"
+
+    def build_authorize_url(uri: str, state: str, challenge: str) -> str:
+        def visit_manually() -> None:
+            time.sleep(0.05)
+            _NO_PROXY_SESSION.get(redirect_uri, params={"code": "auth-code-123", "state": state}, timeout=5)
+
+        threading.Thread(target=visit_manually, daemon=True).start()
+        return f"https://provider.example/authorize?state={state}"
+
+    exchanged: dict = {}
+
+    def exchange(code: str, uri: str, verifier: str) -> dict:
+        exchanged.update(code=code)
+        return {"access_token": "tok-123"}
+
+    result = run_browser_oauth(build_authorize_url, exchange, port=port, timeout=2)
+
+    assert exchanged["code"] == "auth-code-123"
+    assert result == {"access_token": "tok-123"}

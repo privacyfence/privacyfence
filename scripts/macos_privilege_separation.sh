@@ -608,11 +608,18 @@ apply_layout() {
   note "re-owning ${SYSTEM_ROOT} to ${SERVICE_ACCOUNT}:${SERVICE_GROUP}"
   mkdir -p "${SYSTEM_ROOT}/authority" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}" "${SYSTEM_ROOT}/logs"
   move_handoff_files_in
-  chown -R "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" "$SYSTEM_ROOT"
+  # Everything except sockets (ADR 0029). A socket belongs to the process that
+  # bound it, at the mode it chose: re-owning a live companion's
+  # handoff/companion.sock on a re-run -- every .pkg upgrade is one -- leaves
+  # that companion unable to unlink it under handoff/'s sticky bit, and every
+  # companion after it refusing to take it over (ADR 0027). `chown -h` and
+  # the chmod's `! -type l` keep `find -exec` from following a symlink, which
+  # `chown -R`/`chmod -R` never did.
+  find "$SYSTEM_ROOT" ! -type s -exec chown -h "${SERVICE_ACCOUNT}:${SERVICE_GROUP}" {} +
   # Tighten everything first, then re-open exactly the two places that have to
   # be reachable from the user's own session. Order matters: the blanket
   # go-rwx below would otherwise undo the handoff directory's group bits.
-  chmod -R go-rwx "$SYSTEM_ROOT"
+  find "$SYSTEM_ROOT" ! -type s ! -type l -exec chmod go-rwx {} +
   chmod "$SYSTEM_ROOT_MODE" "$SYSTEM_ROOT"
   chmod "$AUTHORITY_DIR_MODE" "${SYSTEM_ROOT}/authority"
   chmod "$HANDOFF_DIR_MODE" "${SYSTEM_ROOT}/${HANDOFF_DIR_NAME}"
@@ -687,9 +694,23 @@ install_services() {
   # into each session as that session is created. The two calls below only
   # start it for an *already* logged-in owner, so with none resolved (the
   # machine half) there is simply nothing to start early.
+  #
+  # Same bootout/bootstrap race as the daemon's (see wait_for_job_unloaded()
+  # and bootstrap_with_retry() below): a companion still loaded from an
+  # earlier enable -- an upgrade, or a re-run -- is torn down asynchronously,
+  # and bootstrapping straight after the bootout can fail with exit 5/37.
+  # Before this waited and retried, that failure was one warning in
+  # /var/log/install.log and a companion that silently did not start until
+  # the next login (macos-graphical-session.yml run 35871051261).
   if [ -n "$OWNER_UID" ]; then
-    launchctl bootout "gui/${OWNER_UID}/${COMPANION_LABEL}" 2>/dev/null || true
-    launchctl bootstrap "gui/${OWNER_UID}" "$COMPANION_PLIST" || warn "could not start the companion for ${OWNER_USER} now -- it will start at their next login"
+    local companion_target="gui/${OWNER_UID}/${COMPANION_LABEL}" rc=0
+    launchctl bootout "$companion_target" 2>/dev/null || true
+    wait_for_job_unloaded "$companion_target" \
+      || warn "${companion_target} still looked loaded ${BOOTOUT_SETTLE_TIMEOUT}s after bootout -- bootstrapping anyway"
+    bootstrap_with_retry "gui/${OWNER_UID}" "$COMPANION_PLIST" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      warn "could not start the companion for ${OWNER_USER} now (launchctl bootstrap exited ${rc}) -- it will start at their next login"
+    fi
   fi
 }
 
@@ -761,14 +782,21 @@ daemon_account_diagnostics() {
 # reimplemented at each call site.
 BOOTOUT_SETTLE_TIMEOUT=10
 
-wait_for_daemon_unloaded() {
-  local timeout="${1:-$BOOTOUT_SETTLE_TIMEOUT}" deadline
+# Takes the full service target (`system/<label>`, `gui/<uid>/<label>`), so
+# install_services()' companion bootout/bootstrap in the owner's GUI domain
+# waits out the same teardown the daemon's does.
+wait_for_job_unloaded() {
+  local target="$1" timeout="${2:-$BOOTOUT_SETTLE_TIMEOUT}" deadline
   deadline=$((SECONDS + timeout))
   while [ "$SECONDS" -lt "$deadline" ]; do
-    launchctl print "system/${DAEMON_LABEL}" >/dev/null 2>&1 || return 0
+    launchctl print "$target" >/dev/null 2>&1 || return 0
     sleep 0.2
   done
   return 1
+}
+
+wait_for_daemon_unloaded() {
+  wait_for_job_unloaded "system/${DAEMON_LABEL}" "$@"
 }
 
 # The backoff schedule "daemon ensure-running"/"daemon restart" and
@@ -780,18 +808,18 @@ wait_for_daemon_unloaded() {
 # so this is the second layer, not a replacement for the wait.
 BOOTSTRAP_RETRY_DELAYS=(1 2 4 8 16)
 
-# Runs `launchctl bootstrap system "$DAEMON_PLIST"`, retrying with the
-# backoff above when launchctl fails with exit 5 ("Input/output error") or
-# 37 ("Operation already in progress") -- both are symptoms of the bootout/
+# Runs `launchctl bootstrap <domain> <plist>`, retrying with the backoff
+# above when launchctl fails with exit 5 ("Input/output error") or 37
+# ("Operation already in progress") -- both are symptoms of the bootout/
 # bootstrap race this function exists to ride out, not of anything wrong
 # with the plist or the account. Any other exit code is returned
 # immediately, unretried: retrying a config error five times with sleeps in
 # between only delays reporting it. Returns 0 on the bootstrap that
 # succeeds, or the last nonzero exit code once every retry in
 # BOOTSTRAP_RETRY_DELAYS has also failed with 5 or 37.
-bootstrap_daemon_with_retry() {
-  local delay rc
-  if launchctl bootstrap system "$DAEMON_PLIST"; then
+bootstrap_with_retry() {
+  local domain="$1" plist="$2" delay rc
+  if launchctl bootstrap "$domain" "$plist"; then
     return 0
   fi
   rc=$?
@@ -799,14 +827,18 @@ bootstrap_daemon_with_retry() {
     if [ "$rc" != 5 ] && [ "$rc" != 37 ]; then
       return "$rc"
     fi
-    warn "launchctl bootstrap exited ${rc} (bootout/bootstrap race) -- retrying in ${delay}s"
+    warn "launchctl bootstrap ${domain} exited ${rc} (bootout/bootstrap race) -- retrying in ${delay}s"
     sleep "$delay"
-    if launchctl bootstrap system "$DAEMON_PLIST"; then
+    if launchctl bootstrap "$domain" "$plist"; then
       return 0
     fi
     rc=$?
   done
   return "$rc"
+}
+
+bootstrap_daemon_with_retry() {
+  bootstrap_with_retry system "$DAEMON_PLIST"
 }
 
 start_daemon_as_service_account() {

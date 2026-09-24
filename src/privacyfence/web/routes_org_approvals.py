@@ -1,5 +1,5 @@
-"""The web approval surface, for org mode (P9, docs/https-connector-
-refactor-plan.md's own P9 section). Not mounted through P8 -- web/server.py's
+"""The web approval surface, for org mode (P9, `git show 96cd5af4^:docs/https-
+connector-refactor-plan.md`'s own P9 section). Not mounted through P8 -- web/server.py's
 own module docstring explained why: the local-mode surface
 (web/routes_approvals.py) authenticates with one shared secret and lists
 *every* pending approval with no principal filtering, so exposing it as-is
