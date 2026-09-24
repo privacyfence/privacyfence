@@ -14,16 +14,21 @@ now. The privacy/PII half of the page is untouched by any of this.
 """
 from __future__ import annotations
 
+import json
+from unittest.mock import patch
+
 import pytest
 import yaml
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
 from privacyfence import auto_accept, paths, privacy_filter
+from privacyfence import webauthn_stepup as wa
 from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import store as policy_store
 from privacyfence.principal import Principal, principal_scope
+from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session, routes_org_settings as ros
 
 
@@ -44,8 +49,16 @@ def _on_disk_rules(tmp_path, principal_id: str) -> list:
     # Reads straight off disk rather than through auto_accept.get_policy_v2_rules(), which
     # requires that principal's config_path to already be registered -- true after a request
     # actually reaches that principal's scope, not for a principal who only attempted a rejected
-    # (bad-CSRF/wrong-origin/forbidden) request in this test process.
-    raw = yaml.safe_load((tmp_path / "users" / principal_id / "config" / "settings.yaml").read_text())
+    # (bad-CSRF/wrong-origin/forbidden) request in this test process. A refused request that still
+    # touched this principal's WebAuthn credentials (a step-up challenge/verify attempt) triggers
+    # paths.py's own one-time legacy-authority-files migration as a side effect -- settings.yaml
+    # moves from config/ to authority/config/ the first time authority_dir() is asked for this
+    # principal at all, whether or not the settings write itself was ever reached. Check the
+    # post-migration location first since a migration, once it happens, is one-directional.
+    settings_path = tmp_path / "users" / principal_id / "authority" / "config" / "settings.yaml"
+    if not settings_path.exists():
+        settings_path = tmp_path / "users" / principal_id / "config" / "settings.yaml"
+    raw = yaml.safe_load(settings_path.read_text())
     return ((raw or {}).get("auto_accept") or {}).get("rules") or []
 
 
@@ -59,11 +72,15 @@ def _seed(tmp_path, monkeypatch, principal_id: str, *, rules=None) -> None:
     (config_dir / "settings.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
 
 
-def _app(*, install_wide_settings=None, sessions=None, install_wide_settings_path=""):
+def _app(
+    *, install_wide_settings=None, sessions=None, install_wide_settings_path="",
+    step_up: StepUpConfig | None = None,
+):
     sessions = sessions or org_session.OrgSessionStore()
     routes = ros.build_routes(
         sessions=sessions, install_wide_settings=install_wide_settings if install_wide_settings is not None else {},
         install_wide_settings_path=install_wide_settings_path,
+        step_up=step_up or StepUpConfig(), step_up_origin=BASE_URL,
     )
     return Starlette(routes=routes), sessions
 
@@ -725,3 +742,199 @@ class TestWriteFailures:
         assert r.status_code == 303
         with principal_scope(ALICE):
             assert auto_accept.get_policy_v2_rules() == []
+
+
+class TestStepUpRequirePasskey:
+    """#579: closes the gap where every org-routed ``_SENSITIVE_ACTIONS``
+    member (``add_policy_rule``, ``remove_policy_rule``, and the two
+    install-wide privacy/PII writes) bypassed step-up entirely, unlike local
+    mode's own generic dispatcher (gated since #426 Phase 3). An agent that
+    cannot forge a WebAuthn assertion could otherwise add an always-allow
+    rule, or flip the install-wide PII/privacy policy, once step-up is
+    supposed to be in force."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_data_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        return tmp_path
+
+    @staticmethod
+    def _step_up(**overrides) -> StepUpConfig:
+        return StepUpConfig(enabled=True, rp_id="pf.example.com", require_passkey=True, **overrides)
+
+    @staticmethod
+    def _install_wide_app(tmp_path, settings: dict, *, step_up: StepUpConfig):
+        settings_path = tmp_path / "install-settings.yaml"
+        settings_path.write_text(yaml.safe_dump(settings), encoding="utf-8")
+        app, sessions = _app(
+            install_wide_settings=settings, install_wide_settings_path=str(settings_path), step_up=step_up,
+        )
+        return app, sessions, settings_path
+
+    @pytest.mark.parametrize("path,data", [
+        ("/api/settings/rules/add", {"rule_choice": "gmail.sender|read", "value": ""}),
+        ("/api/settings/rules/remove", {"rule_id": "r-whatever"}),
+    ])
+    def test_per_principal_action_hard_fails_with_no_credential_and_writes_nothing(
+        self, tmp_path, monkeypatch, path, data,
+    ):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app(step_up=self._step_up())
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = client.post(path, data={**data, "csrf": csrf})
+
+        assert r.status_code == 403
+        assert r.json() == {"error": "passkey_enrollment_required", "enroll_url": "/security"}
+        assert _on_disk_rules(tmp_path, "alice") == []
+
+    @pytest.mark.parametrize("path,data", [
+        ("/api/settings/privacy/policy", {"action": "set_default_policy", "group": "privacy", "policy": "redact"}),
+        (
+            "/api/settings/privacy/policy",
+            {"action": "set_category_policy", "group": "privacy", "category": "body", "policy": "block"},
+        ),
+        ("/api/settings/privacy/pii", {"action": "toggle_pii_detection", "enabled": "false"}),
+        (
+            "/api/settings/privacy/pii",
+            {"action": "toggle_pii_category", "category_key": "medical", "enabled": "false"},
+        ),
+    ])
+    def test_admin_only_action_hard_fails_with_no_credential_and_writes_nothing(
+        self, tmp_path, monkeypatch, path, data,
+    ):
+        _seed(tmp_path, monkeypatch, "carol")
+        settings = {"privacy": {"default_policy": "allow"}, "pii_detection": {"enabled": True}}
+        app, sessions, settings_path = self._install_wide_app(tmp_path, settings, step_up=self._step_up())
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ADMIN)
+
+        r = client.post(path, data={**data, "csrf": csrf})
+
+        assert r.status_code == 403
+        assert r.json() == {"error": "passkey_enrollment_required", "enroll_url": "/security"}
+        assert settings["privacy"]["default_policy"] == "allow"
+        assert settings["pii_detection"]["enabled"] is True
+        assert yaml.safe_load(settings_path.read_text()) == settings
+
+    def test_a_valid_assertion_completes_a_per_principal_action(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app(step_up=self._step_up())
+        wa.add_credential(ALICE, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        first = client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "gmail.sender|read", "value": "", "csrf": csrf},
+        )
+        assert first.status_code == 428
+        assert "webauthn_options" in first.json()
+        assert _on_disk_rules(tmp_path, "alice") == []
+
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post(
+                "/api/settings/rules/add",
+                data={
+                    "rule_choice": "gmail.sender|read", "value": "", "csrf": csrf,
+                    "webauthn_assertion": json.dumps({"id": "Y3JlZC0x"}),
+                },
+            )
+        assert second.status_code == 303
+        with principal_scope(ALICE):
+            assert auto_accept.get_policy_v2_rules() == _catalogue_rules("gmail.sender", "read")
+
+    def test_a_valid_assertion_completes_an_admin_only_action(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "carol")
+        settings = {"privacy": {"default_policy": "block"}}
+        app, sessions, settings_path = self._install_wide_app(tmp_path, settings, step_up=self._step_up())
+        wa.add_credential(ADMIN, wa.WebAuthnCredential(
+            credential_id="Y3JlZC0x", public_key="cGs", sign_count=0, device_type="single_device", backed_up=False,
+        ))
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ADMIN)
+
+        first = client.post(
+            "/api/settings/privacy/policy",
+            data={"action": "set_default_policy", "group": "privacy", "policy": "redact", "csrf": csrf},
+        )
+        assert first.status_code == 428
+
+        fake_verified = type(
+            "V", (), {"new_sign_count": 1, "credential_device_type": None, "credential_backed_up": False},
+        )()
+        with patch.object(wa.webauthn, "verify_authentication_response", return_value=fake_verified):
+            second = client.post(
+                "/api/settings/privacy/policy",
+                data={
+                    "action": "set_default_policy", "group": "privacy", "policy": "redact", "csrf": csrf,
+                    "webauthn_assertion": json.dumps({"id": "Y3JlZC0x"}),
+                },
+            )
+        assert second.status_code == 303
+        assert settings["privacy"]["default_policy"] == "redact"
+        assert yaml.safe_load(settings_path.read_text())["privacy"]["default_policy"] == "redact"
+
+    def test_a_refusal_is_audit_logged_under_the_refused_principal(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app(step_up=self._step_up())
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        recorded = []
+        monkeypatch.setattr(ros, "_record_settings_audit", lambda p, s: recorded.append((p, s)))
+
+        client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "gmail.sender|read", "value": "", "csrf": csrf},
+        )
+
+        assert len(recorded) == 1
+        principal, summary = recorded[0]
+        assert principal.id == "alice"
+        assert "add_policy_rule" in summary
+
+    def test_a_non_admin_still_cannot_reach_an_admin_only_action_under_step_up(self, tmp_path, monkeypatch):
+        # Authorization is checked before step-up (routes_settings.py's own
+        # require_human_session-before-_needs_step_up ordering) -- a
+        # non-admin gets the same 403 "forbidden" it always got, never a
+        # passkey prompt for an action it could never take either way.
+        _seed(tmp_path, monkeypatch, "bob")
+        settings = {"privacy": {"default_policy": "block"}}
+        app, sessions, settings_path = self._install_wide_app(tmp_path, settings, step_up=self._step_up())
+        client = _client(app)
+        csrf = _signed_in(client, sessions, BOB)
+
+        r = client.post(
+            "/api/settings/privacy/policy",
+            data={"action": "set_default_policy", "group": "privacy", "policy": "allow", "csrf": csrf},
+        )
+
+        assert r.status_code == 403
+        assert r.json() == {"error": "forbidden"}
+        assert settings["privacy"]["default_policy"] == "block"
+        assert yaml.safe_load(settings_path.read_text())["privacy"]["default_policy"] == "block"
+
+    def test_step_up_off_does_not_change_existing_behavior(self, tmp_path, monkeypatch):
+        # step_up.enabled=False (the _app() default) -- every existing
+        # TestAddRule/TestInstallWidePolicyEditing test already covers this
+        # implicitly; this is the explicit regression guard for the knob
+        # itself, since _needs_step_up now gates on it.
+        _seed(tmp_path, monkeypatch, "alice")
+        app, sessions = _app(step_up=StepUpConfig(enabled=False, rp_id="pf.example.com", require_passkey=True))
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+
+        r = client.post(
+            "/api/settings/rules/add",
+            data={"rule_choice": "gmail.sender|read", "value": "", "csrf": csrf},
+        )
+
+        assert r.status_code == 303
+        with principal_scope(ALICE):
+            assert auto_accept.get_policy_v2_rules() == _catalogue_rules("gmail.sender", "read")
