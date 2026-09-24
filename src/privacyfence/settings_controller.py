@@ -71,7 +71,7 @@ from .policy.resource_registry import (
     GrantResourceType,
     resource_type as grant_resource_type,
 )
-from .resource_names import get_resolver
+from .resource_names import ResourceNameResolver, get_resolver
 from .secure_files import atomic_write_json, atomic_write_text
 from .step_up_config import LiveStepUpConfig, StepUpConfig
 from . import telegram_auth
@@ -665,13 +665,11 @@ def _auto_accept_state_from_rules(
 ) -> dict[str, Any]:
     """The Auto-accept page's state, factored out of ``SettingsController.
     _auto_accept_state`` (PSC-5) so web/routes_settings.py's own org-mode
-    state builder can share it -- ``resolve_value`` is the one thing local
-    and org mode still don't: local's own ``_resolved_rule_value`` runs the
-    cached-name-resolution machinery (``RULE_NAME_TO_RESOURCE_TYPE``,
-    ``resource_names.py``) org mode's stateless-per-request rendering has
-    no equivalent of (see the former web/org_settings_pages.py's own
-    docstring on ``_rule_rows``), so org's caller passes a plain
-    comma-join instead -- everything past that one string is identical."""
+    state builder can share it. ``resolve_value`` renders one rule's value; both modes
+    pass ``cached_rule_value`` (resource ids shown by their cached names), and differ only
+    in how a missing name gets resolved -- local's ``_resolved_rule_value`` in the background
+    with a snapshot push, org's ``web/routes_settings.py`` ``_await_rule_names`` before the
+    render, since org mode has no live push."""
     catalogue = _policy_scope_catalogue()
     rule_rows = [
         _rule_row(rule, usage_by_rule_id.get(rule.id) or {}, resolved_value=resolve_value(rule))
@@ -681,6 +679,26 @@ def _auto_accept_state_from_rules(
     connectors = sorted({row["connector"] for row in rule_rows if row["connector"]}
                          | {entry["connector"] for entry in catalogue})
     return {"rules": rule_rows, "scope_groups": catalogue, "connectors": connectors}
+
+
+def rule_resource_ids(rule: PolicyRule) -> tuple[GrantResourceType | None, list[str]]:
+    """A rule's own value as a list of strings, plus the resource type that can resolve each one
+    to a display name (``RULE_NAME_TO_RESOURCE_TYPE``) -- ``None`` when the predicate's values are
+    not opaque resource ids (a domain, a label, ...) and are shown as-is."""
+    values = rule.value if isinstance(rule.value, list) else ([rule.value] if rule.value else [])
+    return RULE_NAME_TO_RESOURCE_TYPE.get(rule.predicate), [str(v) for v in values]
+
+
+def cached_rule_value(rule: PolicyRule, resolver: ResourceNameResolver) -> str:
+    """A rule's value as the Auto-accept page's comma-separated display string: each resource id
+    shown by its last-known name (``resolver.cached_name`` -- no network call), or a shortened id
+    until one is known. Shared by local mode's ``SettingsController._resolved_rule_value`` and org
+    mode's ``web/routes_settings.py`` state builder; the two differ only in how a missing name gets
+    resolved, never in how a known one is shown."""
+    rt, str_values = rule_resource_ids(rule)
+    if rt is None:
+        return ", ".join(str_values)
+    return ", ".join(resolver.cached_name(rt, v) or _short_id(v) for v in str_values)
 
 
 # ---------------------------------------------------------------------------- #
@@ -1989,15 +2007,10 @@ class SettingsController:
         ``resource_names.py``) wherever the predicate names an opaque resource id -- a Drive folder,
         a Jira project key, and so on -- rather than showing the raw id, kicking off a background
         resolve for anything not cached yet (``_resolve_names_async``)."""
-        values = rule.value if isinstance(rule.value, list) else ([rule.value] if rule.value else [])
-        if not values:
-            return ""
-        str_values = [str(v) for v in values]
-        rt = RULE_NAME_TO_RESOURCE_TYPE.get(rule.predicate)
-        if rt is None:
-            return ", ".join(str_values)
-        self._resolve_names_async(rt, str_values, self._client_for(rt.connector))
-        return ", ".join(self._resolver.cached_name(rt, v) or _short_id(v) for v in str_values)
+        rt, str_values = rule_resource_ids(rule)
+        if rt is not None:
+            self._resolve_names_async(rt, str_values, self._client_for(rt.connector))
+        return cached_rule_value(rule, self._resolver)
 
     def _privacy_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
         return _privacy_state_from_config(cfg)

@@ -52,6 +52,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   organization server's Google connector client needs
   `https://<your-server>/oauth/callback/apps_script` added to its registered redirect URIs.
 
+### Fixed
+
+- **An organization server's Settings → Auto-accept page shows resource names, not IDs.** A rule
+  naming a Drive folder, task list, Slack channel, Jira project or other resource now reads by that
+  resource's name, as it already did on a desktop install, looked up through the signed-in user's
+  own connected accounts. Before, it showed the raw ID.
+
 ## [4.4.0] — 2026-09-24
 
 ### Added
