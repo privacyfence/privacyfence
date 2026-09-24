@@ -133,6 +133,16 @@ jobs:
         with:
           python-version: '3.13'
 
+      # Telegram ships in the PyPI build too (ADR 0039): the same generator build.yml's three
+      # packaging jobs run through build_dmg.sh/build_deb.sh/build_installer.ps1 writes the
+      # git-ignored _telegram_credentials.py, and MANIFEST.in carries it into the sdist and wheel.
+      # Repository secrets, no environment -- the same ones build.yml reads.
+      - name: Write Telegram app credentials
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+        run: python3 scripts/telegram_credentials.py write
+
       - name: Build sdist and wheel
         run: |
           pip install --upgrade pip build
@@ -165,6 +175,16 @@ jobs:
           fi
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Resolved version=$VERSION channel=$CHANNEL"
+
+      # A stable wheel/sdist without the credentials module would install fine and fail only when
+      # a user first opens Telegram, so a stable tag fails here instead; any other build (a
+      # pre-release, or a workflow_dispatch rerun off a tag) only warns. Runs before any publish
+      # job, all of which need this one.
+      - name: Check Telegram app credentials are packaged
+        run: |
+          REQUIRE=()
+          if [[ "${{ steps.release.outputs.channel }}" == "stable" ]]; then REQUIRE=(--require); fi
+          python3 scripts/telegram_credentials.py check-dist "${REQUIRE[@]}" dist/*.whl dist/*.tar.gz
 
   # Always published first -- rehearses the real upload (same files, same
   # metadata) against TestPyPI before anything reaches the real index.

@@ -90,19 +90,8 @@ DEB_NAME="${PKG_NAME}_${DEB_VERSION}_${ARCH}.deb"
 echo "=== Building ${PKG_NAME} ${VERSION} (deb version ${DEB_VERSION}, ${ARCH}) ==="
 
 # ── 1. Bake in the Telegram app credentials ───────────────────────────────────
-# Identical to build_dmg.sh's own step 2 -- already platform-independent, so reused verbatim
-# rather than duplicated (see that script's comment for the full rationale).
-CREDS_FILE="src/privacyfence/_telegram_credentials.py"
-if [ -n "${TELEGRAM_API_ID:-}" ] && [ -n "${TELEGRAM_API_HASH:-}" ]; then
-  echo "→ Writing Telegram app credentials…"
-  cat > "$CREDS_FILE" <<EOF
-API_ID = ${TELEGRAM_API_ID}
-API_HASH = "${TELEGRAM_API_HASH}"
-EOF
-else
-  echo "→ TELEGRAM_API_ID/TELEGRAM_API_HASH not set; building without Telegram app credentials."
-  rm -f "$CREDS_FILE"
-fi
+# Same generator as build_dmg.sh's own step 2 (see that script's comment for the full rationale).
+"$PYTHON" scripts/telegram_credentials.py write
 
 # ── 2. Build the PyInstaller onedir bundle ────────────────────────────────────
 # --clean for the same reason build_dmg.sh uses it: without it, a rebuild after

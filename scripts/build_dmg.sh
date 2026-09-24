@@ -107,17 +107,8 @@ fi
 # they're never committed: CI supplies them as TELEGRAM_API_ID/TELEGRAM_API_HASH
 # secrets, written here into a git-ignored module PyInstaller then bundles.
 # Local builds without the env vars set just ship without Telegram support.
-CREDS_FILE="src/privacyfence/_telegram_credentials.py"
-if [ -n "${TELEGRAM_API_ID:-}" ] && [ -n "${TELEGRAM_API_HASH:-}" ]; then
-  echo "→ Writing Telegram app credentials…"
-  cat > "$CREDS_FILE" <<EOF
-API_ID = ${TELEGRAM_API_ID}
-API_HASH = "${TELEGRAM_API_HASH}"
-EOF
-else
-  echo "→ TELEGRAM_API_ID/TELEGRAM_API_HASH not set; building without Telegram app credentials."
-  rm -f "$CREDS_FILE"
-fi
+# scripts/telegram_credentials.py is the one generator every build shares.
+"$PYTHON" scripts/telegram_credentials.py write
 
 # ── 3. Build .app bundle ──────────────────────────────────────────────────────
 # --clean forces a fresh module analysis every time: PyInstaller otherwise

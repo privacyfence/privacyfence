@@ -43,6 +43,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Telegram works on a PyPI install.** The sdist and wheel now carry PrivacyFence's Telegram app
+  credentials, as the macOS, Windows and Linux installers already did, so `pip install
+  privacyfence` no longer needs your own `api_id`/`api_hash` to connect Telegram (ADR 0039).
+
 ## [4.4.0] — 2026-09-24
 
 ### Added
