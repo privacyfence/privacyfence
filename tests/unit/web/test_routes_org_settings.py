@@ -47,6 +47,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -370,6 +372,34 @@ class TestRuleValueNames:
         )
         assert r.status_code == 200
         assert [row["value"] for row in r.json()["auto_accept"]["rules"]] == ["Q3 Reports"]
+
+    def test_a_slow_lookup_renders_short_ids_then_names_on_the_next_load(self, tmp_path, monkeypatch):
+        self._seed_folder_rule(tmp_path, monkeypatch, "alice")
+        monkeypatch.setattr(ros, "_RULE_NAME_WAIT_SECONDS", 0.05)
+        release = threading.Event()
+        drive = _FakeDriveClient({self.FOLDER_ID: "Q3 Reports"})
+        original = drive.get_file_metadata
+
+        def slow_get_file_metadata(resource_id):
+            assert release.wait(5)
+            return original(resource_id)
+
+        drive.get_file_metadata = slow_get_file_metadata
+        app, sessions = _app(connector_registry=_FakeConnectorRegistry({"alice": {"drive": drive}}))
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        short_value = '"value": ' + json.dumps(_short_id(self.FOLDER_ID))
+        assert short_value in client.get("/settings").text
+        # Still in flight: a reload renders without starting a second lookup.
+        assert short_value in client.get("/settings").text
+        release.set()
+        for _ in range(100):
+            if drive.calls:
+                break
+            time.sleep(0.01)
+        time.sleep(0.05)
+        assert '"value": "Q3 Reports"' in client.get("/settings").text
+        assert drive.calls == [self.FOLDER_ID]
 
     def test_without_a_registry_an_uncached_id_is_shortened(self, tmp_path, monkeypatch):
         self._seed_folder_rule(tmp_path, monkeypatch, "alice")

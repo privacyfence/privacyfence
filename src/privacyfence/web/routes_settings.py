@@ -1297,11 +1297,18 @@ def build_org_routes(
             if principal.id in resolving:
                 return
             resolving.add(principal.id)
-        future = asyncio.get_running_loop().run_in_executor(None, _resolve_rule_names, principal, pending)
-        try:
-            await asyncio.wait_for(asyncio.shield(future), timeout=_RULE_NAME_WAIT_SECONDS)
-        except asyncio.TimeoutError:
-            pass
+        # Its own daemon thread rather than the event loop's executor, so the lookup outliving the
+        # wait below never holds up anything that joins that executor (a loop shutting down).
+        done = threading.Event()
+
+        def _run() -> None:
+            try:
+                _resolve_rule_names(principal, pending)
+            finally:
+                done.set()
+
+        threading.Thread(target=_run, name=f"rule-names-{principal.id}", daemon=True).start()
+        await asyncio.to_thread(done.wait, _RULE_NAME_WAIT_SECONDS)
 
     async def _wrap_org_settings(request: Request, principal: Principal, *, initial_section: str) -> Response:
         nonce = _csp_nonce_for(request)
