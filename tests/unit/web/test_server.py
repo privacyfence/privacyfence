@@ -1021,7 +1021,7 @@ def _controller(tmp_path, monkeypatch):
     data_dir_path.mkdir()
     monkeypatch.setattr(sc, "data_dir", lambda: data_dir_path)
     config_path = tmp_path / "settings.yaml"
-    config_path.write_text("auto_accept_rules: {}\nconnectors: {}\n", encoding="utf-8")
+    config_path.write_text("auto_accept: {}\nconnectors: {}\n", encoding="utf-8")
     connector_host = SimpleNamespace(set_connectors=lambda conns: None)
     return sc.SettingsController(str(config_path), connectors=[], connector_host=connector_host)
 

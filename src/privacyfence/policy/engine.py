@@ -6,9 +6,8 @@ condition selectors, so a rule's three-way preflight verdict is *derived* from e
 declared ``resolves_from`` rather than kept in sync by hand across ``ARGS_ONLY_RULES``/
 ``DATA_DEPENDENT_RULES`` (F6).
 
-This module knows nothing about where a ``PolicyRule`` list comes from -- ``policy/compat.py``
-compiles one from today's ``auto_accept_rules``/``auto_accept_grants`` config; ``policy/store.py``
-(P4) compiles one straight from the on-disk v2 ``auto_accept:`` schema. Either way, ``evaluate()``
+This module knows nothing about where a ``PolicyRule`` list comes from -- in production
+``policy/store.py`` compiles one from the on-disk ``auto_accept:`` section. ``evaluate()``
 and ``preflight()`` are drop-in replacements for ``should_auto_accept()``/``preflight_from_args()``:
 same ``(bool, matched_rule_id)`` / ``(verdict, matched_rule_id, reason)`` shapes, same fail-closed
 behaviour on an unrecognised predicate or an evaluation error, same temp-accept fallback -- delegated
@@ -21,8 +20,9 @@ outright -- both engines on every real call, the old one deciding by default, a 
 at ``WARNING`` and never at the content level -- behind a ``policy.engine: v1 | v2`` switch. P9
 ([ADR 0004](../../../docs/adr/0004-retire-the-v1-auto-accept-config-model.md)) ended that: the old
 evaluator, the switch and its config module are gone, and this engine is the only one. What is left
-of the safety net is the equivalence harness that proved the migration behaviour-preserving
-(``policy/compat.py`` and ``tests/unit/policy/_v1_reference.py``).
+of the safety net is the equivalence harness that proves each selector behaves like the predicate it
+replaced (``tests/unit/policy/_v1_reference.py``). The one-time v1 -> v2 settings conversion is gone
+too (ADR 0041).
 """
 from __future__ import annotations
 
@@ -47,12 +47,9 @@ class PolicyRule:
     in v2, it stays the engine's internal address (redesign proposal §09); it's what a future
     schema's user-facing verb list compiles down to.
 
-    ``id`` is a stable-enough identifier for logging and shadow-mode diffing. It is *not* the
-    real, immutable rule id the on-disk v2 schema will mint (redesign proposal §07) -- for a
-    ``policy/compat.py``-compiled rule there is no such id yet, since nothing on disk changes in
-    P3; ``compat.py`` uses the original v1 rule name, which is exactly what today's
-    ``AutoAcceptEvaluator.should_auto_accept`` already reports as ``matched_rule``, so a shadow
-    disagreement log can compare the two directly.
+    ``id`` is the rule's identifier for logging. A rule read back from disk carries the
+    content-derived id ``policy.store.rule_id_for`` minted; a rule built in memory may carry
+    anything, which is why attribution recomputes it (``policy.store.rule_id_for_rule``).
     """
 
     id: str
@@ -78,9 +75,9 @@ def find_matching_rule(
     rules: Iterable[PolicyRule], operation_key: str, ctx: ReviewContext,
 ) -> "PolicyRule | None":
     """The rule object ``evaluate()`` below would match, or ``None`` -- factored out for P8 (rule
-    attribution): a caller that needs to know *which row* matched, not just its ``.id`` (which,
-    for a ``policy/compat.py``-compiled rule, is the ambiguous v1 predicate name, not a stable
-    per-resource identity -- see ``policy.store.rule_id_for_rule``), needs the object itself, and
+    attribution): a caller that needs to know *which row* matched, not just its ``.id`` (not
+    guaranteed canonical for a rule built in memory -- see ``policy.store.rule_id_for_rule``),
+    needs the object itself, and
     re-deriving it from ``evaluate()``'s returned id would be wrong whenever two rules in the same
     list happen to share one (exactly the F9 shape this whole redesign exists to fix). Never
     considers the temp-accept grace window -- that is a session-scoped fallback, not a rule row,

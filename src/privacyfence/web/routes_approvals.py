@@ -56,8 +56,7 @@ leaks nothing, so step-up is scoped to the two approving results
 **A confirm dialog that is itself the gate (the self-approval review's
 Phase 4)** is the one place ``_STEP_UP_RESULTS``' "only an approving
 decision" rule under-reaches: ``gate.propose_policy_change`` (P7 of the
-policy v2 redesign) and its deprecated predecessor ``propose_rule_change``
-raise no card at all, so confirming one is the whole gate on a rule that
+policy v2 redesign) raises no card at all, so confirming one is the whole gate on a rule that
 decides what auto-accepts from here on. Those register with
 ``sensitive=True`` (approvals.PendingApprovalRegistry.register_confirm);
 ``approval_step_up.guard_decision`` takes the passkey half of that (gated on
