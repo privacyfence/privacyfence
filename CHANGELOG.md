@@ -52,6 +52,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   organization server's Google connector client needs
   `https://<your-server>/oauth/callback/apps_script` added to its registered redirect URIs.
 
+### Changed
+
+- **An organization server's Approvals page now updates live**, the way the desktop app's always
+  has: a new approval, or one decided from another tab or device, appears or disappears without a
+  manual reload, and the header's live indicator shows whether the page is connected. Each person
+  still sees only their own queue.
+
 ## [4.4.0] — 2026-09-24
 
 ### Added

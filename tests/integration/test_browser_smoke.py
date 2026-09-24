@@ -57,7 +57,7 @@ from pypdf import PdfWriter  # noqa: E402
 
 from privacyfence import org_identity as oi  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
-from privacyfence.principal import Principal  # noqa: E402
+from privacyfence.principal import Principal, principal_scope  # noqa: E402
 from privacyfence.settings_controller import SettingsController  # noqa: E402
 from privacyfence.web import org_session  # noqa: E402
 from privacyfence.web.oauth_provider import OrgOAuthProvider  # noqa: E402
@@ -244,7 +244,15 @@ def local_server(pf_home):
 
 
 @pytest.fixture
-def org_server(pf_home, tmp_path, monkeypatch):
+def org_server(org_server_and_ui):
+    server, sessions, _web_ui = org_server_and_ui
+    return server, sessions
+
+
+@pytest.fixture
+def org_server_and_ui(pf_home, tmp_path, monkeypatch):
+    """``org_server`` plus the ``WebApprovalUI`` it serves, for the tests
+    that need to register an approval against a running org-mode server."""
     monkeypatch.setattr(
         "privacyfence.web.oauth_provider._clients_file_path", lambda: str(tmp_path / "oauth_clients.json"),
     )
@@ -264,11 +272,12 @@ def org_server(pf_home, tmp_path, monkeypatch):
         # test here, not the write-approval step-up gate itself.
         org_config={"step_up": {"enabled": True}},
     )
-    server = WebServer(WebApprovalUI(), host="localhost", port=port, org=org)
+    web_ui = WebApprovalUI()
+    server = WebServer(web_ui, host="localhost", port=port, org=org)
     server.start()
     try:
         _wait_until_connectable("localhost", port)
-        yield server, sessions
+        yield server, sessions, web_ui
     finally:
         server.stop()
 
@@ -1740,6 +1749,35 @@ class TestOrgModeWebAuthnUi:
         page.goto(f"{server.base_url}/security")
         page.wait_for_load_state("load")
         assert page.get_by_text("No passkeys added yet.").is_visible()
+
+    def test_approvals_list_refreshes_live_without_a_manual_reload(self, page, context, org_server_and_ui):
+        """Org mode's counterpart of ``test_list_refreshes_live_without_a_
+        manual_reload``: org mode mounts no ``/api/state/stream``, so its
+        list page subscribes to the principal-scoped
+        ``/api/approvals/stream`` instead. An approval registered for the
+        signed-in principal after the page loaded must appear with no
+        reload; one registered for someone else must not."""
+        server, sessions, web_ui = org_server_and_ui
+        alice = Principal(id="alice", email="alice@example.com", display_name="Alice")
+        bob = Principal(id="bob", email="bob@example.com", display_name="Bob")
+        _sign_in_org(context, server, sessions, principal=alice)
+        page.goto(f"{server.base_url}/approvals")
+        page.wait_for_load_state("load")
+        assert page.get_by_text("Nothing is waiting.").is_visible()
+        page.wait_for_function("() => document.getElementById('pf-shell-live-label').textContent === 'live'")
+
+        with principal_scope(bob):
+            theirs, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key="b1", connector="gmail", tool="gmail_get_message", gate_kind="review",
+                request_id="rb", summary="bob's message", tool_name="Get message",
+            )
+        with principal_scope(alice):
+            mine, _ = web_ui.deferred_registry.register_or_coalesce(
+                dedupe_key="a1", connector="gmail", tool="gmail_get_message", gate_kind="review",
+                request_id="ra", summary="alice's message", tool_name="Get message",
+            )
+        page.wait_for_selector(f'[data-approval-id="{mine.id}"]', timeout=5000)
+        assert page.locator(f'[data-approval-id="{theirs.id}"]').count() == 0
 
 
 @pytest.fixture

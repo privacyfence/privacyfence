@@ -8,6 +8,7 @@ longer exists -- re-pointed onto the merged builder here, same tests.
 """
 from __future__ import annotations
 
+import json
 import urllib.parse as up
 from unittest.mock import patch
 
@@ -189,15 +190,18 @@ class TestPrincipalScopedList:
         _signed_in(client, sessions, ALICE)
         assert ALICE.email in client.get("/approvals").text
 
-    def test_the_list_claims_no_liveness_it_cannot_deliver(self):
-        # Org mode's app mounts no GET /api/state/stream at all, so a live
-        # indicator here would either lie or sit permanently on an error.
+    def test_the_list_updates_live_from_the_approvals_stream(self):
+        # Org mode mounts no GET /api/state/stream, so the page must not
+        # point at it (a live dot sitting on a 404 would lie) -- it
+        # subscribes to its own principal-scoped /api/approvals/stream
+        # instead, so a new approval shows up without a manual reload.
         app, sessions, web_ui = _app()
         _register(web_ui, ALICE, dedupe_key="a1")
         client = _client(app)
         _signed_in(client, sessions, ALICE)
         r = client.get("/approvals")
-        assert 'id="pf-shell-live-dot"' not in r.text
+        assert 'id="pf-shell-live-dot"' in r.text
+        assert 'new EventSource("/api/approvals/stream")' in r.text
         assert "/api/state/stream" not in r.text
 
     def test_the_old_unstyled_footer_links_are_gone(self):
@@ -1141,3 +1145,54 @@ class TestSensitiveConfirmDialog:
         r = client.post(f"/api/approvals/{approval.id}/decide", json={"result": "confirm", "csrf": session_id})
 
         assert r.status_code == 200
+
+
+class TestApprovalsStream:
+    """GET /api/approvals/stream -- what org mode's list page subscribes to
+    for live updates. Driven by calling the route's endpoint directly and
+    pulling chunks off its body iterator: TestClient fully buffers a
+    streaming response, so it can't read an endless SSE stream."""
+
+    @staticmethod
+    def _stream(app, session_id: str, disconnected=lambda: False):
+        from starlette.requests import Request
+
+        route = next(r for r in app.routes if getattr(r, "path", None) == "/api/approvals/stream")
+        scope = {
+            "type": "http", "method": "GET", "path": "/api/approvals/stream", "query_string": b"",
+            "headers": [(b"cookie", f"{org_session.SESSION_COOKIE}={session_id}".encode())],
+            "scheme": "https", "server": ("pf.example.com", 443),
+        }
+
+        async def receive():
+            return {"type": "http.disconnect"} if disconnected() else {"type": "http.request", "body": b""}
+
+        return route.endpoint, Request(scope, receive)
+
+    async def test_first_event_is_the_principals_own_rows_as_summaries(self):
+        app, sessions, web_ui = _app()
+        mine = _register(web_ui, ALICE, dedupe_key="a1")
+        _register(web_ui, BOB, dedupe_key="b1")
+        endpoint, request = self._stream(app, sessions.create(ALICE))
+        response = await endpoint(request)
+        it = response.body_iterator
+        try:
+            chunk = await it.__anext__()
+        finally:
+            await it.aclose()
+        assert chunk.startswith("event: approvals\ndata: ")
+        rows = json.loads(chunk.split("data: ", 1)[1])
+        assert [row["id"] for row in rows] == [mine.id]
+        assert rows[0]["tool_name"] == "Get message"
+
+    async def test_stream_ends_once_the_session_is_gone(self):
+        app, sessions, web_ui = _app()
+        _register(web_ui, ALICE, dedupe_key="a1")
+        session_id = sessions.create(ALICE)
+        endpoint, request = self._stream(app, session_id)
+        response = await endpoint(request)
+        it = response.body_iterator
+        await it.__anext__()
+        sessions.destroy(session_id)
+        with pytest.raises(StopAsyncIteration):
+            await it.__anext__()
