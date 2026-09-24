@@ -150,14 +150,17 @@ MARKER_PATH = WINDOWS_SYSTEM_ROOT / MARKER_FILE_NAME
 INSTALL_DIR_NAME = "Program Folder"
 
 # How long one silent Setup / uninstaller run may take before it is treated as
-# hung, from ten build.yml runs on fresh windows-latest runners (2026-09-24,
-# runs 36050325275/..28453/..30979/..33575/..36567, 36052978158/..81808/..84943
-# and 36054879932/..82830):
+# hung, from twelve build.yml runs on fresh windows-latest runners (2026-09-24;
+# the run list is in the commit that set these values):
 #
-#   first (cold) install    28.2-54.9 s in nine runs, 102.5 s in one  p100 102.5 s
-#     of which `sc start`   16.6-27.6 s, PowerShell's cold start 0.4-31.6 s
-#   every later install     8.5-19.0 s
-#   uninstaller             1.6-12.9 s (the first one on a runner is slowest)
+#   first (cold) install    28.2-58.3 s in eleven runs, 102.5 s in one
+#                           (median 36.6 s)                      p100 102.5 s
+#     of which `sc start`   16.6-27.6 s -- nearly all of it before the service
+#                           process exists (15.2 / 17.8 s where measured; the
+#                           executable then reaches its dispatcher in 0.3 s)
+#     PowerShell's start    0.4-31.6 s;  file copy 6.4-26.7 s
+#   every later install     8.5-19.0 s  (`sc start` 0.6-1.1 s)
+#   uninstaller             1.6-12.9 s  (the first one on a runner is slowest)
 #
 # The 102.5 s run was slow everywhere at once (file copy 26.7 s against ~7 s,
 # PowerShell's start 31.6 s against ~0.4 s): a slow runner rather than a slow
@@ -170,7 +173,7 @@ UNINSTALLER_TIMEOUT_S = 120.0
 # pytest-timeout must outlast the subprocess timeouts above, or it kills the
 # run before an installer's TimeoutExpired can say which step hung. One hung
 # Setup or uninstaller run plus the service's own start/serve waits (~120 s).
-# Observed whole tests, green: 36-78 s; the whole module 158-236 s.
+# Observed whole tests, green: 8-78 s; the whole module 158-236 s.
 TEST_TIMEOUT_S = INSTALLER_TIMEOUT_S + UNINSTALLER_TIMEOUT_S + 120.0
 # Tests 2 and 4 install twice: the same one-hang allowance, plus 3x the
 # slowest such test observed (78 s) for everything else they do.

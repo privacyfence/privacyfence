@@ -826,7 +826,8 @@ function Start-DaemonService {
     # and on a fresh machine that took 17-28s. The process's own start time
     # splits it: before it is the SCM (logging the virtual account on, creating
     # its profile), after it is the executable getting as far as the dispatcher.
-    # Numbers first, so the smoke test's per-step summary cannot cut them off.
+    # Measured on fresh CI runners: 15-18s before, 0.3s after. Numbers first, so
+    # the smoke test's per-step summary cannot cut them off.
     $servicePid = (Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue).ProcessId
     $process = if ($servicePid) { Get-Process -Id $servicePid -ErrorAction SilentlyContinue }
     if ($process -and $process.StartTime) {
