@@ -37,7 +37,8 @@ pattern web/routes_security.py's own ``build_routes()`` already uses for
   as ``_bridge_shim``/``_org_bridge_shim`` for the same reason.
 - ``render_list_page`` -- local's carries the step-up enrollment banner and
   the notifications-detail dial; org's carries the signed-in principal's
-  label and no live-update claim (org mode mounts no ``/api/state/stream``).
+  label and subscribes to ``/api/approvals/stream`` for live updates (org mode
+  mounts no ``/api/state/stream``).
 - ``human_session_guard`` -- the self-approval review's Phase 2, local-only
   and unchanged: org mode has no session-provenance concept at all (its
   equivalent is IdP re-auth), so its own adapter is a no-op.
@@ -415,13 +416,17 @@ def _inject_shim(html: str, shim: str) -> str:
 def _render_org_list_page(rows: list, *, csrf: str, nonce: str, principal: Principal) -> str:
     """Org mode's ``/approvals`` page, in the same shell local mode uses.
 
-    ``live_updates=False`` is not a simplification. Org mode's app mounts no
-    ``GET /api/state/stream`` at all, so there is nothing behind the shell's
-    live indicator here; rendering it anyway would either claim a liveness
-    that doesn't exist or sit permanently on a connection error, on the one
-    surface whose whole job is to be trusted. The list is still correct on
-    load -- it just no longer claims to be self-updating. Tier-0/1
-    notifications ride the same stream, so they go with it.
+    Live updates come from ``GET /api/approvals/stream`` (``stream_url``),
+    not the ``/api/state/stream`` local mode's shell connects to: org mode's
+    app mounts no state stream (there is no settings snapshot to push), but
+    this module's own approvals stream is mounted in both modes, is scoped
+    to the signed-in principal, and emits the same ``approvals`` event the
+    shell script and ``window.__pfRenderApprovals`` already consume -- so a
+    new approval, or one decided from another tab or device, shows up
+    without a manual reload, and the live indicator reflects a real
+    connection. Tier-0/1 notifications stay off: they are local mode's
+    settings.yaml-configured feature, and org mode has no per-principal
+    setting for them yet.
 
     ``principal_label``: every read and write on this page is authorized
     against this principal, and the page never said whose queue it was --
@@ -440,7 +445,7 @@ def _render_org_list_page(rows: list, *, csrf: str, nonce: str, principal: Princ
         nonce=nonce,
         nav_items=web_shell.ORG_NAV_ITEMS,
         principal_label=principal.email or principal.display_name or principal.id,
-        live_updates=False,
+        stream_url="/api/approvals/stream",
         notifications_enabled=False,
     )
 
@@ -562,15 +567,34 @@ def _build_route_list(
         if principal is None:
             return unauthenticated_read_response(request)
 
+        # Same ``event: approvals`` payload -- full summary dicts, not a
+        # patch -- that web/state_stream.py's ``/api/state/stream`` sends,
+        # so web_shell.py's stream script and approval_list_html.py's
+        # ``window.__pfRenderApprovals`` consume either one unchanged. This
+        # is the stream org mode's list page subscribes to (org mode mounts
+        # no ``/api/state/stream``), scoped to the signed-in principal the
+        # same way every other read here is.
+        #
+        # The principal is re-resolved on every tick, not just at connect
+        # time -- the issue #423 reasoning server.py's
+        # ``_state_stream_route`` gives: resolving touches the session (an
+        # open, watching tab is itself activity), and once the session has
+        # idle-/absolute-expired or been signed out, the stream ends
+        # instead of continuing to serve a queue nobody is authorized to see.
         async def event_source():
             last_ids: tuple[str, ...] | None = None
             while True:
                 if await request.is_disconnected():
                     break
-                ids = tuple(card.id for card in registry.list_pending(principal.id))
+                current = resolve_principal(request)
+                if current is None or current.id != principal.id:
+                    break
+                pending = registry.list_pending(principal.id)
+                ids = tuple(card.id for card in pending)
                 if ids != last_ids:
                     last_ids = ids
-                    yield f"data: {json.dumps(list(ids))}\n\n"
+                    summaries = [card.to_summary_dict() for card in pending]
+                    yield f"event: approvals\ndata: {json.dumps(summaries)}\n\n"
                 await asyncio.sleep(_STREAM_POLL_SECONDS)
 
         return StreamingResponse(

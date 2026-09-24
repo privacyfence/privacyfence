@@ -34,7 +34,7 @@ class TestWrap:
 
     def test_wires_the_state_stream_and_render_dispatch(self):
         html = web_shell.wrap("", title="t", active="approvals")
-        assert "new EventSource('/api/state/stream')" in html
+        assert 'new EventSource("/api/state/stream")' in html
         assert "__pfRender" in html
         assert "__pfRenderApprovals" in html
 
@@ -298,7 +298,15 @@ class TestLiveUpdatesCanBeTurnedOff:
     def test_both_are_present_by_default(self):
         html = web_shell.wrap("", title="t", active="approvals")
         assert 'id="pf-shell-live-dot"' in html
-        assert "new EventSource('/api/state/stream')" in html
+        assert 'new EventSource("/api/state/stream")' in html
+
+    def test_stream_url_is_configurable(self):
+        # Org mode's approvals page subscribes to its own principal-scoped
+        # /api/approvals/stream, since org mode mounts no state stream.
+        html = web_shell.wrap("", title="t", active="approvals", stream_url="/api/approvals/stream")
+        assert 'id="pf-shell-live-dot"' in html
+        assert 'new EventSource("/api/approvals/stream")' in html
+        assert "/api/state/stream" not in html
 
     def test_the_page_is_still_a_complete_document(self):
         # Everything the list page itself depends on has to survive: the
