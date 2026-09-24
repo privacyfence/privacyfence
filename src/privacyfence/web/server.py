@@ -1124,6 +1124,8 @@ def _build_org_app(
         step_up=step_up, step_up_origin=org.issuer_url,
         # AGT-5: the admin's "AI systems" pin page lists and pins this provider's DCR clients.
         oauth_provider=org.provider,
+        # Auto-accept rule values resolve to names through the viewing principal's own connectors.
+        connector_registry=org.connector_registry,
     ))
 
     lifespan = None

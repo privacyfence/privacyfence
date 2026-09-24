@@ -128,10 +128,12 @@ restart.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import inspect
 import json
 import logging
+import threading
 import typing
 import uuid
 from datetime import datetime, timezone
@@ -149,12 +151,14 @@ from starlette.routing import BaseRoute, Route
 from .. import approval_icons, auto_accept, settings_window_html, webauthn_stepup, web_shell
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
+from ..connector_registry import ConnectorRegistry
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
+from ..resource_names import get_resolver
 from ..agent_identity import REGISTRY, entry_for_id, sanitize_client_string
 from ..settings_controller import (
     REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rules,
     _parse_value_list, _pii_general_fields, _privacy_state_from_config, _relative_time, _rule_usage_map,
-    audit_rows,
+    audit_rows, cached_rule_value, rule_resource_ids,
 )
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore
@@ -1008,6 +1012,11 @@ def create_app(
     ))
 
 
+# How long an org-mode settings render waits for this principal's missing auto-accept rule names
+# (build_org_routes's _await_rule_names) before showing shortened ids instead -- one connector
+# read per unresolved id, normally well under this; anything slower finishes in the background.
+_RULE_NAME_WAIT_SECONDS = 3.0
+
 _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "add_policy_rule", "remove_policy_rule",
     "toggle_pii_detection", "toggle_pii_category",
@@ -1024,6 +1033,7 @@ def build_org_routes(
     step_up: StepUpConfig,
     step_up_origin: str,
     oauth_provider: OrgOAuthProvider | None = None,
+    connector_registry: ConnectorRegistry | None = None,
 ) -> list[Route]:
     """Org mode's own settings route list (#400; PSC-4b merged its dispatch
     into this module; PSC-5 merges its *rendering* -- both ``GET /settings``
@@ -1082,8 +1092,19 @@ def build_org_routes(
     admin-only and step-up gated), and its ``agent_pins`` store is where the
     pins land. ``None`` (a caller with no OAuth server, this module's own
     older tests) shows an empty page and rejects a pin with a 400.
+
+    ``connector_registry`` lets the Auto-accept page show a rule's resource ids (a Drive folder, a
+    task list, a Jira project, ...) by name, the way local mode's page does: an id with no cached
+    name yet is resolved through *this principal's own* connectors (``ConnectorRegistry.get``),
+    into this principal's own ``resource_names.py`` cache -- see ``_await_rule_names`` below.
+    ``None`` (a hand-built ``OrgAuth`` with no registry, this module's own older tests) shows
+    whatever names are already cached and a shortened id otherwise, never a lookup.
     """
     challenges = StepUpChallengeStore()
+    # Principals with a name lookup already running, so a reload while one is in flight doesn't
+    # start a second thread doing the same lookups.
+    resolving: set[str] = set()
+    resolving_lock = threading.Lock()
 
     def _current_principal(request: Request) -> Principal | None:
         return org_session.authenticated(request, sessions)
@@ -1166,10 +1187,7 @@ def build_org_routes(
         # settings_window_html renders it only when this key is present.
         privacy.pop("gmail_append_signature", None)
 
-        def _resolve_raw(rule: Any) -> str:
-            values = rule.value if isinstance(rule.value, list) else ([rule.value] if rule.value else [])
-            return ", ".join(str(v) for v in values)
-
+        resolver = get_resolver()
         rules = auto_accept.get_policy_v2_rules()
         # AGT-5: the viewing principal's own recent decisions -- per-principal, exactly like
         # the Auto-accept rules above (get_audit_logger() resolves this principal's own log),
@@ -1193,7 +1211,9 @@ def build_org_routes(
             },
             "connectors": [],
             "telegram_auth": {"step": None, "error": ""},
-            "auto_accept": _auto_accept_state_from_rules(rules, _rule_usage_map(), resolve_value=_resolve_raw),
+            "auto_accept": _auto_accept_state_from_rules(
+                rules, _rule_usage_map(), resolve_value=lambda rule: cached_rule_value(rule, resolver),
+            ),
             "privacy": privacy,
             "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
             "agents": _agents_state() if principal.is_admin else {"clients": [], "stale_pins": [], "registry": []},
@@ -1229,10 +1249,71 @@ def build_org_routes(
                 stale.append({"client_id": client_id, "agent_id": entry.agent_id, "agent_name": entry.display_name})
         return {"clients": clients, "stale_pins": stale, "registry": registry}
 
-    def _wrap_org_settings(request: Request, principal: Principal, *, initial_section: str) -> Response:
+    def _resolve_rule_names(principal: Principal, pending: list[tuple[Any, str]]) -> None:
+        """Worker-thread half of ``_await_rule_names``: resolve each ``(resource type, id)``
+        through this principal's own live connector client, caching the name for the next render.
+        A connector this principal hasn't authorized has no client, so its ids stay unresolved --
+        never an error. Runs under ``principal_scope`` explicitly: an executor thread doesn't
+        inherit the request's context, and both the resolver and its on-disk cache are
+        per-principal."""
+        assert connector_registry is not None  # nosec B101  # only scheduled when a registry exists
+        try:
+            with principal_scope(principal):
+                connectors = connector_registry.get(principal).connectors
+                resolver = get_resolver()
+                for rt, resource_id in pending:
+                    conn = connectors.get(rt.connector)
+                    client = getattr(conn, "client", None) if conn is not None else None
+                    if client is not None:
+                        resolver.resolve(rt, resource_id, client)
+        except Exception as exc:  # noqa: BLE001 - a missing name only costs a label, never the page
+            logger.warning("Could not resolve auto-accept rule names for %s: %s", principal.id, exc)
+        finally:
+            with resolving_lock:
+                resolving.discard(principal.id)
+
+    async def _await_rule_names(principal: Principal) -> None:
+        """Org mode's counterpart of local mode's ``SettingsController._resolve_names_async``.
+        Local mode resolves in the background and pushes a fresh snapshot to the open tab once
+        done; org mode has no live push (``live_updates=False`` below), so this instead waits up
+        to ``_RULE_NAME_WAIT_SECONDS`` for the lookup before the page renders. A slower lookup
+        keeps running and fills the cache for the next load rather than holding the request."""
+        if connector_registry is None:
+            return
+        with principal_scope(principal):
+            resolver = get_resolver()
+            pending: list[tuple[Any, str]] = []
+            for rule in auto_accept.get_policy_v2_rules():
+                rt, resource_ids = rule_resource_ids(rule)
+                if rt is not None:
+                    pending.extend(
+                        (rt, rid) for rid in resource_ids if rid and resolver.cached_name(rt, rid) is None
+                    )
+        if not pending:
+            return
+        with resolving_lock:
+            if principal.id in resolving:
+                return
+            resolving.add(principal.id)
+        # Its own daemon thread rather than the event loop's executor, so the lookup outliving the
+        # wait below never holds up anything that joins that executor (a loop shutting down).
+        done = threading.Event()
+
+        def _run() -> None:
+            try:
+                _resolve_rule_names(principal, pending)
+            finally:
+                done.set()
+
+        threading.Thread(target=_run, name=f"rule-names-{principal.id}", daemon=True).start()
+        await asyncio.to_thread(done.wait, _RULE_NAME_WAIT_SECONDS)
+
+    async def _wrap_org_settings(request: Request, principal: Principal, *, initial_section: str) -> Response:
         nonce = _csp_nonce_for(request)
         with principal_scope(principal):
             _ensure_principal_settings_loaded()
+        await _await_rule_names(principal)
+        with principal_scope(principal):
             state = _org_state(principal)
         body = settings_window_html.build_html(
             state, nonce=nonce, initial_section=initial_section,
@@ -1265,7 +1346,7 @@ def build_org_routes(
         # not, always gets (settings_window_html._capabilities_for) --
         # General itself is empty (hidden entirely) for a non-admin.
         initial_section = "general" if principal.is_admin else "auto_accept"
-        return _wrap_org_settings(request, principal, initial_section=initial_section)
+        return await _wrap_org_settings(request, principal, initial_section=initial_section)
 
     async def privacy_page(request: Request) -> Response:
         principal = _current_principal(request)
@@ -1275,7 +1356,7 @@ def build_org_routes(
             )
         if not principal.is_admin:
             return PlainTextResponse("Forbidden -- administrator access required.", status_code=403)
-        return _wrap_org_settings(request, principal, initial_section="privacy")
+        return await _wrap_org_settings(request, principal, initial_section="privacy")
 
     def _current_pii_flag(action: str, body: dict[str, Any]) -> bool:
         """toggle_pii_detection/toggle_pii_category flip the *current*
@@ -1403,6 +1484,9 @@ def build_org_routes(
                 return JSONResponse({"error": "could not write settings.yaml"}, status_code=500)
             if summary is not None:
                 _record_settings_audit(principal, summary)
+        # A rule just added may name an id this principal's page has never resolved.
+        await _await_rule_names(principal)
+        with principal_scope(principal):
             state = _org_state(principal)
         return JSONResponse(state)
 

@@ -47,6 +47,9 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -60,7 +63,7 @@ from privacyfence.policy import catalogue as policy_catalogue
 from privacyfence.policy import describe as policy_describe
 from privacyfence.policy import store as policy_store
 from privacyfence.principal import Principal, principal_scope
-from privacyfence.settings_controller import _privacy_state_from_config
+from privacyfence.settings_controller import _privacy_state_from_config, _short_id
 from privacyfence.step_up_config import StepUpConfig
 from privacyfence.web import org_session
 from privacyfence.web import routes_settings as ros
@@ -101,13 +104,14 @@ def _seed(tmp_path, monkeypatch, principal_id: str, *, rules=None) -> None:
 
 def _app(
     *, install_wide_settings=None, sessions=None, install_wide_settings_path="",
-    step_up: StepUpConfig | None = None,
+    step_up: StepUpConfig | None = None, connector_registry=None,
 ):
     sessions = sessions or org_session.OrgSessionStore()
     routes = ros.build_org_routes(
         sessions=sessions, install_wide_settings=install_wide_settings if install_wide_settings is not None else {},
         install_wide_settings_path=install_wide_settings_path,
         step_up=step_up or StepUpConfig(), step_up_origin=BASE_URL,
+        connector_registry=connector_registry,
     )
     return Starlette(routes=routes), sessions
 
@@ -280,6 +284,137 @@ class TestPrincipalScopedRules:
         assert caps2["is_admin"] is True
         assert caps2["sections"]["privacy"] is True
         assert caps2["sections"]["general"] is True
+
+
+class _FakeDriveClient:
+    def __init__(self, names: dict[str, str]):
+        self._names = names
+        self.calls: list[str] = []
+
+    def get_file_metadata(self, resource_id: str):
+        self.calls.append(resource_id)
+        return SimpleNamespace(name=self._names.get(resource_id, ""))
+
+
+class _FakeConnectorRegistry:
+    """Stands in for ``ConnectorRegistry``: one principal id -> that principal's connectors."""
+
+    def __init__(self, clients_by_principal: dict[str, dict[str, object]]):
+        self._clients = clients_by_principal
+        self.requested: list[str] = []
+
+    def get(self, principal: Principal):
+        self.requested.append(principal.id)
+        clients = self._clients.get(principal.id, {})
+        return SimpleNamespace(connectors={name: SimpleNamespace(client=c) for name, c in clients.items()})
+
+
+class TestRuleValueNames:
+    """Org mode shows a rule's resource ids by name, the way local mode's page does (both render
+    through ``settings_controller.cached_rule_value``), resolving a missing name through the
+    viewing principal's own connectors."""
+
+    FOLDER_ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+
+    def _seed_folder_rule(self, tmp_path, monkeypatch, principal_id: str) -> None:
+        _seed(
+            tmp_path, monkeypatch, principal_id,
+            rules=_catalogue_rules("drive.folder", "update", [self.FOLDER_ID]),
+        )
+
+    def test_the_page_shows_the_folder_name_not_its_id(self, tmp_path, monkeypatch):
+        self._seed_folder_rule(tmp_path, monkeypatch, "alice")
+        drive = _FakeDriveClient({self.FOLDER_ID: "Q3 Reports"})
+        app, sessions = _app(connector_registry=_FakeConnectorRegistry({"alice": {"drive": drive}}))
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        body = client.get("/settings").text
+        assert '"value": "Q3 Reports"' in body
+        assert drive.calls == [self.FOLDER_ID]
+
+    def test_a_cached_name_is_not_looked_up_again(self, tmp_path, monkeypatch):
+        self._seed_folder_rule(tmp_path, monkeypatch, "alice")
+        drive = _FakeDriveClient({self.FOLDER_ID: "Q3 Reports"})
+        app, sessions = _app(connector_registry=_FakeConnectorRegistry({"alice": {"drive": drive}}))
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        client.get("/settings")
+        assert '"value": "Q3 Reports"' in client.get("/settings").text
+        assert drive.calls == [self.FOLDER_ID]
+
+    def test_names_resolve_only_through_the_viewing_principals_own_connectors(self, tmp_path, monkeypatch):
+        self._seed_folder_rule(tmp_path, monkeypatch, "bob")
+        alices_drive = _FakeDriveClient({self.FOLDER_ID: "Alice's folder"})
+        registry = _FakeConnectorRegistry({"alice": {"drive": alices_drive}})
+        app, sessions = _app(connector_registry=registry)
+        client = _client(app)
+        _signed_in(client, sessions, BOB)
+        body = client.get("/settings").text
+        assert "Alice's folder" not in body
+        assert alices_drive.calls == []
+        assert registry.requested == ["bob"]
+
+    def test_an_added_rule_comes_back_resolved(self, tmp_path, monkeypatch):
+        _seed(tmp_path, monkeypatch, "alice")
+        drive = _FakeDriveClient({self.FOLDER_ID: "Q3 Reports"})
+        app, sessions = _app(connector_registry=_FakeConnectorRegistry({"alice": {"drive": drive}}))
+        client = _client(app)
+        csrf = _signed_in(client, sessions, ALICE)
+        r = _post_action(
+            client, "add_policy_rule", {"group": "drive.folder", "value": self.FOLDER_ID, "verbs": ["update"]}, csrf,
+        )
+        assert r.status_code == 200
+        assert [row["value"] for row in r.json()["auto_accept"]["rules"]] == ["Q3 Reports"]
+
+    def test_a_slow_lookup_renders_short_ids_then_names_on_the_next_load(self, tmp_path, monkeypatch):
+        self._seed_folder_rule(tmp_path, monkeypatch, "alice")
+        monkeypatch.setattr(ros, "_RULE_NAME_WAIT_SECONDS", 0.05)
+        release = threading.Event()
+        drive = _FakeDriveClient({self.FOLDER_ID: "Q3 Reports"})
+        original = drive.get_file_metadata
+
+        def slow_get_file_metadata(resource_id):
+            assert release.wait(5)
+            return original(resource_id)
+
+        drive.get_file_metadata = slow_get_file_metadata
+        app, sessions = _app(connector_registry=_FakeConnectorRegistry({"alice": {"drive": drive}}))
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        short_value = '"value": ' + json.dumps(_short_id(self.FOLDER_ID))
+        assert short_value in client.get("/settings").text
+        # Still in flight: a reload renders without starting a second lookup.
+        assert short_value in client.get("/settings").text
+        release.set()
+        for _ in range(100):
+            if drive.calls:
+                break
+            time.sleep(0.01)
+        time.sleep(0.05)
+        assert '"value": "Q3 Reports"' in client.get("/settings").text
+        assert drive.calls == [self.FOLDER_ID]
+
+    def test_without_a_registry_an_uncached_id_is_shortened(self, tmp_path, monkeypatch):
+        self._seed_folder_rule(tmp_path, monkeypatch, "alice")
+        app, sessions = _app()
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        body = client.get("/settings").text
+        assert '"value": ' + json.dumps(_short_id(self.FOLDER_ID)) in body
+
+    def test_a_failing_connector_build_still_renders_the_page(self, tmp_path, monkeypatch):
+        self._seed_folder_rule(tmp_path, monkeypatch, "alice")
+
+        class _Broken:
+            def get(self, principal):
+                raise RuntimeError("simulated connector build failure")
+
+        app, sessions = _app(connector_registry=_Broken())
+        client = _client(app)
+        _signed_in(client, sessions, ALICE)
+        r = client.get("/settings")
+        assert r.status_code == 200
+        assert '"value": ' + json.dumps(_short_id(self.FOLDER_ID)) in r.text
 
 
 class TestAddRule:

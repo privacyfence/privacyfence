@@ -99,6 +99,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   credentials, as the macOS, Windows and Linux installers already did, so `pip install
   privacyfence` no longer needs your own `api_id`/`api_hash` to connect Telegram (ADR 0040).
 
+- **An organization server's Settings → Auto-accept page shows resource names, not IDs.** A rule
+  naming a Drive folder, task list, Slack channel, Jira project or other resource now reads by that
+  resource's name, as it already did on a desktop install, looked up through the signed-in user's
+  own connected accounts. Before, it showed the raw ID.
+
 - **The org-mode setup guide now explains how to name admins when Google is the sign-in
   provider.** Google's sign-in tokens carry no groups, so the guide's `groups` example left every
   user, Workspace admins included, without the admin-only Settings pages (Privacy Filter, AI
