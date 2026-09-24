@@ -88,12 +88,14 @@ the packaged app:
    (``/Library/PrivacyFence/image``), wholly independent of the path it was
    pointed at, not just independent of ``$HOME`` the way an unseparated
    install's daemon would be. Then run the real uninstall gesture --
-   ``disable`` -- and confirm the same state is now where a plain drag-to-
-   Trash removal would actually find it: back under ``$HOME/.privacyfence``,
-   the same "user state survives package removal" property
-   ``test_deb_packaged_lifecycle.py``'s own ``dpkg -r``/``-P`` and
+   ``uninstall`` (ADR 0042) -- and confirm the daemon is gone and the same
+   state is still under the system root, with nothing written to
+   ``$HOME/.privacyfence``: the same "user state survives package removal"
+   property ``test_deb_packaged_lifecycle.py``'s own ``dpkg -r``/``-P`` and
    ``test_windows_packaged_smoke.py``'s silent uninstall assert for their
-   own platforms' removal gesture -- ``disable`` is macOS's.
+   own platforms' removal gesture. ``uninstall --purge``, which deletes it,
+   is the fixture's teardown; ``test_macos_pkg_install.py`` asserts both
+   against a real ``.pkg`` install, reinstall included.
 7. **Signature/notarization**: when the DMG was built with ``--sign``/
    ``NOTARIZE_PROFILE`` (as ``build.yml``'s release job always does; a local
    unsigned dev build is legitimate and skips this instead of failing it),
@@ -239,7 +241,6 @@ SEPARATED_SETTINGS_PATH = AUTHORITY_DIR / "config" / "settings.yaml"
 # those two directories differ in who can reach them.
 SEPARATED_MCP_TOKEN_PATH = AUTHORITY_DIR / MCP_TOKEN_FILE_NAME
 SEPARATED_WEB_BASE_URL_PATH = HANDOFF_DIR / "web_base_url"
-PRIVILEGE_SEPARATION_MARKER = MACOS_SYSTEM_ROOT / "privilege-separation.json"
 
 
 def _built_dmgs() -> list[Path]:
@@ -659,9 +660,10 @@ def _enable_separation(app_path: Path, *, user: str, timeout: float = 120.0) -> 
     _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "enable", "--app", str(app_path), "--user", user, timeout=timeout)
 
 
-def _disable_if_separated(*, user: str) -> None:
-    if _sudo_capture("test", "-e", str(PRIVILEGE_SEPARATION_MARKER)).returncode == 0:
-        _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "disable", "--user", user, check=False, timeout=60)
+def _purge_installed_state() -> None:
+    """``uninstall --purge`` (ADR 0042): launchd jobs, staged image, data and
+    service account. Idempotent, so it runs unconditionally."""
+    _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "uninstall", "--purge", check=False, timeout=90)
 
 
 class RunningDaemon:
@@ -742,14 +744,14 @@ def running_packaged_daemon(installed_app):
     module's own docstring §2/§6 for why handing it a plain, user-owned
     copy is exactly the right, least-privileged input, not a shortcut),
     undone again on the way out regardless of what the test itself already
-    did to it (``_disable_if_separated`` is idempotent -- a no-op once
-    nothing is separated any more)."""
+    did to it (``_purge_installed_state`` is idempotent -- a no-op once
+    nothing is installed any more)."""
     user = getpass.getuser()
     _enable_separation(installed_app, user=user)
     try:
         yield _wait_for_real_daemon()
     finally:
-        _disable_if_separated(user=user)
+        _purge_installed_state()
 
 
 @pytest.fixture(scope="module")
@@ -986,25 +988,20 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     assert settings_text, "deleting the original --app copy must not affect the daemon's own staged copy"
     assert_probe_rule_on_disk(settings_text, value=["example.com"])
 
-    # Second: the real uninstall gesture. macOS has no installer/uninstaller
-    # pair -- "uninstalling" a separated install is `disable`, which moves
-    # state back into $HOME the same deliberate way debian/prerm's own
-    # `disable` call does for the .deb (test_deb_packaged_lifecycle.py's own
-    # Test 1) -- the "user state survives package removal" property
-    # test_windows_packaged_smoke.py's silent uninstall also asserts, for
-    # its own platform's removal gesture.
-    user = getpass.getuser()
-    restored_settings_path = Path.home() / ".privacyfence" / "authority" / "config" / "settings.yaml"
-    try:
-        _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "disable", "--user", user)
-        assert restored_settings_path.exists(), (
-            f"`disable` should have restored state to {restored_settings_path}"
-        )
-        assert_probe_rule_on_disk(
-            restored_settings_path.read_text(encoding="utf-8"), value=["example.com"],
-        )
-    finally:
-        shutil.rmtree(Path.home() / ".privacyfence", ignore_errors=True)
+    # Second: the real uninstall gesture (ADR 0042). macOS has no package
+    # manager, so `uninstall` is its remove: it stops and unregisters the
+    # daemon and keeps the data under the system root, the same "user state
+    # survives package removal" property test_deb_packaged_lifecycle.py's
+    # `dpkg -r` and test_windows_packaged_smoke.py's silent uninstall assert
+    # for their own platforms. Nothing moves into $HOME (ADR 0041, G3).
+    home_data = Path.home() / ".privacyfence"
+    home_data_existed = home_data.exists()
+    _sudo_run(str(PRIVILEGE_SEPARATION_SCRIPT), "uninstall", timeout=90)
+    assert _launchctl_print(f"system/{DAEMON_LABEL}") is None, "`uninstall` left the daemon loaded"
+    settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+    assert settings_text, f"`uninstall` should have kept {SEPARATED_SETTINGS_PATH}"
+    assert_probe_rule_on_disk(settings_text, value=["example.com"])
+    assert home_data.exists() == home_data_existed, f"`uninstall` wrote to {home_data}"
 
 
 @pytest.fixture
@@ -1306,5 +1303,5 @@ async def test_macos_upgrade_preserves_user_state():
         settings_text = _sudo_read_text(SEPARATED_SETTINGS_PATH)
         assert settings_text and "preupgrade.example.com" in settings_text, settings_text
     finally:
-        _disable_if_separated(user=user)
+        _purge_installed_state()
         shutil.rmtree(install_dir, ignore_errors=True)

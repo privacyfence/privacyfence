@@ -69,6 +69,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already required. A bundle with no `server.bind_host` also binds `127.0.0.1` (was `localhost`).
   Pass `--server-bind-host` explicitly when the proxy runs on another host.
 
+- **Uninstalling on macOS keeps your data unless you ask for it to be deleted.** `sudo
+  /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh
+  uninstall` replaces `disable`: it stops PrivacyFence, removes its LaunchDaemon, companion
+  LaunchAgent, staged copy under `/Library/PrivacyFence` and the app the `.pkg` installed, and
+  leaves the data under `/Library/Application Support/PrivacyFence` and the `_privacyfence`
+  account in place, so installing again picks everything up. `uninstall --purge` also deletes the
+  data and the account. `disable` moved the data back into `~/.privacyfence`; nothing does that
+  now. See ADR 0042.
+
 - The installers now refuse a system older than PrivacyFence supports instead of installing an
   app that cannot start: the macOS `.pkg` requires macOS 13 on Apple silicon (an Intel Mac is
   refused), the Windows installer Windows 10 / Windows Server 2016, and the `.deb` declares its
@@ -97,6 +106,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   control channel. Instead it stops with an error asking you to check that PrivacyFence and the
   extension are the same version. On Windows it also no longer looks for PrivacyFence under
   `%LOCALAPPDATA%\Programs`, where no current installer puts it.
+- **The macOS installer no longer moves data from an earlier layout.** `enable` (and so the `.pkg`)
+  no longer moves `~/.privacyfence` into `/Library/Application Support/PrivacyFence`, no longer
+  moves files into `handoff/` from the root of the data directory, and no longer disables a
+  per-user `com.privacyfence.app` LaunchAgent. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
 
 ### Fixed
 

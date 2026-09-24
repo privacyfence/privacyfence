@@ -1072,12 +1072,15 @@ def _authority_owner_problem(state: Separation) -> str | None:
 # in this module the same way it always has.
 #
 # macOS's own package-manager-equivalent hook is the .pkg's postinstall (#428
-# D2), which the DMG now carries and which every ordinary macOS install goes
-# through -- so this prompt is the fallback rather than the usual path: an
-# install that never ran the installer (an app bundle copied off another
-# machine, a source/pip run) still has nothing root-context behind it, and
-# nothing short of a human answering an admin password prompt can create a
-# system account or a LaunchDaemon. This is that prompt.
+# D2), which the DMG carries and which is the only way PrivacyFence is
+# installed on macOS -- so this prompt is the fallback rather than the usual
+# path. It is still reachable on a fresh install (ADR 0041 decision 4 keeps
+# it for that reason): the postinstall never fails the package install, so
+# an `enable --auto` that did not finish there leaves the app installed and
+# unseparated, and the .mcpb's shim then starts the packaged daemon directly
+# (mcpb/shim/src/daemon.ts spawns it whenever there is no marker). Nothing
+# short of a human answering an admin password prompt can create a system
+# account or a LaunchDaemon from there. This is that prompt.
 #
 # ADR 0003 decision 6 removed the one-shot marker this used to write
 # (``AUTO_ENABLE_ATTEMPTED_MARKER_NAME``): a decline used to be respected
