@@ -521,9 +521,8 @@ $HandoffFileNames = @('mcp_token', 'mcp_url', 'web_base_url')
 # <page>_url: approvals_url/settings_url/security_url, written by versions
 # before the self-approval plan's Phase 2 stopped putting a live sign-in link
 # in a group-shared directory. Kept in the glob so an upgrade does not strand
-# one outside the handoff directory while it still exists -- the daemon
-# deletes them on its next start (web/server.py's
-# _clear_legacy_bootstrap_url_files).
+# one outside the handoff directory while it still exists. The daemon no
+# longer deletes them (ADR 0041: no upgrade path from earlier layouts).
 $HandoffFileGlob = '*_url'
 
 function Move-Data {

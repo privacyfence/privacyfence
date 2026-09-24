@@ -304,10 +304,8 @@ class TestUnauthorizedHtml:
         """Two dead ends this page has pointed at over time. The log line
         always reads bootstrap=[REDACTED] (SecretRedactingFormatter,
         SEC-10), so "open the newest sign-in link PrivacyFence logged" never
-        worked. The discovery file that replaced it did work -- for anything
-        running as this user, which is why the self-approval plan's Phase 2
-        stopped writing it (web/server.py's own
-        _clear_legacy_bootstrap_url_files)."""
+        worked, and no discovery file carries a link either: one would work
+        for anything running as this user."""
         body = sa.unauthorized_html(Request(self._scope())).body.decode()
         assert "approvals_url" not in body
         assert "settings_url" not in body

@@ -190,8 +190,7 @@ def socket_path_under(authority_dir: Path) -> Path:
     display-only caller (``session_auth.py``'s ``unauthorized_html()``) can
     compute the same fallback logic from a plain ``data_dir() / "authority"``
     join, without going through the real, side-effecting
-    ``paths.authority_dir()`` (which creates the directory and runs its
-    migration-on-first-use) just to render an error page -- the same
+    ``paths.authority_dir()`` (which creates the directory) just to render an error page -- the same
     "pure display string" posture that page's own docstring has always
     taken for the paths it shows."""
     preferred = authority_dir / SOCKET_FILE_NAME
