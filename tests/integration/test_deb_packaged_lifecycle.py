@@ -1181,6 +1181,27 @@ def test_unattended_install_separates_the_machine_and_defers_the_membership(tmp_
     assert _marker_owner() == getpass.getuser()
     assert getpass.getuser() in _service_group_members()
 
+    # A second account added the same way joins the group without taking the
+    # recorded owner (ADR 0043): owner_user is what maps a peer to the
+    # install's original principal, so it must still name the first account.
+    second = "pf-second-user"
+    subprocess.run(
+        ["sudo", "-n", "useradd", "--no-create-home", "--shell", "/usr/sbin/nologin", second],
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    try:
+        subprocess.run(
+            ["sudo", "-n", str(SEPARATION_TOOL), "enable", "--for-user", second],
+            check=True, capture_output=True, text=True, timeout=60,
+        )
+        assert second in _service_group_members()
+        assert _marker_owner() == getpass.getuser(), (
+            f"enable --for-user {second} replaced the recorded owner {getpass.getuser()!r} "
+            f"with {_marker_owner()!r}"
+        )
+    finally:
+        subprocess.run(["sudo", "-n", "userdel", second], capture_output=True, timeout=30)
+
 
 
 def test_a_failing_machine_half_fails_the_package_install(tmp_path):

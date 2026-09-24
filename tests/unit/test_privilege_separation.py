@@ -2857,9 +2857,10 @@ class TestEnableSplitContract:
 
     def test_the_windows_marker_records_an_empty_owner_when_none_resolved(self):
         assert (
-            "owner_user      = $(if ($script:OwnerResolved) { $script:OwnerUser } else { '' })"
+            "$recordedOwner = $(if ($script:OwnerResolved) { $script:OwnerUser } else { '' })"
             in self.SCRIPTS["win32"]
         )
+        assert "owner_user      = [string]$recordedOwner" in self.SCRIPTS["win32"]
 
     def test_the_windows_script_reports_the_pending_state_distinctly(self):
         assert "PENDING USER" in self.SCRIPTS["win32"]
@@ -2893,6 +2894,176 @@ class TestEnableSplitContract:
 
         assert 'CONSOLE_USER=""' in postinstall
         assert '"$SEPARATION_SCRIPT" enable --auto --app "$APP_PATH"' in postinstall
+
+
+class TestForUserKeepsTheRecordedOwner:
+    """ADR 0043: the marker's ``owner_user`` is written once and then kept.
+    ``owner_uid()``/``owner_sid()`` map the account it names to
+    ``LOCAL_PRINCIPAL`` -- the install's original data -- so ``enable
+    --for-user`` for a second account (ADR 0008) must leave it alone. Each
+    script used to write the account it had just resolved, which moved the
+    owner's principal to whoever was added last.
+
+    Runs each script's real ``cmd_enable_for_user``/``Invoke-EnableForUser``,
+    ``write_marker``/``Write-Marker`` and marker reader, with the steps that
+    need root or a real account stubbed, then reads the result back through
+    ``privilege_separation.separation()`` -- the daemon's own parser."""
+
+    @staticmethod
+    def _posix_function(platform: str, name: str) -> str:
+        # Not TestApplyLayoutLeavesSocketsAlone._function: write_marker's own
+        # heredoc has a bare "}" line of its own, followed by its terminator.
+        text = INSTALLERS[platform].read_text(encoding="utf-8")
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n(?=\n|\Z)", text, re.MULTILINE | re.DOTALL)
+        assert match is not None, f"no {name}() in {INSTALLERS[platform].name}"
+        return match.group(0)
+
+    def _run_posix(self, platform, tmp_path, *, owner_user, command, recorded=None):
+        root = tmp_path / "root"
+        root.mkdir()
+        marker = root / privilege_separation.MARKER_FILE_NAME
+        if recorded is not None:
+            marker.write_text(json.dumps(_marker_payload(platform, owner_user=recorded), indent=2), encoding="utf-8")
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        for tool in ("chown", "chmod"):
+            stub = bin_dir / tool
+            stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            stub.chmod(0o755)
+        functions = ["marker_owner_user", "write_marker"]
+        if command == "cmd_enable_for_user":
+            functions.append("cmd_enable_for_user")
+        script = "\n".join([
+            "set -euo pipefail",
+            "note() { :; }",
+            "die() { echo \"$*\" >&2; exit 1; }",
+            "require_linux() { :; }",
+            "require_macos() { :; }",
+            "require_root() { :; }",
+            "resolve_owner() { :; }",
+            "add_owner_to_service_group() { :; }",
+            "apply_layout() { :; }",
+            f"SYSTEM_ROOT={shlex.quote(str(root))}",
+            f"MARKER_NAME={privilege_separation.MARKER_FILE_NAME}",
+            f"MARKER_VERSION={privilege_separation.MARKER_VERSION}",
+            f"SERVICE_ACCOUNT={service_account_of(platform)}",
+            f"SERVICE_GROUP={privilege_separation.PLATFORM_LAYOUTS[platform].service_group}",
+            f"OWNER_USER={shlex.quote(owner_user)}",
+            *(self._posix_function(platform, name) for name in functions),
+            command,
+        ])
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        return root
+
+    def _recorded_owner(self, platform, root, monkeypatch):
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: platform)
+        monkeypatch.setenv(privilege_separation.SYSTEM_ROOT_ENV_VAR, str(root))
+        privilege_separation.reset_cache()
+        try:
+            state = privilege_separation.separation()
+            assert state is not None, (root / privilege_separation.MARKER_FILE_NAME).read_text(encoding="utf-8")
+            return state.owner_user
+        finally:
+            privilege_separation.reset_cache()
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1")
+    def test_a_second_for_user_leaves_the_owner_alone(self, platform, tmp_path, monkeypatch):
+        root = self._run_posix(
+            platform, tmp_path, owner_user="bob", command="cmd_enable_for_user", recorded="alice",
+        )
+
+        assert self._recorded_owner(platform, root, monkeypatch) == "alice"
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1")
+    def test_the_first_for_user_on_a_machine_only_install_records_the_owner(self, platform, tmp_path, monkeypatch):
+        root = self._run_posix(
+            platform, tmp_path, owner_user="alice", command="cmd_enable_for_user", recorded="",
+        )
+
+        assert self._recorded_owner(platform, root, monkeypatch) == "alice"
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1")
+    def test_a_first_enable_records_the_resolved_owner(self, platform, tmp_path, monkeypatch):
+        root = self._run_posix(platform, tmp_path, owner_user="alice", command="write_marker")
+
+        assert self._recorded_owner(platform, root, monkeypatch) == "alice"
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    @pytest.mark.skipif(sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1")
+    def test_a_machine_half_with_no_owner_does_not_clear_one(self, platform, tmp_path, monkeypatch):
+        root = self._run_posix(platform, tmp_path, owner_user="", command="write_marker", recorded="alice")
+
+        assert self._recorded_owner(platform, root, monkeypatch) == "alice"
+
+    @staticmethod
+    def _powershell() -> str | None:
+        return shutil.which("powershell") or shutil.which("pwsh")
+
+    def _run_windows(self, tmp_path, *, owner_user, recorded):
+        text = INSTALLERS["win32"].read_text(encoding="utf-8")
+
+        def function(name: str) -> str:
+            match = re.search(rf"^function {name} \{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL)
+            assert match is not None, f"no {name} in {INSTALLERS['win32'].name}"
+            return match.group(0)
+
+        root = tmp_path / "root"
+        root.mkdir()
+        marker = root / privilege_separation.MARKER_FILE_NAME
+        if recorded is not None:
+            marker.write_text(json.dumps(_marker_payload("win32", owner_user=recorded), indent=2), encoding="utf-8")
+
+        def quoted(value: str) -> str:
+            return "'" + value.replace("'", "''") + "'"
+
+        script = "\n".join([
+            "Set-StrictMode -Version Latest",
+            "$ErrorActionPreference = 'Stop'",
+            "function Write-Note { }",
+            "function Invoke-Icacls { }",
+            "function Assert-Windows { }",
+            "function Assert-Administrator { }",
+            "function Resolve-Owner { $script:OwnerResolved = $true }",
+            "function Add-OwnerToServiceGroup { }",
+            "function Set-Layout { }",
+            f"$SystemRoot = {quoted(str(root))}",
+            f"$MarkerName = {quoted(privilege_separation.MARKER_FILE_NAME)}",
+            f"$MarkerVersion = {privilege_separation.MARKER_VERSION}",
+            f"$ServiceAccount = {quoted(service_account_of('win32'))}",
+            f"$ServiceGroup = {quoted(privilege_separation.PLATFORM_LAYOUTS['win32'].service_group)}",
+            "$SidSystem = '*S-1-5-18'; $SidAdministrators = '*S-1-5-32-544'; $SidUsers = '*S-1-5-32-545'",
+            f"$script:OwnerUser = {quoted(owner_user)}",
+            "$script:OwnerResolved = $false",
+            function("Get-MarkerOwnerUser"),
+            function("Write-Marker"),
+            function("Invoke-EnableForUser"),
+            "Invoke-EnableForUser",
+        ])
+        script_path = tmp_path / "run.ps1"
+        script_path.write_text(script, encoding="utf-8")
+        result = subprocess.run(
+            [self._powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+            capture_output=True, text=True, timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return root
+
+    @pytest.mark.skipif(shutil.which("powershell") is None and shutil.which("pwsh") is None, reason="needs PowerShell")
+    def test_a_second_for_user_leaves_the_windows_owner_alone(self, tmp_path, monkeypatch):
+        root = self._run_windows(tmp_path, owner_user="bob", recorded="alice")
+
+        assert self._recorded_owner("win32", root, monkeypatch) == "alice"
+
+    @pytest.mark.skipif(shutil.which("powershell") is None and shutil.which("pwsh") is None, reason="needs PowerShell")
+    def test_the_first_windows_for_user_on_a_machine_only_install_records_the_owner(self, tmp_path, monkeypatch):
+        root = self._run_windows(tmp_path, owner_user="alice", recorded="")
+
+        assert self._recorded_owner("win32", root, monkeypatch) == "alice"
 
 
 class TestDebPostinstFailurePolicy:
@@ -2974,7 +3145,7 @@ class TestDebPostinstFailurePolicy:
             r"^write_marker\(\) \{\n(.*?)^\}", self.SCRIPT, re.MULTILINE | re.DOTALL
         ).group(1)
         assert re.search(
-            r'if \[ -z "\$recorded_owner" \] && \[ -f "\$marker" \]; then\n'
+            r'if \[ -f "\$marker" \]; then\n'
             r'\s+recorded_owner="\$\(marker_owner_user\)"',
             body,
         ), body

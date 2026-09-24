@@ -699,12 +699,27 @@ function Write-Marker {
     # "group membership pending", and is_enabled() stays true for it, because
     # the install *is* separated. $OwnerUser itself still holds whatever
     # identity this ran as, which is not the same thing as an owner.
+    #
+    # An owner already recorded in the marker is kept, whoever this run
+    # resolved. owner_user is what privilege_separation.owner_sid() maps to the
+    # install's original principal (ADR 0008), so it names the first human only
+    # and is never rewritten: `enable -ForUser <second>` adds that account
+    # alongside the owner and must not hand it the owner's data, and a machine
+    # half with no owner resolved must not unrecord one. `uninstall -Purge` is
+    # the one thing that removes the owner, by removing the marker. See
+    # docs/adr/0043-the-recorded-owner-is-never-rewritten.md.
+    $recordedOwner = Get-MarkerOwnerUser
+    if ($recordedOwner) {
+        Write-Note "keeping the owner already recorded in ${marker}: $recordedOwner"
+    } else {
+        $recordedOwner = $(if ($script:OwnerResolved) { $script:OwnerUser } else { '' })
+    }
     $payload = [ordered]@{
         version         = $MarkerVersion
         platform        = 'win32'
         service_account = $ServiceAccount
         service_group   = $ServiceGroup
-        owner_user      = $(if ($script:OwnerResolved) { $script:OwnerUser } else { '' })
+        owner_user      = [string]$recordedOwner
         enabled_at      = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     }
     # -Encoding ascii, not the default: privilege_separation._parse_marker
@@ -1090,8 +1105,9 @@ function Invoke-EnableForUser {
     }
 
     Add-OwnerToServiceGroup
-    # The layout is re-asserted rather than assumed, and the marker is
-    # rewritten with the owner it was missing.
+    # The layout is re-asserted rather than assumed. The marker records this
+    # account as the owner only if it has none yet; Write-Marker never
+    # replaces one already recorded.
     Set-Layout
     Write-Marker
 

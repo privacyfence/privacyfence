@@ -473,7 +473,21 @@ apply_layout() {
 }
 
 write_marker() {
-  local marker="${SYSTEM_ROOT}/${MARKER_NAME}"
+  local marker="${SYSTEM_ROOT}/${MARKER_NAME}" recorded_owner=""
+  # An owner already recorded in this file is kept, whoever this run resolved.
+  # `owner_user` is what privilege_separation.owner_uid() maps to the install's
+  # original principal (ADR 0008), so it names the first human only and is
+  # never rewritten: `enable --for-user <second>` adds that account alongside
+  # the owner and must not hand it the owner's data, and an `enable` with no
+  # owner resolved (a .pkg upgrade with nobody at the console) must not
+  # unrecord one. `uninstall --purge` is the one thing that removes the owner,
+  # by removing this file entirely. See
+  # docs/adr/0043-the-recorded-owner-is-never-rewritten.md.
+  if [ -f "$marker" ]; then
+    recorded_owner="$(marker_owner_user)"
+    [ -z "$recorded_owner" ] || note "keeping the owner already recorded in ${marker}: ${recorded_owner}"
+  fi
+  [ -n "$recorded_owner" ] || recorded_owner="$OWNER_USER"
   note "writing ${marker}"
   cat > "$marker" <<MARKER
 {
@@ -481,7 +495,7 @@ write_marker() {
   "platform": "darwin",
   "service_account": "${SERVICE_ACCOUNT}",
   "service_group": "${SERVICE_GROUP}",
-  "owner_user": "${OWNER_USER}",
+  "owner_user": "${recorded_owner}",
   "enabled_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 MARKER
@@ -1038,8 +1052,9 @@ cmd_enable_for_user() {
   fi
 
   add_owner_to_service_group
-  # The layout is re-asserted rather than assumed, and the marker is
-  # rewritten with the owner it was missing.
+  # The layout is re-asserted rather than assumed. The marker records this
+  # account as the owner only if it has none yet; write_marker never replaces
+  # one already recorded.
   apply_layout
   write_marker
 
