@@ -326,23 +326,23 @@ The `platform-windows` job in `.github/workflows/tests.yml` runs the full core P
 
 ## Debian/Ubuntu local mode
 
-The local desktop package is defined by `PrivacyFenceApp.linux.spec`, `scripts/build_deb.sh`, `debian/`, and `resources/linux/privacyfence.desktop`.
+The local desktop package is defined by `PrivacyFenceApp.linux.spec`, `scripts/build_deb.sh`, `debian/`, and `resources/linux/`.
 
-The `.deb` installs the self-contained application under `/opt/privacyfence`, exposes `/usr/bin/privacyfence-app` and `/usr/bin/privacyfence-companion`, installs application icons, installs an XDG autostart desktop entry under `/etc/xdg/autostart/`, and installs the privilege-separation tool as `/usr/sbin/privacyfence-privilege-separation` with its templates under `/usr/share/privacyfence/` (see below — as of #428 D1, `debian/postinst` runs it automatically, `configure)` case, on every install and upgrade).
+The `.deb` installs the self-contained application under `/opt/privacyfence`, exposes `/usr/bin/privacyfence-app` and `/usr/bin/privacyfence-companion`, installs application icons and an application-menu entry, and installs the privilege-separation tool as `/usr/sbin/privacyfence-privilege-separation` with its templates under `/usr/share/privacyfence/` (see below — as of #428 D1, `debian/postinst` runs it automatically, `configure)` case, on every install and upgrade).
 
-The XDG desktop autostart path is separate from the repository's `privacyfence.service`, which is the Python/system-service template rather than the desktop `.deb` startup mechanism.
+The repository's `privacyfence.service` is the `--user` unit for a pip/pipx install, not the `.deb`'s startup mechanism.
 
-Package removal does not delete per-user PrivacyFence state from the user's home directory.
+`apt remove` runs `privacyfence-privilege-separation uninstall` from `debian/prerm`: it stops and unregisters the service and keeps `/var/lib/privacyfence`, the marker and the `privacyfence` account, so a reinstall picks the data up. `apt purge` deletes those too, from `debian/postrm`. Nothing is moved into a home directory ([ADR 0042](adr/0042-uninstall-replaces-disable.md)).
 
 ### Privilege separation (mandatory)
 
 The same change as macOS's, above, in Linux's own idioms. Without it, the daemon starts in the
-logged-in user's session — either of the two startup paths above — which is also the session the AI
+logged-in user's session — a pip/pipx install's `--user` unit — which is also the session the AI
 client it governs runs in. `sudo privacyfence-privilege-separation enable` turns that off — the
 `.deb` installs it under that name in `/usr/sbin`, and a source checkout runs the same file as
 `sudo ./scripts/linux_privilege_separation.sh enable`. It
-creates a dedicated `privacyfence` system account (`useradd --system`), moves the data directory
-from `~/.privacyfence` to `/var/lib/privacyfence` owned by that account, and inverts the startup
+creates a dedicated `privacyfence` system account (`useradd --system`), creates the data directory
+`/var/lib/privacyfence` owned by that account, and inverts the startup
 wiring — a **system systemd unit**
 (`installer/linux/privacyfence-daemon.service.tmpl` → `/etc/systemd/system/privacyfence-daemon.service`)
 runs the daemon with no desktop session at all, while an **XDG autostart entry**
@@ -359,8 +359,8 @@ that do not need the same things:
   runs unconditionally and *without* `|| true`. A failure of it fails the package install, loudly,
   leaving dpkg with a half-configured package rather than an installed-looking one whose central
   claim does not hold.
-- **The per-user half** (`enable --auto --for-user "$SUDO_USER"`) — the group membership, and
-  migrating that person's existing `~/.privacyfence` — does need to know, and `$SUDO_USER` is the
+- **The per-user half** (`enable --auto --for-user "$SUDO_USER"`) — the group membership — does
+  need to know, and `$SUDO_USER` is the
   only thing a postinst has that can say. It names a resolvable, non-root account when the `.deb`
   was installed via `sudo apt install`/`sudo dpkg -i`, and nothing when root installed it directly
   or an unattended upgrade did. So it stays conditional and stays non-fatal: an unattended install
@@ -371,13 +371,11 @@ that do not need the same things:
 A pip/pipx source install has no such postinst hook and is not a packaged build in [ADR
 0003](adr/0003-separated-installs-only.md) decision 6's sense (that decision's own "Out of scope" —
 it is how the project is developed and how org mode is deployed), so it stays opt-in via the manual
-command above. `... disable` remains how to turn it back off on any install — and, per ADR 0003
-decision 6, stops being a way to keep a **packaged** daemon running: it refuses to serve once it
-finds no marker.
+command above. `... uninstall [--purge]` takes it down again (see above). A **packaged** daemon
+whose separation was purged refuses to serve on its next start (ADR 0003 decision 6).
 
-Both pre-Phase-4 startup paths are moved aside rather than left in place: `/etc/xdg/autostart/
-privacyfence.desktop` and the `--user` unit each become `.disabled`, because either would start a
-second daemon as the logged-in user — which on a separated install refuses to start (see
+The tool does not touch a pip/pipx install's `--user` unit: disable it before separating, or it
+starts a second daemon as the logged-in user — which on a separated install refuses to start (see
 `privilege_separation.check_runtime_identity()`) rather than silently seeding a default policy.
 
 The layout matches macOS exactly apart from the root and the account name:
@@ -394,8 +392,7 @@ dpkg-owned application bundle. The installing user is added to the `privacyfence
 what keeps `handoff` reachable from their session — group membership is evaluated at login, so this
 needs a logout/login to take effect. `src/privacyfence/privilege_separation.py` resolves all of it
 from a marker file the installer writes, and the MCPB shim (`mcpb/shim/src/protocol.ts`) reads the
-same marker. `… status` audits the result; `… disable` reverses it, restoring both startup paths it
-moved aside.
+same marker. `… status` audits the result; `… uninstall [--purge]` takes it down.
 
 The `--serve` companion is the one piece with no macOS counterpart, and it is not optional: Linux
 has no tray (ADR 0002 decision 4), so without a persistent process in the user's session a
@@ -418,8 +415,8 @@ Installing the `.deb` turns all of this on, and that is the whole of ADR 0003 de
 upgrade — unconditionally, and **a failure of that step fails the package install**, leaving dpkg
 with a half-configured package rather than a silently unseparated PrivacyFence. So the system
 systemd unit and the companion autostart entry are written by the package itself, the data
-directory is `/var/lib/privacyfence` under the service account, and the two pre-separation startup
-paths are moved aside, all without anybody having to know this tool exists.
+directory is `/var/lib/privacyfence` under the service account, all without anybody having to know
+this tool exists.
 
 The per-user half — adding the installing user to the `privacyfence` group — runs second, still
 gated on `$SUDO_USER` resolving to a real account and still allowed to defer: an unattended `apt`

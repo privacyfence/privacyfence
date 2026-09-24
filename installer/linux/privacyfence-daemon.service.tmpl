@@ -1,12 +1,9 @@
 # #428 Phase 4 (B5b): the PrivacyFence daemon as a *system* systemd unit,
 # running under its own dedicated account.
 #
-# This replaces the two things that start the daemon in the logged-in user's
-# session today -- the `--user` unit in the repo root (privacyfence.service,
-# the pip/pipx path) and the XDG autostart entry the .deb installs
-# (/etc/xdg/autostart/privacyfence.desktop) -- for installs that have opted
-# into privilege separation. The difference that matters is User= below: a
-# `--user` unit and an autostart entry both run as whoever is logged in,
+# The alternative, for an unseparated pip/pipx install, is the `--user` unit
+# in the repo root (privacyfence.service). The difference that matters is
+# User= below: a `--user` unit or an autostart entry runs as whoever is logged in,
 # which is also who the AI client PrivacyFence exists to govern runs as, and
 # a system unit runs as the account it names, in no login session at all.
 # That one line is what takes settings.yaml, the enrolled WebAuthn
@@ -15,8 +12,8 @@
 # Installed to /etc/systemd/system/privacyfence-daemon.service by
 # scripts/linux_privilege_separation.sh -- which fills in every placeholder
 # below. Do not install this file by hand: systemd will start the daemon
-# happily enough, but nothing will have created the service account, moved
-# the data directory, or written the marker file every PrivacyFence process
+# happily enough, but nothing will have created the service account or the
+# data directory, or written the marker file every PrivacyFence process
 # reads to agree on where that directory now is
 # (src/privacyfence/privilege_separation.py).
 #

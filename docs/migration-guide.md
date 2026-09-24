@@ -126,10 +126,10 @@ sudo privacyfence-privilege-separation enable --for-user "$USER"
 sudo privacyfence-privilege-separation status
 ```
 
-Your data directory has moved from `~/.privacyfence` to `/var/lib/privacyfence`. The package moves
-your old autostart entries aside (`.disabled`) rather than leaving two daemons trying to start as
-you; no action needed there. If you connected Claude Code directly, re-run `claude mcp add` against
-the new `/var/lib/privacyfence/handoff/` files.
+Your data directory is `/var/lib/privacyfence`. The package does not move an existing
+`~/.privacyfence` into it ([ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)). If
+you connected Claude Code directly, re-run `claude mcp add` against the
+`/var/lib/privacyfence/handoff/` files.
 
 ## Turn the new hardening on — existing configs don't move by themselves
 

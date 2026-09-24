@@ -503,7 +503,7 @@ def _complete_pending_separation() -> None:
     """
     # Read once, up front: the elevated command below rewrites the marker and
     # drops the cache, so asking again afterwards could answer None on an
-    # install somebody ran `disable` against in between -- and the group to
+    # install somebody purged in between -- and the group to
     # name in the message is the one this decision was pending on.
     state = privilege_separation.separation()
     if state is None:
