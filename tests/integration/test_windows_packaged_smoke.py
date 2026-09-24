@@ -783,20 +783,63 @@ def _install(setup_exe: Path, install_dir: Path, log_path: Path) -> None:
     )
 
 
-def _silent_uninstall(install_dir: Path) -> None:
-    """``unins000.exe /VERYSILENT``, and wait for the install directory to go.
+def _uninstall_leftovers(install_dir: Path) -> list[str]:
+    """Everything still under ``install_dir`` -- the uninstaller's own
+    ``unins000.exe``/``unins000.dat`` included -- which an uninstall that has
+    really finished leaves none of.
 
-    Inno's uninstaller spawns a short-lived helper process to delete its own
-    directory/log after the foreground process it just waited on exits --
-    poll rather than assume the directory is already gone the instant the
-    process returns."""
+    The directory itself may stay, empty. Inno removes ``{app}`` only if Setup
+    created it (``MakeDir`` in is-6_7_3's ``Setup.Install.pas`` logs a
+    directory for uninstall only when it did not exist yet), and every test
+    here pre-creates it with ``_admin_only_writable_dir``."""
+    return sorted(str(path) for path in install_dir.iterdir()) if install_dir.is_dir() else []
+
+
+def _silent_uninstall(install_dir: Path, settle_timeout: float = 60.0) -> None:
+    """``unins000.exe /VERYSILENT``, and wait until the uninstall has really
+    finished: ``unins000.exe``, ``unins000.dat`` and everything else under
+    ``install_dir`` gone, and no Inno Setup process left alive.
+
+    ``unins000.exe`` returning is not that. Per is-6_7_3's
+    ``Setup.Uninstall.pas``, it is only the first phase: it copies itself to
+    ``%TEMP%\\is-XXXXXXXXXX-uninstall.tmp\\_unins.tmp`` and waits for that
+    second phase, which does the uninstall and, at the very end
+    (``DeleteUninstallDataFiles``), deletes ``unins000.dat``, tells the first
+    phase to exit, waits for it, sleeps 500 ms, deletes ``unins000.exe``
+    (retrying for up to ~3 s), removes the directories it could not remove
+    before, and only then exits itself. So for a moment after this function's
+    ``_run_installer`` returns, a process is still deleting files by *name*
+    under ``install_dir``. A caller that reinstalls into the same directory
+    straight away -- ``test_windows_uninstall_keeps_data_and_purge_deletes_it``
+    does, as a real user would -- can have the new install's ``unins000.exe``
+    deleted by the old uninstall's second phase, which is how the v4.5.0a1
+    tag's first ``build-windows`` run failed.
+
+    Fails, naming what is still there and which processes are still alive,
+    if that has not happened within ``settle_timeout`` seconds, rather than
+    carrying on into a step that would race it."""
     uninstaller = install_dir / "unins000.exe"
     assert uninstaller.is_file(), f"{uninstaller} missing -- was the install actually silent/complete?"
     result = _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
     assert result.returncode == 0, f"uninstall failed (exit {result.returncode}):\n{result.stdout}{result.stderr}"
-    deadline = time.monotonic() + 15.0
-    while (install_dir / MAIN_EXE_NAME).exists() and time.monotonic() < deadline:
-        time.sleep(0.2)
+    deadline = time.monotonic() + settle_timeout
+    while True:
+        # Processes first: once none is left, nothing can delete anything
+        # else, so leftovers seen after that are really left over.
+        processes = _inno_processes()
+        leftovers = _uninstall_leftovers(install_dir)
+        if not processes and not leftovers:
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    pytest.fail(
+        f"{uninstaller} /VERYSILENT exited 0, but the uninstall had not finished {settle_timeout:.0f}s later.\n"
+        f"---- still under {install_dir} ----\n"
+        + ("\n".join(leftovers) or "(nothing)")
+        + "\n---- Inno Setup processes still alive ----\n"
+        + ("\n".join(str(p) for p in processes) or "(none)")
+    )
 
 
 def _local_app_data_privacyfence() -> Path | None:
