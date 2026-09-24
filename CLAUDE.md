@@ -51,6 +51,28 @@ refuses to start without the secret, and after pushing a tag it polls for the `b
 that commit and fails loudly if none appears, so the silent-failure mode above cannot pass for a
 successful release. See [ADR 0021](docs/adr/0021-release-tag-push-never-uses-github-token.md).
 
+**Pre-flight `build.yml` itself before tagging — `release.yml`'s dry run does not cover this.**
+`release.yml` never installs the package or resolves a version through `setuptools_scm`, so its
+`dry_run` only proves the tag/changelog bookkeeping (`r2_release.py channel`,
+`changelog_section.py`, `tag_release.py`'s sequencing guards) — it touches no packaged artifact.
+Every `pytest.mark.packaged` test (the macOS DMG/`.pkg`, Windows installer, and `.deb` lifecycle
+smoke tests — see `docs/testing-policy.md`'s layer 6) runs only inside `build.yml`'s
+`build`/`build-windows`/`build-deb` jobs, which otherwise only trigger on an actual tag push. That
+gap is exactly what let `v4.2.0` reach a real tag broken: a `principal_id` regression that only
+`pytest.mark.packaged` could catch sat on `main` for a full cycle, and only surfaced once
+`build.yml` ran for real against the pushed tag — see `CHANGELOG.md`'s `[4.2.1]` entry and
+[ADR 0030](docs/adr/0030-preflight-dispatches-build-yml-before-tagging.md).
+
+Before dispatching `release.yml` — dry run or real — dispatch `build.yml` itself
+(`workflow_dispatch`, no inputs) against the exact commit you intend to tag, and confirm `build`,
+`build-windows`, `build-deb`, and `sbom` all succeed. This is safe to run against an untagged
+commit: every upload/publish/release step in `build.yml` is gated
+`if: startsWith(github.ref, 'refs/tags/')`, so the run builds and tests every artifact but uploads
+nothing to R2, GitHub Releases, or PyPI — see that job's "Determine version and release channel"
+step, which resolves `channel="n/a (not a tag push)"` off a tag. A failure here is fixed on `main`
+like any other CI failure, then the pre-flight is re-run, before `release.yml` is dispatched at all.
+The `.claude/commands/cut-release.md` command runs this pre-flight automatically.
+
 **One release tag per commit.** `setuptools_scm` resolves the version through `git describe`,
 which reports *a* tag on the commit being built rather than specifically the one whose push started
 the run — so a commit carrying two release tags builds as whichever one `describe` prefers (the
