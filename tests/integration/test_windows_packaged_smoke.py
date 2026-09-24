@@ -89,6 +89,7 @@ import socket
 import subprocess
 import sys
 import time
+import warnings
 from pathlib import Path
 from typing import NamedTuple, NoReturn
 from urllib.parse import urlsplit
@@ -405,18 +406,29 @@ def _task_state(name: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
-def _tear_down_separation() -> None:
+def _tear_down_separation() -> tuple[list[_Process], list[_Process]]:
     """Removes whatever an installer-run ``enable`` left behind, without going
-    through the script.
+    through the script, and returns ``(found, survivors)``: every
+    PrivacyFence-related process alive before the sweep started, and every one
+    still alive once it gave up waiting -- empty on a clean machine and after a
+    successful sweep respectively. Judging either is the caller's business
+    (see ``_clean_separation_state``).
 
     ``uninstall -Purge`` is the supported route; this is the floor under it,
     for a run that died between ``enable`` and its own teardown, or one where
     the install directory (and with it the script) is already gone -- which
     after a silent uninstall is the ordinary case, since that keeps the data
-    (ADR 0042). Machine-wide state -- a service, a scheduled task
-    and a directory under ``%ProgramData%`` -- is not something ``tmp_path``
-    isolates, so leaving any of it behind would poison whatever runs next on
-    this runner.
+    (ADR 0042). Machine-wide state -- a service, a scheduled task, a directory
+    under ``%ProgramData%`` and the processes behind them -- is not something
+    ``tmp_path`` isolates, so leaving any of it behind would poison whatever
+    runs next on this runner.
+
+    Inno Setup processes go first, so that an installer still running
+    ``enable`` (or an uninstaller's clean-up helper still deleting files) is
+    not re-creating what the rest of the sweep removes. Every process is then
+    waited for until it is gone from the process table, not just until
+    ``taskkill`` returned: ``taskkill /F`` and ``sc.exe stop`` both only ask,
+    and a dying process still holds its files and its image open.
 
     ``takeown`` before the delete because a separated root is owned by
     Administrators and its ``authority\\`` subtree grants the service account
@@ -425,6 +437,11 @@ def _tear_down_separation() -> None:
     left alone -- a plain ``uninstall`` leaves it too, and re-adding a member
     is idempotent.
     """
+    found = _privacyfence_processes()
+    for process in _inno_processes():
+        subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, text=True, timeout=30,
+            )
     subprocess.run(["sc.exe", "stop", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=60)
     subprocess.run(["sc.exe", "delete", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=60)
     subprocess.run(
@@ -439,10 +456,11 @@ def _tear_down_separation() -> None:
     # could not be shut down" -- Inno exit 5, a rolled-back install, and a
     # failure that lands in whatever test asked for that install rather than
     # in the one that leaked the process. Same reasoning as the service stop
-    # above: what `enable` started, the floor under it has to end.
-    subprocess.run(
-        ["taskkill", "/f", "/im", COMPANION_EXE_NAME], capture_output=True, text=True, timeout=30,
-    )
+    # above: what `enable` started, the floor under it has to end. The daemon's
+    # images are killed too because `sc.exe stop` only asks; the service is
+    # already marked for deletion by then, so the SCM's restart-on-failure
+    # action cannot bring it back.
+    survivors = _wait_for_no_privacyfence_processes(timeout=_SWEEP_TIMEOUT)
     if WINDOWS_SYSTEM_ROOT.exists():
         subprocess.run(
             ["takeown", "/f", str(WINDOWS_SYSTEM_ROOT), "/r", "/d", "Y"],
@@ -451,16 +469,120 @@ def _tear_down_separation() -> None:
         _icacls(str(WINDOWS_SYSTEM_ROOT), "/grant", f"{SID_ADMINISTRATORS}:(OI)(CI)(F)", "/t", "/c", "/q",
                 check=False)
         shutil.rmtree(WINDOWS_SYSTEM_ROOT, ignore_errors=True)
+    return found, survivors
+
+
+# The images a PrivacyFence install runs: the app, its alias (the service's
+# binPath image) and the companion. Inno Setup's own processes are matched by
+# _inno_processes()'s rules instead.
+_PRIVACYFENCE_IMAGE_NAMES = frozenset(name.lower() for name in (MAIN_EXE_NAME, ALIAS_EXE_NAME, COMPANION_EXE_NAME))
+# How long a sweep waits for what it killed to leave the process table.
+_SWEEP_TIMEOUT = 30.0
+
+
+def _privacyfence_processes() -> list[_Process]:
+    """Every live process a test in this module can have started, directly or
+    through the installer: Inno Setup's (``_inno_processes``) and the
+    installed app's own images."""
+    inno = _inno_processes()
+    inno_pids = {process.pid for process in inno}
+    return inno + [
+        process for process in _win32_processes()
+        if process.name.lower() in _PRIVACYFENCE_IMAGE_NAMES and process.pid not in inno_pids
+    ]
+
+
+def _wait_for_no_privacyfence_processes(timeout: float) -> list[_Process]:
+    """Kills every ``_privacyfence_processes()`` match and polls until none is
+    left, or ``timeout`` runs out; returns whatever was still alive then.
+
+    Kills on every round, not once, because what the first round kills can
+    have started a successor in between (an installer's child, a restarted
+    service) -- the wait is for the table to be empty, not for one PID."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = _privacyfence_processes()
+        if not remaining or time.monotonic() >= deadline:
+            return remaining
+        for process in remaining:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, text=True, timeout=30,
+            )
+        time.sleep(0.5)
+
+
+def _process_list(processes: list[_Process]) -> str:
+    return "\n".join(f"  {process}" for process in processes)
 
 
 @pytest.fixture(autouse=True)
-def _clean_separation_state():
-    """Guaranteed on both sides: a service, a scheduled task and a directory
-    under ``%ProgramData%`` are machine-wide, not something ``tmp_path``
-    isolates, and every test here creates all three."""
-    _tear_down_separation()
+def _clean_separation_state(request):
+    """Guaranteed on both sides: a service, a scheduled task, a directory
+    under ``%ProgramData%`` and the processes behind them are machine-wide, not
+    something ``tmp_path`` isolates, and every test here creates all of them.
+
+    **The leak rule.** Every test in this module ends with nothing of
+    PrivacyFence running: tests 1-4 finish by uninstalling (the uninstaller's
+    own ``privilege-separation.ps1 uninstall`` stops the service and ends the
+    companion, and waits for both to be gone), and test 5's install never gets
+    as far as starting either. So once a test body has *passed*, any
+    PrivacyFence-related process still alive -- an Inno Setup installer or
+    uninstaller or one of their ``.tmp`` helpers, ``PrivacyFenceApp.exe``,
+    ``privacyfence-app.exe`` or ``PrivacyFenceCompanion.exe`` -- is something
+    that test started and did not see finish, and the teardown half fails that
+    test with the process list. That is the same shape as every instability
+    this module has had (a timed-out install's ``enable`` still running, an
+    uninstall helper outliving the uninstall, a companion outliving its task):
+    a failure here lands in the test that leaked, not in whichever test next
+    asked for an install.
+
+    A body that failed or was skipped leaves whatever it was in the middle of
+    -- the service and companion of a half-finished test are expected there,
+    not a second defect -- so its leftovers are only reported as a warning.
+    What survives the sweep itself fails the teardown either way: it would
+    carry into the next test regardless of whose it was.
+
+    The setup half sweeps and waits the same way but never fails: anything it
+    finds belongs to whatever ran before this test (which, if it was a test in
+    this module, has already failed for it), so it is only warned about.
+    """
+    found, survivors = _tear_down_separation()
+    if found:
+        warnings.warn(
+            "PrivacyFence processes were already running before this test and were swept:\n"
+            + _process_list(found),
+            stacklevel=1,
+        )
+    if survivors:
+        warnings.warn(
+            f"PrivacyFence processes were still running {_SWEEP_TIMEOUT:.0f}s after the setup sweep "
+            f"killed them -- this test runs against a machine something else is still changing:\n"
+            + _process_list(survivors),
+            stacklevel=1,
+        )
     yield
-    _tear_down_separation()
+    found, survivors = _tear_down_separation()
+    call = getattr(request.node, "rep_call", None)
+    body_passed = call is not None and call.passed
+    problems = []
+    if found and body_passed:
+        problems.append(
+            "this test passed but left PrivacyFence processes running when it returned -- every test in "
+            "this module ends uninstalled, so these are something it started and did not wait for (see "
+            "_clean_separation_state's docstring):\n" + _process_list(found)
+        )
+    elif found:
+        warnings.warn(
+            "swept PrivacyFence processes this (failed or skipped) test left behind:\n" + _process_list(found),
+            stacklevel=1,
+        )
+    if survivors:
+        problems.append(
+            f"PrivacyFence processes were still running {_SWEEP_TIMEOUT:.0f}s after the teardown sweep "
+            f"killed them, and will carry into the next test:\n" + _process_list(survivors)
+        )
+    if problems:
+        pytest.fail("\n\n".join(problems), pytrace=False)
 
 
 def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None:
@@ -1160,11 +1282,11 @@ def test_windows_install_separates_with_no_manual_enable(tmp_path):
             f"a {REMOVED_DAEMON_TASK_NAME!r} daemon sign-in task is registered"
         )
     finally:
-        uninstaller = install_dir / "unins000.exe"
-        if uninstaller.is_file():
-            _run_installer(
-                str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", timeout=UNINSTALLER_TIMEOUT_S,
-            )
+        # _silent_uninstall, not a bare _run_installer: unins000.exe returning
+        # is only the uninstall's first phase, and a second phase still running
+        # when this test returns is a leak _clean_separation_state fails it for.
+        if (install_dir / "unins000.exe").is_file():
+            _silent_uninstall(install_dir)
 
 
 # --------------------------------------------------------------------------- #
