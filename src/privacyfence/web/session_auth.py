@@ -60,7 +60,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response
 
 from .. import paths, privilege_separation
-from ..principal import LOCAL_PRINCIPAL_ID
+from ..principal import LOCAL_PRINCIPAL_ID, Principal, current_principal
 
 SESSION_COOKIE = "pf_session"
 BOOTSTRAP_QUERY_PARAM = "bootstrap"
@@ -270,6 +270,21 @@ def authenticated(request: Request, sessions: LocalSessionStore) -> bool:
     if not session_id:
         return False
     return sessions.touch(session_id)
+
+
+def resolve_principal(request: Request, sessions: LocalSessionStore) -> Principal | None:
+    """The small resolve-or-reject helper alongside ``authenticated()`` above
+    (PSC-2b): ``current_principal()`` when the session cookie is live, else
+    ``None`` -- the same ``Principal | None`` shape web/org_session.py's own
+    ``authenticated()`` already returns, so web/routes_approvals.py's merged
+    route builder can treat both modes' auth gate identically (``resolve_principal(request)``,
+    reject on ``None``) even though local mode gets its principal from the
+    ambient context var (ADR 0008: set once per request by
+    ``_PrincipalScopeMiddleware``, not derived from ``sessions`` the way an
+    org session's principal is)."""
+    if not authenticated(request, sessions):
+        return None
+    return current_principal()
 
 
 def session_provenance(request: Request, sessions: LocalSessionStore) -> str | None:
@@ -519,6 +534,7 @@ __all__ = [
     "clear_session_cookie",
     "human_session_required_json",
     "is_human_session",
+    "resolve_principal",
     "session_provenance",
     "set_session_cookie",
     "unauthorized_html",
