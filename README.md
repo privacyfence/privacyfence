@@ -374,9 +374,9 @@ either way — the migration moves live connector tokens.
 ### Install from the `.deb` (Debian/Ubuntu desktop)
 
 1. Download the latest `privacyfence_<version>_amd64.deb` from [privacyfence.eu/download](https://privacyfence.eu/download/).
-2. `sudo apt install ./privacyfence_<version>_amd64.deb` (resolves any future declared
-   dependencies automatically; a plain `sudo dpkg -i privacyfence_<version>_amd64.deb` works too —
-   the package declares none today, see below).
+2. `sudo apt install ./privacyfence_<version>_amd64.deb` (a plain
+   `sudo dpkg -i privacyfence_<version>_amd64.deb` works too — its only dependencies are the
+   minimum glibc and systemd versions, Ubuntu 24.04 or Debian 13 and newer).
 3. Log out and back in — PrivacyFence starts automatically at the next graphical login (an XDG
    autostart entry, not a menu icon; there's no window to open, all interaction is through the web
    UI). To start it immediately instead of waiting for that, run `privacyfence-app &`.
