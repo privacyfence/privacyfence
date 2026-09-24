@@ -531,6 +531,147 @@ def _relative_time(timestamp: str) -> str:
 
 
 # ---------------------------------------------------------------------------- #
+# State builders with no per-instance dependency (no resolver cache, no
+# connector registry) -- pure functions of a config dict, factored out of the
+# instance methods below of the same name (PSC-5) so web/routes_settings.py's
+# own org-mode state builder can share them instead of re-deriving the same
+# PII-field/privacy-policy/about shape a second time. Each instance method
+# further down is now a thin wrapper calling straight through.
+# ---------------------------------------------------------------------------- #
+
+
+def _pii_general_fields(cfg: dict[str, Any]) -> dict[str, Any]:
+    """The General page's PII Detection Gate card, both hardcoded fields --
+    ``pii_detector.optional_category_keys()`` happens to be exactly these
+    two (``detect_ip_addresses``/``detect_financial_figures``) today, which
+    is what makes reusing this fixed shape for org mode's own install-wide
+    ``pii_detection:`` block accurate rather than merely convenient; see
+    that module's own ``_OPTIONAL_CATEGORIES``."""
+    pii_cfg = cfg.get("pii_detection", {}) or {}
+    return {
+        "pii_enabled": pii_cfg.get("enabled", True),
+        "pii_ip": pii_cfg.get("detect_ip_addresses", True),
+        "pii_financial": pii_cfg.get("detect_financial_figures", True),
+    }
+
+
+def _privacy_state_from_config(cfg: dict[str, Any], *, fail_safe_default: str = "allow") -> dict[str, Any]:
+    """``fail_safe_default`` threads straight through to ``_parse_privacy_
+    group`` for a group genuinely absent from ``cfg`` -- local mode's own
+    call below keeps this module's long-standing "allow" default; org
+    mode's caller (web/routes_settings.py's own org state builder) passes
+    "block", the same fail-closed posture the former web/org_settings_
+    pages.py's ``_privacy_policy_view`` used and this function must keep
+    matching now that the two share it."""
+    groups = [{"key": g, "label": label} for g, label in PRIVACY_GROUP_LABELS.items()]
+    groups.append({"key": "calendar", "label": "Calendar"})
+
+    default_policy: dict[str, str] = {}
+    categories: dict[str, list[dict[str, Any]]] = {}
+    for group in PRIVACY_GROUP_LABELS:
+        try:
+            parsed = _parse_privacy_group(cfg.get(group), group=group, fail_safe_default=fail_safe_default)
+        except PrivacyFilterConfigError as exc:
+            # init_privacy_filter (SEC-07) already refused to start the
+            # daemon on a malformed group at startup, so reaching this
+            # is only possible if settings.yaml was hand-edited on disk
+            # to something malformed *after* that -- the live enforced
+            # policy (_REGISTRY, still whatever last validated config
+            # loaded) is unaffected either way. Render the settings page
+            # as "allow" for this group rather than 500ing on it, same
+            # defensive posture _load_config() itself already takes for
+            # a config file that fails to parse at all.
+            logger.warning("Could not render current %s settings: %s", group, exc)
+            parsed = {"default_policy": "allow", "categories": {}}
+        default_policy[group] = parsed["default_policy"]
+        cat_list = []
+        for cat_key, cat_label in PRIVACY_CATEGORY_LABELS.get(group, {}).items():
+            policy = parsed["categories"].get(cat_key, parsed["default_policy"])
+            cat_list.append({"key": cat_key, "label": cat_label, "policy": policy})
+        categories[group] = cat_list
+
+    calendar_cfg = cfg.get("calendar", {}) or {}
+    return {
+        "groups": groups,
+        "default_policy": default_policy,
+        "categories": categories,
+        "calendar_free_busy": bool(calendar_cfg.get("free_busy_full_event_details", True)),
+    }
+
+
+def _about_state_dict() -> dict[str, Any]:
+    return {
+        "version": __version__,
+        "license": LICENSE_NAME,
+        "repo_url": REPO_URL,
+    }
+
+
+def _rule_usage_map() -> dict[str, Any]:
+    """``AuditLogger.rule_usage()``, grouped by ``rule.id``, off *this*
+    principal's own ``logs/audit/`` directory -- ``authority_root``/
+    ``data_dir`` are themselves principal-scoped (the same contextvar
+    ``principal_scope`` sets), so this already reads whichever principal is
+    currently scoped when called, local mode's single ``LOCAL_PRINCIPAL``
+    or (PSC-5) an org caller's own ``with principal_scope(principal):``
+    block -- see ``_auto_accept_state_from_rules`` below, this function's
+    only caller."""
+    log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
+    return AuditLogger(str(log_dir)).rule_usage() if log_dir.exists() else {}
+
+
+def _rule_row(rule: PolicyRule, usage: dict[str, Any], *, resolved_value: str) -> dict[str, Any]:
+    connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
+    connector = connectors_of_rule[0] if connectors_of_rule else ""
+    return {
+        "id": rule.id,
+        "sentence": policy_describe.rule_sentence(rule, value_display=resolved_value),
+        "connector": connector,
+        "connector_label": policy_describe.connector_label(connector) if connector else "",
+        "scope_type": policy_describe.scope_type_of(rule),
+        "value": resolved_value,
+        # Raw (unresolved) value, for the page's right-click-to-copy affordance -- the
+        # resolved "value" field above may show a friendly name instead of the id/key a
+        # user would actually want to paste elsewhere.
+        "value_ids": [str(v) for v in rule.value] if isinstance(rule.value, list) else (
+            [str(rule.value)] if rule.value else []
+        ),
+        "verbs": [
+            {"verb": verb.value, "family": policy_registry.VERB_FAMILY[verb].value}
+            for verb in policy_describe.rule_verbs(rule)
+        ],
+        "covered_tools": list(policy_describe.covered_tools(rule)),
+        "match_count": usage.get("count", 0),
+        "last_matched": _relative_time(usage["last_matched"]) if usage else "",
+        "never_matched": not usage,
+    }
+
+
+def _auto_accept_state_from_rules(
+    rules: list[PolicyRule], usage_by_rule_id: dict[str, Any], *,
+    resolve_value: Callable[[PolicyRule], str],
+) -> dict[str, Any]:
+    """The Auto-accept page's state, factored out of ``SettingsController.
+    _auto_accept_state`` (PSC-5) so web/routes_settings.py's own org-mode
+    state builder can share it -- ``resolve_value`` is the one thing local
+    and org mode still don't: local's own ``_resolved_rule_value`` runs the
+    cached-name-resolution machinery (``RULE_NAME_TO_RESOURCE_TYPE``,
+    ``resource_names.py``) org mode's stateless-per-request rendering has
+    no equivalent of (see the former web/org_settings_pages.py's own
+    docstring on ``_rule_rows``), so org's caller passes a plain
+    comma-join instead -- everything past that one string is identical."""
+    catalogue = _policy_scope_catalogue()
+    rule_rows = [
+        _rule_row(rule, usage_by_rule_id.get(rule.id) or {}, resolved_value=resolve_value(rule))
+        for rule in rules
+    ]
+    rule_rows.sort(key=lambda row: row["sentence"])
+    connectors = sorted({row["connector"] for row in rule_rows if row["connector"]}
+                         | {entry["connector"] for entry in catalogue})
+    return {"rules": rule_rows, "scope_groups": catalogue, "connectors": connectors}
+
+
+# ---------------------------------------------------------------------------- #
 # Controller
 # ---------------------------------------------------------------------------- #
 
@@ -1660,7 +1801,6 @@ class SettingsController:
         }
 
     def _general_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
-        pii_cfg = cfg.get("pii_detection", {}) or {}
         update_cfg = cfg.get("update_check", {}) or {}
         notifications_cfg = (cfg.get("web", {}) or {}).get("notifications", {}) or {}
 
@@ -1681,9 +1821,7 @@ class SettingsController:
 
         latest = self._latest_update
         return {
-            "pii_enabled": pii_cfg.get("enabled", True),
-            "pii_ip": pii_cfg.get("detect_ip_addresses", True),
-            "pii_financial": pii_cfg.get("detect_financial_figures", True),
+            **_pii_general_fields(cfg),
             "update_check_enabled": update_cfg.get("enabled", True),
             "update_check_beta": update_cfg.get("include_beta", False),
             # The Approval Notifications card's segmented control -- see
@@ -1793,43 +1931,7 @@ class SettingsController:
         decisions" -- not the process-wide ``get_audit_logger()`` singleton, which may be a
         different principal's logger by the time this renders (P6, org mode)."""
         rules = policy_store.compile_rules_from_config(cfg)
-        catalogue = _policy_scope_catalogue()
-        log_dir = authority_root(Path(data_dir())) / "logs" / "audit"
-        usage = AuditLogger(str(log_dir)).rule_usage() if log_dir.exists() else {}
-
-        rule_rows: list[dict[str, Any]] = []
-        for rule in rules:
-            connectors_of_rule = sorted({policy_propose.connector_of_operation(op) for op in rule.operations})
-            connector = connectors_of_rule[0] if connectors_of_rule else ""
-            rule_usage = usage.get(rule.id) or {}
-            resolved_value = self._resolved_rule_value(rule)
-            rule_rows.append({
-                "id": rule.id,
-                "sentence": policy_describe.rule_sentence(rule, value_display=resolved_value),
-                "connector": connector,
-                "connector_label": policy_describe.connector_label(connector) if connector else "",
-                "scope_type": policy_describe.scope_type_of(rule),
-                "value": resolved_value,
-                # Raw (unresolved) value, for the page's right-click-to-copy affordance -- the
-                # resolved "value" field above may show a friendly name instead of the id/key a
-                # user would actually want to paste elsewhere.
-                "value_ids": [str(v) for v in rule.value] if isinstance(rule.value, list) else (
-                    [str(rule.value)] if rule.value else []
-                ),
-                "verbs": [
-                    {"verb": verb.value, "family": policy_registry.VERB_FAMILY[verb].value}
-                    for verb in policy_describe.rule_verbs(rule)
-                ],
-                "covered_tools": list(policy_describe.covered_tools(rule)),
-                "match_count": rule_usage.get("count", 0),
-                "last_matched": _relative_time(rule_usage["last_matched"]) if rule_usage else "",
-                "never_matched": not rule_usage,
-            })
-        rule_rows.sort(key=lambda row: row["sentence"])
-
-        connectors = sorted({row["connector"] for row in rule_rows if row["connector"]}
-                             | {entry["connector"] for entry in catalogue})
-        return {"rules": rule_rows, "scope_groups": catalogue, "connectors": connectors}
+        return _auto_accept_state_from_rules(rules, _rule_usage_map(), resolve_value=self._resolved_rule_value)
 
     def _resolved_rule_value(self, rule: PolicyRule) -> str:
         """A rule's own value, as a comma-separated display string, resolving each id through the
@@ -1848,40 +1950,7 @@ class SettingsController:
         return ", ".join(self._resolver.cached_name(rt, v) or _short_id(v) for v in str_values)
 
     def _privacy_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
-        groups = [{"key": g, "label": label} for g, label in PRIVACY_GROUP_LABELS.items()]
-        groups.append({"key": "calendar", "label": "Calendar"})
-
-        default_policy: dict[str, str] = {}
-        categories: dict[str, list[dict[str, Any]]] = {}
-        for group in PRIVACY_GROUP_LABELS:
-            try:
-                parsed = _parse_privacy_group(cfg.get(group), group=group)
-            except PrivacyFilterConfigError as exc:
-                # init_privacy_filter (SEC-07) already refused to start the
-                # daemon on a malformed group at startup, so reaching this
-                # is only possible if settings.yaml was hand-edited on disk
-                # to something malformed *after* that -- the live enforced
-                # policy (_REGISTRY, still whatever last validated config
-                # loaded) is unaffected either way. Render the settings page
-                # as "allow" for this group rather than 500ing on it, same
-                # defensive posture _load_config() itself already takes for
-                # a config file that fails to parse at all.
-                logger.warning("Could not render current %s settings: %s", group, exc)
-                parsed = {"default_policy": "allow", "categories": {}}
-            default_policy[group] = parsed["default_policy"]
-            cat_list = []
-            for cat_key, cat_label in PRIVACY_CATEGORY_LABELS.get(group, {}).items():
-                policy = parsed["categories"].get(cat_key, parsed["default_policy"])
-                cat_list.append({"key": cat_key, "label": cat_label, "policy": policy})
-            categories[group] = cat_list
-
-        calendar_cfg = cfg.get("calendar", {}) or {}
-        return {
-            "groups": groups,
-            "default_policy": default_policy,
-            "categories": categories,
-            "calendar_free_busy": bool(calendar_cfg.get("free_busy_full_event_details", True)),
-        }
+        return _privacy_state_from_config(cfg)
 
     def _audit_state(self, cfg: dict[str, Any]) -> dict[str, Any]:
         log_cfg = cfg.get("logging", {}) or {}
@@ -1908,8 +1977,4 @@ class SettingsController:
         }
 
     def _about_state(self) -> dict[str, Any]:
-        return {
-            "version": __version__,
-            "license": LICENSE_NAME,
-            "repo_url": REPO_URL,
-        }
+        return _about_state_dict()

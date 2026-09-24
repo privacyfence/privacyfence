@@ -619,10 +619,22 @@ class TestRunningOrgModeService:
 
     def test_local_mode_only_routes_are_not_mounted(self):
         # /settings itself is a real, read-only route in org mode now (#400)
-        # -- see test_org_mode_routes_are_mounted below -- but the local-mode
-        # dispatcher's own /api/settings/{action} endpoint, and the local-
-        # mode-only state stream, must still 404.
-        assert self.client.get("/api/settings/quit_app").status_code == 404
+        # -- see test_org_mode_routes_are_mounted below -- and, since PSC-5,
+        # org mode mounts its own POST /api/settings/{action} too (the same
+        # path local mode's ~30-action dispatcher answers, restricted to
+        # routes_settings._ORG_ALLOWED_ACTIONS) -- so a GET here now 405s
+        # (a real route, wrong method) rather than 404ing outright.
+        # quit_app is one of the ~24 local-only actions org mode's own
+        # allowlist never includes -- POSTing it still 404s, which is what
+        # actually proves local mode's unrestricted dispatcher surface
+        # isn't reachable. The local-mode-only state stream still 404s
+        # outright, unchanged.
+        assert self.client.get("/api/settings/quit_app").status_code == 405
+        cookie = _complete_browser_login(self.client, self.idp, sub="dave")
+        r = self.client.post(
+            "/api/settings/quit_app", json={"csrf": cookie}, headers={"Cookie": f"pf_org_session={cookie}"},
+        )
+        assert r.status_code == 404
         assert self.client.get("/api/state/stream").status_code == 404
 
     # -- Per-principal session creation ------------------------------------ #
