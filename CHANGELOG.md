@@ -64,6 +64,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already required. A bundle with no `server.bind_host` also binds `127.0.0.1` (was `localhost`).
   Pass `--server-bind-host` explicitly when the proxy runs on another host.
 
+- The installers now refuse a system older than PrivacyFence supports instead of installing an
+  app that cannot start: the macOS `.pkg` requires macOS 13 on Apple silicon (an Intel Mac is
+  refused), the Windows installer Windows 10 / Windows Server 2016, and the `.deb` declares its
+  glibc and systemd floors as package dependencies (glibc 2.38, systemd 242: Ubuntu 24.04 or
+  Debian 13 and newer). The support matrix in `docs/platform-support.md` now lists each
+  platform's minimum.
+
 ### Security
 
 - **Recovery-code sign-in is audited, rate-limited and needs a human session.** `POST
