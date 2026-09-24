@@ -18,7 +18,7 @@ Architecture: amd64 arm64
 # links against: the build host's, which scripts/check_deb_glibc_floor.py checks against this
 # floor on every build. systemd 242 is the oldest that knows every directive the daemon's unit
 # uses (RestrictSUIDSGID=), and the separation tool refuses to run without systemd as PID 1.
-Depends: libc6 (>= 2.39), systemd (>= 242), ${misc:Depends}
+Depends: libc6 (>= 2.38), systemd (>= 242), ${misc:Depends}
 Description: Privacy proxy between Claude (MCP) and your personal data
  PrivacyFence sits between Claude (or any other MCP client) and your personal
  data -- Gmail, Google Drive, Calendar, Contacts, Tasks, Slack, Telegram,
