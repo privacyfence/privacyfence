@@ -508,19 +508,22 @@ class TestDcrResourceControls:
 
         assert await provider.get_client("active-one") is not None
 
-    async def test_a_pre_sec_16_flat_format_clients_file_loads_without_being_treated_as_already_stale(
-        self, tmp_path, monkeypatch,
+    async def test_an_entry_not_in_the_current_format_is_skipped_with_a_warning(
+        self, tmp_path, monkeypatch, caplog,
     ):
         import json as _json
+        import logging
         clients_path = tmp_path / "oauth_clients.json"
-        old_format_client = _client_info(client_id="legacy")
-        clients_path.write_text(_json.dumps({"legacy": _json.loads(old_format_client.model_dump_json())}))
+        flat = _json.loads(_client_info(client_id="flat").model_dump_json())
+        current = {"client": _json.loads(_client_info(client_id="current").model_dump_json()), "last_used_at": time.time()}
+        clients_path.write_text(_json.dumps({"flat": flat, "current": current}))
 
-        provider = _provider(tmp_path, monkeypatch)
+        with caplog.at_level(logging.WARNING, logger=op.logger.name):
+            provider = _provider(tmp_path, monkeypatch)
 
-        got = await provider.get_client("legacy")
-        assert got is not None
-        assert got.client_id == "legacy"
+        assert await provider.get_client("flat") is None
+        assert await provider.get_client("current") is not None
+        assert any("'flat'" in r.getMessage() for r in caplog.records)
 
     async def test_a_pruned_stale_client_stays_pruned_on_disk_even_when_the_registration_is_then_rejected(
         self, tmp_path, monkeypatch,
