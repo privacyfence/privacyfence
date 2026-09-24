@@ -89,6 +89,7 @@ import socket
 import subprocess
 import time
 from pathlib import Path
+from typing import NamedTuple, NoReturn
 from urllib.parse import urlsplit
 
 import httpx2
@@ -508,9 +509,188 @@ def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None
     raise TimeoutError(f"{host}:{port} never became connectable") from last_exc
 
 
-def _run_installer(*args: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
-    result = subprocess.run(list(args), capture_output=True, text=True, timeout=timeout)
-    return result
+# --------------------------------------------------------------------------- #
+# Inno Setup processes -- running Setup or the uninstaller, and knowing when
+# every process it started has really gone
+# --------------------------------------------------------------------------- #
+#
+# Neither `setup.exe` nor `unins000.exe` is the process that does the work.
+# Setup extracts its real installer to `%TEMP%\is-XXXXX.tmp\<name>.tmp` and
+# runs that as a child (which in turn runs `privilege-separation.ps1 enable`);
+# the uninstaller copies itself to a `_iu*.tmp` in `%TEMP%` and runs the copy,
+# and a `_un*.tmp` helper deletes `unins000.exe`, `unins000.dat` and the
+# install directory *after* the process that was waited on has exited. So a
+# timeout that kills only the process `subprocess` started leaves the
+# installer running -- still registering the service, the companion task and
+# `%ProgramData%` state underneath the fixture teardown and whatever test runs
+# next -- and "the uninstaller returned" does not mean "the uninstall is
+# finished". The helpers below are how this module handles both.
+
+# Setup's bootstrap and the uninstaller's own image, by name. The helpers they
+# start all run from a `.tmp` image (see above), which nothing else on a CI
+# runner does, so those are matched by extension rather than by the exact
+# naming scheme of whichever Inno Setup version built the installer.
+_INNO_LAUNCHER_NAME = re.compile(r"^(unins\d{3}\.exe|PrivacyFence-.*setup\.exe)$", re.IGNORECASE)
+# How many lines of an installer's /LOG= file a timeout failure quotes.
+_INSTALL_LOG_TAIL_LINES = 100
+
+
+class _Process(NamedTuple):
+    """One row of ``Win32_Process``. ``path``/``command_line`` are None where
+    Windows declines to say (a protected process, or one already exiting)."""
+
+    pid: int
+    parent_pid: int
+    name: str
+    path: str | None
+    command_line: str | None
+
+    def __str__(self) -> str:
+        return f"pid {self.pid} (parent {self.parent_pid}): {self.command_line or self.path or self.name}"
+
+
+def _win32_processes() -> list[_Process]:
+    """Every live process, with executable path and command line --
+    ``tasklist`` reports neither, and the path (``is-XXXXX.tmp``) and command
+    line (which ``privilege-separation.ps1`` step) are what a hung install's
+    diagnosis needs."""
+    script = (
+        "$ErrorActionPreference = 'Stop'; "
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+        "ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | "
+        "Select-Object ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine)"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+    assert result.returncode == 0, f"listing processes failed (exit {result.returncode}):\n{result.stderr}"
+    rows = json.loads(result.stdout or "[]")
+    if isinstance(rows, dict):  # defensive: a single object rather than a one-element array
+        rows = [rows]
+    return [
+        _Process(
+            pid=int(row["ProcessId"]),
+            parent_pid=int(row["ParentProcessId"] or 0),
+            name=row["Name"] or "",
+            path=row["ExecutablePath"],
+            command_line=row["CommandLine"],
+        )
+        for row in rows
+    ]
+
+
+def _inno_processes() -> list[_Process]:
+    """Every live Inno Setup process on the machine: Setup's bootstrap
+    (``PrivacyFence-*setup.exe``) and its ``is-*.tmp\\*.tmp`` installer, and
+    the uninstaller (``unins000.exe``) and its ``_iu*.tmp``/``_un*.tmp``
+    copies and clean-up helpers.
+
+    Machine-wide, not scoped to one run: an Inno process left over from an
+    earlier step is exactly as able to change machine state under a later one
+    as the current run's own. Includes a run the caller is itself still
+    waiting on, so call this after that run has returned."""
+    return [
+        process for process in _win32_processes()
+        if process.name.lower().endswith(".tmp") or _INNO_LAUNCHER_NAME.match(process.name)
+    ]
+
+
+def _wait_for_no_inno_processes(timeout: float = 60.0) -> list[_Process]:
+    """Polls until ``_inno_processes()`` is empty, or ``timeout`` runs out.
+
+    Returns whatever was still alive at the deadline -- empty on success --
+    rather than failing itself, so that each caller can say in its own
+    assertion what the survivors mean for the step it was waiting on."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = _inno_processes()
+        if not remaining or time.monotonic() >= deadline:
+            return remaining
+        time.sleep(0.5)
+
+
+def _descendants(pid: int, processes: list[_Process]) -> list[_Process]:
+    children: dict[int, list[_Process]] = {}
+    for process in processes:
+        if process.pid != process.parent_pid:  # the System Idle Process is its own parent
+            children.setdefault(process.parent_pid, []).append(process)
+    found: list[_Process] = []
+    seen = {pid}
+    pending = [pid]
+    while pending:
+        for child in children.get(pending.pop(), []):
+            if child.pid not in seen:  # a reused PID can make the parent links loop
+                seen.add(child.pid)
+                found.append(child)
+                pending.append(child.pid)
+    return found
+
+
+def _log_tail(log_path: Path | None) -> str:
+    if log_path is None:
+        return "(this run was not given a /LOG= file)"
+    if not log_path.exists():
+        return f"({log_path} was never written)"
+    lines = log_path.read_text(errors="replace").splitlines()
+    return "\n".join(lines[-_INSTALL_LOG_TAIL_LINES:])
+
+
+def _kill_installer_tree(process: subprocess.Popen, timeout: float, log_path: Path | None) -> NoReturn:
+    """Ends an installer run that outlived ``timeout``, all of it, and fails
+    with what it was doing.
+
+    ``subprocess.run(timeout=)`` would kill ``process`` alone, which is the
+    one process in the tree doing nothing but waiting (see this section's
+    header). So the tree is walked from ``process`` while it is still alive
+    to anchor it -- ``taskkill /T`` finds children through their parent PID --
+    and then nothing is reported until no Inno process remains, so that the
+    fixture teardown this failure hands over to runs against a machine
+    nothing else is still changing."""
+    snapshot = _win32_processes()
+    tree = [p for p in snapshot if p.pid == process.pid] + _descendants(process.pid, snapshot)
+    killed = subprocess.run(
+        ["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, text=True, timeout=60,
+    )
+    if killed.returncode != 0:
+        # The root exited between the timeout and the taskkill, so /T had
+        # nothing to walk from; end what the snapshot saw under it instead.
+        for member in tree:
+            subprocess.run(["taskkill", "/F", "/PID", str(member.pid)], capture_output=True, text=True, timeout=15)
+    survivors = _wait_for_no_inno_processes(timeout=20.0)
+    for survivor in survivors:
+        subprocess.run(["taskkill", "/F", "/PID", str(survivor.pid)], capture_output=True, text=True, timeout=15)
+    still_alive = _wait_for_no_inno_processes(timeout=20.0) if survivors else []
+    try:
+        process.communicate(timeout=15)
+    except subprocess.TimeoutExpired:
+        pass  # something outside the tree still holds its pipes; the failure below matters more
+    pytest.fail(
+        f"{process.args[0]} did not finish within {timeout:.0f}s, so its whole process tree was killed.\n"
+        f"---- process tree at the timeout ----\n"
+        + ("\n".join(str(p) for p in tree) or "(the root had already exited)")
+        + f"\n---- taskkill /T /F /PID {process.pid} (exit {killed.returncode}) ----\n"
+        f"{killed.stdout}{killed.stderr}"
+        f"---- Inno Setup processes that survived it, and were killed by PID ----\n"
+        + ("\n".join(str(p) for p in survivors) or "(none)")
+        + "\n---- Inno Setup processes still alive after that ----\n"
+        + ("\n".join(str(p) for p in still_alive) or "(none)")
+        + f"\n---- last {_INSTALL_LOG_TAIL_LINES} lines of the install log ----\n{_log_tail(log_path)}"
+    )
+
+
+def _run_installer(
+    *args: str, timeout: float = 120.0, log_path: Path | None = None,
+) -> subprocess.CompletedProcess:
+    """Runs Setup or an uninstaller and returns its result. Past ``timeout``,
+    kills the whole Inno process tree and fails with the tail of ``log_path``
+    (the run's ``/LOG=`` file, when it has one) -- see _kill_installer_tree."""
+    process = subprocess.Popen(list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_installer_tree(process, timeout, log_path)
+    return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
 
 def _install(setup_exe: Path, install_dir: Path, log_path: Path) -> None:
@@ -519,6 +699,7 @@ def _install(setup_exe: Path, install_dir: Path, log_path: Path) -> None:
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
         f"/DIR={install_dir}",
         f"/LOG={log_path}",
+        log_path=log_path,
     )
     assert result.returncode == 0, (
         f"installer failed (exit {result.returncode}):\n{result.stdout}{result.stderr}\n"
@@ -550,11 +731,6 @@ def _local_app_data_privacyfence() -> Path | None:
 # --------------------------------------------------------------------------- #
 # Test 1 -- install / validate / start+scenario / uninstall
 # --------------------------------------------------------------------------- #
-
-def _run_installer(*args: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
-    result = subprocess.run(list(args), capture_output=True, text=True, timeout=timeout)
-    return result
-
 
 async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     setup_exe = _built_installers()[-1]
@@ -718,6 +894,7 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
             "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
             f"/DIR={install_dir}",
             f"/LOG={upgrade_log_path}",
+            log_path=upgrade_log_path,
         )
         if upgrade_result.returncode == 0:
             break
@@ -947,6 +1124,7 @@ def test_windows_install_fails_when_the_image_is_user_writable(tmp_path):
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
         f"/DIR={install_dir}",
         f"/LOG={log_path}",
+        log_path=log_path,
     )
     install_log = log_path.read_text(errors="replace") if log_path.exists() else ""
 
