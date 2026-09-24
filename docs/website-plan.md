@@ -6,8 +6,9 @@ by the PR that lands the last wave, after every decision it records has an ADR (
 [ADRs this plan creates](#adrs-this-plan-creates)).
 
 **Scope: documentation and website only.** The code changes the audit found — product fixes and
-legacy/migration-code removal — are in [`product-cleanup-plan.md`](product-cleanup-plan.md). This
-plan depends on it: Wave 1 documents the code *after* that plan's phases (see [Waves](#waves)).
+legacy/migration-code removal — were done by the product cleanup plan, now retired (all phases
+merged 2026-09-24, first shipped in `v4.5.0a1`; see [What the product cleanup
+changed](#what-the-product-cleanup-changed)). Wave 1 documents that post-cleanup code directly.
 
 It combines three inputs:
 
@@ -16,7 +17,7 @@ It combines three inputs:
 - a **source-code audit of every document** in the repo (2026-09-24): each doc's claims checked
   against `src/`, `scripts/`, `installer/`, `debian/`, `mcpb/`, `cloudflare/` and the workflows,
   with file:line evidence. Its findings drive [Wave 1](#wave-1--user-documentation),
-  [Wave 2](#wave-2--contributor-documentation) and, for the code, `product-cleanup-plan.md`.
+  [Wave 2](#wave-2--contributor-documentation) and, for the code, the product cleanup (retired).
 
 ## Contents
 
@@ -71,12 +72,12 @@ only so a later reader can tell a deliberate choice from a default.
 | E4 | Reuse existing screenshots where current; add a **new SVG architecture/request-flow diagram**. (The audit found the two approval screenshots are stale — see [Wave 1](#wave-1--user-documentation).) |
 | E5 | Contact: GitHub issues **and `info@privacyfence.eu`**. |
 | F1 | Plan lives in **this file**. |
-| F2 | ADRs for **docs publishing scope**, **crawler policy**, **docs generator + docs version**, **hosting**. (The upgrade-path ADR G1 needs is created by `product-cleanup-plan.md`.) |
+| F2 | ADRs for **docs publishing scope**, **crawler policy**, **docs generator + docs version**, **hosting**. (The upgrade-path ADR G1 needs is [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md).) |
 | F3 | **One PR per wave.** |
 | F4 | No release deadline; README changes reach PyPI with whichever stable release comes next. |
 | G1 | **There are no existing users. The docs describe only the current version** — no upgrade paths, no "as of vX", no "no longer", no migration guide, no history. `migration-guide.md` is deleted after its few non-migration facts are moved. |
 | G2 | **Every document is reviewed against the source code** for validity, completeness and clarity, and fixed or merged in Waves 1–2. The goal is a simple, straightforward, coherent doc set for new users. |
-| G3 | **Legacy and migration code is removed** (approved 2026-09-24) — implemented by [`product-cleanup-plan.md`](product-cleanup-plan.md), which also carries G4 (Telegram in the PyPI build). The docs describe the uninstall rule that plan implements: removing the package leaves data in the system root; purging deletes it. |
+| G3 | **Legacy and migration code is removed** (approved 2026-09-24) — implemented (ADR 0041; G4, Telegram in the PyPI build, is ADR 0040). The docs describe the uninstall rule: `uninstall` / removing the package leaves data in the system root; `uninstall --purge` / purging deletes it ([ADR 0042](adr/0042-uninstall-replaces-disable.md)). |
 
 ## Documentation principles
 
@@ -121,11 +122,11 @@ Findings that change the plan's shape:
 - **Transitional content is everywhere.** Roughly 150 passages across user docs describe upgrades,
   retired features or implementation phases. G1 removes all of them.
 - **Real product bugs, not doc bugs,** were found. The most user-visible: **Apps Script cannot be
-  connected from Settings at all**, and **Telegram does not work on a PyPI install**. They are
-  fixed by [`product-cleanup-plan.md`](product-cleanup-plan.md)'s P phases.
+  connected from Settings at all**, and **Telegram does not work on a PyPI install**. Both are
+  fixed ([#662](https://github.com/privacyfence/privacyfence/pull/662), [#664](https://github.com/privacyfence/privacyfence/pull/664)).
 - **Legacy/migration code** still ships behind the transitional docs (policy v1→v2 conversion,
   deprecated MCP tool aliases, legacy path moves, installer steps that register autostarts only to
-  disable them). With no users it is dead weight and is removed by that plan's L phases.
+  disable them). With no users it was dead weight and has been removed ([#670](https://github.com/privacyfence/privacyfence/pull/670)–[#674](https://github.com/privacyfence/privacyfence/pull/674)).
 - **Dangling references**: code comments and tests cite doc sections that no longer exist (e.g.
   `qa_fixture_recorder.py` cites a `qa-environment-setup.md` §1–§10 checklist deleted in
   `6de7f7cd`; `web/mcp_tools.py:44` cites a TECHNICAL_REFERENCE section that doesn't exist).
@@ -272,20 +273,46 @@ H1 "The approval gateway between AI assistants and your business systems.", tagl
 
 ```
 Wave 0  crawlability & legal ───────────────────────────────────────┐
-product-cleanup-plan.md ──┬─► Wave 1 user docs ─┐                    │
-                          │   Wave 2 contributor docs ─┐             │
-                          └────────────────────────────┴─► Wave 3 docs site ─► Wave 4 core pages ─► Wave 5 connector pages & FAQ
+Wave 1 user docs ─┐                                                  │
+Wave 2 contributor docs ─┴─► Wave 3 docs site ─► Wave 4 core pages ─► Wave 5 connector pages & FAQ
 ```
 
 - **Wave 0** is independent and can land first.
-- **[`product-cleanup-plan.md`](product-cleanup-plan.md)** changes behavior the docs describe, so
-  the doc sections its phases touch are written against the post-cleanup code. Wave 1 may start
-  before every phase has merged, but a doc section describing a phase's behavior lands only after
-  that phase (or describes the merged behavior and says in its PR which phase it is waiting on).
 - **Waves 1 and 2** can run in parallel. Wave 1 must land before Wave 3, because Wave 3 publishes it.
 - **Wave 3** renders from the latest *stable tag* (C4), so the new docs appear on the site only
   after a stable release that contains Wave 1. Plan a release between Wave 1 and Wave 3's launch,
   or accept that `/docs/` launches with the first release after Wave 1.
+
+### What the product cleanup changed
+
+The retired product cleanup plan's phases merged 2026-09-24 and first shipped in `v4.5.0a1`. Wave 1
+describes this behavior, and nothing earlier (G1):
+
+| PR | Behavior the docs must describe |
+|---|---|
+| [#662](https://github.com/privacyfence/privacyfence/pull/662) | Apps Script connects from Settings (local) and org `/connect`, like the other Google connectors; org admins register `/oauth/callback/apps_script`. |
+| [#663](https://github.com/privacyfence/privacyfence/pull/663) | The recovery-code route audits every attempt, needs a human-attested session on a separated install, and is rate-limited. |
+| [#661](https://github.com/privacyfence/privacyfence/pull/661) | `build_org_bundle.py` binds `127.0.0.1` by default; `--agent-links/--no-agent-links`. |
+| [#664](https://github.com/privacyfence/privacyfence/pull/664) | Telegram works on a PyPI install (ADR 0040). |
+| [#665](https://github.com/privacyfence/privacyfence/pull/665) | Installers refuse an OS/CPU below the support matrix (ADR 0039); `platform-support.md` has the Minimum OS column. |
+| [#670](https://github.com/privacyfence/privacyfence/pull/670) | A v1-format `settings.yaml` (`auto_accept_rules`/`auto_accept_grants`) is refused at startup, not converted (ADR 0041). |
+| [#671](https://github.com/privacyfence/privacyfence/pull/671) | No legacy file-location moves; the shim reads only the current layout. |
+| [#673](https://github.com/privacyfence/privacyfence/pull/673), [#672](https://github.com/privacyfence/privacyfence/pull/672), [#674](https://github.com/privacyfence/privacyfence/pull/674) | `uninstall [--purge]` (`-Purge` on Windows) replaces `disable` on all three platforms (ADR 0042): `apt remove` / `uninstall` keeps data under the system root, `apt purge` / `--purge` deletes it; the Windows uninstaller has a "Delete PrivacyFence data" checkbox; macOS's uninstall is `sudo …/macos_privilege_separation.sh uninstall [--purge]`. The `.deb` ships no daemon XDG autostart entry. |
+| [#676](https://github.com/privacyfence/privacyfence/pull/676) | `enable --for-user` never rewrites the install's recorded owner (ADR 0043). |
+
+Doc findings the cleanup PRs recorded and left for Wave 1:
+
+- `security-and-compliance.md`: says a recovery code, "correctly or not, never grants a second
+  attempt"; a wrong code does not consume the stored one ([#663](https://github.com/privacyfence/privacyfence/pull/663)).
+- `org-mode-setup-guide.md` §4.2: gives one `/oauth/callback/google` redirect URI; the code builds
+  one per service ([#662](https://github.com/privacyfence/privacyfence/pull/662)).
+- `README.md` ≈l.337: points Windows users at `%LOCALAPPDATA%\Programs\PrivacyFence\`; the
+  installer is admin-only ([#671](https://github.com/privacyfence/privacyfence/pull/671)).
+- `TECHNICAL_REFERENCE.md`: says the Start Menu entry opens the web settings UI; since ADR 0031 it
+  launches the companion ([#674](https://github.com/privacyfence/privacyfence/pull/674)).
+- The Windows uninstaller's "Delete PrivacyFence data" checkbox has only been compiled in CI; it is
+  in `release-testing.md`'s manual Windows checks and must be clicked through before the next
+  stable release ([#674](https://github.com/privacyfence/privacyfence/pull/674)).
 
 ### Wave 0 — crawlability and legal
 
@@ -322,8 +349,8 @@ reviewed by the maintainer doc by doc.
    and passkey-for-proposed-rules → security; `PENDING USER` and `--for-user` → getting-started
    troubleshooting; unattended `.deb` installs → platform-support). Then delete it.
 2. Write the new docs and rewrite the surviving ones per the table, applying every audit finding
-   for that doc. Where `product-cleanup-plan.md` changes behavior, describe the post-change
-   behavior.
+   for that doc, plus the items in [What the product cleanup
+   changed](#what-the-product-cleanup-changed).
 3. Delete the merged-away docs; update every link to them across the repo (code comments, tests,
    workflows, CLAUDE.md) — guardrail 9 proves none are left.
 4. Add the tools-reference generator (guardrail 3), configuration-reference test (4), history
@@ -414,7 +441,7 @@ note whether the answers match the canonical description and the current install
 
 ## ADRs this plan creates
 
-Next free numbers when each PR lands (ADR 0038 is taken; 0039+ as of 2026-09-24, and `product-cleanup-plan.md` takes some too).
+Next free numbers when each PR lands (0039–0043 were taken by the product cleanup; 0044+ as of 2026-09-24).
 
 | ADR | Wave |
 |---|---|
