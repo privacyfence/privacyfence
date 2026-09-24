@@ -93,6 +93,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   extension are the same version. On Windows it also no longer looks for PrivacyFence under
   `%LOCALAPPDATA%\Programs`, where no current installer puts it.
 
+### Fixed
+
+- **Telegram works on a PyPI install.** The sdist and wheel now carry PrivacyFence's Telegram app
+  credentials, as the macOS, Windows and Linux installers already did, so `pip install
+  privacyfence` no longer needs your own `api_id`/`api_hash` to connect Telegram (ADR 0040).
+
 ### Security
 
 - **Recovery-code sign-in is audited, rate-limited and needs a human session.** `POST
