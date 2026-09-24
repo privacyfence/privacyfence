@@ -59,10 +59,13 @@ function fakeAuthorityDir(): string {
  * once a full request line has been read; "hang" never writes anything
  * (the connection stays open, standing in for a daemon that accepted the
  * connection but is stuck), and "close" ends the connection with nothing
- * written at all (standing in for one that hung up mid-request). */
+ * written at all (standing in for one that hung up mid-request).
+ * ``delayMs`` holds a real reply back that long, standing in for a daemon
+ * that is up but still serving someone else's connection. */
 function startFakeControlChannel(
   socketPath: string,
-  reply: string | "hang" | "close"
+  reply: string | "hang" | "close",
+  delayMs = 0
 ): Promise<net.Server> {
   return new Promise((resolve) => {
     const server = net.createServer((conn) => {
@@ -72,7 +75,7 @@ function startFakeControlChannel(
           conn.end();
           return;
         }
-        conn.end(reply);
+        setTimeout(() => conn.end(reply), delayMs);
       });
     });
     server.listen(socketPath, () => resolve(server));
@@ -127,6 +130,20 @@ describe("mintMcpToken", () => {
     // proves this test isn't accidentally the one below it, waiting out the
     // whole timeout for a case that should never need to.
     assert.ok(Date.now() - startedAt < 1000, "connecting to a nonexistent socket should fail fast");
+  });
+
+  it("waits out a busy daemon with its default timeout rather than giving up after a second", async () => {
+    // v4.3.0's first packaged macOS smoke run: the daemon was listening but
+    // answered after index.ts's old 1s cut, so the shim fell back to a token
+    // file a separated install doesn't have and exited. index.ts now calls
+    // this with no override, so the default is what has to outlast it.
+    const authorityDir = fakeAuthorityDir();
+    const server = await startFakeControlChannel(path.join(authorityDir, "control.sock"), "OK sometoken\n", 1500);
+    try {
+      assert.equal(await mintMcpToken(), "sometoken");
+    } finally {
+      await closeServer(server);
+    }
   });
 
   it("rejects on timeout when the listener never replies, without hanging the test", async () => {

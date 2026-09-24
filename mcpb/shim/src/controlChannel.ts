@@ -47,15 +47,13 @@ import { posixControlSocketPath, windowsControlPipeName } from "./protocol.js";
  * well under a second) because the alternative -- giving up too early on a
  * daemon that is merely busy -- silently downgrades a caller onto the
  * legacy shared token instead of its own, which is exactly the failure mode
- * ADR 0008 exists to close. index.ts's own call site lowers this
- * deliberately (see that file) so a daemon that isn't running at all
- * doesn't make every shim launch wait out this whole window on top of
- * daemon.ts's own "is anything listening" checks, which already ran first. */
+ * ADR 0008 exists to close. A daemon that isn't running, or is too old to
+ * know ``MINT MCP``, never waits this out: the first refuses the connection
+ * and the second answers ``ERROR`` immediately. */
 const DEFAULT_TIMEOUT_MS = 5000;
 
 export interface MintMcpTokenOptions {
-  /** Overridable for tests and for index.ts's own fast-fail call site;
-   * defaults to DEFAULT_TIMEOUT_MS. */
+  /** Overridable for tests; defaults to DEFAULT_TIMEOUT_MS. */
   timeoutMs?: number;
 }
 

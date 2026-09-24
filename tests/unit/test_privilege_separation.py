@@ -1278,6 +1278,46 @@ class TestMacosScriptHelpers:
         finally:
             handoff.chmod(0o700)
 
+    def test_daemon_owner_waits_out_the_xpcproxy_trampoline(self, tmp_path):
+        """launchd reports the job's pid while xpcproxy, running as root, is
+        still in it -- before the switch to the plist's UserName and the exec
+        of the app. The owner has to be read after that, or ``enable`` tears
+        down a correctly started daemon as 'started as root' (v4.3.0's
+        post-release build.yml runs)."""
+        counter = tmp_path / "ps-calls"
+        counter.write_text("0", encoding="utf-8")
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        ps = bin_dir / "ps"
+        # The first three calls land in the trampoline, everything after it in
+        # the app, whichever column is asked for -- so a read of the owner
+        # that doesn't wait gets 'root'.
+        ps.write_text(
+            '#!/bin/sh\n'
+            f'n=$(( $(cat {shlex.quote(str(counter))}) + 1 )); echo "$n" > {shlex.quote(str(counter))}\n'
+            'case "$2" in\n'
+            '  comm=) if [ "$n" -le 3 ]; then echo /usr/libexec/xpcproxy;'
+            ' else echo /Library/PrivacyFence/image/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp; fi ;;\n'
+            '  user=) if [ "$n" -le 3 ]; then echo root; else echo _privacyfence; fi ;;\n'
+            'esac\n',
+            encoding="utf-8",
+        )
+        ps.chmod(0o755)
+
+        script = "\n".join([
+            "set -euo pipefail",
+            "DAEMON_PID_TIMEOUT=10",
+            "daemon_pid() { echo 4242; }",
+            self._function("darwin", "owner_of_pid"),
+            self._function("darwin", "daemon_owner"),
+            "daemon_owner",
+        ])
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "_privacyfence"
+
 
 class TestAutoEnableMacos:
     """#428 D1 (4.1) / ADR 0003 decision 6: the daemon's own trigger for
