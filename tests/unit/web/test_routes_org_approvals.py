@@ -1185,6 +1185,39 @@ class TestApprovalsStream:
         assert [row["id"] for row in rows] == [mine.id]
         assert rows[0]["tool_name"] == "Get message"
 
+    async def test_an_unchanged_tick_sends_nothing_and_a_change_sends_the_new_rows(self, monkeypatch):
+        import asyncio
+
+        monkeypatch.setattr(routes_approvals, "_STREAM_POLL_SECONDS", 0.01)
+        app, sessions, web_ui = _app()
+        first = _register(web_ui, ALICE, dedupe_key="a1")
+        endpoint, request = self._stream(app, sessions.create(ALICE))
+        response = await endpoint(request)
+        it = response.body_iterator
+        try:
+            await it.__anext__()
+            # Several quiet ticks pass before the second approval lands --
+            # none of them may emit a duplicate event.
+            asyncio.get_running_loop().call_later(0.1, lambda: _register(web_ui, ALICE, dedupe_key="a2"))
+            chunk = await asyncio.wait_for(it.__anext__(), timeout=5)
+        finally:
+            await it.aclose()
+        rows = json.loads(chunk.split("data: ", 1)[1])
+        assert len(rows) == 2
+        assert first.id in {row["id"] for row in rows}
+
+    async def test_stream_ends_when_the_client_disconnects(self):
+        app, sessions, web_ui = _app()
+        _register(web_ui, ALICE, dedupe_key="a1")
+        gone = {"value": False}
+        endpoint, request = self._stream(app, sessions.create(ALICE), disconnected=lambda: gone["value"])
+        response = await endpoint(request)
+        it = response.body_iterator
+        await it.__anext__()
+        gone["value"] = True
+        with pytest.raises(StopAsyncIteration):
+            await it.__anext__()
+
     async def test_stream_ends_once_the_session_is_gone(self):
         app, sessions, web_ui = _app()
         _register(web_ui, ALICE, dedupe_key="a1")
