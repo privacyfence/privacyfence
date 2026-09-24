@@ -248,8 +248,14 @@ $script:OwnerResolved = $false
 # recording a marker that claims a human owns this install.
 $NonHumanSids = @('S-1-5-18', 'S-1-5-19', 'S-1-5-20')
 
-function Write-Note { param([string] $Message) Write-Host "-> $Message" }
-function Write-Warn { param([string] $Message) Write-Warning $Message }
+# Every line carries the wall-clock time it was written. Setup captures
+# `enable`'s output into a file and copies it into its own log only after the
+# script exits (installer/privacyfence.iss's LogCommandOutput), so every one of
+# those lines gets the same Inno timestamp -- this is the only record of where
+# inside `enable` an install's time actually went.
+function Get-NoteTime { return (Get-Date).ToString('HH:mm:ss.fff') }
+function Write-Note { param([string] $Message) Write-Host "[$(Get-NoteTime)] -> $Message" }
+function Write-Warn { param([string] $Message) Write-Warning "[$(Get-NoteTime)] $Message" }
 function Stop-WithError { param([string] $Message) throw $Message }
 
 function Assert-Windows {
@@ -974,6 +980,7 @@ function Invoke-Enable {
     # and records the one step that genuinely needs a human (the group
     # membership) as pending rather than abandoning the whole install to the
     # unseparated layout the way it used to.
+    Write-Note 'enable: resolving the owner and checking the install image'
     Resolve-Owner -Optional
     Resolve-Executables
     Assert-ImageProtected
@@ -1031,6 +1038,7 @@ function Invoke-Enable {
     # event log can both explain, and rolling the marker and the ACLs back
     # around it would trade a diagnosable problem for a silent one.
     Start-DaemonService
+    Write-Note 'enable: done'
 
     Write-Host @"
 

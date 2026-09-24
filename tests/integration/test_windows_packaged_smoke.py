@@ -87,6 +87,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -147,6 +148,11 @@ MARKER_PATH = WINDOWS_SYSTEM_ROOT / MARKER_FILE_NAME
 # the one users actually install into is the only input that exercises the
 # quoting at all.
 INSTALL_DIR_NAME = "Program Folder"
+
+# How long one silent Setup / uninstaller run may take before it is treated as
+# hung. Placeholders until measured -- see the Phase P4 commit message.
+INSTALLER_TIMEOUT_S = 120.0
+UNINSTALLER_TIMEOUT_S = 120.0
 
 # The separated layout's own files, as `enable` leaves them on disk. Readable
 # directly rather than through an elevation shim, unlike the POSIX modules'
@@ -513,13 +519,120 @@ def _run_installer(*args: str, timeout: float = 120.0) -> subprocess.CompletedPr
     return result
 
 
+# --------------------------------------------------------------------------- #
+# Install timings -- where a silent install's time goes, in a *passing* job's
+# log too. Setup's /LOG timestamps every line; `enable`'s own lines arrive in
+# it only after the script exits (all stamped with that one moment), so they
+# carry their own [HH:mm:ss.fff] (scripts/windows_privilege_separation.ps1's
+# Write-Note) and are timed from that instead.
+# --------------------------------------------------------------------------- #
+
+_INNO_LINE = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d{3})\s+(.*)$")
+_ENABLE_NOTE = re.compile(r"^SeparateInstall: (?:WARNING: )?\[(\d\d:\d\d:\d\d\.\d{3})\] (?:-> )?(.*)$")
+# Checkpoints in the order Setup reaches them; each phase runs from its own
+# checkpoint to the next one found.
+_INSTALL_PHASES = (
+    ("start", "Log opened."),
+    ("prepare", "PrepareToInstall:"),
+    ("files", "Starting the installation process."),
+    ("enable", "SeparateInstall: running"),
+    ("finish", "SeparateInstall: exit code"),
+    ("end", "Log closed."),
+)
+_terminal_reporter = None
+
+
+def _seconds(clock: str) -> float:
+    hours, minutes, seconds = clock.split(":")
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def _install_timing_summary(log_path: Path) -> list[str]:
+    """Two lines: Setup's phases, then `enable`'s own steps. Timings only --
+    nothing here asserts, so a log in an unexpected shape reports less rather
+    than failing a test that otherwise passed."""
+    if not log_path.exists():
+        return [f"install timings ({log_path.name}): no log"]
+    stamped = []
+    for line in log_path.read_text(errors="replace").splitlines():
+        match = _INNO_LINE.match(line)
+        if match:
+            stamped.append((_seconds(match.group(2)), match.group(3)))
+    if not stamped:
+        return [f"install timings ({log_path.name}): no timestamped lines"]
+    found = []
+    for name, marker in _INSTALL_PHASES:
+        hit = next((t for t, text in stamped if text.startswith(marker)), None)
+        if hit is not None:
+            found.append((name, hit))
+    last = stamped[-1][0]
+    total = (last - stamped[0][0]) % 86400
+    phases = [
+        f"{name} {((found[i + 1][1] if i + 1 < len(found) else last) - t) % 86400:.1f}s"
+        for i, (name, t) in enumerate(found) if name != "end"
+    ]
+    lines = [f"install timings ({log_path.name}): total {total:.1f}s | " + " | ".join(phases)]
+
+    notes = [(_seconds(m.group(1)), m.group(2)) for m in
+             (_ENABLE_NOTE.match(text) for _, text in stamped) if m]
+    if notes:
+        enable_start = next((t for name, t in found if name == "enable"), notes[0][0])
+        enable_end = next((t for name, t in found if name == "finish"), notes[-1][0])
+        steps = [f"powershell start {(notes[0][0] - enable_start) % 86400:.1f}s"]
+        for i, (t, text) in enumerate(notes):
+            until = notes[i + 1][0] if i + 1 < len(notes) else enable_end
+            steps.append(f"{text[:48]} {(until - t) % 86400:.1f}s")
+        lines.append(f"  enable steps ({log_path.name}): " + " | ".join(steps))
+    return lines
+
+
+def _report(lines: list[str]) -> None:
+    """Into the job log even when the test passes (pytest's own capture would
+    swallow a print), and into the step summary when there is one."""
+    if _terminal_reporter is not None:
+        for line in lines:
+            _terminal_reporter.write_line(line)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as handle:
+            handle.write("".join(f"    {line}\n" for line in lines))
+
+
+@pytest.fixture(autouse=True)
+def _installer_timings(pytestconfig, monkeypatch):
+    """Reports every Setup/uninstaller run's wall time, whichever helper or
+    test made it, by wrapping ``_run_installer`` for the test's duration."""
+    global _terminal_reporter
+    _terminal_reporter = pytestconfig.pluginmanager.get_plugin("terminalreporter")
+    module = sys.modules[__name__]
+    wrapped = module._run_installer
+
+    def _timed(*args, **kwargs):
+        started = time.monotonic()
+        outcome = "timed out"
+        try:
+            result = wrapped(*args, **kwargs)
+            outcome = f"exit {result.returncode}"
+            return result
+        finally:
+            _report([f"installer run {Path(args[0]).name}: {time.monotonic() - started:.1f}s ({outcome})"])
+
+    monkeypatch.setattr(module, "_run_installer", _timed)
+    yield
+    _terminal_reporter = None
+
+
 def _install(setup_exe: Path, install_dir: Path, log_path: Path) -> None:
-    result = _run_installer(
-        str(setup_exe),
-        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
-        f"/DIR={install_dir}",
-        f"/LOG={log_path}",
-    )
+    try:
+        result = _run_installer(
+            str(setup_exe),
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
+            f"/DIR={install_dir}",
+            f"/LOG={log_path}",
+            timeout=INSTALLER_TIMEOUT_S,
+        )
+    finally:
+        _report(_install_timing_summary(log_path))
     assert result.returncode == 0, (
         f"installer failed (exit {result.returncode}):\n{result.stdout}{result.stderr}\n"
         f"---- install log ----\n{log_path.read_text(errors='replace') if log_path.exists() else '(missing)'}"
@@ -535,7 +648,9 @@ def _silent_uninstall(install_dir: Path) -> None:
     process returns."""
     uninstaller = install_dir / "unins000.exe"
     assert uninstaller.is_file(), f"{uninstaller} missing -- was the install actually silent/complete?"
-    result = _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
+    result = _run_installer(
+        str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", timeout=UNINSTALLER_TIMEOUT_S,
+    )
     assert result.returncode == 0, f"uninstall failed (exit {result.returncode}):\n{result.stdout}{result.stderr}"
     deadline = time.monotonic() + 15.0
     while (install_dir / MAIN_EXE_NAME).exists() and time.monotonic() < deadline:
@@ -718,7 +833,9 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
             "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
             f"/DIR={install_dir}",
             f"/LOG={upgrade_log_path}",
+            timeout=INSTALLER_TIMEOUT_S,
         )
+        _report(_install_timing_summary(upgrade_log_path))
         if upgrade_result.returncode == 0:
             break
         log_text = upgrade_log_path.read_text(errors="replace") if upgrade_log_path.exists() else ""
@@ -852,7 +969,9 @@ def test_windows_install_separates_with_no_manual_enable(tmp_path):
     finally:
         uninstaller = install_dir / "unins000.exe"
         if uninstaller.is_file():
-            _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
+            _run_installer(
+                str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", timeout=UNINSTALLER_TIMEOUT_S,
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -947,6 +1066,7 @@ def test_windows_install_fails_when_the_image_is_user_writable(tmp_path):
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
         f"/DIR={install_dir}",
         f"/LOG={log_path}",
+        timeout=INSTALLER_TIMEOUT_S,
     )
     install_log = log_path.read_text(errors="replace") if log_path.exists() else ""
 
