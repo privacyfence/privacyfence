@@ -379,18 +379,24 @@ jobs:
       # 2026-09-24. See ADR 0046.
       #
       # To update CodeSignTool: change CODESIGNTOOL_VERSION and CODESIGNTOOL_SHA256 below, and
-      # nothing else. Take the hash from the release page's asset list (GitHub shows each asset's
-      # sha256) -- not from a CI run: on a mismatch this step prints the hash it downloaded and
-      # GitHub's recorded digest side by side, to diagnose, never to copy in unchecked.
+      # nothing else. Keep the hash quoted -- unquoted, YAML reads an all-digit value as a number.
+      # Take it from the release page's asset list (GitHub shows each asset's sha256 for assets
+      # uploaded since mid-2025), or hash the zip yourself -- not from a CI run: on a mismatch
+      # this step prints the hash it downloaded and GitHub's recorded digest side by side, to
+      # diagnose, never to copy in unchecked. v1.3.2's asset predates GitHub's digests; see ADR
+      # 0046 for how its pin was established.
       - name: Install eSigner CodeSignTool
         if: env.ESIGNER_CREDENTIAL_ID != ''
         shell: pwsh
         env:
           CODESIGNTOOL_VERSION: v1.3.2
-          CODESIGNTOOL_SHA256: 0000000000000000000000000000000000000000000000000000000000000000
+          CODESIGNTOOL_SHA256: "4afc32e8b7f79bbe1de7e4e7049aaad4e0f754357613b9bbec0e3052f06fd36b"
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if ($env:CODESIGNTOOL_SHA256 -notmatch '^[0-9a-fA-F]{64}$') {
+            throw "CODESIGNTOOL_SHA256 is not a 64-hex-digit SHA-256 (got '$env:CODESIGNTOOL_SHA256')"
+          }
           # Bounded retry with exponential backoff (5s, 10s, 20s) for a transient 5xx/429/403 or a
           # dropped connection; the fourth failure fails the step.
           function Invoke-WithRetry([scriptblock]$Action, [string]$What) {
@@ -421,6 +427,7 @@ jobs:
                   -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'privacyfence-ci' }
               } "Looking up $env:CODESIGNTOOL_VERSION's recorded digest"
               $Recorded = ($Release.assets | Where-Object { $_.name -eq $Asset }).digest
+              if (-not $Recorded) { $Recorded = 'none (asset predates GitHub release-asset digests)' }
             } catch { Write-Host "::warning::$_" }
             Write-Host "::error::$Asset SHA-256 mismatch -- refusing to sign with it."
             Write-Host "::error::pinned:          $env:CODESIGNTOOL_SHA256"

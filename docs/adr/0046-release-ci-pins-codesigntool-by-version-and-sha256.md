@@ -33,7 +33,17 @@ Two problems with that:
    make an API call: an authenticated (`github.token`) lookup of the digest GitHub recorded for the
    asset, printed beside the pinned and downloaded hashes to diagnose the mismatch.
 4. Updating CodeSignTool is a change to those two lines. The new hash is taken from the release
-   page's asset list, not copied from a CI failure message.
+   page's asset list (or hashed by hand from the downloaded zip), not copied from a CI failure
+   message.
+5. The initial pin, v1.3.2 at `4afc32e8b7f79bbe1de7e4e7049aaad4e0f754357613b9bbec0e3052f06fd36b`,
+   is trust-on-first-use. The asset was uploaded before GitHub started recording release-asset
+   digests, so no independent hash was available, and this repository's cloud sessions cannot
+   download from `github.com` release URLs. The hash is the one a hosted Windows runner computed
+   over HTTPS in run
+   [36061561100](https://github.com/privacyfence/privacyfence/actions/runs/36061561100), a
+   deliberate placeholder-mismatch run. The unpinned step was already signing releases with
+   whatever that URL served, so pinning does not vouch for these bytes after the fact. It
+   guarantees that any change to them from now on fails the build.
 
 ## Alternatives considered
 
