@@ -38,7 +38,8 @@ from typing import Any, Callable
 
 import yaml
 
-from . import __version__, dialog_window_html, org_bundle_signing, org_mode, web_prompt
+from . import __version__, agent_label, dialog_window_html, org_bundle_signing, org_mode, web_prompt
+from .agent_identity import AgentIdentity, AgentSource
 from .app_credentials import telegram_app_credentials
 from .approval_ui import get_approval_ui
 from .audit_log import AuditEntry, AuditLogger, compute_security_config_hash, current_week, get_audit_logger
@@ -676,6 +677,36 @@ def _auto_accept_state_from_rules(
 # ---------------------------------------------------------------------------- #
 # Controller
 # ---------------------------------------------------------------------------- #
+
+def _entry_agent(entry: AuditEntry) -> AgentIdentity:
+    """The ``AgentIdentity`` an audit entry recorded, rebuilt from its four ``agent_*`` fields. An
+    ``agent_source`` this build does not know (a hand-edited or future log line) reads as no
+    signal at all -- unknown, never promoted to a tier the entry did not earn."""
+    try:
+        source = AgentSource(entry.agent_source or "")
+    except ValueError:
+        source = AgentSource.NONE
+    return AgentIdentity(
+        id=entry.agent_id or "", name=entry.agent_name or "", version=entry.agent_version or "", source=source,
+    )
+
+
+def audit_rows(entries: list[AuditEntry]) -> list[dict[str, Any]]:
+    """The Audit Log page's "Recent decisions" rows (AGT-5) -- shared by local mode's
+    ``_audit_state`` and org mode's own page state, so both show the same columns. ``agent`` is
+    ``agent_label.AgentLabel.to_dict()``: the same tiered wording the approval card and list use
+    (``agent_label.py``), raw text the page escapes."""
+    return [
+        {
+            "connector": entry.connector.capitalize() if entry.connector else "",
+            "tool": entry.tool_name or entry.tool,
+            "decision": entry.decision,
+            "time": _relative_time(entry.timestamp),
+            "agent": agent_label.label_for(_entry_agent(entry)).to_dict(),
+        }
+        for entry in entries
+    ]
+
 
 class SettingsController:
     """Domain logic for the settings page (web/routes_settings.py). One
@@ -1971,13 +2002,7 @@ class SettingsController:
 
         recent: list[dict[str, Any]] = []
         if log_dir.exists():
-            for entry in AuditLogger(str(log_dir)).recent_entries(20):
-                recent.append({
-                    "connector": entry.connector.capitalize() if entry.connector else "",
-                    "tool": entry.tool_name or entry.tool,
-                    "decision": entry.decision,
-                    "time": _relative_time(entry.timestamp),
-                })
+            recent = audit_rows(AuditLogger(str(log_dir)).recent_entries(20))
 
         return {
             "log_level": level,

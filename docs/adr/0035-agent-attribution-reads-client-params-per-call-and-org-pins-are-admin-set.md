@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted — 2026-09-24. Not implemented; this answers the questions
+Accepted — 2026-09-24. Implemented by #650, #651, #654 and #655. This answers the questions
 [ADR 0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) left open "before the first
 PR", so that PR has nothing left to decide.
 Amends [ADR 0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md).

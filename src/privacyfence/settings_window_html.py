@@ -321,6 +321,23 @@ select.pf-input { cursor: pointer; }
 .pf-audit-badge.denied { background: var(--pf-danger-tint); color: var(--pf-danger); }
 .pf-audit-badge.auto_accepted { background: rgba(0,113,227,.1); color: var(--pf-accent); }
 .pf-audit-badge.other { background: var(--pf-surface-2); color: var(--pf-text-muted); }
+/* AGT-5: who asked, with its tier -- agent_label.py's wording, the approval list's tiers. */
+.pf-audit-agent { width: 190px; display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--pf-text-muted); flex-shrink: 0; min-width: 0; }
+/* The name gives way, never the tier marker: a truncated claim must still say it is a claim. */
+.pf-audit-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-audit-agent-attested .pf-audit-agent-name { color: var(--pf-text); font-weight: 600; }
+.pf-audit-agent-claimed .pf-audit-agent-name, .pf-audit-agent-unknown .pf-audit-agent-name { font-style: italic; }
+.pf-audit-tier { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; flex-shrink: 0; white-space: nowrap; }
+.pf-audit-tier.attested { background: rgba(0,113,227,.1); color: var(--pf-accent); }
+.pf-audit-tier.claimed, .pf-audit-tier.unknown { background: var(--pf-surface-2); color: var(--pf-text-muted); }
+/* AGT-5: the admin's AI-system pin page. */
+.pf-agents-list { max-width: 640px; border: 1px solid var(--pf-border); border-radius: 10px; overflow: hidden; margin-bottom: 22px; }
+.pf-agents-row { padding: 10px 14px; border-bottom: 1px solid var(--pf-border); }
+.pf-agents-row:last-child { border-bottom: none; }
+.pf-agents-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.pf-agents-name { font-size: 13px; font-weight: 600; color: var(--pf-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-agents-meta { font-size: 11.5px; color: var(--pf-text-dim); font-family: ui-monospace, monospace; }
+.pf-agents-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; font-size: 12px; color: var(--pf-text-muted); }
 .pf-audit-time { width: 70px; text-align: right; font-size: 11.5px; color: var(--pf-text-dim); flex-shrink: 0; }
 
 /* ---- About ---- */
@@ -376,7 +393,7 @@ _JS = r"""
   // nothing -- local mode's own rendering is unaffected by any of this.
   var CAPS = window.__pfCapabilities || {
     mode: 'local', is_admin: false,
-    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, about: true },
+    sections: { general: true, connectors: true, auto_accept: true, privacy: true, audit: true, agents: false, about: true },
     not_applicable_actions: [],
   };
 
@@ -494,7 +511,7 @@ _JS = r"""
 
   var NAV_ITEMS = [
     ['general', 'General'], ['connectors', 'Connectors'], ['auto_accept', 'Auto-accept'],
-    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['about', 'About'],
+    ['privacy', 'Privacy Filter'], ['audit', 'Audit Log'], ['agents', 'AI systems'], ['about', 'About'],
   ];
 
   function renderNav(state) {
@@ -998,21 +1015,29 @@ _JS = r"""
     var audit = state.audit;
     var html = '<div class="pf-page">';
     html += '<div class="pf-page-title">Audit Log</div>';
-    html += '<div class="pf-page-subtitle">Every decision — accepted, denied, or auto-accepted — is recorded locally as JSON lines, then exported weekly to a formatted Excel workbook.</div>';
+    html += notApplicable('export_audit_log')
+      ? '<div class="pf-page-subtitle">Your own recent decisions — accepted, denied, or auto-accepted — and which AI system asked for each.</div>'
+      : '<div class="pf-page-subtitle">Every decision — accepted, denied, or auto-accepted — is recorded locally as JSON lines, then exported weekly to a formatted Excel workbook.</div>';
 
-    html += '<div class="pf-export-row"><div class="pf-btn-primary" role="button" tabindex="0" aria-label="Export Audit Log" ' +
-      dataAttr('export_audit_log', {}) + '>Export Audit Log…</div>';
-    html += '<div class="pf-export-hint">' + esc(audit.export_hint) + '</div></div>';
+    // PSC-5/AGT-5: org mode shows each principal's own recent decisions, but has no export
+    // route and no install log level to set -- both controls are local-only actions.
+    if (!notApplicable('export_audit_log')) {
+      html += '<div class="pf-export-row"><div class="pf-btn-primary" role="button" tabindex="0" aria-label="Export Audit Log" ' +
+        dataAttr('export_audit_log', {}) + '>Export Audit Log…</div>';
+      html += '<div class="pf-export-hint">' + esc(audit.export_hint) + '</div></div>';
+    }
 
-    html += '<div class="pf-card pf-audit-card">';
-    html += '<div class="pf-audit-card-row"><div class="pf-audit-card-title">Log level</div>';
-    html += segGroupHtml(LOG_LEVELS.map(function (lvl) {
-      return { label: lvl, active: audit.log_level === lvl, action: 'set_log_level', payload: { level: lvl } };
-    }), 'Log level');
-    html += '</div>';
-    html += '<div class="pf-audit-card-row"><div class="pf-audit-card-title">Log file</div>';
-    html += '<div class="pf-audit-logfile">' + esc(audit.log_file) + '</div></div>';
-    html += '</div>';
+    if (!notApplicable('set_log_level')) {
+      html += '<div class="pf-card pf-audit-card">';
+      html += '<div class="pf-audit-card-row"><div class="pf-audit-card-title">Log level</div>';
+      html += segGroupHtml(LOG_LEVELS.map(function (lvl) {
+        return { label: lvl, active: audit.log_level === lvl, action: 'set_log_level', payload: { level: lvl } };
+      }), 'Log level');
+      html += '</div>';
+      html += '<div class="pf-audit-card-row"><div class="pf-audit-card-title">Log file</div>';
+      html += '<div class="pf-audit-logfile">' + esc(audit.log_file) + '</div></div>';
+      html += '</div>';
+    }
 
     html += '<div class="pf-group-title">Recent decisions</div>';
     html += '<div class="pf-audit-list">';
@@ -1022,6 +1047,7 @@ _JS = r"""
     audit.recent.forEach(function (a) {
       var badgeCls = a.decision === 'denied' || a.decision === 'rejected' ? 'denied' : (a.decision === 'auto_accepted' ? 'auto_accepted' : 'other');
       html += '<div class="pf-audit-row">';
+      html += auditAgentHtml(a.agent);
       html += '<div class="pf-audit-connector">' + esc(a.connector) + '</div>';
       html += '<div class="pf-audit-tool">' + esc(a.tool) + '</div>';
       html += '<div class="pf-audit-badge ' + badgeCls + '">' + esc(a.decision) + '</div>';
@@ -1029,6 +1055,77 @@ _JS = r"""
       html += '</div>';
     });
     html += '</div></div>';
+    return html;
+  }
+
+  // AGT-5: settings_controller.audit_rows()'s `agent` -- agent_label.AgentLabel.to_dict(), the
+  // same tiered wording the approval card and list use. A row with no agent (a log line from
+  // before attribution) reads as unknown: never blank, never "Claude". No brand mark here --
+  // the tier marker carries the distinction on a page this dense.
+  var TIER_MARKERS = { attested: 'Verified', claimed: 'Not verified', unknown: 'Unknown' };
+
+  function auditAgentHtml(agent) {
+    agent = agent || {};
+    var tier = TIER_MARKERS.hasOwnProperty(agent.tier) ? agent.tier : 'unknown';
+    var headline = agent.headline || 'Unrecognised AI system';
+    var text = agent.claim ? headline + ' \u201c' + agent.claim + '\u201d' : headline;
+    return '<div class="pf-audit-agent pf-audit-agent-' + tier + '" data-agent-tier="' + tier + '" title="' + esc(text) + '">' +
+      '<span class="pf-audit-agent-name">' + esc(text) + '</span><span class="pf-audit-tier ' + tier + '">' +
+      esc(TIER_MARKERS[tier]) + '</span></div>';
+  }
+
+  // -------------------------------------------------------------------- //
+  // AI systems (AGT-5, org mode, admin only -- ADR 0035 decision 3)
+  // -------------------------------------------------------------------- //
+
+  function renderAgents(state) {
+    var agents = state.agents || { clients: [], stale_pins: [], registry: [] };
+    var html = '<div class="pf-page">';
+    html += '<div class="pf-page-title">AI systems</div>';
+    html += '<div class="pf-page-subtitle">Every OAuth client registered with this server names itself — anything that can reach the server can register as "ChatGPT". Pin a registration you have checked to the AI system it really is: only a pinned client is shown as verified, and a pin never moves to another registration.</div>';
+
+    html += '<div class="pf-group-title">Registered clients</div>';
+    html += '<div class="pf-agents-list">';
+    if (agents.clients.length === 0) {
+      html += '<div class="pf-agents-row"><div class="pf-agents-meta">No OAuth clients are registered yet.</div></div>';
+    }
+    agents.clients.forEach(function (c) {
+      html += '<div class="pf-agents-row" data-agent-client="' + esc(c.client_id) + '">';
+      html += '<div class="pf-agents-head"><div class="pf-agents-name">' +
+        (c.client_name ? 'Registered as \u201c' + esc(c.client_name) + '\u201d' : 'No name registered') + '</div>';
+      html += '<div class="pf-agents-meta">last used ' + esc(c.last_used) + '</div></div>';
+      html += '<div class="pf-agents-meta">' + esc(c.client_id) + '</div>';
+      html += '<div class="pf-agents-controls">';
+      if (c.pinned_agent_id) {
+        html += '<span>Pinned to <strong>' + esc(c.pinned_agent_name) + '</strong></span>';
+        html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Unpin" ' +
+          dataAttr('unpin_agent_client', { client_id: c.client_id }) + '>Unpin</div>';
+      } else {
+        html += '<span>Not verified. Pin to:</span>';
+        agents.registry.forEach(function (r) {
+          html += '<div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Pin to ' + esc(r.name) + '" ' +
+            dataAttr('pin_agent_client', { client_id: c.client_id, agent_id: r.id }) + '>' + esc(r.name) + '</div>';
+        });
+      }
+      html += '</div></div>';
+    });
+    html += '</div>';
+
+    if (agents.stale_pins.length > 0) {
+      html += '<div class="pf-group-title">Stale pins</div>';
+      html += '<div class="pf-page-subtitle">These registrations were removed after going unused. Their pins no longer apply to anything; a client that registers again is a new registration and starts unverified.</div>';
+      html += '<div class="pf-agents-list">';
+      agents.stale_pins.forEach(function (p) {
+        html += '<div class="pf-agents-row" data-agent-stale-pin="' + esc(p.client_id) + '">';
+        html += '<div class="pf-agents-head"><div class="pf-agents-name">' + esc(p.agent_name) + '</div></div>';
+        html += '<div class="pf-agents-meta">' + esc(p.client_id) + '</div>';
+        html += '<div class="pf-agents-controls"><div class="pf-btn-secondary" role="button" tabindex="0" aria-label="Remove pin" ' +
+          dataAttr('unpin_agent_client', { client_id: p.client_id }) + '>Remove pin</div></div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
     return html;
   }
 
@@ -1084,6 +1181,7 @@ _JS = r"""
       case 'auto_accept': return renderAutoAccept(state);
       case 'privacy': return renderPrivacy(state);
       case 'audit': return renderAudit(state);
+      case 'agents': return renderAgents(state);
       case 'about': return renderAbout(state);
       default: return renderGeneral(state);
     }
@@ -1383,7 +1481,7 @@ _JS = r"""
 """
 
 
-_ALL_SECTIONS = ("general", "connectors", "auto_accept", "privacy", "audit", "about")
+_ALL_SECTIONS = ("general", "connectors", "auto_accept", "privacy", "audit", "agents", "about")
 
 # The four actions web/routes_settings.py's own bridge shim intercepts
 # client-side rather than forwarding to the generic dispatcher (that
@@ -1421,12 +1519,15 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
 
     Org mode gets ``org_settings_scope.NOT_APPLICABLE_ACTIONS`` (every
     action with no real org route at all -- see that module for the
-    single source of truth) plus two section-level decisions this
-    function itself owns, both narrower than "has an org route": Connectors
-    and Audit Log have no applicable action *and* nothing else worth
-    showing (no read-only connector list or audit history exists for org
-    mode today -- see this phase's own PR description), so the whole
-    section is hidden rather than rendered empty; General and Privacy
+    single source of truth) plus section-level decisions this function
+    itself owns, all narrower than "has an org route": Connectors has no
+    applicable action *and* nothing else worth showing (no read-only
+    connector list exists for org mode today), so the whole section is
+    hidden rather than rendered empty; Audit Log (AGT-5) is shown to every
+    principal as a read-only list of their own recent decisions, its
+    local-only export and log-level controls suppressed through
+    ``not_applicable_actions``; AI systems (AGT-5) is org-admin-only and
+    never shown in local mode; General and Privacy
     Filter are further gated on ``is_admin`` -- the admin-only privacy/PII
     split #400 established and this phase keeps (every action either page
     can post is itself ``admin_only`` in ``ACTION_SCOPES``, so a non-admin
@@ -1436,14 +1537,16 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     if mode != ORG_MODE:
         return {
             "mode": LOCAL_MODE, "is_admin": False,
-            "sections": dict.fromkeys(_ALL_SECTIONS, True),
+            # AGT-5: the AI-system pin page is org-only -- local mode has no DCR
+            # registrations to pin (settings.yaml's agent_overrides: only relabels, ADR 0037).
+            "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "agents": False},
             "not_applicable_actions": [],
         }
     return {
         "mode": ORG_MODE, "is_admin": is_admin,
         "sections": {
             "general": is_admin, "connectors": False, "auto_accept": True,
-            "privacy": is_admin, "audit": False, "about": True,
+            "privacy": is_admin, "audit": True, "agents": is_admin, "about": True,
         },
         "not_applicable_actions": sorted(NOT_APPLICABLE_ACTIONS | _LOCAL_ONLY_BESPOKE_ACTIONS),
     }

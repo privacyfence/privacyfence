@@ -462,7 +462,10 @@ class TestConnectorIconsSurviveLiveUpdates:
         # pending (see test_icon_css_present_even_when_nothing_is_pending
         # below), so the count is the whole bundled set's size, not "gmail"
         # alone -- and still exactly once per connector, not once per row.
-        assert html.count("data:image/png;base64,") == len(approval_icons.all_connector_icons())
+        # The bundled agent marks ride along the same way, once each.
+        assert html.count("data:image/png;base64,") == (
+            len(approval_icons.all_connector_icons()) + len(approval_icons.all_agent_icons())
+        )
 
     def test_a_connector_with_no_bundled_icon_still_gets_a_letter_badge(self):
         rows = self._rows("nosuchconnector")
@@ -536,3 +539,97 @@ class TestFirstRunEmptyState:
         rows = [approval_list_html.row_from_approval(_real_card())]
         html = approval_list_html.build_list_html(rows, csrf="t", any_authed=False)
         assert "Nothing is governed yet." not in html.split("<script")[0]
+
+
+class TestAgentOnTheRow:
+    """AGT-4: each row shows who is asking in the same tiered form as the
+    card (agent_label.py) -- only the attested tier draws the vendor's mark."""
+
+    @staticmethod
+    def _row_for(agent):
+        return approval_list_html._row_html(approval_list_html.row_from_approval(_card(agent=agent)))
+
+    def test_unattributed_row_is_unknown_not_blank_not_claude(self):
+        # Verification 3 (ADR 0006): no usable signal renders as unknown on the list too.
+        from privacyfence.agent_identity import UNKNOWN_AGENT, UNRECOGNISED_LABEL
+
+        for card in (_card(), _card(agent=UNKNOWN_AGENT)):
+            row_html = approval_list_html._row_html(approval_list_html.row_from_approval(card))
+            assert 'data-agent-tier="unknown"' in row_html
+            assert f'<span class="pf-approval-agent-name">{UNRECOGNISED_LABEL}</span>' in row_html
+            assert "not verified" in row_html
+            assert "Claude" not in row_html
+
+    def test_a_row_dict_with_no_agent_field_is_unknown(self):
+        row = approval_list_html.row_from_approval(_card())
+        del row["agent"]
+        assert 'data-agent-tier="unknown"' in approval_list_html._row_html(row)
+
+    def test_an_unexpected_tier_is_treated_as_unknown(self):
+        html = approval_list_html._agent_html({"tier": "bogus", "headline": "X", "claim": "", "icon_id": "claude"})
+        assert 'data-agent-tier="unknown"' in html
+        assert "pf-approval-agent-mark" not in html
+
+    def test_attested_row_draws_the_mark_and_claimed_row_does_not(self):
+        from privacyfence.agent_identity import AgentSource, identify
+
+        attested = self._row_for(identify("claude-code", "", AgentSource.OVERRIDE))
+        claimed = self._row_for(identify("claude-code", "", AgentSource.CLIENT_INFO))
+        assert 'pf-approval-agent-mark pf-approval-agent-mark-claude-code' in attested
+        assert '<span class="pf-approval-agent-name">Claude Code</span>' in attested
+        assert "not verified" not in attested
+        assert "pf-approval-agent-mark" not in claimed
+        assert '<span class="pf-approval-agent-name">Says it is Claude Code</span>' in claimed
+        assert "not verified" in claimed
+        assert attested != claimed
+
+    def test_attested_row_with_no_bundled_mark_draws_none(self):
+        html = approval_list_html._agent_html(
+            {"tier": "attested", "headline": "Z", "claim": "", "icon_id": "no-such-agent"}
+        )
+        assert "pf-approval-agent-mark" not in html
+        assert "pf-approval-agent-glyph" not in html
+
+    def test_unmatched_claim_is_shown_escaped_with_bidi_stripped(self):
+        from privacyfence.agent_identity import AgentSource, identify
+
+        row_html = self._row_for(identify("<b>x</b>‮⁧y", "", AgentSource.CLIENT_INFO))
+        assert 'data-agent-tier="unknown"' in row_html
+        assert "&lt;b&gt;x&lt;/b&gt;y" in row_html
+        assert "<b>" not in row_html
+        assert "‮" not in row_html and "⁧" not in row_html
+
+    def test_every_bundled_agent_mark_is_baked_into_the_page_once(self):
+        from privacyfence import approval_icons
+
+        html = approval_list_html.build_list_html([], csrf="t")
+        for agent_id, uri in approval_icons.all_agent_icons().items():
+            assert html.count(uri) == 1, agent_id
+            assert f".pf-approval-agent-mark-{agent_id}{{" in html
+        assert json.dumps(sorted(approval_icons.all_agent_icons())) in html
+
+    def test_live_rerender_mirrors_the_agent_label(self):
+        js = approval_list_html._JS
+        assert "function agentHtml(agent)" in js
+        assert "agentHtml(row.agent)" in js
+        assert "pf-approval-agent-glyph" in js
+        assert "pf-approval-agent-unverified" in js
+
+    def test_summary_dict_carries_the_tiered_label(self):
+        from privacyfence.agent_identity import AgentSource, agent_scope, identify
+
+        with agent_scope(identify("openai-mcp", "", AgentSource.CLIENT_INFO)):
+            approval = _real_card()
+        assert approval.to_summary_dict()["agent"] == {
+            "tier": "claimed", "headline": "Says it is ChatGPT", "claim": "", "icon_id": "",
+        }
+
+    def test_an_agent_icon_with_an_unsafe_id_gets_no_css_rule(self, monkeypatch):
+        # The id is interpolated into a CSS selector, so anything that isn't
+        # a plain slug is dropped rather than escaped -- same as connectors.
+        from privacyfence import approval_icons
+
+        monkeypatch.setattr(approval_icons, "all_agent_icons", lambda: {
+            'x"}body{color:red': "data:image/png;base64,AAAA", "claude": "data:image/png;base64,BBBB",
+        })
+        assert approval_list_html._agent_icon_uris() == {"claude": "data:image/png;base64,BBBB"}

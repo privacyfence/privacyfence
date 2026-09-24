@@ -204,7 +204,7 @@ class _DraftSender:
     def write_content_scan_text(self, body: str, body_markdown: str) -> str | None:
         # The signature is the user's own contact block, not content Claude
         # drafted: scanning it would flag its phone number/address on every
-        # draft. See docs/adr/0036-gmail-draft-signature-is-shown-but-not-write-scanned.md.
+        # draft. See docs/adr/0038-gmail-draft-signature-is-shown-but-not-write-scanned.md.
         return _preview_body_text(body, body_markdown) if self.signature_html else None
 
 

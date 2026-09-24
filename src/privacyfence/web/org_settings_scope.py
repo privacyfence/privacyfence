@@ -10,8 +10,9 @@ unclassified. PSC-4b merges `web/routes_settings.py` and the former
 `web/routes_org_settings.py` into one dispatcher (`routes_settings.py`'s
 `build_routes`/`build_org_routes`), and that inverts the relationship:
 `ACTION_SCOPES` below is now the primary declaration, and `_ALLOWED_ACTIONS`
-is *projected* from it (every action whose scope names `LOCAL_MODE`, which
-is every action there is -- local mode's own dispatcher predates this
+is *projected* from it (every action whose scope names `LOCAL_MODE` -- every
+action there is except AGT-5's two org-only AI-system pin actions, which
+have no local-mode meaning at all; local mode's own dispatcher predates this
 split and was never itself gated by it).
 
 Each action declares, in one place:
@@ -124,6 +125,18 @@ ACTION_SCOPES: dict[str, ActionScope] = {
     "telegram_submit_2fa": ActionScope(modes=frozenset({LOCAL_MODE})),
     "telegram_cancel_auth": ActionScope(modes=frozenset({LOCAL_MODE})),
     "set_notifications_detail": ActionScope(modes=frozenset({LOCAL_MODE})),
+    # ---------------------------------------------------------------- #
+    # ORG_MODE-only, admin-only (AGT-5, ADR 0035 decision 3): pin a DCR
+    # registration's client_id to a registry AI system, or remove the pin.
+    # A pin creates attested identity -- the only kind a rule may key on --
+    # so both are also sensitive (routes_settings._ORG_ONLY_SENSITIVE_
+    # ACTIONS: step-up gated). There is no LOCAL_MODE route and never will
+    # be: local mode has no DCR registrations to pin; its equivalent is
+    # settings.yaml's agent_overrides: section (agent_overrides.py).
+    # ---------------------------------------------------------------- #
+    "pin_agent_client": ActionScope(modes=frozenset({ORG_MODE}), admin_only=True),
+    "unpin_agent_client": ActionScope(modes=frozenset({ORG_MODE}), admin_only=True),
+
     # B9: hardcodes LOCAL_PRINCIPAL throughout (the credential check, the
     # config/settings.yaml section it writes, the LiveStepUpConfig it
     # updates) -- local mode's own single-principal, file-based step_up

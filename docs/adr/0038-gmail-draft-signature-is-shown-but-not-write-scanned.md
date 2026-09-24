@@ -1,4 +1,4 @@
-# ADR 0036: a Gmail draft's appended signature is shown in the approval popup but not write-scanned
+# ADR 0038: a Gmail draft's appended signature is shown in the approval popup but not write-scanned
 
 ## Status
 

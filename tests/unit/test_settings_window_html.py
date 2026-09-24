@@ -501,7 +501,10 @@ class TestOrgCapabilities:
         caps = self._extract_capabilities(build_html(_make_state()))
         assert caps["mode"] == "local"
         assert caps["is_admin"] is False
-        assert all(caps["sections"].values())
+        # AGT-5: AI systems is org-only (no DCR registrations to pin locally);
+        # every other section stays.
+        assert caps["sections"]["agents"] is False
+        assert all(v for k, v in caps["sections"].items() if k != "agents")
         assert caps["not_applicable_actions"] == []
 
     def test_local_state_is_unaffected_by_capabilities(self):
@@ -527,11 +530,22 @@ class TestOrgCapabilities:
         # Per-principal, not admin-gated -- every org principal keeps this.
         assert caps["sections"]["auto_accept"] is True
 
-    def test_org_mode_never_shows_connectors_or_audit(self):
+    def test_org_mode_never_shows_connectors(self):
         for is_admin in (True, False):
             caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=is_admin))
             assert caps["sections"]["connectors"] is False
-            assert caps["sections"]["audit"] is False
+
+    def test_org_mode_shows_audit_to_every_principal_without_its_local_only_controls(self):
+        # AGT-5: each principal's own recent decisions, read-only -- export and
+        # log level have no org route, so the page must not draw them.
+        for is_admin in (True, False):
+            caps = self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=is_admin))
+            assert caps["sections"]["audit"] is True
+            assert {"export_audit_log", "set_log_level"} <= set(caps["not_applicable_actions"])
+
+    def test_ai_systems_page_is_org_admin_only(self):
+        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=True))["sections"]["agents"] is True
+        assert self._extract_capabilities(build_html(_make_state(), mode="org", is_admin=False))["sections"]["agents"] is False
 
     def test_not_applicable_actions_match_org_settings_scope(self):
         from privacyfence.web.org_settings_scope import NOT_APPLICABLE_ACTIONS

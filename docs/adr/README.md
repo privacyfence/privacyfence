@@ -111,7 +111,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0003](0003-separated-installs-only.md) | Every shipped local-mode install is privilege-separated | Accepted |
 | [0004](0004-retire-the-v1-auto-accept-config-model.md) | Retire the v1 auto-accept config model | Accepted |
 | [0005](0005-moving-the-approval-decision-off-the-device.md) | Moving the approval decision off the device | Proposed |
-| [0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) | Attribute a request to the AI system from the connection, with ranked provenance | Accepted; not implemented; amended by 0035 |
+| [0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) | Attribute a request to the AI system from the connection, with ranked provenance | Accepted; implemented; amended by 0035, 0037 |
 | [0007](0007-local-file-bridge.md) | Local file access crosses the privilege-separation boundary through the `.mcpb` shim | Accepted; extended by 0028 |
 | [0008](0008-one-principal-per-os-user.md) | One principal per OS user, identified by the kernel | Accepted; implemented in part |
 | [0009](0009-use-the-official-mcp-sdk.md) | Use the official `mcp` SDK for Streamable HTTP, not a hand-rolled transport | Accepted (retroactive) |
@@ -140,5 +140,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0032](0032-org-settings-share-locals-generic-action-dispatcher.md) | Org mode's settings writes route through local mode's generic action dispatcher | Accepted |
 | [0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md) | One route layer per surface (approvals, settings), with an auth adapter per mode, not a second module | Accepted |
 | [0034](0034-sensitive-settings-writes-require-step-up-in-both-modes.md) | Sensitive settings writes require WebAuthn step-up in both local and org mode | Accepted |
-| [0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md) | Agent attribution reads the handshake on every call; org mode attests only admin-pinned OAuth clients | Accepted; not implemented |
-| [0036](0036-gmail-draft-signature-is-shown-but-not-write-scanned.md) | A Gmail draft's appended signature is shown in the approval popup but not write-scanned | Accepted |
+| [0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md) | Agent attribution reads the handshake on every call; org mode attests only admin-pinned OAuth clients | Accepted |
+| [0036](0036-card-copy-names-the-caller-through-one-placeholder.md) | Card copy names the caller through one placeholder, filled from the verified name or "the AI system"; connectors never learn who is asking | Accepted (retroactive) |
+| [0037](0037-a-local-override-is-a-relabel-and-never-attests.md) | A local `agent_overrides:` match is a relabel recorded as claimed on every install; local mode has no attested source | Accepted |
+| [0038](0038-gmail-draft-signature-is-shown-but-not-write-scanned.md) | A Gmail draft's appended signature is shown in the approval popup but not write-scanned | Accepted |

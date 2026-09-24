@@ -90,6 +90,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .agent_identity import UNKNOWN_AGENT, AgentIdentity, current_agent
+from .agent_label import label_for
 from .principal import current_principal
 
 logger = logging.getLogger(__name__)
@@ -382,6 +383,11 @@ class PendingApproval:
             # allowed to at its own detail level; web_shell.py's notification
             # body never reads it below "detailed".
             "summary": self.summary,
+            # Who is asking, as a tiered label (agent_label.AgentLabel.to_dict():
+            # tier, headline, claim, icon_id) -- the approval list's live
+            # re-render shows it on every row. Never gated content: it names
+            # the caller, which the card itself already shows.
+            "agent": label_for(self.agent).to_dict(),
             "created_at": _iso(self.created_at),
             "expires_at": _iso(self.expires_at),
             "decided": self.is_finalized(),

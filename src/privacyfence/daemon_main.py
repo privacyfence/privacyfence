@@ -90,6 +90,7 @@ import yaml
 
 from . import (
     __version__,
+    agent_overrides,
     audit_forwarding,
     org_bundle_signing,
     org_mode,
@@ -850,6 +851,8 @@ def _maybe_start_web_server(
         notifications_detail=str(notifications_config.get("detail", "minimal")),
         # #426 Phase 1: mounts /security for local-mode passkey enrollment.
         step_up=local_step_up,
+        # ADR 0006 option D / ADR 0037: a relabel only, never an attested source.
+        agent_overrides=agent_overrides.from_config(config),
     )
     server.start()
     # The pending-result URL gate.py hands back to Claude (§5.2 point 4) is

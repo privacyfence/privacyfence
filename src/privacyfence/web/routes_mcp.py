@@ -53,7 +53,8 @@ from starlette.types import ASGIApp
 
 from .. import __version__ as PRIVACYFENCE_VERSION
 from .. import local_files
-from ..agent_identity import UNKNOWN_AGENT, AgentIdentity, AgentSource, agent_scope, identify
+from ..agent_identity import UNKNOWN_AGENT, AgentIdentity, AgentSource, agent_scope, identify, identify_registry_id
+from ..agent_overrides import AgentOverrides
 from ..connector import Connector
 from ..principal import Principal, principal_scope
 from ..safe_errors import public_message
@@ -141,6 +142,11 @@ def _connection_of(ctx: ServerRequestContext) -> Connection | None:
 # tool call; local mode has no DCR registrations and passes nothing.
 ClientNameLookup = Callable[[str], str | None]
 
+# Looks up the registry agent_id an org admin pinned an access token's ``client_id`` to, or None
+# (ADR 0035 decision 3). Org mode passes ``OrgOAuthProvider.pinned_agent_id``; the pin is the one
+# signal on this path the caller did not choose, so it is the one that records ``oauth_client``.
+PinnedAgentLookup = Callable[[str], str | None]
+
 
 def _claimed_client_info(ctx: ServerRequestContext) -> tuple[object, object]:
     """The ``clientInfo`` name and version this request's client claimed, or ``(None, None)``.
@@ -157,19 +163,37 @@ def _claimed_client_info(ctx: ServerRequestContext) -> tuple[object, object]:
 
 def _resolve_agent(
     ctx: ServerRequestContext, access_token: AccessToken | None, client_names: ClientNameLookup | None,
+    *, pinned_agents: PinnedAgentLookup | None = None, overrides: AgentOverrides | None = None,
 ) -> AgentIdentity:
-    """The AI system a gated tool call is attributed to (ADR 0006, ADR 0035) -- always a *claim*.
+    """The AI system a gated tool call is attributed to (ADR 0006, ADR 0035), strongest signal
+    first -- ADR 0006 decision 2's ranking:
 
-    Org mode's DCR ``client_name`` is tried first and the handshake ``clientInfo`` is the
-    fallback. Both are strings the client chose, so both record ``AgentSource.CLIENT_INFO``
-    (ADR 0035 / gate G1: an unpinned DCR name is claimed) and neither can ever be attested here
-    -- nothing on this path produces ``override`` or ``oauth_client``. ``identify`` sanitizes
-    every string and gives ``UNKNOWN_AGENT`` when no usable name is left."""
+    1. an org admin's pin of the token's ``client_id`` -- ``oauth_client``, the only attested
+       source on this path. The DCR ``client_name`` never overrides a pin, and the pin never
+       follows the name;
+    2. a local ``agent_overrides:`` relabel (``agent_overrides.py``) -- ``client_info``: it is
+       selected by the name the caller sends, so it is a claim on every install (ADR 0037);
+    3. org mode's DCR ``client_name``, then the handshake ``clientInfo`` -- both strings the
+       client chose, so both ``client_info`` (ADR 0035 / gate G1: an unpinned DCR name is
+       claimed).
+
+    Nothing a caller supplies can reach an attested source here: a pin is keyed by the access
+    token's ``client_id``, which the authorization server issued, and every caller-supplied
+    string -- an override's selector included -- records ``client_info``. ``identify``
+    sanitizes every string and gives ``UNKNOWN_AGENT`` when no usable name is left."""
+    name, version = _claimed_client_info(ctx)
+    if pinned_agents is not None and access_token is not None:
+        pinned_id = pinned_agents(access_token.client_id)
+        pinned = identify_registry_id(pinned_id, version, AgentSource.OAUTH_CLIENT) if pinned_id else None
+        if pinned is not None:
+            return pinned
+    override = overrides.resolve(name, version) if overrides is not None else None
+    if override is not None:
+        return override
     if client_names is not None and access_token is not None:
         dcr_agent = identify(client_names(access_token.client_id), "", AgentSource.CLIENT_INFO)
         if dcr_agent is not UNKNOWN_AGENT:
             return dcr_agent
-    name, version = _claimed_client_info(ctx)
     return identify(name, version, AgentSource.CLIENT_INFO)
 
 
@@ -264,7 +288,10 @@ class _PrivacyFenceServer(MCPServer):
         )
 
 
-def build_mcp_server(dispatcher: McpDispatcher, *, client_names: ClientNameLookup | None = None) -> MCPServer:
+def build_mcp_server(
+    dispatcher: McpDispatcher, *, client_names: ClientNameLookup | None = None,
+    pinned_agents: PinnedAgentLookup | None = None, overrides: AgentOverrides | None = None,
+) -> MCPServer:
     """Builds the low-level MCP ``Server``, wired to ``dispatcher`` for both
     tool listing and tool calls. A fresh ``Server`` per daemon process
     (there's exactly one dispatcher, and its connector set can change live --
@@ -390,11 +417,13 @@ def build_mcp_server(dispatcher: McpDispatcher, *, client_names: ClientNameLooku
         # ADR 0006: which AI system made this call, entered beside the
         # principal for everything downstream (audit rows, a pending
         # approval's captured identity) to read back via current_agent().
-        # Meta-tools stay unattributed (plan Invariant 5): they are not
+        # Meta-tools stay unattributed (ADR 0006, Consequences): they are not
         # gated calls. Never read from the request body -- see
         # _is_initialize for why that line is drawn.
         is_meta_tool = name in mcp_tools.META_TOOL_NAMES
-        agent = UNKNOWN_AGENT if is_meta_tool else _resolve_agent(ctx, access_token, client_names)
+        agent = UNKNOWN_AGENT if is_meta_tool else _resolve_agent(
+            ctx, access_token, client_names, pinned_agents=pinned_agents, overrides=overrides,
+        )
         bridge_available = _request_header(ctx, _FILE_BRIDGE_HEADER) is not None
         uploads = _file_bridge_uploads(params)
         base_url = str(ctx.request.base_url) if ctx.request is not None else ""
@@ -734,6 +763,7 @@ class _RehomeStaleInitialize:
 def build_mcp_asgi_app(
     dispatcher: McpDispatcher, *, token: str | None = None, verifier: TokenVerifier | None = None,
     resource_metadata_url: AnyHttpUrl | None = None, client_names: ClientNameLookup | None = None,
+    pinned_agents: PinnedAgentLookup | None = None, overrides: AgentOverrides | None = None,
 ) -> tuple[ASGIApp, StreamableHTTPSessionManager]:
     """Builds the ``/mcp`` endpoint app -- bearer-token authenticated,
     audience-separated from the approval surface's session cookie (§10.3).
@@ -754,9 +784,11 @@ def build_mcp_asgi_app(
     mode has no such document to point to, so it stays ``None`` there.
     ``client_names`` (org mode only) is ``OrgOAuthProvider.client_name``,
     which attributes each tool call to its DCR client's claimed name --
-    see ``_resolve_agent``.
+    see ``_resolve_agent``. ``pinned_agents`` (org mode only) is
+    ``OrgOAuthProvider.pinned_agent_id``, the admin's pins; ``overrides`` (local mode only) is
+    ``settings.yaml``'s ``agent_overrides:`` section (``agent_overrides.py``).
     """
-    server = build_mcp_server(dispatcher, client_names=client_names)
+    server = build_mcp_server(dispatcher, client_names=client_names, pinned_agents=pinned_agents, overrides=overrides)
     session_manager = StreamableHTTPSessionManager(app=server, json_response=False, stateless=False)
 
     if verifier is None:
@@ -777,6 +809,7 @@ def build_mcp_asgi_app(
 def mount_mcp(
     dispatcher: McpDispatcher, *, token: str | None = None, verifier: TokenVerifier | None = None,
     resource_metadata_url: AnyHttpUrl | None = None, client_names: ClientNameLookup | None = None,
+    pinned_agents: PinnedAgentLookup | None = None, overrides: AgentOverrides | None = None,
 ) -> tuple[Route, StreamableHTTPSessionManager]:
     """The ``/mcp`` route -- an exact-path ``Route`` with no ``methods``
     restriction (matches GET/POST/DELETE alike, exactly like the official
@@ -786,7 +819,7 @@ def mount_mcp(
     """
     app, session_manager = build_mcp_asgi_app(
         dispatcher, token=token, verifier=verifier, resource_metadata_url=resource_metadata_url,
-        client_names=client_names,
+        client_names=client_names, pinned_agents=pinned_agents, overrides=overrides,
     )
     return Route(MCP_PATH, endpoint=app), session_manager
 

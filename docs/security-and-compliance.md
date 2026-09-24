@@ -847,6 +847,16 @@ Org deployments can use the implemented forwarding/export path for external rete
 
 Treat audit data as sensitive: it can reveal which services/tools/resources were used even when protected content itself was not released.
 
+### Which AI system the audit log names, and how far to believe it
+
+Each gated connector call records which AI system made it, and how that was learned (`agent_source`; the fields are in [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md#which-ai-system-made-the-request)). The approval card, the approval list and the Audit Log page show the same thing in three forms: **Verified**, **Not verified** ("Says it is ChatGPT"), or **Unrecognised AI system** with the name the client sent.
+
+**Local mode.** Every AI system one OS user runs holds that user's same MCP token ([ADR 0008](adr/0008-one-principal-per-os-user.md)), so nothing the token proves can tell them apart. The name an AI system gives is what it says about itself, and PrivacyFence records it as that: *Not verified*. Local mode has no verified source at all. An `agent_overrides:` entry in `settings.yaml` maps a name an AI system gives to the one it is, but only relabels it: the call stays *Not verified* on every install, privilege-separated or not. The file may be out of the AI system's reach, but the mapping is selected by the name the caller sends, and any process holding the shared token can send a mapped name ([ADR 0037](adr/0037-a-local-override-is-a-relabel-and-never-attests.md)). A verified local identity needs a credential per AI system, which does not exist yet.
+
+**Organization mode.** An OAuth client's registered name is chosen by whatever registered it, so on its own it is *Not verified*. An administrator can pin a registration to an AI system on the admin-only *AI systems* settings page; pinning and unpinning need a passkey when `step_up.require_passkey` is on ([ADR 0034](adr/0034-sensitive-settings-writes-require-step-up-in-both-modes.md)), and every pin and unpin is audited. Only a call whose access token belongs to a pinned registration is *Verified* — the only verified identity PrivacyFence records in either mode. A pin names one registration: it never moves to another client, including one that registers again under the same name, and it stops applying once the registration expires ([ADR 0035](adr/0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md) decision 3).
+
+**In both modes, an unverified name never changes an outcome.** It does not select a rule, auto-accept a call or release data; it is a reporting field. A verified one does not change an outcome today either — the attested tier is only the one a future rule would be allowed to key on ([ADR 0006](adr/0006-attributing-a-request-to-the-ai-system-that-made-it.md) decision 3). The vendor's logo appears only beside a verified identity, and the card's own wording names the AI system only when it is verified; otherwise it says "the AI system" ([ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md)).
+
 ## Dependencies and supply chain
 
 Runtime/test/build dependencies are declared in `pyproject.toml`, with release/dependency audit workflows under `.github/workflows/` and lock/update tooling under `requirements/` and `scripts/`.

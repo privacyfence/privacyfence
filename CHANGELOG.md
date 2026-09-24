@@ -55,7 +55,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   address that isn't one of them is refused before any popup. Gmail's separate "new email" and
   "reply" signature choices aren't available through its API, and a signature image uploaded into
   Gmail itself (rather than linked) may not display. The user's own signature doesn't trigger the
-  popup's "possible personal data" note (ADR 0036).
+  popup's "possible personal data" note (ADR 0038).
 
 - **The audit log and its weekly Excel export gain four columns for which AI system made each
   request** — `agent_id`, `agent_name`, `agent_version` and `agent_source` (audit schema 5,
@@ -70,6 +70,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never change what is allowed: the same call gets the same decision, rule match and released
   data whatever name the client gives. Names are sanitized and length-capped; a client that gives
   none is recorded as unknown. PrivacyFence's own `privacyfence_*` tools are not attributed.
+- **The approval card and the approval list now show which AI system is asking, and how sure
+  PrivacyFence is of it** (ADR 0006 decision 4). A verified identity shows the product's own logo,
+  its name and a *Verified* badge. A name the AI system gave for itself shows no logo, reads
+  "Says it is ChatGPT" and is marked *Not verified*; the card's own wording then says "the AI
+  system" rather than repeating the claimed name. A client that gives no name, or a name
+  PrivacyFence does not recognise, shows "Unrecognised AI system" with the name it sent. The card
+  no longer says "Claude" unless the request was identified as Claude. Logos are bundled with
+  the app, never downloaded, and never taken from what the client sends. Today every identity is
+  one the client gave for itself, so every card shows the *Not verified* form until verified
+  identities arrive.
+- **An administrator can now verify which AI system an OAuth client is** (ADR 0006, ADR 0035
+  decision 3). In organization mode, a new admin-only *AI systems* settings page lists every OAuth
+  client registered with the server and pins one to the AI system it really is. Pinning and
+  unpinning need a passkey when step-up is on, and every change is recorded in the audit log. Only
+  a pinned client is shown and recorded as verified; the name a client registered with never
+  overrides a pin, and a pin never moves to another registration. In local mode, a new optional
+  `settings.yaml` section, `agent_overrides:`, maps the name an AI system gives to the one it is.
+  It only relabels the name: the request is still marked *Not verified* on every install,
+  privilege-separated or not, because the mapping is chosen by the name the AI system sends and
+  every AI system on the machine shares the same local credential (ADR 0037).
+- **The Audit Log settings page shows which AI system made each request, and how sure
+  PrivacyFence is of it**, in both modes. In organization mode every user now sees the page, with
+  their own recent decisions.
 
 ### Fixed
 

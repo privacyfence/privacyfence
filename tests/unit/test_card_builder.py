@@ -9,7 +9,15 @@ from __future__ import annotations
 import html
 import re
 
-from privacyfence import card_builder
+from privacyfence import approval_icons, card_builder
+from privacyfence.agent_identity import (
+    REGISTRY,
+    UNKNOWN_AGENT,
+    UNRECOGNISED_LABEL,
+    AgentIdentity,
+    AgentSource,
+    identify,
+)
 from privacyfence.approval_window_html import NARROW, WIDE
 
 
@@ -168,48 +176,59 @@ class TestBuildCardHtml:
         assert "Seen 2 times this week" in html
 
 
+def _agent(agent_id: str, source: AgentSource) -> AgentIdentity:
+    entry = next(e for e in REGISTRY if e.agent_id == agent_id)
+    return identify(entry.client_names[0], "1.0", source)
+
+
+ATTESTED_CHATGPT = _agent("chatgpt", AgentSource.OVERRIDE)
+CLAIMED_CHATGPT = _agent("chatgpt", AgentSource.CLIENT_INFO)
+
+
 class TestAgentDisplayName:
     """Every string on the card that names the caller of this request comes
-    from one ``agent_display_name`` -- including the rows connectors write
-    with approval_window_html.AGENT_PLACEHOLDER, since connectors never
-    learn who is asking. The default (today's "Claude") is pinned by every
-    other test in this suite rendering unchanged."""
+    from one subject -- including the rows connectors write with
+    approval_window_html.AGENT_PLACEHOLDER, since connectors never learn who
+    is asking. The subject is the attested name, or "the AI system" for a
+    claimed or unknown caller (agent_label.py): a claimed brand never
+    becomes the subject of the card's own sentences."""
 
     _NEW_INFO = {
         "Content returned to {agent}": "None — file bytes are never sent",
         "Note": "More messages exist -- {agent} will see this too",
     }
 
-    def _read_card(self, name: str) -> str:
+    def _read_card(self, agent: AgentIdentity = UNKNOWN_AGENT) -> str:
         return card_builder.build_card_html(
             title="Read Message", preview={"From": "someone@example.com"},
             details_text="The message body.", is_read=True, layout=NARROW,
             claude_reason="to answer the question", visibility={"Body": "block"},
-            new_info=self._NEW_INFO, agent_display_name=name,
+            new_info=self._NEW_INFO, agent=agent,
         )
 
-    def _write_card(self, name: str) -> str:
+    def _write_card(self, agent: AgentIdentity = UNKNOWN_AGENT) -> str:
         return card_builder.build_card_html(
             title="Send Message", preview={"To": "someone@example.com"},
             details_text="Hi.", is_read=False, layout=NARROW,
-            claude_reason="the user asked", agent_display_name=name,
+            claude_reason="the user asked", agent=agent,
         )
 
     @staticmethod
-    def _in_scope(name: str) -> tuple[list[str], list[str]]:
+    def _in_scope(name: str, reason_owner: str) -> tuple[list[str], list[str]]:
         """(read-card strings, write-card strings), each already escaped the
         way the card renders it."""
         n = html.escape(name)
+        r = html.escape(reason_owner)
         read = [
             f"What {n} already knows",
             f"Why {n} needs more data",
-            f"{n}’s stated reason · unverified",
+            f"{r}’s stated reason · unverified",
             f"What will be provided to {n}",
             f"Content returned to {n}",
             f"More messages exist -- {n} will see this too",
             f"None — not disclosed to {n}",
         ]
-        write = [f"Why {n} is doing this", f"{n}’s stated reason · unverified"]
+        write = [f"Why {n} is doing this", f"{r}’s stated reason · unverified"]
         return read, write
 
     @staticmethod
@@ -217,20 +236,19 @@ class TestAgentDisplayName:
         # styles.css's own comments name Claude; they aren't card copy.
         return re.sub(r"<style[^>]*>.*?</style>", "", doc, flags=re.S)
 
-    def test_default_is_todays_copy(self):
-        read, _ = self._in_scope("Claude")
-        doc = card_builder.build_card_html(
-            title="Read Message", preview={"From": "someone@example.com"},
-            details_text="The message body.", is_read=True, layout=NARROW,
-            claude_reason="to answer the question", visibility={"Body": "block"},
-            new_info=self._NEW_INFO,
-        )
+    def test_no_identity_uses_the_neutral_subject_never_claude(self):
+        read, write = self._in_scope("the AI system", "The AI system")
+        read_html, write_html = self._read_card(), self._write_card()
         for s in read:
-            assert s in doc, s
+            assert s in read_html, s
+        for s in write:
+            assert s in write_html, s
+        assert "Claude" not in self._without_stylesheet(read_html)
+        assert "Claude" not in self._without_stylesheet(write_html)
 
-    def test_another_name_changes_every_in_scope_string(self):
-        read, write = self._in_scope("Gemini")
-        read_html, write_html = self._read_card("Gemini"), self._write_card("Gemini")
+    def test_an_attested_name_changes_every_in_scope_string(self):
+        read, write = self._in_scope("ChatGPT", "ChatGPT")
+        read_html, write_html = self._read_card(ATTESTED_CHATGPT), self._write_card(ATTESTED_CHATGPT)
         for s in read:
             assert s in read_html, s
         for s in write:
@@ -239,13 +257,109 @@ class TestAgentDisplayName:
         assert "Claude" not in self._without_stylesheet(read_html)
         assert "Claude" not in self._without_stylesheet(write_html)
 
-    def test_a_hostile_name_renders_escaped_in_every_position(self):
-        name = "<script>alert(1)</script>"
-        read, write = self._in_scope(name)
-        read_html, write_html = self._read_card(name), self._write_card(name)
+    def test_a_claimed_name_is_never_the_subject(self):
+        read, write = self._in_scope("the AI system", "The AI system")
+        read_html, write_html = self._read_card(CLAIMED_CHATGPT), self._write_card(CLAIMED_CHATGPT)
         for s in read:
             assert s in read_html, s
         for s in write:
             assert s in write_html, s
-        assert "<script>alert(1)" not in read_html
-        assert "<script>alert(1)" not in write_html
+        for doc in (read_html, write_html):
+            assert "provided to ChatGPT" not in doc
+            assert "Why ChatGPT" not in doc
+            assert "Says it is ChatGPT" in doc
+
+
+def _agent_row(doc: str) -> str:
+    m = re.search(r'<div class="pf-agent [^"]*" data-agent-tier="[^"]*">.*?</div>', doc, flags=re.S)
+    assert m, "no agent row on the card"
+    return m.group(0)
+
+
+class TestAgentTierOnCard:
+    """ADR 0006 decision 4: the card shows who is asking and its tier, and
+    the attested and claimed tiers must not look the same."""
+
+    @staticmethod
+    def _card(agent: AgentIdentity) -> str:
+        return card_builder.build_card_html(
+            title="Read Message", preview={"From": "someone@example.com"},
+            details_text="Body.", is_read=True, layout=NARROW, agent=agent,
+        )
+
+    def test_attested_gets_the_brand_mark_and_no_claim_marker(self):
+        row = _agent_row(self._card(ATTESTED_CHATGPT))
+        mark = approval_icons.icon_data_uri(approval_icons.agent_icon_path("chatgpt"))
+        assert mark.startswith("data:image/png;base64,")
+        assert 'data-agent-tier="attested"' in row
+        assert f'<img class="pf-agent-icon" src="{mark}"' in row
+        assert '<span class="pf-agent-name">ChatGPT</span>' in row
+        assert "Verified" in row
+        assert "Not verified" not in row
+        assert "Says it is" not in row
+
+    def test_claimed_gets_no_brand_mark_and_a_claim_marker(self):
+        doc = self._card(CLAIMED_CHATGPT)
+        row = _agent_row(doc)
+        mark = approval_icons.icon_data_uri(approval_icons.agent_icon_path("chatgpt"))
+        assert 'data-agent-tier="claimed"' in row
+        assert mark not in doc
+        assert "pf-agent-icon" not in row
+        assert '<span class="pf-agent-glyph" aria-hidden="true">?</span>' in row
+        assert '<span class="pf-agent-name">Says it is ChatGPT</span>' in row
+        assert "Not verified" in row
+
+    def test_attested_and_claimed_markup_differ(self):
+        attested = _agent_row(self._card(ATTESTED_CHATGPT))
+        claimed = _agent_row(self._card(CLAIMED_CHATGPT))
+        assert attested != claimed
+
+    def test_every_registry_entry_has_a_bundled_mark(self):
+        # ADR 0035 decision 4: one real mark per registry entry.
+        for entry in REGISTRY:
+            assert approval_icons.agent_icon_path(entry.agent_id), entry.agent_id
+
+    def test_attested_identity_with_no_bundled_mark_draws_no_image(self, monkeypatch):
+        monkeypatch.setattr(approval_icons, "agent_icon_path", lambda agent_id: None)
+        row = _agent_row(self._card(ATTESTED_CHATGPT))
+        assert 'data-agent-tier="attested"' in row
+        assert "<img" not in row
+        assert "pf-agent-glyph" not in row
+
+    def test_unattributed_request_renders_unknown_not_blank_not_claude(self):
+        # Verification 3 (ADR 0006): no usable signal renders as unknown.
+        doc = self._card(UNKNOWN_AGENT)
+        row = _agent_row(doc)
+        assert 'data-agent-tier="unknown"' in row
+        assert f'<span class="pf-agent-name">{UNRECOGNISED_LABEL}</span>' in row
+        assert "pf-agent-claim" not in row
+        assert "Not verified" in row
+        assert "Claude" not in TestAgentDisplayName._without_stylesheet(doc)
+
+    def test_unmatched_name_renders_unknown_with_the_raw_claim(self):
+        agent = identify("claude-exfil", "", AgentSource.CLIENT_INFO)
+        row = _agent_row(self._card(agent))
+        assert 'data-agent-tier="unknown"' in row
+        assert UNRECOGNISED_LABEL in row
+        assert '<span class="pf-agent-claim">“claude-exfil”</span>' in row
+        assert "pf-agent-icon" not in row
+
+    def test_claimed_name_with_html_and_bidi_renders_inert(self):
+        raw = "<img src=x onerror=alert(1)>\u202eevil\u2066&amp;"
+        agent = identify(raw, "", AgentSource.CLIENT_INFO)
+        doc = self._card(agent)
+        row = _agent_row(doc)
+        assert "<img src=x" not in doc
+        assert "onerror=alert(1)>" not in doc.replace("&lt;img src=x onerror=alert(1)&gt;", "")
+        assert "&lt;img src=x onerror=alert(1)&gt;evil&amp;amp;" in row
+        for ch in ("\u202e", "\u2066"):
+            assert ch not in doc
+
+    def test_every_image_on_the_card_is_bundled(self):
+        # Nothing on the card is fetchable: the agent mark, like every other
+        # image, is a data: URI of a file this build ships (ADR 0035
+        # decision 4). The handshake side -- clientInfo.icons never being
+        # read at all -- is pinned in test_routes_mcp_agent_identity.py.
+        doc = self._card(ATTESTED_CHATGPT)
+        assert "pf-agent-icon" in doc
+        assert re.findall(r'<img[^>]*src="(?!data:image/png;base64,)', doc) == []
