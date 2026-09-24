@@ -174,12 +174,9 @@ from .auto_accept import (
     temp_accept_key,
 )
 from .policy import catalogue as policy_catalogue
-from .policy import compat as policy_compat
 from .policy import describe as policy_describe
 from .policy import engine as policy_engine
-from .policy import resource_registry as policy_resource_registry
 from .policy import propose as policy_propose
-from .policy import store as policy_store
 from .pii_detector import (
     PIIAuditMatch,
     describe_match_for_audit,
@@ -192,7 +189,7 @@ logger = logging.getLogger(__name__)
 
 
 class GateDeniedError(RuntimeError):
-    """Raised by ``gated_call()``/``propose_rule_change()``/
+    """Raised by ``gated_call()``/``propose_policy_change()``/
     ``_deny_unattended()`` for a call denied by policy or by the user's own
     decision -- "denied", never "failed". Composed only of static text (see
     each raise site below): unlike the bare ``RuntimeError(str(exc))`` every
@@ -366,7 +363,7 @@ async def _run_in_popup_executor(func, *args, **kwargs) -> Any:
     mode it silently resolved ``current_principal()`` back to the default
     principal for every popup this function drives that registers its own
     ``PendingApproval`` with no pre-registered one handed in --
-    ``show_rule_confirmation_popup`` (propose_rule_change's confirmation,
+    ``show_rule_confirmation_popup`` (propose_policy_change's confirmation,
     and the "Always allow" rule-creation sub-flow above) and
     ``show_pii_confirmation_popup`` chief among them (gated_call's own main
     review/popup path is unaffected: ``_resolve_decision`` already registers
@@ -1246,207 +1243,6 @@ async def gated_call(
             audit(decision="error", auto_accept_rule="", pii_detected=bool(pii_categories or upload_pii_categories))
 
 
-def _rules_for_grant(
-    rt: "policy_resource_registry.GrantResourceType", resource_id: str, enabled_capabilities: list[str],
-) -> list["policy_engine.PolicyRule"]:
-    """The v2 rules a legacy grant's enabled capabilities compile to for one resource id -- built
-    from the same ``targets`` table migration reads (``policy.resource_registry``), scoped to a single
-    ``value=[resource_id]`` rather than the merged multi-resource list a real grant's capability
-    would have carried, since ``propose_rule_change``'s deprecated ``target="grant"`` shape only
-    ever names one resource per call."""
-    by_rule_name: dict[str, set[str]] = {}
-    for capability_key in enabled_capabilities:
-        capability = rt.capabilities.get(capability_key)
-        if capability is None:
-            continue
-        for op_key, rule_name in capability.targets:
-            by_rule_name.setdefault(rule_name, set()).add(op_key)
-    return [
-        policy_engine.PolicyRule(id=rule_name, predicate=rule_name, value=[resource_id], operations=frozenset(ops))
-        for rule_name, ops in sorted(by_rule_name.items())
-    ]
-
-
-def _narrow_or_remove_v2_rule(compiled: "policy_engine.PolicyRule | None", operation_key: str) -> bool:
-    """Remove ``operation_key`` from whichever existing v2 rule shares ``compiled``'s
-    ``(predicate, value, conditions)`` -- the whole rule if that was its only operation, otherwise
-    the rule minus ``operation_key``, re-added. v2 rules are additive-only and keyed by content, not
-    by a single operation, so "remove this one operation's worth of an old v1 rule" (this deprecated
-    alias's own contract) is always a narrowing edit, never a delete of anything wider than what the
-    caller actually asked to remove."""
-    if compiled is None:
-        return False
-    rule_id = policy_store.rule_id_for_rule(compiled)
-    existing = next((r for r in get_policy_v2_rules() if r.id == rule_id), None)
-    if existing is None or operation_key not in existing.operations:
-        return False
-    removed = remove_policy_v2_rule(rule_id)
-    remaining_ops = existing.operations - {operation_key}
-    if remaining_ops:
-        add_policy_v2_rules([policy_engine.PolicyRule(
-            id=existing.id, predicate=existing.predicate, value=existing.value,
-            operations=remaining_ops, conditions=existing.conditions,
-        )])
-    return removed
-
-
-def _remove_v2_grant(rt: "policy_resource_registry.GrantResourceType", resource_id: str) -> bool:
-    """Remove every v2 rule a legacy grant's resource id could have produced under any of its
-    capabilities -- the whole-entry removal ``target="grant"``'s own ``operation="remove"`` always
-    meant under v1, regardless of which capabilities happened to be enabled."""
-    rule_names = {rule_name for capability in rt.capabilities.values() for _op, rule_name in capability.targets}
-    changed = False
-    for rule_name in sorted(rule_names):
-        rule_id = policy_store.rule_id_for(rule_name, [resource_id], ())
-        if remove_policy_v2_rule(rule_id):
-            changed = True
-    return changed
-
-
-async def propose_rule_change(
-    *,
-    target: str,          # "rule" | "grant"
-    operation: str,        # "add" | "update" | "remove"
-    reason: str,
-    operation_key: str = "",
-    rule_name: str = "",
-    value: Any = None,
-    old_value: Any = None,
-    connector: str = "",
-    config_key: str = "",
-    resource_id: str = "",
-    name: str | None = None,
-    tab: str | None = None,
-    capabilities: dict[str, bool] | None = None,
-) -> dict[str, Any]:
-    """Bridge-facing counterpart to the popup's own "Always allow" flow -- kept as a deprecated
-    alias of ``propose_policy_change`` below (P7), translating its v1-shaped ``target``/
-    ``operation_key``/``rule_name`` (or ``connector``/``config_key``/``resource_id``/
-    ``capabilities``) request into the on-disk v2 ``auto_accept:`` section (P9). Never applies a
-    change without a human confirming via the same show_rule_confirmation_popup() dialog
-    gated_call() uses for "Always allow" -- this is a "gate only" write path: config changes go
-    through the approval gate without a real tool call behind them. Unlike gated_call(), there's no
-    underlying tool call or auto-accept short-circuit here: every proposal reaches a human (or is
-    denied outright in an unattended session, same as gated_call), even if an identical rule
-    already exists -- confirming again is cheap, silently no-op'ing a request Claude explicitly
-    made is more surprising.
-
-    ``target="grant"``'s ``tab`` parameter (a secondary key some multi-workspace Slack/Telegram
-    configs used to disambiguate a resource id) has no v2 equivalent and is ignored -- v2 rules are
-    additive by ``(predicate, value, conditions)`` alone, not by any secondary key.
-
-    Raises GateDeniedError if the user declines, or if called on an unattended
-    connection (see is_unattended()) -- mirroring gated_call's own "deny ==
-    exception" contract so a declined proposal surfaces to Claude as a clear
-    tool error rather than a result it has to remember to check.
-    """
-    if target == "rule":
-        compiled = policy_compat.compile_rule_entry(operation_key, rule_name, value)
-        if compiled is None:
-            raise ValueError(
-                f"Unknown auto-accept rule: {rule_name!r}. See privacyfence_list_policy "
-                "or docs/TECHNICAL_REFERENCE.md's Auto-accept section for valid rule names."
-            )
-        verb = "Remove" if operation == "remove" else ("Replace" if operation == "update" else "Add")
-        description = f"{verb} auto-accept rule: {policy_describe.rule_sentence(compiled)}"
-    elif target == "grant":
-        rt = policy_resource_registry.resource_type(connector, config_key)
-        if rt is None:
-            raise ValueError(f"Unknown grant resource type: {connector}.{config_key}")
-        if operation == "remove":
-            grant_rules: list[policy_engine.PolicyRule] = []
-        else:
-            enabled = [key for key, on in (capabilities or {}).items() if on]
-            grant_rules = _rules_for_grant(rt, resource_id, enabled)
-        verb = "Remove" if operation == "remove" else ("Update" if operation == "update" else "Add")
-        target_desc = f"{connector}.{config_key} {resource_id!r}"
-        description = (
-            f"{verb} {target_desc}" if operation == "remove" else
-            f"{verb} {target_desc}: " + "; ".join(policy_describe.rule_sentence(r) for r in grant_rules)
-        )
-    else:
-        raise ValueError(f"Unknown target: {target!r}")
-    if operation not in ("add", "update", "remove"):
-        raise ValueError(f"Unknown operation: {operation!r}")
-
-    created_at = time.time()
-    request_id = uuid.uuid4().hex[:12]
-    summary = f"Proposed {operation} ({target}): {description}"
-
-    if is_unattended():
-        _audit(
-            created_at=created_at, request_id=request_id, connector=connector or target, tool="",
-            tool_name="", summary=summary, sender="", decision="denied_unattended",
-            auto_accept_rule="", pii_detected=False, claude_reason=reason,
-        )
-        raise GateDeniedError(
-            "Request denied: this connection is in an unattended session, so a config change "
-            "can't be confirmed without a human present."
-        )
-
-    # ``sensitive=True``: unlike the "Always allow" dialog this shares a
-    # renderer with, nothing gated this one first -- there is no card in
-    # front of it, so confirming it is the whole gate on a rule that
-    # decides what auto-accepts from here on. That is what
-    # web/routes_settings.py's ``_SENSITIVE_ACTIONS`` names, and the
-    # flag is what gets this dialog held to the same two checks. See
-    # approvals.PendingApprovalRegistry.register_confirm.
-    confirmed = await _run_in_popup_executor(
-        show_rule_confirmation_popup, description, sensitive=True,
-    )
-
-    if not confirmed:
-        _audit(
-            created_at=created_at, request_id=request_id, connector=connector or target, tool="",
-            tool_name="", summary=summary, sender="", decision="rejected",
-            auto_accept_rule="", pii_detected=False, claude_reason=reason,
-        )
-        raise GateDeniedError("Request denied by user")
-
-    if target == "rule":
-        if operation == "remove":
-            changed = _narrow_or_remove_v2_rule(compiled, operation_key)
-        else:
-            if operation == "update" and old_value is not None:
-                _narrow_or_remove_v2_rule(
-                    policy_compat.compile_rule_entry(operation_key, rule_name, old_value), operation_key,
-                )
-            changed = add_policy_v2_rules([compiled])
-        # "..._via_bridge_proposal" is legacy vocabulary kept for audit-log
-        # continuity, not a live bridge -- see audit_log.py's AuditEntry.decision
-        # field comment.
-        applied_decision = "rule_removed_via_bridge_proposal" if operation == "remove" else "rule_changed_via_bridge_proposal"
-        applied_rule_name = rule_name
-    else:
-        if operation == "remove":
-            changed = _remove_v2_grant(rt, resource_id)
-        else:
-            changed = add_policy_v2_rules(grant_rules)
-        applied_decision = "grant_removed_via_bridge_proposal" if operation == "remove" else "grant_changed_via_bridge_proposal"
-        applied_rule_name = resource_id
-
-    # A confirmed "remove" can still be a no-op (the rule/grant named didn't
-    # actually match anything, e.g. Claude proposed removing a value that
-    # was already gone) -- `changed` already tells the two branches above
-    # apart correctly, but the decision string didn't consult it at all
-    # before this, so the audit log claimed a removal/change happened even
-    # when config verifiably didn't change. "confirmed" (this function's
-    # own return value) still means "the human said yes", so this stays
-    # distinct from "rejected".
-    decision = applied_decision if changed else "bridge_proposal_no_op"
-
-    _audit(
-        created_at=created_at, request_id=request_id, connector=connector or target, tool="",
-        tool_name="", summary=summary, sender="", decision=decision,
-        auto_accept_rule=applied_rule_name, pii_detected=False, claude_reason=reason,
-    )
-    logger.info(
-        "Bridge-proposed %s %s confirmed%s: %s",
-        operation, target, " and applied" if changed else " but was a no-op", description,
-    )
-    return {"confirmed": True, "changed": changed, "description": description}
-
-
 async def propose_policy_change(
     *,
     operation: str,        # "add" | "update" | "remove"
@@ -1456,13 +1252,13 @@ async def propose_policy_change(
     value: Any = None,
     verbs: list[str] | None = None,
 ) -> dict[str, Any]:
-    """The one-shape bridge writer P7 of the policy v2 redesign adds -- ``propose_rule_change``
-    above stays exactly as it was and is kept as a deprecated alias, but every new write goes
-    through here instead, straight into the on-disk v2 ``auto_accept:`` section
-    (``auto_accept.add_policy_v2_rules``/``remove_policy_v2_rule``), never through v1's
-    ``auto_accept_rules``. Same confirmation contract as ``propose_rule_change``: blocks on
-    ``show_rule_confirmation_popup()``, and is refused outright (``GateDeniedError``) in an
-    unattended session, since a config change always needs a human present.
+    """The one-shape bridge writer P7 of the policy v2 redesign adds -- the sole write path now
+    that the deprecated v1 ``propose_rule_change`` has been deleted (PSC-3; ADR 0004 decision 3's
+    one-minor-release grace period was honoured by 4.1.2). Writes go straight into the on-disk v2
+    ``auto_accept:`` section (``auto_accept.add_policy_v2_rules``/``remove_policy_v2_rule``), never
+    through v1's ``auto_accept_rules``. Blocks on ``show_rule_confirmation_popup()``, and is
+    refused outright (``GateDeniedError``) in an unattended session, since a config change always
+    needs a human present.
 
     ``group`` is one of ``policy.catalogue.scope_catalogue()``'s own ids -- also what
     ``privacyfence_list_policy``'s own ``scope_groups`` lists, so a model can discover which groups

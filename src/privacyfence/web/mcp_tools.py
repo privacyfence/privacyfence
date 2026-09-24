@@ -152,85 +152,6 @@ CHECK_POLICY_TOOL = types.Tool(
     annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
 )
 
-LIST_RULES_TOOL = types.Tool(
-    name="privacyfence_list_auto_accept_rules",
-    description=(
-        "DEPRECATED -- use privacyfence_list_policy instead, which lists the same policy engine's "
-        "rules under PrivacyFence's newer, single scope+verb vocabulary and gives each one a "
-        "stable id. This tool is kept, for one minor release, as a read-only view onto the older "
-        "auto_accept_rules/auto_accept_grants config shape; it is not going away suddenly, but new "
-        "code should not start depending on it.\n\n"
-        "List the auto-accept rules and grants currently configured in PrivacyFence's "
-        "settings.yaml -- both the auto_accept_rules section (per-operation rule entries) and "
-        "the auto_accept_grants section (resource-scoped grants, e.g. a trusted Drive sandbox "
-        "folder that covers several sheets.*/drive.* operations at once). Call this before "
-        "privacyfence_propose_auto_accept_rule_change: update/remove target an existing entry "
-        "by its exact identifying fields (operation_key/rule_name/value for a rule; "
-        "connector/config_key/resource_id for a grant), and those fields only match something "
-        "if you listed it first rather than guessed. Read-only, no popup -- reason: one "
-        "sentence on why you're listing the current rules right now (logged, self-reported, "
-        "same as every other gated/meta tool's reason param, since this discloses the full "
-        "current rule set)."
-    ),
-    input_schema={"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
-    annotations=types.ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
-)
-
-PROPOSE_RULE_CHANGE_TOOL = types.Tool(
-    name="privacyfence_propose_auto_accept_rule_change",
-    description=(
-        "DEPRECATED -- use privacyfence_propose_policy_change instead, which writes one rule "
-        "shape (a scope plus the verbs it allows) instead of choosing between a 'rule' half and a "
-        "'grant' half of two separate config sections. This tool is kept, for one minor release, "
-        "as a working alias that still edits the older auto_accept_rules/auto_accept_grants "
-        "sections; new code should not start depending on it.\n\n"
-        "Propose adding, updating, or removing an auto-accept rule or grant in PrivacyFence's "
-        "settings.yaml. This ALWAYS blocks on a native confirmation dialog a human must "
-        "approve -- there is no way to change this config without one, even if an identical "
-        "entry already exists. If declined, or if this connection is in an unattended "
-        "session, the call throws -- never assume success without checking the result. Call "
-        "privacyfence_list_auto_accept_rules first so update/remove target an entry that "
-        "actually exists rather than guessing identifiers.\n\n"
-        "target='rule' edits the auto_accept_rules section (one list of {rule, value} entries "
-        "per operation_key): operation_key (e.g. 'sheets.format_range'), rule_name (e.g. "
-        "'trusted_sender_domain' -- must be one of the real rule names PrivacyFence's rule engine "
-        "knows, see privacyfence_list_auto_accept_rules' output or the Auto-accept section of "
-        "the docs; an unrecognized name is rejected before any popup is shown, not silently "
-        "persisted as a dead rule), value (required for add/update -- often a list), old_value "
-        "(update only -- the prior value being replaced; omit to add alongside the existing "
-        "value instead of replacing it).\n\n"
-        "target='grant' edits the auto_accept_grants section (one resource trusted once, "
-        "covering several operations at a time -- e.g. a Drive sandbox folder): connector "
-        "(e.g. 'drive'), config_key (e.g. 'sandbox_folders'), resource_id (required), name "
-        "(optional cosmetic label), tab (no current resource type uses this), capabilities (add/update only -- "
-        "a map of capability key, e.g. 'write', to true/false; see "
-        "privacyfence_list_auto_accept_rules' auto_accept_grants output for which capability "
-        "keys apply to which resource type).\n\n"
-        "reason: one sentence on why you're proposing this change -- logged, self-reported, "
-        "unverified, same as every other gated tool's reason param."
-    ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "target": {"type": "string", "enum": ["rule", "grant"]},
-            "operation": {"type": "string", "enum": ["add", "update", "remove"]},
-            "reason": {"type": "string"},
-            "operation_key": {"type": "string"},
-            "rule_name": {"type": "string"},
-            "value": {},
-            "old_value": {},
-            "connector": {"type": "string"},
-            "config_key": {"type": "string"},
-            "resource_id": {"type": "string"},
-            "name": {"type": "string"},
-            "tab": {"type": "string"},
-            "capabilities": {"type": "object", "additionalProperties": {"type": "boolean"}},
-        },
-        "required": ["target", "operation", "reason"],
-    },
-    annotations=types.ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True),
-)
-
 LIST_POLICY_TOOL = types.Tool(
     name="privacyfence_list_policy",
     description=(
@@ -249,8 +170,7 @@ LIST_POLICY_TOOL = types.Tool(
         "privacyfence_propose_policy_change's own group/verbs validates against: each entry gives "
         "an id (pass as group), the verbs that scope type can actually govern (pass a subset as "
         "verbs -- naming one this list doesn't include is rejected before any popup is shown), "
-        "and whether it needs a value at all. Call this before proposing a change, the same way "
-        "you'd call privacyfence_list_auto_accept_rules before that tool's own update/remove -- "
+        "and whether it needs a value at all. Call this before proposing a change: "
         "an id or group only matches something real if you listed it first rather than guessed. "
         "Read-only, no popup -- reason: one sentence on why you're listing the current policy "
         "right now (logged, self-reported, same as every other gated/meta tool's reason param, "
@@ -264,11 +184,10 @@ PROPOSE_POLICY_CHANGE_TOOL = types.Tool(
     name="privacyfence_propose_policy_change",
     description=(
         "Propose adding, updating, or removing an auto-accept rule under PrivacyFence's policy "
-        "engine -- one rule shape (a scope plus the verbs it allows) instead of "
-        "privacyfence_propose_auto_accept_rule_change's older choice between a 'rule' and a "
-        "'grant' target. This ALWAYS blocks on a native confirmation dialog a human must approve "
-        "-- there is no way to change this config without one, even if an identical rule already "
-        "exists. If declined, or if this connection is in an unattended session, the call throws "
+        "engine -- one rule shape (a scope plus the verbs it allows). This ALWAYS blocks on a "
+        "native confirmation dialog a human must approve -- there is no way to change this "
+        "config without one, even if an identical rule already exists. If declined, or if this "
+        "connection is in an unattended session, the call throws "
         "-- never assume success without checking the result. Call privacyfence_list_policy "
         "first: group/verbs/rule_id only match something real if you listed them rather than "
         "guessed, and a verb a scope type cannot govern (one privacyfence_list_policy's own "
@@ -445,8 +364,6 @@ CREATE_UPLOAD_SLOT_TOOL = types.Tool(
 
 META_TOOLS: tuple[types.Tool, ...] = (
     CHECK_POLICY_TOOL,
-    LIST_RULES_TOOL,
-    PROPOSE_RULE_CHANGE_TOOL,
     LIST_POLICY_TOOL,
     PROPOSE_POLICY_CHANGE_TOOL,
     BEGIN_UNATTENDED_SESSION_TOOL,

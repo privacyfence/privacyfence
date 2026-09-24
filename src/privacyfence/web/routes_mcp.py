@@ -427,10 +427,6 @@ async def _dispatch_meta_tool(
         return dispatcher.check_policy(
             arguments["connector"], arguments["tool"], arguments.get("args") or {}, reason,
         )
-    if name == mcp_tools.LIST_RULES_TOOL.name:
-        return dispatcher.list_rules(reason)
-    if name == mcp_tools.PROPOSE_RULE_CHANGE_TOOL.name:
-        return await dispatcher.propose_rule_change(session_key, arguments)
     if name == mcp_tools.LIST_POLICY_TOOL.name:
         return dispatcher.list_policy(reason)
     if name == mcp_tools.PROPOSE_POLICY_CHANGE_TOOL.name:

@@ -1,5 +1,5 @@
 """Connector-call dispatch for the ``/mcp`` endpoint -- dedupe/staleness
-logic, the meta-tools (check_policy/list_rules/propose_rule_change/
+logic, the meta-tools (check_policy/list_policy/propose_policy_change/
 begin-end-unattended-session), and manifest building, all scoped to one
 Streamable HTTP session.
 
@@ -33,7 +33,7 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION, get_policy_v2_rules
 from .. import local_files
 from ..connector import Connector
-from ..gate import preflight_auto_accept, propose_policy_change, propose_rule_change, reason_scope, unattended_scope
+from ..gate import preflight_auto_accept, propose_policy_change, reason_scope, unattended_scope
 from ..policy import catalogue as policy_catalogue
 from ..policy import describe as policy_describe
 from ..policy import propose as policy_propose
@@ -364,24 +364,14 @@ class McpDispatcher:
         except Exception as exc:
             logger.warning("Audit log write failed for policy check: %s", exc)
 
-    def list_rules(self, claude_reason: str = "") -> dict:
-        """``privacyfence_list_auto_accept_rules``'s handler -- deprecated alias of
-        ``list_policy`` below (P9). Through P8 this returned a raw read of the v1
-        ``auto_accept_rules``/``auto_accept_grants`` config sections; now that every rule lives in
-        the v2 ``auto_accept:`` section regardless of which surface created it, there is no longer
-        a separate v1 view to show -- reading the old sections directly would show stale content
-        (whatever they held before the one-time migration folded them into v2), not what actually
-        auto-accepts. Returns exactly what ``list_policy`` does."""
-        return self.list_policy(claude_reason)
-
     def list_policy(self, claude_reason: str = "") -> dict:
         """privacyfence_list_policy's handler (P7 of the policy v2 redesign): the on-disk v2
         ``auto_accept:`` section, sentence-rendered the same way ``settings_controller.
         SettingsController._auto_accept_state`` renders it for the Auto-accept Settings page, plus
         the scope catalogue ``privacyfence_propose_policy_change``'s ``group``/``verbs`` validate
         against -- so a model can discover a real rule id and a real (group, verbs) pair before
-        proposing anything, the same "list before you propose" contract ``list_rules``/
-        ``propose_rule_change`` above already have."""
+        proposing anything, the same "list before you propose" contract ``propose_policy_change``
+        below expects."""
         _ = self.connectors
         rule_rows = sorted((_policy_rule_row(rule) for rule in get_policy_v2_rules()), key=lambda row: row["sentence"])
         result = {"rules": rule_rows, "scope_groups": policy_catalogue.scope_catalogue()}
@@ -406,9 +396,33 @@ class McpDispatcher:
         return result
 
     async def propose_policy_change(self, session_key: Hashable, params: dict) -> dict:
-        """privacyfence_propose_policy_change's handler -- same ``unattended_scope``/
-        ``ConnectorRegistry``-bootstrap reasoning as ``propose_rule_change`` above applies here too:
-        see that method's own comment."""
+        # TST-02 regression: this used to be a @staticmethod that called
+        # gate.propose_policy_change() with no unattended_scope() around it
+        # at all -- unlike call() above, which always wraps a connector
+        # dispatch in unattended_scope(session_key in self._unattended_
+        # sessions). That meant privacyfence_propose_policy_change never saw
+        # itself as unattended even after this exact session had called
+        # privacyfence_begin_unattended_session, and it fell through to a
+        # real (never-to-be-answered) show_rule_confirmation_popup() instead
+        # of the immediate denial its own tool description promises ("If
+        # ... this connection is in an unattended session, the call
+        # throws"). Needs session_key threaded through from
+        # routes_mcp._dispatch_meta_tool for is_unattended() to see it.
+        #
+        # Forces this principal's ConnectorRegistry entry to exist (a
+        # no-op if a connector tool call already built it this session) --
+        # daemon_main.py's own per-principal factory is what calls
+        # auto_accept.init_config_path() for whichever principal
+        # ConnectorRegistry.get() builds, and gate.propose_policy_change()
+        # below reaches add_policy_v2_rules/remove_policy_v2_rule, both of
+        # which raise "auto_accept config path not initialized" if that
+        # never happened. Unlike a real connector tool call
+        # (routes_mcp._dispatch_connector_tool already touches
+        # self.connectors before dispatching), this meta tool has no
+        # connector of its own to force that same lazy bootstrap, so it has
+        # to ask for it directly -- discovered by docs/testing-policy.md's
+        # Phase 8 release-workflow smoke test: a principal whose very first
+        # MCP call was this one had never had this side effect run at all.
         _ = self.connectors
         with unattended_scope(session_key in self._unattended_sessions):
             return await propose_policy_change(
@@ -553,53 +567,6 @@ class McpDispatcher:
             if time.time() >= deadline or any(s != "pending" for s in statuses.values()):
                 return statuses
             await asyncio.sleep(self._AWAIT_APPROVAL_POLL_SECONDS)
-
-    async def propose_rule_change(self, session_key: Hashable, params: dict) -> dict:
-        # TST-02 regression: this used to be a @staticmethod that called
-        # gate.propose_rule_change() with no unattended_scope() around it at
-        # all -- unlike call() above, which always wraps a connector
-        # dispatch in unattended_scope(session_key in self._unattended_
-        # sessions). That meant privacyfence_propose_auto_accept_rule_change
-        # never saw itself as unattended even after this exact session had
-        # called privacyfence_begin_unattended_session, and it fell through
-        # to a real (never-to-be-answered) show_rule_confirmation_popup()
-        # instead of the immediate denial its own tool description promises
-        # ("If ... this connection is in an unattended session, the call
-        # throws"). Needs session_key threaded through from
-        # routes_mcp._dispatch_meta_tool for is_unattended() to see it.
-        #
-        # Forces this principal's ConnectorRegistry entry to exist (a
-        # no-op if a connector tool call already built it this session) --
-        # daemon_main.py's own per-principal factory is what calls
-        # auto_accept.init_config_path() for whichever principal
-        # ConnectorRegistry.get() builds, and gate.propose_rule_change()
-        # below (target="rule"/"grant") reaches add_auto_accept_rule/
-        # mutate_grants, both of which raise "auto_accept config path not
-        # initialized" if that never happened. Unlike a real connector
-        # tool call (routes_mcp._dispatch_connector_tool already touches
-        # self.connectors before dispatching), this meta tool has no
-        # connector of its own to force that same lazy bootstrap, so it
-        # has to ask for it directly -- discovered by docs/testing-policy.md's
-        # Phase 8 release-workflow smoke test: a
-        # principal whose very first MCP call was this one had never had
-        # this side effect run at all.
-        _ = self.connectors
-        with unattended_scope(session_key in self._unattended_sessions):
-            return await propose_rule_change(
-                target=params["target"],
-                operation=params["operation"],
-                reason=params.get("reason", ""),
-                operation_key=params.get("operation_key", ""),
-                rule_name=params.get("rule_name", ""),
-                value=params.get("value"),
-                old_value=params.get("old_value"),
-                connector=params.get("connector", ""),
-                config_key=params.get("config_key", ""),
-                resource_id=params.get("resource_id", ""),
-                name=params.get("name"),
-                tab=params.get("tab"),
-                capabilities=params.get("capabilities"),
-            )
 
     # ------------------------------------------------------------------ #
     # Unattended sessions -- ported from IPCServer.begin/end_unattended_
