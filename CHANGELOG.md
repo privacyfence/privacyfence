@@ -58,6 +58,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Linux: the `.deb` declares `amd64` only.** Its package metadata listed `arm64` too, but no
+  arm64 `.deb` has ever been built or tested; `scripts/build_deb.sh` now refuses to package on a
+  host architecture the package doesn't declare (#679, ADR 0044).
 - **Linux: `apt remove` keeps your data, `apt purge` deletes it.** Removing the `.deb` now stops
   PrivacyFence and leaves its config, credentials and audit log in `/var/lib/privacyfence`, so a
   reinstall picks them up; it no longer moves them into your home directory. `apt purge` deletes
