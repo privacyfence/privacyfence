@@ -86,7 +86,7 @@ class TestAuthorizeInteractive:
 class TestLoadCredentials:
     def test_missing_token_file_raises(self, tmp_path):
         client = AppsScriptClient(client_config={}, token_file=str(tmp_path / "does-not-exist.json"))
-        with pytest.raises(AppsScriptClientError, match="No OAuth token found"):
+        with pytest.raises(AppsScriptClientError, match="No OAuth token found.*Authenticate Apps Script from PrivacyFence Settings"):
             client._load_credentials()
 
     def test_valid_token_is_returned_without_refresh_or_network(self, tmp_path, monkeypatch):
@@ -139,7 +139,7 @@ class TestLoadCredentials:
         )
         client = AppsScriptClient(client_config={}, token_file=str(token_file))
 
-        with pytest.raises(AppsScriptClientError, match="Failed to refresh OAuth token.*revoked"):
+        with pytest.raises(AppsScriptClientError, match="Failed to refresh OAuth token.*revoked.*Reconnect Apps Script from PrivacyFence Settings"):
             client._load_credentials()
 
     def test_expired_token_without_refresh_token_raises_invalid_cached_token(self, tmp_path, monkeypatch):
@@ -155,7 +155,7 @@ class TestLoadCredentials:
         )
         client = AppsScriptClient(client_config={}, token_file=str(token_file))
 
-        with pytest.raises(AppsScriptClientError, match="Cached OAuth token is invalid"):
+        with pytest.raises(AppsScriptClientError, match="Cached OAuth token is invalid.*Reconnect Apps Script from PrivacyFence Settings"):
             client._load_credentials()
 
 
