@@ -43,6 +43,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- **Org mode's own sensitive settings actions — adding or removing an auto-accept rule, and
+  editing the install-wide privacy/PII policy — now go through the same passkey step-up gate
+  local mode's dispatcher has enforced since #426 Phase 3.** Before this, `routes_org_settings.
+  build_routes` took no `step_up` at all, so a step-up-requiring install still let any signed-in
+  principal add an always-allow rule, and any admin flip the install-wide privacy/PII policy, with
+  no fresh WebAuthn assertion — exactly the "what gets gated" bypass `_SENSITIVE_ACTIONS` exists to
+  close, just left open on the org-mode side of the same dispatcher.
+
 ### Removed
 
 - **The deprecated v1-shaped auto-accept meta-tools**, `privacyfence_list_auto_accept_rules` and

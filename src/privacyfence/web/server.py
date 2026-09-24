@@ -1126,6 +1126,10 @@ def _build_org_app(
     extra_routes.extend(routes_org_settings.build_routes(
         sessions=org.sessions, install_wide_settings=org.install_wide_settings,
         install_wide_settings_path=org.install_wide_settings_path,
+        # #579: the same StepUpConfig/origin routes_org_approvals.build_routes
+        # above already resolves from org.org_config -- see that call and
+        # this function's own build_routes docstring.
+        step_up=step_up, step_up_origin=org.issuer_url,
     ))
 
     lifespan = None
