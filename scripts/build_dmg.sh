@@ -159,6 +159,16 @@ if [ -n "$SIGN_IDENTITY" ]; then
   echo "→ Code-signing with: ${SIGN_IDENTITY}"
   # shellcheck source=scripts/macos_sign_retry.sh
   source scripts/macos_sign_retry.sh
+  # TEMPORARY (P8 retry-path proof, reverted before final push): fail the first
+  # codesign with the timestamp error, then run the real one.
+  codesign() {
+    if [ ! -e build/.p8_fake_codesign_done ]; then
+      mkdir -p build && touch build/.p8_fake_codesign_done
+      echo "FAKE: The timestamp service is not available." >&2
+      return 1
+    fi
+    command codesign "$@"
+  }
   sign_with_timestamp_retry "$BUNDLE" \
     codesign --deep --force --options runtime \
       --sign "$SIGN_IDENTITY" \

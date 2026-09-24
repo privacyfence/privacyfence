@@ -245,6 +245,16 @@ if [ -n "$SIGN_IDENTITY" ]; then
   mv "$PKG_PATH" "$UNSIGNED_PKG"
   # shellcheck source=scripts/macos_sign_retry.sh
   source "${REPO_ROOT}/scripts/macos_sign_retry.sh"
+  # TEMPORARY (P8 retry-path proof, reverted before final push): fail the first
+  # productsign with the timestamp error, then run the real one.
+  productsign() {
+    if [ ! -e build/.p8_fake_productsign_done ]; then
+      mkdir -p build && touch build/.p8_fake_productsign_done
+      echo "FAKE: The timestamp service is not available." >&2
+      return 1
+    fi
+    command productsign "$@"
+  }
   # A failed attempt may leave a partial output behind; each retry starts from
   # the untouched unsigned input with no output file in the way.
   productsign_fresh() {
