@@ -6,6 +6,13 @@
 AI system is calling, and what that knowledge is allowed to be used for. No code has been written,
 and the open questions in *Verification* below are open.
 
+The `mcp` range quoted below (`>=1.28,<3.0`) was already stale the day this was written:
+`pyproject.toml` had required `mcp>=2.2,<3.0.0` since issue #250, three days before this ADR's own
+commit. `pyproject.toml` is authoritative for the pinned range, as ADR 0009's *Related* section
+already notes. The reasoning is unaffected: it never rested on 1.x behavior, only on properties
+`_connection_of` (`web/routes_mcp.py`) documents as holding under mcp 2.x's
+`ServerRequestContext`/`Connection` shape, so it holds unchanged across `>=2.2,<3.0.0` (issue #618).
+
 Written ahead of the work rather than alongside it, because the question was asked as "separate URL
 endpoints or auto-detect?" and the honest answer is that neither phrasing names the thing that
 matters. Deciding that in a commit message, once, inside the first PR that happens to need it,

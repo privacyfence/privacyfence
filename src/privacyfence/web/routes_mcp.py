@@ -127,7 +127,7 @@ def _connection_of(ctx: ServerRequestContext) -> Connection | None:
 
     Same "degrade to doing nothing rather than break /mcp" posture as
     ``_RehomeStaleInitialize._is_live`` below, and for the same reason: the pin
-    is a range (``mcp>=1.28,<3.0``), so an internal rename must cost this
+    is a range (``mcp>=2.2,<3.0.0``), so an internal rename must cost this
     module its tools/list_changed notifications and its session cleanup, not
     its ability to serve a tool call.
     """
@@ -654,7 +654,7 @@ class _RehomeStaleInitialize:
 
     def _is_live(self, session_id: str) -> bool | None:
         """``None`` when this SDK build doesn't expose its session map where
-        we expect it -- the pin is a range (``mcp>=1.28,<3.0``), so an
+        we expect it -- the pin is a range (``mcp>=2.2,<3.0.0``), so an
         internal rename must degrade to "do nothing" rather than break /mcp.
         """
         instances = getattr(self._session_manager, "_server_instances", None)
