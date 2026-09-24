@@ -51,6 +51,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   request at that moment, the extension fell back to a shared token file that a separated install
   no longer has, and exited: Claude Desktop showed the PrivacyFence server as failed until it was
   restarted. It now waits up to five seconds, the same as PrivacyFence's own command-line tools.
+- **macOS: `macos_privilege_separation.sh enable` no longer aborts with "kept starting as 'root'"
+  on a correctly configured install.** It checked which account the daemon was running as the
+  moment launchd reported a process ID, which can be before launchd has switched that process
+  from `root` to the `_privacyfence` service account. It then stopped a daemon that was starting
+  correctly, retried, and gave up after three attempts. It now waits for that switch to finish
+  before checking.
 
 ## [4.3.0] — 2026-09-24
 
