@@ -3244,7 +3244,8 @@ class TestLoadPrincipalSettings:
                 daemon_main._load_principal_settings()
             settings_path = daemon_main._resolve_authority_path("config/settings.yaml")
 
-        on_disk = yaml.safe_load(open(settings_path, encoding="utf-8"))
+        with open(settings_path, encoding="utf-8") as fh:
+            on_disk = yaml.safe_load(fh)
         assert "auto_accept_rules" in on_disk
         assert "migrated_to_policy_v2" not in on_disk
 
