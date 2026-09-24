@@ -475,15 +475,19 @@ class TestAgentsPageState:
         assert state["stale_pins"] == [{"client_id": "gone", "agent_id": "cursor", "agent_name": "Cursor"}]
 
     async def test_a_non_admin_gets_no_client_list(self, org_home, monkeypatch):
+        # A client id no other part of the page can contain by chance: the embedded state also
+        # carries the setuptools_scm version, whose "+g<sha>" suffix contained "c1" often enough
+        # to fail this test on unrelated commits.
+        client_id = "registered-client-not-for-alice"
         provider = _provider(org_home, monkeypatch)
-        await _register(provider, "c1", "openai-mcp")
+        await _register(provider, client_id, "openai-mcp")
         client, sessions = _settings_client(provider)
         _sign_in(client, sessions, ALICE)
 
         r = client.get("/settings")
 
         assert r.status_code == 200
-        assert "c1" not in r.text.split("window.__pfInitialState = ", 1)[1].split("</script>", 1)[0]
+        assert client_id not in r.text.split("window.__pfInitialState = ", 1)[1].split("</script>", 1)[0]
 
     async def test_the_admin_page_embeds_the_ai_systems_section(self, org_home, monkeypatch):
         provider = _provider(org_home, monkeypatch)
