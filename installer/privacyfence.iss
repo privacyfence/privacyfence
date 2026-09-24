@@ -559,10 +559,10 @@ var
   OkButton: TNewButton;
 begin
   Result := False;
-  Form := CreateCustomForm();
+  (* Inno Setup 6.5+ takes the client size here; the parameterless form
+     this used first does not compile on the 6.7 the build runners install. *)
+  Form := CreateCustomForm(ScaleX(400), ScaleY(160), False, False);
   try
-    Form.ClientWidth := ScaleX(400);
-    Form.ClientHeight := ScaleY(160);
     Form.Caption := 'Uninstall {#AppName}';
 
     Prompt := TNewStaticText.Create(Form);
