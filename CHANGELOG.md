@@ -149,6 +149,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Windows: the PrivacyFence service starts well inside Windows' 30-second service start limit.**
+  On a first start, before registering with Windows the service used to load every connector,
+  which took 18-24 seconds on a fresh machine: close to the limit past which Windows gives up on
+  the service ("did not respond to the start or control request in a timely fashion", error
+  1053). The service now registers first and loads the rest afterwards.
+
 - **Adding a second OS account no longer changes who owns an install.** On macOS, Windows and
   Linux, `enable --for-user <name>` for another account (ADR 0008) rewrote the install's recorded
   owner with that account's name. PrivacyFence gives the recorded owner the install's original

@@ -150,9 +150,29 @@ MARKER_PATH = WINDOWS_SYSTEM_ROOT / MARKER_FILE_NAME
 INSTALL_DIR_NAME = "Program Folder"
 
 # How long one silent Setup / uninstaller run may take before it is treated as
-# hung. Placeholders until measured -- see the Phase P4 commit message.
-INSTALLER_TIMEOUT_S = 120.0
+# hung, from five build.yml runs on fresh windows-latest runners (2026-09-24,
+# runs 36050325275/..28453/..30979/..33575/..36567, before `sc start` stopped
+# waiting on daemon_main's imports -- see src/_daemon_entry.py):
+#
+#   first (cold) install    35.3 / 36.1 / 42.8 / 48.2 / 54.9 s   p100 54.9 s
+#     of which `sc start`   18.5-24.4 s, PowerShell's cold start 2.0-12.6 s
+#   every later install     9.5-19.0 s
+#   uninstaller             1.7-12.9 s (the first one on a runner is slowest)
+#
+# The installer gets ~4x the cold p100 rather than 3x because v4.5.0a1's tag
+# run had a first install exceed the old 120 s. The uninstaller keeps 120 s --
+# ~9x its p100 -- because `uninstall` itself may legitimately spend 60 s
+# waiting on the service and 30 s on the companion before it moves on.
+INSTALLER_TIMEOUT_S = 240.0
 UNINSTALLER_TIMEOUT_S = 120.0
+# pytest-timeout must outlast the subprocess timeouts above, or it kills the
+# run before an installer's TimeoutExpired can say which step hung. One hung
+# Setup or uninstaller run plus the service's own start/serve waits (~120 s).
+# Observed whole tests, green: 36-78 s; the whole module 180-206 s.
+TEST_TIMEOUT_S = INSTALLER_TIMEOUT_S + UNINSTALLER_TIMEOUT_S + 120.0
+# Tests 2 and 4 install twice: the same one-hang allowance, plus 3x the
+# slowest such test observed (78 s) for everything else they do.
+MULTI_INSTALL_TEST_TIMEOUT_S = TEST_TIMEOUT_S + 3 * 78.0
 
 # The separated layout's own files, as `enable` leaves them on disk. Readable
 # directly rather than through an elevation shim, unlike the POSIX modules'
@@ -189,8 +209,8 @@ pytestmark = [
     ),
     # A real silent install + a real daemon cold start + a real silent uninstall is comfortably
     # slower than the suite's default timeout=30 -- same reasoning as every other packaged/system
-    # test in this repo.
-    pytest.mark.timeout(180),
+    # test in this repo. See TEST_TIMEOUT_S for how long.
+    pytest.mark.timeout(TEST_TIMEOUT_S),
 ]
 
 
@@ -788,9 +808,8 @@ def _synthetic_next_version_installer(setup_exe: Path, output_dir: Path) -> tupl
     return new_setup, new_version
 
 
-@pytest.mark.timeout(300)   # builds a second installer *and* boots the daemon twice -- the module's
-                             # default timeout=180 (sized for test 1's single install/boot/uninstall)
-                             # isn't enough headroom for both in one test.
+@pytest.mark.timeout(MULTI_INSTALL_TEST_TIMEOUT_S)   # builds a second installer *and* boots the
+                                                     # daemon twice -- see that constant.
 async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     setup_exe_n = _built_installers()[-1]
     install_dir = _admin_only_writable_dir(tmp_path / INSTALL_DIR_NAME)
@@ -978,7 +997,7 @@ def test_windows_install_separates_with_no_manual_enable(tmp_path):
 # Test 4 -- remove keeps data, reinstall picks it up, purge deletes it (ADR 0042)
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.timeout(300)   # two installs, two service cold starts and a purge
+@pytest.mark.timeout(MULTI_INSTALL_TEST_TIMEOUT_S)   # two installs, two service cold starts and a purge
 async def test_windows_uninstall_keeps_data_and_purge_deletes_it(tmp_path):
     """The Windows spelling of the ``.deb``'s ``apt remove``/``apt purge``.
 

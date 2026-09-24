@@ -76,8 +76,11 @@ def _service_class():  # noqa: ANN202 -- the base class only exists on Windows
     import win32service
     import win32serviceutil
 
-    from . import daemon_main
-
+    # daemon_main is imported inside the two methods rather than here: this
+    # runs before StartServiceCtrlDispatcher (run_service() below), and the
+    # SCM gives that call 30 seconds. Importing daemon_main -- every connector
+    # and its client library -- took 18-24s of it on a fresh Windows runner.
+    # By SvcDoRun the framework has already reported SERVICE_RUNNING.
     class PrivacyFenceService(win32serviceutil.ServiceFramework):
         _svc_name_ = WINDOWS_SERVICE_NAME
         _svc_display_name_ = SERVICE_DISPLAY_NAME
@@ -92,6 +95,8 @@ def _service_class():  # noqa: ANN202 -- the base class only exists on Windows
             # time rather than having the SCM kill the process mid-teardown
             # and leave a stale lock file behind.
             self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+            from . import daemon_main
+
             daemon_main.request_shutdown()
 
         def SvcDoRun(self) -> None:  # noqa: N802 -- the framework's own name
@@ -105,6 +110,8 @@ def _service_class():  # noqa: ANN202 -- the base class only exists on Windows
             # already been told the service is running by the framework's
             # own start sequence, and threading the real work would only
             # add a second place for an exception to be lost.
+            from . import daemon_main
+
             code = daemon_main.main([])
             if code:
                 # The one place a service has to say something a terminal
