@@ -28,8 +28,8 @@ helpers) and `gate.preflight_auto_accept` (a `matched_rule_id`-returning wrapper
 catalogue P6 built for its own Settings form, promoted out of `settings_controller.py` so P7 doesn't
 re-derive it a second time -- is what both `add_policy_rule` and `propose_policy_change` validate a
 `group`/`verbs` submission against, which is also where "a verb the scope type cannot govern is
-rejected at write time" (F5/P0·3) actually lives. `privacyfence_list_auto_accept_rules`/
-`privacyfence_propose_auto_accept_rule_change` (the pre-P7 bridge tools) are kept as deprecated
-aliases, unchanged, rather than removed.
+rejected at write time" (F5/P0·3) actually lives. The pre-P7 bridge tools were kept as deprecated
+aliases for one minor release per ADR 0004 decision 3, then deleted in PSC-3 once 4.1.2 shipped --
+see that ADR for which tools and why.
 """
 from __future__ import annotations

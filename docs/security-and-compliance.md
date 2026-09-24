@@ -291,9 +291,9 @@ the one an **Always allow** click raises: both appear only after an approval car
 answered, and that card took both checks. Asking again would be a second passkey tap for one
 decision.
 
-It is not true of the third. `privacyfence_propose_policy_change` (and the deprecated
-`privacyfence_propose_auto_accept_rule_change`) lets an MCP client ask for an auto-accept rule
-directly. No card is shown, because nothing is being approved yet -- the dialog *is* the gate, and
+It is not true of the third. `privacyfence_propose_policy_change` lets an MCP client ask for an
+auto-accept rule directly. No card is shown, because nothing is being approved yet -- the dialog
+*is* the gate, and
 what it writes is a rule that decides what gets approved without asking from then on. That is the
 same kind of change `_SENSITIVE_ACTIONS` names on the Settings page, reached by a different route
 and, until this was closed, without either of that route's two checks.

@@ -274,12 +274,12 @@ manual steps. It includes:
 - `tests/unit/web/test_mcp_tools.py` — added at phase 1.9 (TST-02):
   `mcp_tools.py`'s own `ToolSpec`-to-`Tool`/`CallToolResult` schema translation (untested by either
   file above, which exercise dispatch and wire framing, not this mapping layer), plus end-to-end
-  coverage over the real `/mcp` transport for three narrow behaviors: an unattended session denying
-  `privacyfence_propose_auto_accept_rule_change` before any confirmation popup can be shown (a real
-  gap this phase found and fixed — see `McpDispatcher.propose_rule_change`'s own comment in
-  `mcp_dispatch.py`), `privacyfence_begin_unattended_session` refusing when disabled by
-  configuration, and `privacyfence_list_auto_accept_rules` always leaving an audit entry for its own
-  disclosure.
+  coverage over the real `/mcp` transport for `privacyfence_begin_unattended_session` refusing when
+  disabled by configuration. TST-02's other original gap, an unattended session denying a
+  rule-change proposal before any confirmation popup can be shown, lives on as
+  `privacyfence_propose_policy_change`'s own unattended-denial coverage since PSC-3 deleted the
+  older tool that gap was first found on (see `McpDispatcher.propose_policy_change`'s own comment
+  in `mcp_dispatch.py`).
 - `mcpb/shim/test/*.test.ts` (`npm test`, run from `mcpb/shim/`) — the .mcpb shim's own suite:
   daemon discovery/launch (`daemon.test.ts`, against
   `mcp_url` file discovery) and the stdio<->Streamable HTTP message proxy (`proxy.test.ts`,

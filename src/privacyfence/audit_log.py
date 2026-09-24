@@ -195,8 +195,10 @@ class AuditEntry:
                             # ("policy_check": web/mcp_dispatch.py's McpDispatcher.check_policy --
                             #  a preflight question, not a real decision; recorded for
                             #  pattern-spotting only)
-                            # ("rules_listed": web/mcp_dispatch.py's McpDispatcher.list_rules -- not
-                            #  a decision either, but the full current rule/grant set was disclosed,
+                            # ("rules_listed": web/mcp_dispatch.py's McpDispatcher.list_rules
+                            #  (deleted along with the meta-tool it backed in PSC-3, once ADR 0004
+                            #  decision 3's one-minor-release grace period was honoured) -- not a
+                            #  decision either, but the full current rule/grant set was disclosed,
                             #  worth its own record for the same pattern-spotting reason as
                             #  "policy_check")
                             # ("org_config_startup": SEC-05 interim -- daemon_main.py's
@@ -240,9 +242,9 @@ class AuditEntry:
                             # ("policy_listed": web/mcp_dispatch.py's McpDispatcher.list_policy (P7
                             #  of the policy v2 redesign) -- privacyfence_list_policy's own
                             #  disclosure of the current v2 auto_accept: rule set, kept distinct from
-                            #  "rules_listed" (privacyfence_list_auto_accept_rules' older v1
-                            #  auto_accept_rules/auto_accept_grants disclosure) since they list two
-                            #  different config sections, not two names for the same event)
+                            #  "rules_listed" (the older v1 auto_accept_rules/auto_accept_grants
+                            #  disclosure the now-PSC-3-deleted list-rules meta-tool gave) since they
+                            #  list two different config sections, not two names for the same event)
                             # ("policy_rule_changed_via_bridge_proposal"/
                             #  "policy_rule_removed_via_bridge_proposal"/"policy_bridge_proposal_no_op":
                             #  gate.py's propose_policy_change() (P7) -- the v2-store counterpart of
