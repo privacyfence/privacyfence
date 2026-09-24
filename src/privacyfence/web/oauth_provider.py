@@ -280,24 +280,23 @@ class OrgOAuthProvider:
             return {}
         try:
             raw = json.loads(self._clients_path.read_text(encoding="utf-8"))
-            now = time.time()
             clients: dict[str, _StoredClient] = {}
             for client_id, data in raw.items():
-                # New format (SEC-16): {"client": {...}, "last_used_at": ...}.
-                # Old format (pre-SEC-16): the client's own fields directly,
-                # at the top level -- still readable so an upgrade doesn't
-                # drop every client an org already has registered. A client
-                # loaded from the old format has no recorded last-use, so it
-                # starts the clock now rather than being treated as already
-                # stale (and immediately eligible for pruning) the moment
-                # this daemon restarts on the new code.
-                if isinstance(data, dict) and "client" in data and "last_used_at" in data:
-                    info = OAuthClientInformationFull.model_validate(data["client"])
-                    last_used_at = float(data["last_used_at"])
-                else:
-                    info = OAuthClientInformationFull.model_validate(data)
-                    last_used_at = now
-                clients[client_id] = _StoredClient(info=info, last_used_at=last_used_at)
+                # Only the current (SEC-16) format is read:
+                # {"client": {...}, "last_used_at": ...}. The pre-SEC-16 flat
+                # format (the client's own fields at the top level) is not
+                # converted -- there is no upgrade path to support (ADR 0041).
+                # Such an entry is skipped, not fatal, so one leftover entry
+                # doesn't cost every other registration in the file.
+                if not (isinstance(data, dict) and "client" in data and "last_used_at" in data):
+                    logger.warning(
+                        "Skipping registered client %r in %s: not in the current "
+                        "{\"client\", \"last_used_at\"} format -- it must register again",
+                        client_id, self._clients_path,
+                    )
+                    continue
+                info = OAuthClientInformationFull.model_validate(data["client"])
+                clients[client_id] = _StoredClient(info=info, last_used_at=float(data["last_used_at"]))
             return clients
         except Exception as exc:
             logger.warning("Could not read %s: %s -- starting with no registered clients", self._clients_path, exc)

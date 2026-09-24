@@ -115,6 +115,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   auto-accept rules were migrated" Settings notice are gone, and a fresh install's default
   `settings.yaml` is written in the current format. See
   [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
+- **Org mode: the old registered-clients format is no longer read.** An entry in
+  `oauth_clients.json` that uses the format from before registered clients recorded their last use
+  is now skipped, with a warning in the log, and that client has to register again. Entries in the
+  current format still load. See
+  [ADR 0041](docs/adr/0041-only-the-current-install-layout-is-supported.md).
 - **Files from earlier data-directory layouts are no longer moved or deleted at startup.** The
   daemon no longer moves a `config/settings.yaml`, `webauthn_credentials.json`, `web_token`,
   `web_token_version` or `logs/audit/` it finds directly under the data directory into
