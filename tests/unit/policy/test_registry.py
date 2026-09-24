@@ -12,7 +12,6 @@ import pytest
 
 from privacyfence.auto_accept import TOOL_TO_GATE, TOOL_TO_OPERATION
 from privacyfence.policy.resource_registry import GRANT_RESOURCE_TYPES
-from privacyfence.settings_controller import OPERATION_LABELS, RULES_BY_OPERATION
 from privacyfence.policy.registry import (
     GATES,
     TOOL_REGISTRY,
@@ -135,13 +134,11 @@ class TestVerbVocabulary:
 
 class TestUngovernableOperationsAreNowCovered:
     def test_ungovernable_operations_are_absent_from_every_existing_surface(self):
-        # This is F5/P0.3 itself: confirm the gap still exists in the tables the registry is
-        # meant to eventually replace, so this test would fail (loudly, as a welcome sign of
-        # progress) once a later phase closes it there instead of just here.
+        # This is F5/P0.3 itself: confirm the gap still exists in the resource-type manifest the
+        # registry is meant to eventually replace, so this test would fail (loudly, as a welcome
+        # sign of progress) once a later phase closes it there instead of just here.
         capability_keys = _capability_operation_keys()
         for op_key in _UNGOVERNABLE_OPERATIONS:
-            assert op_key not in RULES_BY_OPERATION
-            assert op_key not in OPERATION_LABELS
             assert op_key not in capability_keys
 
     @pytest.mark.parametrize("operation", sorted(_UNGOVERNABLE_OPERATIONS))

@@ -8,10 +8,9 @@ auto-accept verdict, but not that any specific rule entry actually produces that
 a given connector call. That's exactly what a human currently checks by hand, rule by rule,
 connector by connector, across docs/connector-qa-testing.md's ten phases ("should NOT
 prompt" / "should still prompt" instructions). Each class below ports one of those checks
-into a deterministic test: real v2 rules (compiled from the same v1-shaped
-``{operation_key: [{"rule": name, "value": value}]}`` config this repo's own
-``policy.compat.compile_rule_entry`` translates 1:1 -- v2 scope predicates keep v1's rule
-names, see policy/scopes.py's ``SCOPE_SELECTORS``), args/raw_data shaped the way the real
+into a deterministic test: real v2 rules (built by ``tests.helpers.policy_rules`` from a
+compact ``{operation_key: [{"predicate": name, "value": value}]}`` table), args/raw_data shaped
+the way the real
 connector module builds them, and an assertion on both the return value and the resulting
 AuditEntry fields -- not just "a popup would/wouldn't show."
 
@@ -34,8 +33,9 @@ import pytest
 
 from privacyfence import auto_accept, gate
 from privacyfence.audit_log import current_week, init_audit_logger
-from privacyfence.policy import compat as policy_compat
 from privacyfence.policy import store as policy_store
+
+from ..helpers import policy_rules
 
 
 @pytest.fixture
@@ -87,17 +87,10 @@ def rule_id(predicate: str, value=None, conditions: tuple = ()) -> str:
     return policy_store.rule_id_for(predicate, value, conditions)
 
 
-def install_rules(rules_config: dict) -> None:
-    """Compile a v1-shaped ``{operation_key: [{"rule": name, "value": value}, ...]}``
-    ``rules_config`` -- the exact shape ``settings.yaml``'s old ``auto_accept_rules`` held,
-    and what every ``RULES`` class attribute below still spells its scenario in, since v2
-    scope predicates keep v1's rule names (``policy/scopes.py``'s own docstring) -- into real
-    ``policy.engine.PolicyRule``s and install them as the current principal's hot-reloaded
-    rule set. ``gate._evaluate_auto_accept`` reads exactly this via
-    ``auto_accept.get_policy_v2_store_rules()`` (P9: there is no more v1 evaluator to
-    construct, and no ``policy.engine: v1|v2`` switch to flip)."""
-    compiled = policy_compat.compile_rules(rules_config)
-    auto_accept.set_policy_v2_store_rules(policy_store.merge_rules(compiled))
+def install_rules(table: dict) -> None:
+    """Install ``policy_rules(table)`` as the current principal's hot-reloaded rule set -- what
+    ``gate._evaluate_auto_accept`` reads via ``auto_accept.get_policy_v2_store_rules()``."""
+    auto_accept.set_policy_v2_store_rules(policy_rules(table))
 
 
 def fail_if_popup_shown(monkeypatch, *, review=True, popup=True):
@@ -115,7 +108,7 @@ class TestGmailTrustedSenderDomain:
     """connector-qa-testing.md Phase 1 step 6: trusted_sender_domain must
     match subdomains of the configured value, not just an exact match."""
 
-    RULES = {"gmail.read_message": [{"rule": "trusted_sender_domain", "value": "trusted.com"}]}
+    RULES = {"gmail.read_message": [{"predicate": "trusted_sender_domain", "value": "trusted.com"}]}
 
     async def test_subdomain_sender_auto_accepts_with_no_popup(self, monkeypatch, audit_dir):
         install_rules(self.RULES)
@@ -150,7 +143,7 @@ class TestDriveApprovedFolder:
     steps 21-23 (PII detection overrides a matching approved_folder rule on
     the read side, but a write to the same folder is never scanned)."""
 
-    RULES = {"drive.read_file_contents": [{"rule": "approved_folder", "value": ["qa-folder-id"]}]}
+    RULES = {"drive.read_file_contents": [{"predicate": "approved_folder", "value": ["qa-folder-id"]}]}
 
     async def test_read_in_approved_folder_auto_accepts(self, monkeypatch, audit_dir):
         install_rules(self.RULES)
@@ -212,7 +205,7 @@ class TestDriveSandboxFolderCoveragePastComment:
     accepts end to end (the wiring was purely additive)."""
 
     async def test_comment_on_a_file_in_the_sandbox_folder_auto_accepts(self, monkeypatch, audit_dir):
-        install_rules({"drive.comment_file": [{"rule": "approved_sandbox_folder", "value": ["qa-folder-id"]}]})
+        install_rules({"drive.comment_file": [{"predicate": "approved_sandbox_folder", "value": ["qa-folder-id"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -227,7 +220,7 @@ class TestDriveSandboxFolderCoveragePastComment:
         assert entries[0]["auto_accept_rule"] == rule_id("approved_sandbox_folder", ["qa-folder-id"])
 
     async def test_upload_into_the_allowlisted_folder_auto_accepts(self, monkeypatch, audit_dir):
-        install_rules({"drive.upload_file": [{"rule": "parent_folder_allowlist", "value": ["qa-folder-id"]}]})
+        install_rules({"drive.upload_file": [{"predicate": "parent_folder_allowlist", "value": ["qa-folder-id"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -242,7 +235,7 @@ class TestDriveSandboxFolderCoveragePastComment:
         assert entries[0]["auto_accept_rule"] == rule_id("parent_folder_allowlist", ["qa-folder-id"])
 
     async def test_move_of_a_file_from_the_allowlisted_folder_auto_accepts(self, monkeypatch, audit_dir):
-        install_rules({"drive.move_file": [{"rule": "move_within_approved_folders", "value": ["qa-folder-id"]}]})
+        install_rules({"drive.move_file": [{"predicate": "move_within_approved_folders", "value": ["qa-folder-id"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -318,7 +311,7 @@ class TestSlackGroupDm:
     of requiring each group's channel ID to be individually allowlisted
     under approved_channel."""
 
-    RULES = {"slack.read_messages": [{"rule": "group_dm"}]}
+    RULES = {"slack.read_messages": [{"predicate": "group_dm"}]}
 
     async def test_group_dm_channel_auto_accepts(self, monkeypatch, audit_dir):
         install_rules(self.RULES)
@@ -357,7 +350,7 @@ class TestSlackSearchAllResults:
     per the original bug report: every result approved (auto-accept), a
     partial match (still gated, as one unit), and no match (gated)."""
 
-    RULES = {"slack.read_messages": [{"rule": "approved_channel_all_results", "value": ["C1", "C2"]}]}
+    RULES = {"slack.read_messages": [{"predicate": "approved_channel_all_results", "value": ["C1", "C2"]}]}
 
     async def test_all_results_in_approved_channels_auto_accepts(self, monkeypatch, audit_dir):
         install_rules(self.RULES)
@@ -409,7 +402,7 @@ class TestTelegramSearchAllResults:
     telegram_search_messages -- which now shares telegram.read_chat_messages
     with telegram_get_messages instead of its own operation key."""
 
-    RULES = {"telegram.read_chat_messages": [{"rule": "approved_chats_all_results", "value": ["111", "222"]}]}
+    RULES = {"telegram.read_chat_messages": [{"predicate": "approved_chats_all_results", "value": ["111", "222"]}]}
 
     async def test_all_results_in_approved_chats_auto_accepts(self, monkeypatch, audit_dir):
         install_rules(self.RULES)
@@ -443,7 +436,7 @@ class TestTelegramSearchAllResults:
     async def test_configured_rule_still_covers_a_plain_chat_read(self, monkeypatch, audit_dir):
         # The merged operation key must not break telegram_get_messages's
         # existing single-chat approved_chats rule.
-        install_rules({"telegram.read_chat_messages": [{"rule": "approved_chats", "value": ["111"]}]})
+        install_rules({"telegram.read_chat_messages": [{"predicate": "approved_chats", "value": ["111"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -464,7 +457,7 @@ class TestAlwaysAllowUnconditionalRule:
     calendar_set_working_location (no calendar_id arg at all)."""
 
     async def test_gmail_draft_auto_accepts_regardless_of_recipient(self, monkeypatch, audit_dir):
-        install_rules({"gmail.create_draft": [{"rule": "always_allow"}]})
+        install_rules({"gmail.create_draft": [{"predicate": "always_allow"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -492,7 +485,7 @@ class TestAlwaysAllowUnconditionalRule:
         assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
 
     async def test_calendar_out_of_office_auto_accepts(self, monkeypatch, audit_dir):
-        install_rules({"calendar.out_of_office": [{"rule": "always_allow"}]})
+        install_rules({"calendar.out_of_office": [{"predicate": "always_allow"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -506,7 +499,7 @@ class TestAlwaysAllowUnconditionalRule:
         assert entries[0]["auto_accept_rule"] == rule_id("always_allow")
 
     async def test_calendar_working_location_auto_accepts(self, monkeypatch, audit_dir):
-        install_rules({"calendar.working_location": [{"rule": "always_allow"}]})
+        install_rules({"calendar.working_location": [{"predicate": "always_allow"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -523,7 +516,7 @@ class TestAlwaysAllowUnconditionalRule:
 class TestCalendarIAmOrganizer:
     """connector-qa-testing.md Phase 4 step 5."""
 
-    RULES = {"calendar.read_event_details": [{"rule": "i_am_organizer"}]}
+    RULES = {"calendar.read_event_details": [{"predicate": "i_am_organizer"}]}
 
     async def test_own_event_auto_accepts(self, monkeypatch, audit_dir):
         install_rules(self.RULES)
@@ -556,7 +549,7 @@ class TestJiraRules:
     i_am_assignee auto-accept independent of the project rule)."""
 
     async def test_issue_in_approved_project_auto_accepts(self, monkeypatch, audit_dir):
-        install_rules({"jira.read_issue": [{"rule": "approved_project_keys", "value": ["PFQA"]}]})
+        install_rules({"jira.read_issue": [{"predicate": "approved_project_keys", "value": ["PFQA"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -571,7 +564,7 @@ class TestJiraRules:
         assert entries[0]["auto_accept_rule"] == rule_id("approved_project_keys", ["PFQA"])
 
     async def test_issue_in_other_project_still_prompts(self, monkeypatch, audit_dir):
-        install_rules({"jira.read_issue": [{"rule": "approved_project_keys", "value": ["PFQA"]}]})
+        install_rules({"jira.read_issue": [{"predicate": "approved_project_keys", "value": ["PFQA"]}]})
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -584,7 +577,7 @@ class TestJiraRules:
         assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
 
     async def test_reporter_auto_accepts_even_outside_the_approved_project(self, monkeypatch, audit_dir):
-        install_rules({"jira.read_issue": [{"rule": "i_am_reporter"}]})
+        install_rules({"jira.read_issue": [{"predicate": "i_am_reporter"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -599,7 +592,7 @@ class TestJiraRules:
         assert entries[0]["auto_accept_rule"] == rule_id("i_am_reporter")
 
     async def test_assignee_auto_accepts_independent_of_reporter_rule(self, monkeypatch, audit_dir):
-        install_rules({"jira.read_issue": [{"rule": "i_am_assignee"}]})
+        install_rules({"jira.read_issue": [{"predicate": "i_am_assignee"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -618,7 +611,7 @@ class TestConfluenceRules:
     independent of the space rule)."""
 
     async def test_page_in_approved_space_auto_accepts(self, monkeypatch, audit_dir):
-        install_rules({"confluence.read_page": [{"rule": "approved_space_keys", "value": ["PFQA"]}]})
+        install_rules({"confluence.read_page": [{"predicate": "approved_space_keys", "value": ["PFQA"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -631,7 +624,7 @@ class TestConfluenceRules:
         assert read_audit_entries(audit_dir)[0]["auto_accept_rule"] == rule_id("approved_space_keys", ["PFQA"])
 
     async def test_page_in_other_space_still_prompts(self, monkeypatch, audit_dir):
-        install_rules({"confluence.read_page": [{"rule": "approved_space_keys", "value": ["PFQA"]}]})
+        install_rules({"confluence.read_page": [{"predicate": "approved_space_keys", "value": ["PFQA"]}]})
         monkeypatch.setattr(gate, "show_read_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -644,7 +637,7 @@ class TestConfluenceRules:
         assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
 
     async def test_author_auto_accepts_even_outside_the_approved_space(self, monkeypatch, audit_dir):
-        install_rules({"confluence.read_page": [{"rule": "i_am_author"}]})
+        install_rules({"confluence.read_page": [{"predicate": "i_am_author"}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -662,7 +655,7 @@ class TestContactsNoContactInfoChange:
     auto-accept; the same rule must not cover an edit that also touches
     email/phone."""
 
-    RULES = {"contacts.edit": [{"rule": "no_contact_info_change"}]}
+    RULES = {"contacts.edit": [{"predicate": "always_allow", "conditions": [("no_contact_info_change", None)]}]}
 
     async def test_name_only_edit_auto_accepts(self, monkeypatch, audit_dir):
         install_rules(self.RULES)
@@ -696,7 +689,7 @@ class TestTasksApprovedTaskList:
     on the allowlist (policy/scopes.py's own approved_task_list docstring)."""
 
     async def test_update_in_approved_list_auto_accepts(self, monkeypatch, audit_dir):
-        install_rules({"tasks.update_task": [{"rule": "approved_task_list", "value": ["list-a"]}]})
+        install_rules({"tasks.update_task": [{"predicate": "approved_task_list", "value": ["list-a"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -708,7 +701,7 @@ class TestTasksApprovedTaskList:
         assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
 
     async def test_update_in_unapproved_list_still_prompts(self, monkeypatch, audit_dir):
-        install_rules({"tasks.update_task": [{"rule": "approved_task_list", "value": ["list-a"]}]})
+        install_rules({"tasks.update_task": [{"predicate": "approved_task_list", "value": ["list-a"]}]})
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -720,7 +713,7 @@ class TestTasksApprovedTaskList:
         assert read_audit_entries(audit_dir)[0]["decision"] == "approved"
 
     async def test_move_auto_accepts_only_when_both_ends_are_approved(self, monkeypatch, audit_dir):
-        install_rules({"tasks.move_task": [{"rule": "approved_task_list", "value": ["list-a", "list-b"]}]})
+        install_rules({"tasks.move_task": [{"predicate": "approved_task_list", "value": ["list-a", "list-b"]}]})
         fail_if_popup_shown(monkeypatch)
 
         result = await gate.gated_call(**make_kwargs(
@@ -732,7 +725,7 @@ class TestTasksApprovedTaskList:
         assert read_audit_entries(audit_dir)[0]["decision"] == "auto_accepted"
 
     async def test_move_to_an_unapproved_destination_still_prompts(self, monkeypatch, audit_dir):
-        install_rules({"tasks.move_task": [{"rule": "approved_task_list", "value": ["list-a", "list-b"]}]})
+        install_rules({"tasks.move_task": [{"predicate": "approved_task_list", "value": ["list-a", "list-b"]}]})
         monkeypatch.setattr(gate, "show_popup", lambda *a, **k: ("accept", None))
 
         result = await gate.gated_call(**make_kwargs(
@@ -757,7 +750,7 @@ class TestAcceptAllPersistsARealRule:
 
     async def test_second_matching_call_is_silently_auto_accepted(self, monkeypatch, audit_dir, tmp_path):
         config_path = tmp_path / "settings.yaml"
-        config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        config_path.write_text("auto_accept: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(config_path))
         install_rules({})
 
@@ -804,7 +797,7 @@ class TestAcceptAllPersistsARealRuleForWrites:
 
     async def test_second_matching_label_add_is_silently_auto_accepted(self, monkeypatch, audit_dir, tmp_path):
         config_path = tmp_path / "settings.yaml"
-        config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
+        config_path.write_text("auto_accept: {}\n", encoding="utf-8")
         auto_accept.init_config_path(str(config_path))
         install_rules({})
 

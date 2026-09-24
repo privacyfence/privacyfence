@@ -5,8 +5,8 @@ Streamable HTTP session.
 
 Originally written (P2) as a self-contained Python port of what was then
 ``bridge/src/tools.ts``'s schema mapping and ``ipc_server.IPCServer``'s own
-``_call_connector``/``_check_policy``/``_list_rules``/
-``_propose_rule_change``/``_build_manifest``/begin-end-unattended-session --
+``_call_connector``/``_check_policy``/``_build_manifest``/
+begin-end-unattended-session --
 deliberately not a shared refactor of ``IPCServer`` at the time, so as not
 to put that module's own already-green test suite at risk mid-migration.
 P5 deleted the bridge and ``ipc_server.py`` entirely once both had a stable
@@ -302,9 +302,7 @@ class McpDispatcher:
         return False
 
     # ------------------------------------------------------------------ #
-    # Meta-tools -- ported from IPCServer._check_policy/_list_rules/
-    # _propose_rule_change (see ipc_server.py for the full rationale on
-    # each; identical behavior, same audit entries).
+    # Meta-tools: check_policy, list_policy, propose_policy_change.
     # ------------------------------------------------------------------ #
 
     def check_policy(self, connector_name: str, tool: str, args: dict, claude_reason: str = "") -> dict:

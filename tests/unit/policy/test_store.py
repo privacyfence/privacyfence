@@ -1,11 +1,12 @@
 """Tests for privacyfence.policy.store (P4 of the policy v2 redesign): the on-disk v2 schema.
 
 Covers the serialization round trip (``rule_to_dict``/``rule_from_dict``/``compile_rules_from_config``),
-``merge_rules``'s union-by-meaning behaviour and its stable, content-derived ids, and the
-destructive/send verb classification the Settings migration banner (``settings_controller.
-SettingsController.policy_v2_migration_notice_html``) depends on.
+``merge_rules``'s union-by-meaning behaviour and its stable, content-derived ids, and
+``reject_v1_sections``' refusal of a config written for the earlier format (ADR 0041).
 """
 from __future__ import annotations
+
+import pytest
 
 from privacyfence.policy import store
 from privacyfence.policy.engine import PolicyRule
@@ -39,7 +40,7 @@ class TestRuleIdFor:
 
     def test_different_conditions_gives_different_id(self):
         a = store.rule_id_for("always_allow", None, ())
-        b = store.rule_id_for("always_allow", None, (("shared_drive_exclusion", None),))
+        b = store.rule_id_for("always_allow", None, (("not_shared_drive", None),))
         assert a != b
 
     def test_id_is_a_stable_prefixed_string(self):
@@ -51,9 +52,8 @@ class TestRuleIdFor:
 class TestRuleIdForRule:
     """P8 (rule attribution and staleness): the canonical id for an already-compiled rule,
     independent of whatever its own ``.id`` happens to be -- gate.py's ``_evaluate_auto_accept``
-    needs this to attribute a decision made against a ``policy.compat``-compiled rule (whose
-    ``.id`` is the ambiguous v1 predicate name, per that module's own docstring) to the same row
-    Settings' Auto-accept page lists."""
+    needs this to attribute a decision made against a rule whose ``.id`` is not canonical (one
+    built in memory) to the same row Settings' Auto-accept page lists."""
 
     def test_matches_rule_id_for_of_the_same_fields(self):
         rule = _rule(id_="approved_sandbox_folder", predicate="approved_sandbox_folder", value=["F1"])
@@ -225,47 +225,37 @@ class TestRulesToConfig:
         assert store.rules_to_config([])["version"] == store.SCHEMA_VERSION
 
 
-class TestVerbFamiliesAndDestructiveOrSend:
-    def test_delete_operation_is_destructive(self):
-        rule = _rule(predicate="always_allow", value=None, operations=("sheets.delete_dimensions",))
-        from privacyfence.policy.registry import VerbFamily
-        assert VerbFamily.DESTRUCTIVE in store.verb_families(rule)
-        assert store.is_destructive_or_send(rule) is True
+class TestRejectV1Sections:
+    @pytest.mark.parametrize("key", store.V1_SECTION_KEYS)
+    def test_each_v1_section_is_refused_and_named(self, key):
+        with pytest.raises(store.V1PolicyConfigError) as excinfo:
+            store.reject_v1_sections({key: {"contacts.edit": [{"rule": "no_contact_info_change"}]}}, "/cfg.yaml")
+        message = str(excinfo.value)
+        assert "/cfg.yaml" in message
+        assert f"'{key}'" in message
+        assert "that section" in message
+        assert "Auto-accept page" in message
+        assert "not converted automatically" in message
 
-    def test_send_operation_is_send(self):
-        rule = _rule(predicate="always_allow", value=None, operations=("slack.send_message",))
-        from privacyfence.policy.registry import VerbFamily
-        assert VerbFamily.SEND in store.verb_families(rule)
-        assert store.is_destructive_or_send(rule) is True
+    def test_both_sections_are_named_together(self):
+        with pytest.raises(store.V1PolicyConfigError) as excinfo:
+            store.reject_v1_sections({"auto_accept_rules": {}, "auto_accept_grants": {}}, "cfg")
+        message = str(excinfo.value)
+        assert "'auto_accept_rules' and 'auto_accept_grants'" in message
+        assert "those sections" in message
 
-    def test_read_only_operation_is_neither(self):
-        rule = _rule(predicate="approved_folder", value=["F1"], operations=("drive.read_file_contents",))
-        assert store.is_destructive_or_send(rule) is False
+    @pytest.mark.parametrize("value", [None, {}, []])
+    def test_an_empty_v1_section_is_still_refused(self, value):
+        with pytest.raises(store.V1PolicyConfigError):
+            store.reject_v1_sections({"auto_accept_grants": value}, "cfg")
 
-    def test_write_only_operation_is_not_flagged(self):
-        rule = _rule(predicate="always_allow", value=None, operations=("jira.update_issue",))
-        assert store.is_destructive_or_send(rule) is False
+    def test_is_a_value_error(self):
+        # daemon_main.main reports ValueError from load_config as "Configuration error" and exits 1.
+        assert issubclass(store.V1PolicyConfigError, ValueError)
 
-    def test_unknown_operation_has_no_verb_families(self):
-        rule = _rule(predicate="always_allow", value=None, operations=("not.a.real.operation",))
-        assert store.verb_families(rule) == frozenset()
-        assert store.is_destructive_or_send(rule) is False
+    def test_current_format_passes(self):
+        cfg = {store.AUTO_ACCEPT_CONFIG_KEY: store.rules_to_config([_rule()]), "logging": {}}
+        assert store.reject_v1_sections(cfg, "cfg") is None
 
-
-class TestDestructiveOrSendRules:
-    def test_filters_configured_rules_to_only_destructive_or_send(self):
-        cfg = {
-            "auto_accept": {
-                "version": 2,
-                "rules": [
-                    {"id": "r-read", "predicate": "approved_folder", "value": ["F1"],
-                     "operations": ["drive.read_file_contents"]},
-                    {"id": "r-delete", "predicate": "always_allow", "operations": ["sheets.delete_dimensions"]},
-                ],
-            }
-        }
-        flagged = store.destructive_or_send_rules(cfg)
-        assert [r.id for r in flagged] == ["r-delete"]
-
-    def test_empty_config_flags_nothing(self):
-        assert store.destructive_or_send_rules({}) == []
+    def test_empty_config_passes(self):
+        assert store.reject_v1_sections({}, "cfg") is None

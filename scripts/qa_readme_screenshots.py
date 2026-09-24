@@ -36,16 +36,11 @@ OUT_DIR = Path(__file__).resolve().parent.parent / "docs" / "images" / "screensh
 
 # Representative, fake-but-plausible state -- enough for the two screenshots
 # to show a populated, real-looking page rather than every field empty.
-# Seeded directly in the v2 auto_accept: schema (policy.store) -- this script
-# builds SettingsController directly rather than going through daemon_main.
-# run_app()'s own startup path, so a v1-only seed would never actually reach
-# the migration step and the Auto-accept page's own screenshot would render
-# empty.
+# Seeded in the auto_accept: schema (policy.store).
 _SETTINGS_YAML = """\
 connectors: {}
 pii_detection:
   enabled: true
-migrated_to_policy_v2: true
 auto_accept:
   version: 2
   rules:

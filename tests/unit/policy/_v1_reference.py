@@ -18,14 +18,41 @@ to "improve" it.
 
 Only the pieces `test_conditions.py`/`test_scopes.py` actually exercise are kept: the
 `_rule_*` predicate methods either file calls via `_old()`, the small set of private helpers
-those methods depend on (`_file_from`, `_domain_of`, `_address_of`, `_attendee_email`), and the
-two classification frozensets both files assert selectors against.
+those methods depend on (`_file_from`, `_domain_of`, `_address_of`, `_attendee_email`), the
+two classification frozensets both files assert selectors against, and `V1_CONDITION_NAMES` --
+which v1 predicate names each v2 condition took over. That mapping used to live in
+`policy/conditions.py` as `ConditionSelector.replaces`, for the one-time settings conversion; the
+conversion is gone (ADR 0041), so only this harness still needs it.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import Any
+
+# ── v2 condition name -> the v1 predicate names it took over ─────────────────────────────────
+
+V1_CONDITION_NAMES: dict[str, tuple[str, ...]] = {
+    "older_than_days": ("age_threshold_days",),
+    "within_days": ("time_window_days",),
+    "past_only": ("past_event",),
+    "no_attachments": ("no_attachments", "no_file_attachments", "no_media_attachments"),
+    "no_external_attendees": ("no_external_attendees",),
+    "no_conferencing_link": ("no_conferencing_link",),
+    "not_private": ("non_private_event",),
+    "not_shared_drive": ("shared_drive_exclusion",),
+    "no_contact_info_change": ("no_contact_info_change",),
+    "in_existing_thread": ("reply_in_existing_thread",),
+}
+
+
+def condition_name_for_v1_predicate(predicate: str) -> str | None:
+    """The v2 condition name that took over v1 ``predicate``, or ``None`` if it isn't one."""
+    for name, v1_names in V1_CONDITION_NAMES.items():
+        if predicate in v1_names:
+            return name
+    return None
+
 
 # ── Classification sets (verbatim from pre-P9 auto_accept.py) ───────────────────────────────
 

@@ -324,7 +324,6 @@ class TestNoOutcomeKeysOnAgentIdentity:
     def test_condition_selector_does_not_reference_agent_identity(self, name):
         selector = CONDITION_SELECTORS[name]
         assert "agent" not in selector.name.lower()
-        assert not any("agent" in replaced.lower() for replaced in selector.replaces)
         assert _agent_markers_in(inspect.getsource(selector.holds)) == [], (
             f"`when: {name}` reads agent identity -- ADR 0006 Invariant 1 forbids keying an outcome on "
             "a claimed identity."

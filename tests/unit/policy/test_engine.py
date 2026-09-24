@@ -1,8 +1,7 @@
 """Tests for privacyfence.policy.engine (P3 of the policy v2 redesign): the v2 rule evaluator.
 
-Equivalence against the old evaluator, on every predicate P2 built a fixture for, lives in
-test_compat.py (it needs `policy.compat` to build the `PolicyRule`s in the first place). This
-module tests `evaluate()`/`preflight()` mechanics that a per-predicate fixture corpus can't reach
+Per-predicate equivalence against the old evaluator lives in test_scopes.py and
+test_conditions.py. This module tests `evaluate()`/`preflight()` mechanics that a per-predicate fixture corpus can't reach
 on its own: multiple rules per operation, first-match ordering, `operations` filtering, fail-closed
 handling of an unrecognised predicate, and the temp-accept delegation the redesign proposal's §09
 files under this module ("evaluate(), preflight(), temp-accept window").
@@ -123,8 +122,8 @@ class TestFindMatchingRule:
         assert find_matching_rule([], "op", make_ctx()) is None
 
     def test_picks_the_same_rule_evaluate_reports_by_id_when_ids_collide(self):
-        # Two rules sharing one `.id` (the F9 shape a v1-compiled rule list can have -- see
-        # policy.compat.compile_rule_entry's own docstring) but naming different resources: only
+        # Two rules sharing one `.id` (the F9 shape a rule list built in memory can have) but
+        # naming different resources: only
         # one of them actually matches this ctx, and find_matching_rule must return that exact
         # object, not merely "the first rule with a matching id".
         a = PolicyRule(id="dup", predicate="i_am_owner", value=None, operations=frozenset({"op"}))

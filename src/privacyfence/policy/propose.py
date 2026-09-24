@@ -224,8 +224,7 @@ class ProposableScope:
     ``condition`` is set only for the two *condition* scopes v1's calendar read family offered as
     plain rules ("any event with no external attendees"). They have no resource identity to scope
     to, so their v2 shape is the honestly-unconditional ``<connector>.anything`` scope carrying one
-    ``when:`` -- exactly what ``policy.compat.compile_rule_entry`` already compiles a bare v1
-    condition rule into. ``v1_rule`` is the v1 rule name such a scope persists under, which for a
+    ``when:``. ``v1_rule`` is the v1 rule name such a scope persists under, which for a
     condition scope is the condition's own v1 name rather than ``always_allow``.
     """
 
