@@ -274,6 +274,17 @@ class TestMainArgvDispatch:
         monkeypatch.setattr(companion, "CompanionChannelServer", _DeafChannel)
         assert companion._run_serve(wait=lambda: None) == 1
 
+    def test_launch_flag_runs_launch(self, monkeypatch):
+        monkeypatch.setattr(companion, "_launch", lambda: 7)
+        assert companion.main(["--launch"]) == 7
+
+    @pytest.mark.parametrize("other", [["--serve"], ["--action", "quit"]])
+    def test_launch_with_another_mode_is_refused(self, monkeypatch, other):
+        monkeypatch.setattr(companion, "_launch", lambda: pytest.fail("launched"))
+        with pytest.raises(SystemExit) as exc_info:
+            companion.main(["--launch", *other])
+        assert exc_info.value.code == 2
+
     def test_serve_and_action_together_are_refused(self, monkeypatch):
         # One runs and exits, the other stays up forever. Silently picking
         # either would make a mis-written .desktop Exec= look like it worked.
@@ -1055,6 +1066,27 @@ class TestTrayLoop:
         companion._run_tray()
         assert tray.icon.image.label.startswith("color:")
 
+    def test_launch_opens_its_page_once_the_channel_is_up(self, tray, monkeypatch):
+        """ADR 0031: a click with no companion running becomes the tray and
+        opens Approvals from it -- attested, because by then this process
+        owns the channel the daemon calls back."""
+        opened = threading.Event()
+        seen = []
+
+        def _open(path):
+            seen.append((path, tray.channel.started))
+            opened.set()
+            return True
+
+        monkeypatch.setattr(companion, "_open_path", _open)
+        assert companion._run_tray(initial_path="/approvals") == 0
+        assert opened.wait(timeout=2.0)
+        assert seen == [("/approvals", True)]
+
+    def test_a_plain_tray_start_opens_nothing(self, tray, monkeypatch):
+        monkeypatch.setattr(companion, "_open_path", lambda path: pytest.fail(f"opened {path}"))
+        assert companion._run_tray() == 0
+
     def test_a_stopped_daemon_offers_start_not_restart_or_stop(self, tray, monkeypatch):
         stopped = companion.daemon_status.DaemonStatus(
             state="stopped", version=None, pid=None, detail="PrivacyFence is not running.",
@@ -1084,6 +1116,9 @@ class TestTrayLoop:
         # real poll tick (probe -> redraw -> update_menu) actually takes,
         # rather than a fixed sleep.
         monkeypatch.setattr(companion, "_STATUS_POLL_SECONDS", 0.01)
+        # The direct (Windows) redraw path; macOS queues it onto a main run
+        # loop no test drives -- see the test below.
+        monkeypatch.setattr(companion.sys, "platform", "win32")
         stopped_status = companion.daemon_status.DaemonStatus(
             state="stopped", version=None, pid=None, detail="PrivacyFence is not running.",
         )
@@ -1094,6 +1129,35 @@ class TestTrayLoop:
 
         assert tray.icon.update_menu_calls >= 1
         assert tray.icon.image.label.startswith("grey:")  # the poll's own redraw, not the initial one
+
+    def test_the_poll_loop_hands_macos_redraws_to_the_main_thread(self, tray, monkeypatch):
+        # AppKit SIGTRAPs when an NSStatusItem/NSMenu is changed off the main
+        # thread, and pystray's darwin backend does no marshalling of its own
+        # -- so on macOS the poll thread may only queue the redraw.
+        monkeypatch.setattr(companion, "_STATUS_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(companion.sys, "platform", "darwin")
+        stopped_status = companion.daemon_status.DaemonStatus(
+            state="stopped", version=None, pid=None, detail="PrivacyFence is not running.",
+        )
+        monkeypatch.setattr(companion.daemon_status, "probe", lambda: stopped_status)
+        queued = []
+        tray.run_until = threading.Event()
+
+        class _MainQueue:
+            def addOperationWithBlock_(self, block):
+                queued.append(block)
+                tray.run_until.set()
+
+        foundation = SimpleNamespace(NSOperationQueue=SimpleNamespace(mainQueue=_MainQueue))
+        monkeypatch.setitem(sys.modules, "Foundation", foundation)
+
+        assert companion._run_tray() == 0
+
+        assert queued, "the poll never queued a redraw"
+        assert tray.icon.update_menu_calls == 0
+        queued[0]()
+        assert tray.icon.update_menu_calls == 1
+        assert tray.icon.icon.label.startswith("grey:")
 
     def test_open_items_dispatch_to_open_path(self, tray, monkeypatch):
         opened = []
@@ -1165,3 +1229,48 @@ class TestTrayLoop:
         items["Service Details…"](tray.icon, None)
         assert calls == ["restart", "status"]
         assert all(t.daemon is True for t in threads)
+
+
+class TestLaunch:
+    """``--launch`` (ADR 0031): what clicking PrivacyFence itself runs -- the
+    macOS app icon and the Windows Start Menu entry. Three outcomes of asking
+    a running companion, three different next steps; see ``_launch()``."""
+
+    @pytest.fixture(autouse=True)
+    def _nothing_real(self, monkeypatch):
+        monkeypatch.setattr(companion, "_run_tray", lambda **kw: pytest.fail("became the tray"))
+        monkeypatch.setattr(companion, "_open_path", lambda path: pytest.fail("opened directly"))
+
+    def test_a_running_companion_is_asked_and_nothing_else_happens(self, monkeypatch):
+        asked = []
+        monkeypatch.setattr(
+            companion, "show_via_companion", lambda path: asked.append(path) or companion.SHOW_OPENED,
+        )
+        assert companion._launch() == 0
+        assert asked == ["/approvals"]
+
+    def test_a_companion_that_declined_is_not_replaced(self, monkeypatch, caplog):
+        """A Deny, or a dialog nobody answered: something is listening, so
+        starting a second tray beside it would only fight it for its
+        address."""
+        monkeypatch.setattr(companion, "show_via_companion", lambda path: companion.SHOW_FAILED)
+        with caplog.at_level("ERROR"):
+            assert companion._launch() == 1
+        assert "did not open Approvals" in caplog.text
+
+    @pytest.mark.parametrize("platform", ["darwin", "win32"])
+    def test_with_no_companion_a_tray_platform_becomes_it(self, monkeypatch, platform):
+        monkeypatch.setattr(companion.sys, "platform", platform)
+        monkeypatch.setattr(companion, "show_via_companion", lambda path: cc.SHOW_NO_COMPANION)
+        started = []
+        monkeypatch.setattr(companion, "_run_tray", lambda **kw: started.append(kw) or 0)
+        assert companion._launch() == 0
+        assert started == [{"initial_path": "/approvals"}]
+
+    def test_with_no_companion_linux_falls_back_to_open_approvals(self, monkeypatch):
+        monkeypatch.setattr(companion.sys, "platform", "linux")
+        monkeypatch.setattr(companion, "show_via_companion", lambda path: cc.SHOW_NO_COMPANION)
+        opened = []
+        monkeypatch.setattr(companion, "_open_path", lambda path: opened.append(path) or True)
+        assert companion._launch() == 0
+        assert opened == ["/approvals"]

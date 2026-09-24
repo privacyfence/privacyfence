@@ -15,8 +15,9 @@ Different installers, same five moves:
 1. **Install the package.** It sets up privilege separation during the install, using the
    administrator password it already asked you for.
 2. **Don't open anything yet.** PrivacyFence is a background daemon plus a small companion app;
-   both start on their own. There is no main window, and double-clicking the application does not
-   open one.
+   both start on their own. There is no main window: opening PrivacyFence itself (the app in
+   `/Applications`, the Start Menu entry, the Applications-menu entry) opens Approvals in your
+   browser, through the companion.
 3. **Connect your AI client** — the bundled `.mcpb` extension for Claude Desktop (macOS, Windows),
    or the daemon's local `/mcp` endpoint for an HTTP-capable client such as Claude Code (any
    platform, and the only route on Linux).
@@ -83,8 +84,9 @@ browser on its Connectors page, already signed in.
 
 Now continue with [Finish setup](#finish-setup-every-platform).
 
-> **If the menu-bar icon isn't there**, start the companion by hand:
-> `/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceCompanion`. If you still can't
+> **If the menu-bar icon isn't there**, double-click PrivacyFence in `/Applications`: with no
+> companion running, that starts it and opens Approvals. When the companion is already running,
+> the same double-click asks you to confirm first. If you still can't
 > reach its menu, `/Applications/PrivacyFenceApp.app/Contents/MacOS/PrivacyFenceApp
 > --print-sign-in-link` prints a one-time link — the companion asks you to confirm it before that
 > link may approve anything. Check the install with
@@ -133,13 +135,13 @@ session is in the `PrivacyFenceUsers` group and can reach the daemon's handoff f
 Click the PrivacyFence tray icon and choose **Open Settings**. Settings opens in your browser on
 its Connectors page, already signed in.
 
-The Start Menu **PrivacyFence** shortcut points at the plain settings URL, which only works once
-you are already signed in — it is not the first way in. The tray icon is.
+The Start Menu **PrivacyFence** entry opens Approvals, already signed in. When the tray icon isn't
+running, it starts it first; when it is, it asks you to confirm first.
 
 Now continue with [Finish setup](#finish-setup-every-platform).
 
-> **If the tray icon isn't there**, start it from the Start Menu's **PrivacyFence Companion**
-> entry. If you still can't reach its menu, the break-glass command prints a one-time sign-in link
+> **If the tray icon isn't there**, start it from the Start Menu's **PrivacyFence** or
+> **PrivacyFence Companion** entry. If you still can't reach its menu, the break-glass command prints a one-time sign-in link
 > — redirect it to a file, because the Windows build is a windowed process with no console of its
 > own:
 >

@@ -1187,6 +1187,98 @@ class TestApplyLayoutLeavesSocketsAlone:
             shutil.rmtree(root, ignore_errors=True)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the macOS installer's own bash against a real unix socket")
+class TestMacosScriptHelpers:
+    """Two ``macos_privilege_separation.sh`` defects a real 4.2.1 install hit:
+    ``migrate_data()`` handing a stale socket to ``ditto`` (which refuses one,
+    aborting ``enable`` before the layout or launchd jobs), and ``status``
+    reading ``handoff/``'s 3770 back as 770."""
+
+    _function = staticmethod(TestApplyLayoutLeavesSocketsAlone._function)
+
+    def test_migrate_data_merges_past_a_stale_socket(self, tmp_path):
+        base = Path(tempfile.mkdtemp(prefix="pf-migrate-", dir="/tmp"))
+        try:
+            legacy = base / "legacy"
+            (legacy / "sub").mkdir(parents=True)
+            (legacy / "settings.yaml").write_text("x", encoding="utf-8")
+            (legacy / "sub" / "kept").write_text("y", encoding="utf-8")
+            for path in (legacy / "companion.sock", legacy / "sub" / "control.sock"):
+                listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                listener.bind(str(path))
+                listener.close()  # leaves the node behind, exactly like a dead companion
+            root = base / "root"
+            root.mkdir()
+
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            ditto = bin_dir / "ditto"
+            ditto.write_text(
+                '#!/bin/sh\n'
+                'if [ -n "$(find "$1" -type s)" ]; then echo "Operation not supported on socket" >&2; exit 1; fi\n'
+                'cp -R "$1" "$2"\n',
+                encoding="utf-8",
+            )
+            ditto.chmod(0o755)
+
+            script = "\n".join([
+                "set -euo pipefail",
+                "note() { :; }",
+                f"legacy_data_dir() {{ printf '%s' {shlex.quote(str(legacy))}; }}",
+                f"SYSTEM_ROOT={shlex.quote(str(root))}",
+                "NON_OWNER_FOR_USER=0 OWNER_HOME=/nonexistent-home",
+                self._function("darwin", "drop_stale_sockets"),
+                self._function("darwin", "migrate_data"),
+                "migrate_data",
+            ])
+            env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+            result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=30)
+
+            assert result.returncode == 0, result.stderr
+            assert (root / "settings.yaml").read_text(encoding="utf-8") == "x"
+            assert (root / "sub" / "kept").read_text(encoding="utf-8") == "y"
+            assert not any(stat.S_ISSOCK(p.lstat().st_mode) for p in root.rglob("*"))
+            assert not legacy.exists()
+        finally:
+            shutil.rmtree(base, ignore_errors=True)
+
+    def test_octal_mode_keeps_the_setgid_and_sticky_digit(self, tmp_path):
+        handoff = tmp_path / "handoff"
+        handoff.mkdir()
+        handoff.chmod(0o3770)
+        root = tmp_path / "root"
+        root.mkdir()
+        root.chmod(0o711)
+        marker = tmp_path / "marker"
+        marker.write_text("{}", encoding="utf-8")
+        marker.chmod(0o644)
+
+        env = dict(os.environ)
+        if sys.platform != "darwin":
+            # BSD `stat -f %Op` emulated with GNU stat's raw hex mode, so the
+            # same helper runs here as on the macOS runner.
+            gnu_stat = shutil.which("stat")
+            bin_dir = tmp_path / "bin"
+            bin_dir.mkdir()
+            stub = bin_dir / "stat"
+            stub.write_text(f'#!/bin/sh\nprintf "%o\\n" "0x$({gnu_stat} -c %f "$3")"\n', encoding="utf-8")
+            stub.chmod(0o755)
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+        def mode(path):
+            script = "\n".join([self._function("darwin", "octal_mode"), f"octal_mode {shlex.quote(str(path))}"])
+            return subprocess.run(
+                ["bash", "-c", script], env=env, check=True, capture_output=True, text=True, timeout=30,
+            ).stdout.strip()
+
+        try:
+            assert mode(handoff) == "3770"
+            assert mode(root) == "711"
+            assert mode(marker) == "644"
+        finally:
+            handoff.chmod(0o700)
+
+
 class TestAutoEnableMacos:
     """#428 D1 (4.1) / ADR 0003 decision 6: the daemon's own trigger for
     auto-enabling privilege separation on macOS, since there's no
@@ -2086,6 +2178,46 @@ class TestWindowsCompanionTaskTemplate:
 
         assert '#define CompanionExeName "PrivacyFenceCompanion.exe"' in inno
         assert r'Name: "{group}\{#AppName} Companion"' in inno
+
+    def test_the_main_start_menu_entry_launches_through_the_companion(self):
+        # ADR 0031: the same thing a double-click on the macOS app does --
+        # open Approvals, starting the tray first if it isn't running --
+        # rather than the bare settings URL, which only worked for a browser
+        # that already had a session.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+
+        assert (
+            r'Name: "{group}\{#AppName}"; Filename: "{app}\{#CompanionExeName}"; Parameters: "--launch"'
+            in inno
+        )
+        assert "localhost:8765" not in inno
+
+
+class TestMacosBundleMainExecutable:
+    """ADR 0031: a double-click on PrivacyFenceApp.app runs the launcher,
+    never the daemon. launchd starts the daemon and the companion by their
+    own explicit paths (macos_privilege_separation.sh), so the bundle's
+    CFBundleExecutable is free to be something a human means to click."""
+
+    SPEC = REPO_ROOT / "PrivacyFenceApp.spec"
+
+    def test_the_bundles_main_executable_is_the_launcher(self):
+        spec = self.SPEC.read_text(encoding="utf-8")
+
+        assert '"CFBundleExecutable": "PrivacyFence",' in spec
+        assert '["src/_launcher_entry.py"]' in spec
+        assert 'name="PrivacyFence",' in spec
+
+    def test_the_launcher_runs_the_companions_launch(self):
+        entry = (REPO_ROOT / "src" / "_launcher_entry.py").read_text(encoding="utf-8")
+
+        assert 'main(["--launch"])' in entry
+
+    def test_launchd_still_starts_the_daemon_by_its_own_path(self):
+        script = (REPO_ROOT / "scripts" / "macos_privilege_separation.sh").read_text(encoding="utf-8")
+
+        assert 'DAEMON_EXECUTABLE="${staged_app}/Contents/MacOS/PrivacyFenceApp"' in script
+        assert 'COMPANION_EXECUTABLE="${staged_app}/Contents/MacOS/PrivacyFenceCompanion"' in script
 
 
 class TestWindowsLayoutAudit:

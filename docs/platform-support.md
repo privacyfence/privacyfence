@@ -62,6 +62,27 @@ with that reason, and a recovery code is not issued rather than issued to nobody
 (status/start/stop/restart) needs no dialog to *read* — only the elevation prompt itself, which is
 the OS's own (`osascript`/`pkexec`/UAC), not one of these two.
 
+### Opening PrivacyFence itself opens Approvals
+
+Every platform's visible entry point runs the companion, never the daemon ([ADR
+0031](adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md)). On macOS that is
+the app in `/Applications`, whose bundle's main executable is a launcher
+(`Contents/MacOS/PrivacyFence`, not the daemon's `PrivacyFenceApp`). On Windows it is the main
+Start Menu entry, and on Linux the Applications-menu entry. What happens depends on whether a
+companion is already running:
+
+- **A companion is running:** the click asks it to open Approvals, and it asks the human to
+  confirm first. The request comes from another process running as the same user, so the
+  confirmation cannot be skipped. On a separated POSIX install, this page request is the one
+  thing the companion's own user may send the companion's channel.
+- **No companion is running (macOS, Windows):** the click becomes the tray/menu-bar companion
+  itself and opens Approvals with no dialog.
+- **No companion is running (Linux):** the click falls back to the view-only link, as
+  `--action=open-approvals` always has.
+
+launchd, the Scheduled Task and systemd still start the daemon and the companion by their own
+explicit paths, so none of this touches the service.
+
 ## macOS
 
 The macOS app is defined by `PrivacyFenceApp.spec`. Release builds are produced by `scripts/build_dmg.sh` and the macOS job in `.github/workflows/build.yml`.
@@ -182,7 +203,9 @@ The installer:
 
 - installs PrivacyFence under Program Files;
 - installs the bundled MCPB/shim assets;
-- creates a Start Menu entry for the settings UI;
+- creates a Start Menu entry that opens Approvals through the companion (`--launch`, starting
+  the tray icon first if it isn't running; [ADR
+  0031](adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md));
 - creates a Task Scheduler entry for user-session startup;
 - creates a Start Menu entry for the companion app;
 - installs the privilege-separation tool as `privilege-separation.ps1` next to the

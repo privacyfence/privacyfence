@@ -61,6 +61,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no fresh WebAuthn assertion — exactly the "what gets gated" bypass `_SENSITIVE_ACTIONS` exists to
   close, just left open on the org-mode side of the same dispatcher.
 
+### Changed
+
+- **Opening PrivacyFence itself now opens Approvals, on every platform.** On macOS, a
+  double-click on PrivacyFence in `/Applications` used to do nothing visible: it started a second
+  daemon as you, which a separated install refuses. It now runs a launcher that opens Approvals
+  through the companion. If the menu-bar icon isn't running, the launcher starts it first. The
+  daemon keeps running in the background exactly as before. On Windows, the main Start Menu
+  **PrivacyFence** entry now does the same thing instead of opening the bare settings URL, which
+  only worked if the browser was already signed in. When the companion is already running, the
+  click asks you to confirm before opening. ([ADR
+  0031](docs/adr/0031-clicking-privacyfence-opens-approvals-through-the-companion.md))
+
+### Fixed
+
+- **The Linux Applications-menu entry (and its Settings action) can approve again on a separated
+  install.** The companion's channel refused every caller except the daemon's service account. So
+  the menu click's request to the running `--serve` companion never got through, and it fell back
+  to a link that could view Approvals but not approve anything. The companion's own user may now
+  ask it to open Approvals or Settings, with the same confirmation dialog as before. Every other
+  request on that channel is still restricted to the daemon.
+
 ### Removed
 
 - **The deprecated v1-shaped auto-accept meta-tools**, `privacyfence_list_auto_accept_rules` and
@@ -68,6 +89,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   release (ADR 0004 decision 3) after the policy v2 redesign; that grace period was honoured by
   4.1.2, the first stable 4.1.x. Use `privacyfence_list_policy` and
   `privacyfence_propose_policy_change` instead.
+
+### Fixed
+
+- **macOS: the companion's menu-bar icon no longer vanishes a few seconds after it appears.** The
+  status poll added in 4.2.1 redrew the icon and menu from a background thread, and AppKit kills a
+  process (`trace trap`) that changes its menu bar off the main thread. Redraws are now queued onto
+  the main thread.
+- **macOS: `macos_privilege_separation.sh enable` no longer aborts half-way when
+  `~/.privacyfence` contains a leftover socket** (`ditto: ... Operation not supported on socket`).
+  Stale sockets are dropped before the merge, so the layout and launchd jobs are installed as
+  normal.
+- **macOS: `macos_privilege_separation.sh status` no longer reports a correct `handoff`
+  directory as `WRONG MODE ... 770, expected 3770`.** The check ignored the setgid/sticky digit.
 
 ## [4.2.1] — 2026-09-23
 

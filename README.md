@@ -338,8 +338,8 @@ Approve it once and it won't ask again for that folder.
    you) and press Enter, then act on the `.mcpb` file there as above.
 4. Open PrivacyFence's tray icon and choose **Open Settings**. (Ask Claude to set up PrivacyFence
    and it will tell you the same thing — see the macOS steps above for why it cannot hand you a
-   link itself. The Start Menu shortcut points at the bare, cookie-authenticated URL, so it only
-   works once you are already signed in — not as the first way in.)
+   link itself. The Start Menu **PrivacyFence** entry opens Approvals through the same tray
+   icon, starting it first if it isn't running.)
 5. Settings opens on its Connectors page: install the organization configuration provided
    by your IT administrator, if any, and authenticate the connectors you want.
 6. **Add a passkey when the companion asks.** A packaged install requires one before it will
