@@ -650,6 +650,20 @@ def _run_status_poll_once(
     return status
 
 
+def _on_ui_thread(fn: Callable[[], None]) -> None:
+    """Run ``fn`` where the tray may be touched. pystray's macOS backend calls
+    AppKit directly from whichever thread asks, and AppKit kills the process
+    (SIGTRAP) when an ``NSStatusItem``/``NSMenu`` is changed off the main
+    thread -- so there it is queued onto the main run loop ``icon.run()``
+    drives. Windows' backend has no such rule."""
+    if sys.platform != "darwin":
+        fn()
+        return
+    from Foundation import NSOperationQueue
+
+    NSOperationQueue.mainQueue().addOperationWithBlock_(fn)
+
+
 def _run_tray(initial_path: str | None = None) -> int:
     """macOS/Windows only -- a persistent process with a tray/menu-bar icon
     and this process's own ``CompanionChannelServer`` (decision 5), both
@@ -764,12 +778,15 @@ def _run_tray(initial_path: str | None = None) -> int:
     poll_stop = threading.Event()
 
     def _redraw(status: "daemon_status.DaemonStatus") -> None:
-        _state.status = status
-        icon.icon = _status_icon_image(base_image, status.state)
-        icon.update_menu()
+        def _apply() -> None:
+            _state.status = status
+            icon.icon = _status_icon_image(base_image, status.state)
+            icon.update_menu()
+
+        _on_ui_thread(_apply)
 
     def _notify() -> None:
-        icon.notify(_NOTIFY_TEXT)
+        _on_ui_thread(lambda: icon.notify(_NOTIFY_TEXT))
 
     def _poll_loop() -> None:
         while not poll_stop.wait(_STATUS_POLL_SECONDS):
