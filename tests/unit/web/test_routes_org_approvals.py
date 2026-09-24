@@ -1,6 +1,10 @@
-"""Tests for web/routes_org_approvals.py: the principal-aware /approvals
-surface in org mode (P9), including the WebAuthn/IdP step-up gate on write
-decisions (§10.6, D7).
+"""Tests for org mode's own wiring of the principal-aware /approvals surface
+(P9): web/routes_approvals.py's build_routes() (the list/show/decide/
+preview/stream/batch-decide routes, shared with local mode) plus
+web/routes_org_stepup.py's own IdP step-up routes (the WebAuthn/IdP gate on
+write decisions, §10.6, D7, with no local-mode analogue at all). PSC-2b:
+this file used to test a dedicated routes_org_approvals.py module that no
+longer exists -- re-pointed onto the merged builder here, same tests.
 """
 from __future__ import annotations
 
@@ -15,7 +19,7 @@ from privacyfence import org_identity as oi, paths, webauthn_stepup as wa
 from privacyfence.approvals import PendingApprovalRegistry
 from privacyfence.principal import Principal, principal_scope
 from privacyfence.step_up_config import StepUpConfig
-from privacyfence.web import org_session, routes_org_approvals as roa
+from privacyfence.web import org_session, routes_approvals, routes_org_stepup
 from privacyfence.web_approval_ui import WebApprovalUI
 
 ISSUER = "https://pf.example.com"
@@ -37,7 +41,10 @@ def _app(*, step_up: StepUpConfig | None = None, sessions=None, idp=None, web_ui
     sessions = sessions or org_session.OrgSessionStore()
     web_ui = web_ui or WebApprovalUI(registry=PendingApprovalRegistry())
     step_up = step_up or StepUpConfig()
-    routes = roa.build_routes(web_ui=web_ui, sessions=sessions, step_up=step_up, idp=idp or _idp(), issuer_url=ISSUER)
+    routes = routes_approvals.build_routes(web_ui=web_ui, sessions=sessions, step_up=step_up, issuer_url=ISSUER)
+    routes += routes_org_stepup.build_routes(
+        web_ui=web_ui, sessions=sessions, step_up=step_up, idp=idp or _idp(), issuer_url=ISSUER,
+    )
     app = Starlette(routes=routes)
     return app, sessions, web_ui
 
@@ -243,7 +250,7 @@ class TestPrincipalScopedList:
         *before* its own <script> tag opened, so the helper functions
         (pfB64uToBuf/pfWebauthnCreate/pfWebauthnGet) landed in the document
         as literal visible text at the top of the rendered card instead of
-        executing -- see routes_org_approvals.py's own _org_bridge_shim."""
+        executing -- see web/routes_approvals.py's own _org_bridge_shim."""
         app, sessions, web_ui = _app()
         approval = _register(web_ui, ALICE, dedupe_key="a1")
         client = _client(app)
@@ -253,6 +260,39 @@ class TestPrincipalScopedList:
         body_start = r.text.index("<body>") + len("<body>")
         assert r.text[body_start : body_start + len("<script")] == "<script"
         assert "function pfB64uToBuf" not in r.text.split("<script", 1)[0]
+
+    def test_a_foreign_principal_can_neither_read_nor_decide_the_approval(self):
+        """PSC-2b: one check spanning every surface this class and
+        TestDecideWithoutStepUp/TestBatchDecide otherwise cover individually
+        (list, get, decide, batch-decide) -- a signed-in principal who isn't
+        this approval's owner gets exactly the same answer a truly unknown
+        id would, everywhere, never "exists but you can't touch it"
+        (module docstring, §10.5)."""
+        app, sessions, web_ui = _app()
+        alices = _register(web_ui, ALICE, dedupe_key="a1")
+        client = _client(app)
+        session_id = _signed_in(client, sessions, BOB)
+
+        listed = client.get("/approvals")
+        assert listed.status_code == 200
+        assert "a message" not in listed.text and "Get message" not in listed.text
+
+        shown = client.get(f"/approvals/{alices.id}")
+        assert shown.status_code == 200
+        assert "no longer pending" in shown.text
+
+        decided = client.post(
+            f"/api/approvals/{alices.id}/decide", json={"result": "accept", "csrf": session_id},
+        )
+        assert decided.status_code == 409  # indistinguishable from already-decided, never a leak
+
+        batch_decided = client.post("/api/approvals/batch/decide", json={
+            "csrf": session_id, "items": [{"id": alices.id, "result": "accept"}],
+        })
+        assert batch_decided.status_code == 200
+        assert batch_decided.json()["results"] == [{"id": alices.id, "outcome": "unknown"}]
+
+        assert not alices.event.is_set()
 
 
 class TestDecideWithoutStepUp:
@@ -737,9 +777,11 @@ class TestIdpStepUp:
         start = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
         qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
 
-        monkeypatch.setattr(roa.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"})
         monkeypatch.setattr(
-            roa.org_identity, "verify_id_token",
+            routes_org_stepup.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"},
+        )
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "verify_id_token",
             lambda idp, token, *, nonce: {"sub": "alice", "nonce": nonce},
         )
         # A fresh, cookie-less client -- mirrors the real cross-site landing.
@@ -769,7 +811,7 @@ class TestIdpStepUp:
         def _boom(*a, **kw):
             raise RuntimeError("IdP unreachable")
 
-        monkeypatch.setattr(roa.org_identity, "exchange_code_for_tokens", _boom)
+        monkeypatch.setattr(routes_org_stepup.org_identity, "exchange_code_for_tokens", _boom)
         cb_client = TestClient(app, base_url=ISSUER, follow_redirects=False)
         r = cb_client.get(f"/oauth/stepup/callback?code=abc&state={qs['state']}")
         assert r.status_code == 302
@@ -784,9 +826,11 @@ class TestIdpStepUp:
         start = client.get(f"/api/approvals/{approval.id}/stepup/idp?result=accept&choice=")
         qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
 
-        monkeypatch.setattr(roa.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"})
         monkeypatch.setattr(
-            roa.org_identity, "verify_id_token",
+            routes_org_stepup.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"},
+        )
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "verify_id_token",
             lambda idp, token, *, nonce: {"sub": "bob", "nonce": nonce},  # a different human signs in
         )
         cb_client = TestClient(app, base_url=ISSUER, follow_redirects=False)
@@ -805,9 +849,11 @@ class TestIdpStepUp:
         qs = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))
         assert qs["acr_values"] == "phr"
 
-        monkeypatch.setattr(roa.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"})
         monkeypatch.setattr(
-            roa.org_identity, "verify_id_token",
+            routes_org_stepup.org_identity, "exchange_code_for_tokens", lambda *a, **kw: {"id_token": "t"},
+        )
+        monkeypatch.setattr(
+            routes_org_stepup.org_identity, "verify_id_token",
             lambda idp, token, *, nonce: {"sub": "alice", "nonce": nonce},  # no "acr" claim at all
         )
         cb_client = TestClient(app, base_url=ISSUER, follow_redirects=False)
