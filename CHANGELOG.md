@@ -43,6 +43,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Apps Script can be connected from Settings**, like the other Google connectors: *Connectors →
+  Apps Script → Authenticate…* on a desktop install, and a *Connect* button on an organization
+  server's `/connect` page. Before, the only way to authorize it was running the app with
+  `--apps-script-oauth`, and its "re-authorize" errors now point at Settings instead. An
+  organization server's Google connector client needs
+  `https://<your-server>/oauth/callback/apps_script` added to its registered redirect URIs.
+
 ### Changed
 
 - The installers now refuse a system older than PrivacyFence supports instead of installing an
@@ -50,6 +59,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Windows Server 2016, and the `.deb` declares its glibc and systemd floors as package
   dependencies (glibc 2.38, systemd 242: Ubuntu 24.04 or Debian 13 and newer). The support
   matrix in `docs/platform-support.md` now lists each platform's minimum.
+
+### Security
+
+- **Recovery-code sign-in is audited, rate-limited and needs a human session.** `POST
+  /security/recover` now records every refused attempt in the audit log
+  (`webauthn_recovery_refused`, with the reason and never the code), not just a successful one. On a
+  privilege-separated install it refuses a session that was not opened from the companion, the same
+  as approving a decision does. Attempts are limited to 5 per session and 20 across all sessions in
+  any 15 minutes; the next one gets a `429` with `Retry-After`.
 
 ## [4.4.0] — 2026-09-24
 
