@@ -43,6 +43,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Apps Script can be connected from Settings**, like the other Google connectors: *Connectors →
+  Apps Script → Authenticate…* on a desktop install, and a *Connect* button on an organization
+  server's `/connect` page. Before, the only way to authorize it was running the app with
+  `--apps-script-oauth`, and its "re-authorize" errors now point at Settings instead. An
+  organization server's Google connector client needs
+  `https://<your-server>/oauth/callback/apps_script` added to its registered redirect URIs.
+
 ### Fixed
 
 - **Telegram works on a PyPI install.** The sdist and wheel now carry PrivacyFence's Telegram app
