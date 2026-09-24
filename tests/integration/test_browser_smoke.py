@@ -58,6 +58,7 @@ from pypdf import PdfWriter  # noqa: E402
 from privacyfence import org_identity as oi  # noqa: E402
 from privacyfence import paths as paths_module  # noqa: E402
 from privacyfence.principal import Principal  # noqa: E402
+from privacyfence.settings_controller import SettingsController  # noqa: E402
 from privacyfence.web import org_session  # noqa: E402
 from privacyfence.web.oauth_provider import OrgOAuthProvider  # noqa: E402
 from privacyfence.web.org_session import OrgSessionStore  # noqa: E402
@@ -1738,3 +1739,84 @@ class TestOrgModeWebAuthnUi:
         page.goto(f"{server.base_url}/security")
         page.wait_for_load_state("load")
         assert page.get_by_text("No passkeys added yet.").is_visible()
+
+
+@pytest.fixture
+def local_server_with_settings(pf_home):
+    """``local_server`` above never passes ``controller=``, so ``/settings``
+    (web/server.py's own ``WebServer.__init__`` docstring: ``controller=
+    None`` mounts nothing there) 404s for every existing test in this file
+    -- none of them needs the settings surface. ``TestSettingsPageRendering``
+    below is the one that does, so it gets its own server with a real
+    ``SettingsController``, rather than changing what every other test's
+    own server mounts."""
+    web_ui = WebApprovalUI()
+    config_path = pf_home / ".privacyfence" / "settings.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+    controller = SettingsController(str(config_path), connectors=[], connector_host=None)
+    port = _free_port()
+    server = WebServer(web_ui, host="localhost", port=port, controller=controller)
+    server.start()
+    try:
+        _wait_until_connectable("localhost", port)
+        yield server, web_ui
+    finally:
+        server.stop()
+
+
+class TestSettingsPageRendering:
+    """PSC-5's own review gate: local mode's settings page and org mode's
+    (admin and non-admin) all render through the same settings_window_html.
+    build_html() now -- this drives all three in a real headless browser and
+    saves a full-page screenshot of each, the same evidence this phase's own
+    brief asks for in the PR description."""
+
+    _SCREENSHOT_DIR = Path(__file__).resolve().parents[2] / "test-results" / "psc5-settings-screenshots"
+
+    def _screenshot(self, page, name: str) -> None:
+        self._SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(self._SCREENSHOT_DIR / f"{name}.png"), full_page=True)
+
+    def test_local_settings_page_renders(self, page, local_server_with_settings):
+        server, _web_ui = local_server_with_settings
+        _sign_in_local(page, server)
+        page.goto(f"{server.base_url}/settings")
+        page.wait_for_load_state("load")
+        page.wait_for_selector(".pf-navitem")
+        nav_labels = page.locator(".pf-navitem").all_inner_texts()
+        assert nav_labels == ["General", "Connectors", "Auto-accept", "Privacy Filter", "Audit Log", "About"]
+        assert page.get_by_text("PII Detection Gate").is_visible()
+        self._screenshot(page, "local-settings")
+
+    def test_org_settings_page_renders_for_non_admin(self, page, context, org_server):
+        server, sessions = org_server
+        principal = Principal(id="bob", email="bob@example.com", display_name="Bob")
+        _sign_in_org(context, server, sessions, principal=principal)
+        page.goto(f"{server.base_url}/settings")
+        page.wait_for_load_state("load")
+        page.wait_for_selector(".pf-navitem")
+        nav_labels = page.locator(".pf-navitem").all_inner_texts()
+        # Connectors/Audit Log are never applicable in org mode; General/
+        # Privacy Filter are admin-only -- a non-admin gets Auto-accept
+        # (and About) only.
+        assert nav_labels == ["Auto-accept", "About"]
+        assert page.get_by_text("Auto-accept").first.is_visible()
+        self._screenshot(page, "org-settings-non-admin")
+
+    def test_org_settings_page_renders_for_admin(self, page, context, org_server):
+        server, sessions = org_server
+        principal = Principal(id="carol", email="carol@example.com", display_name="Carol", is_admin=True)
+        _sign_in_org(context, server, sessions, principal=principal)
+        page.goto(f"{server.base_url}/settings")
+        page.wait_for_load_state("load")
+        page.wait_for_selector(".pf-navitem")
+        nav_labels = page.locator(".pf-navitem").all_inner_texts()
+        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "About"]
+        assert page.get_by_text("PII Detection Gate").is_visible()
+        self._screenshot(page, "org-settings-admin")
+
+        page.goto(f"{server.base_url}/settings/privacy")
+        page.wait_for_load_state("load")
+        page.wait_for_selector(".pf-navitem")
+        assert page.get_by_text("Privacy Filter").is_visible()
+        self._screenshot(page, "org-settings-admin-privacy")

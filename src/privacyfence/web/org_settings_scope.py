@@ -134,6 +134,19 @@ ACTION_SCOPES: dict[str, ActionScope] = {
 }
 
 
+# PSC-5: the shared settings renderer's own read of the table above -- every
+# action with no real ORG_MODE route at all, i.e. exactly the controls
+# settings_window_html.build_html() must never draw when rendering for a
+# principal in org mode (there is no dispatcher on the other end for a click
+# on one). Computed, not hand-maintained, so a new LOCAL_MODE-only action
+# added to ACTION_SCOPES above is automatically excluded from org's rendered
+# page the same PR that adds it -- the renderer has no classification of its
+# own to fall out of sync with this one.
+NOT_APPLICABLE_ACTIONS: frozenset[str] = frozenset(
+    action for action, scope in ACTION_SCOPES.items() if ORG_MODE not in scope.modes
+)
+
+
 def is_action_permitted(action: str, principal: Principal, *, mode: str) -> bool:
     """Whether `principal` may invoke `action` on a settings surface running
     in `mode` (`LOCAL_MODE`/`ORG_MODE`). `mode` is required, not defaulted:

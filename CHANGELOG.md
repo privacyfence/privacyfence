@@ -43,6 +43,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Org mode's settings pages (`/settings`, `/settings/privacy`) now render through the same
+  capability-filtered `settings_window_html.build_html()` local mode's own settings page uses**,
+  instead of a separate, plain-HTML-forms renderer (`web/org_settings_pages.py`, deleted). Org
+  principals get the same nav/section layout local mode does, filtered to what actually applies:
+  Auto-accept for every signed-in principal; General (its PII Detection Gate card only) and
+  Privacy Filter for an admin only; Connectors and Audit Log, which have no org-mode equivalent,
+  are hidden entirely. This also closes a gap PSC-4a/PSC-4b both flagged and left open: org mode's
+  settings pages now carry the same WebAuthn step-up ceremony UI (a passkey prompt) local mode's
+  own settings page does, instead of a step-up refusal showing raw JSON.
+- Org mode's four bespoke settings-write routes (`/api/settings/rules/add`, `/api/settings/rules/
+  remove`, `/api/settings/privacy/policy`, `/api/settings/privacy/pii`) are now one generic `POST
+  /api/settings/{action}` — the same path and JSON body shape local mode's own settings dispatcher
+  already answers, restricted to the six actions `org_settings_scope.ACTION_SCOPES` permits for org
+  mode. `add_policy_rule` now accepts more than one verb in a single submission, matching the
+  shared page's own "Add a rule" form; local mode's settings dispatcher itself is unchanged, and
+  still does not audit-log a settings write (org mode's own dispatcher still does, unchanged).
+
 ### Security
 
 - **Org mode's own sensitive settings actions — adding or removing an auto-accept rule, and

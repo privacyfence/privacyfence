@@ -1,13 +1,21 @@
 """Settings on the web (W3/W4). One module now builds the route list for
-*both* local mode's ~30-action dispatcher and org mode's own purpose-built
-settings surface (policy surface consolidation, PSC-4b) -- formerly a full
+*both* local mode's ~30-action dispatcher and org mode's own settings
+surface (policy surface consolidation, PSC-4b/PSC-5) -- formerly a full
 second module, web/routes_org_settings.py. ``build_routes()`` (below) is
 still local mode's entry point (unchanged signature); ``build_org_routes()``
-is org mode's, replacing ``routes_org_settings.build_routes``. Org-mode page
-*rendering* (``_page``/``_render_settings_page``/``_render_privacy_page`` and
-their own helpers) moved verbatim into web/org_settings_pages.py rather than
-here -- merging renderers is PSC-5's job, not this one's; what merges here is
-dispatch.
+is org mode's, replacing ``routes_org_settings.build_routes``.
+
+Org-mode page *rendering* used to live in its own web/org_settings_pages.py
+(PSC-4b moved it there verbatim, deliberately not merging it, since that was
+PSC-5's job) -- PSC-5 deletes that module. Both ``GET /settings`` and
+``GET /settings/privacy`` now serve settings_window_html.build_html(), the
+exact same capability-filtered renderer local mode's own settings page uses
+(``mode="org"``, ``is_admin=principal.is_admin`` -- see that function's own
+docstring for exactly what each combination hides), and org mode's four
+former bespoke POST routes are one generic ``POST /api/settings/{action}``,
+restricted to ``_ORG_ALLOWED_ACTIONS`` -- the same path and JSON body shape
+local mode's own dispatcher already answers, since it's the same JS bridge
+posting either way now.
 
 ``web/org_settings_scope.py``'s ``ACTION_SCOPES`` is the one declaration both
 modes project from: which of ``_ALLOWED_ACTIONS`` below has a real route in
@@ -143,10 +151,13 @@ from .. import approval_icons, auto_accept, settings_window_html, webauthn_stepu
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
-from ..settings_controller import REPO_URL, SettingsController
+from ..settings_controller import (
+    REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rules,
+    _parse_value_list, _pii_general_fields, _privacy_state_from_config, _rule_usage_map,
+)
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore
-from . import org_install_policy, org_session, org_settings_pages, step_up_decide
+from . import org_install_policy, org_session, step_up_decide
 from .approval_step_up import _verify_or_challenge
 from .csp import nonce_for as _csp_nonce_for
 from .org_session import OrgSessionStore
@@ -972,6 +983,13 @@ def create_app(
     ))
 
 
+_ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
+    "add_policy_rule", "remove_policy_rule",
+    "toggle_pii_detection", "toggle_pii_category",
+    "set_default_policy", "set_category_policy",
+})
+
+
 def build_org_routes(
     *,
     sessions: OrgSessionStore,
@@ -980,12 +998,32 @@ def build_org_routes(
     step_up: StepUpConfig,
     step_up_origin: str,
 ) -> list[Route]:
-    """Org mode's own settings route list (#400), replacing the former
-    web/routes_org_settings.py's ``build_routes`` (PSC-4b). Page rendering
-    lives in web/org_settings_pages.py (moved there verbatim); this module
-    contributes the auth/CSRF/authorization/step-up/audit machinery, shared
-    with local mode's own ``build_routes`` above where the two modes'
-    dispatch actually is the same shape (``_needs_step_up``/
+    """Org mode's own settings route list (#400; PSC-4b merged its dispatch
+    into this module; PSC-5 merges its *rendering* -- both ``GET /settings``
+    and ``GET /settings/privacy`` now serve the exact same settings_window_
+    html.build_html() local mode's own ``_render_settings_page`` above
+    does, capability-filtered for org mode (``mode="org"``,
+    ``is_admin=principal.is_admin`` -- see that function's own docstring),
+    with the former web/org_settings_pages.py deleted).
+
+    That merge folds the four bespoke, form-POSTing routes it used to
+    dispatch through (``add_rule``/``remove_rule``/``set_privacy_policy``/
+    ``set_pii_policy``, one path and payload shape each) into one generic
+    ``POST /api/settings/{action}`` -- the exact same path and JSON body
+    shape local mode's own dispatcher already answers, restricted to
+    ``_ORG_ALLOWED_ACTIONS`` (every action ``org_settings_scope.
+    ACTION_SCOPES`` actually routes for ``ORG_MODE``, which is also
+    everything the shared page's own JS bridge ever posts for a signed-in
+    org principal). That's what closes #579's own remaining follow-up
+    (PSC-4a/PSC-4b both flagged it, see this phase's own PR description):
+    the shared renderer's page now carries the exact same PF_WEBAUTHN_JS/
+    step-up bridge shim local mode's own page does, so a 428/403 step-up
+    refusal here shows the same passkey prompt local mode's does, instead
+    of a raw JSON body replacing the page.
+
+    This module still contributes the auth/CSRF/authorization/step-up/
+    audit machinery, shared with local mode's own ``build_routes`` above
+    where the two modes' dispatch is the same shape (``_needs_step_up``/
     ``_settings_step_up_response``/``_apply_step_up_gate``,
     ``_record_settings_audit``, ``org_settings_scope.is_action_permitted``).
 
@@ -1026,10 +1064,20 @@ def build_org_routes(
         principal, for every other case before returning the response to
         send as-is -- org mode's own extra step over
         ``_apply_step_up_gate`` (local mode's dispatch doesn't audit at
-        all, see ``_record_settings_audit``'s own docstring)."""
-        assertion = _parse_form_assertion(form_body.get("webauthn_assertion"))
+        all, see ``_record_settings_audit``'s own docstring).
+
+        ``form_body`` is, despite the name, a JSON body's already-decoded
+        dict (PSC-5 -- ``settings_action`` below, this function's only
+        caller since the four bespoke form-POST routes it used to serve
+        are gone) -- ``webauthn_assertion``, if present, is already a
+        ``dict``, the same as local mode's own ``payload.get(
+        "webauthn_assertion")``, not the JSON-encoded *string* a multipart
+        form field carried it as (``_parse_form_assertion``, still used by
+        ``org_config_upload`` above, which is still a real multipart
+        route)."""
+        assertion = form_body.get("webauthn_assertion")
         response = _apply_step_up_gate(
-            principal, action, form_body, assertion,
+            principal, action, form_body, assertion if isinstance(assertion, dict) else None,
             step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
         )
         if response is not None:
@@ -1049,29 +1097,94 @@ def build_org_routes(
 
         _load_principal_settings(install_wide_config=install_wide_settings)
 
+    def _org_state(principal: Principal) -> dict[str, Any]:
+        """PSC-5's own org-mode counterpart of ``_snapshot(controller)``
+        above -- the exact same settings_window_html.build_html() shape,
+        built fresh per request (org mode is stateless per request, unlike
+        local mode's single long-lived ``SettingsController``) rather than
+        cached anywhere. General's PII fields and Privacy Filter both read
+        the install-wide config directly (admin-only in this mode, #400's
+        own fail-closed ``"block"`` default for an unconfigured group --
+        unlike local mode's ``"allow"``, see ``_privacy_state_from_config``);
+        Auto-accept reads this principal's own on-disk rules. Sections this
+        mode never shows at all (Connectors, Audit Log) get an inert
+        placeholder -- settings_window_html._capabilities_for is what
+        actually keeps them from ever rendering, not the shape of a
+        placeholder nothing reads. Must already be called inside
+        ``with principal_scope(principal):`` -- ``auto_accept.
+        get_policy_v2_rules()``/``_rule_usage_map()`` both read this
+        principal's own on-disk files.
+        """
+        about = _about_state_dict()
+        privacy = _privacy_state_from_config(install_wide_settings, fail_safe_default="block")
+        # toggle_calendar_free_busy is LOCAL_MODE-only, admin_only, and
+        # hardcoded to a single desktop's own config (org_settings_scope.
+        # ACTION_SCOPES's own comment on it) -- Calendar has no install-
+        # wide/org-mode equivalent at all, so it's dropped from the group
+        # list entirely rather than rendered with a control that could
+        # only ever 404.
+        privacy["groups"] = [g for g in privacy["groups"] if g["key"] != "calendar"]
+
+        def _resolve_raw(rule: Any) -> str:
+            values = rule.value if isinstance(rule.value, list) else ([rule.value] if rule.value else [])
+            return ", ".join(str(v) for v in values)
+
+        rules = auto_accept.get_policy_v2_rules()
+        return {
+            "error": "",
+            "general": {
+                **_pii_general_fields(install_wide_settings),
+                "update_check_enabled": True, "update_check_beta": False,
+                "org_installed": False, "org_installed_date": "",
+                "org_button_label": "", "version": about["version"],
+                "notifications_enabled": True, "notifications_detail": "minimal",
+                "step_up_available": False, "step_up_on": False, "step_up_has_passkey": False,
+            },
+            "connectors": [],
+            "telegram_auth": {"step": None, "error": ""},
+            "auto_accept": _auto_accept_state_from_rules(rules, _rule_usage_map(), resolve_value=_resolve_raw),
+            "privacy": privacy,
+            "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": []},
+            "about": about,
+        }
+
+    def _wrap_org_settings(request: Request, principal: Principal, *, initial_section: str) -> Response:
+        nonce = _csp_nonce_for(request)
+        with principal_scope(principal):
+            _ensure_principal_settings_loaded()
+            state = _org_state(principal)
+        body = settings_window_html.build_html(
+            state, nonce=nonce, initial_section=initial_section,
+            mode=ORG_MODE, is_admin=principal.is_admin,
+        )
+        csrf = request.cookies.get(org_session.SESSION_COOKIE, "")
+        # PF_WEBAUTHN_JS/_settings_bridge_shim (PSC-5, closing #579's own
+        # remaining follow-up): the exact same ceremony helpers local
+        # mode's own _render_settings_page carries -- see that function's
+        # own comment. Whether it's ever exercised depends on this org's
+        # StepUpConfig, not on whether the helpers exist.
+        body += f'<script nonce="{nonce}">{PF_WEBAUTHN_JS}</script>'
+        body += _settings_bridge_shim(csrf=csrf, repo_url=REPO_URL, nonce=nonce)
+        html = web_shell.wrap(
+            body, title="PrivacyFence — Settings", active="settings", nonce=nonce,
+            nav_items=web_shell.ORG_NAV_ITEMS, principal_label=principal.email or principal.display_name or principal.id,
+            # Org mode has no per-request settings push to subscribe a
+            # live stream to (state_stream.py's own StateStream.push_
+            # settings is wired to one local SettingsController's own
+            # on_change, module docstring) -- unchanged from before PSC-5.
+            live_updates=False, notifications_enabled=False,
+        )
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
     async def settings_page(request: Request) -> Response:
         principal = _current_principal(request)
         if principal is None:
             return RedirectResponse("/login?next=/settings", status_code=302, headers={"Cache-Control": "no-store"})
-        # _PrincipalScopeMiddleware already enters this scope for the whole
-        # request in production (server.py's own _build_org_app) -- entering
-        # it again here, around exactly the calls that read per-principal
-        # registries, makes this module correct standalone too (its own
-        # tests build these routes directly, with no middleware wrapping
-        # them), the same explicit-scope pattern gate.py's propose_rule_
-        # change and this module's own test fixtures already use.
-        with principal_scope(principal):
-            _ensure_principal_settings_loaded()
-            rules = auto_accept.get_policy_v2_rules()
-        session_id = request.cookies.get(org_session.SESSION_COOKIE, "")
-        body = org_settings_pages._render_settings_page(rules, principal=principal, csrf=session_id)
-        return HTMLResponse(
-            org_settings_pages._page(
-                "Settings", body, nonce=_csp_nonce_for(request),
-                principal_label=principal.email or principal.display_name or principal.id,
-            ),
-            headers={"Cache-Control": "no-store"},
-        )
+        # Auto-accept is the one section every org principal, admin or
+        # not, always gets (settings_window_html._capabilities_for) --
+        # General itself is empty (hidden entirely) for a non-admin.
+        initial_section = "general" if principal.is_admin else "auto_accept"
+        return _wrap_org_settings(request, principal, initial_section=initial_section)
 
     async def privacy_page(request: Request) -> Response:
         principal = _current_principal(request)
@@ -1081,154 +1194,110 @@ def build_org_routes(
             )
         if not principal.is_admin:
             return PlainTextResponse("Forbidden -- administrator access required.", status_code=403)
-        body = org_settings_pages._render_privacy_page(
-            org_settings_pages._privacy_policy_view(install_wide_settings),
-            org_settings_pages._pii_view(install_wide_settings),
-            # A reachable admin page is an editable one: every control it
-            # draws posts an action `is_action_permitted` gates on
-            # `principal.is_admin` anyway, so rendering them read-only for
-            # someone who just passed that same check would only hide
-            # what they are allowed to do.
-            editable=bool(install_wide_settings_path),
-            csrf=request.cookies.get(org_session.SESSION_COOKIE, ""),
-        )
-        return HTMLResponse(
-            org_settings_pages._page(
-                "Privacy policy", body, nonce=_csp_nonce_for(request),
-                principal_label=principal.email or principal.display_name or principal.id,
-            ),
-            headers={"Cache-Control": "no-store"},
-        )
+        return _wrap_org_settings(request, principal, initial_section="privacy")
 
-    async def add_rule(request: Request) -> Response:
-        """The counterpart of ``remove_rule`` below. Same shape: authenticate, CSRF, origin,
-        ``is_action_permitted``, act scoped to ``current_principal()``, audit. ``rule_choice`` (a
-        ``"{group}|{verb}"`` pair, the ``_add_rule_form_html`` select's own option values) is
-        validated against ``policy.catalogue.scope_catalogue()`` -- the same fixed menu local
-        mode's own picker constrains its dropdown to -- so this route can never hand
-        ``auto_accept.add_policy_v2_rules`` a scope/verb combination the engine wouldn't recognize.
+    def _current_pii_flag(action: str, body: dict[str, Any]) -> bool:
+        """toggle_pii_detection/toggle_pii_category flip the *current*
+        value -- the same semantics local mode's own menu-item toggle
+        uses, and what the shared JS template's own toggleHtml() call
+        sites for these two actions already post (an empty payload,
+        exactly like local mode's), rather than org_install_policy.
+        apply_change's own explicit-``enabled``-field contract (right for
+        a plain HTML form that could be submitted stale or twice, see that
+        module's own ``_bool_field`` docstring -- not what this bridge-
+        driven control sends). Computing the flip here, once, keeps the
+        shared renderer's own JS unaware of this one mode-specific
+        difference."""
+        pii_cfg = install_wide_settings.get("pii_detection", {}) or {}
+        if action == "toggle_pii_detection":
+            return bool(pii_cfg.get("enabled", True))
+        return bool(pii_cfg.get(str(body.get("category_key", "")), True))
+
+    def _apply_org_action(principal: Principal, action: str, body: dict[str, Any]) -> str | None:
+        """Applies one ``_ORG_ALLOWED_ACTIONS`` mutation, scoped to
+        ``principal`` (already entered by the caller), returning the exact
+        summary string to audit-log, or ``None`` when nothing actually
+        changed -- the same "only audit a real change" behavior the former
+        per-action routes kept before PSC-5 folded them into this one
+        dispatcher. May raise ``org_install_policy.PolicyChangeRejected``/
+        ``OSError``, left for the caller to map to a response the same way
+        the former ``_apply_install_wide`` did.
+        """
+        if action == "add_policy_rule":
+            group = str(body.get("group", ""))
+            verb_enums = policy_catalogue.parse_verbs(body.get("verbs") or [])
+            if not verb_enums:
+                return None
+            value = _parse_value_list(str(body.get("value") or ""))
+            new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
+            if not new_rules or not auto_accept.add_policy_v2_rules(new_rules):
+                return None
+            verb_names = ", ".join(verb.value for verb in verb_enums)
+            return f"Added auto-accept rule ({group!r}, allow {verb_names!r}) (principal={principal.id})"
+        if action == "remove_policy_rule":
+            rule_id = str(body.get("rule_id", ""))
+            if not auto_accept.remove_policy_v2_rule(rule_id):
+                return None
+            return f"Removed auto-accept rule {rule_id!r} (principal={principal.id})"
+        # The remaining four actions are all install-wide admin writes,
+        # applied through the same org_install_policy.apply_change #400
+        # C3e's own routes already used.
+        if action in ("toggle_pii_detection", "toggle_pii_category"):
+            body = {**body, "enabled": not _current_pii_flag(action, body)}
+        summary = org_install_policy.apply_change(
+            install_wide_settings, install_wide_settings_path, action=action, payload=body,
+        )
+        return f"{summary} (admin={principal.id})"
+
+    async def settings_action(request: Request) -> Response:
+        """The generic ``POST /api/settings/{action}`` dispatcher PSC-5
+        gives org mode -- the same path and JSON body shape local mode's
+        own ``settings_action`` above answers (this SPA's shared bridge,
+        settings_window_html.py's own ``pfSettingsPost``, posts the same
+        way regardless of mode), restricted to ``_ORG_ALLOWED_ACTIONS``.
+        Gate order mirrors every other mutating route in this module:
+        authenticated, then CSRF, then origin, then authorization, then
+        step-up, then the mutation itself.
         """
         principal = _current_principal(request)
         if principal is None:
-            return RedirectResponse("/login?next=/settings", status_code=302, headers={"Cache-Control": "no-store"})
-        form = await request.form()
-        if not org_session.check_csrf(request, form.get("csrf")):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        if not org_session.check_origin(request):
-            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-        if not is_action_permitted("add_policy_rule", principal, mode=ORG_MODE):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
-        form_body = {k: v for k, v in form.items() if k != "csrf" and isinstance(v, str)}
-        step_up_response = _guard_step_up(principal, "add_policy_rule", form_body)
-        if step_up_response is not None:
-            return step_up_response
-        group, _, verb_name = str(form.get("rule_choice", "")).partition("|")
-        verb_enums = policy_catalogue.parse_verbs([verb_name])
-        value = org_settings_pages._parse_value_field(str(form.get("value", "")))
-        new_rules = policy_catalogue.rules_for_catalogue_entry(group, value, verb_enums)
-        if not new_rules:
-            return JSONResponse({"error": "unknown scope/verb combination"}, status_code=400)
-        with principal_scope(principal):
-            _ensure_principal_settings_loaded()
-            if auto_accept.add_policy_v2_rules(new_rules):
-                _record_settings_audit(
-                    principal, f"Added auto-accept rule ({group!r}, allow {verb_name!r}) "
-                    f"(principal={principal.id})",
-                )
-        return RedirectResponse("/settings", status_code=303, headers={"Cache-Control": "no-store"})
-
-    async def remove_rule(request: Request) -> Response:
-        principal = _current_principal(request)
-        if principal is None:
-            return RedirectResponse("/login?next=/settings", status_code=302, headers={"Cache-Control": "no-store"})
-        form = await request.form()
-        if not org_session.check_csrf(request, form.get("csrf")):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        if not org_session.check_origin(request):
-            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-        if not is_action_permitted("remove_policy_rule", principal, mode=ORG_MODE):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
-        form_body = {k: v for k, v in form.items() if k != "csrf" and isinstance(v, str)}
-        step_up_response = _guard_step_up(principal, "remove_policy_rule", form_body)
-        if step_up_response is not None:
-            return step_up_response
-        rule_id = str(form.get("rule_id", ""))
-        with principal_scope(principal):
-            _ensure_principal_settings_loaded()
-            if auto_accept.remove_policy_v2_rule(rule_id):
-                _record_settings_audit(
-                    principal, f"Removed auto-accept rule {rule_id!r} (principal={principal.id})",
-                )
-        return RedirectResponse("/settings", status_code=303, headers={"Cache-Control": "no-store"})
-
-    async def _apply_install_wide(request: Request, allowed: frozenset[str]) -> Response:
-        """The shared body of both install-wide write routes (#400 C3e).
-
-        The gate order matters and mirrors ``remove_rule`` above exactly:
-        authenticated, then CSRF, then origin, then authorization.
-        ``is_action_permitted`` is the only thing here that consults
-        ``principal.is_admin`` -- the page's own 403 above governs
-        *rendering*, this governs *doing*, and a route that trusted the
-        former would be one hand-written POST away from letting any
-        signed-in principal rewrite the whole org's privacy policy.
-
-        ``allowed`` narrows which actions this particular route will apply,
-        so the form field naming the action can't be swapped for one of the
-        other route's: a value outside it 404s the same way
-        ``routes_settings.py``'s own allowlist check does for an unknown
-        action name.
-        """
-        principal = _current_principal(request)
-        if principal is None:
-            return RedirectResponse(
-                "/login?next=/settings/privacy", status_code=302, headers={"Cache-Control": "no-store"},
-            )
-        form = await request.form()
-        csrf = form.get("csrf")
-        if not org_session.check_csrf(request, csrf if isinstance(csrf, str) else None):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        if not org_session.check_origin(request):
-            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
-        action = str(form.get("action", ""))
-        if action not in allowed:
+        action = request.path_params["action"]
+        if action not in _ORG_ALLOWED_ACTIONS:
             return JSONResponse({"error": "unknown action"}, status_code=404)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(payload, dict) or not org_session.check_csrf(request, payload.get("csrf")):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not org_session.check_origin(request):
+            return JSONResponse({"error": "cross-origin request rejected"}, status_code=403)
         if not is_action_permitted(action, principal, mode=ORG_MODE):
             return JSONResponse({"error": "forbidden"}, status_code=403)
-        # Text fields only: a multipart part carrying a file has no meaning
-        # on this endpoint, and dropping it here keeps `org_install_policy`
-        # a pure dict-of-strings consumer rather than one that has to know
-        # what an UploadFile is.
-        payload = {key: value for key, value in form.items() if key != "csrf" and isinstance(value, str)}
-        step_up_response = _guard_step_up(principal, action, payload)
+        body = {k: v for k, v in payload.items() if k != "csrf"}
+        step_up_response = _guard_step_up(principal, action, body)
         if step_up_response is not None:
             return step_up_response
-        try:
-            summary = org_install_policy.apply_change(
-                install_wide_settings, install_wide_settings_path, action=action, payload=payload,
-            )
-        except org_install_policy.PolicyChangeRejected as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        except OSError as exc:
-            # The settings.yaml write itself failed -- nothing was applied
-            # (see apply_change's own docstring), so this is a 500 with the
-            # policy unchanged, not a partially-applied change.
-            logger.error("Could not write the install-wide settings.yaml: %s", exc)
-            return JSONResponse({"error": "could not write settings.yaml"}, status_code=500)
         with principal_scope(principal):
-            _record_settings_audit(principal, f"{summary} (admin={principal.id})")
-        return RedirectResponse("/settings/privacy", status_code=303, headers={"Cache-Control": "no-store"})
-
-    async def set_privacy_policy(request: Request) -> Response:
-        return await _apply_install_wide(request, frozenset({"set_default_policy", "set_category_policy"}))
-
-    async def set_pii_policy(request: Request) -> Response:
-        return await _apply_install_wide(request, frozenset({"toggle_pii_detection", "toggle_pii_category"}))
+            _ensure_principal_settings_loaded()
+            try:
+                summary = _apply_org_action(principal, action, body)
+            except org_install_policy.PolicyChangeRejected as exc:
+                return JSONResponse({"error": str(exc)}, status_code=400)
+            except OSError as exc:
+                # The settings.yaml write itself failed -- nothing was
+                # applied (apply_change's own docstring), so this is a 500
+                # with the policy unchanged, not a partially-applied one.
+                logger.error("Could not write the install-wide settings.yaml: %s", exc)
+                return JSONResponse({"error": "could not write settings.yaml"}, status_code=500)
+            if summary is not None:
+                _record_settings_audit(principal, summary)
+            state = _org_state(principal)
+        return JSONResponse(state)
 
     return [
         Route("/settings", settings_page),
         Route("/settings/privacy", privacy_page),
-        Route("/api/settings/rules/add", add_rule, methods=["POST"]),
-        Route("/api/settings/rules/remove", remove_rule, methods=["POST"]),
-        Route("/api/settings/privacy/policy", set_privacy_policy, methods=["POST"]),
-        Route("/api/settings/privacy/pii", set_pii_policy, methods=["POST"]),
+        Route("/api/settings/{action}", settings_action, methods=["POST"]),
     ]

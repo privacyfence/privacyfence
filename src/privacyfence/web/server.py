@@ -54,28 +54,29 @@ decision additionally demands a fresh WebAuthn step-up when
 web/routes_approvals.py's own module docstring covers both.
 
 **`/settings` in org mode** (#400) is, likewise, *not*
-``routes_settings.py``'s ~30-action local-mode surface wholesale -- porting
-that dispatcher's *page* was never the plan (see routes_connect.py's own
-module docstring for why a small, purpose-built page is the shape every
-other org-mode surface here already takes). PSC-4b folded the *dispatch*
-half into one module, though: ``routes_settings.build_org_routes()`` (the
-former web/routes_org_settings.py) mounts two purpose-built pages, rendered
-by web/org_settings_pages.py: ``GET /settings``, every signed-in principal's
-own auto-accept rules, read-only except for adding or removing a rule; and
-``GET /settings/privacy``, an admin-only (``Principal.is_admin`` -- #400
-C3c finally gave that field a real consumer) view of the install-wide
-PII/privacy policy, editable since #400 C3e through two ``POST
-/api/settings/privacy/...`` routes that write the server's own
-settings.yaml and hot-reload it for every principal
-(web/org_install_policy.py). The rest of routes_settings.py's ~30 actions
-(connector management, the update banner, Telegram's interactive auth --
-see web/org_settings_scope.py's own ``ACTION_SCOPES`` for the ones that
-only ever meant something on a desktop install) remain unmounted, as do the
-two admin-only actions that are install-wide but aren't privacy policy
-(``set_log_level``, ``toggle_calendar_free_busy``) -- ``ACTION_SCOPES`` is
-the one place that split is declared now, consulted by both
-``build_routes``/``build_org_routes`` rather than filtered separately by
-each.
+``routes_settings.py``'s ~30-action local-mode dispatcher opened up
+wholesale -- ``routes_settings.build_org_routes()`` (the former
+web/routes_org_settings.py) mounts a capability-filtered subset instead,
+restricted to ``org_settings_scope.ACTION_SCOPES``'s own ``ORG_MODE``
+members: ``GET /settings``, every signed-in principal's own auto-accept
+rules, read-only except for adding or removing one; and ``GET
+/settings/privacy``, an admin-only (``Principal.is_admin`` -- #400 C3c
+finally gave that field a real consumer) view of the install-wide
+PII/privacy policy, editable since #400 C3e (web/org_install_policy.py).
+PSC-5 makes that subset render through the exact same settings_window_
+html.build_html() local mode's own settings page does (capability-filtered
+per mode/``is_admin``, web/org_settings_pages.py deleted) and dispatches
+every write through the same generic ``POST /api/settings/{action}``
+local mode's own dispatcher answers, restricted to
+``routes_settings._ORG_ALLOWED_ACTIONS``. The rest of routes_settings.py's
+~30 actions (connector management, the update banner, Telegram's
+interactive auth -- see web/org_settings_scope.py's own ``ACTION_SCOPES``
+for the ones that only ever meant something on a desktop install) remain
+unmounted, as do the two admin-only actions that are install-wide but
+aren't privacy policy (``set_log_level``, ``toggle_calendar_free_busy``) --
+``ACTION_SCOPES`` is the one place that split is declared now, consulted
+by both ``build_routes``/``build_org_routes`` rather than filtered
+separately by each.
 """
 from __future__ import annotations
 
@@ -1129,10 +1130,9 @@ def _build_org_app(
     # #400: mounted unconditionally, same reasoning as /approvals above --
     # needs only org.sessions and the install-wide settings dict, both
     # already required parameters of this function either way.
-    # PSC-4b: routes_settings.py now builds both modes' settings routes --
-    # only the former web/routes_org_settings.py's route/handler half moved
-    # here (as build_org_routes); its page rendering lives in
-    # web/org_settings_pages.py, unchanged.
+    # PSC-4b/PSC-5: routes_settings.py now builds both modes' settings
+    # routes and renders both through the same settings_window_html.
+    # build_html() -- see build_org_routes's own docstring.
     extra_routes.extend(build_org_routes(
         sessions=org.sessions, install_wide_settings=org.install_wide_settings,
         install_wide_settings_path=org.install_wide_settings_path,
