@@ -150,25 +150,27 @@ MARKER_PATH = WINDOWS_SYSTEM_ROOT / MARKER_FILE_NAME
 INSTALL_DIR_NAME = "Program Folder"
 
 # How long one silent Setup / uninstaller run may take before it is treated as
-# hung, from eight build.yml runs on fresh windows-latest runners (2026-09-24,
-# runs 36050325275/..28453/..30979/..33575/..36567 and 36052978158/..81808/
-# ..84943):
+# hung, from ten build.yml runs on fresh windows-latest runners (2026-09-24,
+# runs 36050325275/..28453/..30979/..33575/..36567, 36052978158/..81808/..84943
+# and 36054879932/..82830):
 #
-#   first (cold) install    28.2-54.9 s (median 37.0)          p100 54.9 s
-#     of which `sc start`   16.6-24.4 s, PowerShell's cold start 0.4-12.6 s
+#   first (cold) install    28.2-54.9 s in nine runs, 102.5 s in one  p100 102.5 s
+#     of which `sc start`   16.6-27.6 s, PowerShell's cold start 0.4-31.6 s
 #   every later install     8.5-19.0 s
 #   uninstaller             1.6-12.9 s (the first one on a runner is slowest)
 #
-# The installer gets ~4x the cold p100 rather than 3x because v4.5.0a1's tag
-# run had a first install exceed the old 120 s. The uninstaller keeps 120 s --
-# ~9x its p100 -- because `uninstall` itself may legitimately spend 60 s
-# waiting on the service and 30 s on the companion before it moves on.
-INSTALLER_TIMEOUT_S = 240.0
+# The 102.5 s run was slow everywhere at once (file copy 26.7 s against ~7 s,
+# PowerShell's start 31.6 s against ~0.4 s): a slow runner rather than a slow
+# step, and the shape v4.5.0a1's tag run most likely had when its first install
+# overran the old 120 s. The installer gets ~3.5x that p100. The uninstaller
+# keeps 120 s -- ~9x its p100 -- because `uninstall` itself may legitimately
+# spend 60 s waiting on the service and 30 s on the companion before it moves on.
+INSTALLER_TIMEOUT_S = 360.0
 UNINSTALLER_TIMEOUT_S = 120.0
 # pytest-timeout must outlast the subprocess timeouts above, or it kills the
 # run before an installer's TimeoutExpired can say which step hung. One hung
 # Setup or uninstaller run plus the service's own start/serve waits (~120 s).
-# Observed whole tests, green: 36-78 s; the whole module 180-206 s.
+# Observed whole tests, green: 36-78 s; the whole module 158-236 s.
 TEST_TIMEOUT_S = INSTALLER_TIMEOUT_S + UNINSTALLER_TIMEOUT_S + 120.0
 # Tests 2 and 4 install twice: the same one-hang allowance, plus 3x the
 # slowest such test observed (78 s) for everything else they do.

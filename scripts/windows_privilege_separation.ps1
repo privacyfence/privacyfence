@@ -819,15 +819,20 @@ function Start-DaemonService {
       contain it.
     #>
     Write-Note "starting the $ServiceName service"
+    $requested = Get-Date
     Invoke-Sc @('start', $ServiceName) | Out-Null
+    $returned = Get-Date
     # `sc start` returns once the service has called StartServiceCtrlDispatcher,
-    # and on a fresh machine that took 17-24s. The process's own start time
+    # and on a fresh machine that took 17-28s. The process's own start time
     # splits it: before it is the SCM (logging the virtual account on, creating
     # its profile), after it is the executable getting as far as the dispatcher.
+    # Numbers first, so the smoke test's per-step summary cannot cut them off.
     $servicePid = (Get-CimInstance -ClassName Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue).ProcessId
     $process = if ($servicePid) { Get-Process -Id $servicePid -ErrorAction SilentlyContinue }
     if ($process -and $process.StartTime) {
-        Write-Note "the $ServiceName service is running; its process started at $($process.StartTime.ToString('HH:mm:ss.fff'))"
+        $before = ($process.StartTime - $requested).TotalSeconds
+        $after = ($returned - $process.StartTime).TotalSeconds
+        Write-Note ('{0:N1}s to process, {1:N1}s to dispatcher: the {2} service is running' -f $before, $after, $ServiceName)
     }
 }
 
