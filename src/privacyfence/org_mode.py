@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 Mode = Literal["local", "org"]
 
 DEFAULT_MODE: Mode = "local"
-DEFAULT_BIND_HOST = "localhost"
+DEFAULT_BIND_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 
 
@@ -47,12 +47,15 @@ def resolve_mode(org_config: dict[str, Any]) -> Mode:
 
 @dataclass(frozen=True)
 class ServerConfig:
-    """§10.2's transport decision, made concrete per install. Local mode's
-    defaults here (``bind_host="localhost"``, no TLS, no trusted proxies)
-    are exactly D1's decision -- loopback plain HTTP -- so an install that
-    never sets ``mode: org`` never has a reason to look at this class at
-    all; ``daemon_main.py`` only calls ``from_org_config`` when
-    ``resolve_mode`` says org.
+    """§10.2's transport decision, made concrete per install. Only org mode
+    reads this class -- ``daemon_main.py`` calls ``from_org_config`` only
+    when ``resolve_mode`` says org, and local mode binds its own hardcoded
+    ``localhost``. The defaults (``bind_host="127.0.0.1"``, no TLS, no
+    trusted proxies) are the same loopback listener
+    ``scripts/build_org_bundle.py`` writes when ``--server-bind-host`` isn't
+    passed, so a bundle with no ``bind_host`` binds exactly what a bundle
+    built with no flags does: reachable only by a reverse proxy on the
+    same host, never directly from the network.
     """
 
     bind_host: str = DEFAULT_BIND_HOST

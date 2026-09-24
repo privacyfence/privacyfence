@@ -52,6 +52,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   organization server's Google connector client needs
   `https://<your-server>/oauth/callback/apps_script` added to its registered redirect URIs.
 
+- **`--agent-links` / `--no-agent-links` for `scripts/build_org_bundle.py`**, writing the org
+  bundle's `download_delivery.agent_links` (on by default, unchanged) instead of requiring the
+  bundle to be edited by hand.
+
+### Changed
+
+- **Org bundles bind the daemon to loopback by default.** `scripts/build_org_bundle.py
+  --server-bind-host` now defaults to `127.0.0.1` instead of `0.0.0.0`, so a bundle built without
+  the flag is reachable only by a reverse proxy on the same host, as the org-mode setup guide
+  already required. A bundle with no `server.bind_host` also binds `127.0.0.1` (was `localhost`).
+  Pass `--server-bind-host` explicitly when the proxy runs on another host.
+
+### Security
+
+- **Recovery-code sign-in is audited, rate-limited and needs a human session.** `POST
+  /security/recover` now records every refused attempt in the audit log
+  (`webauthn_recovery_refused`, with the reason and never the code), not just a successful one. On a
+  privilege-separated install it refuses a session that was not opened from the companion, the same
+  as approving a decision does. Attempts are limited to 5 per session and 20 across all sessions in
+  any 15 minutes; the next one gets a `429` with `Retry-After`.
+
 ## [4.4.0] — 2026-09-24
 
 ### Added
