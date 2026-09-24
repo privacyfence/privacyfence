@@ -67,8 +67,8 @@ server-side on one WebAuthn assertion bound to the exact submitted set
 ``runBatch`` mirrors web/routes_settings.py's own ``pfSettingsPost``
 428/403 handling almost exactly: a ``428`` carries fresh
 ``webauthn_options`` (and this page's own ``batch_id`` to echo back) to
-complete with ``window.pfWebauthnGet`` (injected by web/routes_approvals.py's/
-web/routes_org_approvals.py's list route, same as the settings page) and
+complete with ``window.pfWebauthnGet`` (injected by web/routes_approvals.py's
+list route, same as the settings page) and
 resubmit; a ``403``/``400`` surfaces via ``window.alert`` since this page
 stays open across the ceremony, unlike a one-shot card. The submit
 button's own label names the selected set's composition -- "Approve 12 ·

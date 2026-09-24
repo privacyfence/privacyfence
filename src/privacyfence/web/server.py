@@ -40,8 +40,8 @@ one shared secret. Passed to ``build_app``/``WebServer`` as one ``OrgAuth``
 bundle (see that class) rather than four separate parameters, so a caller
 either opts into the whole org-mode picture or none of it.
 
-**`/approvals` in org mode** (P9, web/routes_org_approvals.py) is *not*
-``routes_approvals.create_app``'s local-mode surface -- that one still
+**`/approvals` in org mode** (P9, web/routes_approvals.py's ``build_routes()``)
+is *not* ``routes_approvals.create_app``'s local-mode surface -- that one still
 authenticates with one shared secret and lists *every* pending approval
 with no principal filtering, which is exactly why it was never mounted
 here through P8 (exposing it as-is under org mode, where many principals
@@ -51,7 +51,7 @@ separate, principal-aware route set: every read and write is authorized
 against ``current_principal()`` via ``org_session``, and a *write*
 decision additionally demands a fresh WebAuthn step-up when
 ``org_config.json``'s ``step_up.enabled`` is set (§10.6, D7) --
-web/routes_org_approvals.py's own module docstring covers both.
+web/routes_approvals.py's own module docstring covers both.
 
 **`/settings` in org mode** (#400) is, likewise, *not*
 ``routes_settings.py``'s ~30-action local-mode surface -- porting that
@@ -1038,7 +1038,7 @@ def _build_org_app(
     surface's ~30-action dispatcher, still -- only its own purpose-built
     replacement is mounted, see routes_org_settings below).
     ``/approvals`` and ``/security`` (P9,
-    web/routes_org_approvals.py/web/routes_security.py) are mounted
+    web/routes_approvals.py/web/routes_security.py) are mounted
     unconditionally here -- unlike ``/connect`` (below), they need nothing
     from ``org.connector_registry``, only ``web_ui`` (already a required
     parameter of build_app() in both modes) and ``org.org_config`` for
@@ -1046,7 +1046,7 @@ def _build_org_app(
     from urllib.parse import urlparse
 
     from ..org_mode import AuthzPolicyConfig
-    from . import routes_org_approvals, routes_org_settings, routes_security
+    from . import routes_approvals, routes_org_settings, routes_org_stepup, routes_security
 
     extra_routes: list[Route] = []
     lifespans = []
@@ -1096,7 +1096,13 @@ def _build_org_app(
 
     issuer_host = urlparse(org.issuer_url).hostname or ""
     step_up = StepUpConfig.from_org_config(org.org_config, default_rp_id=issuer_host)
-    extra_routes.extend(routes_org_approvals.build_routes(
+    # PSC-2b: one approval route module now builds both modes' routes --
+    # only the IdP step-up routes (no local-mode analogue at all) stay a
+    # separate mount, see routes_org_stepup.py's own module docstring.
+    extra_routes.extend(routes_approvals.build_routes(
+        web_ui=web_ui, sessions=org.sessions, step_up=step_up, issuer_url=org.issuer_url,
+    ))
+    extra_routes.extend(routes_org_stepup.build_routes(
         web_ui=web_ui, sessions=org.sessions, step_up=step_up, idp=org.idp, issuer_url=org.issuer_url,
     ))
     if step_up.rp_id:

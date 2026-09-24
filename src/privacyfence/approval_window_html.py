@@ -81,8 +81,8 @@ _STYLES_CSS = _STYLES_PATH.read_text(encoding="utf-8")
 # reused unchanged for as long as this exact document is served --
 # there's no later "per-response" moment to generate one against, the way
 # a document built fresh inside a route handler gets one from
-# web/server.py's _SecurityHeadersMiddleware. web/routes_approvals.py's/
-# web/routes_org_approvals.py's own serving code recovers the same value
+# web/server.py's _SecurityHeadersMiddleware. web/routes_approvals.py's
+# own serving code recovers the same value
 # via extract_csp_nonce() below and sets it as that specific response's
 # CSP nonce, so the header and the body always agree.
 _NONCE_TAG_RE = re.compile(r'<script nonce="([A-Za-z0-9_-]+)">')

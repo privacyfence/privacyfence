@@ -151,7 +151,7 @@ class StepUpConfig:
     why local mode gets one at all now.
 
     ``enabled=False`` is a real off switch, not just "no credentials
-    enrolled yet": web/routes_org_approvals.py's decide endpoint skips the
+    enrolled yet": web/routes_approvals.py's decide endpoint skips the
     whole step-up check when this is False, and local mode's own
     decide-time check (#426 Phase 2) does the same.
 

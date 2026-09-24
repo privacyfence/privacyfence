@@ -9,7 +9,7 @@ from privacyfence import org_mode, privilege_separation, step_up_config
 class TestStepUpConfigFromOrgConfig:
     """P9, §10.6/§15 D7: WebAuthn step-up is off by default (an existing org
     install with no "step_up" section keeps working exactly as before this
-    phase -- see web/routes_org_approvals.py's own decide()'s
+    phase -- see web/routes_approvals.py's own decide()'s
     ``if step_up.enabled`` gate). Byte-identical to org_mode.py's own
     pre-Phase-1 parsing -- these assertions are unchanged from before the
     move, only the import moved (see test_org_mode.py's own git history)."""

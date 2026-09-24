@@ -31,7 +31,7 @@ there, with its footer ``back_link`` intact.
 
 ``PF_WEBAUTHN_JS`` (the base64url <-> ArrayBuffer conversions and the two
 ``navigator.credentials`` wrapper calls) is defined here and imported by
-web/routes_org_approvals.py's own step-up shim rather than duplicated --
+web/routes_approvals.py's own step-up shim rather than duplicated --
 this module owns it only because enrollment is where the ceremony's shape
 first has to exist; there is nothing enrollment-specific about the helpers
 themselves.
@@ -136,7 +136,7 @@ logger = logging.getLogger(__name__)
 # reader grepping either finds the other.
 _ENROLL_CEREMONY = "enroll-credential"
 
-# Shared with web/routes_org_approvals.py's decide-time step-up shim -- see
+# Shared with web/routes_approvals.py's decide-time step-up shim -- see
 # module docstring. Defines window.pfWebauthnCreate(optionsJson) and
 # window.pfWebauthnGet(optionsJson), each returning a Promise of the plain
 # JSON-shaped credential object webauthn_stepup.py's finish_registration()/

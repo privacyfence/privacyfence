@@ -49,7 +49,7 @@ org's privacy policy is exactly the kind of act that belongs in the audit
 log under the principal who did it."
 
 Both pages go through ``web_shell.wrap()`` with ``web_shell.ORG_NAV_ITEMS``,
-the same shell ``routes_org_approvals.py``/``routes_connect.py``/``routes_
+the same shell ``routes_approvals.py``/``routes_connect.py``/``routes_
 security.py`` use -- this is an org-mode surface, so it should look like
 ``/approvals``/``/connect``/``/security``, not like the desktop-app-shaped
 local settings page, and (since those other three pages all carry the same
@@ -166,7 +166,7 @@ def _parse_value_field(raw_text: str) -> list[str] | None:
 def _add_rule_form_html(csrf_esc: str) -> str:
     # One <select> whose options are (scope group, verb) pairs rather than a separate verb picker
     # -- this page is plain server-rendered forms with no JS (see module docstring: "reuse
-    # routes_org_approvals.py's minimal doctype+tokens.css shell"), so there is no client-side way
+    # routes_approvals.py's minimal doctype+tokens.css shell"), so there is no client-side way
     # to filter a second <select>'s options by a first one's choice, the same reason the v1-era
     # version of this form combined operation and rule name into one option value. Adding more than
     # one verb to the same scope is a second submission, same as adding a second scope value is.
