@@ -1293,6 +1293,47 @@ class TestLocalModeWiresTheFirstEnrollmentGate:
 
         assert passed["confirm_first_enrollment"] is srv.confirm_first_passkey_enrollment
 
+    @pytest.mark.parametrize("separated", [True, False], ids=["separated", "unseparated"])
+    def test_build_app_gates_recovery_on_a_human_session_only_when_separated(
+        self, tmp_path, monkeypatch, separated,
+    ):
+        """The recovery-code route asks the human-session question on exactly
+        the installs the approvals and settings routes do -- a
+        privilege-separated one -- and not on an unseparated one, which has
+        no companion to mint a human session at all. Driven through the real
+        ``build_app`` so the wiring, not just the route, is what is tested."""
+        from starlette.testclient import TestClient
+
+        from privacyfence import paths, privilege_separation
+        from privacyfence.step_up_config import StepUpConfig
+        from privacyfence.web import server as srv
+        from privacyfence.web.session_auth import PROVENANCE_HUMAN, SESSION_COOKIE
+
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: separated)
+        sessions = LocalSessionStore()
+        app = srv.build_app(
+            WebApprovalUI(), sessions=sessions,
+            step_up=StepUpConfig(rp_id="localhost", rp_name="PrivacyFence"),
+            step_up_issuer_url="http://localhost",
+        )
+        client = TestClient(app, base_url="http://localhost", follow_redirects=False)
+
+        unattested = sessions.create()
+        client.cookies.set(SESSION_COOKIE, unattested)
+        r = client.post("/security/recover", json={"csrf": unattested, "code": "0000-0000-0000-0000"})
+        if separated:
+            assert r.status_code == 403
+            assert r.json()["error"] == "human_session_required"
+        else:
+            # Past the gate: refused only because the code is wrong.
+            assert r.status_code == 401
+
+        human = sessions.create(provenance=PROVENANCE_HUMAN)
+        client.cookies.set(SESSION_COOKIE, human)
+        r = client.post("/security/recover", json={"csrf": human, "code": "0000-0000-0000-0000"})
+        assert r.status_code == 401
+
 
 class TestLocalEnrollmentState:
     """Plan item 1.2's daemon-side answer: the one question the companion
