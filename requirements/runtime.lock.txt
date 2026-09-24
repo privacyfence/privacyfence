@@ -464,9 +464,9 @@ h11==0.16.0 \
     # via
     #   httpcore2
     #   uvicorn
-httpcore2==2.13.0 ; sys_platform != 'emscripten' \
-    --hash=sha256:2adc8be4fb285fbcd6d894298db3b52c177e74b6674eda3a76bd36be3292a3db \
-    --hash=sha256:35ae5be347aa40467b4a5dc032ac67ebb6d27189fc97e8cebcf99616f6a1bb9e
+httpcore2==2.13.1 ; sys_platform != 'emscripten' \
+    --hash=sha256:e0aa977abe17e69a3b820a24542a6fa88702676d83880b8d194dcd18408e5103 \
+    --hash=sha256:e1e05d4f25f7d7d496bfb96748f6f4b67657b03da069b3a68c36069f3db73d0a
     # via httpx2
 httplib2==0.32.0 \
     --hash=sha256:48a0ef30a42db65d8f3399045e1d09ab0ba66e3b9efc360d07f80ea55d286025 \
@@ -474,9 +474,9 @@ httplib2==0.32.0 \
     # via
     #   google-api-python-client
     #   google-auth-httplib2
-httpx2==2.13.0 \
-    --hash=sha256:81bd07dc67a3701729ef1f777a3c00c915d4539604fdb5afd327f8682f6b7b44 \
-    --hash=sha256:fc12720cedf72faa26cca6b4ca394e05c894e7d7933fc45cafe767960804e49a
+httpx2==2.13.1 \
+    --hash=sha256:6dff50fabc270ee5fd25d845d0b078ed20564579744d6d962850975996d2f9a4 \
+    --hash=sha256:e48744a19e3af5ee48313d0ce5fe941d5422fae5705ea922a4aabf94d7800dfa
     # via mcp
 httpx2-jsfetch==1.0 ; python_full_version >= '3.12' and sys_platform == 'emscripten' \
     --hash=sha256:70a0e3eabfef7cce5ad9c629f7d01ca05e418f586646f4ddf14782e4c1454c60 \
@@ -802,9 +802,9 @@ pillow==12.3.0 ; sys_platform == 'darwin' or sys_platform == 'win32' \
     # via
     #   privacyfence (pyproject.toml)
     #   pystray
-platformdirs==4.11.11 \
-    --hash=sha256:972ea6b2b387155a536226a0750e46923d731d459a387c4a255c583ed2f64547 \
-    --hash=sha256:b0befe8a90759e4a9a8b9820d434ae226a6549063210b596da0038a7a05aede4
+platformdirs==4.11.12 \
+    --hash=sha256:b1ba966ac76153d9985a0787ffab951e7c18416189873d4e4ddb2c8a04a0a254 \
+    --hash=sha256:e8dc1cb58f1153fd7f61db1374317770baababec2480b37b8f01c6cc25b45267
     # via zeep
 portalocker==4.4.0 \
     --hash=sha256:90c0df939d4ffba121f8e925bbf98ecea8b9381718666ab871a226938d2b63b2 \
@@ -975,9 +975,9 @@ pydantic-core==2.46.5 \
     --hash=sha256:fc8515076c11f3cfdf4fb142dcca0fe384b1230a3b5415458ac84f3e0903ec13 \
     --hash=sha256:ff218293c9c806138dca139765e3b067621be52bcd93cdc14c7711be7ddc90a9
     # via pydantic
-pyjwt[crypto]==2.14.0 \
-    --hash=sha256:77283c83fb56ecf566a886c757a714bc83668e38156de2cce8263302f42e0b86 \
-    --hash=sha256:ad0cef71c756a56e74863c2919cf0985f72decbcfcb550ee2f422e7c62b5eedc
+pyjwt[crypto]==2.15.0 \
+    --hash=sha256:7a3742debf6b879e912dbb9819ceec1594be812452b78c5f2e2dfc56564954f8 \
+    --hash=sha256:b11c5f9791d7bf51c2b39a81ed669f6b2dbbd669df2942f6c60167e9e3d1abe4
     # via
     #   privacyfence (pyproject.toml)
     #   mcp
@@ -1305,17 +1305,17 @@ slack-sdk==3.44.1 \
     --hash=sha256:ca19505423789fa2a3189ff486f989f02e49289f008d0a5813df7255b3fb93ea \
     --hash=sha256:d6f20a0fbe3fecf9cac955c99d686301b48a645b7045472c3a0cdd186d7c42b2
     # via privacyfence (pyproject.toml)
-soupsieve==2.9.2 \
-    --hash=sha256:4a55d8cf158a9c2e587fa4922f1bbb91d68ac829e2d6f25403a85747c71daf74 \
-    --hash=sha256:8089a26fd974ca7a1f30276d3d8492ab266ab15af581642dfe8aa162e0c1c823
+soupsieve==2.10 \
+    --hash=sha256:49e9380d7d2905463583bafe285e818c7366a9ed7b3aee221c1ac79c905d8bc0 \
+    --hash=sha256:8596eb8967d744174820280fa62b4542a2e955bfaccca73ed8a13c6eb8e9b502
     # via beautifulsoup4
 sse-starlette==3.4.11 \
     --hash=sha256:1bae716c02f3e6f294be41ff333220692dae7c3cbab077c900f159676719dade \
     --hash=sha256:c7b2244bdff016fe7f64e10075e89a3e6bbf899649cc89b0fe884b5545042453
     # via mcp
-starlette==1.6.0 \
-    --hash=sha256:a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c \
-    --hash=sha256:d4e3ac5e546444960c710297a3c9fc3f7ebae1b7e963f3d36173b49da535be9b
+starlette==1.7.0 \
+    --hash=sha256:67f8e99895493dd2911a03f11314af6ceebeae4e704bb9f43dfc6a9db151c93e \
+    --hash=sha256:c79f74ea63cff761804fbbfb182f1e0b440c2d07b164d24700c5a1bab5d6ff5d
     # via
     #   privacyfence (pyproject.toml)
     #   mcp
