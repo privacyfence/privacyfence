@@ -1,9 +1,14 @@
 """Tests for mcp_tools.py's ``ToolSpec`` -> MCP ``Tool``/``CallToolResult``
-translation, plus TST-02's three specific coverage gaps (`git show ba1ec76e^:docs/
-security-remediation-plan.md` phase 1.9): ``privacyfence_begin_unattended_session``
-refused when disabled, ``privacyfence_propose_auto_accept_rule_change``
-denied inside an unattended session, and ``privacyfence_list_auto_accept_
-rules``' disclosure being audited.
+translation, plus TST-02's coverage gap (`git show ba1ec76e^:docs/
+security-remediation-plan.md` phase 1.9) for ``privacyfence_begin_unattended_
+session`` refused when disabled. TST-02's other two original gaps -- a
+rule-change proposal denied inside an unattended session, and the v1
+rule-listing tool's disclosure being audited -- went with the deprecated v1
+tools those gaps covered when PSC-3 deleted them (ADR 0004 decision 3's
+one-minor-release grace period honoured, see that ADR for which tools); the
+same regression the first gap uncovered now lives on in
+``privacyfence_propose_policy_change``'s own unattended-denial coverage, see
+McpDispatcher.propose_policy_change's comment in web/mcp_dispatch.py.
 
 Split by layer, same as the existing web/ test suite:
 ``TestToolSchema``/``TestCallToolResult`` exercise mcp_tools.py's own pure
@@ -11,15 +16,10 @@ functions directly -- no dispatcher, no wire protocol, since nothing else in
 the suite gave that translation layer its own test module before this.
 ``TestUnattendedSessionBehavior`` drives the real ``/mcp`` ASGI app with the
 official ``mcp`` client end to end (test_routes_mcp.py's own pattern) so the
-three behaviors above are proven the way a real MCP client would actually
-observe them, not just at whichever internal layer happens to implement
-them -- test_mcp_dispatch.py already covers the same branches at the
-McpDispatcher-unit level in more detail, including the regression this phase
-uncovered (McpDispatcher.propose_rule_change never wrapped its call in
-unattended_scope(), so an unattended session's own rule-change proposal fell
-through to a real, never-to-be-answered confirmation popup instead of the
-immediate denial its own tool description promises -- see that fix's
-comment in web/mcp_dispatch.py).
+behavior above is proven the way a real MCP client would actually observe
+it, not just at whichever internal layer happens to implement it --
+test_mcp_dispatch.py already covers the same branches at the
+McpDispatcher-unit level in more detail.
 """
 from __future__ import annotations
 
@@ -200,12 +200,6 @@ class TestMetaToolManifest:
         assert "reason" in tool.input_schema["properties"]
         assert "reason" in tool.input_schema.get("required", [])
 
-    def test_propose_rule_change_requires_target_and_operation_as_enums(self):
-        schema = mcp_tools.PROPOSE_RULE_CHANGE_TOOL.input_schema
-        assert schema["properties"]["target"]["enum"] == ["rule", "grant"]
-        assert schema["properties"]["operation"]["enum"] == ["add", "update", "remove"]
-        assert set(schema["required"]) == {"target", "operation", "reason"}
-
     def test_check_policy_requires_connector_tool_and_reason(self):
         schema = mcp_tools.CHECK_POLICY_TOOL.input_schema
         assert set(schema["required"]) == {"connector", "tool", "reason"}
@@ -230,7 +224,7 @@ class TestMetaToolManifest:
     def test_status_tool_requires_only_reason(self):
         # issue #396 Phase 2: the one meta-tool guaranteed to exist even
         # with zero connectors -- no params of its own beyond the shared
-        # audited "reason", same posture as list_rules.
+        # audited "reason", same posture as list_policy.
         schema = mcp_tools.PRIVACYFENCE_STATUS_TOOL.input_schema
         assert schema["required"] == ["reason"]
         assert set(schema["properties"]) == {"reason"}
@@ -261,8 +255,7 @@ class TestMetaToolManifest:
     def test_propose_policy_change_requires_only_operation_and_reason(self):
         # rule_id/group/value/verbs are each conditionally required depending on operation --
         # gate.propose_policy_change enforces that at call time (ValueError before any popup),
-        # not the schema, the same posture propose_rule_change's own operation_key/rule_name/... vs
-        # connector/config_key/... split already takes.
+        # not the schema.
         schema = mcp_tools.PROPOSE_POLICY_CHANGE_TOOL.input_schema
         assert schema["properties"]["operation"]["enum"] == ["add", "update", "remove"]
         assert set(schema["required"]) == {"operation", "reason"}
@@ -272,12 +265,6 @@ class TestMetaToolManifest:
     def test_list_policy_requires_only_reason(self):
         schema = mcp_tools.LIST_POLICY_TOOL.input_schema
         assert schema["required"] == ["reason"]
-
-    def test_old_tool_descriptions_point_at_their_replacements(self):
-        assert "privacyfence_list_policy" in mcp_tools.LIST_RULES_TOOL.description
-        assert "DEPRECATED" in mcp_tools.LIST_RULES_TOOL.description
-        assert "privacyfence_propose_policy_change" in mcp_tools.PROPOSE_RULE_CHANGE_TOOL.description
-        assert "DEPRECATED" in mcp_tools.PROPOSE_RULE_CHANGE_TOOL.description
 
 
 # --------------------------------------------------------------------------- #
@@ -332,52 +319,6 @@ class TestBeginUnattendedSessionRefusedWhenDisabled:
         assert dispatcher.unattended_session_count() == 0
 
 
-class TestProposeRuleChangeDeniedWhenUnattended:
-    """Regression coverage for the gap TST-02 exists to catch: see this
-    fix's own comment on McpDispatcher.propose_rule_change in
-    web/mcp_dispatch.py."""
-
-    @pytest.fixture(autouse=True)
-    def _setup(self, tmp_path, monkeypatch):
-        from privacyfence import gate
-        self._config_path = tmp_path / "settings.yaml"
-        self._config_path.write_text("auto_accept_rules: {}\n", encoding="utf-8")
-        auto_accept.init_config_path(str(self._config_path))
-        self._popup_calls: list[str] = []
-        monkeypatch.setattr(
-            gate, "show_rule_confirmation_popup",
-            lambda description, *, sensitive=False: self._popup_calls.append(description) or True,
-        )
-
-    async def test_denied_without_ever_showing_a_confirmation_popup(self):
-        dispatcher = _dispatcher({}, unattended_sessions_enabled=True)
-        async with _connected_session(dispatcher) as session:
-            await session.call_tool("privacyfence_begin_unattended_session", {"reason": "scheduled run"})
-            result = await session.call_tool("privacyfence_propose_auto_accept_rule_change", {
-                "target": "rule", "operation": "add", "reason": "trust this sender",
-                "operation_key": "gmail.read_message", "rule_name": "i_am_sender",
-            })
-        assert result.is_error is True
-        assert "unattended session" in result.content[0].text
-        assert self._popup_calls == []
-        assert "i_am_sender" not in self._config_path.read_text(encoding="utf-8")
-
-    async def test_still_confirms_normally_outside_an_unattended_session(self):
-        # Same session, never marked unattended -- the fix must not turn
-        # every proposal into a denial.
-        dispatcher = _dispatcher({})
-        async with _connected_session(dispatcher) as session:
-            result = await session.call_tool("privacyfence_propose_auto_accept_rule_change", {
-                "target": "rule", "operation": "add", "reason": "trust this sender",
-                "operation_key": "gmail.read_message", "rule_name": "i_am_sender",
-            })
-        assert result.is_error is False
-        assert result.structured_content["confirmed"] is True
-        # P9: propose_rule_change translates its v1-shaped request into a v2 rule and confirms
-        # with policy.describe's own sentence rendering, not the raw operation_key/rule_name.
-        assert self._popup_calls == ["Add auto-accept rule: Gmail - sender: allow read"]
-
-
 class TestStatusOverRealTransport:
     """End to end through the real /mcp Streamable HTTP transport -- what the
     retired sign-in-link tool's own transport test used to cover here, now
@@ -408,65 +349,10 @@ class TestStatusOverRealTransport:
         assert result.is_error is True
 
 
-class TestListAutoAcceptRulesDisclosureIsAudited:
-    @pytest.fixture(autouse=True)
-    def _setup(self, tmp_path):
-        # P9: the v1 auto_accept_rules/auto_accept_grants sections are no longer read by anything
-        # live -- privacyfence_list_auto_accept_rules is a deprecated alias of privacyfence_list_policy
-        # now, so the fixture config has to be a real v2 auto_accept: rule for it to show up at all.
-        from privacyfence.policy.store import rule_id_for
-
-        init_audit_logger(str(tmp_path))
-        self._audit_dir = tmp_path
-        config_path = tmp_path / "settings.yaml"
-        self._rule_id = rule_id_for("i_am_sender", [], ())
-        config_path.write_text(
-            "auto_accept:\n"
-            "  version: 2\n"
-            "  rules:\n"
-            f"    - id: {self._rule_id}\n"
-            "      predicate: i_am_sender\n"
-            "      value: []\n"
-            "      operations: [gmail.read_message]\n"
-            "      conditions: []\n",
-            encoding="utf-8",
-        )
-        auto_accept.init_config_path(str(config_path))
-
-    async def test_listing_the_rules_writes_an_audit_entry_naming_the_disclosure(self):
-        dispatcher = _dispatcher({})
-        async with _connected_session(dispatcher) as session:
-            result = await session.call_tool(
-                "privacyfence_list_auto_accept_rules", {"reason": "checking before a scheduled run"},
-            )
-        assert result.is_error is False
-        rules = result.structured_content["rules"]
-        assert len(rules) == 1
-        assert rules[0]["id"] == self._rule_id
-        assert rules[0]["operations"] == ["gmail.read_message"]
-
-        entries = _read_audit_entries(self._audit_dir)
-        assert len(entries) == 1
-        # P9: list_rules now returns exactly what list_policy does, decision name included.
-        assert entries[0]["decision"] == "policy_listed"
-        assert entries[0]["claude_reason"] == "checking before a scheduled run"
-
-    async def test_every_call_gets_its_own_audit_entry_not_deduped(self):
-        # Disclosure of the current rule set must be logged every time it
-        # happens, not silently coalesced by the dedupe cache that applies
-        # to ordinary connector reads (list_rules is a meta-tool, dispatched
-        # outside McpDispatcher.call()'s dedupe path entirely).
-        dispatcher = _dispatcher({})
-        async with _connected_session(dispatcher) as session:
-            await session.call_tool("privacyfence_list_auto_accept_rules", {"reason": "first check"})
-            await session.call_tool("privacyfence_list_auto_accept_rules", {"reason": "second check"})
-        entries = _read_audit_entries(self._audit_dir)
-        assert [e["claude_reason"] for e in entries] == ["first check", "second check"]
-
-
 class TestListAndProposePolicyOverRealTransport:
-    """P7's two new meta-tools, driven end to end the same way
-    TestListAutoAcceptRulesDisclosureIsAudited above proves the older pair's wiring."""
+    """P7's two meta-tools, driven end to end over the real /mcp transport --
+    the sole surface for reading/writing auto-accept policy since PSC-3
+    deleted their v1-shaped predecessors (see ADR 0004 for which tools)."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, tmp_path, monkeypatch):

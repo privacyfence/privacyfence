@@ -194,10 +194,9 @@ access), so nothing there needs the per-platform steps above.
    redirected to a file — it has no console) as the break-glass path.
 2. **Expect a confirmation dialog to ask for more than it used to**, if you already had
    `step_up.require_passkey` on before this upgrade. Confirming an auto-accept rule an AI client
-   proposed over MCP (`privacyfence_propose_policy_change` and the older
-   `privacyfence_propose_auto_accept_rule_change`) now needs the same passkey and attributable
-   session that changing the same setting from the Settings page already needed — it previously
-   needed neither. Denying/cancelling is unaffected.
+   proposed over MCP (`privacyfence_propose_policy_change`) now needs the same passkey and
+   attributable session that changing the same setting from the Settings page already needed — it
+   previously needed neither. Denying/cancelling is unaffected.
 3. **Verify the install is actually separated** with the platform's `status` command above — not
    just that it started. `PENDING USER` means one more login is outstanding; anything other than
    fully separated on a packaged build means it isn't serving `/mcp` or approvals at all yet.
