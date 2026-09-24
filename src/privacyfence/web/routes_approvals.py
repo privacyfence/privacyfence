@@ -85,9 +85,9 @@ from .. import approval_list_html, approval_window_html, web_shell, webauthn_ste
 from ..approvals import BATCH_RESULTS, CONFIRM_RESULTS
 from ..principal import current_principal
 from ..step_up_config import StepUpConfig
-from ..webauthn_stepup import StepUpChallengeStore, WebAuthnError
+from ..webauthn_stepup import StepUpChallengeStore
 from ..web_approval_ui import WebApprovalUI
-from . import step_up_decide
+from . import approval_step_up, step_up_decide
 from .csp import nonce_for as _csp_nonce_for
 from .csp import set_nonce as _set_csp_nonce
 from .routes_security import PF_WEBAUTHN_JS
@@ -586,63 +586,20 @@ def create_app(
             )
             return JSONResponse(body, status_code=status)
 
-        if sensitive_confirm and step_up is not None and step_up.enabled and step_up.require_passkey:
-            # Deliberately not routed through ``is_step_up_required``: that
-            # predicate answers "does this scope cover this gate_kind", and
-            # a confirm dialog has no gate_kind to answer it with. The
-            # question here is the one web/routes_settings.py's
-            # ``_needs_step_up`` asks of a ``_SENSITIVE_ACTIONS`` name --
-            # scope-independent, since changing what a future call can reach
-            # without asking is not a read or a write, it is the thing that
-            # decides which of those get asked about at all.
-            assertion = payload.get("webauthn_assertion")
-            if not isinstance(assertion, dict):
-                # ``require_passkey`` is on in this branch, so
-                # ``_step_up_response`` cannot return ``None`` here -- that
-                # is its "nothing enrolled *and* require_passkey off" case,
-                # which is the one configuration this branch excludes. The
-                # fallback is there so that relaxing the condition above
-                # fails closed rather than falling through to ``resolve``,
-                # which is what the two results it guards do instead.
-                return _step_up_response(approval_id, result=result, choice=choice) or JSONResponse(
-                    {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
-                )
-            else:
-                expected_fp = webauthn_stepup.decision_fingerprint(
-                    approval_id=approval_id, principal_id=current_principal().id, result=result, choice=choice,
-                )
-                try:
-                    step_up_decide.verify_step_up(
-                        current_principal(), rp_id=step_up.rp_id, origin=origin, subject_key=approval_id,
-                        fingerprint=expected_fp, assertion=assertion, challenges=challenges,
-                    )
-                except step_up_decide.StepUpExpired:
-                    return JSONResponse({"error": "step_up_expired"}, status_code=400)
-                except WebAuthnError as exc:
-                    return JSONResponse({"error": str(exc)}, status_code=401)
-
-        if step_up is not None and step_up.enabled and result in _STEP_UP_RESULTS:
-            if pending is not None and webauthn_stepup.is_step_up_required(
-                gate_kind=pending.gate_kind, pii_detected=pending.pii_detected, scope=step_up.scope,
-            ):
-                assertion = payload.get("webauthn_assertion")
-                if not isinstance(assertion, dict):
-                    stepup_response = _step_up_response(approval_id, result=result, choice=choice)
-                    if stepup_response is not None:
-                        return stepup_response
-                else:
-                    expected_fp = webauthn_stepup.decision_fingerprint(
-                        approval_id=approval_id, principal_id=current_principal().id, result=result, choice=choice,
-                    )
-                    try:
-                        step_up_decide.verify_step_up(
-                            current_principal(), rp_id=step_up.rp_id, origin=origin, subject_key=approval_id,
-                            fingerprint=expected_fp, assertion=assertion, challenges=challenges,
-                        )
-                    except step_up_decide.StepUpExpired:
-                        return JSONResponse({"error": "step_up_expired"}, status_code=400)
-                    except WebAuthnError as exc:
-                        return JSONResponse({"error": str(exc)}, status_code=401)
+        # PSC-2a: the sensitive-confirm passkey check (scope-independent,
+        # gated on ``require_passkey`` directly -- see module docstring) and
+        # the ordinary approving-decision one (gated on ``is_step_up_required``)
+        # are both approval_step_up.guard_decision's job now; see that
+        # function's own docstring for the two triggers and their order.
+        stepup_response = approval_step_up.guard_decision(
+            current_principal(), step_up,
+            approval=pending, approval_id=approval_id, result=result, choice=choice,
+            step_up_results=_STEP_UP_RESULTS, assertion=payload.get("webauthn_assertion"), origin=origin,
+            challenges=challenges,
+            step_up_response=lambda: _step_up_response(approval_id, result=result, choice=choice),
+        )
+        if stepup_response is not None:
+            return stepup_response
 
         accepted = web_ui.resolve(approval_id, result, choice, principal_id=current_principal().id)
         if not accepted:
@@ -652,52 +609,6 @@ def create_app(
             # an error worth alarming over.
             return JSONResponse({"status": "already_decided"}, status_code=409)
         return JSONResponse({"status": "ok"})
-
-    def _batch_needs_step_up(parsed: list[tuple[str, str]], registry) -> bool:
-        """True iff at least one *known, batchable, approving* item in this
-        batch actually needs step-up (webauthn_stepup.is_step_up_required) --
-        an unknown id or a non-batchable item contributes nothing here,
-        since answer_batch() below will never apply either one regardless
-        of step-up. A deny-only batch never reaches this at all (see
-        ``batch_decide``'s own caller), but a batch that mixes accepts and
-        denies is checked only against its accepts."""
-        for approval_id, result in parsed:
-            if result not in _BATCH_STEP_UP_RESULTS:
-                continue
-            approval = registry.get(approval_id, principal_id=current_principal().id)
-            if (
-                approval is not None and approval.is_batchable()
-                and webauthn_stepup.is_step_up_required(
-                    gate_kind=approval.gate_kind, pii_detected=approval.pii_detected, scope=step_up.scope,
-                )
-            ):
-                return True
-        return False
-
-    def _batch_step_up_response(batch_id: str, *, fingerprint: str) -> JSONResponse | None:
-        """The batch counterpart of ``_step_up_response`` -- same "no
-        enrolled credential and require_passkey off" evadable fall-through
-        (returns ``None``), same ``403`` naming ``/security`` when
-        ``require_passkey`` is on instead. Deliberately no IdP-reauth
-        fallback even in org mode's own version of this function -- the
-        binder plan's own Phase 3 text: this ceremony is a page-level one
-        (like web/routes_settings.py's own sensitive actions), not a
-        per-card one, and page-level step-up here never offered an IdP link
-        either."""
-        options_json = step_up_decide.begin_step_up(
-            current_principal(), rp_id=step_up.rp_id, subject_key=f"batch:{batch_id}", fingerprint=fingerprint,
-            challenges=challenges,
-        )
-        if options_json is not None:
-            return JSONResponse(
-                {"error": "step_up_required", "batch_id": batch_id, "webauthn_options": json.loads(options_json)},
-                status_code=428,
-            )
-        if step_up.require_passkey:
-            return JSONResponse(
-                {"error": "passkey_enrollment_required", "enroll_url": "/security"}, status_code=403,
-            )
-        return None
 
     async def batch_decide(request: Request) -> Response:
         """The approval binder's own batch decide endpoint (Phase 2:
@@ -747,7 +658,6 @@ def create_app(
 
         raw_batch_id = payload.get("batch_id")
         batch_id = raw_batch_id if isinstance(raw_batch_id, str) and raw_batch_id else uuid.uuid4().hex
-        batch_id_verified = False
 
         if (
             require_human_session
@@ -757,36 +667,21 @@ def create_app(
             body, status = _human_session_required_json("approve a decision")
             return JSONResponse(body, status_code=status)
 
-        if step_up is not None and step_up.enabled and _batch_needs_step_up(parsed, registry):
-            if step_up.batch == "per_item":
-                return JSONResponse(
-                    {
-                        "error": "batch_step_up_per_item",
-                        "message": "This install requires a separate passkey check per decision -- "
-                        "decide these individually instead of as a batch.",
-                    },
-                    status_code=400,
-                )
-            fingerprint = webauthn_stepup.batch_decision_fingerprint(principal_id=current_principal().id, items=parsed)
-            assertion = payload.get("webauthn_assertion")
-            if not isinstance(assertion, dict):
-                stepup_response = _batch_step_up_response(batch_id, fingerprint=fingerprint)
-                if stepup_response is not None:
-                    return stepup_response
-            else:
-                try:
-                    step_up_decide.verify_step_up(
-                        current_principal(), rp_id=step_up.rp_id, origin=origin, subject_key=f"batch:{batch_id}",
-                        fingerprint=fingerprint, assertion=assertion, challenges=challenges,
-                    )
-                except step_up_decide.StepUpExpired:
-                    return JSONResponse({"error": "step_up_expired"}, status_code=400)
-                except WebAuthnError as exc:
-                    return JSONResponse({"error": str(exc)}, status_code=401)
-                # The challenge store lookup inside verify_step_up() only succeeds for a
-                # batch_id this server minted a live challenge under -- that's the one case
-                # a client-supplied batch_id is provably genuine rather than an arbitrary string.
-                batch_id_verified = True
+        # PSC-2a: approval_step_up.guard_batch_decision now owns
+        # "does this batch need step-up, and if so, challenge or verify
+        # one" -- see its own docstring for the (response, batch_id_verified)
+        # return shape.
+        stepup_response, batch_id_verified = approval_step_up.guard_batch_decision(
+            current_principal(), step_up,
+            parsed=parsed, registry=registry, batch_id=batch_id, batch_step_up_results=_BATCH_STEP_UP_RESULTS,
+            per_item_message=(
+                "This install requires a separate passkey check per decision -- "
+                "decide these individually instead of as a batch."
+            ),
+            assertion=payload.get("webauthn_assertion"), origin=origin, challenges=challenges,
+        )
+        if stepup_response is not None:
+            return stepup_response
 
         if not batch_id_verified:
             batch_id = uuid.uuid4().hex
