@@ -157,10 +157,13 @@ cp -p installer/macos/com.privacyfence.companion.plist.tmpl "${RESOURCES}/instal
 # ── 5. Optional code signing ──────────────────────────────────────────────────
 if [ -n "$SIGN_IDENTITY" ]; then
   echo "→ Code-signing with: ${SIGN_IDENTITY}"
-  codesign --deep --force --options runtime \
-    --sign "$SIGN_IDENTITY" \
-    --entitlements scripts/entitlements.plist \
-    "$BUNDLE"
+  # shellcheck source=scripts/macos_sign_retry.sh
+  source scripts/macos_sign_retry.sh
+  sign_with_timestamp_retry "$BUNDLE" \
+    codesign --deep --force --options runtime \
+      --sign "$SIGN_IDENTITY" \
+      --entitlements scripts/entitlements.plist \
+      "$BUNDLE"
 fi
 
 # ── 6. Build the Claude Desktop extension (.mcpb) ─────────────────────────────
