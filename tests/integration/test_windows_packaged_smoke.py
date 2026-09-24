@@ -675,6 +675,16 @@ def _silent_uninstall(install_dir: Path) -> None:
     deadline = time.monotonic() + 15.0
     while (install_dir / MAIN_EXE_NAME).exists() and time.monotonic() < deadline:
         time.sleep(0.2)
+    _p2_diag_snapshot("OLD _silent_uninstall returned", install_dir)
+
+
+def _p2_diag_snapshot(label: str, install_dir: Path) -> None:  # TEMPORARY P2 DIAGNOSTIC -- reverted
+    import warnings
+    files = {n: (install_dir / n).exists() for n in ("unins000.exe", "unins000.dat")}
+    files["<install dir>"] = install_dir.exists()
+    procs = _inno_processes()
+    warnings.warn(f"P2-DIAG t={time.monotonic():.2f} {label}: {install_dir.parent.name}: files={files} "
+                  f"inno={[str(p) for p in procs]}", stacklevel=2)
 
 
 def _local_app_data_privacyfence() -> Path | None:
@@ -1021,6 +1031,11 @@ async def test_windows_uninstall_keeps_data_and_purge_deletes_it(tmp_path):
     # ── Reinstall: the same data is served again ──────────────────────────
     _admin_only_writable_dir(install_dir)
     _install(setup_exe, install_dir, tmp_path / "install-2.log")
+    _p2_diag_snapshot("after reinstall", install_dir)
+    install2 = (tmp_path / "install-2.log").read_text(errors="replace")
+    import warnings
+    warnings.warn("P2-DIAG install-2.log uninstaller lines: "
+                  + " | ".join(line for line in install2.splitlines() if "ninstall" in line or "unins" in line), stacklevel=1)
     base_url, mcp_token_after = _wait_for_separated_service()
     await _assert_separated_service_serves_mcp(base_url, mcp_token_after)
     assert mcp_token_after == mcp_token_before, (
@@ -1039,6 +1054,7 @@ async def test_windows_uninstall_keeps_data_and_purge_deletes_it(tmp_path):
     assert group.returncode != 0, f"{WINDOWS_SERVICE_GROUP_NAME} survived `uninstall -Purge`:\n{group.stdout}"
 
     # And the uninstaller after it finds nothing left to fail on.
+    _p2_diag_snapshot("before final uninstall", install_dir)
     _silent_uninstall(install_dir)
 
 
