@@ -45,7 +45,7 @@ only so a later reader can tell a deliberate choice from a default.
 | B3 | Limitations (ADR 0025) get a **named section on `/security/`**, linked from `/enterprise/` and the footer. |
 | B4 | Organization mode is presented as **production-ready, first-class**. |
 | B5 | **English only.** |
-| B6 | Name the tested clients — **Claude Desktop and claude.ai** — and say "MCP-compatible" generally. ChatGPT and Gemini are expected in the next version: the client list is kept in one data file so adding them is a one-line change **when they ship, not before**. See [Inputs needed](#inputs-needed-from-the-maintainer) — the audit found local mode is localhost-only, so claude.ai appears to need organization mode. |
+| B6 | Name the tested clients — **Claude Desktop and Claude Code** on any install, **claude.ai through organization mode only** (local mode listens on localhost; confirmed 2026-09-24) — and say "MCP-compatible" generally. ChatGPT and Gemini are expected in the next version: the client list is kept in one data file so adding them is a one-line change **when they ship, not before**. |
 | C1 | **Python docs generator** (Zensical or MkDocs + Material, chosen in [Wave 3](#wave-3--build-pipeline-and-docs-site)) for `/docs/`; **hand-written HTML** for marketing pages. |
 | C2 | **Stay on GitHub Pages** (behind the existing Cloudflare proxy, see D2). |
 | C3 | Publish **user and operator docs only** — the [published set](#published-docsprivacyfenceeudocs) below. ADRs, contributor docs and `downloads-and-release-kpi.md` stay GitHub-only. |
@@ -72,6 +72,8 @@ only so a later reader can tell a deliberate choice from a default.
 | F4 | No release deadline; README changes reach PyPI with whichever stable release comes next. |
 | G1 | **There are no existing users. The docs describe only the current version** — no upgrade paths, no "as of vX", no "no longer", no migration guide, no history. `migration-guide.md` is deleted after its few non-migration facts are moved. |
 | G2 | **Every document is reviewed against the source code** for validity, completeness and clarity, and fixed or merged in Waves 1–2. The goal is a simple, straightforward, coherent doc set for new users. |
+| G3 | **Legacy and migration code is removed** ([Wave L](#wave-l--remove-legacy-and-migration-code), approved 2026-09-24). Uninstall rule: removing the package leaves data in the system root; purging deletes it. Nothing moves data back into a home directory. |
+| G4 | **Telegram ships in the PyPI build** too (approved 2026-09-24), accepting that the app's `api_id`/`api_hash` become readable in the published sdist/wheel — as they already are, with more effort, inside the DMG, installer and `.deb`. |
 
 ## Documentation principles
 
@@ -120,14 +122,14 @@ Findings that change the plan's shape:
   **Telegram does not work on a PyPI install**.
 - **Legacy/migration code** still ships behind the transitional docs (policy v1→v2 conversion,
   deprecated MCP tool aliases, legacy path moves, installer steps that register autostarts only to
-  disable them). With no users it is dead weight — see [Wave L](#wave-l--remove-legacy-and-migration-code-needs-your-go-ahead).
+  disable them). With no users it is dead weight and is removed — see [Wave L](#wave-l--remove-legacy-and-migration-code).
 - **Dangling references**: code comments and tests cite doc sections that no longer exist (e.g.
   `qa_fixture_recorder.py` cites a `qa-environment-setup.md` §1–§10 checklist deleted in
   `6de7f7cd`; `web/mcp_tools.py:44` cites a TECHNICAL_REFERENCE section that doesn't exist).
 - **The approval screenshots show a deleted UI.** `gmail-read-thread.png` and `sheets-write.png`
   are native macOS windows from a removed script, yet are on the README and the homepage.
 - **claude.ai**: local mode listens on localhost only, so claude.ai can reach PrivacyFence only
-  through an organization deployment. This needs confirming before any page claims it (B6).
+  through an organization deployment (confirmed, B6). No doc says so today.
 
 ## Target documentation set
 
@@ -139,7 +141,7 @@ is updated in the same PR; guardrail 9 fails the build on any link to a missing 
 
 | Doc | Built from | What changes |
 |---|---|---|
-| `getting-started.md` | itself + README quick start + migration-guide's troubleshooting facts | The single install doc. Per platform: install, connect **Claude Desktop** (`.mcpb`), **Claude Code** (with the real per-OS path to `privacyfence-app --print-mcp-token`), **claude.ai** (via org mode, if confirmed); first approval including the **passkey step-up** (on by default, scope `writes_and_pii_reads`); a troubleshooting table (`PENDING USER`, `PENDING SIGNOUT`, `enable --for-user`, "daemon stopped → Start PrivacyFence…"); **uninstall** per platform. Fixes: the shim never starts the daemon on packaged installs; `.deb` runs a system service, not XDG autostart; data lives under the system root, not `~/.privacyfence`; Windows needs a sign-out; macOS postinstall never fails the install. |
+| `getting-started.md` | itself + README quick start + migration-guide's troubleshooting facts | The single install doc. Per platform: install, connect **Claude Desktop** (`.mcpb`), **Claude Code** (with the real per-OS path to `privacyfence-app --print-mcp-token`), and a pointer that **claude.ai** needs an organization deployment; first approval including the **passkey step-up** (on by default, scope `writes_and_pii_reads`); a troubleshooting table (`PENDING USER`, `PENDING SIGNOUT`, `enable --for-user`, "daemon stopped → Start PrivacyFence…"); **uninstall** per platform. Fixes: the shim never starts the daemon on packaged installs; `.deb` runs a system service, not XDG autostart; data lives under the system root, not `~/.privacyfence`; Windows needs a sign-out; macOS postinstall never fails the install. |
 | `platform-support.md` | its own lines 1–63 + per-platform essentials | ~120 lines: support matrix with **minimum OS** (macOS 13) and **architectures** (Apple Silicon DMG, x64 Windows, amd64 `.deb`), one data-location table, logs, start/stop/status commands (`launchctl`/`systemctl`/`sc`), Linux dialog dependency, adding a second account. Build internals move to `packaging.md`; "Known open items" (bug history) deleted, the two real open items move to `release-testing.md`. |
 | `how-it-works.md` (new) | TECHNICAL_REFERENCE architecture, MCP and meta-tools sections | Daemon, companion, shim vs direct HTTP, how clients get a token (control channel `MINT MCP`, `--print-mcp-token`), the ten meta-tools with their real annotations, unattended sessions. |
 | `approvals-and-policy.md` (new) | approval-list-ui-ux (user parts), approval-window-content-reference, always-allow prose, TECHNICAL_REFERENCE auto-accept, file-type-support (user parts), privacy filter | Outline: how requests are gated (auto / review / confirm; the 30 s wait and `approval_pending`) · the approvals list · anatomy of a card (Enter never approves, Esc denies) · the PII check (overrides rules, second confirmation, re-read of own content skips it) · always-allow and policy rules (every matching candidate gets a button; `conditions:` key; `not_shared_drive`; the scope catalogue; the 5-minute same-file window) · privacy filter allow/redact/block (org default `block`, local default `allow`) · file previews with real limits · notifications (`web.notifications.*`, code default `minimal` vs seeded `standard`). |
@@ -150,7 +152,7 @@ is updated in the same PR; guardrail 9 fails the build on any link to a missing 
 | `configuration-reference.md` (new) | `settings.yaml.example`, `daemon_main.py` defaults, `build_org_bundle.py` flags | Every `settings.yaml` key and org-bundle key with type, default, and where code and seeded defaults differ (`web.mcp.enabled`, `web.settings.enabled`, notifications). Includes `file_bridge.max_download_bytes`, CLI setup flags. A test keeps it in sync with `settings.yaml.example`'s keys. |
 | `org-mode-setup-guide.md` → title "Organization deployment" | 3 org-mode docs + migration-guide's org step-up facts | One guide, 14 parts: overview · prerequisites (Ubuntu 24.04 or Python ≥ 3.11, `python3-venv`) · service account and install · identity provider · connector apps · signing key and bundle (with its config table) · reverse proxy and TLS (Caddy **and** nginx) · hardened systemd unit · first sign-in and validation · install-wide vs per-user policy · approvals and step-up · file delivery (`agent_links`, `/mcp-files/fetch/<token>`) · operations (backup paths, upgrade, monitoring probe, key rotation, limits: 200 principals, 50 MB uploads, 2000 DCR clients) · troubleshooting. Fixes: settings paths under `authority/`; `/settings` *is* mounted; bind `127.0.0.1`. |
 | `connecting-a-service.md` (new) | shared steps of the 5 connector guides | Local and org: where the org-config button is (General page), Authenticate/Reconnect, what each status pill means. No restart needed (connectors swap in live). |
-| `google-cloud-setup.md`, `slack-setup.md`, `salesforce-setup.md`, `atlassian-setup.md`, `telegram-setup.md` | themselves | One shared template: what you need · register the app · values table (local redirect, org redirects — all five Google `/oauth/callback/<service>` URIs — scopes, bundle flags) · build and distribute the bundle · users connect (link) · provider-specific troubleshooting. Fixes: Apps Script path (after Wave P), restricted-scope verification, Salesforce My Domain URLs, Telegram on PyPI. Note that `build_org_bundle.py` comes from the repo. |
+| `google-cloud-setup.md`, `slack-setup.md`, `salesforce-setup.md`, `atlassian-setup.md`, `telegram-setup.md` | themselves | One shared template: what you need · register the app · values table (local redirect, org redirects — all five Google `/oauth/callback/<service>` URIs — scopes, bundle flags) · build and distribute the bundle · users connect (link) · provider-specific troubleshooting. Fixes: Apps Script path (after Wave P), restricted-scope verification, Salesforce My Domain URLs, Telegram credentials present in every install type (after Wave P). claude.ai as a client is covered in the organization deployment guide. Note that `build_org_bundle.py` comes from the repo. |
 | `README.md` (root) | itself | Shrink (C5); fix the known drift. |
 | `SECURITY.md` (root) | itself | Trim to ~50 lines; no-SLA reasoning once; no links to contributor files. |
 
@@ -229,11 +231,10 @@ images and scripts stay self-hosted, as today.
 > detection runs locally before personal data reaches the AI, and every decision is audited.
 >
 > It runs on an employee's own computer (macOS, Windows, Linux) or as a central deployment on
-> infrastructure the organization controls — which also serves web clients such as claude.ai.
+> infrastructure the organization controls, which also lets web clients such as claude.ai connect.
 > Connector credentials stay with PrivacyFence, never with the AI client, and no data passes through
 > PrivacyFence-operated servers — there are none.
 
-The claude.ai sentence stands only if confirmed (see [Inputs needed](#inputs-needed-from-the-maintainer)).
 Homepage: `<title>PrivacyFence — privacy and approval gateway for AI assistants (MCP)</title>`,
 H1 "The approval gateway between AI assistants and your business systems.", tagline
 "Give AI assistants access. Not authority."
@@ -292,15 +293,14 @@ Code fixes, each small; one PR. Each gets a test and a `CHANGELOG.md` line.
 | P2 | **Recovery code route hardening**: audit failed attempts (the route's own docstring promises it), require a human-attested session, and rate-limit attempts. Low severity — the code is 64 random bits — but the missing audit and the unattested-session gap are real. | `web/routes_security.py:590-611`, `webauthn_stepup.py:611-631` |
 | P3 | **Org mode binds `127.0.0.1` by default**; exposing the listener becomes an explicit `--server-bind-host`. Today the default is `0.0.0.0` while the guide says never to expose it. | `scripts/build_org_bundle.py:203` |
 | P4 | **`agent_links` gets a `build_org_bundle.py` flag** (today it can only be hand-edited into the bundle). | `org_mode.py:165` |
-| P5 | **Telegram on a PyPI install**: decide — either document "Telegram needs the packaged installers" (recommended; shipping the API hash in the sdist makes it public on PyPI) or add it to the PyPI build. | `publish-pypi.yml` has no `TELEGRAM_*` |
+| P5 | **Telegram credentials in the PyPI build** (G4): pass `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` to `publish-pypi.yml`'s build job and generate `_telegram_credentials.py` there, as `build_dmg.sh`/`build_deb.sh` do. The file is git-ignored, and `setuptools_scm` packages only tracked files, so it also needs an explicit include (`MANIFEST.in` / package data) — and a check in the build job that the wheel actually contains it, failing on a stable tag if not. Local and dev builds keep working without it. | `publish-pypi.yml` has no `TELEGRAM_*`; `app_credentials.py` |
 | P6 | **Declare minimum OS versions**: `MinVersion` in `installer/privacyfence.iss`, a stated Debian/Ubuntu floor in `debian/control`. | not declared today |
 | P7 | **Approval screenshots regenerated from the web UI** by a script (extend `qa_readme_screenshots.py`), replacing the two native-window images from the deleted `qa_popup_smoke.py`. Needed by README, homepage and Wave 4. | `docs/images/screenshots/*.png`, `pages.yml:71-72` |
 
-### Wave L — remove legacy and migration code (needs your go-ahead)
+### Wave L — remove legacy and migration code
 
-G1 removes the *docs* for upgrading. The *code* that performs upgrades still ships, and each piece
-is behavior the docs would otherwise have to describe. With no users, the recommendation is to
-delete it, in one PR, reviewed function by function:
+Approved (G3). G1 removes the *docs* for upgrading; this removes the *code* that performs
+upgrades, which the docs would otherwise have to describe. One PR, reviewed function by function:
 
 - **Policy v1 → v2**: `policy/compat.py` (whole module), `daemon_main._migrate_settings_to_policy_v2`
   and its two call sites, `settings_controller.policy_v2_migration_notice_html`,
@@ -322,10 +322,12 @@ delete it, in one PR, reviewed function by function:
   `installer/privacyfence-task.xml.tmpl`; macOS `stop_legacy_agent`.
 - **Per-user → system-root data moves**: `migrate_data` (macOS/Linux), `Move-Data` /
   `Get-LegacyDataDir` / `Restore-LegacyDataDir` (Windows), `move_handoff_files_in/out`, and
-  `privilege_separation.maybe_auto_enable_macos` (in-place-upgrade fallback). **Decide with this:**
-  what uninstall does with data. Today `apt remove` runs `disable`, which moves
-  `/var/lib/privacyfence` into the owner's home. Without a legacy layout to return to, the simpler
-  rule is: remove leaves data in the system root; purge deletes it.
+  `privilege_separation.maybe_auto_enable_macos` (in-place-upgrade fallback).
+- **Uninstall follows G3**: today `apt remove` runs `disable`, which moves `/var/lib/privacyfence`
+  into the owner's home (and the Windows/macOS equivalents move data back to per-user locations).
+  After this wave, remove stops the service and leaves data in the system root; purge (`apt purge`,
+  and a documented equivalent for macOS and Windows) deletes it. `disable` either goes or becomes
+  that stop-and-leave step — whichever keeps the three platforms' uninstall paths simplest.
 - **Not removed**: anything a current fresh install uses. `enforce_separation` for a packaged
   install that somehow isn't separated stays unless shown unreachable.
 
@@ -451,12 +453,8 @@ Positioning (B1) and the documentation principles are not ADRs: the first lives 
 
 ## Inputs needed from the maintainer
 
-- **Wave L go-ahead**: delete the legacy/migration code listed there? And the uninstall rule
-  (remove keeps data in the system root, purge deletes it)?
-- **claude.ai**: confirm it works only through organization mode (local mode listens on
-  localhost). The canonical description and B6 depend on it.
-- **P5**: Telegram on PyPI — document the limitation (recommended) or ship credentials in the
-  PyPI build?
+- **Telegram secrets**: confirm `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` are available to
+  `publish-pypi.yml` (repo-level secrets, or the `pypi`/`testpypi` environments) — P5 needs them.
 - **Imprint**: postal (or service) address and the name as it should appear.
 - **Cloudflare**: the Wave 0 dashboard steps; confirm the Pages custom domain is the apex.
 - **Mailbox**: confirm `info@privacyfence.eu` delivers.
