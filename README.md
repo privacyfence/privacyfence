@@ -395,9 +395,9 @@ either way — the migration moves live connector tokens.
    recovery code it shows you.
 
 The package ships a self-contained PyInstaller build of the daemon — no `python3-*` packages
-required beyond what a normal Debian/Ubuntu desktop already has. `apt remove`/`dpkg -r` leaves
-your `~/.privacyfence` config, credentials, and audit log untouched; only `apt purge` is meant to
-also clean up anything package-owned, and there's no system-wide config here to purge either. See
+required beyond what a normal Debian/Ubuntu desktop already has. `apt remove`/`dpkg -r` stops
+PrivacyFence and leaves its config, credentials and audit log in `/var/lib/privacyfence`, so a
+reinstall picks them up; `apt purge` deletes them and the `privacyfence` service account. See
 [Technical Reference](https://github.com/privacyfence/privacyfence/blob/main/docs/TECHNICAL_REFERENCE.md#installation-and-packaging) for the full details, and
 [Platform support](https://github.com/privacyfence/privacyfence/blob/main/docs/platform-support.md#debianubuntu-local-mode) for how the
 package is built.
@@ -414,18 +414,18 @@ org mode is deployed, and the wrong one for a laptop; use the `.deb` above for t
 
 **Privilege separation is mandatory for the `.deb`:** `debian/postinst` separates the install
 itself, on every install and upgrade, moving the daemon to a `privacyfence` system account of its
-own — a system systemd unit in place of the autostart entry — which takes the policy, the audit key
+own — a system systemd unit — which takes the policy, the audit key
 and the connector credentials out of the AI client's reach. That machine-level move always runs and
 a failure of it fails the package install; the one piece that can be left pending is adding *you* to
 the `privacyfence` group, when the install can't safely tell who owns it (an unattended upgrade with
 no `sudo` session behind it) — the companion app closes that the first time you actually log in.
 A source checkout has no such postinst hook and stays opt-in via
 `sudo privacyfence-privilege-separation enable` (installed by the `.deb`; from a source checkout
-it's `sudo ./scripts/linux_privilege_separation.sh enable`). `... disable` reverses it either way,
-and, on a packaged install, stops being a way to keep the daemon running — it refuses to serve once
-it finds no marker. Reversible, and worth reading
+it's `sudo ./scripts/linux_privilege_separation.sh enable`). `... uninstall` stops and unregisters
+the service and keeps the data; `... uninstall --purge` also deletes the data and the service
+account. Neither moves anything into your home directory. Worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
-before you run it by hand — the migration moves live connector tokens.
+before you run it by hand.
 
 ### Run from source
 

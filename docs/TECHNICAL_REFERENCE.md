@@ -954,9 +954,9 @@ comparison:
 
 - **Local desktop mode**: a self-contained `.deb` (`PrivacyFenceApp.linux.spec`,
   `scripts/build_deb.sh`, `debian/`) installing the PyInstaller onedir output under
-  `/opt/privacyfence`, exposing `/usr/bin/privacyfence-app`, and registering an XDG autostart entry
-  under `/etc/xdg/autostart/` — the Linux analogue of the macOS LaunchAgent/Windows Task Scheduler
-  task. Package removal does not delete per-user state from the home directory. Currently `amd64`
+  `/opt/privacyfence`, exposing `/usr/bin/privacyfence-app`, and running the daemon as a system
+  systemd unit under its own account. `apt remove` keeps the data in `/var/lib/privacyfence`;
+  `apt purge` deletes it (ADR 0042). Currently `amd64`
   only; `arm64` is a deliberate, undecided follow-up rather than a gap (see `platform-support.md`'s
   "Architecture and CPU constraints").
 - **Org mode / server deployments**: `pip`/`pipx install privacyfence`, walked end to end by

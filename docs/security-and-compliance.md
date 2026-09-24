@@ -56,7 +56,8 @@ and [ADR 0003](adr/0003-separated-installs-only.md) makes mandatory rather than 
 three. A packaged build that finds itself unseparated does not serve at all (ADR 0003 decision 6 —
 no `/mcp`, no approvals), so the un-separated install the rest of this section describes is not
 something any of the three platforms' installers ship: it is reachable only via `... disable`
-(documented and deliberate — see that subsection), or from a non-packaged source/pip checkout run
+on macOS and Windows or `... uninstall --purge` on Linux (documented and deliberate — see that
+subsection), or from a non-packaged source/pip checkout run
 with `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` for local development (never a real deployment — see
 that subsection and [ADR 0003](adr/0003-separated-installs-only.md) decision 7). That subsection
 says exactly which of the statements below a separated install changes and which it leaves
@@ -530,11 +531,14 @@ so the daemon leaves your session and the companion app enters it:
 | Data directory | `/Library/Application Support/PrivacyFence` | `/var/lib/privacyfence` | `%ProgramData%\PrivacyFence` |
 | Daemon starts as | a LaunchDaemon | a system systemd unit (`privacyfence-daemon.service`) | a Windows service (`PrivacyFence`) |
 | Companion starts as | a LaunchAgent (the menu-bar app) | an XDG autostart entry running `privacyfence-companion --serve` | a Scheduled Task (`PrivacyFenceCompanion`, the tray app) |
-| Replaces | the login-session LaunchAgent | the `.deb`'s XDG autostart entry and the `--user` unit | the installer's own `PrivacyFence` Scheduled Task, disabled rather than deleted |
+| Replaces | the login-session LaunchAgent | a pip/pipx install's `--user` unit | the installer's own `PrivacyFence` Scheduled Task, disabled rather than deleted |
 
-All three still ship the manual `enable`/`disable`/`status` subcommands above; the migration moves
-live connector OAuth tokens, so take a backup first if running one by hand. `... disable` reverses
-it on any platform — and, per [ADR 0003](adr/0003-separated-installs-only.md) decision 6, it stops
+macOS and Windows still ship the manual `enable`/`disable`/`status` subcommands above; the migration
+moves live connector OAuth tokens, so take a backup first if running one by hand. Linux ships
+`enable`/`uninstall [--purge]`/`status` instead ([ADR 0042](adr/0042-uninstall-replaces-disable.md)):
+`uninstall` stops the service and keeps the data under `/var/lib/privacyfence`, `--purge` deletes
+it, and neither moves anything into a home directory. `... disable` reverses separation on macOS
+and Windows — and, per [ADR 0003](adr/0003-separated-installs-only.md) decision 6, it stops
 being a way to run PrivacyFence: a packaged build finds no marker afterward and refuses to serve.
 **Every packaged install on all three platforms now separates itself as part of installing**,
 mandatorily rather than opt-in, per ADR 0003. The `.deb`'s `postinst` separates the install itself,
@@ -566,7 +570,8 @@ failure, not a silently-opt-in install.
 
 **And a packaged build that ends up unseparated anyway does not serve.** ADR 0003 decision 6 is the
 backstop for the installs the paragraph above doesn't cover — a pre-ADR-0003 install upgrading in
-place, a restored backup, an install where `... disable` was run and forgotten: on startup, a
+place, a restored backup, an install where `... disable` (or, on Linux, `... uninstall --purge`)
+was run and forgotten: on startup, a
 packaged local-mode daemon attempts its platform's provisioning (the same mechanisms above, run
 again) and, if it is still unseparated afterward, refuses outright — no `/mcp`, no approvals —
 naming the one command that fixes it. Source checkouts and `pip`/`pipx` installs are not packaged

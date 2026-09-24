@@ -14,15 +14,12 @@ user would.
    the .deb" docstring section: that module deliberately avoids the ``.deb``
    because its own layer doesn't need it; this module's whole point is that
    the ``.deb`` specifically is what's being proven).
-2. **Validate the autostart entry**: ``desktop-file-validate`` against the
-   installed autostart entry -- the one thing a malformed ``.desktop`` file
-   would silently no-op on at the next graphical login rather than fail
-   loudly, so this is the one place that would catch it before release.
-   Since ADR 0003 decision 5 the entry on disk right after an install is
-   ``privacyfence.desktop.disabled`` (auto-separation renames it), and
-   ``desktop-file-validate`` refuses a filename without a ``.desktop``
-   extension outright, so the check runs against a byte-for-byte,
-   correctly-named copy.
+2. **Validate the .desktop entries**: ``desktop-file-validate`` against the
+   application-menu entry the package installs and the companion autostart
+   entry the postinst renders -- a malformed ``.desktop`` file silently
+   no-ops at the next login or menu click rather than failing loudly, so
+   this is the one place that would catch it before release. The package
+   ships no autostart entry for the daemon itself (it is a system unit).
 3. **Start the real installed daemon** (``/usr/bin/privacyfence-app``, the
    wrapper ``debian/install`` puts on ``PATH`` -- not the PyInstaller onedir
    output directly, so this also proves the wrapper script itself works) and
@@ -53,18 +50,16 @@ user would.
    dependency needed here, keeping this job's prerequisites to exactly what
    ``scripts/build_deb.sh`` itself already needs (Python + ``dpkg``/
    ``lintian``).
-4. **Remove** (``dpkg -r``): package-owned files gone
-   (``/opt/privacyfence``, ``/usr/bin/privacyfence-app``); the autostart
-   ``.desktop`` file -- a ``conffile`` -- deliberately survives a plain
-   remove (dpkg's own conffile contract). ``prerm``'s own ``remove`` case
-   also undoes separation (``disable``), which moves state from the system
-   root back into ``$HOME`` -- the one deliberate exception to P2.2's "the
-   package never reaches into `$HOME`" contract, documented in ``debian/
-   prerm`` itself; this module confirms the state that lands there is the
-   same state scenario 3 created.
-5. **Purge** (``dpkg -P``): the conffile is now gone too; the state
-   ``remove`` already restored to ``$HOME`` is still untouched by purge
-   itself (there is nothing left separated to undo a second time).
+4. **Remove, then reinstall** (``dpkg -r``, ADR 0042): package-owned files
+   gone (``/opt/privacyfence``, ``/usr/bin/privacyfence-app``); ``prerm``'s
+   ``uninstall`` has stopped the daemon and removed its unit and the
+   companion autostart entry; the data under ``/var/lib/privacyfence``, the
+   marker and the service account are still there, and nothing was written
+   to ``$HOME``. Reinstalling the same ``.deb`` brings the daemon back up on
+   that same data -- the rule scenario 3 confirmed is still in its policy.
+5. **Purge** (``dpkg -P``): nothing is left -- no data directory, no service
+   account or group, no unit, no autostart entry, no ``$HOME`` state, and
+   dpkg no longer knows the package.
 6. **Upgrade in place** (P7.3): install version N, use it to create real
    on-disk state (an applied auto-accept rule, via the same MCP round trip
    as step 3), install a synthetically-bumped version N+1 of the identical
@@ -94,10 +89,10 @@ per-user half still runs only when ``$SUDO_USER`` resolves to a real,
 non-root account -- true for this module's own passwordless-``sudo`` CI
 account, same as a real human's ``sudo dpkg -i``). That moves the daemon to
 its own system account/unit (``privacyfence-daemon.service``, already
-running by the time ``_dpkg("-i", ...)`` returns) and renames away the
+running by the time ``_dpkg("-i", ...)`` returns) and renders the companion
 autostart entry this module's step 2 validates -- see
-``test_linux_graphical_session_autostart.py`` for that autostart-triggering
-path itself, which this module doesn't re-prove.
+``test_linux_graphical_session_autostart.py`` for a login session actually
+starting it, which this module doesn't re-prove.
 
 This wasn't always true: before ADR 0003 decision 6
 (``privilege_separation.enforce_separation()``, 4bcafc0/776128f) a packaged
@@ -134,7 +129,6 @@ import shlex
 import shutil
 import socket
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -174,14 +168,13 @@ SETTINGS_EXAMPLE = REPO_ROOT / "src" / "privacyfence" / "resources" / "settings.
 PACKAGE_NAME = "privacyfence"
 DAEMON_BIN = Path("/usr/bin/privacyfence-app")
 OPT_DIR = Path("/opt/privacyfence")
-AUTOSTART_DESKTOP_FILE = Path("/etc/xdg/autostart/privacyfence.desktop")
-# scripts/linux_privilege_separation.sh's stop_legacy_autostart() renames
-# AUTOSTART_DESKTOP_FILE to this (and marks it Hidden=true) as part of the
-# machine half of `enable` -- which, since ADR 0003 decision 5, postinst
-# runs unconditionally on every install. So a freshly `dpkg -i`'d package
-# never leaves AUTOSTART_DESKTOP_FILE itself on disk; disable (prerm's own
-# `remove` case, see cmd_disable's restore step) is what renames it back.
-AUTOSTART_DESKTOP_DISABLED_FILE = Path(f"{AUTOSTART_DESKTOP_FILE}.disabled")
+# The application-menu entry the package installs, and the companion's
+# autostart entry the separation tool renders at `enable` time (it is not a
+# package file). The package ships no autostart entry for the daemon: that
+# path, which earlier packages used, must stay empty.
+COMPANION_MENU_DESKTOP_FILE = Path("/usr/share/applications/privacyfence-companion.desktop")
+COMPANION_AUTOSTART_DESKTOP_FILE = Path("/etc/xdg/autostart/privacyfence-companion.desktop")
+DAEMON_AUTOSTART_DESKTOP_FILE = Path("/etc/xdg/autostart/privacyfence.desktop")
 
 # ADR 0003 decisions 3 and 5, as the postinst leaves them on disk. Spelled out
 # here rather than imported from privilege_separation: this module asserts what
@@ -191,6 +184,7 @@ AUTOSTART_DESKTOP_DISABLED_FILE = Path(f"{AUTOSTART_DESKTOP_FILE}.disabled")
 SEPARATION_TOOL = Path("/usr/sbin/privacyfence-privilege-separation")
 SYSTEM_ROOT = Path("/var/lib/privacyfence")
 PRIVILEGE_SEPARATION_MARKER = SYSTEM_ROOT / "privilege-separation.json"
+SERVICE_ACCOUNT = "privacyfence"
 SERVICE_GROUP = "privacyfence"
 DAEMON_SYSTEM_UNIT_FILE = Path("/etc/systemd/system/privacyfence-daemon.service")
 DAEMON_UNIT_NAME = DAEMON_SYSTEM_UNIT_FILE.name
@@ -306,52 +300,15 @@ def _dpkg(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return result
 
 
-def _disable_auto_enabled_privilege_separation() -> None:
-    """Undoes the separation ``postinst`` performs on every ``dpkg -i``
-    (install *and* upgrade) -- since ADR 0003 decision 5 the machine half of
-    it runs unconditionally, and the per-user half additionally runs whenever
-    ``$SUDO_USER`` resolves to a real, non-root account, exactly what this CI
-    runner's own passwordless-``sudo``-invoking account satisfies, same as a
-    real human's ``sudo dpkg -i``/``sudo apt install`` would. This module's whole scenario
-    (an autostart ``.desktop`` conffile that survives a plain remove, a daemon
-    started directly via the installed wrapper against an isolated ``$HOME``)
-    is the pre-D1, unseparated lifecycle -- ``test_linux_graphical_session_
-    autostart.py``'s own "unseparated path" test pins the identical mechanism
-    the identical way, right after its own ``_dpkg("-i", ...)``, for the same
-    reason: once separation auto-enables, the daemon runs as its own system
-    account under ``privacyfence-daemon.service``, the legacy autostart entry
-    is renamed to ``.disabled``, and a second, directly-launched instance
-    against an isolated ``$HOME`` either can't bind its ports/sockets or gets
-    refused outright by ``check_runtime_identity`` -- none of which is what
-    this module is testing. Must be re-run after every ``_dpkg("-i", ...)``
-    in this module, including the upgrade-in-place one: the postinst fires on
-    upgrade too, not just on a fresh install."""
-    subprocess.run(
-        ["sudo", "-n", "privacyfence-privilege-separation", "disable", "--user", getpass.getuser()],
-        check=True, capture_output=True, text=True, timeout=30,
-    )
-
-
 def _reset_service_group_membership() -> None:
     """Strips this CI account back out of ``${SERVICE_GROUP}``, best-effort.
 
-    ``cmd_disable()`` (``scripts/linux_privilege_separation.sh``) leaves the
-    ``privacyfence`` group's membership alone on purpose -- its own printed
-    note says so: keeping the account/group around means a later ``enable``
-    doesn't have to pick a new uid. That is the right call for a real
-    machine, where a human who was added stays added until they ask
-    otherwise, but it means neither ``_disable_auto_enabled_privilege_
-    separation()`` nor a plain ``dpkg -P`` (whose ``prerm`` also only calls
-    plain ``disable``) actually returns this runner's own account to "not a
-    member" between tests -- every test in this module runs real ``sudo
-    dpkg -i``, which resolves ``$SUDO_USER`` to this same CI account, and
-    once any one of them adds it, it stays added for the rest of the
-    process. ``test_unattended_install_separates_the_machine_and_defers_the_
+    A purge deletes the group outright (ADR 0042), so this only matters when
+    a test left the package in a state ``dpkg -P`` could not clean up.
+    ``test_unattended_install_separates_the_machine_and_defers_the_
     membership`` asserts nobody is in the group after *its own* unattended
-    install specifically -- an assertion only a genuinely clean slate can
-    make. Root-only (``getent``/``gpasswd`` need it), so this goes through
-    ``sudo -n`` like every other machine-state reset in this module; a
-    missing group (nothing installed yet this run) is not an error."""
+    install, which only a genuinely clean slate can make. A missing group is
+    not an error."""
     subprocess.run(
         ["sudo", "-n", "gpasswd", "--delete", getpass.getuser(), SERVICE_GROUP],
         capture_output=True, text=True, timeout=10,
@@ -359,34 +316,24 @@ def _reset_service_group_membership() -> None:
 
 
 def _reset_owner_home_state() -> None:
-    """Best-effort cleanup of ``~/.privacyfence`` -- real state under this CI
-    account's *real* ``$HOME``, not a ``tmp_path`` scratch copy, ever since
-    this module started running its scenarios against the real separated
-    daemon (see the "Real-daemon helpers" section). Every purge below
-    triggers ``prerm``'s own ``disable`` call, which restores separated
-    state to exactly this path -- deliberately, it is the documented
-    "give the human their data back" gesture disabling performs, not a bug
-    -- but leaving it there between tests would let one test's settings.yaml
-    silently seed the next's, the same failure mode the old scratch-``$HOME``
-    design existed to prevent. This account is disposable in CI (same
-    posture test_linux_graphical_session_autostart.py's own module
-    docstring already states for the identical reason), so deleting it here
-    is safe; a real user's ``~/.privacyfence`` is never touched by anything
-    in this module, since nothing in this module runs anywhere but a
-    disposable CI runner (this module's own pytestmark requires
-    passwordless sudo to even collect)."""
+    """Best-effort cleanup of ``~/.privacyfence`` under this CI account's
+    real ``$HOME``. Nothing in the package's lifecycle may write there (ADR
+    0041/0042 -- the remove/purge test asserts exactly that), so this only
+    guarantees a clean slate for that assertion. This account is disposable
+    in CI (this module's own pytestmark requires passwordless sudo to even
+    collect), so deleting it here is safe."""
     shutil.rmtree(Path.home() / ".privacyfence", ignore_errors=True)
 
 
 def _purge_if_present() -> None:
     """Best-effort cleanup -- covers both "fully installed" (a fresh
-    ``dpkg -P`` needed) and "removed but not purged" (conffiles still on
-    disk from a previous run's remove step), so a test that fails partway
-    through never leaves the runner with this package in either state.
+    ``dpkg -P`` needed) and "removed but not purged" (data and account kept
+    by a previous run's remove step), so a test that fails partway through
+    never leaves the runner with this package in either state.
 
     Also resets this account's own ``${SERVICE_GROUP}`` membership and real
     ``$HOME`` state -- see ``_reset_service_group_membership()``/
-    ``_reset_owner_home_state()`` -- since a plain purge alone does neither."""
+    ``_reset_owner_home_state()`` -- in case a purge could not."""
     status = subprocess.run(["dpkg-query", "-W", "-f=${Status}", PACKAGE_NAME], capture_output=True, text=True)
     if status.returncode == 0 and status.stdout.strip() not in ("", "unknown ok not-installed"):
         _dpkg("-P", PACKAGE_NAME, check=False)
@@ -400,7 +347,7 @@ def _capture_installed_file_manifest(request) -> None:
     that test's own ``tmp_path``, so tests/diagnostics.py's generic
     per-``tmp_path`` manifest already covers it for free), a real
     ``dpkg -i`` installs into real system paths (``/opt/privacyfence``,
-    ``/usr/bin``, ``/etc/xdg/autostart``) no ``tmp_path`` isolates -- this
+    ``/usr/bin``, ``/usr/share``) no ``tmp_path`` isolates -- this
     is the one packaged-artifact module that needs its own capture call for
     that reason. ``dpkg -L``/``dpkg -s`` are already exactly the manifest a
     human would reach for by hand, so this doesn't invent a new format."""
@@ -440,7 +387,7 @@ def _clean_package_state(request):
 # last tag this module's own daemon-lifecycle helpers were green against),
 # this module ran the packaged binary directly against a scratch,
 # deliberately-unseparated $HOME -- undoing whatever postinst's machine half
-# had just done via _disable_auto_enabled_privilege_separation() -- for a
+# had just done -- for a
 # fast, isolated round trip that never touched real system state. Decision 6
 # retired that option outright: a packaged daemon that finds itself
 # unseparated now refuses to serve at all
@@ -505,7 +452,7 @@ def _prepare_home(home: Path, *, port: int) -> None:
     unseparated $HOME" technique this was for (see this module's own
     "Real-daemon helpers" section) -- but the *unseparated* path it seeds
     is still a real, current product scenario elsewhere: a bare ``pip``/
-    ``pipx`` install, or a ``.deb`` install with `disable` run against it.
+    ``pipx`` install.
     test_linux_graphical_session_autostart.py's own "unseparated path" test
     pins exactly that scenario, importing this function (and ``_free_port``
     below) to do it -- kept here, not there, so the two modules' own
@@ -928,11 +875,32 @@ async def _run_daemon_mcp_approval_audit_scenario(daemon: RunningDaemon) -> None
 
 
 # --------------------------------------------------------------------------- #
-# Test 1 -- P7.1: install / validate / start+scenario / remove / purge
+# Test 1 -- P7.1 and ADR 0042: install / validate / start+scenario / remove /
+# reinstall / purge
 # --------------------------------------------------------------------------- #
 
-async def test_deb_install_validate_scenario_remove_purge_lifecycle():
+def _account_exists(name: str) -> bool:
+    return subprocess.run(["getent", "passwd", name], capture_output=True, timeout=10).returncode == 0
+
+
+def _group_exists(name: str) -> bool:
+    return subprocess.run(["getent", "group", name], capture_output=True, timeout=10).returncode == 0
+
+
+def _sudo_path_exists(path: Path) -> bool:
+    """SYSTEM_ROOT is 0711 and authority/ 0700 under the service account, so
+    this account cannot stat what is inside them directly."""
+    return _sudo_capture("test", "-e", str(path)).returncode == 0
+
+
+def _validate_desktop_file(path: Path) -> None:
+    validate = subprocess.run(["desktop-file-validate", str(path)], capture_output=True, text=True)
+    assert validate.returncode == 0, f"{path} failed validation:\n{validate.stdout}{validate.stderr}"
+
+
+async def test_deb_install_validate_scenario_remove_reinstall_purge_lifecycle():
     deb_path = _built_debs()[-1]
+    home_state = Path.home() / ".privacyfence"
 
     # ── Install. ADR 0003 decision 5 separates it unconditionally as part
     # of `configure` -- see this module's own "Real-daemon helpers" section
@@ -942,40 +910,19 @@ async def test_deb_install_validate_scenario_remove_purge_lifecycle():
     assert DAEMON_BIN.is_file(), f"{DAEMON_BIN} missing after dpkg -i"
     assert os.access(DAEMON_BIN, os.X_OK), f"{DAEMON_BIN} is not executable after dpkg -i"
     assert (OPT_DIR / "PrivacyFenceApp").is_file()
-    # Not AUTOSTART_DESKTOP_FILE itself: postinst's machine half separates
-    # every install unconditionally (ADR 0003 decision 5), which renames the
-    # conffile to AUTOSTART_DESKTOP_DISABLED_FILE before this dpkg -i even
-    # returns -- see that constant's own comment. The plain name only comes
-    # back once `disable` runs, which the remove step below exercises.
-    assert not AUTOSTART_DESKTOP_FILE.exists(), (
-        f"{AUTOSTART_DESKTOP_FILE} should already be renamed away by the auto-separation "
-        "a fresh dpkg -i triggers"
+    assert not DAEMON_AUTOSTART_DESKTOP_FILE.exists(), (
+        f"{DAEMON_AUTOSTART_DESKTOP_FILE} exists -- the daemon is a system unit, and the package "
+        "must not ship an entry that starts a second one in a login session"
     )
-    assert AUTOSTART_DESKTOP_DISABLED_FILE.is_file()
 
     status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True, check=True)
     assert "Status: install ok installed" in status.stdout
 
-    # ── Validate the autostart entry (P7.1) -- the disabled copy, which is
-    # what's actually on disk right after an install (see above); its
-    # Hidden=true line is what stop_legacy_autostart() added, still a
-    # syntactically valid .desktop file ─────────────────────────────────
-    #
-    # Validated through a ``.desktop``-suffixed copy, not in place:
-    # desktop-file-validate rejects any filename without that extension
-    # before it reads a byte of the contents ("filename does not have a
-    # .desktop extension", exit 1), so pointing it straight at the
-    # ``.disabled`` name tests the rename rather than the file. The copy is
-    # byte-for-byte, so what gets validated is exactly what is installed.
-    with tempfile.TemporaryDirectory() as staging:
-        staged = Path(staging) / AUTOSTART_DESKTOP_FILE.name
-        shutil.copyfile(AUTOSTART_DESKTOP_DISABLED_FILE, staged)
-        validate = subprocess.run(
-            ["desktop-file-validate", str(staged)], capture_output=True, text=True,
-        )
-    assert validate.returncode == 0, (
-        f"{AUTOSTART_DESKTOP_DISABLED_FILE} failed validation:\n{validate.stdout}{validate.stderr}"
-    )
+    # ── Validate the .desktop entries (P7.1): the application-menu entry
+    # the package installs, and the companion autostart entry the postinst
+    # rendered ───────────────────────────────────────────────────────────
+    _validate_desktop_file(COMPANION_MENU_DESKTOP_FILE)
+    _validate_desktop_file(COMPANION_AUTOSTART_DESKTOP_FILE)
 
     # ── The real, already-running privacyfence-daemon.service; run the
     # Phase 3 scenario against it ─────────────────────────────────────────
@@ -989,41 +936,53 @@ async def test_deb_install_validate_scenario_remove_purge_lifecycle():
     assert owner == getpass.getuser(), (
         f"the per-user half should have recorded {getpass.getuser()!r} as the marker's owner_user, got {owner!r}"
     )
-    # dpkg -r's own prerm runs `disable` (see
-    # _disable_auto_enabled_privilege_separation()'s own docstring for the
-    # identical mechanism run by hand), which moves separated state back to
-    # the owner's real $HOME -- this CI account's own, same disposable-
-    # account posture test_linux_graphical_session_autostart.py's module
-    # docstring already states for writing into it directly.
-    restored_settings_path = Path.home() / ".privacyfence" / "authority" / "config" / "settings.yaml"
-    try:
-        # ── Remove (P7.1): package files gone; the autostart .desktop is a
-        # conffile and survives a plain remove; separation is undone,
-        # restoring state to $HOME rather than leaving it stranded under a
-        # system root nothing can reach any more ──────────────────────────
-        _dpkg("-r", PACKAGE_NAME)
-        assert not OPT_DIR.exists(), f"{OPT_DIR} should be gone after dpkg -r"
-        assert not DAEMON_BIN.exists(), f"{DAEMON_BIN} should be gone after dpkg -r"
-        assert AUTOSTART_DESKTOP_FILE.exists(), "a conffile must survive a plain `dpkg -r` (only purge removes it)"
-        assert restored_settings_path.exists(), (
-            f"dpkg -r's own `disable` call should have restored state to {restored_settings_path}"
-        )
-        assert "allowed.example.com" in restored_settings_path.read_text(encoding="utf-8")
 
-        remove_status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True)
-        assert "Status: deinstall ok config-files" in remove_status.stdout
+    # ── Remove (ADR 0042): prerm's `uninstall` stops and unregisters the
+    # service; package files go; the data, the marker and the service
+    # account stay under the system root; nothing reaches $HOME ─────────
+    _dpkg("-r", PACKAGE_NAME)
+    assert not OPT_DIR.exists(), f"{OPT_DIR} should be gone after dpkg -r"
+    assert not DAEMON_BIN.exists(), f"{DAEMON_BIN} should be gone after dpkg -r"
+    assert not DAEMON_SYSTEM_UNIT_FILE.exists(), f"{DAEMON_SYSTEM_UNIT_FILE} survived dpkg -r"
+    assert not COMPANION_AUTOSTART_DESKTOP_FILE.exists(), f"{COMPANION_AUTOSTART_DESKTOP_FILE} survived dpkg -r"
+    unit_state = _sudo_capture("systemctl", "is-active", DAEMON_UNIT_NAME).stdout.strip()
+    assert unit_state != "active", f"{DAEMON_UNIT_NAME} is still active after dpkg -r"
 
-        # ── Purge (P7.1): the conffile is now gone too; $HOME still
-        # untouched -- already unseparated, so purge's own prerm `disable`
-        # call is the documented no-op for an install with no marker left
-        # to find ───────────────────────────────────────────────────────
-        _dpkg("-P", PACKAGE_NAME)
-        assert not AUTOSTART_DESKTOP_FILE.exists(), "dpkg -P must remove the conffile"
-        purge_status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True)
-        assert purge_status.returncode != 0, f"package should be unknown to dpkg after purge:\n{purge_status.stdout}"
-        assert restored_settings_path.exists(), "dpkg -P must never touch $HOME (P2.2)"
-    finally:
-        shutil.rmtree(Path.home() / ".privacyfence", ignore_errors=True)
+    kept = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+    assert kept and "allowed.example.com" in kept, f"dpkg -r must keep the data under {SYSTEM_ROOT}: {kept!r}"
+    assert PRIVILEGE_SEPARATION_MARKER.is_file(), "dpkg -r must keep the marker"
+    assert _account_exists(SERVICE_ACCOUNT), f"dpkg -r must keep the {SERVICE_ACCOUNT} account"
+    assert not home_state.exists(), f"dpkg -r wrote {home_state} -- nothing may move data into a home directory"
+
+    remove_status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True)
+    assert "Status: deinstall ok config-files" in remove_status.stdout, remove_status.stdout
+
+    # ── Reinstall: the same data comes back into service ──────────────────
+    _dpkg("-i", str(deb_path))
+    assert "Status: install ok installed" in _dpkg_status()
+    assert _marker_owner() == getpass.getuser(), "a reinstall must keep the recorded owner"
+    daemon = _wait_for_real_daemon()
+    async with httpx.AsyncClient(base_url=daemon.base_url, follow_redirects=True) as web_client:
+        session_id = await _bootstrap_session(web_client)
+        assert (await web_client.get("/settings")).status_code == 200
+        await _quit(web_client, session_id)
+    _wait_for_daemon_unit_stopped()
+    reinstalled = _sudo_read_text(SEPARATED_SETTINGS_PATH)
+    assert reinstalled and "allowed.example.com" in reinstalled, (
+        f"the reinstalled daemon did not keep the policy it had before dpkg -r: {reinstalled!r}"
+    )
+
+    # ── Purge (ADR 0042): nothing left ────────────────────────────────────
+    _dpkg("-P", PACKAGE_NAME)
+    purge_status = subprocess.run(["dpkg", "-s", PACKAGE_NAME], capture_output=True, text=True)
+    assert purge_status.returncode != 0, f"package should be unknown to dpkg after purge:\n{purge_status.stdout}"
+    assert not _sudo_path_exists(SYSTEM_ROOT), f"{SYSTEM_ROOT} survived dpkg -P"
+    assert not _account_exists(SERVICE_ACCOUNT), f"the {SERVICE_ACCOUNT} account survived dpkg -P"
+    assert not _group_exists(SERVICE_GROUP), f"the {SERVICE_GROUP} group survived dpkg -P"
+    assert not DAEMON_SYSTEM_UNIT_FILE.exists()
+    assert not COMPANION_AUTOSTART_DESKTOP_FILE.exists()
+    assert not DAEMON_AUTOSTART_DESKTOP_FILE.exists()
+    assert not home_state.exists(), f"dpkg -P wrote {home_state}"
 
 
 # --------------------------------------------------------------------------- #
@@ -1132,9 +1091,8 @@ async def test_upgrade_in_place_preserves_user_state(tmp_path):
 
 # --------------------------------------------------------------------------- #
 # Test 3 -- ADR 0003 decision 5: the postinst's two halves and their two
-# failure policies. Everything above this line deliberately reverts the
-# separation the postinst performs; these two are what assert it happened,
-# and how it behaves when it can't.
+# failure policies: these two assert the separation the postinst performs
+# happened, and how it behaves when it can't.
 # --------------------------------------------------------------------------- #
 
 def _service_group_members() -> list[str]:
@@ -1223,7 +1181,6 @@ def test_unattended_install_separates_the_machine_and_defers_the_membership(tmp_
     assert _marker_owner() == getpass.getuser()
     assert getpass.getuser() in _service_group_members()
 
-    _disable_auto_enabled_privilege_separation()
 
 
 def test_a_failing_machine_half_fails_the_package_install(tmp_path):
@@ -1231,7 +1188,7 @@ def test_a_failing_machine_half_fails_the_package_install(tmp_path):
     half that cannot do its job stops the install where it is.
 
     The induced failure is a regular file sitting where ``/var/lib/
-    privacyfence`` has to be a directory -- ``migrate_data``'s own
+    privacyfence`` has to be a directory -- ``apply_layout``'s own
     ``mkdir -p`` is what trips on it, under the script's ``set -e``. Any
     failure of the machine half would do; this one is deterministic, needs no
     edit to the package being tested, and is undone by deleting one file."""
@@ -1274,4 +1231,3 @@ def test_a_failing_machine_half_fails_the_package_install(tmp_path):
     assert "Status: install ok installed" in _dpkg_status()
     assert PRIVILEGE_SEPARATION_MARKER.is_file()
 
-    _disable_auto_enabled_privilege_separation()

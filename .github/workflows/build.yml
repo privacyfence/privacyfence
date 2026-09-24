@@ -474,8 +474,8 @@ jobs:
           python-version: '3.12'
 
       # desktop-file-utils (desktop-file-validate): the packaged-lifecycle test
-      # (below, after the build) validates the installed
-      # /etc/xdg/autostart/privacyfence.desktop with it. patchelf: scripts/build_deb.sh strips the
+      # (below, after the build) validates the installed application-menu entry and the rendered
+      # companion autostart entry with it. patchelf: scripts/build_deb.sh strips the
       # build host's own RUNPATH out of the bundled CPython extension modules with it -- on this
       # runner those point back into setup-python's hosted toolcache, which lintian rejects at
       # error severity (see that script's staging step).
@@ -539,9 +539,9 @@ jobs:
 
       # The one place the actual packaged artifact -- not a source checkout,
       # not the --target install the org-mode smoke test above uses -- gets exercised at all.
-      # Real `dpkg -i`, `desktop-file-validate` on the installed autostart entry, the real
+      # Real `dpkg -i`, `desktop-file-validate` on the installed .desktop entries, the real
       # installed daemon started and driven through a daemon/MCP/approval/audit round trip, real
-      # `dpkg -r`/`dpkg -P` with `$HOME` state checked at each step, and a real version-upgrade
+      # `dpkg -r` (data kept, reinstall picks it up) and `dpkg -P` (nothing left), and a real version-upgrade
       # install-over-install. Needs root for dpkg -- `ubuntu-latest`'s default `runner` user has
       # passwordless sudo (see that test module's own `_can_install_packages` skip condition). A
       # failure here fails this job before the .deb reaches R2/GitHub Releases below.

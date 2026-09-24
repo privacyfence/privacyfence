@@ -58,6 +58,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Linux: `apt remove` keeps your data, `apt purge` deletes it.** Removing the `.deb` now stops
+  PrivacyFence and leaves its config, credentials and audit log in `/var/lib/privacyfence`, so a
+  reinstall picks them up; it no longer moves them into your home directory. `apt purge` deletes
+  that directory and the `privacyfence` service account and group.
+  `privacyfence-privilege-separation disable` is replaced by `uninstall` (same keep-the-data
+  behavior) and `uninstall --purge`. See ADR 0042.
+
 - **An organization server's Approvals page now updates live**, the way the desktop app's always
   has: a new approval, or one decided from another tab or device, appears or disappears without a
   manual reload, and the header's live indicator shows whether the page is connected. Each person
@@ -77,6 +84,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   platform's minimum.
 
 ### Removed
+
+- **Linux: the `.deb`'s daemon autostart entry and the separation tool's migration steps.** The
+  package no longer ships `/etc/xdg/autostart/privacyfence.desktop` (the daemon is a system unit),
+  and `privacyfence-privilege-separation enable` no longer moves `~/.privacyfence` into
+  `/var/lib/privacyfence` or disables a pip install's `--user` unit (ADR 0041).
 
 - **The v1 auto-accept settings format is no longer read or converted.** A `settings.yaml` that
   still has an `auto_accept_rules:` or `auto_accept_grants:` section now stops PrivacyFence at
