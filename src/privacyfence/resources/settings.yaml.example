@@ -100,6 +100,16 @@ calendar:
   # titles/status in the (auto-approved) free/busy result.
   free_busy_full_event_details: true
 
+gmail:
+  # Append your Gmail signature to drafts created through PrivacyFence (the
+  # Gmail API, unlike Gmail's own compose window, adds none). This is the
+  # default; each draft tool's include_signature argument overrides it per
+  # call. The signature is the one Gmail stores for the sending address
+  # (Settings > See all settings > Signature, per address) -- Gmail's
+  # separate "new email" / "reply" signature defaults aren't exposed through
+  # its API. Shown in the approval popup with the rest of the draft.
+  append_signature_to_drafts: false
+
 # Enable/disable individual connectors (all enabled by default — this section
 # is only needed to turn one off). Toggled automatically when you use
 # Disable/Enable in PrivacyFence Settings. Enabling here isn't enough on its

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -15,7 +16,13 @@ from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..connector import Connector, ToolParam, ToolSpec
 from ..download_staging import get_download_staging_store
 from ..gate import current_reason, gated_call
-from ..gmail_client import GmailClient, GmailClientError, resolve_attachment_destination
+from ..gmail_client import (
+    GmailClient,
+    GmailClientError,
+    resolve_attachment_destination,
+    signature_has_content,
+    signature_plain_text,
+)
 from ..html_to_text import html_to_text
 from ..org_mode import DownloadDeliveryConfig
 from ..principal import current_principal
@@ -96,6 +103,30 @@ def _body_params() -> list[ToolParam]:
     ]
 
 
+def _sender_params() -> list[ToolParam]:
+    """The include_signature/send_as ToolParam pair shared by all 6 draft tools."""
+    return [
+        ToolParam(
+            "include_signature", "bool", required=False, default=None,
+            description=(
+                "Append the user's Gmail signature (the one Gmail stores for "
+                "the sending address) to the end of the body. Omit to use the "
+                "user's 'Append Gmail signature to drafts' setting. Don't also "
+                "write a sign-off block of your own when this is on."
+            ),
+        ),
+        ToolParam(
+            "send_as", "str", required=False, default="",
+            description=(
+                "Send from this Gmail send-as address instead of the account's "
+                "default (sets From:, and the signature used is this address's "
+                "own). Must be one of the account's configured send-as "
+                "addresses -- anything else is rejected."
+            ),
+        ),
+    ]
+
+
 def _attachments_param() -> ToolParam:
     """The ``attachments`` ToolParam shared by all three
     ``gmail_*_with_attachments`` tools."""
@@ -126,15 +157,55 @@ def _require_body(body: str, body_markdown: str, tool: str) -> None:
         raise ValueError(f"{tool}: provide body and/or body_markdown -- at least one is required")
 
 
-def _preview_body_text(body: str, body_markdown: str) -> str:
+def _preview_body_text(body: str, body_markdown: str, signature_html: str = "") -> str:
     """Text shown to the human reviewer for the draft's content.
 
     Prefers the raw body_markdown source over body when both are given --
     that guarantees what the reviewer approves always matches what actually
     gets rendered as HTML, rather than trusting the two to describe the same
-    content independently.
+    content independently. The signature, when one is being appended, is
+    shown exactly as gmail_client appends it to the plain-text part.
     """
-    return body_markdown if body_markdown.strip() else body
+    content = body_markdown if body_markdown.strip() else body
+    return content + signature_plain_text(signature_html)
+
+
+@dataclass
+class _DraftSender:
+    """What a draft tool resolved, before gating, about who it's from:
+    the signature to append (``""`` for none) and the From: header to set
+    (``""`` to leave it to Gmail's default)."""
+
+    signature_html: str = ""
+    from_header: str = ""
+    alias_email: str = ""
+    signature_requested: bool = False
+
+    def client_kwargs(self) -> dict[str, str]:
+        kwargs = {"signature_html": self.signature_html, "from_header": self.from_header}
+        return {k: v for k, v in kwargs.items() if v}
+
+    def preview(self, preview: dict[str, str]) -> dict[str, str]:
+        """``preview`` with From/Signature rows added -- metadata only, the
+        signature's text itself is in details_text with the body."""
+        out = {"From": self.alias_email, **preview} if self.from_header else dict(preview)
+        if self.signature_requested:
+            if not self.signature_html:
+                out["Signature"] = f"None set for {self.alias_email} -- nothing appended"
+            elif signature_plain_text(self.signature_html):
+                out["Signature"] = f"Appended ({self.alias_email})"
+            else:
+                out["Signature"] = f"Appended ({self.alias_email}; image only, rich-text drafts only)"
+        return out
+
+    def details_text(self, body: str, body_markdown: str) -> str:
+        return _preview_body_text(body, body_markdown, self.signature_html)
+
+    def write_content_scan_text(self, body: str, body_markdown: str) -> str | None:
+        # The signature is the user's own contact block, not content Claude
+        # drafted: scanning it would flag its phone number/address on every
+        # draft. See docs/adr/0038-gmail-draft-signature-is-shown-but-not-write-scanned.md.
+        return _preview_body_text(body, body_markdown) if self.signature_html else None
 
 
 class GmailConnector(Connector):
@@ -145,6 +216,9 @@ class GmailConnector(Connector):
         self.download_mode: str = "local"
         self.download_config: DownloadDeliveryConfig | None = None
         self.download_base_url: str = ""
+        # settings.yaml's gmail.append_signature_to_drafts -- the default
+        # for every draft tool's include_signature when a call omits it.
+        self.append_signature: bool = False
 
     @property
     def name(self) -> str:
@@ -258,6 +332,7 @@ class GmailConnector(Connector):
                     *_body_params(),
                     ToolParam("cc", "str", required=False, default=""),
                     ToolParam("bcc", "str", required=False, default=""),
+                    *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -274,6 +349,7 @@ class GmailConnector(Connector):
                     *_body_params(),
                     ToolParam("cc", "str", required=False, default=""),
                     ToolParam("bcc", "str", required=False, default=""),
+                    *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -289,6 +365,7 @@ class GmailConnector(Connector):
                     *_body_params(),
                     ToolParam("cc", "str", required=False, default=""),
                     ToolParam("bcc", "str", required=False, default=""),
+                    *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -308,6 +385,7 @@ class GmailConnector(Connector):
                     _attachments_param(),
                     ToolParam("cc", "str", required=False, default=""),
                     ToolParam("bcc", "str", required=False, default=""),
+                    *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -326,6 +404,7 @@ class GmailConnector(Connector):
                     _attachments_param(),
                     ToolParam("cc", "str", required=False, default=""),
                     ToolParam("bcc", "str", required=False, default=""),
+                    *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -345,6 +424,7 @@ class GmailConnector(Connector):
                     _attachments_param(),
                     ToolParam("cc", "str", required=False, default=""),
                     ToolParam("bcc", "str", required=False, default=""),
+                    *_sender_params(),
                     ToolParam("reason", "str", required=True, description="One sentence: why are you calling this tool right now?"),
                 ],
             ),
@@ -965,10 +1045,30 @@ class GmailConnector(Connector):
     # Popup gate (writes)
     # ------------------------------------------------------------------ #
 
+    async def _resolve_draft_sender(self, include_signature: bool | None, send_as: str) -> _DraftSender:
+        """Resolve the signature/From: a draft gets, before gating -- so the
+        reviewer approves the exact signature that is saved, and an unknown
+        ``send_as`` is rejected without ever raising a popup. Costs no API
+        call when neither is wanted."""
+        signature_requested = self.append_signature if include_signature is None else bool(include_signature)
+        send_as = (send_as or "").strip()
+        if not signature_requested and not send_as:
+            return _DraftSender()
+        alias = await self._fetch(self._gmail.resolve_send_as, send_as)
+        has_signature = signature_requested and signature_has_content(alias.signature_html)
+        return _DraftSender(
+            signature_html=alias.signature_html if has_signature else "",
+            from_header=alias.from_header() if send_as else "",
+            alias_email=alias.email,
+            signature_requested=signature_requested,
+        )
+
     async def _create_draft(
-        self, to: str, subject: str, body: str = "", body_markdown: str = "", cc: str = "", bcc: str = ""
+        self, to: str, subject: str, body: str = "", body_markdown: str = "", cc: str = "", bcc: str = "",
+        include_signature: bool | None = None, send_as: str = "",
     ) -> Any:
         _require_body(body, body_markdown, "gmail_create_draft")
+        sender = await self._resolve_draft_sender(include_signature, send_as)
         preview = {"To": to}
         if cc:
             preview["Cc"] = cc
@@ -983,21 +1083,26 @@ class GmailConnector(Connector):
             sender=to,
             raw_data={
                 "to": to, "subject": subject, "body": body, "body_markdown": body_markdown,
-                "cc": cc, "bcc": bcc,
+                "cc": cc, "bcc": bcc, "include_signature": sender.signature_requested, "send_as": send_as,
             },
             filtered_data=None,
             gate="popup",
-            preview=preview,
-            details_text=_preview_body_text(body, body_markdown),
+            preview=sender.preview(preview),
+            details_text=sender.details_text(body, body_markdown),
+            write_content_scan_text=sender.write_content_scan_text(body, body_markdown),
             my_email=self.my_email,
             args={"to": to, "subject": subject},
         )
-        return await self._fetch(self._gmail.create_draft, to, subject, body, cc, bcc, body_markdown)
+        return await self._fetch(
+            self._gmail.create_draft, to, subject, body, cc, bcc, body_markdown, **sender.client_kwargs()
+        )
 
     async def _reply_draft(
-        self, message_id: str, body: str = "", body_markdown: str = "", cc: str = "", bcc: str = ""
+        self, message_id: str, body: str = "", body_markdown: str = "", cc: str = "", bcc: str = "",
+        include_signature: bool | None = None, send_as: str = "",
     ) -> Any:
         _require_body(body, body_markdown, "gmail_reply_draft")
+        sender = await self._resolve_draft_sender(include_signature, send_as)
         message, preview, to_arg = await self._reply_preview_and_to(message_id, cc, bcc, reply_all=False)
         await gated_call(
             connector=self.name,
@@ -1007,23 +1112,27 @@ class GmailConnector(Connector):
             sender=message.sender or "",
             raw_data={
                 "message_id": message_id, "body": body, "body_markdown": body_markdown,
-                "cc": cc, "bcc": bcc,
+                "cc": cc, "bcc": bcc, "include_signature": sender.signature_requested, "send_as": send_as,
             },
             filtered_data=None,
             gate="popup",
-            preview=preview,
-            details_text=_preview_body_text(body, body_markdown),
+            preview=sender.preview(preview),
+            details_text=sender.details_text(body, body_markdown),
+            write_content_scan_text=sender.write_content_scan_text(body, body_markdown),
             my_email=self.my_email,
             args={"message_id": message_id, "to": to_arg},
         )
         return await self._fetch(
-            self._gmail.create_reply_draft, message_id, body, False, self.my_email, cc, bcc, body_markdown
+            self._gmail.create_reply_draft, message_id, body, False, self.my_email, cc, bcc, body_markdown,
+            **sender.client_kwargs(),
         )
 
     async def _reply_all_draft(
-        self, message_id: str, body: str = "", body_markdown: str = "", cc: str = "", bcc: str = ""
+        self, message_id: str, body: str = "", body_markdown: str = "", cc: str = "", bcc: str = "",
+        include_signature: bool | None = None, send_as: str = "",
     ) -> Any:
         _require_body(body, body_markdown, "gmail_reply_all_draft")
+        sender = await self._resolve_draft_sender(include_signature, send_as)
         message, preview, to_arg = await self._reply_preview_and_to(message_id, cc, bcc, reply_all=True)
         await gated_call(
             connector=self.name,
@@ -1033,17 +1142,19 @@ class GmailConnector(Connector):
             sender=message.sender or "",
             raw_data={
                 "message_id": message_id, "body": body, "body_markdown": body_markdown,
-                "cc": cc, "bcc": bcc,
+                "cc": cc, "bcc": bcc, "include_signature": sender.signature_requested, "send_as": send_as,
             },
             filtered_data=None,
             gate="popup",
-            preview=preview,
-            details_text=_preview_body_text(body, body_markdown),
+            preview=sender.preview(preview),
+            details_text=sender.details_text(body, body_markdown),
+            write_content_scan_text=sender.write_content_scan_text(body, body_markdown),
             my_email=self.my_email,
             args={"message_id": message_id, "to": to_arg},
         )
         return await self._fetch(
-            self._gmail.create_reply_draft, message_id, body, True, self.my_email, cc, bcc, body_markdown
+            self._gmail.create_reply_draft, message_id, body, True, self.my_email, cc, bcc, body_markdown,
+            **sender.client_kwargs(),
         )
 
     async def _create_draft_with_attachments(
@@ -1055,6 +1166,8 @@ class GmailConnector(Connector):
         attachments: str = "",
         cc: str = "",
         bcc: str = "",
+        include_signature: bool | None = None,
+        send_as: str = "",
     ) -> Any:
         _require_body(body, body_markdown, "gmail_create_draft_with_attachments")
         paths = _parse_attachment_paths(attachments)
@@ -1063,6 +1176,7 @@ class GmailConnector(Connector):
         # reference's own path shape.
         self._require_attachment_paths(paths)
         attachment_info = self._stat_attachments(paths)
+        sender = await self._resolve_draft_sender(include_signature, send_as)
         preview = {"To": to}
         if cc:
             preview["Cc"] = cc
@@ -1079,17 +1193,20 @@ class GmailConnector(Connector):
             raw_data={
                 "to": to, "subject": subject, "body": body, "body_markdown": body_markdown,
                 "cc": cc, "bcc": bcc, "attachments": paths,
+                "include_signature": sender.signature_requested, "send_as": send_as,
             },
             filtered_data=None,
             gate="popup",
-            preview=preview,
-            details_text=_preview_body_text(body, body_markdown),
+            preview=sender.preview(preview),
+            details_text=sender.details_text(body, body_markdown),
+            write_content_scan_text=sender.write_content_scan_text(body, body_markdown),
             my_email=self.my_email,
             args={"to": to, "subject": subject},
         )
         return await self._fetch(
             self._gmail.create_draft_with_attachments,
             to, subject, body, paths, cc, bcc, body_markdown, self.download_mode,
+            **sender.client_kwargs(),
         )
 
     async def _reply_draft_with_attachments(
@@ -1100,11 +1217,14 @@ class GmailConnector(Connector):
         attachments: str = "",
         cc: str = "",
         bcc: str = "",
+        include_signature: bool | None = None,
+        send_as: str = "",
     ) -> Any:
         _require_body(body, body_markdown, "gmail_reply_draft_with_attachments")
         paths = _parse_attachment_paths(attachments)
         self._require_attachment_paths(paths)
         attachment_info = self._stat_attachments(paths)
+        sender = await self._resolve_draft_sender(include_signature, send_as)
         message, preview, to_arg = await self._reply_preview_and_to(message_id, cc, bcc, reply_all=False)
         preview["Attachments"] = self._format_attachment_preview(attachment_info)
         await gated_call(
@@ -1116,17 +1236,20 @@ class GmailConnector(Connector):
             raw_data={
                 "message_id": message_id, "body": body, "body_markdown": body_markdown,
                 "cc": cc, "bcc": bcc, "attachments": paths,
+                "include_signature": sender.signature_requested, "send_as": send_as,
             },
             filtered_data=None,
             gate="popup",
-            preview=preview,
-            details_text=_preview_body_text(body, body_markdown),
+            preview=sender.preview(preview),
+            details_text=sender.details_text(body, body_markdown),
+            write_content_scan_text=sender.write_content_scan_text(body, body_markdown),
             my_email=self.my_email,
             args={"message_id": message_id, "to": to_arg},
         )
         return await self._fetch(
             self._gmail.create_reply_draft_with_attachments,
             message_id, body, paths, False, self.my_email, cc, bcc, body_markdown, self.download_mode,
+            **sender.client_kwargs(),
         )
 
     async def _reply_all_draft_with_attachments(
@@ -1137,11 +1260,14 @@ class GmailConnector(Connector):
         attachments: str = "",
         cc: str = "",
         bcc: str = "",
+        include_signature: bool | None = None,
+        send_as: str = "",
     ) -> Any:
         _require_body(body, body_markdown, "gmail_reply_all_draft_with_attachments")
         paths = _parse_attachment_paths(attachments)
         self._require_attachment_paths(paths)
         attachment_info = self._stat_attachments(paths)
+        sender = await self._resolve_draft_sender(include_signature, send_as)
         message, preview, to_arg = await self._reply_preview_and_to(message_id, cc, bcc, reply_all=True)
         preview["Attachments"] = self._format_attachment_preview(attachment_info)
         await gated_call(
@@ -1153,17 +1279,20 @@ class GmailConnector(Connector):
             raw_data={
                 "message_id": message_id, "body": body, "body_markdown": body_markdown,
                 "cc": cc, "bcc": bcc, "attachments": paths,
+                "include_signature": sender.signature_requested, "send_as": send_as,
             },
             filtered_data=None,
             gate="popup",
-            preview=preview,
-            details_text=_preview_body_text(body, body_markdown),
+            preview=sender.preview(preview),
+            details_text=sender.details_text(body, body_markdown),
+            write_content_scan_text=sender.write_content_scan_text(body, body_markdown),
             my_email=self.my_email,
             args={"message_id": message_id, "to": to_arg},
         )
         return await self._fetch(
             self._gmail.create_reply_draft_with_attachments,
             message_id, body, paths, True, self.my_email, cc, bcc, body_markdown, self.download_mode,
+            **sender.client_kwargs(),
         )
 
     async def _reply_preview_and_to(
@@ -1498,9 +1627,9 @@ class GmailConnector(Connector):
     # Helpers
     # ------------------------------------------------------------------ #
 
-    async def _fetch(self, func, *args) -> Any:
+    async def _fetch(self, func, *args, **kwargs) -> Any:
         try:
-            return await asyncio.to_thread(func, *args)
+            return await asyncio.to_thread(func, *args, **kwargs)
         except GmailClientError as exc:
             logger.error("Gmail fetch failed: %s", exc)
             raise RuntimeError(str(exc)) from exc

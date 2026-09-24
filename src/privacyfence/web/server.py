@@ -73,7 +73,8 @@ local mode's own dispatcher answers, restricted to
 interactive auth -- see web/org_settings_scope.py's own ``ACTION_SCOPES``
 for the ones that only ever meant something on a desktop install) remain
 unmounted, as do the two admin-only actions that are install-wide but
-aren't privacy policy (``set_log_level``, ``toggle_calendar_free_busy``) --
+aren't privacy policy (``set_log_level``, ``toggle_calendar_free_busy``,
+``toggle_gmail_signature``) --
 ``ACTION_SCOPES`` is the one place that split is declared now, consulted
 by both ``build_routes``/``build_org_routes`` rather than filtered
 separately by each.

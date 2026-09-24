@@ -17,6 +17,7 @@ import logging
 import mimetypes
 import os
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,11 +29,13 @@ from googleapiclient.errors import HttpError
 
 from . import local_files
 from .email_markdown import markdown_to_html, markdown_to_plain
+from .html_to_text import html_to_text
 from .secure_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
-# gmail.modify: reading and modifying messages/labels, creating drafts.
+# gmail.modify: reading and modifying messages/labels, creating drafts, and
+# reading send-as aliases (settings.sendAs.list, for draft signatures).
 # gmail.settings.basic: required separately for filter create/update/delete —
 # gmail.modify covers filters.list but the settings-mutation endpoints reject
 # it with a 403 insufficientPermissions unless this scope is also granted.
@@ -172,7 +175,44 @@ def _attach_files(msg, attachments: list[str], *, download_mode: str) -> None:
         msg.attach(part)
 
 
-def _build_body_part(body: str, body_markdown: str = "", *, policy=None):
+# RFC 3676 signature delimiter ("-- " with the trailing space) -- the same
+# separator Gmail's own plain-text alternative uses, so a recipient's client
+# can recognize and fold the signature.
+_SIGNATURE_TEXT_SEPARATOR = "\n\n-- \n"
+
+# How long GmailClient.list_send_as() reuses its last answer. Signatures change
+# rarely; this only exists so a burst of drafts doesn't cost an extra API
+# round-trip each, while an edit made in Gmail's settings still shows up
+# within minutes without restarting anything.
+_SEND_AS_CACHE_TTL_SECONDS = 300.0
+
+
+def signature_plain_text(signature_html: str) -> str:
+    """The plain-text rendering of a Gmail signature, including its leading
+    separator -- exactly what the text/plain part of a draft gets appended,
+    and what connectors/gmail.py shows the reviewer. Empty (no separator
+    either) when the signature has no visible text."""
+    text = html_to_text(signature_html or "")
+    return f"{_SIGNATURE_TEXT_SEPARATOR}{text}" if text else ""
+
+
+def signature_has_content(signature_html: str) -> bool:
+    """Whether a Gmail signature would show anything: visible text, or an
+    image (a logo-only signature renders to no text at all). Gmail returns
+    ``""`` for an address with no signature, but an emptied-out editor can
+    leave markup like ``<div><br></div>`` behind."""
+    html = signature_html or ""
+    return bool(html_to_text(html)) or "<img" in html.lower()
+
+
+def _signature_html_block(signature_html: str) -> str:
+    # Gmail's own compose window wraps the signature this way; keeping the
+    # class means Gmail (and clients that know it) treat it as a signature,
+    # e.g. hiding it in collapsed replies.
+    return f'<br><div class="gmail_signature">{signature_html}</div>'
+
+
+def _build_body_part(body: str, body_markdown: str = "", *, policy=None, signature_html: str = ""):
     """Build the body part(s) of a draft: a plain ``MIMEText`` when no
     ``body_markdown`` is given (today's behavior, unchanged), or a
     ``multipart/alternative`` (text/plain + text/html) when it is.
@@ -183,6 +223,14 @@ def _build_body_part(body: str, body_markdown: str = "", *, policy=None):
     two alternatives from silently diverging (a reviewer approving the plain
     preview should always see the same content the recipient's HTML-capable
     client renders).
+
+    ``signature_html`` (the user's Gmail signature, see
+    ``GmailClient.resolve_send_as``) is appended to every alternative: as
+    HTML to the HTML part, and as ``signature_plain_text`` to the plain one.
+    A plain-only draft stays plain-only -- it gets the text rendering, never
+    a switch to ``multipart/alternative`` just to carry the signature's
+    markup, so an image-only signature adds nothing to it. A signature with
+    no content at all (``signature_has_content``) adds nothing anywhere.
 
     Callers that build a bare top-level message (no attachments) pass
     ``policy`` here so it lands on the object that will carry the address
@@ -197,14 +245,37 @@ def _build_body_part(body: str, body_markdown: str = "", *, policy=None):
             "email body: provide body and/or body_markdown -- at least one must be non-empty"
         )
 
+    signature_text = signature_plain_text(signature_html)
+
     if not body_markdown:
-        return email.mime.text.MIMEText(body, policy=policy)
+        return email.mime.text.MIMEText(body + signature_text, policy=policy)
 
     plain_text = body if body else markdown_to_plain(body_markdown)
+    html = markdown_to_html(body_markdown)
+    if signature_has_content(signature_html):
+        html += _signature_html_block(signature_html)
     alt = email.mime.multipart.MIMEMultipart("alternative", policy=policy)
-    alt.attach(email.mime.text.MIMEText(plain_text, "plain"))
-    alt.attach(email.mime.text.MIMEText(markdown_to_html(body_markdown), "html"))
+    alt.attach(email.mime.text.MIMEText(plain_text + signature_text, "plain"))
+    alt.attach(email.mime.text.MIMEText(html, "html"))
     return alt
+
+
+@dataclass
+class SendAsAlias:
+    """One Gmail send-as address (users.settings.sendAs) -- the only place
+    the Gmail API exposes a signature. Gmail's UI can hold several named
+    signatures, but the API returns just one per alias."""
+
+    email: str
+    display_name: str = ""
+    signature_html: str = ""
+    is_default: bool = False
+    is_primary: bool = False
+
+    def from_header(self) -> str:
+        import email.utils
+
+        return email.utils.formataddr((self.display_name, self.email))
 
 
 @dataclass
@@ -267,6 +338,8 @@ class GmailClient:
         # one service per thread instead of one shared instance.
         self._local = threading.local()
         self._creds_lock = threading.Lock()
+        self._send_as_lock = threading.Lock()
+        self._send_as_cache: tuple[float, list[SendAsAlias]] | None = None
 
     # ------------------------------------------------------------------ #
     # Authentication
@@ -521,16 +594,83 @@ class GmailClient:
         data = self.fetch_attachment_bytes(message_id, attachment_id)
         return self.save_attachment_bytes(data, filename or attachment_id, destination_dir)
 
+    def list_send_as(self) -> list[SendAsAlias]:
+        """The account's send-as aliases, cached for
+        ``_SEND_AS_CACHE_TTL_SECONDS``."""
+        with self._send_as_lock:
+            cached = self._send_as_cache
+            if cached is not None and time.monotonic() - cached[0] < _SEND_AS_CACHE_TTL_SECONDS:
+                return list(cached[1])
+        try:
+            resp = (
+                self._get_service().users().settings().sendAs()
+                .list(userId="me")
+                .execute()
+            )
+        except HttpError as exc:
+            raise GmailClientError(f"list_send_as failed: {exc}") from exc
+        aliases = [
+            SendAsAlias(
+                email=entry.get("sendAsEmail", ""),
+                display_name=entry.get("displayName", ""),
+                signature_html=entry.get("signature", ""),
+                is_default=bool(entry.get("isDefault")),
+                is_primary=bool(entry.get("isPrimary")),
+            )
+            for entry in resp.get("sendAs", [])
+            if entry.get("sendAsEmail")
+        ]
+        with self._send_as_lock:
+            self._send_as_cache = (time.monotonic(), aliases)
+        return list(aliases)
+
+    def resolve_send_as(self, send_as: str = "") -> SendAsAlias:
+        """The alias a draft is sent from: the one whose address matches
+        ``send_as`` (case-insensitive), or, when ``send_as`` is empty, the
+        account's default alias (falling back to the primary address).
+
+        Raises ``GmailClientError`` for an address that isn't one of the
+        account's send-as aliases -- Gmail would otherwise silently rewrite
+        the draft's From: to the primary address.
+        """
+        import email.utils
+
+        aliases = self.list_send_as()
+        wanted = email.utils.parseaddr(send_as)[1].lower() if send_as else ""
+        if wanted:
+            for alias in aliases:
+                if alias.email.lower() == wanted:
+                    return alias
+            known = ", ".join(a.email for a in aliases) or "(none)"
+            raise GmailClientError(
+                f"send_as: {send_as!r} is not one of this account's Gmail send-as addresses ({known})"
+            )
+        for pick in (lambda a: a.is_default, lambda a: a.is_primary, lambda a: True):
+            for alias in aliases:
+                if pick(alias):
+                    return alias
+        raise GmailClientError("list_send_as returned no send-as addresses for this account")
+
     # ------------------------------------------------------------------ #
     # Write operations
     # ------------------------------------------------------------------ #
     def create_draft(
-        self, to: str, subject: str, body: str, cc: str = "", bcc: str = "", body_markdown: str = ""
+        self, to: str, subject: str, body: str, cc: str = "", bcc: str = "", body_markdown: str = "",
+        *, signature_html: str = "", from_header: str = "",
     ) -> dict:
-        """Create a Gmail draft and return its id."""
+        """Create a Gmail draft and return its id.
+
+        ``signature_html`` is appended to the body (see ``_build_body_part``);
+        ``from_header``, when given, sets From: to that send-as alias --
+        otherwise Gmail fills in the account's default. Both come from
+        ``resolve_send_as``, resolved by the caller before approval so what
+        was approved is exactly what gets saved.
+        """
         import base64
 
-        msg = _build_body_part(body, body_markdown, policy=_UNFOLDED_POLICY)
+        msg = _build_body_part(body, body_markdown, policy=_UNFOLDED_POLICY, signature_html=signature_html)
+        if from_header:
+            msg["from"] = from_header
         msg["to"] = self._encode_addresses(to)
         msg["subject"] = subject
         if cc:
@@ -563,6 +703,9 @@ class GmailClient:
         bcc: str = "",
         body_markdown: str = "",
         download_mode: str = "local",
+        *,
+        signature_html: str = "",
+        from_header: str = "",
     ) -> dict:
         """Create a Gmail draft with one or more local-file attachments.
 
@@ -577,13 +720,15 @@ class GmailClient:
             raise GmailClientError("create_draft_with_attachments requires at least one attachment")
 
         msg = email.mime.multipart.MIMEMultipart("mixed", policy=_UNFOLDED_POLICY)
+        if from_header:
+            msg["from"] = from_header
         msg["to"] = self._encode_addresses(to)
         msg["subject"] = subject
         if cc:
             msg["cc"] = self._encode_addresses(cc)
         if bcc:
             msg["bcc"] = self._encode_addresses(bcc)
-        msg.attach(_build_body_part(body, body_markdown))
+        msg.attach(_build_body_part(body, body_markdown, signature_html=signature_html))
         _attach_files(msg, attachments, download_mode=download_mode)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
@@ -613,6 +758,9 @@ class GmailClient:
         cc: str = "",
         bcc: str = "",
         body_markdown: str = "",
+        *,
+        signature_html: str = "",
+        from_header: str = "",
     ) -> dict:
         """Create a draft that replies to an existing message in-thread.
 
@@ -625,7 +773,11 @@ class GmailClient:
         """
         target = self._resolve_reply_target(message_id, reply_all, my_email, cc)
 
-        msg = _build_body_part(body, body_markdown, policy=_UNFOLDED_POLICY)
+        # The signature goes at the end: Gmail's UI puts it above the quoted
+        # original, but these drafts don't quote it.
+        msg = _build_body_part(body, body_markdown, policy=_UNFOLDED_POLICY, signature_html=signature_html)
+        if from_header:
+            msg["from"] = from_header
         msg["to"] = self._encode_address(target["to_addr"])
         msg["subject"] = target["subject"]
         if target["final_cc"]:
@@ -675,6 +827,9 @@ class GmailClient:
         bcc: str = "",
         body_markdown: str = "",
         download_mode: str = "local",
+        *,
+        signature_html: str = "",
+        from_header: str = "",
     ) -> dict:
         """Create a reply draft with one or more local-file attachments.
 
@@ -692,6 +847,8 @@ class GmailClient:
         target = self._resolve_reply_target(message_id, reply_all, my_email, cc)
 
         msg = email.mime.multipart.MIMEMultipart("mixed", policy=_UNFOLDED_POLICY)
+        if from_header:
+            msg["from"] = from_header
         msg["to"] = self._encode_address(target["to_addr"])
         msg["subject"] = target["subject"]
         if target["final_cc"]:
@@ -701,7 +858,7 @@ class GmailClient:
         if target["original_message_id"]:
             msg["In-Reply-To"] = target["original_message_id"]
             msg["References"] = target["references"]
-        msg.attach(_build_body_part(body, body_markdown))
+        msg.attach(_build_body_part(body, body_markdown, signature_html=signature_html))
         _attach_files(msg, attachments, download_mode=download_mode)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")

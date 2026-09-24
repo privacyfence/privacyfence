@@ -88,10 +88,10 @@ _write_lock = threading.Lock()
 # concept across all three, so a route authorizes and applies the same
 # string rather than translating between two vocabularies.
 #
-# `toggle_calendar_free_busy` and `set_log_level` are the two admin-only
-# actions deliberately absent. Both are install-wide and both would belong
-# here eventually, but neither is privacy/PII *policy* and each needs a
-# reload path of its own that doesn't exist yet: the first rebuilds
+# `toggle_calendar_free_busy`, `toggle_gmail_signature` and `set_log_level`
+# are the admin-only actions deliberately absent. All are install-wide and
+# would belong here eventually, but none is privacy/PII *policy* and each
+# needs a reload path of its own that doesn't exist yet: the first two rebuild
 # connectors (per principal, through `ConnectorRegistry`, not the single
 # `refresh_connectors()` local mode calls), the second reconfigures
 # process-wide logging. Adding either is additive -- a mutator below and a

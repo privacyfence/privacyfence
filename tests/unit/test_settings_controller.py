@@ -1847,6 +1847,19 @@ class TestPrivacyFilter:
         assert calls == [1]
 
 
+    def test_toggle_gmail_signature_flips_and_refreshes_connectors(self, controller, monkeypatch):
+        calls = []
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: calls.append(1) or controller.snapshot())
+        assert controller.snapshot()["privacy"]["gmail_append_signature"] is False
+
+        controller.toggle_gmail_signature()
+        assert controller._load_config()["gmail"]["append_signature_to_drafts"] is True
+        assert controller.snapshot()["privacy"]["gmail_append_signature"] is True
+
+        controller.toggle_gmail_signature()
+        assert controller._load_config()["gmail"]["append_signature_to_drafts"] is False
+        assert calls == [1, 1]
+
 class TestAuditLog:
     def test_set_log_level_persists_and_hot_applies(self, controller, monkeypatch):
         applied = []
