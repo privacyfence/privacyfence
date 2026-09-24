@@ -5,6 +5,10 @@
 by the PR that lands the last wave, after every decision it records has an ADR (see
 [ADRs this plan creates](#adrs-this-plan-creates)).
 
+**Scope: documentation and website only.** The code changes the audit found — product fixes and
+legacy/migration-code removal — are in [`product-cleanup-plan.md`](product-cleanup-plan.md). This
+plan depends on it: Wave 1 documents the code *after* that plan's phases (see [Waves](#waves)).
+
 It combines three inputs:
 
 - the external "Website & Docs Strategy" review (2026-09-23);
@@ -12,7 +16,7 @@ It combines three inputs:
 - a **source-code audit of every document** in the repo (2026-09-24): each doc's claims checked
   against `src/`, `scripts/`, `installer/`, `debian/`, `mcpb/`, `cloudflare/` and the workflows,
   with file:line evidence. Its findings drive [Wave 1](#wave-1--user-documentation),
-  [Wave 2](#wave-2--contributor-documentation) and [Wave P](#wave-p--product-fixes-the-audit-found).
+  [Wave 2](#wave-2--contributor-documentation) and, for the code, `product-cleanup-plan.md`.
 
 ## Contents
 
@@ -67,13 +71,12 @@ only so a later reader can tell a deliberate choice from a default.
 | E4 | Reuse existing screenshots where current; add a **new SVG architecture/request-flow diagram**. (The audit found the two approval screenshots are stale — see [Wave 1](#wave-1--user-documentation).) |
 | E5 | Contact: GitHub issues **and `info@privacyfence.eu`**. |
 | F1 | Plan lives in **this file**. |
-| F2 | ADRs for **docs publishing scope**, **crawler policy**, **docs generator + docs version**, **hosting** — plus the upgrade-path ADR added by G1. |
+| F2 | ADRs for **docs publishing scope**, **crawler policy**, **docs generator + docs version**, **hosting**. (The upgrade-path ADR G1 needs is created by `product-cleanup-plan.md`.) |
 | F3 | **One PR per wave.** |
 | F4 | No release deadline; README changes reach PyPI with whichever stable release comes next. |
 | G1 | **There are no existing users. The docs describe only the current version** — no upgrade paths, no "as of vX", no "no longer", no migration guide, no history. `migration-guide.md` is deleted after its few non-migration facts are moved. |
 | G2 | **Every document is reviewed against the source code** for validity, completeness and clarity, and fixed or merged in Waves 1–2. The goal is a simple, straightforward, coherent doc set for new users. |
-| G3 | **Legacy and migration code is removed** ([Wave L](#wave-l--remove-legacy-and-migration-code), approved 2026-09-24). Uninstall rule: removing the package leaves data in the system root; purging deletes it. Nothing moves data back into a home directory. |
-| G4 | **Telegram ships in the PyPI build** too (approved 2026-09-24), accepting that the app's `api_id`/`api_hash` become readable in the published sdist/wheel — as they already are, with more effort, inside the DMG, installer and `.deb`. |
+| G3 | **Legacy and migration code is removed** (approved 2026-09-24) — implemented by [`product-cleanup-plan.md`](product-cleanup-plan.md), which also carries G4 (Telegram in the PyPI build). The docs describe the uninstall rule that plan implements: removing the package leaves data in the system root; purging deletes it. |
 
 ## Documentation principles
 
@@ -117,12 +120,12 @@ Findings that change the plan's shape:
 
 - **Transitional content is everywhere.** Roughly 150 passages across user docs describe upgrades,
   retired features or implementation phases. G1 removes all of them.
-- **Real product bugs, not doc bugs,** were found — listed in [Wave P](#wave-p--product-fixes-the-audit-found).
-  The most user-visible: **Apps Script cannot be connected from Settings at all**, and
-  **Telegram does not work on a PyPI install**.
+- **Real product bugs, not doc bugs,** were found. The most user-visible: **Apps Script cannot be
+  connected from Settings at all**, and **Telegram does not work on a PyPI install**. They are
+  fixed by [`product-cleanup-plan.md`](product-cleanup-plan.md)'s P phases.
 - **Legacy/migration code** still ships behind the transitional docs (policy v1→v2 conversion,
   deprecated MCP tool aliases, legacy path moves, installer steps that register autostarts only to
-  disable them). With no users it is dead weight and is removed — see [Wave L](#wave-l--remove-legacy-and-migration-code).
+  disable them). With no users it is dead weight and is removed by that plan's L phases.
 - **Dangling references**: code comments and tests cite doc sections that no longer exist (e.g.
   `qa_fixture_recorder.py` cites a `qa-environment-setup.md` §1–§10 checklist deleted in
   `6de7f7cd`; `web/mcp_tools.py:44` cites a TECHNICAL_REFERENCE section that doesn't exist).
@@ -152,7 +155,7 @@ is updated in the same PR; guardrail 9 fails the build on any link to a missing 
 | `configuration-reference.md` (new) | `settings.yaml.example`, `daemon_main.py` defaults, `build_org_bundle.py` flags | Every `settings.yaml` key and org-bundle key with type, default, and where code and seeded defaults differ (`web.mcp.enabled`, `web.settings.enabled`, notifications). Includes `file_bridge.max_download_bytes`, CLI setup flags. A test keeps it in sync with `settings.yaml.example`'s keys. |
 | `org-mode-setup-guide.md` → title "Organization deployment" | 3 org-mode docs + migration-guide's org step-up facts | One guide, 14 parts: overview · prerequisites (Ubuntu 24.04 or Python ≥ 3.11, `python3-venv`) · service account and install · identity provider · connector apps · signing key and bundle (with its config table) · reverse proxy and TLS (Caddy **and** nginx) · hardened systemd unit · first sign-in and validation · install-wide vs per-user policy · approvals and step-up · file delivery (`agent_links`, `/mcp-files/fetch/<token>`) · operations (backup paths, upgrade, monitoring probe, key rotation, limits: 200 principals, 50 MB uploads, 2000 DCR clients) · troubleshooting. Fixes: settings paths under `authority/`; `/settings` *is* mounted; bind `127.0.0.1`. |
 | `connecting-a-service.md` (new) | shared steps of the 5 connector guides | Local and org: where the org-config button is (General page), Authenticate/Reconnect, what each status pill means. No restart needed (connectors swap in live). |
-| `google-cloud-setup.md`, `slack-setup.md`, `salesforce-setup.md`, `atlassian-setup.md`, `telegram-setup.md` | themselves | One shared template: what you need · register the app · values table (local redirect, org redirects — all five Google `/oauth/callback/<service>` URIs — scopes, bundle flags) · build and distribute the bundle · users connect (link) · provider-specific troubleshooting. Fixes: Apps Script path (after Wave P), restricted-scope verification, Salesforce My Domain URLs, Telegram credentials present in every install type (after Wave P). claude.ai as a client is covered in the organization deployment guide. Note that `build_org_bundle.py` comes from the repo. |
+| `google-cloud-setup.md`, `slack-setup.md`, `salesforce-setup.md`, `atlassian-setup.md`, `telegram-setup.md` | themselves | One shared template: what you need · register the app · values table (local redirect, org redirects — every Google `/oauth/callback/<service>` URI, Apps Script included after cleanup P1 — scopes, bundle flags) · build and distribute the bundle · users connect (link) · provider-specific troubleshooting. Fixes: Apps Script path (after cleanup P1), restricted-scope verification, Salesforce My Domain URLs, Telegram credentials present in every install type (after cleanup P4). claude.ai as a client is covered in the organization deployment guide. Note that `build_org_bundle.py` comes from the repo. |
 | `README.md` (root) | itself | Shrink (C5); fix the known drift. |
 | `SECURITY.md` (root) | itself | Trim to ~50 lines; no-SLA reasoning once; no links to contributor files. |
 
@@ -242,17 +245,17 @@ H1 "The approval gateway between AI assistants and your business systems.", tagl
 ## Waves
 
 ```
-Wave 0  crawlability & legal ─────────────────────────────┐
-Wave P  product fixes ──┐                                  │
-Wave L  legacy code ────┼─► Wave 1 user docs ─┐            │
-                        │   Wave 2 contributor docs ─┐     │
-                        └────────────────────────────┴─► Wave 3 docs site ─► Wave 4 core pages ─► Wave 5 connector pages & FAQ
+Wave 0  crawlability & legal ───────────────────────────────────────┐
+product-cleanup-plan.md ──┬─► Wave 1 user docs ─┐                    │
+                          │   Wave 2 contributor docs ─┐             │
+                          └────────────────────────────┴─► Wave 3 docs site ─► Wave 4 core pages ─► Wave 5 connector pages & FAQ
 ```
 
 - **Wave 0** is independent and can land first.
-- **Waves P and L** change behavior the docs describe, so the doc sections they touch are written
-  against the post-fix code. If L is not approved, Wave 1 documents the current code without any
-  upgrade framing, and uninstall/`disable` behavior is described as it is.
+- **[`product-cleanup-plan.md`](product-cleanup-plan.md)** changes behavior the docs describe, so
+  the doc sections its phases touch are written against the post-cleanup code. Wave 1 may start
+  before every phase has merged, but a doc section describing a phase's behavior lands only after
+  that phase (or describes the merged behavior and says in its PR which phase it is waiting on).
 - **Waves 1 and 2** can run in parallel. Wave 1 must land before Wave 3, because Wave 3 publishes it.
 - **Wave 3** renders from the latest *stable tag* (C4), so the new docs appear on the site only
   after a stable release that contains Wave 1. Plan a release between Wave 1 and Wave 3's launch,
@@ -283,64 +286,6 @@ record the baseline (3 months of Search Console, download total, stars).
 Done when: `curl -A` as GPTBot, OAI-SearchBot, ClaudeBot and Googlebot gets 200 on `/`,
 `/robots.txt`, `/sitemap.xml`; Rich Results Test parses the JSON-LD; the OG card renders.
 
-### Wave P — product fixes the audit found
-
-Code fixes, each small; one PR. Each gets a test and a `CHANGELOG.md` line.
-
-| # | Fix | Evidence |
-|---|---|---|
-| P1 | **Apps Script is connectable from Settings** (local and org), like every other Google connector. Today its only path is `privacyfence-app --apps-script-oauth`. | `settings_controller.py:233-246` (`ALL_CONNECTORS`/`GOOGLE_CONNECTORS` omit it); `web/routes_connect.py:94-97` |
-| P2 | **Recovery code route hardening**: audit failed attempts (the route's own docstring promises it), require a human-attested session, and rate-limit attempts. Low severity — the code is 64 random bits — but the missing audit and the unattested-session gap are real. | `web/routes_security.py:590-611`, `webauthn_stepup.py:611-631` |
-| P3 | **Org mode binds `127.0.0.1` by default**; exposing the listener becomes an explicit `--server-bind-host`. Today the default is `0.0.0.0` while the guide says never to expose it. | `scripts/build_org_bundle.py:203` |
-| P4 | **`agent_links` gets a `build_org_bundle.py` flag** (today it can only be hand-edited into the bundle). | `org_mode.py:165` |
-| P5 | **Telegram credentials in the PyPI build** (G4): pass `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` to `publish-pypi.yml`'s build job and generate `_telegram_credentials.py` there, as `build_dmg.sh`/`build_deb.sh` do. The file is git-ignored, and `setuptools_scm` packages only tracked files, so it also needs an explicit include (`MANIFEST.in` / package data) — and a check in the build job that the wheel actually contains it, failing on a stable tag if not. Local and dev builds keep working without it. | `publish-pypi.yml` has no `TELEGRAM_*`; `app_credentials.py` |
-| P6 | **Declare minimum OS versions**: `MinVersion` in `installer/privacyfence.iss`, a stated Debian/Ubuntu floor in `debian/control`. | not declared today |
-| P7 | **Approval screenshots regenerated from the web UI** by a script (extend `qa_readme_screenshots.py`), replacing the two native-window images from the deleted `qa_popup_smoke.py`. Needed by README, homepage and Wave 4. | `docs/images/screenshots/*.png`, `pages.yml:71-72` |
-
-### Wave L — remove legacy and migration code
-
-Approved (G3). G1 removes the *docs* for upgrading; this removes the *code* that performs
-upgrades, which the docs would otherwise have to describe. One PR, reviewed function by function:
-
-- **Policy v1 → v2**: `policy/compat.py` (whole module), `daemon_main._migrate_settings_to_policy_v2`
-  and its two call sites, `settings_controller.policy_v2_migration_notice_html`,
-  `settings_controller.RULES_BY_OPERATION`/`GRANT_RESOURCE_TYPES` (v1 predicate tables — verify
-  no current caller), `auto_accept.migrate_telegram_search_operation_key`, and the `replaces=(…)`
-  aliases for old condition names in `policy/conditions.py`.
-- **Deprecated MCP tools**: `privacyfence_list_auto_accept_rules` and
-  `privacyfence_propose_auto_accept_rule_change` (`web/mcp_tools.py`, `mcp_dispatch.py`,
-  `gate.propose_rule_change` and its v1 `target: rule|grant` translation).
-- **Legacy file locations**: `paths._migrate_path`, `_migrate_legacy_authority_files`,
-  `_migrate_legacy_audit_log_dir`, `_LEGACY_AUTHORITY_PATHS`;
-  `web/mcp_auth.delete_legacy_shared_mcp_token`; `web/server._clear_legacy_bootstrap_url_files`
-  and the matching cleanup in the three privilege-separation scripts; the shim's legacy
-  `mcp_token` file fallback and the withdrawn `%LOCALAPPDATA%\Programs` path in
-  `mcpb/shim/src/daemon.ts`.
-- **Installers that install something only to switch it off**: the `.deb` shipping
-  `/etc/xdg/autostart/privacyfence.desktop` and `linux_privilege_separation.sh:stop_legacy_autostart`
-  (+ `LEGACY_USER_UNIT`); Windows `RegisterAutostartTask` + `Disable-DaemonTask` +
-  `installer/privacyfence-task.xml.tmpl`; macOS `stop_legacy_agent`.
-- **Per-user → system-root data moves**: `migrate_data` (macOS/Linux), `Move-Data` /
-  `Get-LegacyDataDir` / `Restore-LegacyDataDir` (Windows), `move_handoff_files_in/out`, and
-  `privilege_separation.maybe_auto_enable_macos` (in-place-upgrade fallback).
-- **Uninstall follows G3**: today `apt remove` runs `disable`, which moves `/var/lib/privacyfence`
-  into the owner's home (and the Windows/macOS equivalents move data back to per-user locations).
-  After this wave, remove stops the service and leaves data in the system root; purge (`apt purge`,
-  and a documented equivalent for macOS and Windows) deletes it. `disable` either goes or becomes
-  that stop-and-leave step — whichever keeps the three platforms' uninstall paths simplest.
-- **Not removed**: anything a current fresh install uses. `enforce_separation` for a packaged
-  install that somehow isn't separated stays unless shown unreachable.
-
-Safety net: installer changes are fully exercised only by the packaged smoke tests in `build.yml`
-(tag builds) and the graphical-session workflows. Land Wave L, then cut an **alpha tag** and let
-those run before any stable release.
-
-Also: `CHANGELOG.md` "Removed" entries (deprecated MCP tools, v1 policy format), and
-**an ADR: "Only the current install layout is supported; no upgrade path from earlier layouts."**
-A sweep of phase/issue history in code comments and docstrings (e.g. `paths.py`,
-`policy/compat.py`, `qa_readme_screenshots.py`) rides along where the code is touched anyway;
-a repo-wide comment sweep is out of scope.
-
 ### Wave 1 — user documentation
 
 Produces the [published set](#published-docsprivacyfenceeudocs). One PR, drafted by Claude,
@@ -351,13 +296,18 @@ reviewed by the maintainer doc by doc.
    and passkey-for-proposed-rules → security; `PENDING USER` and `--for-user` → getting-started
    troubleshooting; unattended `.deb` installs → platform-support). Then delete it.
 2. Write the new docs and rewrite the surviving ones per the table, applying every audit finding
-   for that doc. Where Wave P or L changes behavior, describe the post-change behavior.
+   for that doc. Where `product-cleanup-plan.md` changes behavior, describe the post-change
+   behavior.
 3. Delete the merged-away docs; update every link to them across the repo (code comments, tests,
    workflows, CLAUDE.md) — guardrail 9 proves none are left.
 4. Add the tools-reference generator (guardrail 3), configuration-reference test (4), history
    lint (2) and dangling-reference test (9).
 5. `docs/README.md` becomes the two-part index plus the documentation principles.
-6. README drift fixes that Wave 0 didn't take (quick start → links, "macOS/Linux implementation",
+6. **Approval screenshots regenerated from the web UI** by a script (extend
+   `qa_readme_screenshots.py`), replacing `gmail-read-thread.png` and `sheets-write.png` — native
+   windows from the deleted `qa_popup_smoke.py` (`docs/images/screenshots/`, `pages.yml:71-72`).
+   Needed by README, homepage and Wave 4.
+7. README drift fixes that Wave 0 didn't take (quick start → links, "macOS/Linux implementation",
    "ask that client to open PrivacyFence for you", "one persistent macOS daemon", Windows sign-out,
    packaged script paths); README shrink (C5) happens in Wave 4 once `/docs/` URLs exist.
 
@@ -405,7 +355,7 @@ version without JavaScript; the sitemap lists docs pages and both search console
 - **`/how-it-works/`**: the SVG diagram — AI client → MCP (the `.mcpb` shim for Claude Desktop, or
   HTTP `/mcp` directly for Claude Code and organization mode) → PrivacyFence (policy → approval →
   PII check → audit; credentials inside) → connectors → services — then one read and one write
-  walked through with the regenerated screenshots (P7).
+  walked through with the regenerated screenshots (Wave 1).
 - **`/security/`**: business-language summary following `security-and-compliance.md`'s sections,
   each linking its anchor; closes with "What PrivacyFence does not claim" (ADR 0025).
   Guardrail 11.
@@ -443,7 +393,6 @@ Next free numbers when each PR lands (ADR 0029 is taken; 0030+ as of writing).
 | ADR | Wave |
 |---|---|
 | Crawler and training-bot policy: allow all | 0 |
-| Only the current install layout is supported; no upgrade path from earlier layouts | L |
 | Which docs are published on privacyfence.eu | 3 |
 | Docs generator, and docs built from the latest stable tag | 3 |
 | Website hosting: GitHub Pages behind the Cloudflare proxy | 3 |
@@ -453,8 +402,6 @@ Positioning (B1) and the documentation principles are not ADRs: the first lives 
 
 ## Inputs needed from the maintainer
 
-- **Telegram secrets**: confirm `TELEGRAM_API_ID`/`TELEGRAM_API_HASH` are available to
-  `publish-pypi.yml` (repo-level secrets, or the `pypi`/`testpypi` environments) — P5 needs them.
 - **Imprint**: postal (or service) address and the name as it should appear.
 - **Cloudflare**: the Wave 0 dashboard steps; confirm the Pages custom domain is the apex.
 - **Mailbox**: confirm `info@privacyfence.eu` delivers.
