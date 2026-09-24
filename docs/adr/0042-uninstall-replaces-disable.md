@@ -4,8 +4,10 @@
 
 Accepted — 2026-09-24. Decided by the maintainer on 2026-09-24 (option C of the product cleanup's
 Linux phase). Implemented on Linux (`scripts/linux_privilege_separation.sh`, `debian/prerm`,
-`debian/postrm`) and macOS (`scripts/macos_privilege_separation.sh`). Windows follows in the
-cleanup's next phase with the same semantics; until then its script still carries `disable`.
+`debian/postrm`), macOS (`scripts/macos_privilege_separation.sh`) and Windows
+(`scripts/windows_privilege_separation.ps1`'s `uninstall [-Purge]`, run by
+`installer/privacyfence.iss`'s uninstaller, whose "Delete PrivacyFence data" checkbox adds
+`-Purge`).
 
 Records the per-platform mechanics that [ADR 0041](0041-only-the-current-install-layout-is-supported.md)
 decision 3 left to this phase.

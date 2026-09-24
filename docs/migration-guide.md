@@ -204,9 +204,9 @@ access), so nothing there needs the per-platform steps above.
 
 An older PrivacyFence build does not understand the post-separation data layout (the service
 account's ownership, the `authority`/`handoff` split) or the new session-provenance and recovery-code
-handling. Rolling back a packaged install therefore isn't "reinstall the old package": run
-`... disable` first to move the data directory back out from under the service account, or restore
-it from the backup you took before upgrading. See
+handling. Rolling back a packaged install therefore isn't "reinstall the old package": restore the
+data directory from the backup you took before upgrading. Nothing moves it back out from under the
+service account any more ([ADR 0042](adr/0042-uninstall-replaces-disable.md)). See
 [`org-mode-operational-readiness.md`](org-mode-operational-readiness.md#rollback) for the same
 reasoning applied to a server deployment.
 

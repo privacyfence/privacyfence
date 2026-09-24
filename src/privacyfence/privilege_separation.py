@@ -1523,29 +1523,20 @@ def _log_handlers_under(directory: Path) -> list[logging.FileHandler]:
 @contextlib.contextmanager
 def _data_dir_log_files_released() -> Iterator[None]:
     """Close the log files this process holds open inside the data directory
-    the elevated ``enable`` is about to **move**, and let them reopen
-    afterwards.
+    around the elevated ``enable``, and point them at wherever the data
+    directory is afterwards.
 
-    The third sighting of one defect, and the first where the process
-    holding the file is the one that asked for the move. ``disable`` moved
-    ``%ProgramData%\\PrivacyFence`` out from under a service it had only
-    *asked* to stop (fixed in 1d6b13f) and out from under a companion whose
-    task it had deleted without ending the process; ``enable`` moves
-    ``%LOCALAPPDATA%\\PrivacyFence`` out from under **its own caller** --
     ``enforce_separation()`` runs from inside a packaged daemon that has
-    already called ``daemon_main.setup_logging()``, so
-    ``logs/privacyfence.log`` is open for append in this very process for
-    the whole elevated run. Windows has no POSIX rename-over-open-files
-    escape hatch, so that is a sharing violation every time::
-
-        -> moving C:\\Users\\...\\AppData\\Local\\PrivacyFence to C:\\ProgramData\\PrivacyFence
-        Move-Item : The process cannot access the file because it is being used by another process.
-            + CategoryInfo : WriteError: (privacyfence.log:FileInfo) [Move-Item], IOException
-
-    -- after which ``Undo-PartialEnable`` rolls the whole thing back and
-    decision 6 refuses to serve, which is how a Scheduler-started daemon
-    on a hosted runner (and on any machine whose install is not separated
-    yet) produced no control pipe at all.
+    already called ``daemon_main.setup_logging()``, so ``logs/privacyfence.log``
+    is open for append in this very process for the whole elevated run.
+    ``enable`` used to *move* that directory, and on Windows, which has no
+    POSIX rename-over-open-files escape hatch, that was a sharing violation
+    every time (``Move-Item : The process cannot access the file because it
+    is being used by another process``), after which ``Undo-PartialEnable``
+    rolled the whole thing back and decision 6 refused to serve. ``enable``
+    no longer moves anything (ADR 0041), but releasing the handles costs
+    nothing and keeps the elevated run from depending on what this process
+    has open.
 
     Nothing is lost while the window is open: ``FileHandler.emit()``
     reopens ``baseFilename`` by itself whenever ``stream`` is ``None`` --
@@ -1662,9 +1653,10 @@ def _run_full_auto_enable_non_macos() -> None:
                 return
             argv = [pkexec, str(script), "enable", "--auto"]
         try:
-            # The elevated run *moves* this process's own data directory, so
-            # nothing of ours may be holding a file in it while it does --
-            # see _data_dir_log_files_released(), and note that it wraps
+            # Nothing of ours may be holding a file in the data directory
+            # while the elevated run lays out the separated one, and the log
+            # handlers have to follow data_dir() afterwards -- see
+            # _data_dir_log_files_released(), and note that it wraps
             # this call alone rather than the function, because a logger
             # call inside the window would simply reopen the file.
             with _data_dir_log_files_released():

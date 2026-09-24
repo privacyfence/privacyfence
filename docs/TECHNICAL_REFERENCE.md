@@ -874,7 +874,7 @@ and its "Known open items" for what `windows-graphical-session.yml` verifies.
 Uninstalling runs `privilege-separation.ps1 uninstall`, which removes the service and the companion
 task and keeps `%ProgramData%\PrivacyFence\` and the `PrivacyFenceUsers` group, so a reinstall picks
 the data up again; the uninstaller's **Delete PrivacyFence data** checkbox (unchecked by default,
-never offered on a silent uninstall) adds `-Purge`, which deletes both (ADR 0042). Nothing moves data
+never offered on a silent uninstall) adds `-Purge`, which deletes both ([ADR 0042](adr/0042-uninstall-replaces-disable.md)). Nothing moves data
 back into `%LOCALAPPDATA%` ([ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)).
 
 A source checkout or `pip`/`pipx` run is not separated, and keeps its state under

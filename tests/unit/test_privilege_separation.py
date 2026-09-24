@@ -4080,12 +4080,14 @@ class TestEnforceSeparation:
 
 class TestDataDirLogFilesReleased:
     """privacyfence/privacyfence#599's third defect: the elevated ``enable``
-    moves the data directory out from under the process that asked for it.
+    used to move the data directory out from under the process that asked
+    for it. It no longer moves anything (ADR 0041); the release-and-repoint
+    around it stays, and so do these tests of it.
 
     ``enforce_separation()`` runs from inside a packaged daemon that has
     already called ``daemon_main.setup_logging()``, so
     ``<data_dir>/logs/privacyfence.log`` is open for append in that very
-    process for the whole elevated run -- and Windows answers a move of a
+    process for the whole elevated run -- and Windows answered a move of a
     directory holding an open file with a sharing violation rather than a
     POSIX rename. The observed failure is quoted in
     ``_data_dir_log_files_released()``'s own docstring.

@@ -531,16 +531,15 @@ so the daemon leaves your session and the companion app enters it:
 | Data directory | `/Library/Application Support/PrivacyFence` | `/var/lib/privacyfence` | `%ProgramData%\PrivacyFence` |
 | Daemon starts as | a LaunchDaemon | a system systemd unit (`privacyfence-daemon.service`) | a Windows service (`PrivacyFence`) |
 | Companion starts as | a LaunchAgent (the menu-bar app) | an XDG autostart entry running `privacyfence-companion --serve` | a Scheduled Task (`PrivacyFenceCompanion`, the tray app) |
-| Replaces | the login-session LaunchAgent | a pip/pipx install's `--user` unit | the installer's own `PrivacyFence` Scheduled Task, disabled rather than deleted |
+| Replaces | the login-session LaunchAgent | a pip/pipx install's `--user` unit | nothing: the installer registers no daemon task |
 
-Windows still ships the manual `enable`/`disable`/`status` subcommands above; the migration
-moves live connector OAuth tokens, so take a backup first if running one by hand. macOS and Linux
-ship `enable`/`uninstall [--purge]`/`status` instead ([ADR 0042](adr/0042-uninstall-replaces-disable.md)):
-`uninstall` stops the service and keeps the data under the data directory above, `--purge` deletes
-it and the service account, and neither moves anything into a home directory. On macOS, which has
-no package manager, `uninstall` is the uninstall: it also removes the app the `.pkg` installed.
-`... disable` reverses separation on Windows — and, per [ADR 0003](adr/0003-separated-installs-only.md) decision 6, it stops
-being a way to run PrivacyFence: a packaged build finds no marker afterward and refuses to serve.
+All three platforms ship `enable`/`uninstall [--purge]`/`status` ([ADR 0042](adr/0042-uninstall-replaces-disable.md);
+Windows spells the flag `-Purge`): `uninstall` stops the service and keeps the data under the data
+directory above, `--purge` deletes it and the service account (on Windows, the `PrivacyFenceUsers`
+group; its virtual account goes with the service), and neither moves anything into a home
+directory. On macOS, which has no package manager, `uninstall` is the uninstall: it also removes the
+app the `.pkg` installed. On Windows the uninstaller runs it, adding `-Purge` only when its
+**Delete PrivacyFence data** checkbox is ticked.
 **Every packaged install on all three platforms now separates itself as part of installing**,
 mandatorily rather than opt-in, per ADR 0003. The `.deb`'s `postinst` separates the install itself,
 root already, on every install and every upgrade ([`debian/postinst`](../debian/postinst)). Since
@@ -571,8 +570,8 @@ failure, not a silently-opt-in install.
 
 **And a packaged build that ends up unseparated anyway does not serve.** ADR 0003 decision 6 is the
 backstop for the installs the paragraph above doesn't cover — a pre-ADR-0003 install upgrading in
-place, a restored backup, an install where `... disable` (or, on Linux, `... uninstall --purge`)
-was run and forgotten: on startup, a
+place, a restored backup, an install where `... uninstall --purge` was run and the program left
+behind: on startup, a
 packaged local-mode daemon attempts its platform's provisioning (the same mechanisms above, run
 again) and, if it is still unseparated afterward, refuses outright — no `/mcp`, no approvals —
 naming the one command that fixes it. Source checkouts and `pip`/`pipx` installs are not packaged

@@ -91,7 +91,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the `PrivacyFenceUsers` group in place, so installing again picks everything up. Tick the
   uninstaller's new **Delete PrivacyFence data** checkbox (unchecked by default) to delete them
   too, which runs `uninstall -Purge`; a silent uninstall never deletes data. `disable` moved the
-  data back into `%LOCALAPPDATA%`; nothing does that now. See ADR 0042.
+  data back into `%LOCALAPPDATA%`; nothing does that now. See [ADR 0042](docs/adr/0042-uninstall-replaces-disable.md).
 
 - The installers now refuse a system older than PrivacyFence supports instead of installing an
   app that cannot start: the macOS `.pkg` requires macOS 13 on Apple silicon (an Intel Mac is

@@ -225,7 +225,7 @@ The installer:
 - on uninstall, runs `privilege-separation.ps1 uninstall`, which stops and removes the service and
   the companion task and keeps `%ProgramData%\PrivacyFence` — data and marker — and the
   `PrivacyFenceUsers` group, so a reinstall picks the data up again
-  (ADR 0042). The uninstaller offers a
+  ([ADR 0042](adr/0042-uninstall-replaces-disable.md)). The uninstaller offers a
   **Delete PrivacyFence data** checkbox, unchecked by default, which adds `-Purge` and deletes those
   too; a silent uninstall never purges.
 
@@ -314,7 +314,7 @@ executable: Windows' service manager waits for a started process to call
 console entry point calls. Stopping the service takes the same shutdown path the web UI's own Quit
 button does.
 
-**Uninstall** follows ADR 0042, the same split
+**Uninstall** follows [ADR 0042](adr/0042-uninstall-replaces-disable.md), the same split
 as the `.deb`'s `apt remove`/`apt purge`. Uninstalling PrivacyFence runs
 `privilege-separation.ps1 uninstall`: the service and the companion task are removed (the
 `NT SERVICE\PrivacyFence` virtual account goes with its service, and comes back with the same SID
@@ -493,11 +493,11 @@ What automation deliberately does not cover, and why, is in [`testing-policy.md`
   every platform, and `tests/platform/test_windows_acls.py` proves on the `platform-windows` job
   that real `icacls` output reads back the way all of that assumes — including the two behaviors the
   installer's own structure depends on: that a file created in the handoff directory inherits its
-  grants, and that a file *moved* there does not (which is why `enable` runs `icacls /reset` over it
-  after the migration). What none of that reaches is the service, the virtual account, or the
+  grants, and that a file *moved* there does not (which is why `enable` runs `icacls /reset` over
+  whatever a previous install left there). What none of that reaches is the service, the virtual account, or the
   logon-token group membership. The remaining half — enable on a real machine, confirm the daemon comes up under the
   service account, confirm the companion and the MCPB shim still reach it after a logout/login,
-  confirm `disable` restores the previous layout with connector tokens intact — is a manual check,
+  confirm uninstall keeps the data and a reinstall picks connector tokens back up — is a manual check,
   and belongs with the other per-platform human checks in
   [`release-testing.md`](release-testing.md). **This manual real-machine verification still has not
   run against a release build.** #428 D1 (4.1) turned privilege separation on by default on macOS
