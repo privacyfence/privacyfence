@@ -137,6 +137,7 @@ import atexit
 import contextlib
 import functools
 import getpass
+import json
 import os
 import platform
 import plistlib
@@ -146,6 +147,7 @@ import socket
 import subprocess
 import tempfile
 import time
+import warnings
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -593,6 +595,90 @@ def _sudo_mint_attested_bootstrap_code(*, timeout: float = 5.0) -> str:
     return reply[len("OK "):].strip()
 
 
+_MCP_MINT_PROBE_BODY = '''
+import json, socket, sys, time
+
+attempts = []
+started = time.monotonic()
+while True:
+    t0 = time.monotonic()
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(ATTEMPT_TIMEOUT)
+    reply = b""
+    try:
+        sock.connect(CONTROL)
+        sock.sendall(b"MINT MCP\\n")
+        while b"\\n" not in reply:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            reply += chunk
+        line = reply.decode("utf-8", "replace").strip()
+        # The token itself never leaves this process: only whether one came back.
+        outcome = "OK <token>" if line.startswith("OK ") else (line or "closed without answering")
+    except OSError as exc:
+        outcome = "%s: %s" % (type(exc).__name__, exc)
+    finally:
+        sock.close()
+    attempts.append({"at": round(t0 - started, 2), "took": round(time.monotonic() - t0, 2),
+                     "outcome": outcome})
+    if outcome == "OK <token>" or time.monotonic() - started >= TOTAL_TIMEOUT:
+        break
+    time.sleep(0.2)
+print(json.dumps(attempts))
+sys.exit(0 if attempts[-1]["outcome"] == "OK <token>" else 1)
+'''
+
+
+def _wait_for_control_channel_mcp_mint(*, timeout: float = 60.0, attempt_timeout: float = 5.0) -> list[dict]:
+    """Blocks until the daemon's control channel actually answers the exact
+    request the shim starts with -- ``MINT MCP``, as this account with
+    ``${SERVICE_GROUP}`` added in, the same peer the shim will be -- and
+    returns every attempt it made (when, how long, what came back).
+
+    ``_wait_for_real_daemon()`` already proved the channel answered once, but
+    that was *before* ``_companion_agent_paused()`` put the real companion
+    back. A companion that starts on an install with no passkey yet opens
+    ``/security`` straight away (companion.py's ``_offer_first_enrollment``),
+    which is usually an attested ``MINT COMPANION`` -- a request the daemon
+    serves by calling back into the companion, on a channel that answers one
+    connection at a time. v4.3.0's first build attempt started the shim into
+    exactly that window and its mint timed out (build.yml run 35978672697).
+    Waiting on the socket file, or on a bare connect, would not see any of
+    that: the listen backlog accepts the connection while the answer waits.
+
+    ``MINT MCP`` is load-or-create for this account's own principal, so this
+    probe mints the very token the shim then gets back, not a second one.
+    A slow or repeated answer is reported as a warning, not hidden."""
+    script = (
+        f"CONTROL = {str(CONTROL_SOCKET)!r}\n"
+        f"TOTAL_TIMEOUT = {float(timeout)!r}\n"
+        f"ATTEMPT_TIMEOUT = {float(attempt_timeout)!r}\n"
+        f"{_MCP_MINT_PROBE_BODY}"
+    )
+    result = _sudo_capture_as_owner("python3", "-c", script, timeout=timeout + attempt_timeout + 15)
+    try:
+        attempts = json.loads(result.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        attempts = None
+    assert result.returncode == 0 and attempts, (
+        f"the control channel at {CONTROL_SOCKET} never answered MINT MCP within {timeout}s "
+        f"(each attempt allowed {attempt_timeout}s, the shim's own window).\n"
+        f"attempts: {json.dumps(attempts, indent=1) if attempts else result.stdout!r}\n"
+        f"stderr: {result.stderr}\n"
+        f"launchctl print system/{DAEMON_LABEL}:\n{_launchctl_print(f'system/{DAEMON_LABEL}')}"
+    )
+    # Not a failure -- the wait above is what absorbs it -- but the one
+    # measurement of how long a real client would have waited here, so it is
+    # surfaced in the job log's warnings summary rather than lost.
+    if len(attempts) > 1 or attempts[-1]["took"] > 1.0:
+        warnings.warn(
+            f"the control channel needed {len(attempts)} attempt(s) to answer MINT MCP: {json.dumps(attempts)}",
+            stacklevel=2,
+        )
+    return attempts
+
+
 @contextlib.contextmanager
 def _sudo_companion_stand_in(*, serve_seconds: float = 120.0):
     """Holds the companion's own address open for a first passkey
@@ -923,7 +1009,13 @@ async def test_packaged_app_connects_over_mcp_and_completes_an_approval_round_tr
     override: the shim's own ``privilegeSeparationRoot()``
     (``mcpb/shim/src/protocol.ts``) already prefers the real, marker-named
     system root over anything ``$HOME``-relative once separation is on,
-    which it now always is by the time this fixture yields."""
+    which it now always is by the time this fixture yields.
+
+    Starts the shim only once the control channel has answered the shim's
+    own first request (``_wait_for_control_channel_mcp_mint``): this test is
+    about the packaged app speaking MCP, not about which of two processes
+    the fixture just restarted gets to the channel first."""
+    _wait_for_control_channel_mcp_mint()
     user = getpass.getuser()
     params = StdioServerParameters(
         command="sudo", args=["-n", "-u", user, "-g", SERVICE_GROUP, "node", str(built_shim_entry)],

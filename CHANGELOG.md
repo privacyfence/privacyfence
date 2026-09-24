@@ -149,6 +149,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The Claude Desktop extension keeps trying for up to 30 seconds when PrivacyFence doesn't
+  answer its first token request.** When Claude starts, the extension asks the running
+  PrivacyFence for its MCP token. If PrivacyFence was busy with another request for more than
+  five seconds, for example while its menu-bar app was starting at login, or was restarting
+  during an upgrade, the extension gave up at once, and Claude showed the PrivacyFence server as
+  failed until it was restarted. It now retries every second for up to 30 seconds. If
+  PrivacyFence refuses the request, or your account isn't allowed to connect to it, the extension
+  still stops at once.
+
 - **Adding a second OS account no longer changes who owns an install.** On macOS, Windows and
   Linux, `enable --for-user <name>` for another account (ADR 0008) rewrote the install's recorded
   owner with that account's name. PrivacyFence gives the recorded owner the install's original

@@ -46,7 +46,7 @@ import { pathToFileURL } from "node:url";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { mintMcpToken as mintMcpTokenReal } from "./controlChannel.js";
+import { ControlChannelError, mintMcpToken as mintMcpTokenReal } from "./controlChannel.js";
 import { waitForDaemonPatiently } from "./daemon.js";
 import { ShimExitError } from "./errors.js";
 import { createFileBridge, FILE_BRIDGE_HEADER } from "./fileBridge.js";
@@ -120,6 +120,11 @@ export interface MainOptions {
    * the note above ``getMcpToken()`` for why this call site no longer
    * shortens it). */
   mintMcpToken?: () => Promise<string>;
+  /** Overridable for tests; defaults to MINT_RETRY_WINDOW_MS. See
+   * ``getMcpToken()``. */
+  mintRetryWindowMs?: number;
+  /** Overridable for tests; defaults to MINT_RETRY_INTERVAL_MS. */
+  mintRetryIntervalMs?: number;
   /** Overridable for tests (e.g. a fake Transport); defaults to a real
    * StreamableHTTPClientTransport pointed at the discovered mcp_url. */
   daemonTransport?: Transport;
@@ -150,24 +155,70 @@ function defaultWaitForDisconnect(): Promise<void> {
   });
 }
 
+// How long getMcpToken() keeps retrying a mint that failed without the
+// daemon answering, and how long it pauses between attempts. By the time the
+// mint runs, waitForDaemonPatiently() has already seen the daemon's /mcp port
+// accept a connection, so "nothing answered" is a daemon that is up but whose
+// control channel is momentarily unavailable: still serving another
+// connection past the 5s per-attempt window (the channel answers one at a
+// time, and an attested MINT COMPANION -- what the companion sends when it
+// starts, or when its menu is clicked -- waits on a call back into the
+// companion), or being restarted by an upgrade's `enable`. Both pass in
+// seconds. Bounded so a channel that never comes back still ends in the
+// user-facing error below rather than a shim that hangs silently.
+const MINT_RETRY_WINDOW_MS = 30_000;
+const MINT_RETRY_INTERVAL_MS = 1_000;
+
+/** Whether a failed mint is worth another attempt. Not when the daemon
+ * answered (a ``ControlChannelError``: it refused, and will refuse again),
+ * and not when this account may not connect at all (``EACCES``/``EPERM`` --
+ * on a separated install, not yet in the service group until its next
+ * login, which no retry inside this process can bring about). Everything
+ * else -- a timeout, a connection closed before answering, ``ECONNREFUSED``
+ * or ``ENOENT`` on a socket between one daemon and the next -- is. */
+function isRetryableMintError(err: unknown): boolean {
+  if (err instanceof ControlChannelError) return false;
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return code !== "EACCES" && code !== "EPERM";
+}
+
 /**
  * Mints this OS account's own MCP token over the control channel (ADR 0008
- * D3). A plain connection error and a ``ControlChannelError`` (the daemon
+ * D3), retrying a mint nobody answered for up to MINT_RETRY_WINDOW_MS (see
+ * above). A plain connection error and a ``ControlChannelError`` (the daemon
  * answered but refused) both end the same way: a ``ShimExitError`` whose
  * message carries ``err.message``, so whoever reads privacyfence.log next
  * can tell which one it was.
  */
 async function getMcpToken(opts: MainOptions): Promise<string> {
   const mint = opts.mintMcpToken ?? (() => mintMcpTokenReal());
-  try {
-    return await mint();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new ShimExitError(
-      `ERROR: Could not get an MCP token from the PrivacyFence daemon (${message}).\n` +
-        "Make sure PrivacyFence and this extension are the same version, then restart Claude.",
-      1
-    );
+  const windowMs = opts.mintRetryWindowMs ?? MINT_RETRY_WINDOW_MS;
+  const intervalMs = opts.mintRetryIntervalMs ?? MINT_RETRY_INTERVAL_MS;
+  const deadline = Date.now() + windowMs;
+  let attempts = 0;
+  for (;;) {
+    attempts += 1;
+    try {
+      return await mint();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (isRetryableMintError(err) && Date.now() + intervalMs < deadline) {
+        if (attempts === 1) {
+          console.error(
+            `The PrivacyFence daemon did not answer the MCP token request (${message}); ` +
+              `retrying for up to ${Math.round(windowMs / 1000)}s.`
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+        continue;
+      }
+      const tried = attempts > 1 ? ` after ${attempts} attempts` : "";
+      throw new ShimExitError(
+        `ERROR: Could not get an MCP token from the PrivacyFence daemon${tried} (${message}).\n` +
+          "Make sure PrivacyFence and this extension are the same version, then restart Claude.",
+        1
+      );
+    }
   }
 }
 
