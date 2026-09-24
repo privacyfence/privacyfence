@@ -469,9 +469,9 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
             context=lambda: _separated_job_report(companion_domain),
         )
 
-        # Outlive a few status-poll ticks: a tray redraw off AppKit's main
-        # thread SIGTRAPs on the first one, and KeepAlive respawns it under a
-        # new pid -- up, then down, then up again, which the checks above miss.
+        # Outlive a few status-poll ticks: a companion that dies after
+        # starting is respawned by KeepAlive under a new pid, and the checks
+        # above cannot tell that crash loop from a healthy companion.
         time.sleep(3 * _STATUS_POLL_SECONDS)
         still = _wait_for_running(companion_domain, timeout=5)
         assert still == companion_pid, (
