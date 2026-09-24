@@ -7,7 +7,10 @@ own CHANGELOG entries describe the work inline rather than against an issue. Thi
 phase of the policy v2 redesign (P0–P9) — see [ADR 0002](0002-local-mode-trust-boundary-and-companion-app.md)
 and [ADR 0003](0003-separated-installs-only.md) for the two unrelated ADRs immediately before this
 one in sequence, and the P3/P4/P6/P7/P8 entries under `CHANGELOG.md`'s `## [Unreleased]` heading for
-the phases that got here.
+the phases that got here. Decision 3's deferred deletion (the two-tool grace period, tracked as
+[Issue #580](https://github.com/privacyfence/privacyfence/issues/580)) shipped in PSC-3 (#633),
+2026-09-24 — see [ADR 0033](0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md)'s
+own Related section for the plan that tracked it alongside #579.
 
 ## Context
 
