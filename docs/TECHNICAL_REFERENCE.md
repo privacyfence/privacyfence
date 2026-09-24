@@ -707,11 +707,12 @@ returns `matched_rule_id`, so a planning agent can say *why* something will auto
 The two pre-redesign bridge tools were kept as deprecated aliases for one minor release (ADR 0004
 decision 3) and were deleted once 4.1.2 shipped (PSC-3; see that ADR for which tools and why).
 
-Org mode's own per-principal settings page (`web/routes_org_settings.py`) writes the identical
-schema through the identical primitives (`auto_accept.add_policy_v2_rules`/`remove_policy_v2_rule`)
-— a signed-in principal manages their own rules from `/settings` the same way local mode's Auto-
-accept page does, scoped to `current_principal()` throughout so an admin has no more mutation
-power over another principal's rules than that principal does.
+Org mode's own per-principal settings page (`web/routes_settings.py`'s `build_org_routes`, rendered
+by `web/org_settings_pages.py`) writes the identical schema through the identical primitives
+(`auto_accept.add_policy_v2_rules`/`remove_policy_v2_rule`) — a signed-in principal manages their
+own rules from `/settings` the same way local mode's Auto-accept page does, scoped to
+`current_principal()` throughout so an admin has no more mutation power over another principal's
+rules than that principal does.
 
 ### Related but distinct mechanisms
 
