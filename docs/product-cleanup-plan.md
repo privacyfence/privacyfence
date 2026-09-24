@@ -65,8 +65,11 @@ unless it has no way to delegate.
   "Found, not fixed" — not into the diff.
 - Every behavior change gets a test and a `CHANGELOG.md` line under `## [Unreleased]` (never a
   version heading). Removals go under "Removed".
-- In the same PR, update this file's [Status](#status) row for the phase (→ `in review`, with the
-  PR link). If a brief turned out wrong, correct the brief in the same PR and say so.
+- If this file is on `main`, update its [Status](#status) row for the phase in the same PR (→
+  `in review`, with the PR link), and correct the brief in the same PR if it turned out wrong.
+  If it is not on `main` yet (it was written on the `claude/documentation-refactoring` branch),
+  leave it alone: PR titles are the state, and brief corrections go in the PR description for the
+  orchestrator to fold back in.
 - Do not edit docs that [`website-plan.md`](website-plan.md) Wave 1/2 will rewrite, beyond fixing a
   link or sentence your change makes false. Do fix every code comment, docstring, error message and
   test your change makes false.
@@ -94,7 +97,7 @@ Carried over from `website-plan.md` (question IDs kept so the two plans stay cro
 | P3 | Org bundle: bind `127.0.0.1` by default, `agent_links` flag | C | — | not started |
 | P4 | Telegram credentials in the PyPI build | D | maintainer input | not started |
 | P5 | Declare minimum OS versions | E | — | not started |
-| L1 | Remove policy v1 and deprecated MCP tools (+ ADR) | A | P1 | not started |
+| L1 | Remove policy v1 settings conversion (+ ADR) | A | P1 | not started |
 | L2 | Remove legacy file-location moves (Python + shim) | B | L1, P2 | not started |
 | L3 | Linux: installer cleanup and remove/purge semantics | E | L2, P5 | not started |
 | L4 | macOS: installer cleanup and uninstall semantics | E | L3 | not started |
@@ -121,7 +124,20 @@ Lane E  P5 ───────────────────────
 
 ## Phase briefs
 
-Evidence line numbers are from the audit (2026-09-24); re-locate by symbol name if they have moved.
+Evidence line numbers were re-checked against `main` at `d89250d2` (2026-09-24, after the
+policy-surface consolidation PSC-2…6, agent attribution AGT-1…6 and the 4.3.0/4.4.0 release PRs);
+re-locate by symbol name if they have moved since.
+
+**What those merges already changed for this plan:**
+- The deprecated MCP tools `privacyfence_list_auto_accept_rules` and
+  `privacyfence_propose_auto_accept_rule_change` and `gate.propose_rule_change` were deleted by
+  #633 (PSC-3). L1 is smaller accordingly.
+- There is now one approval route module and one settings dispatcher for both modes
+  (`routes_approvals.py`, `routes_settings.py`; ADR 0033), and sensitive settings writes need
+  step-up in both modes (ADR 0034). P1 adds Apps Script once, not per mode.
+- `maybe_auto_enable_macos` is now called from `privilege_separation.enforce_separation`, not from
+  `companion.py` — see L4.
+- ADRs are numbered up to 0038; the release pre-flight is ADR 0030 (`/cut-release`).
 
 ### P1 — Apps Script connectable from Settings
 
@@ -129,13 +145,15 @@ Evidence line numbers are from the audit (2026-09-24); re-locate by symbol name 
 page, locally or in organization mode. Its only path is `privacyfence-app --apps-script-oauth`,
 which no user doc a new user would find explains.
 
-**Evidence.** `settings_controller.py` `ALL_CONNECTORS` and `GOOGLE_CONNECTORS` omit it (≈l.233–246);
-`web/routes_connect.py` `GOOGLE_SCOPES`/`OAUTH_SERVICES` (≈l.94–97) have no Apps Script entry;
-`apps_script_client.py`'s error messages point at `--apps-script-oauth`.
+**Evidence.** `settings_controller.py` `ALL_CONNECTORS` (≈l.234) and `GOOGLE_CONNECTORS` (≈l.247)
+omit it; `web/routes_connect.py` `GOOGLE_SCOPES`/`OAUTH_SERVICES` (≈l.94–100) have no Apps Script
+entry; `apps_script_client.py`'s error messages and `daemon_main.py` still point at
+`--apps-script-oauth`.
 
 **Do.**
-- Add Apps Script to the Settings connector list and the Google OAuth connect flow in both modes,
-  with its own scopes, so Authenticate/Reconnect and the status pill work like Gmail's.
+- Add Apps Script to the Settings connector list and the Google OAuth connect flow, with its own
+  scopes, so Authenticate/Reconnect and the status pill work like Gmail's. Since ADR 0033 there is
+  one settings dispatcher and one renderer for both modes, so this is one change, not two.
 - In org mode, make sure the org bundle's Google section covers it and the redirect URI
   (`/oauth/callback/<service>`) is registered by the same code path as the other five.
 - Update `apps_script_client.py`'s "re-authorize" messages to point at Settings. Keep
@@ -152,16 +170,22 @@ exists.
 
 ### P2 — Recovery-code route hardening
 
-**Problem.** The step-up recovery-code route doesn't audit failed attempts (its own docstring says
-it does), accepts an unattested session, and has no attempt rate limit. Low severity — the code is
-64 random bits — but the missing audit and the unattested-session gap are real.
+**Problem.** The step-up recovery-code route (`POST /security/recover`) audits only a successful
+use — its docstring says it records every attempt — accepts any signed-in session including an
+unattested one, and has no attempt rate limit. Low severity — the code is 64 random bits — but the
+missing audit and the unattested-session gap are real. Still true on `main` after the PSC merges.
 
-**Evidence.** `web/routes_security.py` ≈l.590–611; `webauthn_stepup.py` ≈l.611–631.
+**Evidence.** `web/routes_security.py` `recover_credential` (≈l.576–610): returns 401 on a bad code
+before `_audit` runs, and never calls `session_auth.is_human_session`; `webauthn_stepup.py`
+`consume_recovery_code`.
 
 **Do.**
 - Write an audit event for every failed and successful recovery attempt, in the same format as
   other step-up events.
-- Require a human-attested session (the same check the other step-up management routes use).
+- Require a human-attested session: `session_auth.is_human_session` /
+  `human_session_required_json`, the same check the other step-up management routes use. Check
+  how org mode resolves the principal here (org sessions come from the IdP, ADR 0033's auth
+  adapter) and apply the equivalent there rather than refusing every org user.
 - Rate-limit attempts per session and globally (reuse any existing limiter; otherwise a small
   in-memory one with a stated window), returning a clear error when exceeded.
 - Tests for each of the three, including the audit record contents.
@@ -177,7 +201,7 @@ N+1th attempt in the window is refused.
 **Problem.** `build_org_bundle.py --server-bind-host` defaults to `0.0.0.0` while the org guide says
 never to expose the listener. `agent_links` can only be set by hand-editing the bundle.
 
-**Evidence.** `scripts/build_org_bundle.py` ≈l.203–205; `org_mode.py` ≈l.165 (`agent_links: bool =
+**Evidence.** `scripts/build_org_bundle.py` ≈l.204; `org_mode.py` ≈l.165 (`agent_links: bool =
 True`), ≈l.211.
 
 **Do.**
@@ -227,8 +251,10 @@ an install that fails at runtime instead of a clear refusal.
   `docs/platform-support.md` and the CI runner images; ask if they disagree).
 - `debian/control`: express the Debian/Ubuntu floor through dependency versions (e.g. the Python
   and systemd versions the package actually needs) rather than a distro name check.
-- macOS: confirm the app bundle's `LSMinimumSystemVersion` and the `.pkg`'s install check match
-  macOS 13; fix whichever doesn't.
+- macOS: the app bundle already declares `LSMinimumSystemVersion` 13.0 (`PrivacyFenceApp.spec`
+  ≈l.213); the `.pkg` has no OS check of its own (`scripts/build_pkg.sh`,
+  `installer/macos/pkg/`) — add one so the installer refuses instead of installing an app that
+  won't launch.
 - Unit tests that read the three declarations, so they can't silently drift from
   `platform-support.md`'s matrix.
 
@@ -237,7 +263,12 @@ jobs must be green.
 
 **Done when.** All three installers state a floor that matches the support matrix, enforced by test.
 
-### L1 — Remove policy v1 and deprecated MCP tools
+### L1 — Remove policy v1 settings conversion
+
+**Already done on `main`:** the two deprecated MCP tools and `gate.propose_rule_change` (#633,
+PSC-3, closing ADR 0004 decision 3). What remains is the v1 → v2 *settings* conversion, which
+ADR 0004 decisions 4–5 deliberately kept as the one remaining caller of `policy/compat.py` and
+`policy/resource_registry.py`.
 
 **Removes.**
 - `policy/compat.py` (whole module); `daemon_main._migrate_settings_to_policy_v2` and its two call
@@ -245,31 +276,34 @@ jobs must be green.
   `settings_controller.RULES_BY_OPERATION` / `GRANT_RESOURCE_TYPES` (v1 predicate tables —
   verify no current caller first); `auto_accept.migrate_telegram_search_operation_key`; the
   `replaces=(…)` aliases for old condition names in `policy/conditions.py`; any v1 handling in
-  `policy/store.py`.
-- MCP tools `privacyfence_list_auto_accept_rules` and `privacyfence_propose_auto_accept_rule_change`
-  (`web/mcp_tools.py`, `mcp_dispatch.py`), `gate.propose_rule_change` and its v1
-  `target: rule|grant` translation. Their v2 replacements stay.
+  `policy/store.py`; the migration-only parts of `policy/resource_registry.py` (its name-resolution
+  callbacks stay — `resource_names.py` still uses them); leftover comments in `gate.py` and
+  `mcp_dispatch.py` that describe the deleted v1 tools.
 
 **Do.** Remove function by function, deleting or rewriting the tests that only exercised the
 removed paths (never skipping them). A settings file in v1 format should now fail with a clear
 error naming the problem, not be silently converted — add a test for that error.
 
 **Also in this PR:** the ADR *"Only the current install layout is supported; no upgrade path from
-earlier layouts"* recording G1, G3 and H1 for all of Wave L (L2–L5 cite it), and CHANGELOG "Removed"
-entries for the two MCP tools and the v1 policy format.
+earlier layouts"* recording G1, G3 and H1 for all of Wave L (L2–L5 cite it). It **partly
+supersedes ADR 0004** (decisions 4–5: the one-time migration as a kept caller) — per
+`docs/adr/README.md`, write `Supersedes 0004 (in part)` in the new ADR and add one forward-pointing
+line to ADR 0004's Status plus its row in the ADR index. CHANGELOG "Removed" entry for the v1 policy settings format.
 
 **Verify.** `/dod`; coverage floor must hold (removed code removes its tests too — the ratchet is
 on percentage). `scripts/qa_web_smoke.py` locally.
 
-**Done when.** `grep -ri "v1\|compat\|auto_accept_rule" src/privacyfence/policy src/privacyfence/web/mcp_tools.py`
-finds nothing legacy; the MCP tool list has no deprecated names.
+**Done when.** `policy/compat.py` is gone, nothing in `src/` calls a `migrate_*` policy function,
+and a v1-format `settings.yaml` is refused with a clear message.
 
 ### L2 — Remove legacy file-location moves (Python and shim)
 
 **Removes.** `paths._migrate_path`, `_migrate_legacy_authority_files`,
 `_migrate_legacy_audit_log_dir`, `_LEGACY_AUTHORITY_PATHS`; `web/mcp_auth.delete_legacy_shared_mcp_token`;
-`web/server._clear_legacy_bootstrap_url_files`; the shim's legacy `mcp_token` file fallback and the
-withdrawn `%LOCALAPPDATA%\Programs` path in `mcpb/shim/src/daemon.ts`; phase/issue history in the
+`web/server._clear_legacy_bootstrap_url_files`; the shim's legacy shared `mcp_token` file
+fallback (`protocol.ts` `readMcpToken()`, referenced from `index.ts` and `controlChannel.ts`) and
+the `%LOCALAPPDATA%\Programs` candidate in `mcpb/shim/src/daemon.ts` `windowsDefaultAppPaths`
+(its comment says it stays only for installs an older lowest-privilege release made — G1); phase/issue history in the
 comments of the code touched (e.g. `paths.py`).
 
 **Keep** the matching cleanup lines in the three `scripts/*_privilege_separation.*` scripts for L3–L5
@@ -308,9 +342,16 @@ ships.
 ### L4 — macOS: installer cleanup and uninstall semantics
 
 **Removes.** `macos_privilege_separation.sh` `stop_legacy_agent`, `migrate_data`, the remaining
-`move_handoff_files_in/out`; `privilege_separation.maybe_auto_enable_macos` (in-place-upgrade
-fallback) and its caller in `companion.py`; the matching parts of `installer/macos/pkg/postinstall`,
-`build_pkg.sh` and `build_dmg.sh`.
+`move_handoff_files_in/out`; the matching parts of `installer/macos/pkg/postinstall`, `build_pkg.sh`
+and `build_dmg.sh`. #638 fixed two bugs in this script and #649 two macOS startup races — keep
+their fixes and tests.
+
+**Decide, don't assume: `privilege_separation.maybe_auto_enable_macos`.** The audit called it an
+in-place-upgrade fallback, but on `main` it is now what `enforce_separation` runs on macOS for a
+packaged install that isn't separated yet (`privilege_separation.py` ≈l.1735, reached from
+`daemon_main.py` ≈l.2234). If the `.pkg` postinstall always leaves a fresh install separated, it
+is unreachable on a fresh install and goes, with `enforce_separation` then refusing to serve
+instead; if any fresh-install path relies on it, it stays under H1. Show which in the PR.
 
 **Changes (G3).** Uninstall follows the `disable` decision recorded by L3. macOS has no package
 manager purge: provide the documented equivalent (the uninstall command the user runs, with a
@@ -344,7 +385,8 @@ both dispatched runs are green.
 
 Not a code phase; the orchestrator does it (or asks the maintainer to).
 
-- Dispatch `build.yml` against `main`'s tip and the three graphical-session workflows; all green.
+- Dispatch `build.yml` against `main`'s tip (the pre-flight in `CLAUDE.md`, ADR 0030) and the
+  three graphical-session workflows; all green.
 - Dispatch `release.yml` with `dry_run: true` for the next alpha (`/cut-release` does both) and
   report the result. **Cutting the alpha for real is the maintainer's decision** (steward skill).
 - After the real alpha: confirm `publish-pypi.yml`'s build job produced a wheel that passed P4's
