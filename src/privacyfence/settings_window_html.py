@@ -322,10 +322,12 @@ select.pf-input { cursor: pointer; }
 .pf-audit-badge.auto_accepted { background: rgba(0,113,227,.1); color: var(--pf-accent); }
 .pf-audit-badge.other { background: var(--pf-surface-2); color: var(--pf-text-muted); }
 /* AGT-5: who asked, with its tier -- agent_label.py's wording, the approval list's tiers. */
-.pf-audit-agent { width: 150px; font-size: 12px; color: var(--pf-text-muted); flex-shrink: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pf-audit-agent-attested { color: var(--pf-text); font-weight: 600; }
-.pf-audit-agent-claimed, .pf-audit-agent-unknown { font-style: italic; }
-.pf-audit-tier { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; margin-left: 4px; font-style: normal; }
+.pf-audit-agent { width: 190px; display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--pf-text-muted); flex-shrink: 0; min-width: 0; }
+/* The name gives way, never the tier marker: a truncated claim must still say it is a claim. */
+.pf-audit-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pf-audit-agent-attested .pf-audit-agent-name { color: var(--pf-text); font-weight: 600; }
+.pf-audit-agent-claimed .pf-audit-agent-name, .pf-audit-agent-unknown .pf-audit-agent-name { font-style: italic; }
+.pf-audit-tier { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 8px; flex-shrink: 0; white-space: nowrap; }
 .pf-audit-tier.attested { background: rgba(0,113,227,.1); color: var(--pf-accent); }
 .pf-audit-tier.claimed, .pf-audit-tier.unknown { background: var(--pf-surface-2); color: var(--pf-text-muted); }
 /* AGT-5: the admin's AI-system pin page. */
@@ -1006,7 +1008,9 @@ _JS = r"""
     var audit = state.audit;
     var html = '<div class="pf-page">';
     html += '<div class="pf-page-title">Audit Log</div>';
-    html += '<div class="pf-page-subtitle">Every decision — accepted, denied, or auto-accepted — is recorded locally as JSON lines, then exported weekly to a formatted Excel workbook.</div>';
+    html += notApplicable('export_audit_log')
+      ? '<div class="pf-page-subtitle">Your own recent decisions — accepted, denied, or auto-accepted — and which AI system asked for each.</div>'
+      : '<div class="pf-page-subtitle">Every decision — accepted, denied, or auto-accepted — is recorded locally as JSON lines, then exported weekly to a formatted Excel workbook.</div>';
 
     // PSC-5/AGT-5: org mode shows each principal's own recent decisions, but has no export
     // route and no install log level to set -- both controls are local-only actions.
@@ -1059,7 +1063,8 @@ _JS = r"""
     var headline = agent.headline || 'Unrecognised AI system';
     var text = agent.claim ? headline + ' \u201c' + agent.claim + '\u201d' : headline;
     return '<div class="pf-audit-agent pf-audit-agent-' + tier + '" data-agent-tier="' + tier + '" title="' + esc(text) + '">' +
-      esc(text) + '<span class="pf-audit-tier ' + tier + '">' + esc(TIER_MARKERS[tier]) + '</span></div>';
+      '<span class="pf-audit-agent-name">' + esc(text) + '</span><span class="pf-audit-tier ' + tier + '">' +
+      esc(TIER_MARKERS[tier]) + '</span></div>';
   }
 
   // -------------------------------------------------------------------- //

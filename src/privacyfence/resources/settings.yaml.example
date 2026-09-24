@@ -409,3 +409,14 @@ file_bridge:
   # know this machine has memory to spare for occasional larger files.
   # Uncomment to change it.
   # max_download_bytes: 200000000
+
+# ADR 0006 option D / ADR 0035: name an AI system whose MCP client reports
+# a name PrivacyFence doesn't recognise (its handshake clientInfo.name) as
+# one it does. Values are registry ids: claude-code, claude, chatgpt,
+# gemini-cli, cursor. On a privilege-separated install this file is out of
+# the AI system's reach, so a match is recorded as verified ("override");
+# anywhere else it only relabels the name and stays "Not verified", since
+# the AI system could have written it. Read at startup -- restart after
+# changing it.
+# agent_overrides:
+#   my-internal-wrapper: claude-code
