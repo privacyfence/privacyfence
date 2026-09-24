@@ -26,9 +26,8 @@ byte identical between modes once parameterized by ``principal``) and
 ``web/routes_approvals.py``'s own ``decide()`` already reduces to -- local
 mode's own inline try/except around ``step_up_decide.verify_step_up`` is
 gone, folded into this one call). ``_record_settings_audit`` (org mode's
-own, moved in unchanged) is available to both for the same reason, though
-only org mode's routes call it today -- see that function's own docstring
-for why local mode's dispatcher doesn't yet.
+own, moved in unchanged) is available to both for the same reason, and both
+modes' dispatch now calls it -- see that function's own docstring.
 
 ``GET /settings`` serves settings_window_html.build_html(), wrapped in
 web_shell.wrap() so it reads as the same application as ``/approvals``;
@@ -535,11 +534,12 @@ def _record_settings_audit(principal: Principal, summary: str) -> None:
     """Moved in unchanged from the former web/routes_org_settings.py, where
     #400 called for it by name: "Changing an org's privacy policy is
     exactly the kind of act that belongs in the audit log under the
-    principal who did it." Only org mode's routes below call this today --
-    local mode's own generic dispatch has never audited a settings change,
-    and PSC-4b doesn't change that (a real behavior change, not a pure
-    route merge -- left as a follow-up rather than folded in here silently;
-    see this phase's own PR description)."""
+    principal who did it." PSC-4b left local mode's own generic dispatch
+    silent on purpose, flagging the asymmetry as a decision for the
+    maintainer rather than resolving it -- now resolved: ``settings_action``
+    below calls this for every successful mutation and every step-up
+    refusal too, under ``LOCAL_PRINCIPAL``, the same shape org mode's own
+    routes already use."""
     # Same free-form AuditEntry shape daemon_main.log_org_config_bundle_hash
     # uses for an install-level event that isn't a connector call -- this is
     # a settings mutation, not a gated tool call, so "connector"/"tool" stay
@@ -793,11 +793,17 @@ def build_routes(
             step_up=step_up, step_up_origin=step_up_origin, challenges=challenges,
         )
         if step_up_response is not None:
+            with principal_scope(LOCAL_PRINCIPAL):
+                _record_settings_audit(
+                    LOCAL_PRINCIPAL, f"Step-up required for {action!r}, refused (principal={LOCAL_PRINCIPAL.id})",
+                )
             return step_up_response
         try:
             result = _call_action(controller, action, body)
         except _BadAction as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        with principal_scope(LOCAL_PRINCIPAL):
+            _record_settings_audit(LOCAL_PRINCIPAL, f"Changed setting {action!r} (principal={LOCAL_PRINCIPAL.id})")
         state = result if isinstance(result, dict) else controller.snapshot()
         return JSONResponse(_augment_connectors_with_icons(state))
 
