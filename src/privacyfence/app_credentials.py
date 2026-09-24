@@ -7,7 +7,7 @@ not a substitute for per-user auth (still phone + code + optional 2FA, see
 menu_bar.py). Because this repo is public, the real values are never
 committed: every release build -- DMG, Windows installer, ``.deb`` and the
 PyPI sdist/wheel -- bakes them in from CI secrets (see
-scripts/telegram_credentials.py and ADR 0039) into the git-ignored
+scripts/telegram_credentials.py and ADR 0040) into the git-ignored
 ``_telegram_credentials`` module generated right before packaging. Local/dev
 builds fall back to the
 PRIVACYFENCE_TELEGRAM_API_ID / PRIVACYFENCE_TELEGRAM_API_HASH env vars.

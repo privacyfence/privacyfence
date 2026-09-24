@@ -133,7 +133,7 @@ jobs:
         with:
           python-version: '3.13'
 
-      # Telegram ships in the PyPI build too (ADR 0039): the same generator build.yml's three
+      # Telegram ships in the PyPI build too (ADR 0040): the same generator build.yml's three
       # packaging jobs run through build_dmg.sh/build_deb.sh/build_installer.ps1 writes the
       # git-ignored _telegram_credentials.py, and MANIFEST.in carries it into the sdist and wheel.
       # Repository secrets, no environment -- the same ones build.yml reads.

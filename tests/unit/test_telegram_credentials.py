@@ -1,5 +1,5 @@
 """Tests for scripts/telegram_credentials.py -- the one generator of the build-time Telegram app
-credentials module, and the check publish-pypi.yml runs over the built wheel and sdist (ADR 0039).
+credentials module, and the check publish-pypi.yml runs over the built wheel and sdist (ADR 0040).
 
 Imported by file path, same pattern as tests/unit/test_changelog_section.py.
 """

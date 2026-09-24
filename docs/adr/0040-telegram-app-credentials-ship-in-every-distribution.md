@@ -1,4 +1,4 @@
-# ADR 0039: Telegram app credentials ship in every distribution, including PyPI
+# ADR 0040: Telegram app credentials ship in every distribution, including PyPI
 
 ## Status
 

@@ -8,7 +8,7 @@ secrets, and every build that ships Telegram support writes them into the git-ig
 ``src/privacyfence/_telegram_credentials.py`` right before packaging. This script is that one
 generator -- scripts/build_dmg.sh, scripts/build_deb.sh, scripts/build_installer.ps1 and
 .github/workflows/publish-pypi.yml all call it rather than each carrying their own heredoc. Every
-distribution, PyPI included, ships the credentials: ADR 0039.
+distribution, PyPI included, ships the credentials: ADR 0040.
 
 Subcommands:
 
@@ -93,7 +93,7 @@ def check_dist(paths: list[Path], require: bool) -> int:
         return 0
     message = f"{', '.join(missing)} lack {MODULE_SUFFIX}; Telegram will not work on this install."
     if require:
-        print(f"::error::{message} A stable release must ship it (ADR 0039).")
+        print(f"::error::{message} A stable release must ship it (ADR 0040).")
         return 1
     print(f"::warning::{message}")
     return 0
