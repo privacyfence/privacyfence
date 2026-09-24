@@ -437,3 +437,87 @@ class TestAuditForwardingFlags:
             tmp_path, "--enable-audit-forwarding", "--audit-forwarding-syslog-host", "siem.example.com",
         ))
         assert "audit_forwarding.enabled=True" in capsys.readouterr().out
+
+
+class TestServerBindHost:
+    """The org guide says never to expose the listener directly, so a bundle
+    built with no --server-bind-host binds loopback for a same-host proxy."""
+
+    def _build(self, tmp_path, *extra):
+        key_path = tmp_path / "key.pem"
+        build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+        rc = build_org_bundle.main([
+            "-o", str(out_path), "--mode", "org",
+            "--server-issuer-url", "https://pf.example.com",
+            "--idp-issuer", "https://idp.example.com",
+            "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            "--sign-key", str(key_path), *extra,
+        ])
+        assert rc == 0
+        return json.loads(out_path.read_text())
+
+    def test_defaults_to_loopback(self, tmp_path):
+        assert self._build(tmp_path)["server"]["bind_host"] == "127.0.0.1"
+
+    def test_explicit_flag_still_binds_elsewhere(self, tmp_path):
+        assert self._build(tmp_path, "--server-bind-host", "0.0.0.0")["server"]["bind_host"] == "0.0.0.0"
+
+    def test_default_matches_the_daemons_default_for_a_bundle_without_bind_host(self):
+        from privacyfence import org_mode
+
+        assert build_org_bundle.build_parser().get_default("server_bind_host") == org_mode.DEFAULT_BIND_HOST
+
+
+class TestAgentLinksFlag:
+    def _build(self, tmp_path, *extra, merge=False):
+        key_path = tmp_path / "key.pem"
+        if not key_path.exists():
+            build_org_bundle._generate_signing_key(str(key_path))
+        out_path = tmp_path / "org_config.json"
+        argv = ["-o", str(out_path), "--sign-key", str(key_path)]
+        if merge:
+            argv.append("--merge")
+        else:
+            argv += [
+                "--mode", "org", "--server-issuer-url", "https://pf.example.com",
+                "--idp-issuer", "https://idp.example.com",
+                "--idp-client-id", "cid", "--idp-client-secret", "csecret",
+            ]
+        assert build_org_bundle.main([*argv, *extra]) == 0
+        return json.loads(out_path.read_text())
+
+    def test_absent_leaves_the_key_out_so_the_daemon_default_applies(self, tmp_path):
+        bundle = self._build(tmp_path)
+        assert "agent_links" not in bundle.get("download_delivery", {})
+
+    def test_no_agent_links_writes_false(self, tmp_path):
+        assert self._build(tmp_path, "--no-agent-links")["download_delivery"]["agent_links"] is False
+
+    def test_agent_links_writes_true(self, tmp_path):
+        assert self._build(tmp_path, "--agent-links")["download_delivery"]["agent_links"] is True
+
+    def test_agent_links_turns_it_back_on_on_merge_and_keeps_other_download_keys(self, tmp_path):
+        self._build(tmp_path, "--no-agent-links", "--downloads-disable-staging")
+
+        bundle = self._build(tmp_path, "--agent-links", merge=True)
+
+        assert bundle["download_delivery"] == {"agent_links": True, "allow_disk_staging": False}
+
+    def test_written_value_is_what_the_daemon_reads(self, tmp_path):
+        from privacyfence import org_mode
+
+        bundle = self._build(tmp_path, "--no-agent-links")
+
+        assert org_mode.DownloadDeliveryConfig.from_org_config(bundle).agent_links is False
+
+    def test_requires_org_mode(self, tmp_path):
+        with pytest.raises(SystemExit, match="--agent-links"):
+            build_org_bundle.main([
+                "-o", str(tmp_path / "org_config.json"),
+                "--slack-client-id", "id", "--slack-client-secret", "secret", "--no-agent-links",
+            ])
+
+    def test_summary_line_reports_agent_links(self, tmp_path, capsys):
+        self._build(tmp_path, "--no-agent-links")
+        assert "download_delivery.agent_links=False" in capsys.readouterr().out
