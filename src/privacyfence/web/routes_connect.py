@@ -74,6 +74,7 @@ from starlette.routing import Route
 
 from .. import atlassian_oauth, google_oauth, org_identity, paths, salesforce_client, slack_client, telegram_auth, web_shell
 from ..app_credentials import telegram_app_credentials
+from ..apps_script_client import SCOPES as _APPS_SCRIPT_SCOPES
 from ..calendar_client import SCOPES as _CALENDAR_SCOPES
 from ..connector_registry import ConnectorRegistry
 from ..contacts_client import SCOPES as _CONTACTS_SCOPES
@@ -93,7 +94,7 @@ logger = logging.getLogger(__name__)
 
 GOOGLE_SCOPES: dict[str, list[str]] = {
     "gmail": _GMAIL_SCOPES, "drive": _DRIVE_SCOPES, "calendar": _CALENDAR_SCOPES,
-    "contacts": _CONTACTS_SCOPES, "tasks": _TASKS_SCOPES,
+    "contacts": _CONTACTS_SCOPES, "tasks": _TASKS_SCOPES, "apps_script": _APPS_SCRIPT_SCOPES,
 }
 GOOGLE_SERVICES = frozenset(GOOGLE_SCOPES)
 ATLASSIAN_SERVICES = frozenset({"jira", "confluence"})
@@ -110,6 +111,7 @@ _GRANT_KEY.update({"slack": "slack", "salesforce": "salesforce", "jira": "atlass
 
 SERVICE_LABELS: dict[str, str] = {
     "gmail": "Gmail", "drive": "Drive", "calendar": "Calendar", "contacts": "Contacts", "tasks": "Tasks",
+    "apps_script": "Apps Script",
     "slack": "Slack", "salesforce": "Salesforce", "jira": "Jira", "confluence": "Confluence", "telegram": "Telegram",
 }
 
@@ -648,7 +650,7 @@ def _render_connect_page(
     *, principal: Principal, org_config: dict[str, Any], telegram_state: _TelegramState,
     flash_connected: str, flash_error: str, csrf: str, nonce: str,
 ) -> str:
-    google_rows = "".join(_service_row_html(principal, org_config, s) for s in ("gmail", "drive", "calendar", "contacts", "tasks"))
+    google_rows = "".join(_service_row_html(principal, org_config, s) for s in ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script"))
     other_rows = "".join(_service_row_html(principal, org_config, s) for s in ("slack", "salesforce", "jira", "confluence"))
     telegram_row = _telegram_box_html(principal, org_config, telegram_state, csrf)
     who = principal.email or principal.display_name or principal.id

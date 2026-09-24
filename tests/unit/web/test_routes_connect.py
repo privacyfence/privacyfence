@@ -20,7 +20,7 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from privacyfence import paths
+from privacyfence import apps_script_client, paths
 from privacyfence.connector_registry import ConnectorRegistry
 from privacyfence.principal import Principal
 from privacyfence.web import org_session, routes_connect as rc
@@ -86,7 +86,9 @@ class TestConnectPage:
         session_id, _principal = _signed_in(sessions)
         r = _client(app).get("/connect", cookies={org_session.SESSION_COOKIE: session_id})
         assert r.status_code == 200
-        for label in ("Gmail", "Drive", "Calendar", "Contacts", "Tasks", "Slack", "Salesforce", "Jira", "Confluence"):
+        for label in (
+            "Gmail", "Drive", "Calendar", "Contacts", "Tasks", "Apps Script", "Slack", "Salesforce", "Jira", "Confluence",
+        ):
             assert label in r.text
         assert "Connect" in r.text  # nothing authorized yet
 
@@ -184,6 +186,24 @@ class TestOAuthStart:
         assert qs["redirect_uri"] == f"{ISSUER}/oauth/callback/gmail"
         assert "code_challenge" in qs
 
+    def test_apps_script_redirects_to_google_with_its_own_scopes_and_callback(self):
+        app, sessions, _registry = _app()
+        session_id, _principal = _signed_in(sessions)
+        r = _client(app).get("/oauth/start/apps_script", cookies={org_session.SESSION_COOKIE: session_id})
+        assert r.status_code == 302
+        location = r.headers["location"]
+        assert location.startswith("https://accounts.google.com/o/oauth2/auth?")
+        qs = dict(up.parse_qsl(up.urlparse(location).query))
+        assert qs["redirect_uri"] == f"{ISSUER}/oauth/callback/apps_script"
+        assert qs["scope"].split() == apps_script_client.SCOPES
+
+    def test_apps_script_without_a_google_section_redirects_back_with_error(self):
+        app, sessions, _registry = _app(org_config={"slack": _ORG_CONFIG["slack"]})
+        session_id, _principal = _signed_in(sessions)
+        r = _client(app).get("/oauth/start/apps_script", cookies={org_session.SESSION_COOKIE: session_id})
+        assert r.status_code == 302
+        assert r.headers["location"] == "/connect?error=apps_script"
+
     def test_atlassian_covers_both_jira_and_confluence(self):
         # Jira and Confluence are one Atlassian OAuth app under the hood
         # (one grant, one token -- see _GRANT_KEY), and Atlassian's OAuth
@@ -261,6 +281,31 @@ class TestOAuthCallback:
         token_file = paths.user_dir(principal) / "credentials" / "slack_token.json"
         assert token_file.exists()
         assert evicted == [principal.id]
+
+    def test_apps_script_callback_saves_its_own_token_with_its_own_scopes(self, monkeypatch):
+        app, sessions, registry = _app()
+        session_id, principal = _signed_in(sessions)
+        client = _client(app)
+        start = client.get("/oauth/start/apps_script", cookies={org_session.SESSION_COOKIE: session_id})
+        state = dict(up.parse_qsl(up.urlparse(start.headers["location"]).query))["state"]
+
+        exchanged = []
+
+        def fake_exchange_code(client_config, scopes, redirect_uri, code, code_verifier):
+            exchanged.append((scopes, redirect_uri, code))
+            return "fake-creds"
+
+        saved = []
+        monkeypatch.setattr(rc.google_oauth, "exchange_code", fake_exchange_code)
+        monkeypatch.setattr(rc.google_oauth, "save_credentials", lambda token_file, creds: saved.append((token_file, creds)))
+        monkeypatch.setattr(registry, "evict", lambda pid: None)
+
+        r = client.get(f"/oauth/callback/apps_script?code=auth-code-1&state={state}")
+
+        assert r.status_code == 302
+        assert r.headers["location"] == "/connect?connected=apps_script"
+        assert exchanged == [(apps_script_client.SCOPES, f"{ISSUER}/oauth/callback/apps_script", "auth-code-1")]
+        assert saved == [(str(paths.user_dir(principal) / "credentials" / "apps_script_token.json"), "fake-creds")]
 
     def test_state_is_single_use(self, monkeypatch):
         app, sessions, _registry = _app()
