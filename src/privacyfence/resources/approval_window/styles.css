@@ -184,6 +184,38 @@ img { display: block; max-width: 100%; }
 .pf-head h2 { margin: 0; font-size: 25px; white-space: nowrap; }
 .pf-head-title { display: flex; align-items: center; gap: 10px; }
 .pf-head-shield { width: 51px; height: 51px; object-fit: contain; opacity: .9; }
+/* Who is asking (approval_window_html.py's _agent_html; ADR 0006 decision 4:
+   the attested and claimed tiers must not look the same). Attested: the
+   vendor's mark on a light tile -- light in dark mode too, so a black mark
+   (OpenAI, Cursor) stays visible without being recoloured -- and a solid
+   "Verified" badge. Claimed/unknown: a dashed "?" glyph where a mark would
+   be, the claim in italics, and a dashed "Not verified" badge. */
+.pf-agent {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-top: 10px;
+  font-size: 13px; color: var(--color-neutral-700);
+}
+.pf-agent-icon {
+  width: 22px; height: 22px; object-fit: contain; box-sizing: border-box; padding: 2px;
+  background: #fff; border-radius: 5px; box-shadow: 0 0 0 1px var(--color-divider);
+}
+.pf-agent-glyph {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; box-sizing: border-box; border-radius: 5px;
+  border: 1px dashed var(--color-neutral-500); color: var(--color-neutral-600);
+  font: 600 12px ui-monospace, Menlo, monospace;
+}
+.pf-agent-name { font-weight: 600; color: var(--color-text); overflow-wrap: anywhere; }
+.pf-agent-claimed .pf-agent-name, .pf-agent-unknown .pf-agent-name { font-weight: 500; }
+.pf-agent-claim { font-style: italic; overflow-wrap: anywhere; }
+.pf-agent-badge {
+  display: inline-flex; align-items: center; white-space: nowrap;
+  font: 600 10px ui-monospace, Menlo, monospace; letter-spacing: 0.05em; text-transform: uppercase;
+  padding: 2px 8px; border-radius: 20px;
+}
+.pf-agent-badge-verified { background: var(--color-neutral-800); color: var(--color-neutral-100); }
+.pf-agent-badge-unverified {
+  border: 1px dashed var(--color-neutral-500); color: var(--color-neutral-700); cursor: help;
+}
 /* Read/Write pill, paired with the same-colored rail on <body> (see
    approval_window_html.py's build_card_stack_html). Background/color set
    inline per call (accent vs accent-2 tokens), only the shape/type is

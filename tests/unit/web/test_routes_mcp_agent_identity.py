@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 from types import SimpleNamespace
 
 import httpx
@@ -22,7 +23,7 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
 
-from privacyfence import gate, org_identity
+from privacyfence import agent_overrides, card_builder, gate, org_identity
 from privacyfence.agent_identity import UNKNOWN_AGENT, AgentSource, current_agent
 from privacyfence.audit_log import current_week, init_audit_logger
 from privacyfence.connector import Connector, ToolParam, ToolSpec
@@ -89,11 +90,12 @@ def _dispatcher(connector: Connector) -> McpDispatcher:
 
 
 @contextlib.asynccontextmanager
-async def _session(dispatcher, *, client_name: str | None, verifier=None, client_names=None):
+async def _session(dispatcher, *, client_name: str | None, verifier=None, client_names=None, overrides=None):
     """A live, initialized ClientSession whose handshake claims ``client_name`` (None: the SDK's
     own default clientInfo)."""
     app, session_manager = build_mcp_asgi_app(
         dispatcher, token=None if verifier else TOKEN, verifier=verifier, client_names=client_names,
+        overrides=overrides,
     )
     info = types.Implementation(name=client_name, version="9.9") if client_name is not None else None
     async with mcp_lifespan(session_manager):
@@ -184,6 +186,37 @@ class TestDegradedClientInfo:
     ])
     def test_degrades_to_unknown(self, session):
         assert rm._resolve_agent(SimpleNamespace(session=session), None, None) == UNKNOWN_AGENT
+
+
+class TestClientInfoIconsAreNeverRead:
+    """ADR 0006 Invariant 4 / ADR 0035 decision 2: ``clientInfo.icons`` and ``website_url`` are
+    never read, so a caller-supplied URL can never reach the approval card -- neither as a
+    tracking beacon nor as a borrowed brand mark. Pinned end to end, from the handshake read to
+    the rendered card."""
+
+    class _ClientInfo:
+        name = "openai-mcp"
+        version = "1.0"
+
+        @property
+        def icons(self):
+            raise AssertionError("clientInfo.icons was read")
+
+        @property
+        def website_url(self):
+            raise AssertionError("clientInfo.website_url was read")
+
+    def test_neither_capture_nor_the_card_touches_them(self):
+        session = SimpleNamespace(client_params=SimpleNamespace(client_info=self._ClientInfo()))
+        agent = rm._resolve_agent(SimpleNamespace(session=session), None, None)
+        assert agent.id == "chatgpt"
+        doc = card_builder.build_card_html(
+            title="Read Message", preview={"From": "a@example.com"}, details_text="Body.",
+            is_read=True, layout="narrow", agent=agent,
+        )
+        # Claimed tier, so no mark at all -- and every image the card does draw is bundled.
+        assert 'data-agent-tier="claimed"' in doc
+        assert re.findall(r'<img[^>]*src="(?!data:image/png;base64,)', doc) == []
 
 
 # --------------------------------------------------------------------------- #
@@ -281,6 +314,18 @@ class TestNoCallerSignalIsAttested:
             client_name=claimed, verifier=_OrgVerifier("dcr-1"), client_names=provider.client_name,
         )
         assert agent[3] not in ATTESTED
+
+    @pytest.mark.parametrize("claimed", _SPOOFS)
+    async def test_local_override(self, claimed):
+        # ADR 0037: settings.yaml maps the caller's own name, so a match is still that caller's
+        # claim -- every spoof is mapped to a registry entry here and none may come back attested.
+        overrides = agent_overrides.from_config({"agent_overrides": {
+            name: "claude-code" for name in _SPOOFS if name.strip()
+        }})
+        agent_id, _name, _version, source = await _agent_of_call(client_name=claimed, overrides=overrides)
+        assert source not in ATTESTED
+        if claimed.strip():
+            assert (agent_id, source) == ("claude-code", "client_info")
 
     @pytest.mark.parametrize("claimed", _SPOOFS)
     def test_modern_envelope(self, claimed):

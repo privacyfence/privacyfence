@@ -251,6 +251,7 @@ def org_server(pf_home, tmp_path, monkeypatch):
     monkeypatch.setattr(
         "privacyfence.web.oauth_provider._refresh_store_path", lambda: str(tmp_path / "oauth_refresh.json"),
     )
+    monkeypatch.setattr("privacyfence.web.oauth_provider.pins_file_path", lambda: tmp_path / "agent_pins.json")
     port = _free_port()
     issuer_url = f"http://localhost:{port}"
     idp = _idp()
@@ -1796,12 +1797,21 @@ class TestSettingsPageRendering:
         page.wait_for_load_state("load")
         page.wait_for_selector(".pf-navitem")
         nav_labels = page.locator(".pf-navitem").all_inner_texts()
-        # Connectors/Audit Log are never applicable in org mode; General/
-        # Privacy Filter are admin-only -- a non-admin gets Auto-accept
-        # (and About) only.
-        assert nav_labels == ["Auto-accept", "About"]
+        # Connectors is never applicable in org mode; General/Privacy
+        # Filter/AI systems are admin-only -- a non-admin gets Auto-accept,
+        # their own Audit Log (AGT-5) and About.
+        assert nav_labels == ["Auto-accept", "Audit Log", "About"]
         assert page.get_by_text("Auto-accept").first.is_visible()
         self._screenshot(page, "org-settings-non-admin")
+
+        # AGT-5: read-only in org mode -- the local-only export and log-level
+        # controls have no org route, so they must not be drawn.
+        page.locator('.pf-navitem[data-nav="audit"]').click()
+        page.wait_for_selector(".pf-audit-list")
+        assert page.get_by_text("Recent decisions", exact=True).is_visible()
+        assert page.locator('[data-action="export_audit_log"]').count() == 0
+        assert page.locator('[data-action="set_log_level"]').count() == 0
+        self._screenshot(page, "org-settings-non-admin-audit")
 
     def test_org_settings_page_renders_for_admin(self, page, context, org_server):
         server, sessions = org_server
@@ -1811,9 +1821,16 @@ class TestSettingsPageRendering:
         page.wait_for_load_state("load")
         page.wait_for_selector(".pf-navitem")
         nav_labels = page.locator(".pf-navitem").all_inner_texts()
-        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "About"]
+        assert nav_labels == ["General", "Auto-accept", "Privacy Filter", "Audit Log", "AI systems", "About"]
         assert page.get_by_text("PII Detection Gate").is_visible()
         self._screenshot(page, "org-settings-admin")
+
+        # AGT-5: the admin's AI-system pin page renders (no client has
+        # registered with this fixture's provider, so it lists none).
+        page.locator('.pf-navitem[data-nav="agents"]').click()
+        page.wait_for_selector(".pf-agents-list")
+        assert page.get_by_text("Registered clients").is_visible()
+        self._screenshot(page, "org-settings-admin-agents")
 
         page.goto(f"{server.base_url}/settings/privacy")
         page.wait_for_load_state("load")

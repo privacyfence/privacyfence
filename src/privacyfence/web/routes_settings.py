@@ -136,7 +136,7 @@ import typing
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from starlette.applications import Starlette
 from starlette.background import BackgroundTask
@@ -150,9 +150,11 @@ from .. import approval_icons, auto_accept, settings_window_html, webauthn_stepu
 from ..audit_log import AuditEntry, current_week, get_audit_logger
 from ..policy import catalogue as policy_catalogue
 from ..principal import LOCAL_PRINCIPAL, Principal, principal_scope
+from ..agent_identity import REGISTRY, entry_for_id, sanitize_client_string
 from ..settings_controller import (
     REPO_URL, SettingsController, _about_state_dict, _auto_accept_state_from_rules,
-    _parse_value_list, _pii_general_fields, _privacy_state_from_config, _rule_usage_map,
+    _parse_value_list, _pii_general_fields, _privacy_state_from_config, _relative_time, _rule_usage_map,
+    audit_rows,
 )
 from ..step_up_config import StepUpConfig
 from ..webauthn_stepup import StepUpChallengeStore
@@ -170,6 +172,9 @@ from .session_auth import check_origin as _origin_ok
 from .session_auth import human_session_required_json as _human_session_required_json
 from .session_auth import is_human_session as _is_human_session
 from .session_auth import unauthorized_html as _unauthorized_response
+
+if TYPE_CHECKING:
+    from .oauth_provider import OrgOAuthProvider
 
 logger = logging.getLogger(__name__)
 
@@ -194,9 +199,9 @@ MAX_ORG_CONFIG_BYTES = 1_000_000
 # ---------------------------------------------------------------------------- #
 
 # Projected from web/org_settings_scope.py's ACTION_SCOPES -- every action
-# naming LOCAL_MODE, which by construction is every action there is (local
-# mode's own dispatcher predates that module's mode split and was never
-# gated by it). That module is now the primary declaration; this is the
+# naming LOCAL_MODE, which is every action there is except AGT-5's two
+# org-only AI-system pin actions (local mode's own dispatcher predates that
+# module's mode split and was never gated by it). That module is now the primary declaration; this is the
 # view of it local mode's own dispatch below actually consults.
 _ALLOWED_ACTIONS: frozenset[str] = frozenset(
     action for action, scope in ACTION_SCOPES.items() if LOCAL_MODE in scope.modes
@@ -246,6 +251,16 @@ _NON_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
     "disable_connector", "refresh_connectors", "authenticate_connector",
     "telegram_start_auth", "telegram_submit_code", "telegram_submit_2fa", "telegram_cancel_auth",
     "set_log_level", "set_notifications_detail",
+})
+
+# AGT-5 (ADR 0035 decision 3): the org-only actions, classified the same
+# explicit way. Pinning a DCR client to an AI system creates attested
+# identity -- the only kind a rule may key on (ADR 0006 decision 3) -- and
+# unpinning takes it away, so both are sensitive: step-up gated in org mode
+# under ADR 0034. TestOrgOnlyActionsAreClassified fails the moment an
+# ORG_MODE-only ACTION_SCOPES entry lands without a matching entry here.
+_ORG_ONLY_SENSITIVE_ACTIONS: frozenset[str] = frozenset({
+    "pin_agent_client", "unpin_agent_client",
 })
 
 # ---------------------------------------------------------------------------- #
@@ -577,7 +592,10 @@ def _needs_step_up(action: str, step_up: StepUpConfig | None) -> bool:
     config that hasn't turned require_passkey on" both mean the same thing
     here, so one optional-typed check covers both without either caller
     special-casing the other's default."""
-    return step_up is not None and step_up.enabled and step_up.require_passkey and action in _SENSITIVE_ACTIONS
+    return (
+        step_up is not None and step_up.enabled and step_up.require_passkey
+        and (action in _SENSITIVE_ACTIONS or action in _ORG_ONLY_SENSITIVE_ACTIONS)
+    )
 
 
 def _settings_step_up_response(
@@ -993,6 +1011,7 @@ _ORG_ALLOWED_ACTIONS: frozenset[str] = frozenset({
     "add_policy_rule", "remove_policy_rule",
     "toggle_pii_detection", "toggle_pii_category",
     "set_default_policy", "set_category_policy",
+    "pin_agent_client", "unpin_agent_client",
 })
 
 
@@ -1003,6 +1022,7 @@ def build_org_routes(
     install_wide_settings_path: str = "",
     step_up: StepUpConfig,
     step_up_origin: str,
+    oauth_provider: OrgOAuthProvider | None = None,
 ) -> list[Route]:
     """Org mode's own settings route list (#400; PSC-4b merged its dispatch
     into this module; PSC-5 merges its *rendering* -- both ``GET /settings``
@@ -1054,6 +1074,13 @@ def build_org_routes(
     threads it to every step-up-aware org route, this one included, rather
     than leaving a default that would silently reopen #579 for a caller
     that forgets to pass it.
+
+    ``oauth_provider`` (AGT-5, ADR 0035 decision 3) backs the admin-only
+    "AI systems" page: its DCR registrations are what an admin pins to a
+    registry AI system (``pin_agent_client``/``unpin_agent_client``, both
+    admin-only and step-up gated), and its ``agent_pins`` store is where the
+    pins land. ``None`` (a caller with no OAuth server, this module's own
+    older tests) shows an empty page and rejects a pin with a 400.
     """
     challenges = StepUpChallengeStore()
 
@@ -1113,8 +1140,10 @@ def build_org_routes(
         the install-wide config directly (admin-only in this mode, #400's
         own fail-closed ``"block"`` default for an unconfigured group --
         unlike local mode's ``"allow"``, see ``_privacy_state_from_config``);
-        Auto-accept reads this principal's own on-disk rules. Sections this
-        mode never shows at all (Connectors, Audit Log) get an inert
+        Auto-accept reads this principal's own on-disk rules; Audit Log
+        (AGT-5) this principal's own recent decisions; AI systems (AGT-5,
+        admin only) the OAuth provider's registrations and pins. Sections
+        this mode never shows at all (Connectors) get an inert
         placeholder -- settings_window_html._capabilities_for is what
         actually keeps them from ever rendering, not the shape of a
         placeholder nothing reads. Must already be called inside
@@ -1137,6 +1166,16 @@ def build_org_routes(
             return ", ".join(str(v) for v in values)
 
         rules = auto_accept.get_policy_v2_rules()
+        # AGT-5: the viewing principal's own recent decisions -- per-principal, exactly like
+        # the Auto-accept rules above (get_audit_logger() resolves this principal's own log),
+        # with the same agent column local mode's page gets.
+        # A log that cannot be read costs the page its list, never the request -- the same
+        # posture _record_settings_audit takes for a write.
+        try:
+            recent = audit_rows(get_audit_logger().recent_entries(20))
+        except Exception as exc:
+            logger.warning("Could not read recent audit entries for %s: %s", principal.id, exc)
+            recent = []
         return {
             "error": "",
             "general": {
@@ -1151,9 +1190,39 @@ def build_org_routes(
             "telegram_auth": {"step": None, "error": ""},
             "auto_accept": _auto_accept_state_from_rules(rules, _rule_usage_map(), resolve_value=_resolve_raw),
             "privacy": privacy,
-            "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": []},
+            "audit": {"log_level": "", "log_file": "", "export_hint": "", "recent": recent},
+            "agents": _agents_state() if principal.is_admin else {"clients": [], "stale_pins": [], "registry": []},
             "about": about,
         }
+
+    def _agents_state() -> dict[str, Any]:
+        """The admin's "AI systems" page (AGT-5): every current DCR registration with its
+        claimed name and pin, every pin whose registration the TTL prune removed (stale --
+        inert, shown so an admin can clear it; ADR 0035 decision 3), and the registry an admin
+        can pin to. ``client_name`` is the caller's own string: sanitized here, escaped by the
+        page."""
+        registry = [{"id": entry.agent_id, "name": entry.display_name} for entry in REGISTRY]
+        if oauth_provider is None:
+            return {"clients": [], "stale_pins": [], "registry": registry}
+        pins = oauth_provider.agent_pins.pins()
+        clients = []
+        for client in sorted(oauth_provider.list_clients(), key=lambda c: -c.last_used_at):
+            pin = pins.get(client.client_id)
+            entry = entry_for_id(pin.agent_id) if pin is not None else None
+            clients.append({
+                "client_id": client.client_id,
+                "client_name": sanitize_client_string(client.client_name),
+                "last_used": _relative_time(datetime.fromtimestamp(client.last_used_at, timezone.utc).isoformat()),
+                "pinned_agent_id": entry.agent_id if entry is not None else "",
+                "pinned_agent_name": entry.display_name if entry is not None else "",
+            })
+        live = {c["client_id"] for c in clients}
+        stale = []
+        for client_id, pin in sorted(pins.items()):
+            entry = entry_for_id(pin.agent_id)
+            if client_id not in live and entry is not None:
+                stale.append({"client_id": client_id, "agent_id": entry.agent_id, "agent_name": entry.display_name})
+        return {"clients": clients, "stale_pins": stale, "registry": registry}
 
     def _wrap_org_settings(request: Request, principal: Principal, *, initial_section: str) -> Response:
         nonce = _csp_nonce_for(request)
@@ -1246,6 +1315,13 @@ def build_org_routes(
             if not auto_accept.remove_policy_v2_rule(rule_id):
                 return None
             return f"Removed auto-accept rule {rule_id!r} (principal={principal.id})"
+        if action == "pin_agent_client":
+            return _pin_agent_client(principal, body)
+        if action == "unpin_agent_client":
+            client_id = str(body.get("client_id", ""))
+            if oauth_provider is None or not oauth_provider.agent_pins.unpin(client_id):
+                return None
+            return f"Unpinned OAuth client {client_id!r} from its AI system (admin={principal.id})"
         # The remaining four actions are all install-wide admin writes,
         # applied through the same org_install_policy.apply_change #400
         # C3e's own routes already used.
@@ -1255,6 +1331,28 @@ def build_org_routes(
             install_wide_settings, install_wide_settings_path, action=action, payload=body,
         )
         return f"{summary} (admin={principal.id})"
+
+    def _pin_agent_client(principal: Principal, body: dict[str, Any]) -> str | None:
+        """Pin one *current* registration to a registry AI system. Both halves are validated
+        against server-side state, never taken on trust from the body: the ``client_id`` must
+        be a live registration (a pin names a registration, not a name) and the ``agent_id``
+        a registry entry. The audit line carries the registration's claimed name so a
+        reviewer can see what the admin was looking at when they pinned it."""
+        client_id = str(body.get("client_id", ""))
+        agent_id = str(body.get("agent_id", ""))
+        if oauth_provider is None or not oauth_provider.has_client(client_id):
+            raise org_install_policy.PolicyChangeRejected(f"no registered OAuth client {client_id!r}")
+        entry = entry_for_id(agent_id)
+        if entry is None:
+            raise org_install_policy.PolicyChangeRejected(f"{agent_id!r} is not a known AI system")
+        if oauth_provider.agent_pins.pinned_agent_id(client_id) == entry.agent_id:
+            return None
+        oauth_provider.agent_pins.pin(client_id, entry.agent_id, pinned_by=principal.id)
+        claimed = sanitize_client_string(oauth_provider.client_name(client_id))
+        return (
+            f"Pinned OAuth client {client_id!r} (registered as {claimed!r}) to AI system "
+            f"{entry.agent_id!r} (admin={principal.id})"
+        )
 
     async def settings_action(request: Request) -> Response:
         """The generic ``POST /api/settings/{action}`` dispatcher PSC-5

@@ -2,11 +2,12 @@
 
 ## Status
 
-**Accepted; not implemented.** What is accepted is the *mechanism* — how PrivacyFence learns which
-AI system is calling, and what that knowledge is allowed to be used for. No code has been written,
-and the open questions in *Verification* below are open.
+**Accepted; implemented.** What is accepted is the *mechanism* — how PrivacyFence learns which
+AI system is calling, and what that knowledge is allowed to be used for. Implemented by #648, #650,
+#651, #654 and #655. Decision 5's `/mcp/a/<agent-id>` alias remains deferred and unbuilt.
 
-Amended by [ADR 0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md), which answers them.
+Amended by [ADR 0035](0035-agent-attribution-reads-client-params-per-call-and-org-pins-are-admin-set.md), which answers the open questions in *Verification* below.
+Amended by [ADR 0037](0037-a-local-override-is-a-relabel-and-never-attests.md): a local `agent_overrides:` match is a relabel recorded as `client_info`, never `override`, until per-credential local tokens exist.
 
 The `mcp` range quoted below (`>=1.28,<3.0`) was already stale the day this was written:
 `pyproject.toml` had required `mcp>=2.2,<3.0.0` since issue #250, three days before this ADR's own

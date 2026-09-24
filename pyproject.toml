@@ -189,6 +189,8 @@ privacyfence = [
     "resources/settings.yaml.example",
     "resources/connector_icons/*.png",
     "resources/connector_icons/README.md",
+    "resources/agent_icons/*.png",
+    "resources/agent_icons/README.md",
 ]
 
 [project.optional-dependencies]

@@ -103,6 +103,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from .. import __version__, paths, privilege_separation, web_shell, webauthn_stepup
+from ..agent_overrides import AgentOverrides
 from ..connector_registry import ConnectorRegistry
 from ..org_identity import IdpConfig
 from ..principal import ANONYMOUS_PRINCIPAL, LOCAL_PRINCIPAL, Principal, current_principal, principal_scope
@@ -846,6 +847,7 @@ def build_app(
     org: OrgAuth | None = None,
     step_up: StepUpConfig | None = None,
     step_up_issuer_url: str = "",
+    agent_overrides: AgentOverrides | None = None,
 ) -> ASGIApp:
     """The approval routes, wrapped with the Host allowlist and security
     headers every real deployment needs -- routes_approvals.create_app()
@@ -931,7 +933,9 @@ def build_app(
         # rest, exactly as it already does for org mode's OrgOAuthProvider.
         if not mcp_token and mcp_verifier is None:
             raise ValueError("mcp_token or mcp_verifier is required when mcp_dispatcher is given")
-        mcp_route, session_manager = mount_mcp(mcp_dispatcher, token=mcp_token, verifier=mcp_verifier)
+        mcp_route, session_manager = mount_mcp(
+            mcp_dispatcher, token=mcp_token, verifier=mcp_verifier, overrides=agent_overrides,
+        )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
         # ADR 0007: the local file bridge's own upload/download endpoints,
@@ -1061,7 +1065,7 @@ def _build_org_app(
         mcp_route, session_manager = mount_mcp(
             mcp_dispatcher, verifier=org.provider,
             resource_metadata_url=protected_resource_metadata_url(org.issuer_url),
-            client_names=org.provider.client_name,
+            client_names=org.provider.client_name, pinned_agents=org.provider.pinned_agent_id,
         )
         extra_routes.append(mcp_route)
         lifespans.append(mcp_lifespan(session_manager))
@@ -1141,6 +1145,8 @@ def _build_org_app(
         # above already resolves from org.org_config -- see that call and
         # this function's own build_org_routes docstring.
         step_up=step_up, step_up_origin=org.issuer_url,
+        # AGT-5: the admin's "AI systems" pin page lists and pins this provider's DCR clients.
+        oauth_provider=org.provider,
     ))
 
     lifespan = None
@@ -1184,6 +1190,7 @@ class WebServer:
         ssl_keyfile: str | None = None,
         trusted_proxies: tuple[str, ...] = (),
         step_up: StepUpConfig | None = None,
+        agent_overrides: AgentOverrides | None = None,
     ) -> None:
         """``org``, ``ssl_certfile``/``ssl_keyfile`` and ``trusted_proxies``
         are org mode's own additions (P7, §10.2) -- every local-mode caller
@@ -1202,6 +1209,10 @@ class WebServer:
         boot path always passes one (``StepUpConfig.from_local_config``).
         Ignored in org mode, which resolves its own from ``org.org_config``
         (see ``_build_org_app``).
+
+        ``agent_overrides`` (local mode only) is ``settings.yaml``'s ``agent_overrides:`` section,
+        parsed once by daemon_main.py (``agent_overrides.from_config``) -- a relabel only, never
+        an attested source (see that module).
         """
         self.host = host
         self.port = port
@@ -1341,6 +1352,7 @@ class WebServer:
             org=org,
             step_up=step_up,
             step_up_issuer_url=f"http://{host}:{port}",
+            agent_overrides=agent_overrides,
         )
         if trusted_proxies:
             # §10.2: honored only when this explicit list is non-empty --
