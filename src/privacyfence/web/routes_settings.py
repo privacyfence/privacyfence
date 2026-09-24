@@ -766,11 +766,12 @@ def build_routes(
         # getattr(controller, action) runs -- an unlisted name (including
         # dunders, _load_config, snapshot itself) is a 404, not a lookup
         # that then gets rejected (§16.2.5/§16.7's own required test).
-        # PSC-4b: routed through org_settings_scope.is_action_permitted the
-        # same way org mode's own dispatch below is -- for LOCAL_MODE this
-        # is exactly "action in _ALLOWED_ACTIONS" (see that module's own
-        # docstring on why local mode has no admin concept to gate on).
-        if not is_action_permitted(action, LOCAL_PRINCIPAL, mode=LOCAL_MODE):
+        # _ALLOWED_ACTIONS is itself projected from org_settings_scope.
+        # ACTION_SCOPES (PSC-4b) -- local mode has no admin concept to gate
+        # on (that module's own docstring), so consulting the declaration
+        # here is exactly this membership check, not a separate
+        # is_action_permitted(..., mode=LOCAL_MODE) call.
+        if action not in _ALLOWED_ACTIONS:
             return JSONResponse({"error": "unknown action"}, status_code=404)
         try:
             payload = await request.json()
