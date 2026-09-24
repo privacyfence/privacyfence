@@ -113,7 +113,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0005](0005-moving-the-approval-decision-off-the-device.md) | Moving the approval decision off the device | Proposed |
 | [0006](0006-attributing-a-request-to-the-ai-system-that-made-it.md) | Attribute a request to the AI system from the connection, with ranked provenance | Accepted; implemented; amended by 0035, 0037 |
 | [0007](0007-local-file-bridge.md) | Local file access crosses the privilege-separation boundary through the `.mcpb` shim | Accepted; extended by 0028 |
-| [0008](0008-one-principal-per-os-user.md) | One principal per OS user, identified by the kernel | Accepted; implemented in part |
+| [0008](0008-one-principal-per-os-user.md) | One principal per OS user, identified by the kernel | Accepted; implemented in part; amended by 0043 |
 | [0009](0009-use-the-official-mcp-sdk.md) | Use the official `mcp` SDK for Streamable HTTP, not a hand-rolled transport | Accepted (retroactive) |
 | [0010](0010-local-mode-serves-plain-http-on-localhost.md) | Local mode serves plain HTTP on `localhost`, not HTTPS with a self-signed certificate | Accepted (retroactive) |
 | [0011](0011-org-mode-runs-its-own-oauth-authorization-server.md) | Org mode runs its own OAuth authorization server | Accepted (retroactive) |
@@ -148,3 +148,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0040](0040-telegram-app-credentials-ship-in-every-distribution.md) | Telegram app credentials ship in every distribution, including the PyPI sdist/wheel | Accepted |
 | [0041](0041-only-the-current-install-layout-is-supported.md) | Only the current install layout is supported; there is no upgrade path from earlier layouts | Accepted |
 | [0042](0042-uninstall-replaces-disable.md) | `uninstall [--purge]` replaces `disable`; uninstalling keeps the data, purging deletes it | Accepted |
+| [0043](0043-the-recorded-owner-is-never-rewritten.md) | The marker's recorded owner is written once and never rewritten by adding another account | Accepted |

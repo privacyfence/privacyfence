@@ -141,6 +141,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Adding a second OS account no longer changes who owns an install.** On macOS, Windows and
+  Linux, `enable --for-user <name>` for another account (ADR 0008) rewrote the install's recorded
+  owner with that account's name. PrivacyFence gives the recorded owner the install's original
+  data — connected accounts, policy and audit log — so after the change the added account was
+  served that data and the original owner got a new, empty identity. Every platform's
+  separation script now keeps an owner that is already recorded and records one only when the
+  install has none yet; a macOS or Windows re-run with nobody signed in also no longer clears it
+  (ADR 0043). An install that was already affected is not changed back automatically; the
+  separation script's `status` shows which account is recorded as the owner.
+
 - **Telegram works on a PyPI install.** The sdist and wheel now carry PrivacyFence's Telegram app
   credentials, as the macOS, Windows and Linux installers already did, so `pip install
   privacyfence` no longer needs your own `api_id`/`api_hash` to connect Telegram (ADR 0040).
