@@ -83,7 +83,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   leaves the data under `/Library/Application Support/PrivacyFence` and the `_privacyfence`
   account in place, so installing again picks everything up. `uninstall --purge` also deletes the
   data and the account. `disable` moved the data back into `~/.privacyfence`; nothing does that
-  now. See ADR 0042.
+  now. See [ADR 0042](docs/adr/0042-uninstall-replaces-disable.md).
 
 - The installers now refuse a system older than PrivacyFence supports instead of installing an
   app that cannot start: the macOS `.pkg` requires macOS 13 on Apple silicon (an Intel Mac is

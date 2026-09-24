@@ -4,8 +4,8 @@
 
 Accepted — 2026-09-24. Decided by the maintainer on 2026-09-24 (option C of the product cleanup's
 Linux phase). Implemented on Linux (`scripts/linux_privilege_separation.sh`, `debian/prerm`,
-`debian/postrm`). macOS and Windows follow in the cleanup's next two phases with the same semantics;
-until then their scripts still carry `disable`.
+`debian/postrm`) and macOS (`scripts/macos_privilege_separation.sh`). Windows follows in the
+cleanup's next phase with the same semantics; until then its script still carries `disable`.
 
 Records the per-platform mechanics that [ADR 0041](0041-only-the-current-install-layout-is-supported.md)
 decision 3 left to this phase.

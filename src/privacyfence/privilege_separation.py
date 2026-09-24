@@ -1275,10 +1275,11 @@ def _run_auto_enable_macos(script: Path) -> None:
 #
 # Decisions 2-5 cover the installs we ship: a .pkg, a Windows installer run
 # and a .deb postinst that each separate at install time. This is the
-# backstop for the installs that exist anyway -- a pre-4.2 DMG install
-# upgrading in place, a restored backup, a hand-copied .app, a package whose
-# separation was purged by hand while its files stayed (on Linux,
-# `privacyfence-privilege-separation uninstall --purge`, ADR 0042). Called from daemon_main.main(), after
+# backstop for the installs that exist anyway -- a .pkg whose postinstall
+# `enable --auto` did not finish (it never fails the install), a restored
+# backup, a hand-copied .app, a package whose separation was purged by hand
+# while its files stayed (on Linux, `privacyfence-privilege-separation
+# uninstall --purge`, ADR 0042). Called from daemon_main.main(), after
 # check_runtime_identity() and before the daemon opens /mcp or the approvals
 # UI to anything.
 #

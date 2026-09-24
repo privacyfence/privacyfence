@@ -1007,26 +1007,10 @@ class TestInstallerContract:
         # Python octal literals (0o711) -- same numbers, two notations.
         assert int(self._assign(platform, script_name), 8) == module_constant
 
-    @pytest.mark.parametrize("platform", ["darwin"])
-    def test_migrates_every_file_that_moved_into_the_handoff_dir(self, platform):
-        # Each of these sits at the root of a pre-Phase-4 data directory and
-        # has to end up inside handoff/, or something in the user's session
-        # loses track of the daemon: the shim loses mcp_url/mcp_token, the
-        # companion loses web_base_url.
-        names = re.search(r"^HANDOFF_FILE_NAMES=\(([^)]*)\)$", self.SCRIPTS[platform], re.MULTILINE)
-        assert names is not None
-        moved = set(names.group(1).split())
-
-        assert mcp_auth.MCP_TOKEN_FILE_NAME in moved
-        assert control_channel.WEB_BASE_URL_FILE_NAME in moved
-        from privacyfence.web import server
-
-        assert server.MCP_URL_FILE_NAME in moved
-
     @pytest.mark.parametrize(
         ("platform", "subcommand"),
         [
-            ("darwin", "enable"), ("darwin", "disable"), ("darwin", "status"),
+            ("darwin", "enable"), ("darwin", "uninstall"), ("darwin", "status"),
             ("linux", "enable"), ("linux", "uninstall"), ("linux", "status"),
         ],
     )
@@ -1034,24 +1018,31 @@ class TestInstallerContract:
         assert f"cmd_{subcommand}()" in self.SCRIPTS[platform]
         assert f"{subcommand})" in self.SCRIPTS[platform]
 
-    def test_the_linux_script_has_no_disable(self):
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_the_posix_scripts_have_no_disable(self, platform):
         # ADR 0042: `disable` moved the data back into the owner's home, which
         # nothing may do any more (ADR 0041). `uninstall` replaces it.
-        script = self.SCRIPTS["linux"]
+        script = self.SCRIPTS[platform]
         assert "cmd_disable" not in script
         assert "disable)" not in script
         assert "{enable|uninstall|status}" in script
 
-    def test_the_linux_script_moves_no_data_between_layouts(self):
+    @pytest.mark.parametrize(
+        ("platform", "platform_only"),
+        [
+            ("linux", ("stop_legacy_autostart", "LEGACY_AUTOSTART_PATH", "LEGACY_USER_UNIT", "cp -a")),
+            ("darwin", ("stop_legacy_agent", "LEGACY_AGENT_LABEL", "drop_stale_sockets", "ditto \"$entry\"")),
+        ],
+    )
+    def test_the_posix_scripts_move_no_data_between_layouts(self, platform, platform_only):
         # ADR 0041: only the current layout is supported, so nothing copies
         # ~/.privacyfence into the system root on `enable`, and (ADR 0042)
         # nothing copies it back out on uninstall.
-        script = self.SCRIPTS["linux"]
+        script = self.SCRIPTS[platform]
         for gone in (
             "migrate_data", "move_handoff_files_in", "move_handoff_files_out",
-            "HANDOFF_FILE_NAMES", "HANDOFF_FILE_GLOB", "stop_legacy_autostart",
-            "LEGACY_AUTOSTART_PATH", "LEGACY_USER_UNIT", "legacy_data_dir", "NON_OWNER_FOR_USER",
-            "cp -a", "mv ",
+            "HANDOFF_FILE_NAMES", "HANDOFF_FILE_GLOB", "legacy_data_dir", "NON_OWNER_FOR_USER",
+            "mv ", *platform_only,
         ):
             assert gone not in script, gone
 
@@ -2785,22 +2776,8 @@ class TestEnableSplitContract:
         assert re.search(
             r'if \[ -n "\$OWNER_USER" \]; then\n\s+add_owner_to_service_group', body
         )
-        steps = ["create_service_account", "apply_layout", "write_marker"]
-        if platform == "darwin":
-            steps.append("migrate_data")
-        for step in steps:
+        for step in ("create_service_account", "apply_layout", "write_marker"):
             assert re.search(rf"^  {step}$", body, re.MULTILINE), step
-
-    @pytest.mark.parametrize("platform", ["darwin"])
-    def test_the_posix_machine_half_has_nothing_to_migrate(self, platform):
-        # With no owner there is no home directory to read, so migrate_data
-        # reduces to creating the root -- the path it already had for "no
-        # existing ~/.privacyfence".
-        body = re.search(
-            r"^migrate_data\(\) \{\n(.*?)^\}", self.SCRIPTS[platform], re.MULTILINE | re.DOTALL
-        ).group(1)
-        assert re.search(r'if \[ -z "\$OWNER_HOME" \]; then', body)
-        assert 'mkdir -p "$SYSTEM_ROOT"' in body
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_the_posix_scripts_report_the_pending_state_distinctly(self, platform):

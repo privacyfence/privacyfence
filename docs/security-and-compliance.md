@@ -56,7 +56,7 @@ and [ADR 0003](adr/0003-separated-installs-only.md) makes mandatory rather than 
 three. A packaged build that finds itself unseparated does not serve at all (ADR 0003 decision 6 —
 no `/mcp`, no approvals), so the un-separated install the rest of this section describes is not
 something any of the three platforms' installers ship: it is reachable only via `... disable`
-on macOS and Windows or `... uninstall --purge` on Linux (documented and deliberate — see that
+on Windows or `... uninstall --purge` on macOS and Linux (documented and deliberate — see that
 subsection), or from a non-packaged source/pip checkout run
 with `PRIVACYFENCE_DEV_ALLOW_UNSEPARATED=1` for local development (never a real deployment — see
 that subsection and [ADR 0003](adr/0003-separated-installs-only.md) decision 7). That subsection
@@ -533,12 +533,13 @@ so the daemon leaves your session and the companion app enters it:
 | Companion starts as | a LaunchAgent (the menu-bar app) | an XDG autostart entry running `privacyfence-companion --serve` | a Scheduled Task (`PrivacyFenceCompanion`, the tray app) |
 | Replaces | the login-session LaunchAgent | a pip/pipx install's `--user` unit | the installer's own `PrivacyFence` Scheduled Task, disabled rather than deleted |
 
-macOS and Windows still ship the manual `enable`/`disable`/`status` subcommands above; the migration
-moves live connector OAuth tokens, so take a backup first if running one by hand. Linux ships
-`enable`/`uninstall [--purge]`/`status` instead ([ADR 0042](adr/0042-uninstall-replaces-disable.md)):
-`uninstall` stops the service and keeps the data under `/var/lib/privacyfence`, `--purge` deletes
-it, and neither moves anything into a home directory. `... disable` reverses separation on macOS
-and Windows — and, per [ADR 0003](adr/0003-separated-installs-only.md) decision 6, it stops
+Windows still ships the manual `enable`/`disable`/`status` subcommands above; the migration
+moves live connector OAuth tokens, so take a backup first if running one by hand. macOS and Linux
+ship `enable`/`uninstall [--purge]`/`status` instead ([ADR 0042](adr/0042-uninstall-replaces-disable.md)):
+`uninstall` stops the service and keeps the data under the data directory above, `--purge` deletes
+it and the service account, and neither moves anything into a home directory. On macOS, which has
+no package manager, `uninstall` is the uninstall: it also removes the app the `.pkg` installed.
+`... disable` reverses separation on Windows — and, per [ADR 0003](adr/0003-separated-installs-only.md) decision 6, it stops
 being a way to run PrivacyFence: a packaged build finds no marker afterward and refuses to serve.
 **Every packaged install on all three platforms now separates itself as part of installing**,
 mandatorily rather than opt-in, per ADR 0003. The `.deb`'s `postinst` separates the install itself,

@@ -298,10 +298,13 @@ time it starts and finds the install unseparated — a decline is an unfinished 
 setting, and a packaged build that stays unseparated refuses to serve at all rather than serve a
 guarantee it cannot keep.) Run
 `sudo ./scripts/macos_privilege_separation.sh enable` any time afterward if you need to re-run it
-by hand (`... disable` reverses the layout, but on a packaged install it stops being a way to keep
-the daemon running — it refuses to serve once it finds no marker). Worth reading
+by hand. To uninstall, run
+`sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh uninstall`:
+it stops PrivacyFence, removes the app and keeps the data under
+`/Library/Application Support/PrivacyFence`; `... uninstall --purge` also deletes the data and the
+`_privacyfence` account. Neither moves anything into your home directory. Worth reading
 [Security and compliance](https://github.com/privacyfence/privacyfence/blob/main/docs/security-and-compliance.md#privilege-separation-macos-linux-and-windows)
-before you run it by hand — the migration moves live connector tokens.
+before you run it by hand.
 
 **Downloading or uploading a file may prompt "Claude would like to access files in your
 Downloads folder"** the first time a tool saves or reads something outside its own working
