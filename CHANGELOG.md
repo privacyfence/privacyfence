@@ -149,6 +149,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Windows: an upgrade no longer stops at "Setup was unable to automatically close all
+  applications".** The installer already ended PrivacyFence's service and processes before copying
+  files; it now also waits until they are actually gone, and anything still holding a file is
+  closed rather than only asked to close — PrivacyFence's background processes have no window to
+  answer that request, so it always failed, and a silent install aborted there. See ADR 0045.
+
 - **Adding a second OS account no longer changes who owns an install.** On macOS, Windows and
   Linux, `enable --for-user <name>` for another account (ADR 0008) rewrote the install's recorded
   owner with that account's name. PrivacyFence gives the recorded owner the install's original

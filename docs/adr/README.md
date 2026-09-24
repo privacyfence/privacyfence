@@ -150,3 +150,4 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0042](0042-uninstall-replaces-disable.md) | `uninstall [--purge]` replaces `disable`; uninstalling keeps the data, purging deletes it | Accepted |
 | [0043](0043-the-recorded-owner-is-never-rewritten.md) | The marker's recorded owner is written once and never rewritten by adding another account | Accepted |
 | [0044](0044-the-deb-declares-only-the-architectures-ci-builds.md) | The `.deb` declares only the architectures CI builds and tests | Accepted |
+| [0045](0045-the-windows-installer-ends-its-own-processes-and-force-closes-the-rest.md) | The Windows installer ends its own processes, and RestartManager force-closes whatever is left | Accepted |

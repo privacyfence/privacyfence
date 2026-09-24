@@ -2032,6 +2032,32 @@ class TestWindowsInstallerContract:
         assert "if not SeparateInstall(SeparationOutput) then" in post_install
         assert "RaiseException(" in post_install
 
+    def test_setup_ends_its_own_processes_and_force_closes_what_is_left(self):
+        # ADR 0045. PrepareToInstall ends every PrivacyFence process and waits
+        # until tasklist no longer lists one; RestartManager is only the
+        # backstop, and with the default CloseApplications=yes it merely asks,
+        # which a headless daemon or a tray icon never answers -- so under
+        # /SUPPRESSMSGBOXES it aborted Setup (exit 5) instead of closing them.
+        # The packaged upgrade test asserts the confirmation line from Setup's
+        # log, so the two files have to carry the same string.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+        setup = inno.split("\n[Setup]\n", 1)[1].split("\n[Files]\n", 1)[0]
+        prepare = inno.split("function PrepareToInstall", 1)[1].split("\nend;", 1)[0]
+        listing = inno.split("function ListPrivacyFenceProcesses", 1)[1].split("\nend;", 1)[0]
+        kill = inno.split("procedure KillPrivacyFenceProcesses", 1)[1].split("\nend;", 1)[0]
+        confirmation = "PrepareToInstall: no PrivacyFence process is still running"
+        smoke = (REPO_ROOT / "tests" / "integration" / "test_windows_packaged_smoke.py").read_text(encoding="utf-8")
+
+        assert re.search(r"^CloseApplications=force$", setup, re.MULTILINE)
+        assert "sc.exe') +\n      '\" stop " in prepare
+        assert "KillPrivacyFenceProcesses();" in prepare
+        assert "ListPrivacyFenceProcesses(Running)" in prepare
+        assert f"Log('{confirmation}')" in prepare
+        assert confirmation in smoke
+        for image in ("{#CompanionExeName}", "{#AppExeName}", "{#AliasExeName}"):
+            assert f"'/F /IM \"{image}\"'" in kill
+            assert f"Lowercase('{image}')" in listing
+
     def test_no_code_line_reads_as_a_section_tag_or_a_directive(self):
         # iscc reads a line whose first non-blank character is '[' as a
         # section tag and one starting with '#' as an ISPP directive -- even

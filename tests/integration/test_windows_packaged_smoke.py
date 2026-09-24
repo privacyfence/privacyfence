@@ -197,70 +197,6 @@ def _task_exists(name: str) -> bool:
     return result.returncode == 0
 
 
-def _stop_daemon_service(*, timeout: float = 60.0) -> None:
-    """``sc stop`` the real service and wait for it to actually reach STOPPED.
-
-    Not ``taskkill``, and the difference is the whole point:
-    Install-DaemonService configures failure actions (``sc failure ... actions=
-    restart/5000/restart/10000/restart/30000``), so a service process that dies
-    *unexpectedly* is restarted by the SCM within five seconds. Killing it by
-    image name therefore buys about five seconds -- which is exactly what Inno
-    Setup's own four one-second DeleteFile retries were losing to:
-
-        _internal\\PIL\\_imaging.cp312-win_amd64.pyd
-        DeleteFile: The existing file appears to be in use (5). Retrying.
-        ... DeleteFile failed; code 5. Access is denied.
-
-    A clean stop is not an unexpected termination, so the SCM leaves it
-    stopped, and every ``_internal`` DLL the daemon had mapped is released for
-    good. A no-op when the service does not exist (``sc query`` exits
-    non-zero), which is the unseparated case and every test that never
-    installed."""
-    if subprocess.run(
-        ["sc.exe", "query", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
-    ).returncode != 0:
-        return
-    subprocess.run(["sc.exe", "stop", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        result = subprocess.run(
-            ["sc.exe", "query", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode != 0 or "STOPPED" in result.stdout:
-            return
-        time.sleep(0.5)
-
-
-def _kill_stray_app_processes() -> None:
-    """Best-effort ``taskkill`` sweep for any process still running against
-    ``MAIN_EXE_NAME``/``ALIAS_EXE_NAME``, by image name rather than PID.
-
-    v4.1.0a9's release build failed here: the upgrade-install step's Inno
-    Setup run exited 5 ("Some applications could not be shut down") because
-    RestartManager still found a running ``privacyfence-app`` at the moment
-    it tried to close applications ahead of overwriting files -- even though
-    this test's own daemon had already been confirmed exited beforehand.
-    Whatever is actually holding the handle at that point (the OS's own
-    deferred teardown of the just-exited process's image sections, or a
-    second process this test never tracked), taskkill-by-image-name clears it
-    either way; killing an already-gone process is simply a no-op (taskkill
-    exits non-zero, which is why this ignores the result).
-
-    ``COMPANION_EXE_NAME`` is in the sweep because a *separated* install has
-    one running: ``Install-CompanionTask`` registers and starts it, and it is
-    what RestartManager now names ("an application using one of our files:
-    PrivacyFenceCompanion"). It could not appear here before, because until
-    the Windows ``enable`` was fixed no install ever got far enough to start
-    a companion at all.
-
-    The daemon is stopped rather than killed, and before the sweep: on a
-    separated install it is a *service*, and the SCM restarts a killed one
-    within five seconds. See _stop_daemon_service()."""
-    _stop_daemon_service()
-    for image_name in (ALIAS_EXE_NAME, MAIN_EXE_NAME, COMPANION_EXE_NAME):
-        subprocess.run(["taskkill", "/F", "/IM", image_name], capture_output=True, text=True, timeout=15)
-
-
 # --------------------------------------------------------------------------- #
 # Privilege separation -- what the install does to itself (ADR 0003
 # decision 4), and how it comes back down (ADR 0042).
@@ -703,30 +639,19 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     setup_exe_n1, new_version = _synthetic_next_version_installer(setup_exe_n, tmp_path / "upgrade-build")
     upgrade_log_path = tmp_path / "install-n1.log"
 
-    # v4.1.0a9's release build failed exactly here: Setup exited 5 because
-    # RestartManager found a still-running "privacyfence-app" and, under
-    # /SUPPRESSMSGBOXES, defaulted the resulting Abort/Retry/Ignore prompt to
-    # Abort rather than actually retrying -- see _kill_stray_app_processes's
-    # own comment. Sweep for one before the attempt, and again before a
-    # single retry if Setup still reports that exact failure, rather than
-    # failing the whole release on what a real interactive install would
-    # have shrugged off with one manual Retry click.
-    _kill_stray_app_processes()
-    for attempt in (1, 2):
-        upgrade_result = _run_installer(
-            str(setup_exe_n1),
-            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
-            f"/DIR={install_dir}",
-            f"/LOG={upgrade_log_path}",
-        )
-        if upgrade_result.returncode == 0:
-            break
-        log_text = upgrade_log_path.read_text(errors="replace") if upgrade_log_path.exists() else ""
-        if attempt == 2 or upgrade_result.returncode != 5 or "could not be shut down" not in log_text:
-            break
-        _kill_stray_app_processes()
-        time.sleep(2)
-
+    # No sweep of our own and no retry: the service and the companion that
+    # version N started are still running here, exactly as on a real
+    # upgrade, and stopping them is the installer's job (PrepareToInstall,
+    # ADR 0045). This test used to stop and taskkill them itself and retry
+    # Setup once past RestartManager's "Some applications could not be shut
+    # down" (f3883ac6, 3079c985, df1a403d), which proved the harness could
+    # clear the way rather than that the installer does.
+    upgrade_result = _run_installer(
+        str(setup_exe_n1),
+        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
+        f"/DIR={install_dir}",
+        f"/LOG={upgrade_log_path}",
+    )
     assert upgrade_result.returncode == 0, (
         f"upgrade install (version {new_version}) failed (exit {upgrade_result.returncode}):\n"
         f"{upgrade_result.stdout}{upgrade_result.stderr}\n"
@@ -734,6 +659,12 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
         f"{upgrade_log_path.read_text(errors='replace') if upgrade_log_path.exists() else '(missing)'}"
     )
     assert alias_exe.is_file(), f"{alias_exe} missing after upgrade install"
+    upgrade_log = upgrade_log_path.read_text(errors="replace")
+    assert "PrepareToInstall: no PrivacyFence process is still running" in upgrade_log, (
+        "the upgrade succeeded, but PrepareToInstall did not confirm it had ended every "
+        "PrivacyFence process before copying files -- RestartManager or luck did its job:\n"
+        f"{upgrade_log}"
+    )
 
     # ── The companion task is still registered -- `enable` re-registers it
     # (with /f) on every install, upgrades included ────────────────────────
