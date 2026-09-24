@@ -41,6 +41,7 @@ import yaml
 from . import __version__, agent_label, dialog_window_html, org_bundle_signing, org_mode, web_prompt
 from .agent_identity import AgentIdentity, AgentSource
 from .app_credentials import telegram_app_credentials
+from .apps_script_client import AppsScriptClient
 from .approval_ui import get_approval_ui
 from .audit_log import AuditEntry, AuditLogger, compute_security_config_hash, current_week, get_audit_logger
 from .auto_accept import (
@@ -232,7 +233,7 @@ RULES_INT_VALUE: set[str] = {"age_threshold_days", "time_window_days"}
 
 # All connectors PrivacyFence supports, in display order
 ALL_CONNECTORS: list[str] = [
-    "gmail", "drive", "contacts", "calendar", "tasks",
+    "gmail", "drive", "contacts", "calendar", "tasks", "apps_script",
     "slack", "jira", "confluence", "salesforce", "telegram",
 ]
 
@@ -244,7 +245,14 @@ NOTIFICATIONS_DETAIL_LEVELS: tuple[str, ...] = ("minimal", "standard", "detailed
 
 # Connectors authenticated via a shared Google OAuth client (org bundle's
 # "google" section).
-GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks"}
+GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks", "apps_script"}
+
+# Display names for connectors whose key isn't just its label lower-cased.
+_CONNECTOR_LABEL_OVERRIDES: dict[str, str] = {"apps_script": "Apps Script"}
+
+
+def connector_label(cname: str) -> str:
+    return _CONNECTOR_LABEL_OVERRIDES.get(cname, cname.capitalize())
 
 # Which section of the organization config bundle each connector depends on.
 # Jira and Confluence share one Atlassian OAuth grant. Telegram is not part
@@ -252,7 +260,7 @@ GOOGLE_CONNECTORS: set[str] = {"gmail", "drive", "contacts", "calendar", "tasks"
 # app_credentials.py) and checked separately.
 ORG_CONFIG_SERVICE: dict[str, str] = {
     "gmail": "google", "drive": "google", "contacts": "google",
-    "calendar": "google", "tasks": "google",
+    "calendar": "google", "tasks": "google", "apps_script": "google",
     "slack": "slack",
     "jira": "atlassian", "confluence": "atlassian",
     "salesforce": "salesforce",
@@ -273,6 +281,7 @@ _GOOGLE_CLIENTS: dict[str, type] = {
     "calendar": CalendarClient,
     "contacts": ContactsClient,
     "tasks": TasksClient,
+    "apps_script": AppsScriptClient,
 }
 
 # Display metadata for the Privacy Filter page -- mirrors the group/category
@@ -1395,7 +1404,7 @@ class SettingsController:
                 self.error = ""
                 self.refresh_connectors()
             else:
-                self.error = f"{cname.capitalize()} authentication failed: {result}"
+                self.error = f"{connector_label(cname)} authentication failed: {result}"
                 self._push_snapshot()
 
         _run_async(work, done)
@@ -1917,7 +1926,7 @@ class SettingsController:
 
             rows.append({
                 "key": cname,
-                "label": cname.capitalize(),
+                "label": connector_label(cname),
                 "icon": cname,
                 "authed": connected,
                 "enabled": enabled,

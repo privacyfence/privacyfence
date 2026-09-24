@@ -142,7 +142,7 @@ class AppsScriptClient:
             if not os.path.exists(self._token_file):
                 raise AppsScriptClientError(
                     f"No OAuth token found at '{self._token_file}'. "
-                    "Run the application once with '--apps-script-oauth' to authorize."
+                    "Authenticate Apps Script from PrivacyFence Settings (Connectors) to authorize."
                 )
             creds = Credentials.from_authorized_user_file(self._token_file, SCOPES)
             if creds.valid:
@@ -154,13 +154,13 @@ class AppsScriptClient:
                 except Exception as exc:  # noqa: BLE001 - surface a clear message
                     raise AppsScriptClientError(
                         f"Failed to refresh OAuth token: {exc}. "
-                        "Re-run with '--apps-script-oauth' to re-authorize."
+                        "Reconnect Apps Script from PrivacyFence Settings (Connectors) to re-authorize."
                     ) from exc
                 self._save_token(creds)
                 return creds
             raise AppsScriptClientError(
                 "Cached OAuth token is invalid and cannot be refreshed. "
-                "Re-run with '--apps-script-oauth' to re-authorize."
+                "Reconnect Apps Script from PrivacyFence Settings (Connectors) to re-authorize."
             )
 
     def _save_token(self, creds: Credentials) -> None:
