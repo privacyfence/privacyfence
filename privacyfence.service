@@ -41,15 +41,14 @@
 # or a dedicated venv).
 #
 # This unit runs the daemon as you, which is also who the AI client it
-# governs runs as -- issue #428's whole subject. #428 Phase 4 (B5b) makes
-# that opt-out-able: `sudo scripts/linux_privilege_separation.sh enable`
-# replaces this with a *system* unit
-# (installer/linux/privacyfence-daemon.service.tmpl,
-# /etc/systemd/system/privacyfence-daemon.service) running under a dedicated
-# `privacyfence` account, and moves this file to
-# privacyfence.service.disabled so it cannot start a second daemon in your
-# session at the next login. `... disable` puts it back. Nothing here changes
-# unless you run that script.
+# governs runs as -- issue #428's whole subject.
+# `sudo scripts/linux_privilege_separation.sh enable` runs it as a *system*
+# unit instead (installer/linux/privacyfence-daemon.service.tmpl,
+# /etc/systemd/system/privacyfence-daemon.service) under a dedicated
+# `privacyfence` account, with its data in /var/lib/privacyfence. That script
+# does not touch this unit or ~/.privacyfence: disable and remove this unit
+# first (see Uninstall above), or it starts a second daemon in your session,
+# which refuses to run on a separated install.
 
 [Unit]
 Description=PrivacyFence daemon

@@ -1007,26 +1007,44 @@ class TestInstallerContract:
         # Python octal literals (0o711) -- same numbers, two notations.
         assert int(self._assign(platform, script_name), 8) == module_constant
 
-    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
-    def test_migrates_every_file_that_moved_into_the_handoff_dir(self, platform):
-        # Each of these sits at the root of a pre-Phase-4 data directory and
-        # has to end up inside handoff/, or something in the user's session
-        # loses track of the daemon: the shim loses mcp_url/mcp_token, the
-        # companion loses web_base_url.
-        names = re.search(r"^HANDOFF_FILE_NAMES=\(([^)]*)\)$", self.SCRIPTS[platform], re.MULTILINE)
-        assert names is not None
-        moved = set(names.group(1).split())
-
-        assert mcp_auth.MCP_TOKEN_FILE_NAME in moved
-        assert control_channel.WEB_BASE_URL_FILE_NAME in moved
-        from privacyfence.web import server
-
-        assert server.MCP_URL_FILE_NAME in moved
-
-    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
-    @pytest.mark.parametrize("subcommand", ["enable", "disable", "status"])
+    @pytest.mark.parametrize(
+        ("platform", "subcommand"),
+        [
+            ("darwin", "enable"), ("darwin", "uninstall"), ("darwin", "status"),
+            ("linux", "enable"), ("linux", "uninstall"), ("linux", "status"),
+        ],
+    )
     def test_documents_each_subcommand(self, platform, subcommand):
         assert f"cmd_{subcommand}()" in self.SCRIPTS[platform]
+        assert f"{subcommand})" in self.SCRIPTS[platform]
+
+    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
+    def test_the_posix_scripts_have_no_disable(self, platform):
+        # ADR 0042: `disable` moved the data back into the owner's home, which
+        # nothing may do any more (ADR 0041). `uninstall` replaces it.
+        script = self.SCRIPTS[platform]
+        assert "cmd_disable" not in script
+        assert "disable)" not in script
+        assert "{enable|uninstall|status}" in script
+
+    @pytest.mark.parametrize(
+        ("platform", "platform_only"),
+        [
+            ("linux", ("stop_legacy_autostart", "LEGACY_AUTOSTART_PATH", "LEGACY_USER_UNIT", "cp -a")),
+            ("darwin", ("stop_legacy_agent", "LEGACY_AGENT_LABEL", "drop_stale_sockets", "ditto \"$entry\"")),
+        ],
+    )
+    def test_the_posix_scripts_move_no_data_between_layouts(self, platform, platform_only):
+        # ADR 0041: only the current layout is supported, so nothing copies
+        # ~/.privacyfence into the system root on `enable`, and (ADR 0042)
+        # nothing copies it back out on uninstall.
+        script = self.SCRIPTS[platform]
+        for gone in (
+            "migrate_data", "move_handoff_files_in", "move_handoff_files_out",
+            "HANDOFF_FILE_NAMES", "HANDOFF_FILE_GLOB", "legacy_data_dir", "NON_OWNER_FOR_USER",
+            "mv ", *platform_only,
+        ):
+            assert gone not in script, gone
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_refuses_to_run_without_the_companion(self, platform):
@@ -1063,18 +1081,19 @@ class TestInstallerContract:
         assert "privacyfence-privilege-separation enable --auto --for-user" in postinst
         assert '[ "$1" = "configure" ]' in postinst
 
-    def test_the_debian_prerm_disables_on_remove(self):
-        # #428 D1's auto-enable (above) needs an undo on the way out, or
-        # `apt remove` stops privacyfence-privilege-separation --auto ever
-        # wrote and strands a separated install's data (including live
-        # connector OAuth tokens) under a directory the user can no longer
-        # read, with the one tool that could reverse it just deleted.
+    def test_the_debian_prerm_uninstalls_on_remove(self):
+        # ADR 0042: `remove` stops and unregisters the unit and the companion
+        # autostart entry the separation tool rendered -- dpkg does not track
+        # either, so without this `apt remove` leaves a unit pointing at a
+        # binary it just deleted -- while the tool still exists.
         prerm = (REPO_ROOT / "debian" / "prerm").read_text(encoding="utf-8")
-        assert "privacyfence-privilege-separation disable" in prerm
-        remove_case = re.search(r"remove\)(.*?);;", prerm, re.DOTALL)
+        assert "disable" not in prerm.split("set -e", 1)[1]
+        remove_case = re.search(r"\bremove\)(.*?);;", prerm, re.DOTALL)
         assert remove_case is not None, "no `remove)` case in debian/prerm"
-        assert "privacyfence-privilege-separation disable" in remove_case.group(1)
-        assert "|| true" in remove_case.group(1)
+        assert "privacyfence-privilege-separation uninstall || true" in remove_case.group(1)
+        # Plain uninstall: prerm cannot tell remove from purge (dpkg passes
+        # `remove` for both), so deleting data is postrm's `purge` case alone.
+        assert "--purge" not in remove_case.group(1)
         # Must not run on a mere upgrade -- that would tear down a running
         # separated install's unit mid-upgrade instead of leaving it alone.
         upgrade_case = re.search(r"\bupgrade\)(.*?);;", prerm, re.DOTALL)
@@ -1838,63 +1857,17 @@ class TestSystemdAndAutostartTemplates:
         # autostart-only, exactly like the daemon entry it replaces.
         assert "NoDisplay=true" in self.COMPANION
 
-    def test_installer_moves_the_daemons_own_autostart_entry_aside(self):
-        # Left in place it would start a second daemon as the logged-in user,
-        # which on a separated install refuses to start (check_runtime_
-        # identity) rather than quietly seeding a default policy.
-        assert 'LEGACY_AUTOSTART_PATH="/etc/xdg/autostart/privacyfence.desktop"' in self.SCRIPT
-        assert f'LEGACY_USER_UNIT="{Path("privacyfence.service").name}"' in self.SCRIPT
-        assert "${LEGACY_AUTOSTART_PATH}.disabled" in self.SCRIPT
-
-    def test_the_user_unit_it_disables_is_the_one_this_repo_ships(self):
-        assert (REPO_ROOT / "privacyfence.service").is_file()
-
-    def test_disabling_the_legacy_autostart_entry_also_hides_it(self):
-        # B24: systemd-xdg-autostart-generator does not filter the autostart
-        # directories by filename -- renaming the entry to *.desktop.disabled
-        # alone does not stop it from being turned into a unit and started at
-        # the next login. Hidden=true is the key the generator (and every
-        # other XDG-autostart reader) actually honours, so hiding the entry
-        # -- not just the rename -- has to be what stop_legacy_autostart does.
-        assert "hide_autostart_entry" in self.SCRIPT
-        assert 'hide_autostart_entry "$LEGACY_AUTOSTART_PATH"' in self.SCRIPT
-        # The rename is unconditional in stop_legacy_autostart; hiding has to
-        # run first so the file that lands at .disabled already carries it.
-        hide_call = self.SCRIPT.index('hide_autostart_entry "$LEGACY_AUTOSTART_PATH"')
-        rename_call = self.SCRIPT.index('mv "$LEGACY_AUTOSTART_PATH" "${LEGACY_AUTOSTART_PATH}.disabled"')
-        assert hide_call < rename_call
-
-    def test_an_already_disabled_but_unhidden_entry_is_healed(self):
-        # An install separated by a script version that predates B24 has a
-        # ${LEGACY_AUTOSTART_PATH}.disabled with no Hidden=true -- and
-        # systemd has been autostarting it under its renamed name the whole
-        # time. The postinst's machine half re-runs on every package upgrade
-        # (debian/postinst's own `enable --machine-only` call), so
-        # stop_legacy_autostart must heal that file in place rather than only
-        # handling a fresh entry still at its original path.
-        assert '"${LEGACY_AUTOSTART_PATH}.disabled" ] && ! autostart_entry_is_hidden' in self.SCRIPT
-
-    def test_restoring_the_legacy_entry_undoes_the_hide(self):
-        # `disable` puts the daemon's own autostart entry back in charge of
-        # starting it in the logged-in user's session -- a Hidden=true this
-        # script itself added would silently defeat that.
-        assert "unhide_autostart_entry" in self.SCRIPT
-        restore = self.SCRIPT[self.SCRIPT.index('restoring the daemon\'s XDG autostart entry'):]
-        unhide_call = restore.index('unhide_autostart_entry "${LEGACY_AUTOSTART_PATH}.disabled"')
-        rename_call = restore.index('mv "${LEGACY_AUTOSTART_PATH}.disabled" "$LEGACY_AUTOSTART_PATH"')
-        assert unhide_call < rename_call
-
-    def test_status_checks_the_disabled_entry_for_hidden_too(self):
-        # Before B24's fix, `status` only ever looked at $LEGACY_AUTOSTART_
-        # PATH -- which stop_legacy_autostart always renames away, so the
-        # check reported no problem even when the renamed file was still
-        # autostarting a second daemon. It has to also check the .disabled
-        # file it actually left behind.
-        assert (
-            '"${LEGACY_AUTOSTART_PATH}.disabled" ] && ! autostart_entry_is_hidden "${LEGACY_AUTOSTART_PATH}.disabled"'
-            in self.SCRIPT
-        )
-        assert self.SCRIPT.count('echo "  STILL AUTOSTARTS') == 2
+    def test_the_deb_ships_no_autostart_entry_of_its_own(self):
+        # The daemon is a system unit and the companion's autostart entry is
+        # rendered at `enable` time, so the package has nothing to put under
+        # /etc/xdg/autostart itself -- and with it gone, no conffile either.
+        build = (REPO_ROOT / "scripts" / "build_deb.sh").read_text(encoding="utf-8")
+        install = (REPO_ROOT / "debian" / "install").read_text(encoding="utf-8")
+        assert not (REPO_ROOT / "resources" / "linux" / "privacyfence.desktop").exists()
+        assert "etc/xdg/autostart" not in build
+        assert "conffiles" not in build
+        assert "etc/xdg/autostart" not in install
+        assert "/etc/xdg/autostart/privacyfence.desktop" not in self.SCRIPT
 
     def test_every_placeholder_is_one_the_installer_substitutes(self):
         substituted = set(re.findall(r"-e \"s\|(__[A-Z_]+__)\|", self.SCRIPT))
@@ -2828,19 +2801,8 @@ class TestEnableSplitContract:
         assert re.search(
             r'if \[ -n "\$OWNER_USER" \]; then\n\s+add_owner_to_service_group', body
         )
-        for step in ("create_service_account", "migrate_data", "apply_layout", "write_marker"):
+        for step in ("create_service_account", "apply_layout", "write_marker"):
             assert re.search(rf"^  {step}$", body, re.MULTILINE), step
-
-    @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
-    def test_the_posix_machine_half_has_nothing_to_migrate(self, platform):
-        # With no owner there is no home directory to read, so migrate_data
-        # reduces to creating the root -- the path it already had for "no
-        # existing ~/.privacyfence".
-        body = re.search(
-            r"^migrate_data\(\) \{\n(.*?)^\}", self.SCRIPTS[platform], re.MULTILINE | re.DOTALL
-        ).group(1)
-        assert re.search(r'if \[ -z "\$OWNER_HOME" \]; then', body)
-        assert 'mkdir -p "$SYSTEM_ROOT"' in body
 
     @pytest.mark.parametrize("platform", POSIX_PLATFORMS)
     def test_the_posix_scripts_report_the_pending_state_distinctly(self, platform):
@@ -3002,20 +2964,16 @@ class TestDebPostinstFailurePolicy:
         ), body
         assert '"owner_user": "${recorded_owner}"' in body
 
-    def test_the_per_user_half_bounces_the_daemon_around_a_real_migration(self):
-        # It runs against a *live* separated install by construction now: the
-        # postinst calls it moments after the machine half started the unit.
-        # Merging a legacy ~/.privacyfence into a directory the running daemon
-        # has open would corrupt whichever copy lost.
+    def test_the_per_user_half_leaves_a_running_daemon_alone(self):
+        # With nothing to merge into the data directory (ADR 0041), the
+        # per-user half has no reason to stop a daemon the machine half has
+        # just started -- it only adds a group member and rewrites the marker.
         body = re.search(
             r"^cmd_enable_for_user\(\) \{\n(.*?)^\}", self.SCRIPT, re.MULTILINE | re.DOTALL
         ).group(1)
-        assert 'if [ -d "$(legacy_data_dir)" ] && daemon_unit_is_active; then' in body
-        assert 'systemctl stop "$DAEMON_UNIT"' in body
-        assert 'systemctl start "$DAEMON_UNIT"' in body
-        assert body.index("systemctl stop") < body.index("  migrate_data") < body.index(
-            "systemctl start"
-        )
+        assert "systemctl" not in body
+        assert "add_owner_to_service_group" in body
+        assert body.index("\n  apply_layout\n") < body.index("\n  write_marker\n")
 
     @pytest.mark.skipif(
         sys.platform == "win32", reason="runs a bash script; Windows' installer is the .ps1"
@@ -3033,6 +2991,131 @@ class TestDebPostinstFailurePolicy:
 
             assert result.returncode != 0
             assert "cannot be combined" in result.stderr, result.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="runs the Linux installer's own bash")
+class TestLinuxUninstall:
+    """ADR 0042: ``uninstall`` stops and unregisters the service and keeps the
+    data, marker, account and group; ``uninstall --purge`` deletes those too;
+    nothing moves data into a home directory. The .deb wires ``remove`` to
+    the first and ``purge`` to the second's steps, written out in postrm.
+
+    The behavioural tests run the script's real ``cmd_uninstall`` with
+    ``systemctl``/``getent``/``userdel``/``groupdel`` stubbed on ``PATH`` and
+    every path pointed into ``tmp_path``, so no root is needed."""
+
+    SCRIPT = INSTALLERS["linux"].read_text(encoding="utf-8")
+    POSTRM = (REPO_ROOT / "debian" / "postrm").read_text(encoding="utf-8")
+
+    @classmethod
+    def _function(cls, name: str) -> str:
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}\n", cls.SCRIPT, re.MULTILINE | re.DOTALL)
+        # ...or a one-liner, which service_account_exists() and its sibling are.
+        match = match or re.search(rf"^{name}\(\) \{{ .*\}}$", cls.SCRIPT, re.MULTILINE)
+        assert match is not None, f"no {name}() in the Linux installer"
+        return match.group(0)
+
+    def _run(self, tmp_path: Path, *, purge: bool) -> tuple[Path, Path, list[str]]:
+        root = tmp_path / "var-lib-privacyfence"
+        (root / "authority" / "config").mkdir(parents=True)
+        (root / "authority" / "config" / "settings.yaml").write_text("x: 1\n", encoding="utf-8")
+        (root / "privilege-separation.json").write_text("{}", encoding="utf-8")
+        units = tmp_path / "etc"
+        units.mkdir()
+        unit = units / "privacyfence-daemon.service"
+        companion = units / "privacyfence-companion.desktop"
+        unit.write_text("[Unit]\n", encoding="utf-8")
+        companion.write_text("[Desktop Entry]\n", encoding="utf-8")
+        home = tmp_path / "home"
+        home.mkdir()
+
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        log = tmp_path / "calls.log"
+        for tool in ("systemctl", "getent", "userdel", "groupdel"):
+            stub = bin_dir / tool
+            stub.write_text(f'#!/bin/sh\necho "{tool} $*" >> "$CALL_LOG"\nexit 0\n', encoding="utf-8")
+            stub.chmod(0o755)
+
+        script = "\n".join([
+            "set -euo pipefail",
+            "note() { :; }",
+            "warn() { :; }",
+            "require_linux() { :; }",
+            "require_root() { :; }",
+            f"SYSTEM_ROOT={shlex.quote(str(root))}",
+            "SERVICE_ACCOUNT=privacyfence SERVICE_GROUP=privacyfence",
+            "DAEMON_UNIT=privacyfence-daemon.service",
+            f"DAEMON_UNIT_PATH={shlex.quote(str(unit))}",
+            f"COMPANION_AUTOSTART_PATH={shlex.quote(str(companion))}",
+            f"PURGE={1 if purge else 0}",
+            self._function("service_account_exists"),
+            self._function("service_group_exists"),
+            self._function("uninstall_services"),
+            self._function("purge_data_and_account"),
+            self._function("cmd_uninstall"),
+            "cmd_uninstall",
+        ])
+        env = {
+            **os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            "CALL_LOG": str(log), "HOME": str(home),
+        }
+        subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, timeout=30)
+        calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+        assert not any(home.iterdir()), "uninstall wrote into a home directory"
+        assert not unit.exists() and not companion.exists()
+        return root, home, calls
+
+    def test_uninstall_stops_the_service_and_keeps_the_data(self, tmp_path):
+        root, _home, calls = self._run(tmp_path, purge=False)
+
+        assert "systemctl disable --now privacyfence-daemon.service" in calls
+        assert "systemctl daemon-reload" in calls
+        assert (root / "authority" / "config" / "settings.yaml").read_text(encoding="utf-8") == "x: 1\n"
+        assert (root / "privilege-separation.json").is_file()
+        assert not any(call.startswith(("userdel", "groupdel")) for call in calls), calls
+
+    def test_uninstall_purge_also_deletes_the_data_account_and_group(self, tmp_path):
+        root, _home, calls = self._run(tmp_path, purge=True)
+
+        assert "systemctl disable --now privacyfence-daemon.service" in calls
+        assert not root.exists()
+        assert "userdel privacyfence" in calls and "groupdel privacyfence" in calls
+        # A group cannot be deleted while it is still an account's primary one.
+        assert calls.index("userdel privacyfence") < calls.index("groupdel privacyfence")
+
+    def test_purge_is_refused_on_any_other_command(self):
+        result = subprocess.run(
+            ["bash", str(INSTALLERS["linux"]), "enable", "--purge"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        assert result.returncode != 0
+        assert "--purge only applies to uninstall" in result.stderr, result.stderr
+
+    def test_the_postrm_purges_what_the_script_would(self):
+        # dpkg deletes the tool before postrm runs, so postrm writes the purge
+        # steps out; this keeps its path and names the script's own.
+        purge_case = re.search(r"\bpurge\)(.*?);;", self.POSTRM, re.DOTALL)
+        assert purge_case is not None, "no `purge)` case in debian/postrm"
+        body = purge_case.group(1)
+        root = re.search(r'^SYSTEM_ROOT="([^"]+)"$', self.SCRIPT, re.MULTILINE).group(1)
+        account = re.search(r'^SERVICE_ACCOUNT="([^"]+)"$', self.SCRIPT, re.MULTILINE).group(1)
+        group = re.search(r'^SERVICE_GROUP="([^"]+)"$', self.SCRIPT, re.MULTILINE).group(1)
+        assert root == str(privilege_separation.LINUX_SYSTEM_ROOT)
+        assert f"rm -rf {root}\n" in body
+        assert f"userdel {account} " in body
+        assert f"groupdel {group} " in body
+        assert body.index("userdel") < body.index("groupdel")
+
+    def test_the_postrm_keeps_the_data_on_remove(self):
+        remove_case = re.search(r"^    remove\)(.*?);;", self.POSTRM, re.MULTILINE | re.DOTALL)
+        assert remove_case is not None, "no `remove)` case in debian/postrm"
+        assert remove_case.group(1).strip() == ""
+
+    def test_neither_maintainer_script_reaches_into_a_home_directory(self):
+        for name in ("prerm", "postrm"):
+            body = (REPO_ROOT / "debian" / name).read_text(encoding="utf-8").split("set -e", 1)[1]
+            assert "$HOME" not in body and "~/" not in body and "/home" not in body, name
 
 
 _NET_LOCALGROUP_OUTPUT = """\

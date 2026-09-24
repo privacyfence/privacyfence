@@ -8,9 +8,8 @@ Terminal=false
 Categories=Utility;
 Actions=Settings;RecoveryCode;ServiceStatus;StartService;RestartService;StopService;Quit;
 # #428 Phase 3 (ADR 0002 decision 2): Linux's own "same menu items as the
-# macOS/Windows tray" -- this entry (installed to /usr/share/applications/,
-# not /etc/xdg/autostart/ -- see privacyfence.desktop's own comment) is a
-# real, clickable Applications-menu item, unlike that autostart-only file.
+# macOS/Windows tray" -- this entry (installed to /usr/share/applications/)
+# is a real, clickable Applications-menu item.
 # Each Exec= below runs privacyfence-companion --action=... once and exits
 # (companion.py's own module docstring): there's no persistent Linux tray
 # process for these to attach to, so every action here is one-shot.

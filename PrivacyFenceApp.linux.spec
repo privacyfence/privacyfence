@@ -21,8 +21,7 @@
 #     artifact as-is, no further PyInstaller-level wrapping.
 #   - No .icns / entitlements / codesign arguments -- Linux's EXE() doesn't embed an exe icon the
 #     way Windows/.app builds do; the existing PNG icons in src/privacyfence/resources/ are used
-#     as-is by the .desktop entry (resources/linux/privacyfence.desktop) and app-menu icon
-#     instead, no conversion step needed (contrast Windows, which does need a generated .ico).
+#     as-is by the app-menu entry (resources/linux/privacyfence-companion.desktop) instead, no conversion step needed (contrast Windows, which does need a generated .ico).
 #
 # Claude's MCP entry point is the daemon's own /mcp Streamable HTTP endpoint (web/server.py); the
 # stdio<->/mcp shim Claude Desktop actually spawns is built separately -- see mcpb/shim/ and
