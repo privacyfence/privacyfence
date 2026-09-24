@@ -83,9 +83,12 @@ audit trail are unchanged, only the caller is.
   someone also adds it to `ACTION_SCOPES`'s `ORG_MODE` set — at which point it is automatically
   both authorized *and* dispatchable for org mode through this one generic route, with no second
   route to remember to add.
-- Local mode's own dispatcher (`settings_action` in `build_routes`) is untouched: it still does not
-  audit-log a settings write (documented, deliberate asymmetry since PSC-4b), and this phase does
-  not change that either direction.
+- Local mode's own dispatcher (`settings_action` in `build_routes`) is untouched by this phase in
+  either direction; a separate, orthogonal PR (`feature/audit-local-mode-settings`) independently
+  resolved PSC-4b's own documented local/org audit-logging asymmetry by wiring
+  `_record_settings_audit` into local mode's dispatcher too, landing on `main` while this phase was
+  in flight. Both dispatchers now audit-log a settings write, the same shape, under their own
+  principal (`LOCAL_PRINCIPAL` locally, the signed-in principal in org mode).
 
 ## Verification
 
