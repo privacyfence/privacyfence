@@ -125,9 +125,9 @@ export interface MainOptions {
    * exercise both the "mint succeeds, the token file is never read" and
    * "mint fails, fall back to the token file exactly as before" paths
    * without touching a real socket/pipe. Defaults to the real
-   * controlChannel.ts ``mintMcpToken()``, called with a shortened timeout
-   * (see ``MINT_TIMEOUT_MS`` below) rather than that function's own 5s
-   * default. */
+   * controlChannel.ts ``mintMcpToken()`` with its own default timeout (see
+   * the note above ``getMcpToken()`` for why this call site no longer
+   * shortens it). */
   mintMcpToken?: () => Promise<string>;
   /** Overridable for tests (e.g. a fake Transport); defaults to a real
    * StreamableHTTPClientTransport pointed at the discovered mcp_url. */
@@ -138,19 +138,20 @@ export interface MainOptions {
   waitForDisconnect?: () => Promise<void>;
 }
 
-// controlChannel.ts's mintMcpToken() defaults to 5s, sized for the mint
-// itself possibly racing a daemon that is merely busy (that module's own
-// doc comment). By the time this call site runs, waitForDaemonPatiently()
-// above has already spent as long as it took to confirm /mcp is reachable
-// -- so a daemon old enough to have no control-channel MINT MCP handler at
-// all, or (the ordinary "nothing is listening" case daemon.ts already
-// handled) one that was never running, should fail this specific call fast
-// rather than making every shim launch pay the full default window on top
-// of the wait that already happened. 1s is generous for a local socket
-// round trip against a daemon that *is* listening and *does* know the
-// command; it is not generous enough to matter for a case that was always
-// going to fail.
-const MINT_TIMEOUT_MS = 1000;
+// The mint deliberately runs with controlChannel.ts's own default timeout.
+// This call site used to cut it to 1s, reasoning that only a daemon too old
+// to know MINT MCP, or one that isn't running, could be slow here, and that
+// both should fail fast. Neither is ever slow: an old daemon answers
+// ``ERROR unknown command`` at once, and a missing one refuses the
+// connection at once. The only thing a timeout ever catches is a daemon
+// that is up but busy -- the control channel serves one connection at a
+// time, and resolves each peer's account via getpwuid(), which on macOS is
+// a directory-service round trip -- and the 1s cut turned exactly that case
+// into a fallback onto a legacy token file that a separated install no
+// longer has, so the shim exited instead of waiting. That is what failed
+// v4.3.0's packaged macOS smoke test on its first attempt. The daemon's own
+// Python client (control_channel.mint_mcp_token()) already waits 5s for
+// the same call.
 
 function defaultWaitForDisconnect(): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -176,7 +177,7 @@ function defaultWaitForDisconnect(): Promise<void> {
  * silent fallback would not.
  */
 async function getMcpToken(opts: MainOptions, mcpTokenFile: string): Promise<string> {
-  const mint = opts.mintMcpToken ?? (() => mintMcpTokenReal({ timeoutMs: MINT_TIMEOUT_MS }));
+  const mint = opts.mintMcpToken ?? (() => mintMcpTokenReal());
   try {
     return await mint();
   } catch (err) {
