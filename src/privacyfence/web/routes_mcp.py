@@ -168,27 +168,26 @@ def _resolve_agent(
     """The AI system a gated tool call is attributed to (ADR 0006, ADR 0035), strongest signal
     first -- ADR 0006 decision 2's ranking:
 
-    1. an attested local override (``agent_overrides.py``: only on a separated install);
-    2. an org admin's pin of the token's ``client_id`` -- ``oauth_client``. The DCR
-       ``client_name`` never overrides a pin, and the pin never follows the name;
-    3. an override that could not attest -- the same mapping, recorded as ``client_info``;
-    4. org mode's DCR ``client_name``, then the handshake ``clientInfo`` -- both strings the
+    1. an org admin's pin of the token's ``client_id`` -- ``oauth_client``, the only attested
+       source on this path. The DCR ``client_name`` never overrides a pin, and the pin never
+       follows the name;
+    2. a local ``agent_overrides:`` relabel (``agent_overrides.py``) -- ``client_info``: it is
+       selected by the name the caller sends, so it is a claim on every install (ADR 0037);
+    3. org mode's DCR ``client_name``, then the handshake ``clientInfo`` -- both strings the
        client chose, so both ``client_info`` (ADR 0035 / gate G1: an unpinned DCR name is
        claimed).
 
-    Nothing a caller supplies can reach an attested source here: a pin or an attested override
-    comes from a file only the human side can write, and every caller-supplied string goes
-    through ``identify``, which records the source it is given. ``identify`` sanitizes every
-    string and gives ``UNKNOWN_AGENT`` when no usable name is left."""
+    Nothing a caller supplies can reach an attested source here: a pin is keyed by the access
+    token's ``client_id``, which the authorization server issued, and every caller-supplied
+    string -- an override's selector included -- records ``client_info``. ``identify``
+    sanitizes every string and gives ``UNKNOWN_AGENT`` when no usable name is left."""
     name, version = _claimed_client_info(ctx)
-    override = overrides.resolve(name, version) if overrides is not None else None
-    if override is not None and override.is_attested():
-        return override
     if pinned_agents is not None and access_token is not None:
         pinned_id = pinned_agents(access_token.client_id)
         pinned = identify_registry_id(pinned_id, version, AgentSource.OAUTH_CLIENT) if pinned_id else None
         if pinned is not None:
             return pinned
+    override = overrides.resolve(name, version) if overrides is not None else None
     if override is not None:
         return override
     if client_names is not None and access_token is not None:
@@ -418,7 +417,7 @@ def build_mcp_server(
         # ADR 0006: which AI system made this call, entered beside the
         # principal for everything downstream (audit rows, a pending
         # approval's captured identity) to read back via current_agent().
-        # Meta-tools stay unattributed (plan Invariant 5): they are not
+        # Meta-tools stay unattributed (ADR 0006, Consequences): they are not
         # gated calls. Never read from the request body -- see
         # _is_initialize for why that line is drawn.
         is_meta_tool = name in mcp_tools.META_TOOL_NAMES

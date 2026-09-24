@@ -1,17 +1,17 @@
-"""AGT-5: the two attested sources (ADR 0006 options C and D, ADR 0035 decision 3) and the audit
-viewer's agent column.
+"""AGT-5: the attested org pin (ADR 0006 option C, ADR 0035 decision 3), the local relabel (option D,
+ADR 0037) and the audit viewer's agent column.
 
 - Org mode: an admin pins a DCR ``client_id`` to a registry AI system -> ``oauth_client``. The pin
   is admin-only, step-up gated and audited; the DCR ``client_name`` never overrides it; unpinned
   stays ``client_info``.
-- Local mode: ``settings.yaml``'s ``agent_overrides:`` -> ``override`` only on a separated install
-  whose file is the service-owned authority copy; anywhere else it relabels as ``client_info``.
+- Local mode: ``settings.yaml``'s ``agent_overrides:`` relabels the name and records
+  ``client_info`` on every install -- separated or not, whatever file it was read from. Its
+  selector is the caller's own claimed name, and every local AI system shares one MCP token.
 """
 from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -237,119 +237,105 @@ class TestOrgPinCapture:
 
 
 # --------------------------------------------------------------------------- #
-# Local override -> override, only when out of the agent's reach
+# Local override -> a relabel, recorded as client_info on every install (ADR 0037)
 # --------------------------------------------------------------------------- #
 
-def _separated(monkeypatch, enabled: bool) -> None:
-    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: enabled)
+_OVERRIDE_CONFIG = {"agent_overrides": {"My-Wrapper": "claude-code", "python-mcp-client": "claude-code"}}
 
 
-class TestOverridesAreAttested:
-    def test_a_separated_install_with_the_authority_copy_attests(self, tmp_path, monkeypatch):
-        _separated(monkeypatch, True)
-        authority = tmp_path / "authority"
-        assert agent_overrides.overrides_are_attested(authority / "config" / "settings.yaml", authority) is True
+def _started_overrides(tmp_path, monkeypatch, *, separated: bool, config_path: str):
+    """The ``AgentOverrides`` daemon_main's own startup hands the web server, for a daemon whose
+    settings came from ``config_path`` on a separated (or unseparated) install."""
+    from privacyfence import daemon_main
+    from privacyfence.connector_host import ConnectorHost
+    from privacyfence.web.server import WebServer
 
-    def test_an_unseparated_install_never_attests(self, tmp_path, monkeypatch):
-        _separated(monkeypatch, False)
-        authority = tmp_path / "authority"
-        assert agent_overrides.overrides_are_attested(authority / "config" / "settings.yaml", authority) is False
+    monkeypatch.setattr(privilege_separation, "is_enabled", lambda: separated)
+    monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
+    monkeypatch.setattr(WebServer, "start", lambda self: None)
+    captured: dict[str, object] = {}
+    real_init = WebServer.__init__
 
-    def test_a_separated_install_reading_a_file_elsewhere_does_not_attest(self, tmp_path, monkeypatch):
-        _separated(monkeypatch, True)
-        assert agent_overrides.overrides_are_attested(tmp_path / "home" / "settings.yaml", tmp_path / "authority") is False
+    def _init(self, *args, **kwargs):
+        captured["overrides"] = kwargs.get("agent_overrides")
+        real_init(self, *args, **kwargs)
 
-    def test_a_path_that_cannot_be_resolved_does_not_attest(self, tmp_path, monkeypatch):
-        _separated(monkeypatch, True)
-
-        def _denied(self, strict=False):
-            raise OSError("denied")
-
-        monkeypatch.setattr(Path, "resolve", _denied)
-        assert agent_overrides.overrides_are_attested(tmp_path / "authority" / "x", tmp_path / "authority") is False
+    monkeypatch.setattr(WebServer, "__init__", _init)
+    daemon_main._maybe_start_web_server(
+        dict(_OVERRIDE_CONFIG), ConnectorHost([]), unattended_sessions_enabled=False, config_path=config_path,
+    )
+    return captured["overrides"]
 
 
-class TestLocalOverride:
-    """Verification 2 for D: the same file gives ``override`` on a separated install and
-    ``client_info`` on an unseparated one -- through the daemon's own wiring."""
+class TestLocalOverrideNeverAttests:
+    """The review finding this replaces: on a separated install an override was recorded as
+    ``override`` (attested), so any local AI system sending ``python-mcp-client`` was recorded as
+    attested Claude Code. The override now relabels only, wherever it was read from."""
 
-    CONFIG = {"agent_overrides": {"My-Wrapper": "claude-code"}}
-
-    def _overrides(self, tmp_path, monkeypatch, *, separated: bool):
-        from privacyfence import daemon_main
-
-        _separated(monkeypatch, separated)
-        monkeypatch.setattr(daemon_main, "PROJECT_ROOT", str(tmp_path))
-        config_path = str(paths.authority_root(tmp_path) / "config" / "settings.yaml")
-        return daemon_main._local_agent_overrides(self.CONFIG, config_path)
-
-    def test_an_override_on_a_separated_install_gives_override(self, tmp_path, monkeypatch):
-        overrides = self._overrides(tmp_path, monkeypatch, separated=True)
+    @pytest.mark.parametrize("separated", [True, False], ids=["separated", "unseparated"])
+    @pytest.mark.parametrize("where", ["authority", "elsewhere", "none"])
+    def test_a_match_is_claimed_on_every_install(self, tmp_path, monkeypatch, separated, where):
+        config_path = {
+            "authority": str(paths.authority_root(tmp_path) / "config" / "settings.yaml"),
+            "elsewhere": str(tmp_path / "home" / "settings.yaml"),
+            "none": "",
+        }[where]
+        overrides = _started_overrides(tmp_path, monkeypatch, separated=separated, config_path=config_path)
 
         agent = _resolve_agent(_ctx("my-wrapper", "3.1"), None, None, overrides=overrides)
 
-        assert agent == AgentIdentity(id="claude-code", name="Claude Code", version="3.1", source=AgentSource.OVERRIDE)
+        assert agent == AgentIdentity(id="claude-code", name="Claude Code", version="3.1", source=AgentSource.CLIENT_INFO)
+        assert not agent.is_attested()
 
-    def test_the_same_file_on_an_unseparated_install_gives_client_info(self, tmp_path, monkeypatch):
-        overrides = self._overrides(tmp_path, monkeypatch, separated=False)
-
-        agent = _resolve_agent(_ctx("my-wrapper"), None, None, overrides=overrides)
-
+    def test_a_spoofed_mapped_name_is_recorded_as_a_claim(self, tmp_path, monkeypatch):
+        # The finding's own scenario: any AI system holding the shared local token sends a mapped name.
+        overrides = _started_overrides(
+            tmp_path, monkeypatch, separated=True,
+            config_path=str(paths.authority_root(tmp_path) / "config" / "settings.yaml"),
+        )
+        agent = _resolve_agent(_ctx("python-mcp-client"), None, None, overrides=overrides)
         assert (agent.id, agent.source) == ("claude-code", AgentSource.CLIENT_INFO)
 
-    def test_no_config_path_cannot_attest(self, monkeypatch):
-        from privacyfence import daemon_main
-
-        _separated(monkeypatch, True)
-        overrides = daemon_main._local_agent_overrides(self.CONFIG, "")
-        assert overrides is not None and overrides.attested is False
-
-    def test_an_unmatched_name_falls_through_to_the_claim(self, tmp_path, monkeypatch):
-        overrides = self._overrides(tmp_path, monkeypatch, separated=True)
+    def test_an_unmatched_name_falls_through_to_the_claim(self):
+        overrides = agent_overrides.AgentOverrides(mapping={"my-wrapper": "claude-code"})
 
         agent = _resolve_agent(_ctx("openai-mcp"), None, None, overrides=overrides)
 
         assert (agent.id, agent.source) == ("chatgpt", AgentSource.CLIENT_INFO)
 
-    def test_an_attested_override_outranks_a_pin(self):
-        overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"}, attested=True)
-        agent = _resolve_agent(_ctx("x"), _token(), None, pinned_agents=lambda _c: "chatgpt", overrides=overrides)
-        assert (agent.id, agent.source) == ("cursor", AgentSource.OVERRIDE)
-
-    def test_a_pin_outranks_an_override_that_cannot_attest(self):
-        overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"}, attested=False)
+    def test_a_pin_outranks_an_override(self):
+        overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"})
         agent = _resolve_agent(_ctx("x"), _token(), None, pinned_agents=lambda _c: "chatgpt", overrides=overrides)
         assert (agent.id, agent.source) == ("chatgpt", AgentSource.OAUTH_CLIENT)
 
     def test_a_relabel_outranks_the_dcr_name(self):
-        overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"}, attested=False)
+        overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"})
         agent = _resolve_agent(_ctx("x"), _token(), lambda _c: "openai-mcp", pinned_agents=lambda _c: None, overrides=overrides)
         assert (agent.id, agent.source) == ("cursor", AgentSource.CLIENT_INFO)
 
     def test_no_claimed_name_matches_no_override(self):
-        overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"}, attested=True)
+        overrides = agent_overrides.AgentOverrides(mapping={"x": "cursor"})
         assert overrides.resolve(None, "") is None
         assert _resolve_agent(_ctx(None), None, None, overrides=overrides) is UNKNOWN_AGENT
 
 
 class TestFromConfig:
     def test_absent_section_is_none(self):
-        assert agent_overrides.from_config({}, attested=True) is None
+        assert agent_overrides.from_config({}) is None
 
     def test_a_non_mapping_section_is_ignored(self):
-        assert agent_overrides.from_config({"agent_overrides": ["claude-code"]}, attested=True) is None
+        assert agent_overrides.from_config({"agent_overrides": ["claude-code"]}) is None
 
     def test_bad_entries_are_skipped_and_good_ones_kept(self):
         overrides = agent_overrides.from_config({"agent_overrides": {
             "ok": "gemini-cli", "unknown-target": "nope", "": "cursor", "not-str": 3,
-            "‮Spoof\n": "cursor",
-        }}, attested=True)
+            "\u202eSpoof\n": "cursor",
+        }})
         assert overrides is not None
         assert dict(overrides.mapping) == {"ok": "gemini-cli", "spoof": "cursor"}
-        assert overrides.attested is True
 
     def test_nothing_usable_is_none(self):
-        assert agent_overrides.from_config({"agent_overrides": {"a": "nope"}}, attested=False) is None
+        assert agent_overrides.from_config({"agent_overrides": {"a": "nope"}}) is None
 
 
 # --------------------------------------------------------------------------- #

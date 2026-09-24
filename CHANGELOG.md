@@ -68,16 +68,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the app, never downloaded, and never taken from what the client sends. Today every identity is
   one the client gave for itself, so every card shows the *Not verified* form until verified
   identities arrive.
-- **An administrator can now verify which AI system an OAuth client is, and a separated local
-  install can verify it from `settings.yaml`** (ADR 0006, ADR 0035 decision 3). In organization
-  mode, a new admin-only *AI systems* settings page lists every OAuth client registered with the
-  server and pins one to the AI system it really is. Pinning and unpinning need a passkey when
-  step-up is on, and every change is recorded in the audit log. Only a pinned client is shown and
-  recorded as verified; the name a client registered with never overrides a pin, and a pin never
-  moves to another registration. On a privilege-separated local install, a new optional
-  `agent_overrides:` section maps the name an AI system gives to the one it is, and is recorded as
-  verified. On an install that is not separated the same section only relabels the name, still
-  marked *Not verified*, because there the AI system could have written the file itself.
+- **An administrator can now verify which AI system an OAuth client is** (ADR 0006, ADR 0035
+  decision 3). In organization mode, a new admin-only *AI systems* settings page lists every OAuth
+  client registered with the server and pins one to the AI system it really is. Pinning and
+  unpinning need a passkey when step-up is on, and every change is recorded in the audit log. Only
+  a pinned client is shown and recorded as verified; the name a client registered with never
+  overrides a pin, and a pin never moves to another registration. In local mode, a new optional
+  `settings.yaml` section, `agent_overrides:`, maps the name an AI system gives to the one it is.
+  It only relabels the name: the request is still marked *Not verified* on every install,
+  privilege-separated or not, because the mapping is chosen by the name the AI system sends and
+  every AI system on the machine shares the same local credential (ADR 0037).
 - **The Audit Log settings page shows which AI system made each request, and how sure
   PrivacyFence is of it**, in both modes. In organization mode every user now sees the page, with
   their own recent decisions.

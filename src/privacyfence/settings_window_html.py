@@ -1531,7 +1531,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
         return {
             "mode": LOCAL_MODE, "is_admin": False,
             # AGT-5: the AI-system pin page is org-only -- local mode has no DCR
-            # registrations to pin (its equivalent is settings.yaml's agent_overrides:).
+            # registrations to pin (settings.yaml's agent_overrides: only relabels, ADR 0037).
             "sections": {**dict.fromkeys(_ALL_SECTIONS, True), "agents": False},
             "not_applicable_actions": [],
         }

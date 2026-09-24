@@ -1211,8 +1211,8 @@ class WebServer:
         (see ``_build_org_app``).
 
         ``agent_overrides`` (local mode only) is ``settings.yaml``'s ``agent_overrides:`` section,
-        parsed once by daemon_main.py (``agent_overrides.from_config``) -- see that module for
-        when it attests and when it only relabels.
+        parsed once by daemon_main.py (``agent_overrides.from_config``) -- a relabel only, never
+        an attested source (see that module).
         """
         self.host = host
         self.port = port

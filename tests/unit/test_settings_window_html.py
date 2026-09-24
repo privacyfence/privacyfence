@@ -502,8 +502,8 @@ class TestOrgCapabilities:
         assert caps["is_admin"] is False
         # AGT-5: AI systems is org-only (no DCR registrations to pin locally);
         # every other section stays.
-        assert caps["sections"].pop("agents") is False
-        assert all(caps["sections"].values())
+        assert caps["sections"]["agents"] is False
+        assert all(v for k, v in caps["sections"].items() if k != "agents")
         assert caps["not_applicable_actions"] == []
 
     def test_local_state_is_unaffected_by_capabilities(self):
