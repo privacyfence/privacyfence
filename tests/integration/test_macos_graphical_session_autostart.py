@@ -94,6 +94,7 @@ from privacyfence.privilege_separation import (
     MACOS_SYSTEM_ROOT,
     MARKER_FILE_NAME,
 )
+from privacyfence.companion import _STATUS_POLL_SECONDS
 from privacyfence.web.control_channel import companion_socket_path_under, socket_path_under
 from tests.diagnostics import failure_dir, suite_name_for, write_environment_info
 
@@ -466,6 +467,16 @@ def test_macos_privilege_separation_wires_daemon_and_companion_autostart(_clean_
         _wait_for_path_as_root(
             companion_socket_path_under(HANDOFF_DIR), timeout=20, what="the companion's own control channel socket",
             context=lambda: _separated_job_report(companion_domain),
+        )
+
+        # Outlive a few status-poll ticks: a tray redraw off AppKit's main
+        # thread SIGTRAPs on the first one, and KeepAlive respawns it under a
+        # new pid -- up, then down, then up again, which the checks above miss.
+        time.sleep(3 * _STATUS_POLL_SECONDS)
+        still = _wait_for_running(companion_domain, timeout=5)
+        assert still == companion_pid, (
+            f"{COMPANION_LABEL} died and was respawned (pid {companion_pid} -> {still}) within "
+            f"{3 * _STATUS_POLL_SECONDS:.0f}s:\n{_separated_job_report(companion_domain)}"
         )
     finally:
         # TRUSTED_IMAGE_DIR itself is root-owned, but its parent (/Library/PrivacyFence) and
