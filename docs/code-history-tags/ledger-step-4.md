@@ -31,6 +31,27 @@
    at the next restart.** This was cited as "#400 C3e". File:
    `src/privacyfence/web/org_install_policy.py` (module docstring). It meets the bar because of the
    rejected alternative: a "restart required" banner, which would have been the smaller change.
+6. **The decision ledger replays an approved read, but an approved write is single-use.** This was
+   cited as "D3". Within the ledger TTL, an identical read may reuse an approval. A second
+   identical write goes back through the gate. Files: `tests/unit/test_gate.py`
+   (`test_write_gate_ledger_entry_is_single_use`) and `src/privacyfence/approvals.py` (step 3's
+   file). It meets the bar because it is a trust boundary: how far one human approval reaches.
+7. **An auto-accept rule is identified by a content-derived id, never by its name.** This was
+   cited as "F9". `policy.store.rule_id_for_rule` computes the id, and `AuditEntry.rule_id`
+   records it. Files: `src/privacyfence/audit_log.py`, `tests/unit/test_gate.py`
+   (`TestRuleIdAttribution`), `tests/unit/policy/test_engine.py` and
+   `tests/unit/policy/test_store.py`. It meets the bar because it is hard to reverse once audit logs
+   carry the ids. Rejected alternative: attribute by rule name, which can repeat.
+8. **Six operation keys are left ungoverned.** This was cited as "F5" and "P0.3". The keys are
+   `gmail.create_filter`, `gmail.update_filter`, `slack.create_group_chat` and three
+   `apps_script.*` keys. No rule, label, grant or proposal reaches them. Files:
+   `tests/unit/policy/test_registry.py` (`_UNGOVERNABLE_OPERATIONS`) and
+   `tests/unit/policy/test_propose.py`. This one is weaker: it is an ADR only if always-popup is a
+   firm decision and not a known gap.
+9. **App-level sign-in policy on top of the IdP (allowed domains, required groups).** This was
+   cited as "SEC-22". Files: `src/privacyfence/org_identity.py`, `web/oauth_provider.py`,
+   `web/routes_org_identity.py` and their tests. This one is borderline: it is a trust-boundary
+   layer, but it may be too small a decision for an ADR.
 
 ## Changed user-visible strings
 
@@ -59,7 +80,11 @@
 
 ## Cross-slice edits needed
 
-None found. No test outside this slice asserts on a changed string (checked with `git grep`).
+- `docs/code-history-tags/plan.md` still names `tests/unit/test_p6_principal_isolation.py` and
+  `test_the_f5_operations_stay_unproposed`. They are now `tests/unit/test_principal_isolation.py`
+  and `test_the_ungovernable_operations_stay_unproposed`. The plan is deleted in step 7 anyway.
+
+Other than that, none. No test outside this slice asserts on a changed string (checked with `git grep`).
 
 ## Bugs noticed
 
@@ -88,7 +113,13 @@ None found. No test outside this slice asserts on a changed string (checked with
 - History phrasing without a tag was left alone under rule 7:
   - "no longer writes the link to a file" is on the local not-authorized page, and
     `test_session_auth.py` asserts on it;
-  - "used to be a blind time.sleep" in `test_audit_forwarding.py`.
+  - "used to be a blind time.sleep" in `test_audit_forwarding.py`;
+  - `AuditEntry.rule_id`'s comment in `audit_log.py` mentions the v1 and v2 engines disagreeing.
+    Only one engine exists now (ADR 0004), so that sentence is stale;
+  - `tests/unit/test_principal_isolation.py`'s module docstring quotes a deleted plan's "exit
+    criterion" wording;
+  - `tests/unit/policy/test_describe.py` says that the popup and Settings "currently disagree" on
+    width, which may be stale.
 
 ## Open issues kept as URLs
 

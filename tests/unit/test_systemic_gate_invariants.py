@@ -25,15 +25,15 @@ guard before this module existed:
   layer to strip -- documented rather than silently excluded, per this
   repo's own "where the codebase is inconsistent, call it out explicitly"
   convention (docs/coding-and-testing-guidelines.md).
-- All ten remaining credential/token-file writers across the
+- All ten credential/token-file writers across the
   ``*_client.py``/``*_oauth.py`` modules go through ``secure_files.py``'s
   ``atomic_write_text``/``atomic_write_json`` rather than a hand-rolled
-  ``open()``/``.write()`` -- the SEC-09 invariant (secure_files.py's own
-  module docstring) checked per call site here, rather than trusted to have
-  been done once at each site and stay that way. (Eleven at the time the
-  review was written; see ``TOKEN_WRITE_SITES``'s own comment for why
-  ``room_directory_client.py``'s site doesn't count against this specific
-  check anymore -- it's still covered, just separately.)
+  ``open()``/``.write()`` -- the restrictive-file-permissions invariant
+  (secure_files.py's own module docstring) checked per call site here,
+  rather than trusted to have been done once at each site and stay that
+  way. (See ``TOKEN_WRITE_SITES``'s own comment for why
+  ``scripts/sync_room_directory.py``'s write doesn't count against this
+  specific check -- it's still covered, just separately.)
 - Nothing that decides a gated call -- a ``CONDITION_SELECTORS`` entry,
   ``auto_accept.ReviewContext``, any ``policy/`` module -- reads agent
   identity: ADR 0006 Invariant 1, a claimed identity never changes an
@@ -165,16 +165,13 @@ _PII_SCAN_TEXT_EXEMPT = {
 # real writer (_save_token_file -- save_token_file is a thin public wrapper
 # around it, not a second independent write site).
 #
-# TST-13 named eleven at the time the review was written; room_directory_
-# client.py's own _save_token (once counted here) was retired along with
-# the rest of that module once scripts/sync_room_directory.py became its
-# only caller -- that script now carries its own standalone copy of the
+# scripts/sync_room_directory.py carries its own standalone copy of the
 # atomic-write pattern (deliberately, same as build_org_bundle.py: it must
 # not import the privacyfence package at all, see its own module
-# docstring), so it was never a fair fit for *this* check (which is
+# docstring), so it isn't a fair fit for *this* check (which is
 # specifically "does it call the shared helper" -- a script that can't
-# import that helper by design isn't a violation of the invariant). Ten
-# real sites remain here; the standalone script's own copy is checked
+# import that helper by design isn't a violation of the invariant). The
+# standalone script's own copy is checked
 # separately below for the pattern it stands in for, not for calling the
 # helper it deliberately can't reach.
 TOKEN_WRITE_SITES: tuple[tuple[str, str | None, str], ...] = (

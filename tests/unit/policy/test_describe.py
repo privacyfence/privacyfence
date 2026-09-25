@@ -1,7 +1,7 @@
-"""Tests for privacyfence.policy.describe (P5 of the policy v2 redesign).
+"""Tests for privacyfence.policy.describe.
 
 `describe.py` exists so that one intent reads the same wherever it is shown, and so that a surface
-can state a rule's *width* instead of leaving the user to infer it from an operation key (F2). The
+can state a rule's *width* instead of leaving the user to infer it from an operation key. The
 assertions here are mostly about that width: `covered_tools` on a one-verb rule and on the full
 sandbox-folder rule set are the two numbers the popup and Settings currently disagree about
 without saying so.
@@ -57,7 +57,7 @@ class TestRuleVerbsAndCoverage:
     def test_a_rule_is_only_credited_with_the_verbs_its_predicate_governs(self):
         """`slack.read_messages` carries both `read` and `search`; `approved_channel` governs only
         the first. Crediting it with both would describe a rule as allowing a multi-channel search
-        it cannot actually match (F7)."""
+        it cannot actually match."""
         rule = PolicyRule(id="r", predicate="approved_channel", value=["C1"],
                           operations=frozenset({"slack.read_messages"}))
         assert describe.rule_verbs(rule) == (Verb.READ,)
@@ -72,7 +72,7 @@ class TestRuleVerbsAndCoverage:
         assert "slack_get_channel_history" in describe.covered_tools(rule)
 
     def test_a_predicate_no_surface_proposes_is_credited_with_its_keys_own_verbs(self):
-        """A hand-written v1 rule (or a P2 scope no phase has made proposable) still has to render.
+        """A hand-written v1 rule (or a scope no surface proposes) still has to render.
         Falling back to the operation key's verbs is the most that can honestly be said."""
         rule = PolicyRule(id="r", predicate="file_type_allowlist", value=["text/plain"],
                           operations=frozenset({"drive.read_file_contents"}))
@@ -80,7 +80,7 @@ class TestRuleVerbsAndCoverage:
         assert describe.covered_tools(rule) == ("drive_get_file_content",)
 
     def test_covered_tools_counts_the_sandbox_folders_real_width(self):
-        """The number F2 is about: one "Write auto-accept" toggle, thirteen operation keys, and
+        """The width a surface has to state: one "Write auto-accept" toggle, thirteen operation keys, and
         the tools behind them."""
         rules = propose.rules_for_scope_group("drive.folder", ["FOLDER1"], _WRITE_VERBS)
         tools = {tool for rule in rules for tool in describe.covered_tools(rule)}
@@ -143,7 +143,7 @@ class TestSentences:
         assert describe.rule_sentence(rule) == "Confluence - space SP: allow read"
 
     def test_value_display_overrides_the_raw_value_phrase(self):
-        """Issue #588: a caller that already resolved the id(s) to a friendly name (Settings'
+        """A caller that already resolved the id(s) to a friendly name (Settings'
         Auto-accept page) can pass it through so the sentence agrees with it, instead of
         `rule_sentence` re-deriving the raw id from `rule.value` on its own."""
         rule = PolicyRule(id="r", predicate="approved_sandbox_folder", value=["FOLDER1"],
