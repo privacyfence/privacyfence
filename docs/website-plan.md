@@ -51,8 +51,8 @@ question is answered. The PR says which placeholders are waiting.
 | Q1 | ~~Approve the canonical product description, homepage `<title>` and H1.~~ **Answered 2026-09-25:** new wording, H1 and tagline, see [Canonical product description](#canonical-product-description). | — | — |
 | Q2 | ~~Imprint name and address.~~ **Answered 2026-09-25:** name **Andras Takacs**, contact **info@privacyfence.eu**, location **Budapest, Hungary**. No street address: the imprint is email-only by the maintainer's decision. | — | — |
 | Q3 | ~~GA4 measurement ID.~~ **Answered 2026-09-25: `G-7Z3PFP4XPT`.** Wave 0 uses Google's standard `gtag.js` snippet for this ID, but never as pasted: the site's consent code injects it only after "Accept" (guardrail 13). | — | — |
-| Q4 | **Repository description** for GitHub's About box (M6). Proposed: *"Open-source privacy and approval gateway for AI assistants (MCP): human approval, local PII checks and audit for Gmail, Drive, Slack, Salesforce, Jira and more."* | Nothing in the repo | The proposal. |
-| Q5 | **Cut 4.5.0 stable once Wave 1 has merged?** `/docs/` publishes from the latest stable tag (C4), so the new docs go live only with a stable release that contains them. | `/docs/` going live (Wave 3 can merge without it, see its brief) | Yes: 4.5.0 is the first stable after Wave 1. |
+| Q4 | ~~Repository description.~~ **Answered 2026-09-25:** the proposal, *"Open-source privacy and approval gateway for AI assistants (MCP): human approval, local PII checks and audit for Gmail, Drive, Slack, Salesforce, Jira and more."* Set it in M6. | — | — |
+| Q5 | ~~Which stable release takes the new docs live?~~ **Answered 2026-09-25: 4.6.0**, cut once Wave 1 has merged (M13). 4.5.0 ships first, without Wave 1. `/docs/` publishes from the latest stable tag (C4), so the new docs go live with 4.6.0. | — | — |
 | Q6 | **Wave 1 as one PR (F3) or three?** One PR is ~15 docs for one review. Three (1a install + platform + how it works; 1b security + organization deployment + configuration; 1c approvals + tools + connector guides) can run as three parallel sessions, each reviewed separately. | How Wave 1 is started | One PR, as decided in F3. The session may use sub-agents internally. |
 | Q7 | **When do ChatGPT and Gemini support ship?** | Nothing. B6 adds them to the clients data file in the release that ships them. | Not before they ship. |
 
@@ -78,7 +78,7 @@ blocks waiting for one silently. If a step is missing, it says which one in its 
 | M10 | Every wave | **Review and merge** each wave's PR. |
 | M11 | After Wave 1 merges | **Fresh install per platform** using only `getting-started.md`. Record it in `release-testing.md`'s manual checks. |
 | M12 | Before the next stable release | **Windows uninstaller:** click through the "Delete PrivacyFence data" checkbox, which has only been compiled in CI ([#674](https://github.com/privacyfence/privacyfence/pull/674)). |
-| M13 | After Wave 1 merges (Q5) | **Cut the stable release** through `/cut-release` or the Actions tab (`release.yml`). A Claude Code on the web container cannot push tags. |
+| M13 | After Wave 1 merges (Q5) | **Cut 4.6.0**, the first stable release containing Wave 1, through `/cut-release` or the Actions tab (`release.yml`). A Claude Code on the web container cannot push tags. |
 | M14 | After Wave 3 deploys and M13 | Check that `/docs/getting-started/` shows the released text, and that Search Console accepts the regenerated sitemap. |
 | M15 | Monthly | [Measurement](#measurement), and [#365's gate check](#release-history-page-releases-365) (`curl -s https://downloads.privacyfence.eu/api/stats/downloads`). |
 
@@ -294,8 +294,8 @@ Two consequences for how the waves run:
   each wave PR re-reads its target docs on `main` when it starts.
 - **Latest stable is now 4.4.0**, and `v4.5.0a1` (the product cleanup) is the current
   pre-release. Wave 3 still publishes the first stable release that contains Wave 1, so the "plan
-  a release between Wave 1 and Wave 3" note below stands: 4.5.0 is the natural candidate if Wave 1
-  lands before it is cut.
+  a release between Wave 1 and Wave 3" note below stands. 4.5.0 is released before Wave 1, so the
+  release that takes the new docs live is 4.6.0 (Q5).
 
 ## Target documentation set
 
