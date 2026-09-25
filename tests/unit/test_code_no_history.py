@@ -66,6 +66,12 @@ _ALLOWED: dict[tuple[str, str], str] = {
     ("CLAUDE.md", "D1"): "Cloudflare D1, the Worker's database",
     ("privilege_separation.py", "since 4.3"): "4.3BSD, the Unix release, not a PrivacyFence version",
     ("", "§2.7"): "the definition of done in docs/coding-and-testing-guidelines.md, cited by number everywhere",
+    ("scripts/verify_audit_log.py", "W28"): "an ISO week in an audit log file name (2026-W28.jsonl)",
+    ("tests/unit/test_verify_audit_log.py", "W28"): "an ISO week in an audit log file name (2026-W28.jsonl)",
+    ("tests/unit/test_verify_audit_log.py", "W29"): "an ISO week in an audit log file name (2026-W29.jsonl)",
+    ("tests/unit/test_audit_log.py", "W01"): "an ISO week in an audit log file name (2026-W01.jsonl)",
+    ("tests/unit/test_audit_log.py", "W02"): "an ISO week in an audit log file name (2026-W02.xlsx)",
+    ("tests/unit/test_audit_log.py", "W28"): "an ISO week in an audit log file name (2026-W28.jsonl)",
 }
 
 # Embedded base64 (fonts in the approval window's stylesheet) is data that spells anything.
