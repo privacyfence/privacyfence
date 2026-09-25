@@ -206,6 +206,25 @@ def _save_token_file(token_file: str, token_record: dict[str, Any]) -> None:
     atomic_write_json(token_file, token_record)
 
 
+def _oauth_error_detail(exc: requests.RequestException) -> str:
+    """The ``error``/``error_description`` pair from a token-endpoint error
+    response, e.g. `` (invalid_grant: expired access/refresh token)``, or
+    ``""``. A bare "400 Bad Request" can't tell a spent refresh token from a
+    revoked app or an IP restriction; these two fields can, and carry no
+    credential."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return ""
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(body, dict) or not body.get("error"):
+        return ""
+    description = body.get("error_description")
+    return f" ({body['error']}: {description})" if description else f" ({body['error']})"
+
+
 def _is_expired_session_error(exc: Exception) -> bool:
     text = str(exc)
     return "INVALID_SESSION_ID" in text or "Session expired" in text
@@ -276,16 +295,21 @@ class SalesforceClient:
             resp.raise_for_status()
             data = resp.json()
         except requests.RequestException as exc:
-            logger.warning("Salesforce token refresh failed: %s", exc)
+            logger.warning("Salesforce token refresh failed: %s%s", exc, _oauth_error_detail(exc))
             return False
 
         self._config["access_token"] = data.get("access_token", self._config.get("access_token"))
         self._config["instance_url"] = data.get("instance_url", self._config.get("instance_url"))
+        # With refresh token rotation on (an External Client App option), the
+        # response carries a new refresh token and the one just sent is spent.
+        # Persisting the old one works until the next access-token expiry, then
+        # every refresh fails with 400 invalid_grant.
+        self._config["refresh_token"] = data.get("refresh_token") or refresh_token
         self._sf = None
         if self._token_file:
             _save_token_file(self._token_file, {
                 "access_token": self._config["access_token"],
-                "refresh_token": refresh_token,
+                "refresh_token": self._config["refresh_token"],
                 "instance_url": self._config["instance_url"],
             })
         logger.info("Salesforce access token refreshed")

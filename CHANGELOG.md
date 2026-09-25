@@ -149,6 +149,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Salesforce stays signed in past its first token refresh.** With refresh token rotation on
+  (an option on Salesforce's External Client Apps), each refresh returns a new refresh token and
+  spends the old one; PrivacyFence kept the old one, so the connector worked for a few hours after
+  signing in and then failed with "Session expired or invalid" until you signed in again. A failed
+  refresh now also logs Salesforce's reason (e.g. `invalid_grant: expired access/refresh token`).
+
 - **Windows: an upgrade no longer stops at "Setup was unable to automatically close all
   applications".** The installer already ended PrivacyFence's service and processes before copying
   files; it now also waits until they are actually gone, and anything still holding a file is
