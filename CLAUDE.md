@@ -251,55 +251,24 @@ the only place it's published; see below.
 
 ### Cloudflare R2 release archive
 
-Every tag push — stable and pre-release alike — additionally uploads that release's artifacts to
-Cloudflare R2 (bucket `privacyfence-releases`), laid out as `releases/<channel>/<version>/...`:
-the DMG, and the two org-config build scripts (`build.yml`'s `build` job), both SBOMs (`build.yml`'s
-`sbom` job), and the sdist/wheel (`publish-pypi.yml`'s `publish-r2` job). `<version>` is the
-resolved `major.minor.patch[a|b|rc<n>]` string (never the `v`-prefixed tag itself); `<channel>` is
-`stable`, `alpha`, `beta`, or `rc`, derived from that suffix — see `scripts/r2_release.py`, which
-every one of those upload steps calls (`channel` subcommand to resolve the directory, `upload` to
-actually push files). That script is also where the R2 credential wiring lives now; it replaced
-`.github/workflows/r2-smoke-test.yml`, a one-off workflow that proved the GitHub Actions → R2
-credentials/endpoint plumbing worked and was deleted once `r2_release.py` existed to reuse it.
+Every tag push — stable and pre-release alike — also uploads that release's artifacts to the
+private Cloudflare R2 bucket `privacyfence-releases`, under `releases/<channel>/<version>/`. R2 is
+the one archive that has *everything*; PyPI and the GitHub Release carry only a stable tag's files.
+The facts live in [`docs/downloads-and-release-kpi.md`](docs/downloads-and-release-kpi.md):
 
-R2 is the one archive that has *everything*, regardless of what's also public elsewhere — stable
-artifacts land here too, even though they're also on PyPI/GitHub Releases. The bucket itself is
-left at Cloudflare R2's default (private — no public bucket policy or custom domain configured by
-anything in this repo). **Be exact about what that privacy buys, because this section used to claim
-more than it delivers:**
+- layout, channels, which job uploads what, which channel reaches which public index, and what the
+  private bucket does and does not buy — [Release archive (R2)](docs/downloads-and-release-kpi.md#release-archive-r2);
+- `scripts/r2_release.py`'s subcommands (`channel`, `check-tag`, `upload`, `finalize`, `verify`,
+  `promote`), which every upload step calls — same section;
+- the secrets and variables (`CF_RELEASES_R2_ACCESS_KEY_ID`, `CF_RELEASES_R2_SECRET_ACCESS_KEY`,
+  and the `CF_RELEASES_R2_ENDPOINT` variable) and the rule that every Cloudflare token is
+  **account-owned**, never minted from a personal profile —
+  [Credentials](docs/downloads-and-release-kpi.md#credentials).
 
-- **It does** make the download Worker the only public path to any artifact. Nothing can enumerate
-  the bucket, hotlink an object, or fetch a release without passing through the route that counts
-  it — which is what makes the download KPI a full count rather than a partial sample.
-- **It does not** restrict *who* may download a pre-release. `cloudflare/downloads/src/index.ts`
-  serves `/download/<channel>/<artifact>` for every channel it knows, unauthenticated, and
-  `/api/releases` lists them all. A private bucket behind a public Worker is a private bucket with
-  a public door.
-
-Concretely, this means:
-
-- **Stable**: reaches PyPI/TestPyPI (see above) and gets a public GitHub Release with the DMG,
-  org-config scripts, and SBOMs attached, exactly as before — R2 is an additional private
-  mirror, not stable's only distribution point.
-- **Alpha / beta / rc**: never reach PyPI/TestPyPI, and their GitHub Release entry (still created,
-  marked prerelease, so `update_checker.py`'s beta channel — which reads exactly that flag off the
-  releases list — keeps working) carries no file attachments. The actual DMG/SBOMs/sdist/wheel
-  are stored only in R2 — reachable through the Worker's own download routes, but listed on no public
-  index other than `privacyfence.eu/download/` itself.
-
-Required secrets/vars (Settings → Secrets and variables → Actions), named for what they're for —
-the release archive's R2 credentials, distinct from the download Worker's own deploy credentials
-(see [`docs/downloads-and-release-kpi.md`](docs/downloads-and-release-kpi.md)'s Credentials
-section for those):
-
-- `CF_RELEASES_R2_ACCESS_KEY_ID` / `CF_RELEASES_R2_SECRET_ACCESS_KEY` (secrets) — an R2 API token
-  scoped to the `privacyfence-releases` bucket. Mint it as an **account-owned** token (Manage
-  Account → Account API Tokens), not from a personal profile: this credential publishes every
-  release, and a user token stops working when that user's access changes. Same rule as the
-  downloads Worker's own token — see
-  [`docs/downloads-and-release-kpi.md`](docs/downloads-and-release-kpi.md)'s Credentials section.
-- `CF_RELEASES_R2_ENDPOINT` (repo/environment **variable**, not a secret — `build.yml` and
-  `publish-pypi.yml` read it as `vars.`) — the bucket's S3-compatible endpoint URL.
+The process rule that belongs here: a pre-release tag never reaches PyPI/TestPyPI and its GitHub
+Release entry (still created, marked prerelease, because `update_checker.py`'s beta channel reads
+exactly that flag) carries no files — its artifacts are reachable only through the download
+Worker.
 
 ### Who can download a pre-release
 
