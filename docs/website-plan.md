@@ -289,6 +289,13 @@ pin): ADR 0045 (the Windows installer ends its own processes, force-closes the r
 `packaging.md` (Wave 2) takes the CodeSignTool pin that `platform-support.md` just gained, and
 `release-testing.md` the installer's process handling. No user-doc change.
 
+Also after #684 (2026-09-25): on a separated install, Google sign-in (all Google connectors,
+Apps Script included) now opens in the browser through the companion app, the same way Slack,
+Salesforce and Atlassian already did, on an OS-picked loopback port, and an abandoned sign-in
+times out. For Wave 1, `connecting-a-service.md` describes one Authenticate flow for every
+connector and the timeout, and `google-cloud-setup.md`'s local redirect row matches a loopback
+desktop-app client. Before writing that row, re-read `google_oauth.authorize_local()`.
+
 Two consequences for how the waves run:
 
 - **Branch every wave from current `main`**, not from `claude/documentation-refactoring`, which
