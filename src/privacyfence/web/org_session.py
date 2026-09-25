@@ -172,8 +172,7 @@ def clear_session_cookie(response: Response) -> None:
 
 
 def check_csrf(request: Request, csrf: str | None) -> bool:
-    """Double-submit check for org-mode mutations (P8, `git show 96cd5af4^:docs/https-
-    connector-refactor-plan.md` §9.3), mirroring web/session_auth.py's own
+    """Double-submit check for org-mode mutations, mirroring web/session_auth.py's own
     ``check_csrf`` exactly -- but against ``pf_org_session`` instead of
     local mode's ``pf_session``. The session id itself doubles as the CSRF
     token here for the same reason it does in local mode: it's server-set,

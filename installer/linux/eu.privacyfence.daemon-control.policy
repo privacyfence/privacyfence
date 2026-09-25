@@ -3,7 +3,7 @@
  "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <!--
-  #428 Phase 2 (local-mode-fixes-plan.md §2.1): what lets the companion app's
+  ADR 0026: what lets the companion app's
   tray menu (running as an ordinary logged-in user, no sudo of its own) put
   up exactly one authentication prompt for "start/stop/restart PrivacyFence's
   background service", instead of asking a human to open a terminal.

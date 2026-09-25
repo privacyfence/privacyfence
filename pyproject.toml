@@ -136,8 +136,7 @@ dependencies = [
     # docstring.
     "webauthn>=3.0,<4.0",
     # Cross-platform single-instance file locking for daemon_main.py's
-    # _acquire_instance_lock()/_release_instance_lock() (the now-removed docs/windows-
-    # support-plan.md Phase 1, B1 in `git show be78e7ee^:docs/windows-linux-support-plan.md`):
+    # _acquire_instance_lock()/_release_instance_lock():
     # picks the right OS primitive itself (fcntl.flock on POSIX,
     # msvcrt/LockFileEx on Windows), the same "don't hand-roll a
     # platform-locking primitive" reasoning already given above for
@@ -216,7 +215,7 @@ dev = [
     "build>=1.2",
     "twine>=5.0",
     # Build-time-only PNG -> multi-resolution .ico conversion for the
-    # Windows build (`git show be78e7ee^:docs/windows-support-plan.md` Phase 2.3): unlike
+    # Windows build: unlike
     # macOS's sips/iconutil (used by build_dmg.sh), there's no Windows-
     # native icon-conversion tool available cross-platform in CI, so
     # scripts/build_installer.ps1 does it with Pillow instead. Not a
@@ -250,8 +249,7 @@ test = [
     # dependency of `mcp`; declared here because these tests import it
     # directly rather than relying on that staying true.
     "httpx2>=2.5",
-    # tests/integration/test_browser_smoke.py (TST-06, docs/security-
-    # remediation-plan.md Phase 2 item 2.5) -- drives the real web approval
+    # tests/integration/test_browser_smoke.py -- drives the real web approval
     # surface in a real headless browser, for the CSP/SameSite-cookie/SSE
     # behavior only a real browser actually enforces (see that module's own
     # docstring). Also needs a downloaded Chromium build (`playwright
@@ -301,14 +299,11 @@ testpaths = ["tests"]
 # A hung asyncio socket test (e.g. a fixture never closing a connection)
 # would otherwise block the whole suite indefinitely instead of failing.
 timeout = 30
-# The seven-layer taxonomy testing-policy.md describes (introduced by the
-# now-removed automated-test-strategy-plan.md's Phase 0, and now documented
-# there rather than here). Registered here so `pytest -m <marker>`
-# and `pytest -m "not live"` work and so an unregistered-marker typo fails
-# loudly (pytest's default `--strict-markers`-independent warning) rather
-# than silently matching nothing. Applied to new test modules as later
-# phases add them -- see testing-policy.md's "Pytest markers" note for which
-# existing modules already carry one.
+# The seven-layer taxonomy docs/testing-policy.md describes. Registered here
+# so `pytest -m <marker>` and `pytest -m "not live"` work and so an
+# unregistered-marker typo fails loudly (pytest's default
+# `--strict-markers`-independent warning) rather than silently matching
+# nothing. See testing-policy.md for which modules carry which marker.
 markers = [
     "unit: fast, fully offline",
     "integration: real internal stack, no external network",
@@ -316,14 +311,10 @@ markers = [
     "browser: real Chromium via Playwright",
     "packaged: runs against a built installer/artifact",
     "live: touches a real third-party provider (self-hosted runner only)",
-    # The now-removed automated-test-strategy-plan.md Phase 2.3: OS-level path/process/
-    # locking/daemon-discovery behavior, homed under tests/platform/ rather
-    # than scattered across existing files. Deliberately a separate marker
-    # from `system` -- Phase 0's own status note flagged this as an open
-    # naming decision (Phase 2.3's text said "the platform marker from
-    # Phase 0" before Phase 0's own marker list turned out to have no such
-    # entry); `system` stays reserved for Phase 3's canonical daemon/MCP/
-    # approval/audit scenario, a different concept from this one.
+    # OS-level path/process/locking/daemon-discovery behavior, homed under
+    # tests/platform/ rather than scattered across existing files.
+    # Deliberately a separate marker from `system`, which is the full
+    # daemon/MCP/approval/audit scenario -- a different concept.
     "platform: OS-level path/process/locking/daemon behavior (tests/platform/)",
 ]
 

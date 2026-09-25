@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# PyInstaller spec for PrivacyFenceApp.exe on Windows (the now-removed docs/windows-support-
-# plan.md Phase 2, B4 in `git show be78e7ee^:docs/windows-linux-support-plan.md`).
+# PyInstaller spec for PrivacyFenceApp.exe on Windows, packaged into the installer by
+# scripts/build_installer.ps1 (see docs/packaging.md).
 #
 # Produces:
 #   dist/PrivacyFenceApp/

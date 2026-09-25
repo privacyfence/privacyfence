@@ -195,8 +195,7 @@ class TestAuthorizeInteractive:
 
 # ---------------------------------------------------------------------------- #
 # build_authorize_url / exchange_code -- the hoisted functions authorize_
-# interactive itself now delegates to (P8, docs/https-connector-refactor-
-# plan.md §9.3), called directly here rather than through run_browser_oauth's
+# interactive itself now delegates to, called directly here rather than through run_browser_oauth's
 # local listener -- this is the shape web/routes_connect.py's org-mode
 # server-redirect flow calls them in.
 # ---------------------------------------------------------------------------- #

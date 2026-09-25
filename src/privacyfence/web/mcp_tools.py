@@ -247,8 +247,8 @@ AWAIT_APPROVAL_TOOL = types.Tool(
     name="privacyfence_await_approval",
     description=(
         "Long-poll one or more pending approvals returned by a gated tool call's "
-        "{status: 'approval_pending', approval_id, pending_count, binder_url, url, ...} result "
-        "(git show 96cd5af4^:docs/https-connector-refactor-plan.md §5), and report their status -- status only, never "
+        "{status: 'approval_pending', approval_id, pending_count, binder_url, url, ...} result, "
+        "and report their status -- status only, never "
         "content. Passing every outstanding approval_id in one call is the expected use, not a "
         "fallback for an edge case: if pending_count on the latest pending result is greater than "
         "one, issue whatever other gated calls are independently ready rather than waiting on this "

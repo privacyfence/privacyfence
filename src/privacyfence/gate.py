@@ -812,11 +812,10 @@ async def gated_call(
     my_email: str = "",
     session_created_ids: set | None = None,
     args: dict | None = None,
-    delivery: str = "",  # "local_disk" | "inline_base64" | "staged_link" -- `git show
-        # 04d08f4a^:docs/org-mode-download-delivery-plan.md`'s Phase 3: which transport actually moved (or would move)
-        # this call's file bytes, recorded on the audit entry alongside the ordinary accept/
-        # deny decision. "" (every call site before this phase, and every non-download tool)
-        # means "not applicable" -- this is deliberately not inferred from anything else gated_
+    delivery: str = "",  # "local_disk" | "inline_base64" | "staged_link" -- which
+        # transport actually moved (or would move) this call's file bytes (ADR 0017), recorded
+        # on the audit entry alongside the ordinary accept/deny decision. "" (every
+        # non-download tool) means "not applicable" -- this is deliberately not inferred from anything else gated_
         # call already has, since only the three download/attachment tools know their own
         # delivery mode. See audit_log.AuditEntry.delivery's own docstring.
 ) -> Any:

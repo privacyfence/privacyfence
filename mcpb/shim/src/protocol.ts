@@ -1,7 +1,6 @@
 /**
  * Discovery-file constants, ported from what web/server.py and
- * web/mcp_auth.py write on the daemon side (docs/https-connector-refactor-
- * plan.md §12's "Gap found while implementing P2" / D11):
+ * web/mcp_auth.py write on the daemon side (ADR 0012):
  *
  * - <data dir>/mcp_url   -- written by WebServer.start() once the
  *   embedded HTTP server is actually bound, cleared on stop(). The direct

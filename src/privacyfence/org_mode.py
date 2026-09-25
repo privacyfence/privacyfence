@@ -1,7 +1,7 @@
-"""``mode: local`` vs. ``mode: org`` (P7, docs/https-connector-refactor-
-plan.md §4's operating-modes table) -- the one setting the rest of the
-table's rows follow from. Lives in ``org_config.json`` (§4: "org_config.json
-| as today | as today, plus server/TLS/IdP config"), not settings.yaml: it's
+"""``mode: local`` vs. ``mode: org`` -- the one setting every other
+difference between the two operating modes follows from. Lives in
+``org_config.json`` (alongside the org server, TLS and IdP settings), not
+settings.yaml: it's
 an install-wide decision, not a per-user preference, and org_config.json is
 already the file daemon_main.py reads before it knows anything about a
 principal at all.
@@ -156,8 +156,8 @@ class DownloadDeliveryConfig:
     # is the primary mitigation, and staging still happens for oversized
     # files by default.
     allow_disk_staging: bool = True
-    # Phase 4 (`git show 453ae02e:local-mode-fixes-plan.md`, ADR 0007's "Clients
-    # without the bridge" section): every staged-link download in org mode is reached
+    # ADR 0028 (and ADR 0007's "Clients without the bridge" section): every
+    # staged-link download in org mode is reached
     # by an MCP client -- an agent, not a human with a browser -- so the
     # default is the capability link (/mcp-files/fetch/<token>, no bearer
     # header or session cookie needed: the token in the URL is the

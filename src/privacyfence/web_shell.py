@@ -1,6 +1,6 @@
-"""Shared page chrome for the web surfaces (docs/https-connector-refactor-
-plan.md §16.3: "one header, one nav, one palette, one session, links both
-ways") -- one pure function, ``wrap()``, that both ``/approvals`` and
+"""Shared page chrome for the web surfaces (one header, one nav, one
+palette, one session, links both ways) -- one pure function, ``wrap()``,
+that both ``/approvals`` and
 ``/settings`` wrap themselves in at the route layer (web/routes_approvals.py,
 web/routes_settings.py), so the two pages read as one application instead of
 "two applications bolted together" (§16.2.3's own wording for the problem

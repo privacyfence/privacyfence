@@ -177,12 +177,10 @@ _NON_BATCHABLE_KIND_REASON: dict[str, str] = {
 
 class TooManyPendingApprovalsError(RuntimeError):
     """Raised by register_or_coalesce() when either cap is already reached
-    -- fail-closed rather than queueing (`git show 96cd5af4^:docs/https-connector-
-    refactor-plan.md` §7.1): "reject further gated calls with a 'too many pending
-    approvals' error... the natural backstop against a runaway agent". The
+    -- fail-closed rather than queueing: rejecting further gated calls is the
+    natural backstop against a runaway agent. The
     per-principal cap (``max_pending_per_principal``) is checked first and
-    is the one that matters day to day in org mode (SEC-15, `git show ba1ec76e^:docs/
-    security-remediation-plan.md` Phase 1 item 1.8); the whole-registry cap
+    is the one that matters day to day in org mode; the whole-registry cap
     (``max_pending``) is the secondary backstop it always was -- see
     DEFAULT_MAX_PENDING_PER_PRINCIPAL's own comment for why both exist."""
 

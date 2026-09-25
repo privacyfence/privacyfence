@@ -1,6 +1,5 @@
-"""Shared Telegram phone/code/2FA sign-in coroutines (P8, `git show 96cd5af4^:docs/https-
-connector-refactor-plan.md` §9.3's own words: "Telegram's phone + code + 2FA
-flow is already a form in the settings UI and ports unchanged").
+"""Shared Telegram phone/code/2FA sign-in coroutines, used by both the
+desktop settings UI and org mode's per-user ``/connect`` page.
 
 Extracted from settings_controller.py's telegram_start_auth/telegram_
 submit_code/telegram_submit_2fa work() closures -- same telethon calls,

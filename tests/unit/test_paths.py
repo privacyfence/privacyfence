@@ -284,7 +284,7 @@ class TestAuthorityDir:
             assert paths.authority_dir() == tmp_path / "authority"
 
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (known, accepted gap, `git show be78e7ee^:docs/windows-linux-support-plan.md`'s Track B3)",
+        sys.platform == "win32", reason="chmod/stat permission bits are a POSIX-only security model -- Windows has none to assert on (a known, accepted gap; Windows access is an NTFS ACL, which windows_acl.py audits)",
     )
     def test_created_at_0700(self, monkeypatch, tmp_path):
         monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)

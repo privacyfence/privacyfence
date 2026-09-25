@@ -1,9 +1,8 @@
 """Tests for approval_ui.py: the pluggable ApprovalUI seam gate.py depends on
 instead of importing a concrete approval-surface implementation directly.
 
-WebApprovalUI (web_approval_ui.py) is the sole implementation since P10
-deleted NativeApprovalUI/approval_popup.py (docs/https-connector-refactor-
-plan.md §12, D6) -- its own tests (test_web_approval_ui.py) cover its real
+WebApprovalUI (web_approval_ui.py) is the sole implementation (ADR 0001)
+-- its own tests (test_web_approval_ui.py) cover its real
 behavior; this file stays focused on the seam itself: the singleton
 accessors and the deferred_registry contract a future implementation would
 also have to satisfy.
