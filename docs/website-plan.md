@@ -42,9 +42,10 @@ questionnaire answers (2026-09-23); a source-code audit of every document (2026-
 
 ### Open questions
 
-Answer these in the orchestrating session. It passes the answers to the wave sessions. A wave can
-start before its questions are answered; it drafts with the default and cannot merge until the
-question is answered. The PR says which placeholders are waiting.
+**All seven were answered on 2026-09-25**; the answers are in the table. The orchestrator passes
+them to every session as they stand. If a later question comes up, add it here with what it
+blocks and a default. A wave drafts with the default and cannot merge until the question is
+answered.
 
 | # | Question | Blocks | Default if unanswered |
 |---|---|---|---|
@@ -53,8 +54,8 @@ question is answered. The PR says which placeholders are waiting.
 | Q3 | ~~GA4 measurement ID.~~ **Answered 2026-09-25: `G-7Z3PFP4XPT`.** Wave 0 uses Google's standard `gtag.js` snippet for this ID, but never as pasted: the site's consent code injects it only after "Accept" (guardrail 13). | — | — |
 | Q4 | ~~Repository description.~~ **Answered 2026-09-25:** the proposal, *"Open-source privacy and approval gateway for AI assistants (MCP): human approval, local PII checks and audit for Gmail, Drive, Slack, Salesforce, Jira and more."* Set it in M6. | — | — |
 | Q5 | ~~Which stable release takes the new docs live?~~ **Answered 2026-09-25: 4.6.0**, cut once Wave 1 has merged (M13). 4.5.0 ships first, without Wave 1. `/docs/` publishes from the latest stable tag (C4), so the new docs go live with 4.6.0. | — | — |
-| Q6 | **Wave 1 as one PR (F3) or three?** One PR is ~15 docs for one review. Three (1a install + platform + how it works; 1b security + organization deployment + configuration; 1c approvals + tools + connector guides) can run as three parallel sessions, each reviewed separately. | How Wave 1 is started | One PR, as decided in F3. The session may use sub-agents internally. |
-| Q7 | **When do ChatGPT and Gemini support ship?** | Nothing. B6 adds them to the clients data file in the release that ships them. | Not before they ship. |
+| Q6 | ~~Wave 1 as one PR or three?~~ **Answered 2026-09-25: one PR** (F3), one session. The session may use sub-agents internally. | — | — |
+| Q7 | ~~When do ChatGPT and Gemini support ship?~~ **Answered 2026-09-25:** in the release after this plan's work (after 4.6.0). No page in this plan names them. The clients data file (guardrail 10) keeps adding them a one-line change for that release. | — | — |
 
 Wording you review in the PRs, not questions: the privacy policy and consent banner (Wave 0), every
 doc (Waves 1–2), every page (Waves 0, 4, 5).
@@ -147,7 +148,8 @@ Documentation principles, Guardrails, and your brief (<link>) plus every section
 it links to. Your brief's "Owns" list is your whole scope; anything else goes in
 the PR's "For later waves" list.
 Branch: <branch> from current origin/main.
-Answers so far: <Q1: …, Q2: …, or "none, use the defaults">.
+Maintainer answers: the "Open questions" table in the plan (all answered),
+plus anything newer: <paste, or "nothing newer">.
 Open one PR. Its description has: what was done, anything in the brief not done
 and why, placeholders waiting on open questions, and "For later waves".
 Then drive the PR to green.
@@ -628,7 +630,7 @@ served `/` contains no `cloudflareinsights` script.
 
 ### Wave 1 — user documentation
 
-- **Session:** S1 (or S1a–c, see Q6) · **Starts:** now · **Parallel with:** S0, S2
+- **Session:** S1 · **Starts:** now · **Parallel with:** S0, S2
 - **Needs before merge:** nothing blocking; maintainer review of every doc (M10).
 - **Owns:** every doc in the [published set](#published-docs--privacyfenceeudocs), the
   [deleted](#deleted) docs, README (except the opening paragraph S0 owns), `docs/README.md`'s
@@ -637,8 +639,8 @@ served `/` contains no `cloudflareinsights` script.
 - **Must not touch:** contributor docs' content (S2), `website/**`, CLAUDE.md beyond link updates.
 - **Re-read on start:** each target doc on `main` when you begin it; they keep changing.
 
-Produces the [published set](#published-docs--privacyfenceeudocs). One PR (F3, unless Q6 splits
-it), drafted by Claude, reviewed by the maintainer doc by doc. Deliverables:
+Produces the [published set](#published-docs--privacyfenceeudocs). One PR (F3, Q6), drafted by
+Claude, reviewed by the maintainer doc by doc. Deliverables:
 
 1. Move every still-current fact out of `migration-guide.md` first (step-up keys and "Turn on"
    button → configuration reference; `--step-up-scope` → org guide; human vs unattested sessions
