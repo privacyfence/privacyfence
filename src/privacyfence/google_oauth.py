@@ -1,14 +1,18 @@
-"""Shared Google OAuth 2.0 helper for org mode's server-redirect flow (P8).
+"""Shared Google OAuth 2.0 helper for both modes.
 
-Local mode keeps using ``google-auth-oauthlib``'s own ``InstalledAppFlow``
-loopback implementation directly -- each of gmail_client.py/drive_client.py/
-calendar_client.py/contacts_client.py/tasks_client.py's own
-``authorize_interactive()`` is unchanged by this module and calls
-``flow.run_local_server(port=0)`` exactly as before. This module is
-additive, used only by ``web/routes_connect.py``'s org-mode routes, where a
-remote browser (a phone, say) can't have PrivacyFence open a local port and
-a local browser window on its own behalf -- see ``oauth_loopback.py``'s own
-module docstring for why that assumption breaks down.
+Org mode (P8): ``web/routes_connect.py``'s routes call ``authorize_url``/
+``exchange_code`` directly, against a public redirect_uri, because a remote
+browser (a phone, say) can't have PrivacyFence open a local port and a local
+browser window on its own behalf -- see ``oauth_loopback.py``'s own module
+docstring for why that assumption breaks down.
+
+Local mode: every Google connector's ``authorize_interactive()`` calls
+``authorize_local()``, which drives the same two functions through
+``oauth_loopback.run_browser_oauth()`` -- so the authorize URL is opened by
+the companion app when one is running (ADR 0002 decision 5), exactly like
+Slack/Salesforce/Atlassian. ``InstalledAppFlow.run_local_server()``, used
+here before, calls ``webbrowser.open()`` from the daemon itself, which on a
+separated install reaches no desktop session and opens nothing.
 
 ``google_auth_oauthlib.flow.Flow`` is the lower-level counterpart of
 ``InstalledAppFlow`` that takes an explicit ``redirect_uri`` instead of
@@ -41,6 +45,7 @@ from typing import Any
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 
+from .oauth_loopback import run_browser_oauth
 from .secure_files import atomic_write_text
 
 logger = logging.getLogger(__name__)
@@ -165,6 +170,32 @@ def exchange_code(
     return flow.credentials
 
 
+def authorize_local(client_config: dict[str, Any], scopes: list[str]) -> Credentials:
+    """Local mode's interactive authorization for every Google connector:
+    a loopback redirect on an OS-picked port (Desktop-app clients accept any),
+    with the browser opened through ``oauth_loopback``'s default opener -- see
+    the module docstring for why not ``InstalledAppFlow.run_local_server()``.
+    Raises ``OAuthLoopbackError`` if nobody completes sign-in in time, and
+    ``GoogleOAuthError`` if the code exchange fails."""
+
+    def build_authorize_url(redirect_uri: str, state: str, code_challenge: str) -> str:
+        # PKCE is run_browser_oauth's own pair, so Flow must not generate one.
+        flow = Flow.from_client_config(
+            client_config, scopes=scopes, redirect_uri=redirect_uri, autogenerate_code_verifier=False,
+        )
+        url, _ = flow.authorization_url(
+            access_type="offline", state=state,
+            code_challenge=code_challenge, code_challenge_method="S256",
+        )
+        return url
+
+    def exchange(code: str, redirect_uri: str, code_verifier: str) -> dict[str, Any]:
+        return {"credentials": exchange_code(client_config, scopes, redirect_uri, code, code_verifier)}
+
+    result = run_browser_oauth(build_authorize_url, exchange, port=0, path="/", redirect_host="localhost")
+    return result["credentials"]
+
+
 def save_credentials(token_file: str, creds: Credentials) -> None:
     """Same file format ``GmailClient._save_token``/etc. write and
     ``Credentials.from_authorized_user_file`` reads back -- a token
@@ -175,6 +206,7 @@ def save_credentials(token_file: str, creds: Credentials) -> None:
 
 __all__ = [
     "GoogleOAuthError",
+    "authorize_local",
     "authorize_url",
     "build_flow",
     "exchange_code",

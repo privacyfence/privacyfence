@@ -1,14 +1,15 @@
 """Shared browser-loopback OAuth 2.0 helper.
 
-Used by the Slack, Salesforce, and Atlassian authorize flows (Google keeps using
-``google-auth-oauthlib``'s own loopback implementation via ``InstalledAppFlow``).
+Used by every local-mode connector authorize flow: Slack, Salesforce, Atlassian,
+and -- through ``google_oauth.authorize_local()`` -- every Google connector.
 Handles the parts every Authorization Code + PKCE flow needs: a short-lived local
 HTTP server to catch the redirect, CSRF ``state`` verification, and PKCE
 ``code_verifier``/``code_challenge`` generation.
 
 Slack/Salesforce/Atlassian all require an exact-match redirect URI in their app's
-allow-list, so callers must pass a fixed port (unlike Google's "Desktop app" OAuth
-clients, which accept any loopback port).
+allow-list, so those callers pass a fixed port. Google's "Desktop app" OAuth
+clients accept any loopback port, so its caller passes ``port=0`` and lets the
+OS pick one.
 
 ``run_browser_oauth()`` opens a browser
 on **the machine running the PrivacyFence daemon**, not on
@@ -38,9 +39,8 @@ each of slack_client.py/salesforce_client.py/atlassian_oauth.py's own
 module's ``run_browser_oauth`` is still what drives them in ``local`` mode
 (unchanged, byte-identical), but ``org`` mode calls the same functions
 directly and drives the provider round trip over real HTTP redirects
-instead. Google's equivalent split lives in the new ``google_oauth.py``
-module rather than here, since it never went through this module's loopback
-flow to begin with (``InstalledAppFlow`` manages its own).
+instead. Google's equivalent functions live in ``google_oauth.py``, whose
+``authorize_local()`` drives them through this module's loopback flow too.
 """
 
 from __future__ import annotations
@@ -183,7 +183,6 @@ def run_browser_oauth(
     """
     state = secrets.token_urlsafe(24)
     code_verifier, code_challenge = _make_pkce_pair()
-    redirect_uri = f"http://{redirect_host}:{port}{path}"
 
     result = _CallbackResult()
     done = threading.Event()
@@ -226,6 +225,8 @@ def run_browser_oauth(
             f"Could not bind 127.0.0.1:{port} for the OAuth redirect — is another "
             f"PrivacyFence sign-in already in progress? ({exc})"
         ) from exc
+    # Read back rather than using ``port``: ``port=0`` means the OS picks one.
+    redirect_uri = f"http://{redirect_host}:{server.server_port}{path}"
 
     server_thread = threading.Thread(target=server.serve_forever, daemon=True, name="oauth-loopback")
     server_thread.start()

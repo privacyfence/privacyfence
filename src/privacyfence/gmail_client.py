@@ -23,12 +23,12 @@ from typing import Any
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from . import local_files
 from .email_markdown import markdown_to_html, markdown_to_plain
+from .google_oauth import authorize_local
 from .html_to_text import html_to_text
 from .secure_files import atomic_write_text
 
@@ -359,8 +359,7 @@ class GmailClient:
             )
 
         logger.info("Starting interactive OAuth flow")
-        flow = InstalledAppFlow.from_client_config(self._client_config, SCOPES)
-        creds = flow.run_local_server(port=0)
+        creds = authorize_local(self._client_config, SCOPES)
         self._save_token(creds)
         logger.info("OAuth token saved to '%s'", self._token_file)
 

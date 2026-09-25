@@ -4,7 +4,7 @@ insert-then-delete sequencing), and the OAuth2 token lifecycle
 (authorize_interactive / _load_credentials / _save_token).
 
 The token lifecycle tests mock at the google-auth library boundary
-(``Credentials.from_authorized_user_file``, ``InstalledAppFlow.from_client_config``)
+(``Credentials.from_authorized_user_file``, ``google_oauth.authorize_local``)
 rather than at ``_load_credentials`` itself, so the actual
 load/valid/expired/refresh/save branching in ``_load_credentials`` is
 exercised for real -- a prior coverage audit found every OAuth-using
@@ -55,23 +55,18 @@ class TestAuthorizeInteractive:
         with pytest.raises(TasksClientError, match="No Google organization config installed"):
             client.authorize_interactive()
 
-    def test_runs_local_server_flow_and_persists_returned_credentials(self, tmp_path, monkeypatch):
+    def test_runs_local_authorization_and_persists_returned_credentials(self, tmp_path, monkeypatch):
         token_file = tmp_path / "nested" / "token.json"
         client = TasksClient(client_config={"installed": {"client_id": "cid"}}, token_file=str(token_file))
 
         fake_creds = MagicMock()
         fake_creds.to_json.return_value = '{"token": "abc"}'
-        fake_flow = MagicMock()
-        fake_flow.run_local_server.return_value = fake_creds
-        mock_from_client_config = MagicMock(return_value=fake_flow)
-        monkeypatch.setattr(
-            "privacyfence.tasks_client.InstalledAppFlow.from_client_config", mock_from_client_config
-        )
+        mock_authorize_local = MagicMock(return_value=fake_creds)
+        monkeypatch.setattr("privacyfence.tasks_client.authorize_local", mock_authorize_local)
 
         client.authorize_interactive()
 
-        mock_from_client_config.assert_called_once_with({"installed": {"client_id": "cid"}}, SCOPES)
-        fake_flow.run_local_server.assert_called_once_with(port=0)
+        mock_authorize_local.assert_called_once_with({"installed": {"client_id": "cid"}}, SCOPES)
         assert token_file.read_text(encoding="utf-8") == '{"token": "abc"}'
 
 
