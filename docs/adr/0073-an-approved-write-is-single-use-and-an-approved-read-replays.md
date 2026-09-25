@@ -4,11 +4,10 @@
 
 Accepted (recorded retroactively on 2026-09-25; decided around 2026-08-28 in
 `docs/https-connector-refactor-plan.md` §5.4 and decision row D3, read it with
-`git show 96cd5af4^:docs/https-connector-refactor-plan.md`, and implemented in `36c5b7ce`,
-merged in [#188](https://github.com/privacyfence/privacyfence/pull/188)). Implemented for the
-ledger path only. The hold-window path, write-only coalescing and the collected-outcome expiry
-audit below are decided but not yet implemented, tracked in
-https://github.com/privacyfence/privacyfence/issues/739.
+`git show 96cd5af4^:docs/https-connector-refactor-plan.md`, and implemented for the ledger path
+in `36c5b7ce`, merged in [#188](https://github.com/privacyfence/privacyfence/pull/188)).
+The hold-window path, write-only coalescing and the collected-outcome expiry audit below were
+decided in https://github.com/privacyfence/privacyfence/issues/739 and are implemented.
 
 ## Context
 
@@ -90,6 +89,23 @@ whatever was decided, whether that was an approval or a denial.
   `approval_pending` again.
 - `tests/unit/test_approvals.py`'s `test_review_gate_ledger_entry_is_reusable` and
   `test_popup_gate_ledger_entry_is_single_use`.
+- The hold-window path, in `tests/unit/test_gate.py`'s
+  `test_write_decided_within_the_hold_window_is_single_use` (an identical write after one decided
+  inside the hold window gets a card of its own) and `tests/unit/test_approvals.py`'s
+  `test_mark_collected_consumes_a_popup_entry`, `test_mark_collected_leaves_a_review_entry_replayable`
+  and `test_a_popup_entry_with_a_waiter_is_not_handed_out_by_the_ledger`.
+- Write coalescing, in `tests/unit/test_gate.py`'s
+  `test_concurrent_identical_write_is_refused_while_the_first_waits` and
+  `test_reissued_write_after_pending_still_collects_its_decision`, and `tests/unit/test_approvals.py`'s
+  `TestWriteCoalescingWithWaiters`.
+- The expiry audit, in `tests/unit/test_gate.py`'s
+  `test_replayed_read_leaves_no_expired_row_after_the_ledger_ttl`,
+  `test_write_decided_within_the_hold_window_leaves_no_expired_row`,
+  `test_read_decided_within_the_hold_window_leaves_no_expired_row` and
+  `test_uncollected_decision_is_still_audited_as_expired`, and `tests/unit/test_approvals.py`'s
+  `test_a_replayed_review_entry_is_not_reported_once_the_ledger_ttl_lapses`,
+  `test_an_entry_collected_within_the_hold_window_is_not_reported` and
+  `test_an_uncollected_popup_entry_is_still_reported`.
 
 ## Related
 
