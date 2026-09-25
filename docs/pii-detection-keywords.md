@@ -66,8 +66,8 @@ The check reads the content being released, not the envelope around it:
 - **Calendar** — the event description.
 - **Jira** — the issue description and comments.
 - **Confluence** — the page body.
-- **Drive** — a document's text, limited to its first 2,000 characters; a sheet read, limited to
-  its first 50 rows.
+- **Drive** — a document's text, all of what the AI system receives (at most 100 KB); a sheet
+  read, limited to its first 50 rows.
 - **Attachments and downloaded or uploaded files** — the text PrivacyFence can extract from the
   file (see [File previews](approvals-and-policy.md#file-previews)), capped at 20,000 characters.
   A file larger than 5 MB is not scanned, and images are not read (no OCR).

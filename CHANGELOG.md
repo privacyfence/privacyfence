@@ -80,6 +80,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   change the scheme and client address a request appeared to have. A reverse proxy on the same
   host now has to be listed, as `--server-trusted-proxy 127.0.0.1`, which the setup guide's
   example already does.
+- **Reading a Drive document shows and PII-checks everything the AI system receives.** The
+  approval card and the PII check used to see only the first 2,000 characters, while approving
+  released up to 100 KB of text, so an IBAN or ID number further into a document raised no
+  warning.
 
 ## [4.5.0] — 2026-09-25
 

@@ -792,8 +792,12 @@ class DriveConnector(Connector):
             filtered_data=filtered,
             gate="review",
             preview=preview,
-            details_text=text[:2000],
-            pii_scan_text=text[:2000],
+            # The whole of what the AI receives (up to get_file_content's
+            # cap), not a prefix: a shorter card would let the reviewer
+            # approve text they never saw, and PII past the cut would go
+            # unflagged.
+            details_text=text,
+            pii_scan_text=text,
             visibility={
                 "File metadata": category_policy("drive_privacy", "file_metadata"),
                 "Document content": category_policy("drive_privacy", "file_content"),
