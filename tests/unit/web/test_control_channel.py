@@ -512,7 +512,7 @@ class TestConfirmEnrollCommand:
 
 
 class TestEnrollmentCommand:
-    """Plan item 1.2's daemon-side half: the one question the companion
+    """The first-enrollment offer's daemon-side half: the one question the companion
     cannot answer for itself, because on a separated install the credential
     store lives under ``authority_dir()`` and the logged-in user cannot read
     it."""
@@ -642,8 +642,8 @@ class TestStatusCommand:
 
 
 class TestRecoveryCommand:
-    """Plan item 1.3, on the daemon's own channel. The property under test
-    is the one the whole item exists for: whatever happens, the reply on
+    """Recovery-code reissue, on the daemon's own channel. The property under
+    test is the one the command exists for: whatever happens, the reply on
     this socket never carries a recovery code. This socket is ``0660``
     group-shared with the agent on a separated install."""
 

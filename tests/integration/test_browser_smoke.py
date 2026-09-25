@@ -615,7 +615,7 @@ class TestApprovalDecisionFlow:
             thread.join(timeout=5)
 
     def test_list_refreshes_live_without_a_manual_reload(self, page, local_server):
-        """5deef1d8:docs/approval-list-ui-ux.md's ``/api/approvals/stream`` SSE
+        """The approval list's ``/api/approvals/stream`` SSE
         push, driven by a real ``EventSource`` in a real page -- a new
         approval registered *after* the page already loaded must appear
         with no navigation/reload, within the stream's own ~1s poll
@@ -1097,8 +1097,8 @@ class TestApprovalBinder:
     def test_icon_renders_for_a_connector_with_nothing_pending_at_first_paint(self, page, local_server):
         """A connector with nothing pending at first paint still needs its
         CSS rule baked in; without one, a row that arrived for it live would
-        draw the generic letter badge until the next full reload. Slack has nothing pending at first paint here --
-        the only card at load time is a Gmail one -- so a Slack row
+        draw the generic letter badge until the next full reload. Slack has
+        nothing pending at first paint here -- the only card at load time is a Gmail one -- so a Slack row
         arriving live must still draw the real bundled icon, not a letter
         "S"."""
         server, web_ui = local_server
@@ -1386,7 +1386,8 @@ class TestMobileLayoutViewport:
             thread.join(timeout=5)
 
     def test_list_row_keeps_a_readable_title_column(self, mobile_page, local_server):
-        """F2, as it actually reaches a phone: ``.pf-approval-actions`` is
+        """The list row's title column, as it actually reaches a phone:
+        ``.pf-approval-actions`` is
         ``flex-shrink:0`` around ~220px of buttons while
         ``.pf-approval-main`` is ``flex:1;min-width:0``, so the row's own
         ``flex-wrap`` never fires -- the text column shrinks to roughly
@@ -1834,11 +1835,10 @@ def local_server_with_settings(pf_home):
 
 
 class TestSettingsPageRendering:
-    """PSC-5's own review gate: local mode's settings page and org mode's
-    (admin and non-admin) all render through the same settings_window_html.
-    build_html() now -- this drives all three in a real headless browser and
-    saves a full-page screenshot of each, the same evidence this phase's own
-    brief asks for in the PR description."""
+    """Local mode's settings page and org mode's (admin and non-admin) all
+    render through the same settings_window_html.build_html() (ADR 0033) --
+    this drives all three in a real headless browser and saves a full-page
+    screenshot of each, as evidence a reviewer can look at."""
 
     _SCREENSHOT_DIR = Path(__file__).resolve().parents[2] / "test-results" / "psc5-settings-screenshots"
 
@@ -1867,12 +1867,12 @@ class TestSettingsPageRendering:
         nav_labels = page.locator(".pf-navitem").all_inner_texts()
         # Connectors is never applicable in org mode; General/Privacy
         # Filter/AI systems are admin-only -- a non-admin gets Auto-accept,
-        # their own Audit Log (AGT-5) and About.
+        # their own Audit Log and About.
         assert nav_labels == ["Auto-accept", "Audit Log", "About"]
         assert page.get_by_text("Auto-accept").first.is_visible()
         self._screenshot(page, "org-settings-non-admin")
 
-        # AGT-5: read-only in org mode -- the local-only export and log-level
+        # The audit log is read-only in org mode -- the local-only export and log-level
         # controls have no org route, so they must not be drawn.
         page.locator('.pf-navitem[data-nav="audit"]').click()
         page.wait_for_selector(".pf-audit-list")
@@ -1893,7 +1893,7 @@ class TestSettingsPageRendering:
         assert page.get_by_text("PII Detection Gate").is_visible()
         self._screenshot(page, "org-settings-admin")
 
-        # AGT-5: the admin's AI-system pin page renders (no client has
+        # The admin's AI-system pin page (ADR 0035) renders (no client has
         # registered with this fixture's provider, so it lists none).
         page.locator('.pf-navitem[data-nav="agents"]').click()
         page.wait_for_selector(".pf-agents-list")

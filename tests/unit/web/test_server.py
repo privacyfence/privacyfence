@@ -1316,7 +1316,7 @@ class TestLocalModeWiresTheFirstEnrollmentGate:
 
 
 class TestLocalEnrollmentState:
-    """Plan item 1.2's daemon-side answer: the one question the companion
+    """The first-enrollment offer's daemon-side answer: the one question the companion
     cannot answer for itself, because on a separated install the credential
     store is unreadable to the logged-in user."""
 
@@ -1419,8 +1419,8 @@ class TestLocalStatusPayload:
 
 
 class TestRecoveryCodeDelivery:
-    """Plan item 1.3: a credential-store reset token stops being a value a
-    process holding a ``pf_session`` can read out of an HTTP response."""
+    """A credential-store reset token is never a value a process holding a
+    ``pf_session`` can read out of an HTTP response."""
 
     def _server_module(self):
         from privacyfence.web import server as srv

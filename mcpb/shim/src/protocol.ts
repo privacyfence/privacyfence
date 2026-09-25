@@ -166,7 +166,7 @@ export function handoffDir(env: NodeJS.ProcessEnv = process.env): string {
 export const MCP_URL_FILE = path.join(handoffDir(), "mcp_url");
 
 /**
- * ADR 0008 (docs/adr/0008-one-principal-per-os-user.md, D3): the address of
+ * ADR 0008 D3 (docs/adr/0008-one-principal-per-os-user.md): the address of
  * the daemon's control channel -- the same one companion.py already speaks
  * ``MINT``/``MINT COMPANION``/``STATUS``/``QUIT`` over (web/control_channel.
  * py) -- ported to TypeScript, because minting MCP tokens per OS account

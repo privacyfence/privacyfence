@@ -289,8 +289,9 @@ def local_enrollment_state(step_up: StepUpConfig | None) -> str:
 
 
 def local_status_payload(started_at: str) -> str:
-    """The companion's ``STATUS`` command, from the daemon's side: a compact JSON object -- ``daemon_status.probe()``'s "the
-    control channel answered" case, and what the companion's tray menu and
+    """The companion's ``STATUS`` command, from the daemon's side: a
+    compact JSON object -- ``daemon_status.probe()``'s "the control
+    channel answered" case, and what the companion's tray menu and
     ``Service Details...`` dialog are actually built from.
 
     Read-only and free of anything a local process couldn't already infer
@@ -942,7 +943,7 @@ def build_app(
             # call below passes nothing -- see routes_security.py's
             # build_routes docstring on why the two differ here.
             confirm_first_enrollment=confirm_first_passkey_enrollment,
-            # Plan item 1.3: the companion shows the one-time recovery code
+            # The companion shows the one-time recovery code
             # instead of this response carrying it -- on a packaged build
             # only, which is the only kind of install ADR 0003 guarantees a
             # companion for. Everywhere else this stays None and the code
@@ -1041,7 +1042,8 @@ def _build_org_app(
     # -- see OrgAuth's own docstring. daemon_main.py's real org-mode boot
     # path always supplies one; a hand-built OrgAuth in a test that only
     # cares about the OAuth-AS/session-login surface can omit it and get
-    # that surface alone, with /connect and /oauth/start|callback left out (see test_server_org_mode.py's TestConnectSurfaceOrgMode).
+    # that surface alone, with /connect and /oauth/start|callback left out
+    # (see test_server_org_mode.py's TestConnectSurfaceOrgMode).
     default_next_path = routes_org_identity.DEFAULT_NEXT_PATH
     if org.connector_registry is not None:
         extra_routes.extend(routes_connect.build_routes(
@@ -1143,8 +1145,9 @@ class WebServer:
         agent_overrides: AgentOverrides | None = None,
     ) -> None:
         """``org``, ``ssl_certfile``/``ssl_keyfile`` and ``trusted_proxies``
-        are org mode's own -- every local-mode caller leaves them unset. ``ssl_certfile``/``ssl_keyfile`` (both required
-        together, or neither) terminate TLS directly in uvicorn; leave both
+        are org mode's own -- every local-mode caller leaves them unset.
+        ``ssl_certfile``/``ssl_keyfile`` (both required together, or
+        neither) terminate TLS directly in uvicorn; leave both
         unset when a reverse proxy in front of this daemon terminates TLS
         instead. ``trusted_proxies`` is the explicit allowlist required
         before ``X-Forwarded-For``/``X-Forwarded-Proto`` are
