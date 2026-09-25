@@ -60,6 +60,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   certification, local or organization mode, cost, and verifying a download. The site's menu
   links the FAQ, and `/connectors/` links each connector's page.
 
+- **The Slack, Salesforce, Jira and Confluence, and Telegram pages on the website now show an
+  approval card** for a read in that service, with the PII check's findings, as the Google
+  Workspace page already did. Each is generated from example data, never a real account.
+
 - **A release history page, `privacyfence.eu/releases/`,** lists every published version on
   every channel (stable, release candidate, beta and alpha), newest first, each with its release
   date, its installers and their SHA-256 checksums, and a link to its release notes. It works

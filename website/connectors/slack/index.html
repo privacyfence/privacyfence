@@ -51,16 +51,22 @@
       </div>
     </section>
 
-    <section class="page-section shell" aria-labelledby="pii-heading">
-      <div class="section-heading">
-        <p class="kicker">Personal data</p>
-        <h2 id="pii-heading">Message text is checked before you see the card.</h2>
-      </div>
-      <div class="page-copy stack">
-        <p>Before a reviewed read is shown to you, PrivacyFence scans the <strong>message text</strong> locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. Sender names and channel names are not scanned. Email addresses and phone numbers are deliberately not flagged, because nearly every signature has them.</p>
-        <p>A match sends the read to a card even if an always-allow rule covers the channel, highlights what was found, and asks for a second confirmation. The audit log records the category, never the matched text.</p>
-        <p>The privacy filter can also withhold whole kinds of Slack data from the assistant: message content, thread content, people's identities, and the channel, direct-message and group-chat lists. Each is set in <strong>Settings → Privacy Filter → Slack</strong>.</p>
-        <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a> · <a href="/docs/approvals-and-policy/#privacy-filter">The privacy filter</a></p>
+    <section class="page-section proof-section" aria-labelledby="pii-heading">
+      <div class="shell walkthrough split">
+        <div class="stack">
+          <p class="kicker">Personal data</p>
+          <h2 id="pii-heading">Message text is checked before you see the card.</h2>
+          <div class="page-copy stack">
+            <p>Before a reviewed read is shown to you, PrivacyFence scans the <strong>message text</strong> locally for likely personal data in English, German and Hungarian: IBANs, card numbers, ID and tax numbers, salary information and similar. Sender names and channel names are not scanned. Email addresses and phone numbers are deliberately not flagged, because nearly every signature has them.</p>
+            <p>A match sends the read to a card even if an always-allow rule covers the channel, highlights what was found, and asks for a second confirmation. The audit log records the category, never the matched text.</p>
+            <p>The privacy filter can also withhold whole kinds of Slack data from the assistant: message content, thread content, people's identities, and the channel, direct-message and group-chat lists. Each is set in <strong>Settings → Privacy Filter → Slack</strong>.</p>
+            <p><a href="/docs/approvals-and-policy/#the-pii-check">How the PII check works</a> · <a href="/docs/approvals-and-policy/#privacy-filter">The privacy filter</a></p>
+          </div>
+        </div>
+        <figure class="screenshot-frame">
+          <a href="/assets/slack-read-thread.png"><img src="/assets/slack-read-thread.png" width="2000" height="1700" alt="PrivacyFence approval card for reading a Slack thread in #finance-ops: the requesting AI system marked Not verified, its stated reason, a possible-PII warning listing financial figures, an IBAN and salary information, what will be provided to the AI system, and a preview table of the replies" loading="lazy"></a>
+          <figcaption>Reading a Slack thread: the PII check flags an IBAN and a salary before anything is released. Example data only.</figcaption>
+        </figure>
       </div>
     </section>
 
