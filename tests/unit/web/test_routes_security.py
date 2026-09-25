@@ -1,4 +1,4 @@
-"""Tests for web/routes_security.py: passkey enrollment (P9; mode-agnostic since #426 Phase 1)."""
+"""Tests for web/routes_security.py: passkey enrollment, in org mode and local mode alike."""
 from __future__ import annotations
 
 import json
@@ -24,11 +24,11 @@ BOB = Principal(id="bob", email="bob@example.com", display_name="Bob")
 @pytest.fixture(autouse=True)
 def _fake_data_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "data_dir", lambda: tmp_path)
-    # #426 Phase 4: register_verify/delete_credential/recover_credential
-    # now write audit entries -- an un-initialized logger falls back to
-    # the real ~/.privacyfence/audit (audit_log.py's own
-    # _fallback_log_dir), which testing-policy.md is explicit tests must
-    # never touch. init_audit_logger(str(tmp_path)) is that module's own
+    # register_verify/delete_credential/recover_credential write audit
+    # entries -- an un-initialized logger falls back to the real
+    # ~/.privacyfence/audit (audit_log.py's own _fallback_log_dir), which
+    # coding-and-testing-guidelines.md's "Fixtures & isolation" is explicit
+    # tests must never touch. init_audit_logger(str(tmp_path)) is that module's own
     # documented isolation pattern.
     init_audit_logger(str(tmp_path / "audit"))
     return tmp_path
@@ -88,7 +88,7 @@ def _local_app(
         back_link=("/settings/connectors", "Back to Connectors"),
         dev_unseparated_notice=dev_unseparated_notice,
         confirm_first_enrollment=confirm_first_enrollment or (lambda: (True, "")),
-        # Plan item 1.3. Unlike confirm_first_enrollment above this defaults
+        # Unlike confirm_first_enrollment above this defaults
         # to None, because that is what local mode's real wiring passes on
         # anything but a packaged build (web/server.py's build_app) -- the
         # companion path is driven by the tests that pass one.
@@ -174,7 +174,7 @@ def _register_another_credential(client, session_id, *, credential_id=b"second-r
 
 def _register_first_credential(client, session_id, *, fake_verified=None) -> dict:
     """Drives a full options->verify round trip and returns the parsed
-    JSON response -- shared by every Phase 4 test below that needs a
+    JSON response -- shared by every test below that needs a
     freshly enrolled credential."""
     client.post("/api/security/webauthn/register/options", json={"csrf": session_id})
     fake_verified = fake_verified or type("V", (), {
@@ -430,7 +430,7 @@ class TestRegisterVerify:
 
 class TestDeleteCredential:
     def test_unauthenticated_is_401(self):
-        # A JSON/fetch endpoint now (#426 Phase 3), not a plain form submit
+        # A JSON/fetch endpoint now, not a plain form submit
         # -- see module docstring -- so this is a clean 401, not org mode's
         # own /login redirect (a fetch() wouldn't usefully follow that
         # anyway).
@@ -467,7 +467,7 @@ class TestDeleteCredential:
 
 
 class TestDeleteLastCredentialRequiresStepUp:
-    """#426 Phase 3: removing your *only* enrolled passkey needs a fresh
+    """Removing your *only* enrolled passkey needs a fresh
     assertion first, regardless of ``step_up.require_passkey`` -- see
     module docstring. Mirrors test_routes_approvals.py's own
     TestStepUpWebAuthnFlow."""
@@ -566,8 +566,7 @@ class TestDeleteLastCredentialRequiresStepUp:
 # seven-layer taxonomy.
 @pytest.mark.unit
 class TestCrossPrincipalIsolation:
-    """TST-10: every route
-    here resolves ``principal`` from the request's own session
+    """Every route here resolves ``principal`` from the request's own session
     (``_current_principal``) and never takes an id from the request body/
     path, so every store this module touches -- webauthn_stepup.py's
     per-principal credential file, and this module's own
@@ -650,7 +649,7 @@ class TestCrossPrincipalIsolation:
 # seven-layer taxonomy.
 @pytest.mark.unit
 class TestLocalModeEnrollment:
-    """#426 Phase 1: the exact same ``build_routes`` wired to web/
+    """The exact same ``build_routes`` wired to web/
     session_auth.py instead of org_session -- local mode has exactly one
     identity (``LOCAL_PRINCIPAL``), so there's no cross-principal isolation
     to prove the way ``TestCrossPrincipalIsolation`` above does for org
@@ -694,7 +693,7 @@ class TestLocalModeEnrollment:
         assert wa.list_credentials(LOCAL_PRINCIPAL)[0].label == "My Laptop"
 
         # The only enrolled credential -- deleting it needs a fresh
-        # assertion first (#426 Phase 3, TestDeleteLastCredentialRequiresStepUp).
+        # assertion first (see TestDeleteLastCredentialRequiresStepUp).
         cred_id = wa.list_credentials(LOCAL_PRINCIPAL)[0].credential_id
         first = client.post(f"/security/credentials/{cred_id}/delete", json={"csrf": session_id})
         assert first.status_code == 428
@@ -713,7 +712,7 @@ class TestLocalModeEnrollment:
 # seven-layer taxonomy.
 @pytest.mark.unit
 class TestEnrollAndRemoveAreAudited:
-    """#426 Phase 4: every enroll/remove writes its own audit entry."""
+    """Every enroll/remove writes its own audit entry."""
 
     def test_enrollment_is_audited(self, tmp_path):
         app, sessions = _app()
@@ -773,7 +772,7 @@ class TestEnrollAndRemoveAreAudited:
 # seven-layer taxonomy.
 @pytest.mark.unit
 class TestRecoveryCodeIssuedOnEnrollment:
-    """#426 Phase 4: register_verify hands back a one-time recovery code
+    """register_verify hands back a one-time recovery code
     exactly when this principal doesn't already have an unused one."""
 
     def test_first_ever_enrollment_returns_a_recovery_code(self):
@@ -811,7 +810,7 @@ class TestRecoveryCodeIssuedOnEnrollment:
 # seven-layer taxonomy.
 @pytest.mark.unit
 class TestRecoverCredential:
-    """#426 Phase 4: POST /security/recover -- the recovery-code path for
+    """POST /security/recover -- the recovery-code path for
     when the only enrolled authenticator is lost, no WebAuthn ceremony
     involved."""
 
@@ -1079,7 +1078,7 @@ class TestRecoveryAttemptLimiter:
 # ===================================================================== #
 # the enrollment gate: enrolling a passkey is
 # gated too. See routes_security.py's own module docstring for the
-# finding (F1) these classes are the regression test for.
+# self-enrollment bypass these classes are the regression test for.
 # ===================================================================== #
 
 RP_ID = "pf.example.com"
@@ -1124,7 +1123,7 @@ class TestEnrollmentGateWithACredentialAlreadyEnrolled:
     """
 
     def test_a_session_alone_no_longer_enrolls_a_second_passkey(self, _fake_data_dir):
-        # The finding, as a regression test. Setup is the paranoid
+        # The self-enrollment bypass, as a regression test. Setup is the paranoid
         # configuration: a genuine credential already enrolled, and an agent
         # holding nothing but the session cookie.
         _enroll_for_real(ALICE, _software_authenticator())
@@ -1515,11 +1514,10 @@ class TestRegisterVerifyRequiresAnAuthorizedCeremony:
 # seven-layer taxonomy.
 @pytest.mark.unit
 class TestRecoveryCodeDeliveredByTheCompanion:
-    """Plan item 1.3: on a packaged local-mode install the one-time recovery
-    code never appears in this response at all -- the companion puts it on
-    the human's own desktop. F7 of the review this plan comes from: an agent
-    that reaches an enrollment otherwise receives a credential-store reset
-    token as a side effect.
+    """On a packaged local-mode install the one-time recovery code never
+    appears in this response at all -- the companion puts it on the human's
+    own desktop. Otherwise an agent that reaches an enrollment receives a
+    credential-store reset token as a side effect.
     """
 
     def _register(self, client, session_id):
@@ -1613,8 +1611,7 @@ class TestRecoveryCodeDeliveredByTheCompanion:
 
 
 class TestRecentSignInsSection:
-    """The self-approval plan's Phase 2, second half: every path to a session
-    is audited now, but an audit entry nobody reads is evidence after the
+    """Every path to a session is audited, but an audit entry nobody reads is evidence after the
     fact -- so the recent ones land on the page a human already visits to
     reason about what can approve on this install."""
 

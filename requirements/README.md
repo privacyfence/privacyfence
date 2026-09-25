@@ -1,6 +1,6 @@
 # Hash-locked dependency sets
 
-The files here are derived, `uv pip compile --universal`-generated output (SEC-19) — do not
+The files here are derived, `uv pip compile --universal`-generated output — do not
 hand-edit any of them; regenerate with
 [`scripts/update_dependency_locks.sh`](../scripts/update_dependency_locks.sh)
 (needs `uv` on PATH — see the script's own comments for why `--universal` and the explicit
@@ -11,7 +11,7 @@ fails the build if a committed file has drifted from what `pyproject.toml` actua
 - **`runtime.lock.txt`** — `pyproject.toml`'s `[project.dependencies]` only, no extras. This is not
   what a plain `pip install privacyfence` resolves — pip doesn't auto-discover or apply a lock file,
   so that command still resolves fresh from `pyproject.toml`'s version ranges (see the literal
-  install command in [`org-mode-setup-guide.md`](../docs/org-mode-setup-guide.md)). This file is
+  install command in [`org-mode-setup-guide.md`](../docs/org-mode-setup-guide.md#3-service-account-and-install)). This file is
   installed from explicitly, by name, in exactly three places: `build.yml`'s macOS/Windows/Linux
   jobs (`pip install --require-hashes -r requirements/runtime.lock.txt`), before PyInstaller freezes
   whatever's importable into the `.app`/installer/`.deb` — so it pins what actually ships in a

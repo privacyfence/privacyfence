@@ -1,6 +1,6 @@
 /**
  * D1 download counting. See migrations/0001_download_counts.sql for the table this writes to,
- * and index.ts's `shouldCount()` for the rule deciding which requests get here at all.
+ * and artifacts.ts's `isDownloadStart()` for the rule deciding which requests get here at all.
  */
 import type { Channel } from "./channel.js";
 
