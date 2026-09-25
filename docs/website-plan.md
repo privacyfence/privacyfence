@@ -70,10 +70,10 @@ blocks waiting for one silently. If a step is missing, it says which one in its 
 | M1 | Before Wave 0 merges | **Cloudflare → Security → Bots** (names as of 2026-09-25): *Configure AI bot policies* → Search, Agent and Training all **Allow**; **Enable Bot Preference Sync off** (it prepends Cloudflare's block to the served `robots.txt`, so the repo's file would not be what crawlers read); **AI Labyrinth off**; **Bot fight mode off** (D1, D2). **Done 2026-09-25** (maintainer confirmed Bot Preference Sync is off; GPTBot and ClaudeBot get 200 on `/`; no Cloudflare block is served). Wave 0's post-deploy check re-verifies it once `robots.txt` exists. |
 | M2 | Before Wave 0 merges | **Cloudflare → Web Analytics:** off for `privacyfence.eu`, including automatic setup. Otherwise Cloudflare injects its beacon at the edge, alongside GA ([Analytics](#analytics-google-analytics-4-behind-consent)). **Done 2026-09-25:** Web Analytics lists `privacyfence.eu` as Disabled. Wave 0's post-deploy check (no `cloudflareinsights` in the served `/`) re-verifies it. |
 | M3 | Before Wave 0 merges | **Cloudflare:** Redirect Rule `www` → apex (301). Confirm the GitHub Pages custom domain is the apex (D6). **Done 2026-09-25:** `www` returns 301 to `https://privacyfence.eu/`, and the Pages custom domain is `privacyfence.eu` (maintainer confirmed). |
-| M4 | Before GA goes live (Q3) | **Google Analytics:** create the GA4 property and web stream. Set data retention to 2 months, and turn off Google Signals, ads personalization and data sharing. Property created and ID sent (Q3, `G-7Z3PFP4XPT`); confirm the settings above. |
+| M4 | Before GA goes live (Q3) | **Google Analytics:** create the GA4 property and web stream. Set data retention to 2 months, and turn off Google Signals, ads personalization and data sharing. Property created and ID sent (Q3, `G-7Z3PFP4XPT`); confirm the settings above. **Done 2026-09-25** (maintainer confirmed: retention 2 months; Google Signals, granular location/device data, user-provided data, ads personalization and data sharing off; enhanced measurement on). |
 | M5 | Before Wave 0 merges | **Mailbox:** confirm `info@privacyfence.eu` delivers (E5). **Done 2026-09-25** (maintainer confirmed). |
 | M6 | Any time | **GitHub → About:** set the description (Q4), website `https://privacyfence.eu`, and topics `mcp`, `mcp-server`, `claude`, `privacy`, `human-in-the-loop`, `pii`, `ai-security`. |
-| M7 | After Wave 0 deploys | **Search Console:** submit `https://privacyfence.eu/sitemap.xml` and link the GA4 property. |
+| M7 | After Wave 0 deploys | **Search Console:** submit `https://privacyfence.eu/sitemap.xml` and link the GA4 property. **Half done 2026-09-25:** GA4 is linked to Search Console. The sitemap submission waits until Wave 0 has deployed `sitemap.xml`. |
 | M8 | After Wave 0 deploys | **Baseline:** record 3 months of Search Console impressions and clicks, the download total and the star count ([Measurement](#measurement)). |
 | M9 | After Wave 0 deploys | **Live checks:** Wave 0's post-deploy "Done when" list: bot user agents, Rich Results Test, OG card, GA Realtime only after "Accept", and one real phone. |
 | M10 | Every wave | **Review and merge** each wave's PR. |
@@ -600,7 +600,7 @@ Doc findings the cleanup PRs recorded and left for Wave 1:
 ### Wave 0 — crawlability, legal, analytics, responsive base
 
 - **Session:** S0 · **Starts:** now · **Parallel with:** S1, S2
-- **Needs before merge:** nothing left: Q1–Q3 are answered and M1–M3 and M5 are done (2026-09-25). M4's settings check is needed only before GA goes live.
+- **Needs before merge:** nothing left: Q1–Q3 are answered and M1–M3 and M5 are done (2026-09-25). M4 is done too, so GA goes live with the Wave 0 deploy.
 - **Owns:** `website/**`, `.github/workflows/pages.yml`, `website/canonical-description.md`, README's
   opening description paragraph (nothing else in README), the Wave 0 guardrail tests, three ADRs.
 - **Must not touch:** `docs/**` other than new ADRs and `docs/adr/README.md`.
