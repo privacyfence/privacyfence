@@ -71,7 +71,7 @@ blocks waiting for one silently. If a step is missing, it says which one in its 
 | M2 | Before Wave 0 merges | **Cloudflare → Web Analytics:** off for `privacyfence.eu`, including automatic setup. Otherwise Cloudflare injects its beacon at the edge, alongside GA ([Analytics](#analytics-google-analytics-4-behind-consent)). **Done 2026-09-25:** Web Analytics lists `privacyfence.eu` as Disabled. Wave 0's post-deploy check (no `cloudflareinsights` in the served `/`) re-verifies it. |
 | M3 | Before Wave 0 merges | **Cloudflare:** Redirect Rule `www` → apex (301). Confirm the GitHub Pages custom domain is the apex (D6). **Done 2026-09-25:** `www` returns 301 to `https://privacyfence.eu/`, and the Pages custom domain is `privacyfence.eu` (maintainer confirmed). |
 | M4 | Before GA goes live (Q3) | **Google Analytics:** create the GA4 property and web stream. Set data retention to 2 months, and turn off Google Signals, ads personalization and data sharing. Property created and ID sent (Q3, `G-7Z3PFP4XPT`); confirm the settings above. |
-| M5 | Before Wave 0 merges | **Mailbox:** confirm `info@privacyfence.eu` delivers (E5). |
+| M5 | Before Wave 0 merges | **Mailbox:** confirm `info@privacyfence.eu` delivers (E5). **Done 2026-09-25** (maintainer confirmed). |
 | M6 | Any time | **GitHub → About:** set the description (Q4), website `https://privacyfence.eu`, and topics `mcp`, `mcp-server`, `claude`, `privacy`, `human-in-the-loop`, `pii`, `ai-security`. |
 | M7 | After Wave 0 deploys | **Search Console:** submit `https://privacyfence.eu/sitemap.xml` and link the GA4 property. |
 | M8 | After Wave 0 deploys | **Baseline:** record 3 months of Search Console impressions and clicks, the download total and the star count ([Measurement](#measurement)). |
@@ -600,7 +600,7 @@ Doc findings the cleanup PRs recorded and left for Wave 1:
 ### Wave 0 — crawlability, legal, analytics, responsive base
 
 - **Session:** S0 · **Starts:** now · **Parallel with:** S1, S2
-- **Needs before merge:** Q1, Q2; M1–M3, M5. (Q3/M4 only for GA to go live.)
+- **Needs before merge:** nothing left: Q1–Q3 are answered and M1–M3 and M5 are done (2026-09-25). M4's settings check is needed only before GA goes live.
 - **Owns:** `website/**`, `.github/workflows/pages.yml`, `website/canonical-description.md`, README's
   opening description paragraph (nothing else in README), the Wave 0 guardrail tests, three ADRs.
 - **Must not touch:** `docs/**` other than new ADRs and `docs/adr/README.md`.
