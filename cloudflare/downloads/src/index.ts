@@ -127,10 +127,12 @@ async function handleStats(env: Env): Promise<Response> {
   }
 }
 
-// How long the release history may be reused, by the edge cache below and by browsers. Short, so
-// a new release shows up within minutes; long enough that page views cannot drive the R2 list and
-// manifest reads behind every uncached response.
-const HISTORY_MAX_AGE_SECONDS = 300;
+// How long release metadata may be reused: by browsers and other HTTP caches for every
+// /api/releases* route, and by the history's own edge cache below. Short, so a new release shows
+// up within minutes; long enough that page views cannot drive the R2 list and manifest reads
+// behind every uncached history response.
+const RELEASES_MAX_AGE_SECONDS = 300;
+const RELEASES_CACHE_CONTROL = { "Cache-Control": `public, max-age=${RELEASES_MAX_AGE_SECONDS}` };
 
 async function handleHistory(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   // One cache entry for everyone: the key has no query string and no Origin (CORS is added by the
@@ -147,9 +149,7 @@ async function handleHistory(request: Request, env: Env, ctx: ExecutionContext):
     // Not cached: the website falls back to /api/releases, and the next request retries.
     return jsonResponse({ error: "release history temporarily unavailable" }, 503, { "Cache-Control": "no-store" });
   }
-  const response = jsonResponse({ releases }, 200, {
-    "Cache-Control": `public, max-age=${HISTORY_MAX_AGE_SECONDS}`,
-  });
+  const response = jsonResponse({ releases }, 200, RELEASES_CACHE_CONTROL);
   ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
   return response;
 }
@@ -162,7 +162,7 @@ async function routeApi(path: string, request: Request, env: Env, ctx: Execution
         return [channel, manifest && publicManifest(manifest)] as const;
       }),
     );
-    return jsonResponse({ channels: Object.fromEntries(entries) });
+    return jsonResponse({ channels: Object.fromEntries(entries) }, 200, RELEASES_CACHE_CONTROL);
   }
 
   // Before the channel route, which would otherwise read "history" as an unknown channel.
@@ -174,7 +174,7 @@ async function routeApi(path: string, request: Request, env: Env, ctx: Execution
     if (!isChannel(channel)) return notFound(`unknown channel: ${channel}`);
     const manifest = await resolveLatestManifest(env.RELEASES, channel);
     if (!manifest) return notFound(`no published release for channel: ${channel}`);
-    return jsonResponse(publicManifest(manifest));
+    return jsonResponse(publicManifest(manifest), 200, RELEASES_CACHE_CONTROL);
   }
 
   if (path === "/api/stats/downloads") return handleStats(env);

@@ -312,6 +312,20 @@ describe("metadata routes", () => {
     },
   );
 
+  it.each(["/api/releases", "/api/releases/stable", "/api/releases/history"])(
+    "%s may be cached for five minutes",
+    async (path) => {
+      const response = await call(path);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Cache-Control")).toBe("public, max-age=300");
+    },
+  );
+
+  it.each(["/api/releases/nightly", "/api/stats/downloads"])("%s carries no Cache-Control", async (path) => {
+    // A 404 must not stick once the channel is published, and the stats are live counts.
+    expect((await call(path)).headers.get("Cache-Control")).toBeNull();
+  });
+
   it("the latest-per-channel routes keep every other artifact field", async () => {
     const body = (await (await call("/api/releases/stable")).json()) as { artifacts: object[] };
     expect(body.artifacts[0]).toEqual({

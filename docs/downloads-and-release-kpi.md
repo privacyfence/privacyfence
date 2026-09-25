@@ -175,6 +175,13 @@ a wrong method returns 405 with `Allow`. `/api/*` accepts `GET` and `OPTIONS` on
 and `sha256` field by field, so a field added to the manifest later is not published until it is
 listed there. Only the `/download/...` routes read `key`, to find the object they stream.
 
+`/api/releases`, `/api/releases/<channel>` and `/api/releases/history` answer a 200 with
+`Cache-Control: public, max-age=300`, so a new release reaches every client within five minutes.
+Their 404s and 503s carry none, so a channel's first release is never hidden behind a cached
+404, and `/api/stats/downloads` carries none because its counts are live. The website's own
+fetches use `cache: 'no-store'` and always ask the Worker. Only the history route also keeps its
+response in the Worker's edge cache (below).
+
 Download responses carry `Content-Type` (by extension: `.dmg`, `.exe`, `.deb`, `.pkg`, else
 `application/octet-stream`), `Content-Length`, `ETag`, `Accept-Ranges: bytes` and
 `Content-Disposition: attachment; filename="…"`. A single `bytes=` range is honored with a 206 and
