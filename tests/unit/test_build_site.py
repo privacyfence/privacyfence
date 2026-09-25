@@ -354,3 +354,10 @@ def test_descriptions_carry_no_straight_double_quote():
     assert build_site._curly_quotes('what "Always allow" proposes') == "what “Always allow” proposes"
     export = build_site.export_docs(build_site.DocsSource(None), "PrivacyFence (test)")
     assert not any('"' in description for description in export.descriptions.values())
+
+
+def test_the_build_refuses_a_manifest_that_publishes_a_private_file(monkeypatch):
+    monkeypatch.setitem(build_site.STATIC, "og-source.html", "website/assets/og-source.html")
+    monkeypatch.setattr(build_site, "REPOSITORY_ONLY", frozenset({"assets/og-source.html"}))
+    with pytest.raises(build_site.BuildError, match="repository-only"):
+        build_site.check_manifest()

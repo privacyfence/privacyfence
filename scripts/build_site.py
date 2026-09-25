@@ -556,6 +556,11 @@ def export_docs(source: DocsSource, version_label: str) -> DocsExport:
         if text is None:
             raise BuildError(f"docs/README.md publishes {stem}.md, which does not exist at {source.blob_ref}")
         raw[stem] = text
+    # Guardrail 5 fails a pull request that leaves a doc unclassified; at a tag, say so rather than
+    # fail the deploy, since the doc is simply not published.
+    unclassified = sorted(set(source.list_docs()) - {f"{stem}.md" for stem in stems} - CONTRIBUTOR_DOCS)
+    if unclassified:
+        warn(f"docs at {source.blob_ref} in neither half of docs/README.md are not published: {unclassified}")
     resolver = LinkResolver(source, published)
     titles = {stem: doc_title(text, stem) for stem, text in raw.items()}
     # A page's description is its index line ("Configuration reference: every settings.yaml
@@ -842,6 +847,14 @@ class BuildReport:
     layout_sample: list[str]
 
 
+def check_manifest() -> None:
+    """Refuses a manifest that would publish a file it also says stays private."""
+    published = set(PAGES.values()) | {s.removeprefix("website/") for s in STATIC.values() if s.startswith("website/")}
+    leaked = sorted(published & (REPOSITORY_ONLY | BUILD_INPUTS))
+    if leaked:
+        raise BuildError(f"the build manifest publishes files it lists as repository-only or build inputs: {leaked}")
+
+
 def build(
     out: Path,
     *,
@@ -852,6 +865,7 @@ def build(
 ) -> BuildReport:
     """Builds the whole site into `out` (replacing it). `docs_ref` is a git ref, "latest" (the
     newest stable tag), "worktree", or None for no docs."""
+    check_manifest()
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
