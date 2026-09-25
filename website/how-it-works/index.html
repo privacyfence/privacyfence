@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How PrivacyFence works — the request flow from AI client to your systems</title>
+  <meta name="description" content="How a request from an MCP-compatible AI assistant travels through PrivacyFence: policy, local PII check, human approval and audit, with one read and one write approved step by step.">
+  <meta name="pf-content-group" content="marketing">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/how-it-works/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/tokens.css">
+  <link rel="stylesheet" href="/chrome.css">
+  <link rel="stylesheet" href="/styles.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="PrivacyFence">
+  <meta property="og:url" content="https://privacyfence.eu/how-it-works/">
+  <meta property="og:title" content="How PrivacyFence works">
+  <meta property="og:description" content="Every request from an AI assistant passes policy, a local PII check, human approval and audit before it reaches Gmail, Drive, Slack, Salesforce or Jira.">
+  <meta property="og:image" content="https://privacyfence.eu/assets/og.png">
+</head>
+<body>
+  <!-- include: header -->
+
+  <main id="top">
+    <section class="page-intro shell">
+      <p class="kicker">How it works</p>
+      <h1>Every request passes a gate the AI does not control.</h1>
+      <p class="lede">An AI assistant never talks to Gmail, Drive or Slack itself. It asks PrivacyFence, and PrivacyFence decides, outside the AI, whether the request runs straight away, waits for you, or is refused. The credentials for your services never leave PrivacyFence.</p>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="flow-heading">
+      <div class="section-heading">
+        <p class="kicker">The request flow</p>
+        <h2 id="flow-heading">From the assistant to your systems, and back.</h2>
+      </div>
+      <figure class="diagram">
+        <picture>
+          <source media="(max-width: 600px)" srcset="/assets/architecture-narrow.svg" width="360" height="1060">
+          <img src="/assets/architecture.svg" width="1120" height="540" alt="The request flow: an AI client (Claude Desktop through the PrivacyFence extension, Claude Code over HTTP, or claude.ai through an organization deployment) sends each tool call over MCP to PrivacyFence, which applies policy, runs the local PII check, asks a person for approval where needed and audits the decision, then calls Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence or Telegram with credentials that stay inside PrivacyFence.">
+        </picture>
+        <figcaption>PrivacyFence runs on your own computer or on a server your organization controls. There is no PrivacyFence-operated server in the path.</figcaption>
+      </figure>
+
+      <div class="card-grid four grid-auto">
+        <article class="card stack">
+          <h3>The assistant connects over MCP</h3>
+          <p>Claude Desktop connects through the PrivacyFence extension (<code>PrivacyFence.mcpb</code>), which ships with the macOS and Windows installers. Claude Code connects straight to the local <code>/mcp</code> endpoint with a token from <code>privacyfence-app --print-mcp-token</code>. In an organization deployment, clients such as claude.ai sign in with OAuth through your identity provider.</p>
+          <a class="text-link" href="/docs/how-it-works/#how-an-ai-system-connects">How an AI system connects →</a>
+        </article>
+        <article class="card stack">
+          <h3>Every tool has a gate</h3>
+          <p>Each of the 114 connector tools has a gate fixed in code. Listing and searching metadata runs straight away and is logged. Reading content, such as an email or a file, is <strong>reviewed</strong> before the result is released. Writes and other changes need your <strong>approval</strong> before they happen.</p>
+          <a class="text-link" href="/docs/tools-reference/#gates">Every tool and its gate →</a>
+        </article>
+        <article class="card stack">
+          <h3>The decision stays outside the AI</h3>
+          <p>On a packaged install PrivacyFence runs under its own service account. An assistant running as you cannot read its credentials, change its rules or approve its own request. Approving takes a person on the Approvals page, and by default a passkey.</p>
+          <a class="text-link" href="/security/">The security model →</a>
+        </article>
+        <article class="card stack">
+          <h3>Then the connector calls the service</h3>
+          <p>Once a request is allowed, PrivacyFence calls the provider's API directly, with the sign-in you gave PrivacyFence. The assistant gets the result, never the credentials.</p>
+          <a class="text-link" href="/connectors/">What each connector can do →</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="page-section proof-section" aria-labelledby="read-heading">
+      <div class="shell walkthrough split">
+        <div class="stack">
+          <p class="kicker">A read, step by step</p>
+          <h2 id="read-heading">Reading an email thread that contains personal data.</h2>
+          <ol class="steps">
+            <li>The assistant calls <code>gmail_get_thread</code> and says why. Reading a thread is a <strong>reviewed</strong> read, and no rule covers it, so PrivacyFence holds the result.</li>
+            <li>Before you see anything, PrivacyFence fetches the thread and <strong>scans it locally</strong> for personal data. Here it finds a date of birth, a home address, an IBAN and salary information, and highlights each one.</li>
+            <li>The card shows what the assistant already knows (subject, participants, dates), its stated reason, <strong>who is asking</strong> (a name the client sent is marked <em>Not verified</em>), and exactly what will be released.</li>
+            <li>You choose <strong>Allow once</strong> or <strong>Deny</strong>. Because personal data was found, allowing asks for a second confirmation, and a packaged install also asks for your passkey.</li>
+            <li>If you decide within 30 seconds the call simply returns. Otherwise the assistant gets a link to the card to send you, and repeats the call once you have approved. After a denial it gets nothing from the thread.</li>
+            <li>The decision goes to the audit log, with the categories found but never the matched text.</li>
+          </ol>
+          <a class="text-link" href="/docs/approvals-and-policy/#the-pii-check">How the PII check works →</a>
+        </div>
+        <figure class="screenshot-frame">
+          <a href="/assets/gmail-read-thread.png"><img src="/assets/gmail-read-thread.png" width="2000" height="2020" alt="PrivacyFence approval card for reading a Gmail thread: the requesting AI system marked Not verified, its stated reason, a possible-PII warning listing a personal data reference, an IBAN and salary information, the matches highlighted in the message text, and what will be provided to the AI system" loading="lazy"></a>
+          <figcaption>The card for reading a Gmail thread, with the local PII check's findings highlighted. Example data only.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="page-section proof-section alternate" aria-labelledby="write-heading">
+      <div class="shell walkthrough split">
+        <div class="stack">
+          <p class="kicker">A write, step by step</p>
+          <h2 id="write-heading">Writing budget figures into a spreadsheet.</h2>
+          <ol class="steps">
+            <li>The assistant calls <code>drive_sheets_write_range</code>. It is a write, so <strong>nothing changes</strong> in the spreadsheet until you approve.</li>
+            <li>The card names the spreadsheet, its owner and the range, says what the write does (every cell in the range is overwritten), and shows the values and formulas as a table.</li>
+            <li>A write carries content the assistant wrote itself, so the PII check does not hold it. It notes what it saw, here currency amounts, for your information.</li>
+            <li>On a packaged install, approving a write asks for your passkey. For this tool, approving also lets further calls like it to the same file through for 5 minutes, held in memory only.</li>
+            <li>Only then does PrivacyFence write to Google Sheets, and the decision is audited.</li>
+          </ol>
+          <a class="text-link" href="/docs/approvals-and-policy/#the-approval-card">What is on an approval card →</a>
+        </div>
+        <figure class="screenshot-frame">
+          <a href="/assets/sheets-write.png"><img src="/assets/sheets-write.png" width="2000" height="1560" alt="PrivacyFence approval card for writing a spreadsheet range: the spreadsheet, its owner, the range and the effect of the write, the AI system's stated reason, an informational financial-figures note, and a preview table of the values to be written" loading="lazy"></a>
+          <figcaption>The card for a spreadsheet write, before anything is written. Example data only.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="page-section shell" aria-labelledby="routine-heading">
+      <div class="section-heading">
+        <p class="kicker">Routine work</p>
+        <h2 id="routine-heading">Approve the sensitive. Automate the routine.</h2>
+      </div>
+      <div class="card-grid grid-auto">
+        <article class="card stack">
+          <h3>Always-allow rules</h3>
+          <p>A card's <strong>Always allow</strong> button, the Settings page, or the assistant itself (with your confirmation) can add a narrow rule: a sender domain, a Drive folder, a Slack channel, a Jira project. Matching requests then run without a card, and are still audited.</p>
+          <a class="text-link" href="/docs/approvals-and-policy/#always-allow-and-policy-rules">Always-allow and policy rules →</a>
+        </article>
+        <article class="card stack">
+          <h3>Personal data still reaches you</h3>
+          <p>The PII check overrides read rules. A read a rule would let through goes to a card anyway when likely personal data is found in it.</p>
+          <a class="text-link" href="/docs/approvals-and-policy/#the-pii-check">The PII check →</a>
+        </article>
+        <article class="card stack">
+          <h3>Scheduled runs</h3>
+          <p>An assistant can ask ahead of time whether a call would run without a person. Where an organization turns it on, a run with nobody watching can declare itself unattended, so anything no rule covers is denied at once instead of waiting.</p>
+          <a class="text-link" href="/docs/how-it-works/#unattended-sessions">Unattended sessions →</a>
+        </article>
+      </div>
+    </section>
+
+    <section class="cta-section">
+      <div class="shell cta-card split">
+        <div>
+          <p class="kicker">Next</p>
+          <h2>Try it on your own computer.</h2>
+          <p>Install PrivacyFence on macOS, Windows or Linux, connect Claude Desktop or Claude Code, and approve your first request.</p>
+        </div>
+        <div class="actions vertical cluster">
+          <a class="button primary" href="/download/">Download PrivacyFence</a>
+          <a class="button secondary" href="/docs/getting-started/">Getting started</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- include: footer -->
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

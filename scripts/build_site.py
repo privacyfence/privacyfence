@@ -12,7 +12,9 @@ What it does, in order:
 
 1. **Hand-written pages.** Every page in `PAGES` is read from `website/`, its
    `<!-- include: NAME key="value" -->` lines are replaced with `website/_partials/NAME.html`, and
-   it is written to the same path under the output directory. Every file in `STATIC` is copied
+   it is written to the same path under the output directory. An `include: clients` line is the
+   "Works with" strip, rendered from `website/_data/clients.json`, which also fills the JSON-LD
+   `softwareRequirements` (guardrail 10). Every file in `STATIC` is copied
    as is. Nothing else under `website/` is published: `REPOSITORY_ONLY` files stay in the
    repository, and `BUILD_INPUTS` are read by this script and never copied.
    tests/unit/test_website_download_cta.py holds every file under `website/` to exactly one of
@@ -34,7 +36,8 @@ What it does, in order:
 4. **Stale-tag guard.** If that tag predates the published doc set (it has no
    `docs/how-it-works.md`), `/docs/` and `llms-full.txt` are skipped with a warning and
    `llms.txt` points at the docs on GitHub instead. The first stable release that carries the
-   published set turns `/docs/` on by itself.
+   published set turns `/docs/` on by itself. Whenever `/docs/` is not built, the hand-written
+   pages' links into it (the header's Docs link among them) are pointed at the docs on GitHub.
 5. **Generated files.** `sitemap.xml`, `robots.txt`, `llms.txt` and (with docs) `llms-full.txt`.
 6. **Link check.** Every internal link and fragment in every HTML page of the output must resolve
    (guardrail 6). A broken one fails the build.
@@ -86,6 +89,10 @@ DOWNLOAD_ORIGIN = "https://downloads.privacyfence.eu"
 # URL path -> page source under website/. Each is assembled from the shared partials.
 PAGES: dict[str, str] = {
     "/": "index.html",
+    "/how-it-works/": "how-it-works/index.html",
+    "/security/": "security/index.html",
+    "/enterprise/": "enterprise/index.html",
+    "/connectors/": "connectors/index.html",
     "/download/": "download/index.html",
     "/privacy/": "privacy/index.html",
     "/imprint/": "imprint/index.html",
@@ -101,6 +108,8 @@ STATIC: dict[str, str] = {
     "stats.js": "website/stats.js",
     "download/download.js": "website/download/download.js",
     "assets/og.png": "website/assets/og.png",
+    "assets/architecture.svg": "website/assets/architecture.svg",
+    "assets/architecture-narrow.svg": "website/assets/architecture-narrow.svg",
     "assets/icon.png": "src/privacyfence/resources/icon_512.png",
     "assets/gmail-read-thread.png": "docs/images/screenshots/gmail-read-thread.png",
     "assets/sheets-write.png": "docs/images/screenshots/sheets-write.png",
@@ -112,6 +121,7 @@ BUILD_INPUTS: frozenset[str] = frozenset(
         "_partials/header.html",
         "_partials/footer.html",
         "_docs/overrides/main.html",
+        "_data/clients.json",
     }
 )
 
@@ -276,11 +286,69 @@ def render_partial(name: str, indent: str = "", **overrides: str) -> str:
     return "".join(f"{indent}{line}" if line.strip() else line for line in text.splitlines(keepends=True))
 
 
+# ---- The tested AI clients (guardrail 10) --------------------------------------------------------
+
+CLIENTS_FILE = WEBSITE / "_data" / "clients.json"
+DEPLOYMENT_NOTES = {("organization",): "organization deployment"}
+
+
+def load_clients() -> dict:
+    """website/_data/clients.json: the one list of AI clients the site names as tested."""
+    data = json.loads(CLIENTS_FILE.read_text(encoding="utf-8"))
+    for client in data["clients"]:
+        if not client.get("name") or not set(client.get("deployments", [])) <= {"local", "organization"}:
+            raise BuildError(f"{CLIENTS_FILE.name}: a client needs a name and deployments from local/organization: {client}")
+    return data
+
+
+def render_clients(indent: str = "") -> str:
+    """The "Works with" strip, from the clients data file."""
+    data = load_clients()
+    e = html.escape
+    items = []
+    for client in data["clients"]:
+        note = DEPLOYMENT_NOTES.get(tuple(client["deployments"]))
+        suffix = f' <small>{e(note)}</small>' if note else ""
+        items.append(f'  <li class="client" title="{e(client["name"])}, {e(client["connects"])}">{e(client["name"])}{suffix}</li>')
+    lines = [
+        '<ul class="works-with cluster" aria-label="Tested AI clients">',
+        '  <li class="works-with-label">Works with</li>',
+        *items,
+        f'  <li class="works-with-more">and {e(data["others"])}</li>',
+        "</ul>",
+    ]
+    return "".join(f"{indent}{line}\n" for line in lines)
+
+
+def clients_requirement() -> str:
+    """The same list as one sentence, for the JSON-LD `softwareRequirements`."""
+    data = load_clients()
+    names = []
+    for client in data["clients"]:
+        note = DEPLOYMENT_NOTES.get(tuple(client["deployments"]))
+        names.append(f'{client["name"]} ({note})' if note else client["name"])
+    listed = ", ".join(names[:-1]) + f" or {names[-1]}" if len(names) > 1 else names[0]
+    return f"An MCP-compatible AI client, such as {listed}"
+
+
+def set_clients(page: str) -> str:
+    """Adds `softwareRequirements` from the clients data file to the page's JSON-LD
+    SoftwareApplication node."""
+    return _update_software_node(page, softwareRequirements=clients_requirement())
+
+
+GENERATED_PARTIALS: dict[str, Callable[[str], str]] = {"clients": render_clients}
+
+
 def assemble_page(source: str) -> str:
     """A page from website/ with every include line replaced by its partial."""
 
     def include(match: re.Match[str]) -> str:
         args = dict((key, value) for key, value in (arg.split("=", 1) for arg in shlex.split(match["args"])))
+        if match["name"] in GENERATED_PARTIALS:
+            if args:
+                raise BuildError(f"partial {match['name']!r} takes no arguments")
+            return GENERATED_PARTIALS[match["name"]](match["indent"])
         return render_partial(match["name"], match["indent"], **args)
 
     page = INCLUDE_RE.sub(include, source)
@@ -371,13 +439,16 @@ JSON_LD_RE = re.compile(r'(<script type="application/ld\+json">)(.*?)(</script>)
 
 def set_software_version(page: str, version: str) -> str:
     """Adds `softwareVersion` to the page's JSON-LD SoftwareApplication node."""
+    return _update_software_node(page, softwareVersion=version)
 
+
+def _update_software_node(page: str, **fields: str) -> str:
     def fill(match: re.Match[str]) -> str:
         data = json.loads(match[2])
         nodes = data.get("@graph", [data])
         for node in nodes:
             if node.get("@type") == "SoftwareApplication":
-                node["softwareVersion"] = version
+                node.update(fields)
         body = json.dumps(data, indent=2, ensure_ascii=False).replace("</", "<\\/")
         return f"{match[1]}\n{body}\n  {match[3]}"
 
@@ -750,6 +821,10 @@ def llms_txt(export: DocsExport | None, version: str | None) -> str:
         "",
         "## Website",
         "",
+        f"- [How it works]({SITE_URL}/how-it-works/): the request flow from AI client to connected service, with one read and one write approved",
+        f"- [Security]({SITE_URL}/security/): the security model in brief, and what PrivacyFence does not claim",
+        f"- [Enterprise]({SITE_URL}/enterprise/): local mode and organization deployment side by side, with prerequisites",
+        f"- [Connectors]({SITE_URL}/connectors/): per connector, what an AI client can read, what is reviewed and which writes need approval",
         f"- [Download]({SITE_URL}/download/): installers for macOS, Windows and Linux, each with its SHA-256 checksum",
         f"- [Privacy policy]({SITE_URL}/privacy/): what this website and the download service do with visitor data",
         f"- [Imprint]({SITE_URL}/imprint/): who publishes privacyfence.eu",
@@ -935,7 +1010,7 @@ def build(
     version = str(manifest["version"]) if manifest else None
 
     for url_path, source in PAGES.items():
-        page = assemble_page((WEBSITE / source).read_text(encoding="utf-8"))
+        page = set_clients(assemble_page((WEBSITE / source).read_text(encoding="utf-8")))
         if manifest:
             if url_path == "/download/":
                 page = prerender_download(page, manifest)

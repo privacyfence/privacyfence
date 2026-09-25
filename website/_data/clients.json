@@ -1,0 +1,21 @@
+{
+  "about": "The AI clients privacyfence.eu names as tested, in one place (guardrail 10, tests/unit/test_website_clients.py). scripts/build_site.py renders the homepage's 'Works with' strip (an `include: clients` line) and the JSON-LD softwareRequirements from this file. Add a client here when a release supports it, not before.",
+  "clients": [
+    {
+      "name": "Claude Desktop",
+      "deployments": ["local", "organization"],
+      "connects": "through the PrivacyFence extension (PrivacyFence.mcpb)"
+    },
+    {
+      "name": "Claude Code",
+      "deployments": ["local", "organization"],
+      "connects": "straight to /mcp over HTTP"
+    },
+    {
+      "name": "claude.ai",
+      "deployments": ["organization"],
+      "connects": "straight to an organization deployment's /mcp over HTTPS, with OAuth sign-in"
+    }
+  ],
+  "others": "other MCP-compatible clients"
+}

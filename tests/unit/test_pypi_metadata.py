@@ -103,7 +103,7 @@ _README_TARGETS = _readme_targets()
 
 
 def test_the_readme_scan_actually_found_targets():
-    assert len(_README_TARGETS) > 30, f"only {len(_README_TARGETS)} README links/images found -- the scan is probably broken"
+    assert len(_README_TARGETS) > 20, f"only {len(_README_TARGETS)} README links/images found -- the scan is probably broken"
 
 
 @pytest.mark.parametrize("line, target", _README_TARGETS, ids=lambda v: v if isinstance(v, str) else "")

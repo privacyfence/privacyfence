@@ -27,6 +27,9 @@
    which comes later in the page and so opens over the header. Its text size is the site's,
    not the generator's smaller base size. */
 .site-header { position: relative; top: auto; z-index: 5; font-size: 16px; line-height: 1.6; }
+/* With the navigation drawer open (a phone or tablet), the header drops below the generator's
+   overlay (4), so it is dimmed like the rest of the page and a tap on it closes the drawer. */
+[data-md-toggle="drawer"]:checked ~ .site-header { z-index: 3; }
 
 /* The site footer sits below the generator's previous/next bar, on the site's background. */
 .site-footer { font-size: 13px; line-height: 1.6; }

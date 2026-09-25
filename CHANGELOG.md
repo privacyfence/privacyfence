@@ -53,6 +53,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   current release's installers even without JavaScript, and the site offers `llms.txt` and
   `llms-full.txt` for AI assistants.
 
+- **New website pages explain PrivacyFence before you install it:** `/how-it-works/` (the request
+  flow as a diagram, and one read and one write approved step by step), `/security/` (the security
+  model in brief, ending with what PrivacyFence does not claim), `/enterprise/` (local mode and an
+  organization deployment side by side, with prerequisites and limits) and `/connectors/` (what
+  an AI client can read, what is reviewed and which writes need approval, per connector). The
+  site's menu links them and the docs. The README is shorter and links the docs on the website.
+
 ### Fixed
 
 - **The companion no longer says a separated install "is not privilege-separated".** Whenever
