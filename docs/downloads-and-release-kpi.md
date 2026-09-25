@@ -276,10 +276,13 @@ Releases' latest release; an empty pre-release set renders nothing; a stats fail
 line. `tests/integration/test_download_page.py` exercises the page in headless Chromium with the
 API stubbed.
 
-**`pages.yml` builds `_site` from a hand-written list of files, not the `website/` directory.**
-A file not named in its "Build static site" step ships as a 404.
-`tests/unit/test_website_download_cta.py::test_every_website_file_is_actually_deployed` fails if
-any file under `website/` is missing from that step; add new website files to both.
+**The site is built from a named list of files, not the `website/` directory.**
+`scripts/build_site.py`'s manifest (`PAGES`, `STATIC`) is what ships; a file named in none of its
+lists ships as a 404. `tests/unit/test_website_download_cta.py::test_every_website_file_is_actually_deployed`
+fails if any file under `website/` is missing from them; add new website files to the manifest.
+The build also pre-renders `/download/` from `/api/releases/stable` at deploy time, so the page
+lists the current installers without JavaScript; `download.js` replaces those cards with the live
+manifest, and keeps them (instead of showing the GitHub fallback) if the fetch fails.
 
 ## Cloudflare resources
 
