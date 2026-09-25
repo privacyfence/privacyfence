@@ -149,6 +149,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **"Could not add a passkey: The operation either timed out or was not allowed" now says why.**
+  That is the browser's own wording for two different problems -- the prompt was cancelled or
+  timed out, or the device has no built-in authenticator ready (on Windows: Windows Hello has no
+  PIN or fingerprint set up). The Security page now tells them apart and says what to do: set up
+  Windows Hello under *Settings → Accounts → Sign-in options*, or retry and finish the prompt,
+  which can open behind the browser window. Adding a passkey a device already has enrolled says
+  so too, instead of the raw `InvalidStateError`.
+
 - **Salesforce stays signed in past its first token refresh.** With refresh token rotation on
   (an option on Salesforce's External Client Apps), each refresh returns a new refresh token and
   spends the old one; PrivacyFence kept the old one, so the connector worked for a few hours after
