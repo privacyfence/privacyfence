@@ -385,8 +385,10 @@ def load_org_config() -> dict[str, Any]:
     downgrade to no IdP-backed auth at all (org_mode.resolve_mode({})
     resolves to "local"), triggerable by anything that can truncate or
     corrupt the file — not a state this daemon should ever paper over.
-    Installed via PrivacyFence Settings' "Install/Update Organization
-    Config…" (or by hand-editing this file).
+    A local-mode bundle is installed via PrivacyFence Settings'
+    "Install/Update Organization Config…"; an org-mode bundle is copied to
+    this path by hand and the daemon restarted, since org mode mounts no
+    local Settings page.
 
     Bundle signing (ADR 0016): a well-formed-but-hostile *replacement* of
     this file (as opposed to the malformed-file cases above) is a

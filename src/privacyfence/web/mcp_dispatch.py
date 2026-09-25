@@ -32,6 +32,11 @@ from ..principal import current_principal
 
 logger = logging.getLogger(__name__)
 
+# Args the Slack connector computes itself (from Slack's own answer) before gated_call. An agent
+# asking check_policy could otherwise supply them and be told a call would auto-accept when the
+# real call, which recomputes them, would not.
+_CONNECTOR_COMPUTED_ARGS = frozenset({"is_self_dm", "is_group_dm"})
+
 
 def _policy_rule_row(rule) -> dict:
     """One ``privacyfence_list_policy`` rule row -- the same fields
@@ -316,8 +321,9 @@ class McpDispatcher:
         else:
             operation_key = TOOL_TO_OPERATION.get(tool, f"{connector_name}.{tool}")
             my_email = getattr(connector, "my_email", "")
+            agent_args = {k: v for k, v in args.items() if k not in _CONNECTOR_COMPUTED_ARGS}
             verdict, matched_rule, matched_rule_id, reason = preflight_auto_accept(
-                operation_key, args, my_email,
+                operation_key, agent_args, my_email,
             )
             if gate == "review":
                 reason += (

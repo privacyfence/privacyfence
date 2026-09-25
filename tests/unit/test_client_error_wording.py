@@ -28,7 +28,7 @@ _CLIENTS = [
     ("calendar_client", "CalendarClient", "CalendarClientError", True),
     ("contacts_client", "ContactsClient", "ContactsClientError", True),
     ("tasks_client", "TasksClient", "TasksClientError", True),
-    ("apps_script_client", "AppsScriptClient", "AppsScriptClientError", False),
+    ("apps_script_client", "AppsScriptClient", "AppsScriptClientError", True),
 ]
 
 

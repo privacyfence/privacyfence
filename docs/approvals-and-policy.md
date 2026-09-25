@@ -512,18 +512,21 @@ Organization deployments have no live updates, so they have no notifications.
 
 ## Step-up: passkey on approvals
 
-When step-up is on, approving asks for your passkey (Touch ID, Face ID, Windows Hello, or a
-security key) — proof that a person, not a program on your computer, made the decision. It is on
-by default on installs from the macOS, Windows and Linux installers, with the scope
+When step-up is on, approving asks for your passkey (Touch ID, Face ID, Windows Hello, a security
+key, or your phone) — proof that a person, not a program on your computer, made the decision. It is
+on by default on installs from the macOS, Windows and Linux installers, with the scope
 `writes_and_pii_reads`: every approved write, and every read the PII check flagged. Denying never
 needs a passkey. A batch approved with **Approve selected** needs one prompt for the whole set.
 
 Add a passkey at **Security** (`/security`); on a packaged install the companion app walks you
-through adding the first one. On Windows, set up Windows Hello first (**Settings → Accounts →
-Sign-in options**, add a PIN): if it isn't set up, adding a passkey fails with a message saying the
-device has no built-in passkey authenticator ready. The same `NotAllowedError` also appears when the
-Windows Hello or Touch ID prompt was cancelled, timed out, or opened behind the browser window — the
-message says which of the two it was. A device that already has a passkey for this install says so.
+through adding the first one. Any authenticator that checks your PIN, fingerprint or face works:
+one built into the device, a USB or NFC security key, or your phone over the browser's QR-code flow
+(see [ADR 0055](adr/0055-step-up-passkey-enrollment-accepts-any-authenticator.md)). To use the one
+built into Windows, set up Windows Hello first (**Settings → Accounts → Sign-in options**, add a
+PIN). If nothing built in is ready and no security key or phone is used, adding a passkey fails with
+a message saying the device has no built-in passkey authenticator ready. The same `NotAllowedError`
+also appears when the passkey prompt was cancelled, timed out, or opened behind the browser window —
+the message says which of the two it was. A device that already has a passkey for this install says so.
 
 The scopes, `require_passkey`, the batch setting and exactly what a passkey does and does not prove
 are in [Security and compliance](security-and-compliance.md).

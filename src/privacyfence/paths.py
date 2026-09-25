@@ -242,8 +242,8 @@ def authority_dir(principal: "Principal | None" = None) -> Path:
     read-only to the shared group where POSIX has to make it writable), the
     privacy policy (``config/settings.yaml``), enrolled WebAuthn credentials,
     and local mode's audit log and its HMAC key -- as distinct from
-    ``user_dir()``, which stays reachable by the agent for its own
-    ``mcp_token`` and connector caches/credentials.
+    ``user_dir()``, which stays reachable by the agent for its connector
+    caches/credentials.
 
     On a privilege-separated install this subtree is owned by the service
     account and unreadable to the agent; on an unseparated one it lives at

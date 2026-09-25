@@ -82,6 +82,10 @@ Key modules in the suite:
   process: discovery, bootstrap into `/approvals` and `/settings`, a gated call allowed and denied
   through the HTTP decide route, the audit log read back, and "Quit PrivacyFence". Runs in every
   full-suite job, so on all three OSes.
+- `tests/integration/test_org_guide_configs.py` — the org guide's hardened systemd unit and nginx
+  block, read from the guide by heading name: `systemd-analyze verify` and `nginx -t` (each skips
+  without its binary; the `org-mode-smoke` job installs both), plus static checks of the hardening
+  lines, forwarded headers and upload size limit.
 - `tests/platform/` — atomic-write concurrency, cross-process single-instance locking, the browser
   launch default, a spawned-daemon lifecycle, and real `icacls` behavior on Windows.
 - `tests/integration/test_browser_smoke.py` — real headless Chromium: login, decisions (including

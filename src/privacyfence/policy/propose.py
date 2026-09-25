@@ -277,7 +277,7 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
         _folder_ids, "this folder",
     ),
     _scope("parent_folder_allowlist", "drive.folder", "drive", (Verb.CREATE,), _args_values("parent_folder_id"), "this folder"),
-    _scope("move_within_approved_folders", "drive.folder", "drive", (Verb.MOVE,), _move_folder_ids, "this folder"),
+    _scope("move_within_approved_folders", "drive.folder", "drive", (Verb.MOVE,), _move_folder_ids, "these folders"),
     _scope("i_am_owner", "drive.owned_by_me", "drive", (Verb.READ, Verb.DOWNLOAD), _no_value_needed, "if I own it"),
     # ── Gmail ─────────────────────────────────────────────────────────────────────────────────
     _scope("i_am_sender", "gmail.sender", "gmail", (Verb.READ, Verb.DOWNLOAD, Verb.ARCHIVE), _no_value_needed, "if I'm sender"),

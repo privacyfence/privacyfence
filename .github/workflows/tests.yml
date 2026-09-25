@@ -341,6 +341,17 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[test]"
 
+      # Without nginx and systemd-analyze the guide config test skips its parser checks; here
+      # they must run, so a missing binary fails the step instead.
+      - name: Install nginx for the org guide config check
+        run: sudo apt-get update && sudo apt-get install -y nginx
+
+      - name: Check the org guide's systemd unit and nginx configs
+        run: |
+          command -v systemd-analyze
+          command -v nginx
+          pytest -v -rs tests/integration/test_org_guide_configs.py
+
       - name: Run org-mode release-workflow smoke test
         env:
           PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS: "1"
