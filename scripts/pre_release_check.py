@@ -1,20 +1,10 @@
 #!/usr/bin/env python3
-"""Automated gate to run before starting `docs/release-testing.md`.
+"""Gate 2 of `docs/release-testing.md` ("Gates, in order").
 
-This does not replace that plan -- it only covers the parts a release should
-never be blocked on discovering *manually*: the same automated suite CI runs
-(`docs/testing-policy.md`, "Layers 1–4: every PR"). Everything in `release-testing.md`
--- live fixtures, popup smoke, real Cowork/Desktop prompts, DMG install --
-still needs a human, a screen, and real accounts, none of which this script
-has.
-
-There used to be a version-consistency check here too, comparing
-`pyproject.toml`'s `project.version` against `src/privacyfence/__init__.py`'s
-`__version__` -- both hand-bumped in the same commit. Neither of those static
-strings exists any more (see this repo's CLAUDE.md "Releasing" section):
-`__version__` is derived at import time from the git tag via setuptools_scm
-(`src/privacyfence/__init__.py`), so there is exactly one source of truth
-left and nothing to compare.
+It runs the same automated suite CI blocks on (`docs/testing-policy.md`,
+"Layers 1–4: every PR"), so a release is never blocked on discovering a
+failure there by hand. It checks no packaged artifact, and it replaces none
+of the checks in `release-testing.md`'s "What stays manual".
 
     .venv/bin/python scripts/pre_release_check.py
 
@@ -67,8 +57,7 @@ def main() -> int:
         ],
         cwd=REPO_ROOT,
     )
-    # TST-03: same coverage
-    # ratchet CI enforces (.github/workflows/tests.yml) -- see
+    # Same coverage ratchet CI enforces (.github/workflows/tests.yml) -- see
     # scripts/check_coverage_floor.py's module docstring for the floors.
     # Runs even if pytest itself failed above, same as the shim checks
     # below; the summary loop still reports every result either way.

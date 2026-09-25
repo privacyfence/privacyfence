@@ -1,6 +1,6 @@
 name: Windows graphical-session autostart
 
-# docs/testing-policy.md's Phase 7 item 2: the installer's Task Scheduler
+# docs/testing-policy.md's layer 6 (packaged artifact): the installer's Task Scheduler
 # LogonTrigger actually starting the packaged companion in the signed-in
 # session, and the daemon's Windows service restarting after a crash -- see
 # tests/integration/test_windows_graphical_session_autostart.py's own
@@ -13,9 +13,9 @@ name: Windows graphical-session autostart
 # Deliberately its own workflow, not a step added to build.yml's
 # build-windows job or tests.yml's per-PR jobs -- same reasoning as
 # linux-graphical-session.yml: this is the most expensive tier in this
-# repo's whole test taxonomy by design (Phase 7's own objective), so it's
+# repo's whole test taxonomy by design, so it's
 # too heavy to run on every PR or sit on an actual release's critical path
-# the way build.yml's own packaged installer smoke test (Phase 6.2)
+# the way build.yml's own packaged installer smoke test
 # correctly does. Scheduled instead on
 # packaging-related `main` changes, a weekly cadence (an hour after
 # linux-graphical-session.yml's own Monday slot, same reasoning -- spread
@@ -29,7 +29,7 @@ on:
     paths:
       - 'installer/**'
       - 'scripts/build_installer.ps1'
-      # #428 Phase 4 (B5c): privacyfence.iss installs this next to the
+      # privacyfence.iss installs this next to the
       # application as privilege-separation.ps1, so a change to it is a
       # change to what the installer ships -- and the packaged smoke test
       # below is the only thing in this repo that builds that installer.
@@ -86,10 +86,10 @@ jobs:
       # GitHub-hosted Windows runners already run elevated (Administrators
       # group) -- this test's own skip condition confirms it rather than
       # assuming so, but this job still needs no separate elevation step.
-      - name: Run Windows graphical-session/autostart test (Phase 7 item 2)
+      - name: Run Windows graphical-session/autostart test
         run: pytest tests/integration/test_windows_graphical_session_autostart.py -v
 
-      # docs/testing-policy.md's Phase 10: same tests/
+      # Same tests/
       # diagnostics.py capture as linux-graphical-session.yml's own step --
       # same reasoning (a scheduled tier still needs to be diagnosable
       # from CI, not just tellable apart from a real regression by re-running

@@ -13,10 +13,10 @@ mechanism to build; only a hook (``../conftest.py``'s own
 below) that runs once per failing test and:
 
 1. writes a small ``environment.txt`` -- OS/runtime versions and the CI run
-   identifier (item 1's "OS/runtime versions, and a test-run identifier"),
+   identifier,
 2. writes ``manifest.txt``, a flat recursive listing (relative path + size,
-   never content) of everything under that test's own ``tmp_path`` -- covers
-   item 1's "an installed-file manifest (packaged tests)" without also
+   never content) of everything under that test's own ``tmp_path`` -- an
+   installed-file manifest for packaged tests, without also
    re-uploading the installed binaries themselves as CI artifacts (see
    ``capture_directory_manifest``'s own docstring for why this is a listing,
    not a copy -- a PyInstaller onedir build or an extracted ``.deb`` easily
@@ -24,7 +24,7 @@ below) that runs once per failing test and:
 3. copies out the small text logs a manifest listing alone wouldn't let
    anyone actually read -- ``daemon.log``/``install*.log``/
    ``uninstall*.log`` and any ``*.jsonl`` audit log, wherever they land
-   under that ``tmp_path``. Every module this phase covers already names its
+   under that ``tmp_path``. Every module this covers already names its
    own subprocess log exactly one of these ways (e.g.
    test_windows_packaged_smoke.py's ``_running_daemon``, test_deb_packaged_
    lifecycle.py's identically-shaped helper, tests/system/
@@ -33,11 +33,11 @@ below) that runs once per failing test and:
    exist.
 
 Nothing is written on a passing run -- ``TEST_RESULTS_ROOT`` never even gets
-created unless a covered test actually fails -- matching the posture
-test_browser_smoke.py's own Phase 4.5 fixture already established for the
-browser suite, which this module deliberately leaves untouched: its own
-screenshot/DOM/console capture already satisfies this phase's "browser
-console... reuse Phase 4's existing capture", so nothing here duplicates it.
+created unless a covered test actually fails -- matching the posture of
+test_browser_smoke.py's own ``_capture_failure_artifacts`` fixture for the
+browser suite, which this module deliberately leaves untouched: that
+fixture's screenshot/DOM/console capture already covers the browser, so
+nothing here duplicates it.
 """
 from __future__ import annotations
 

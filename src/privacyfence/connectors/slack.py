@@ -439,6 +439,7 @@ class SlackConnector(Connector):
         n = len(messages)
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
+        is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "message_content")
         # Channel is known via slack_list_channels; Messages (count) is
         # only learned once approved. No literal excerpt here (no "First
@@ -479,7 +480,7 @@ class SlackConnector(Connector):
             preview_tables=[table] if filtered else [],
             table_only=True,
             my_email=self.my_email,
-            args={"channel_id": channel_id, "is_group_dm": is_group_dm},
+            args={"channel_id": channel_id, "is_group_dm": is_group_dm, "is_self_dm": is_self_dm},
         )
 
     async def _get_thread_replies(self, channel_id: str, thread_ts: str) -> Any:
@@ -487,6 +488,7 @@ class SlackConnector(Connector):
         n = len(messages)
         channel_display = await self._channel_display(channel_id, messages)
         is_group_dm = await self._fetch(self._slack.resolve_is_group_dm, channel_id)
+        is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
         filtered = _apply_message_privacy([_message_to_dict(m) for m in messages], "thread_content")
         # Channel is known via slack_list_channels; Replies (count) is only
         # learned once approved. No literal excerpt here (no "Thread
@@ -527,7 +529,12 @@ class SlackConnector(Connector):
             preview_tables=[table] if filtered else [],
             table_only=True,
             my_email=self.my_email,
-            args={"channel_id": channel_id, "thread_ts": thread_ts, "is_group_dm": is_group_dm},
+            args={
+                "channel_id": channel_id,
+                "thread_ts": thread_ts,
+                "is_group_dm": is_group_dm,
+                "is_self_dm": is_self_dm,
+            },
         )
 
     async def _search_messages(
@@ -662,6 +669,7 @@ class SlackConnector(Connector):
             preview["In thread"] = (root_message.text if root_message else "") or thread_ts
         if mark_unread:
             preview["Mark unread"] = "after sending"
+        is_self_dm = await self._fetch(self._slack.resolve_is_self_dm, channel_id)
         await gated_call(
             connector=self.name,
             tool="slack_send_message",
@@ -674,7 +682,7 @@ class SlackConnector(Connector):
             preview=preview,
             details_text=text,
             my_email=self.my_email,
-            args={"channel_id": channel_id, "thread_ts": thread_ts},
+            args={"channel_id": channel_id, "thread_ts": thread_ts, "is_self_dm": is_self_dm},
         )
         result = await self._fetch(self._slack.send_message, channel_id, text, thread_ts)
         if mark_unread and isinstance(result, dict):

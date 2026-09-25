@@ -409,11 +409,10 @@ class _AutoAcceptState:
         self.rules_changed_listeners: list[Callable[[], None]] = []
         self.rules_changed_listener: Callable[[], None] | None = None  # see
         # set_rules_changed_listener's docstring
-        # Rules that exist in the on-disk v2 `auto_accept:` section -- added directly through the
-        # Auto-accept Settings page, the MCP bridge, the popup's own "Always allow" flow, or
-        # migrated there from a hand-edited v1 config -- refreshed by set_policy_v2_store_rules()
-        # below. This is the *only* rule source gate.py evaluates against (P9); there is no longer
-        # a separate v1-compiled layer to also check.
+        # Rules that exist in the on-disk v2 `auto_accept:` section -- added through the
+        # Auto-accept Settings page, the MCP bridge, the popup's own "Always allow" flow, or by
+        # hand -- refreshed by set_policy_v2_store_rules() below. This is the only rule source
+        # gate.py evaluates against.
         self.policy_v2_store_rules: list["PolicyRule"] = []
 
 
@@ -456,8 +455,8 @@ def is_temp_accepted(operation_key: str, file_key: str | None) -> bool:
 def set_policy_v2_store_rules(rules: "list[PolicyRule]") -> None:
     """Hot-reload the current principal's rule set -- called by settings_controller.py after any
     Auto-accept Settings page mutation, by this module's own add_policy_v2_rules/
-    remove_policy_v2_rule after a bridge or popup write, and by daemon_main.py at startup, right
-    after the v1 -> v2 migration."""
+    remove_policy_v2_rule after a bridge or popup write, and by daemon_main.py whenever it loads a
+    principal's settings (at startup, and for each organization principal)."""
     _REGISTRY.get().policy_v2_store_rules = list(rules)
 
 

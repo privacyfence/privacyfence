@@ -659,6 +659,15 @@ class TestUpdateCheck:
         assert pushed[0]["general"]["update_available"] is True
 
 
+@pytest.fixture
+def stub_connector_build(monkeypatch):
+    """A successful install now rebuilds the live connector set; keep the
+    real build_connectors (which would try to authenticate every service)
+    out of tests that are only about the bundle's validation and write."""
+    monkeypatch.setattr(daemon_main, "build_connectors", lambda cfg, org: ([], {}))
+
+
+@pytest.mark.usefixtures("stub_connector_build")
 class TestOrgConfigInstall:
     """install_org_config_bytes is the validate-then-write step behind
     web/routes_settings.py's multipart upload -- through P9 also reachable
@@ -694,12 +703,51 @@ class TestOrgConfigInstall:
         assert state["general"]["org_installed"] is True
         assert state["general"]["org_button_label"] == "Install/Update Organization Config…"
 
+    def test_live_connectors_are_rebuilt_from_the_new_bundle(self, controller, monkeypatch):
+        recorded = []
+        monkeypatch.setattr(sc, "_main_dispatch", lambda f, *a, **k: recorded.append((f, a, k)))
+
+        def _load_installed():
+            path = sc.org_dir() / "org_config.json"
+            return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+        def _build(cfg, org):
+            client_id = (org.get("google") or {}).get("client_id", "none")
+            return [SimpleNamespace(name="drive", client_id=client_id)], {}
+
+        monkeypatch.setattr(daemon_main, "load_org_config", _load_installed)
+        monkeypatch.setattr(daemon_main, "build_connectors", _build)
+        controller.install_org_config_bytes(
+            json.dumps({"version": 1, "google": {"client_id": "old", "client_secret": "s"}}).encode(),
+        )
+        assert wait_until(lambda: len(recorded) == 1)
+        _drain_run_async(recorded)
+        assert controller._connector_objs["drive"].client_id == "old"
+
+        controller.install_org_config_bytes(
+            json.dumps({"version": 1, "google": {"client_id": "new", "client_secret": "s"}}).encode(),
+        )
+        assert wait_until(lambda: len(recorded) == 1)
+        _drain_run_async(recorded)
+
+        assert controller._connector_objs["drive"].client_id == "new"
+        assert [c.client_id for c in controller._host_calls[-1]] == ["new"]
+
+    def test_rejected_bundle_leaves_live_connectors_alone(self, controller, monkeypatch):
+        refreshes = []
+        monkeypatch.setattr(controller, "refresh_connectors", lambda: refreshes.append(1))
+
+        controller.install_org_config_bytes(b"not valid json")
+
+        assert refreshes == []
+
     def test_snapshot_not_installed_label(self, controller):
         state = controller.snapshot()
         assert state["general"]["org_installed"] is False
         assert state["general"]["org_button_label"] == "Install Organization Config…"
 
 
+@pytest.mark.usefixtures("stub_connector_build")
 class TestOrgConfigInstallSigning:
     """SEC-05 (full signing): install_org_config_bytes runs every bundle
     through org_bundle_signing.verify_and_maybe_pin() before writing it to
@@ -753,6 +801,7 @@ class TestOrgConfigInstallSigning:
         assert installed == first_bundle  # unchanged -- the bad update was never written
 
 
+@pytest.mark.usefixtures("stub_connector_build")
 class TestWouldPinNewOrgSigningKey:
     """F5 of the self-approval review: the read-only precheck web/
     routes_settings.py's org_config_upload route uses to demand an

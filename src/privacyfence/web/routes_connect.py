@@ -256,7 +256,10 @@ def _build_authorize_url(service: str, org_config: dict[str, Any], redirect_uri:
         slack_org = org_config.get("slack") or {}
         if not slack_org.get("client_id"):
             raise _NotConfigured(service)
-        return slack_client.build_authorize_url(slack_org["client_id"], redirect_uri, state), ""
+        url = slack_client.build_authorize_url(
+            slack_org["client_id"], redirect_uri, state, user_scopes=slack_org.get("user_scopes"),
+        )
+        return url, ""
 
     if service == "salesforce":
         sf_org = org_config.get("salesforce") or {}

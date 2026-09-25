@@ -1,35 +1,29 @@
-"""Policy v2 vocabulary -- see the "Scope and Verbs" redesign proposal.
+"""The auto-accept policy: which gated calls may go through without asking.
 
-This package is being built up in independently-reviewable phases (P0-P9); each phase's exit
-criterion is "no behaviour change" until the engine swap (P3) lands, and even then the change is
-opt-in (`policy.engine: v2`, default `v1`) until a later phase flips the default. `gate.py` (P3,
-shadow-mode evaluation, plus P6's own always-on v2-store check -- see `auto_accept.
-_AutoAcceptState.policy_v2_store_rules`), `daemon_main.py` (P4, the one-time on-disk migration; P6,
-hot-loading that same v2-store check), `settings_controller.py`/`web/routes_settings.py` (P4, the
-post-migration Settings notice) are consumers outside this package and its tests.
+A rule names a **scope** (which resources: a folder, a sender domain, a Slack channel kind), the
+**operation keys** it covers, and optionally **conditions** that narrow it further. The package is
+split by job:
 
-P5 (`policy/propose.py`, `policy/describe.py`) landed the one writer both "Always allow" surfaces
-will share -- the scope catalogue that replaces the five v1 suggestion tables, and the rendering
-that lets a surface state a rule's width rather than leave it to be inferred. P6 wires the first of
-those two surfaces up to it: `settings_controller.py`'s Auto-accept page reads and writes the v2
-`auto_accept:` section directly (`policy/store.py`, `policy/propose.rules_for_scope_group`),
-including the three F5 operation groups (Apps Script's tools, Gmail's filter tools, Slack's
-group-chat tool) that had no v1 predicate to be reachable through at all -- see `policy/scopes.py`'s
-`NEW_SCOPE_SELECTORS` and `policy/catalogue.EXTRA_SCOPES`. `gate.py`'s own two "Always allow"
-suggestion call sites (the approval popup) are the one surface P5's writer still doesn't reach --
-rewiring the popup's own widening-chip UI onto it remains a later phase's work.
+* `registry.py` maps every tool to its operation key and verb; `resource_registry.py` holds the
+  Settings resource grants.
+* `scopes.py` and `conditions.py` hold one selector per predicate -- the code that decides whether a
+  call's item is in scope, or whether a condition holds.
+* `engine.py` is the only rule evaluator: the old one, and the `policy.engine` switch that once
+  chose between them, are gone (ADR 0004).
+* `store.py` reads and writes the on-disk `auto_accept:` section; `propose.py` is the one writer
+  every "Always allow" surface uses to build rules; `describe.py` renders a rule as a sentence; and
+  `catalogue.py` is the scope catalogue the Settings form and the MCP bridge validate a
+  `group`/`verbs` submission against, which is where a verb the scope type cannot govern is rejected
+  at write time.
 
-P7 gives the MCP bridge the same one-shape write path: `gate.propose_policy_change` (a bridge-facing
-counterpart to `SettingsController.add_policy_rule`/`remove_policy_rule`, writing straight to
-`policy/store.py`'s v2 section via new `auto_accept.add_policy_v2_rules`/`remove_policy_v2_rule`
-helpers) and `gate.preflight_auto_accept` (a `matched_rule_id`-returning wrapper around
-`AutoAcceptEvaluator.preflight_from_args`, checked against the v2 engine the same two-layer way
-`gate._evaluate_auto_accept` already does for a real call). `policy/catalogue.py` -- the scope
-catalogue P6 built for its own Settings form, promoted out of `settings_controller.py` so P7 doesn't
-re-derive it a second time -- is what both `add_policy_rule` and `propose_policy_change` validate a
-`group`/`verbs` submission against, which is also where "a verb the scope type cannot govern is
-rejected at write time" (F5/P0·3) actually lives. The pre-P7 bridge tools were kept as deprecated
-aliases for one minor release per ADR 0004 decision 3, then deleted in PSC-3 once 4.1.2 shipped --
-see that ADR for which tools and why.
+Consumers outside this package are `gate.py`, which evaluates every gated call against the rules in
+`auto_accept._AutoAcceptState.policy_v2_store_rules` and builds the popup's "Always allow" choices
+from `propose.py`; `daemon_main.py`, which loads those rules from the `auto_accept:` section when it
+loads a principal's settings; `settings_controller.py`/`web/routes_settings.py`, the Auto-accept
+Settings page; and `web/mcp_dispatch.py`, the `privacyfence_check_policy`/`list_policy`/
+`propose_policy_change` tools. Apps Script's tools, Gmail's filter tools and Slack's group-chat tool
+are governable only through scopes that have no old predicate name -- see `scopes.NEW_SCOPE_SELECTORS`
+and `catalogue.EXTRA_SCOPES`. The bridge tools that preceded `propose_policy_change` were removed; ADR
+0004 records which and why.
 """
 from __future__ import annotations

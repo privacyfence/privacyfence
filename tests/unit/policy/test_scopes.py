@@ -42,10 +42,14 @@ def _old(predicate: str):
 # and the new selector's matches().
 FIXTURES: dict[str, list] = {
     "dm_with_myself": [
+        (None, make_ctx(args={"channel_id": "D12345", "is_self_dm": True})),
+        (None, make_ctx(args={"channel_id": "D67890", "is_self_dm": False})),
         (None, make_ctx(args={"channel_id": "D12345"})),
         (None, make_ctx(args={"channel_id": "C12345"})),
     ],
     "send_to_myself": [
+        (None, make_ctx(args={"channel_id": "D12345", "is_self_dm": True})),
+        (None, make_ctx(args={"channel_id": "D67890", "is_self_dm": False})),
         (None, make_ctx(args={"channel_id": "D12345"})),
         (None, make_ctx(args={"channel_id": "C12345"})),
     ],
@@ -119,6 +123,12 @@ FIXTURES: dict[str, list] = {
     "move_within_approved_folders": [
         (["folder1"], make_ctx(raw_data=SimpleNamespace(parent_ids=["folder1", "folder2"]))),
         (["folder9"], make_ctx(raw_data=SimpleNamespace(parent_ids=["folder1"]))),
+        (["folder1", "folder3"], make_ctx(
+            args={"destination_folder_id": "folder3"}, raw_data=SimpleNamespace(parent_ids=["folder1"]))),
+        (["folder1"], make_ctx(
+            args={"destination_folder_id": "folder3"}, raw_data=SimpleNamespace(parent_ids=["folder1"]))),
+        (["folder1"], make_ctx(raw_data={
+            "file": SimpleNamespace(parent_ids=["folder1"]), "destination_folder_id": "folder1"})),
     ],
     "parent_folder_allowlist": [
         (["folderA"], make_ctx(args={"parent_folder_id": "folderA"})),
@@ -327,6 +337,58 @@ class TestKindIsAssignedToEverySelector:
     @pytest.mark.parametrize("predicate,selector", sorted(SCOPE_SELECTORS.items()))
     def test_kind_is_a_scope_kind(self, predicate, selector):
         assert isinstance(selector.kind, ScopeKind)
+
+
+class TestSelfDmFailsClosed:
+    """Every IM id starts with "D"; only the connector's resolved verdict may make a DM "mine"."""
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_a_dm_with_someone_else_does_not_match(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D67890", "is_self_dm": False})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is False
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_a_dm_with_no_verdict_does_not_match(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D12345"})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is False
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_a_truthy_non_bool_verdict_does_not_match(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D12345", "is_self_dm": "true"})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is False
+
+    @pytest.mark.parametrize("predicate", ["dm_with_myself", "send_to_myself"])
+    def test_the_self_dm_matches(self, predicate):
+        ctx = make_ctx(args={"channel_id": "D12345", "is_self_dm": True})
+        assert SCOPE_SELECTORS[predicate].matches(None, ctx) is True
+
+
+class TestMoveWithinApprovedFolders:
+    """A move matches only when it starts and ends inside the approved set."""
+
+    selector = SCOPE_SELECTORS["move_within_approved_folders"]
+
+    def _ctx(self, source, destination):
+        return make_ctx(
+            args={"file_id": "f1", "destination_folder_id": destination},
+            raw_data={"file": SimpleNamespace(parent_ids=[source]), "destination_folder_id": destination},
+        )
+
+    def test_a_move_within_the_approved_folders_matches(self):
+        assert self.selector.matches(["sandbox", "sandbox/sub"], self._ctx("sandbox", "sandbox/sub")) is True
+
+    def test_a_move_out_of_the_approved_folder_does_not_match(self):
+        assert self.selector.matches(["sandbox"], self._ctx("sandbox", "elsewhere")) is False
+
+    def test_a_move_into_the_approved_folder_from_outside_does_not_match(self):
+        assert self.selector.matches(["sandbox"], self._ctx("elsewhere", "sandbox")) is False
+
+    def test_a_move_with_no_destination_does_not_match(self):
+        ctx = make_ctx(raw_data=SimpleNamespace(parent_ids=["sandbox"]))
+        assert self.selector.matches(["sandbox"], ctx) is False
+
+    def test_approved_folder_is_unchanged_and_ignores_the_destination(self):
+        assert SCOPE_SELECTORS["approved_folder"].matches(["sandbox"], self._ctx("sandbox", "elsewhere")) is True
 
 
 class TestNewScopeSelectors:

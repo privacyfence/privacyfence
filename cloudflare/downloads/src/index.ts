@@ -16,7 +16,7 @@
  *
  * `<artifact-id>` matches a manifest artifact's own `id` field (e.g. "macos-arm64",
  * "windows-x64", "linux-x64") -- see manifest.ts's Manifest/ManifestArtifact types, which match
- * Phase 2's manifest schema exactly.
+ * the manifest.json scripts/r2_release.py writes exactly.
  */
 import { CHANNELS, isChannel, type Channel } from "./channel.js";
 import {
@@ -122,7 +122,7 @@ async function handleStats(env: Env): Promise<Response> {
   } catch (err) {
     console.error("privacyfence-downloads: stats query failed", err);
     // A stats failure must never look like "zero downloads" -- surface it so the website
-    // (Phase 5) can hide the stats section instead of showing a wrong number.
+    // download page can hide the stats section instead of showing a wrong number.
     return jsonResponse({ error: "stats temporarily unavailable" }, 503);
   }
 }

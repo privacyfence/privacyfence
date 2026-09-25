@@ -238,7 +238,7 @@ class TestHandoffProblems:
         problems = self._problems([windows_acl.Ace(ACCOUNT, windows_acl.FILE_ALL_ACCESS)])
 
         assert len(problems) == 1
-        assert "cannot reach mcp_token" in problems[0]
+        assert "cannot read mcp_url, web_base_url" in problems[0]
 
     def test_a_writable_group_is_reported(self):
         aces = [

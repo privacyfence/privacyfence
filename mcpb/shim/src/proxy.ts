@@ -7,9 +7,9 @@
  * Deliberately *not* built on the SDK's ``Client``/``Server`` classes: those
  * re-run the initialize handshake and cache tool schemas on this process,
  * which is exactly the "protocol/manifest/tool-schema knowledge" the shim
- * must not carry -- it is what keeps the class of bug bridge/test/manifest.test.ts and
- * tests/integration/test_bridge_daemon_contract.py exist to catch (one
- * side's wire format drifting from the other's) structurally impossible for
+ * must not carry -- it is what keeps the class of bug the old bridge's
+ * manifest and contract tests existed to catch (one side's wire format
+ * drifting from the other's) structurally impossible for
  * this transport, rather than something the shim also has to get right.
  * Both ``Transport`` implementations already do their own JSON-RPC framing
  * (line-delimited stdio / Streamable HTTP's SSE-or-JSON) -- this only moves
