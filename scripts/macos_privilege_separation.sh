@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# #428 Phase 4 (B5a): run the PrivacyFence daemon under its own macOS account
+# Run the PrivacyFence daemon under its own macOS account
 # -- and, because macOS has no package manager to do it, uninstall it again.
 #
 # Until this runs, the daemon and the AI agent it exists to govern are the same
-# OS user, which is the root cause of all four weaknesses issue #428 describes:
+# OS user, which is the root cause of four weaknesses:
 # the agent can read the session-minting credential, rewrite the always-allow
 # rules and PII policy that decide what it is allowed to do, forge a WebAuthn
 # credential into the store a local passkey would be checked against, and read
@@ -23,7 +23,7 @@
 #      PrivacyFenceApp.app) into a fresh root:wheel-owned copy under
 #      /Library/PrivacyFence/image -- see stage_trusted_image()'s own comment
 #      for why: /Applications itself is admin-group-writable on every real
-#      Mac, so nothing installed directly under it can ever be trusted (B1)
+#      Mac, so nothing installed directly under it can ever be trusted
 #      without this;
 #   5. writes the marker file every PrivacyFence process reads to agree on that
 #      layout (src/privacyfence/privilege_separation.py);
@@ -78,8 +78,8 @@ MARKER_NAME="privilege-separation.json"
 MARKER_VERSION=1
 HANDOFF_DIR_NAME="handoff"
 SYSTEM_ROOT_MODE=711
-# #428 Phase 2's interim multi-user guard (§2.6, "companion socket
-# takeover"): the leading 3 is the sticky bit (01000) on top of the setgid
+# The multi-user guard against companion socket takeover (ADR 0027): the
+# leading 3 is the sticky bit (01000) on top of the setgid
 # bit (02000) this already carried. Setgid alone means every member of
 # SERVICE_GROUP can create and delete files here, which is exactly right for
 # the daemon and the companion producing group-owned files for each other --
@@ -200,7 +200,7 @@ resolve_owner() {
 
 # Mirrors ``privilege_separation._TRUSTED_POSIX_IMAGE_GROUP``: root's own
 # group, and the only one besides root itself this trusts to replace what
-# the daemon runs (B1). Deliberately not "admin" -- the group
+# the daemon runs. Deliberately not "admin" -- the group
 # /Applications is actually group-owned by, and whose members are exactly
 # the accounts this check exists to stop trusting; see that constant's own
 # comment for the full reasoning. Not cross-checked by TestInstallerContract
@@ -208,7 +208,7 @@ resolve_owner() {
 # Linux counterpart to compare against -- /opt is already dpkg-owned.
 TRUSTED_IMAGE_GROUP="wheel"
 
-# B1 follow-up: where stage_trusted_image() (below) copies the daemon/
+# Where stage_trusted_image() (below) copies the daemon/
 # companion image to before ever trusting it. Deliberately NOT under
 # SYSTEM_ROOT -- apply_layout() chowns that whole tree, itself included, to
 # ${SERVICE_ACCOUNT}, which require_trusted_image()'s own "owned by anyone
@@ -219,11 +219,11 @@ TRUSTED_IMAGE_GROUP="wheel"
 # for exactly this reason.
 TRUSTED_IMAGE_DIR="/Library/PrivacyFence/image"
 
-# B1: nothing previously verified the daemon/companion image was not
-# user-writable before this elevates to it. ADR 0002 §5a used to claim
-# /Applications was root-owned the same way /opt is; it is actually
-# root:admin drwxrwxr-x, and a drag-installed .app is normally owned by the
-# installing user -- the same account the agent runs as. Walks $1 and every
+# Verifies the daemon/companion image is not user-writable before this
+# elevates to it. ADR 0002 §5a assumed /Applications was root-owned the same
+# way /opt is; it is actually root:admin drwxrwxr-x, and a drag-installed
+# .app is normally owned by the installing user -- the same account the
+# agent runs as. Walks $1 and every
 # directory on the way to it (a root-owned, unwritable executable still
 # isn't safe if the directory holding it can be emptied and refilled by
 # someone else) and dies naming every path that fails: owned by anyone but
@@ -254,15 +254,15 @@ require_trusted_image() {
     for p in "${image_problems[@]}"; do
       warn "$p"
     done
-    die "$1 is not safe to run as ${SERVICE_ACCOUNT} (B1) -- anyone who can rewrite it, or a directory on the path to it, can run code as that account. Fix the ownership/permissions named above, or install PrivacyFenceApp.app somewhere only root can write to."
+    die "$1 is not safe to run as ${SERVICE_ACCOUNT} -- anyone who can rewrite it, or a directory on the path to it, can run code as that account. Fix the ownership/permissions named above, or install PrivacyFenceApp.app somewhere only root can write to."
   fi
 }
 
-# B1 follow-up, discovered by #428 D2's own real `installer -pkg ... -target /`
-# coverage (test_macos_pkg_install.py): require_trusted_image() walks every
+# Why the image is staged at all (test_macos_pkg_install.py's real
+# `installer -pkg ... -target /` covers it): require_trusted_image() walks every
 # directory on the way to the image, and /Applications itself is root:admin
 # drwxrwxr-x on every real Mac -- group-writable by the same admin account
-# the agent runs as. That made the walk refuse *any* app installed at the
+# the agent runs as. So the walk refuses *any* app installed at the
 # standard /Applications/PrivacyFenceApp.app location, no matter how the
 # bundle itself was owned -- not just for a .pkg install, but for the DMG's
 # own daemon-triggered runtime prompt (privilege_separation.
@@ -271,7 +271,7 @@ require_trusted_image() {
 # same require_trusted_image() call.
 #
 # Rather than trust wherever --app/--daemon-exec/--companion-exec point,
-# `enable` now copies that image -- right now, as root, while it already has
+# `enable` copies that image -- right now, as root, while it already has
 # the administrator authentication this whole command required to run at
 # all -- into TRUSTED_IMAGE_DIR, a location this script itself provisions as
 # root:wheel and nothing else ever writes to. Everything launchd runs from
@@ -284,8 +284,7 @@ require_trusted_image() {
 # One real consequence: once separated, replacing /Applications/
 # PrivacyFenceApp.app in place (a fresh DMG drag) no longer takes effect on
 # its own -- the separated daemon keeps running the staged copy until `enable`
-# is run again. That is not a bug this introduces so much as the one honest
-# way to close the hole above: auto-refreshing the staged copy from an
+# is run again. That is the one honest way to close the hole above: auto-refreshing the staged copy from an
 # already-running, already-elevated process would mean trusting
 # /Applications again, silently, which is exactly what this exists to stop
 # doing. Re-authenticating (by hand, or a future re-prompt) is the correct
@@ -296,7 +295,7 @@ require_trusted_image() {
 # function's own root:wheel ownership if staging ran first, and TRUSTED_IMAGE_DIR
 # is deliberately outside SYSTEM_ROOT for exactly that reason regardless.
 stage_trusted_image() {
-  note "staging a root-owned copy of the app image under ${TRUSTED_IMAGE_DIR} (B1)"
+  note "staging a root-owned copy of the app image under ${TRUSTED_IMAGE_DIR}"
   rm -rf "$TRUSTED_IMAGE_DIR"
   mkdir -p "$TRUSTED_IMAGE_DIR"
   if [ -n "$APP_PATH" ]; then
@@ -407,8 +406,7 @@ wait_for_service_account() {
   # point depends on that lookup: apply_layout()'s `chown -R`, and, far more
   # quietly, launchd's own resolution of UserName in the LaunchDaemon plist --
   # launchd runs a job as *root* when the account it names does not resolve at
-  # bootstrap time, which is privacyfence/privacyfence#598's Failure A: an
-  # install that reports itself separated while its daemon holds every
+  # bootstrap time: an install that reports itself separated while its daemon holds every
   # privilege separation exists to drop.
   #
   # So flush the cache and then actually wait for the account to answer,
@@ -569,7 +567,7 @@ daemon_pid() {
 }
 
 # The account a pid is running as, "" for an empty/absent pid. Split out of
-# daemon_owner() below so `daemon status` (§2.1, unprivileged and meant to
+# daemon_owner() below so `daemon status` (unprivileged and meant to
 # answer immediately) can ask the same question about whatever pid
 # daemon_pid() reports *right now*, without also inheriting daemon_owner()'s
 # own DAEMON_PID_TIMEOUT wait -- a status query has nothing to wait for: "no
@@ -698,14 +696,14 @@ bootstrap_daemon_with_retry() {
 
 start_daemon_as_service_account() {
   # The one thing `launchctl bootstrap` will not tell you: it exits 0 having
-  # started the job as root when the plist's UserName did not resolve
-  # (privacyfence/privacyfence#598 Failure A). Everything downstream then
+  # started the job as root when the plist's UserName did not resolve.
+  # Everything downstream then
   # *says* the install is separated -- the marker, `status`, the approvals UI
   # -- while the daemon holds exactly the privileges separation exists to
   # drop. And it is not only a reporting problem: a root-owned daemon on a
   # separated install is refused by privilege_separation.check_runtime_
   # identity() on every start, so launchd's KeepAlive relaunches it forever
-  # and no control socket ever appears -- #598's Failure B, same cause.
+  # and no control socket ever appears -- the same cause, seen differently.
   #
   # wait_for_service_account() above removes the obvious reason for that
   # lookup to fail, and is not sufficient: this has been observed with
@@ -787,7 +785,7 @@ gui_session_uids() {
   } | sort -u
 }
 
-# ── Daemon manager (#428 Phase 2) ─────────────────────────────────────────────
+# ── Daemon manager ────────────────────────────────────────────────────────────
 #
 # `daemon {status|start|stop|restart|ensure-running}` is what the companion
 # app's tray menu runs -- `status` unprivileged, on every poll, and
@@ -948,7 +946,7 @@ cmd_enable() {
   create_service_account
   # Before anything that resolves the account by name: apply_layout()'s
   # `chown -R`, and install_services()' `launchctl bootstrap`, which is the
-  # one that fails *silently* (#598 Failure A). See wait_for_service_account().
+  # one that fails *silently*. See wait_for_service_account().
   wait_for_service_account
   if [ -n "$OWNER_USER" ]; then
     add_owner_to_service_group
@@ -964,12 +962,12 @@ cmd_enable() {
   write_marker
   install_services
 
-  # #428 Phase 2: install_services()'s own start_daemon_as_service_account()
-  # already tries to get the daemon running, but "tried and the LaunchDaemon
+  # install_services()'s own start_daemon_as_service_account() already
+  # tries to get the daemon running, but "tried and the LaunchDaemon
   # reported a pid" is not the same claim as "reachable, with a control
-  # socket, and owned by the right account" -- and the #598 upgrade-gap bug
-  # this phase exists to close was exactly a case where the first succeeded
-  # and the second silently did not. Run in a subshell, the same way --auto
+  # socket, and owned by the right account" -- and a daemon that came up as
+  # root is exactly a case where the first succeeds and the second silently
+  # does not. Run in a subshell, the same way --auto
   # itself is below: cmd_daemon_ensure_running's own die() would otherwise
   # take this whole `enable` down with it under set -euo pipefail, which is
   # not what a hiccup *here* -- after everything else above has already
@@ -1329,7 +1327,7 @@ case "$COMMAND" in
       ENABLE_COMMAND=cmd_enable
     fi
     if [ "$AUTO" = "1" ]; then
-      note "auto-enabling privilege separation (#428 D1, 4.1)"
+      note "auto-enabling privilege separation (ADR 0003)"
       # Subshell, not a direct call: die() calls exit, which under
       # set -euo pipefail would take this whole process down with it if
       # called directly -- including whatever elevated `do shell script`

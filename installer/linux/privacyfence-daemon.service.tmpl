@@ -1,4 +1,4 @@
-# #428 Phase 4 (B5b): the PrivacyFence daemon as a *system* systemd unit,
+# The PrivacyFence daemon as a *system* systemd unit,
 # running under its own dedicated account.
 #
 # The alternative, for an unseparated pip/pipx install, is the `--user` unit
@@ -24,7 +24,7 @@
 
 [Unit]
 Description=PrivacyFence daemon (privilege-separated)
-Documentation=https://github.com/privacyfence/privacyfence/issues/428
+Documentation=https://github.com/privacyfence/privacyfence/blob/main/docs/adr/0003-separated-installs-only.md
 After=network.target
 
 [Service]
@@ -51,8 +51,8 @@ Environment=HOME=__SYSTEM_ROOT__
 # Mirrors the LaunchDaemon's KeepAlive/SuccessfulExit=false and the Windows
 # task's RestartOnFailure (tests/windows_task_contract.py): restart on a
 # crash, not on a clean exit -- so `systemctl stop` actually stops it. The
-# companion's own Quit action over the control channel does not: #428 B4
-# made that socket's QUIT refuse unconditionally on a separated install
+# companion's own Quit action over the control channel does not: that
+# socket's QUIT refuses unconditionally on a separated install
 # (web/control_channel.py's _handle_daemon_request()), because it is
 # 0660 group-shared with the agent -- a system service is `systemctl`'s
 # to stop, not a line on that socket.
@@ -60,8 +60,8 @@ Restart=on-failure
 RestartSec=5
 
 # Cheap, uncontroversial hardening on top of the uid split this unit exists
-# for -- none of it is what #428 Phase 4 claims, and none of it is load-
-# bearing for that claim. Deliberately stopping short of ProtectHome= and
+# for -- none of it is what privilege separation claims, and none of it is
+# load-bearing for that claim. Deliberately stopping short of ProtectHome= and
 # ProtectSystem=strict: the daemon reads a human's files through connectors
 # by design, and a StateDirectory= would fight the installer for ownership
 # of a root it has already provisioned.

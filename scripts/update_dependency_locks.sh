@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regenerate requirements/*.lock.txt from pyproject.toml -- see
 # requirements/README.md for what these two files are and why they're
-# hash-locked (SEC-19, Phase 2.4).
+# hash-locked.
 #
 # Prerequisites: `uv` on PATH (https://docs.astral.sh/uv/getting-started/installation/) -- kept
 # out of the `dev` extra so that installing `.[dev]` doesn't pull in a tool only this script uses.

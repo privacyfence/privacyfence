@@ -1,4 +1,4 @@
-"""Cross-process atomicity of secure_files.atomic_write_bytes() (SEC-09).
+"""Cross-process atomicity of secure_files.atomic_write_bytes().
 
 The existing coverage of secure_files.py (tests/unit/test_secure_files.py)
 proves atomic_write_bytes() writes to a sibling temp file and os.replace()s

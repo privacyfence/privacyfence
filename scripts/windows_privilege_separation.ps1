@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  #428 Phase 4 (B5c): provision -- or back out of -- running the PrivacyFence
+  Provision -- or back out of -- running the PrivacyFence
   daemon under its own Windows account.
 
 .DESCRIPTION
   Until this runs, the daemon and the AI agent it exists to govern are the same
-  OS user, which is the root cause of all four weaknesses issue #428 describes:
+  OS user, which is the root cause of four weaknesses:
   the agent can read the session-minting channel, rewrite the always-allow rules
   and PII policy that decide what it is allowed to do, forge a WebAuthn
   credential into the store a local passkey would be checked against, and read
@@ -15,7 +15,7 @@
   macOS and Linux got the same change in their own idioms
   (scripts/macos_privilege_separation.sh, scripts/linux_privilege_separation.sh)
   and this deliberately mirrors them step for step. Three things have no POSIX
-  counterpart at all, and they are why Windows was sequenced last:
+  counterpart at all:
 
   1. NTFS ACLs instead of permission bits. secure_files.secure_mkdir's chmod is
      a documented no-op here, so every "mode" in the POSIX layout becomes an
@@ -28,11 +28,11 @@
   3. The install location is part of the boundary. A service runs whatever its
      binPath names, so a PrivacyFence the logged-in user can rewrite would let
      the agent run its own code *as the service account*. This script refuses to
-     enable against such an install -- see Assert-ImageProtected below. #407's
-     non-elevated per-user install tier was the case that made that refusal
-     reachable by an ordinary user; ADR 0003 decision 4 withdraws the tier
-     rather than the refusal, which stays as the check on every install
-     directory this is ever pointed at.
+     enable against such an install -- see Assert-ImageProtected below. A
+     non-elevated per-user install tier would make that refusal reachable by
+     an ordinary user; ADR 0003 decision 4 withdraws the tier rather than the
+     refusal, which stays as the check on every install directory this is
+     ever pointed at.
 
 .EXAMPLE
   # From an elevated PowerShell, against a real install:
@@ -65,7 +65,7 @@
   `enable` itself, elevated, as a step of every install -- so on Windows this
   script is normally something a human runs only to look at an install
   (`status`) or to purge one (`uninstall -Purge`), the same way the .deb's postinst
-  has run the Linux script since #428 D1. Running `enable` by hand still
+  runs the Linux script. Running `enable` by hand still
   works, and is the documented way to re-provision an install whose service,
   ACLs or companion task have drifted.
 #>
@@ -98,7 +98,7 @@ param(
     # and the $ServiceGroup local group. The POSIX scripts' `uninstall --purge`.
     [switch] $Purge,
 
-    # #428 Phase 2: `daemon`'s own sub-verb -- {status|start|stop|restart|
+    # `daemon`'s own sub-verb -- {status|start|stop|restart|
     # ensure-running}. Position = 1 (the only other positional parameter
     # this script has) is what lets `service_control.py`'s elevated
     # `_windows_runas_argv(script, "daemon $action", transcript)` work
@@ -372,9 +372,8 @@ function Test-TrustedIdentity {
 
     # SYSTEM and Administrators are ignored everywhere in this script, for the
     # reason windows_acl.py's own docstring gives: they are the service manager
-    # and the account that provisioned the install, and issue #428's "Honest
-    # limits" already concedes that a local Administrator defeats the design by
-    # taking ownership. Matched by SID so this holds on a non-English Windows.
+    # and the account that provisioned the install, and a local Administrator
+    # defeats the design by taking ownership anyway. Matched by SID so this holds on a non-English Windows.
     #
     # NT SERVICE\TrustedInstaller (S-1-5-80-956008885-3418522649-1831038044-
     # 1853292631-2271478464 -- an "NT SERVICE" SID, computed the same
@@ -407,15 +406,13 @@ function Test-TrustedIdentity {
 
 function Assert-ImageProtected {
     <#
-      #407, settled: a service runs whatever binPath names, so an install the
+      A service runs whatever binPath names, so an install the
       logged-in user can rewrite turns privilege separation inside out -- the
       agent gains a way to run its own code *as the service account*, which is
-      strictly worse than the unseparated install it replaced.
+      strictly worse than an unseparated install.
 
-      This used to be a check on which install *tier* had been chosen:
-      privacyfence.iss offered a non-elevated per-user install under
-      %LOCALAPPDATA%\Programs, and that tier is what this refused. ADR 0003
-      decision 4 removed the tier -- Setup is PrivilegesRequired=admin and runs
+      ADR 0003 decision 4 removed the non-elevated per-user install tier
+      under %LOCALAPPDATA%\Programs -- Setup is PrivilegesRequired=admin and runs
       this script itself, so a stock install lands under %ProgramFiles% and
       never reaches the refusal below. What is left for it to catch is
       everything else that can put a writable image under a service's binPath:
@@ -632,8 +629,7 @@ function Set-Layout {
     # and it denies the daemon WRITE_DAC on its own boundary -- a service
     # that can rewrite the ACL protecting it from the agent is one
     # compromise away from not having one. Administrators can already defeat
-    # all of this by taking ownership, which issue #428's "Honest limits"
-    # says in as many words, so nothing is given away.
+    # all of this by taking ownership, so nothing is given away.
     #
     # It also settles OWNER RIGHTS (S-1-3-4), an ACE Windows materializes on
     # directories under a user profile that grants *whoever owns the object*
@@ -671,9 +667,9 @@ owned by that account would make every permission below advisory. Re-run
     Invoke-Icacls @($SystemRoot, '/grant:r', "${ServiceAccount}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", '/q')
     Invoke-Icacls @($SystemRoot, '/grant', "${SidUsers}:(X)", '/q')
 
-    # authority\: policy the agent may not edit, #426's WebAuthn store, the
+    # authority\: policy the agent may not edit, the WebAuthn store, the
     # audit log and its HMAC key. The service account and nothing else -- this
-    # is the whole of what Phase 4 claims, on every platform.
+    # is the whole of what privilege separation claims, on every platform.
     Invoke-Icacls @($authority, '/inheritance:r', '/q')
     Invoke-Icacls @($authority, '/grant:r', "${ServiceAccount}:(OI)(CI)(F)", "${SidSystem}:(OI)(CI)(F)", "${SidAdministrators}:(OI)(CI)(F)", '/q')
 
@@ -795,7 +791,7 @@ function Install-DaemonService {
         'start=', 'auto',
         'DisplayName=', (ConvertTo-CommandLineToken 'PrivacyFence')
     ) -join ' ') | Out-Null
-    Invoke-Sc @('description', $ServiceName, 'Runs the PrivacyFence approval daemon under its own account (issue #428 Phase 4).') | Out-Null
+    Invoke-Sc @('description', $ServiceName, 'Runs the PrivacyFence approval daemon under its own account.') | Out-Null
     # Crash restart, the thing the Scheduled Task's repeating TimeTrigger was
     # standing in for before there was a service manager involved: three
     # restarts with a widening delay, and the counter resets after a day.
@@ -991,8 +987,7 @@ function Undo-PartialEnable {
       0042: nothing restores data into a user profile). A re-run `enable`
       picks it up exactly as a reinstall does.
 
-      This is privacyfence/privacyfence#599's counterpart to the `disable`
-      defect fixed in 1d6b13f: an operation that is not atomic and does not
+      An operation that is not atomic and does not
       clean up after itself when it fails midway leaves an install that is
       neither separated nor whole -- here, a marker claiming a layout whose
       service is gone, which paths.py would resolve for nobody.
@@ -1065,10 +1060,10 @@ function Invoke-Enable {
         Write-Note "no owner account resolved -- leaving the $ServiceGroup membership pending"
     }
     # Everything that can leave this install in neither layout, in one block
-    # that undoes itself -- privacyfence/privacyfence#599's third half. The two
-    # states worth having are "separated" and "not"; an `enable` that stops
-    # between them produces neither, and that is not a theoretical shape. The
-    # observed one was the daemon's data under %ProgramData% -- a real
+    # that undoes itself. The two states worth having are "separated" and
+    # "not"; an `enable` that stops between them produces neither, and that
+    # is not a theoretical shape. One observed on a real runner was the
+    # daemon's data under %ProgramData% -- a real
     # install's authority directory, audit log and MCP token -- with no marker,
     # no service and no companion task pointing at it, which `paths.py`
     # resolves for nobody.
@@ -1378,7 +1373,7 @@ function Invoke-Status {
     return $problems
 }
 
-# ── Daemon manager (#428 Phase 2) ──────────────────────────────────────────
+# ── Daemon manager ─────────────────────────────────────────────────────────
 #
 # `daemon {status|start|stop|restart|ensure-running}` is what the companion
 # app's tray menu runs -- `status` unprivileged, on every poll, and

@@ -4,12 +4,8 @@
 # claude_desktop_config.json edits.
 #
 # Ships one file: PrivacyFence.mcpb — mcpb/shim/: talks to the daemon's
-# /mcp Streamable HTTP endpoint (the only transport there is since P5
-# retired the bridge, decision D11).
-# Requires web.mcp.enabled in config/settings.yaml (on by default as of
-# D11/P4b). Until P5, this script also built a second "Legacy Bridge"
-# .mcpb as a rollback lever while both transports shipped; that lever isn't
-# needed any more now that the bridge itself no longer exists.
+# /mcp Streamable HTTP endpoint, the only transport there is.
+# Requires web.mcp.enabled in config/settings.yaml (on by default).
 #
 # A small Node/TypeScript MCP server with no connector clients, no PII
 # detection, no PyObjC/AppKit — bundled by esbuild into a single

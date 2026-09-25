@@ -7,14 +7,14 @@ Icon=privacyfence
 Terminal=false
 Categories=Utility;
 Actions=Settings;RecoveryCode;ServiceStatus;StartService;RestartService;StopService;Quit;
-# #428 Phase 3 (ADR 0002 decision 2): Linux's own "same menu items as the
+# ADR 0002 decision 2: Linux's own "same menu items as the
 # macOS/Windows tray" -- this entry (installed to /usr/share/applications/)
 # is a real, clickable Applications-menu item.
 # Each Exec= below runs privacyfence-companion --action=... once and exits
 # (companion.py's own module docstring): there's no persistent Linux tray
 # process for these to attach to, so every action here is one-shot.
 #
-# The local-mode-fixes plan's Phase 2: the four ServiceStatus/StartService/
+# The four ServiceStatus/StartService/
 # RestartService/StopService actions are this platform's counterpart to
 # the macOS/Windows tray's dynamic status line and Start/Restart/Stop items -- ADR 0002
 # decision 4 rules out a tray icon here, not the affordance itself, so

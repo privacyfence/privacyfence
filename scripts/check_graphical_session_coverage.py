@@ -130,19 +130,19 @@ def evaluate(workflow: str, run: dict[str, Any] | None, run_is_ancestor: bool) -
     if run is None:
         return (
             f"{workflow} has no completed run at all -- no autostart coverage exists for this "
-            "release (privacyfence/privacyfence#374)."
+            "release (see docs/testing-policy.md's layer 6)."
         )
     if not run_is_ancestor:
         return (
             f"{workflow}'s most recent completed run ({run.get('html_url')}) is not an ancestor "
             "of this release's commit -- no autostart coverage exists for this exact release yet "
-            "(privacyfence/privacyfence#374)."
+            "(see docs/testing-policy.md's layer 6)."
         )
     conclusion = run.get("conclusion")
     if conclusion != "success":
         return (
             f"{workflow}'s most recent run reachable from this release did not succeed "
-            f"(conclusion={conclusion}): {run.get('html_url')} (privacyfence/privacyfence#374)."
+            f"(conclusion={conclusion}): {run.get('html_url')} (see docs/testing-policy.md's layer 6)."
         )
     return None
 
@@ -198,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
             "graphical-session workflow -- see the warnings above. If a failure looks like a "
             "flake, re-run that workflow's own failed jobs once and re-run this release; a "
             "second red run on the same commit is real and must not be re-run away "
-            "(privacyfence/privacyfence#374)."
+            "(see docs/testing-policy.md's layer 6)."
         )
         return 1
 

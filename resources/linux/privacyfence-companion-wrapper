@@ -5,5 +5,5 @@
 # exists at all: Debian policy puts the PyInstaller onedir bundle itself
 # under /opt, so this is what puts a stable name on PATH). Run by
 # resources/linux/privacyfence-companion.desktop's Exec= lines
-# (#428 Phase 3, ADR 0002).
+# (ADR 0002).
 exec /opt/privacyfence/PrivacyFenceCompanion "$@"

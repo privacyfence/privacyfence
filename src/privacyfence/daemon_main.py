@@ -336,8 +336,8 @@ def _flush_deferred_warnings() -> None:
 def _drop_converted_v1_sections(config: dict[str, Any], resolved: str) -> None:
     """Remove the v1 policy sections an earlier release already converted, and persist that.
 
-    4.1 through 4.4 converted ``auto_accept_rules``/``auto_accept_grants`` into ``auto_accept:`` on
-    startup and left the originals on disk, so every install that ran one of them would otherwise
+    Some earlier releases converted ``auto_accept_rules``/``auto_accept_grants`` into ``auto_accept:``
+    on startup and left the originals on disk, so every install that ran one of them would otherwise
     be refused by ``reject_v1_sections`` below. A failed write is not fatal: the in-memory config is
     already clean, and the next start tries again (ADR 0047).
     """
@@ -598,7 +598,7 @@ def check_storage_permissions(org_mode_active: bool) -> None:
         dirs = [d for d in dirs if d not in (data_dir(), handoff_dir())]
     problems = audit_directory_permissions(dirs) + privilege_separation.audit_layout()
     for problem in problems:
-        logger.warning("SEC-09: %s", problem)
+        logger.warning("Insecure storage permissions: %s", problem)
     if problems and org_mode_active:
         raise InsecurePermissionsError(
             "Refusing to start in organization mode: " + " ".join(problems)

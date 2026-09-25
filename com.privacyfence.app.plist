@@ -17,8 +17,8 @@ config/settings.yaml is resolved correctly. Adjust ProgramArguments to the
 absolute path of your privacyfence-app script (inside the project venv).
 
 Note that this is a LaunchAgent: it runs the daemon as whoever is logged in,
-which is also the account the AI client PrivacyFence governs runs as. #428
-Phase 4 offers the alternative -- scripts/macos_privilege_separation.sh
+which is also the account the AI client PrivacyFence governs runs as.
+Privilege separation is the alternative -- scripts/macos_privilege_separation.sh
 installs a LaunchDaemon under a dedicated account instead
 (installer/macos/com.privacyfence.daemon.plist.tmpl), plus a LaunchAgent for
 the companion app, and disables this file if it finds it installed. See
