@@ -2574,7 +2574,7 @@ class TestWindowsLayoutAudit:
 
     def test_reports_a_handoff_dir_the_group_cannot_read(self, separated_windows, monkeypatch):
         # The failure that presents as "the daemon is not running": the shim
-        # cannot read mcp_token, so it reports no daemon against one that is
+        # cannot read mcp_url, so it reports no daemon against one that is
         # running perfectly well.
         self._install_dacls(monkeypatch, separated_windows, {
             separated_windows / privilege_separation.HANDOFF_DIR_NAME: [
@@ -2584,7 +2584,7 @@ class TestWindowsLayoutAudit:
 
         problems = privilege_separation.audit_layout()
 
-        assert any("cannot reach mcp_token" in problem for problem in problems)
+        assert any("cannot read mcp_url, web_base_url" in problem for problem in problems)
 
     def test_reports_a_handoff_dir_the_group_can_write(self, separated_windows, monkeypatch):
         # Nothing in the user's session creates anything there on Windows --

@@ -159,10 +159,12 @@ def data_dir() -> Path:
 
 def handoff_dir() -> Path:
     """Where the files the *user's own desktop session* has to reach live:
-    the agent's ``mcp_token`` and the ``mcp_url`` the MCPB shim discovers it
-    by, the ``web_base_url``/``*_url`` discovery files a human reads, and
-    both ends of the control channels (``control.sock``,
-    ``companion.sock``).
+    the ``mcp_url`` the MCPB shim discovers the daemon by, the
+    ``web_base_url``/``*_url`` discovery files the companion and a human
+    read, and both ends of the control channels (``control.sock``,
+    ``companion.sock``). On an unseparated install the agent's ``mcp_token``
+    is here too; a separated install keeps it under the authority directory
+    and clients mint it over the control channel instead.
 
     ``data_dir()`` itself on an unseparated install.
     On a separated install it's ``data_dir()/handoff``, group-owned by the
