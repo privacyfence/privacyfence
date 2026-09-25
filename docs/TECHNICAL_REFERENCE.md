@@ -735,6 +735,16 @@ empty one — is refused at startup with a configuration error naming the sectio
 every org principal). Nothing converts it: remove the section and recreate its rules on the
 Auto-accept page. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md).
 
+The one exception is a file that 4.1–4.4 already converted, which carries a top-level
+`migrated_to_policy_v2: true` marker. In that file, its rules are already in the `auto_accept:`
+section. So `load_config` removes the leftover v1 sections and the marker, rewrites the file, and
+logs a warning naming what it removed (`policy.store.drop_converted_v1_sections`). See
+[ADR 0047](adr/0047-settings-an-earlier-release-converted-are-cleaned-up-not-refused.md).
+
+On Windows, where the daemon runs as a service with no stderr, a refused start is reported in the
+Application event log entry the service writes ("PrivacyFence exited with status 1: …"). That
+matters because every refusal above happens before the daemon has opened its own log file.
+
 ---
 
 ## Web surfaces (`/approvals`, `/settings`)

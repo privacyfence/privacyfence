@@ -225,6 +225,40 @@ class TestRulesToConfig:
         assert store.rules_to_config([])["version"] == store.SCHEMA_VERSION
 
 
+class TestDropConvertedV1Sections:
+    """ADR 0047: 4.1-4.4 converted the v1 sections and left them on disk under a marker."""
+
+    def test_removes_both_sections_and_the_marker(self):
+        current = store.rules_to_config([_rule()])
+        cfg = {
+            store.AUTO_ACCEPT_CONFIG_KEY: current,
+            "auto_accept_rules": {"contacts.edit": [{"rule": "no_contact_info_change"}]},
+            "auto_accept_grants": {},
+            store.CONVERTED_V1_MARKER: True,
+            "logging": {},
+        }
+        removed = store.drop_converted_v1_sections(cfg)
+        assert removed == ["auto_accept_rules", "auto_accept_grants", store.CONVERTED_V1_MARKER]
+        assert cfg == {store.AUTO_ACCEPT_CONFIG_KEY: current, "logging": {}}
+        store.reject_v1_sections(cfg, "cfg")
+
+    def test_a_marker_alone_is_removed(self):
+        cfg = {store.CONVERTED_V1_MARKER: True}
+        assert store.drop_converted_v1_sections(cfg) == [store.CONVERTED_V1_MARKER]
+        assert cfg == {}
+
+    @pytest.mark.parametrize("marker", [None, False])
+    def test_an_unconverted_v1_section_is_left_for_the_refusal(self, marker):
+        cfg = {"auto_accept_rules": {}}
+        if marker is not None:
+            cfg[store.CONVERTED_V1_MARKER] = marker
+        before = dict(cfg)
+        assert store.drop_converted_v1_sections(cfg) == []
+        assert cfg == before
+        with pytest.raises(store.V1PolicyConfigError):
+            store.reject_v1_sections(cfg, "cfg")
+
+
 class TestRejectV1Sections:
     @pytest.mark.parametrize("key", store.V1_SECTION_KEYS)
     def test_each_v1_section_is_refused_and_named(self, key):

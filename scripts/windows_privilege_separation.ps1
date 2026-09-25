@@ -801,6 +801,46 @@ function Install-DaemonService {
     Invoke-Sc @('failure', $ServiceName, 'reset=', '86400', 'actions=', 'restart/5000/restart/10000/restart/30000') | Out-Null
 }
 
+# Where Windows looks up the message text for an Event Log source. pywin32's
+# servicemanager, which writes the service's events, carries the message table
+# they use; with no source registered here, Event Viewer and Get-WinEvent show
+# every PrivacyFence entry with an empty message, and Get-WinEvent refuses a
+# -FilterHashtable naming the provider at all ("The parameter is incorrect").
+$EventSourceKey = "HKLM:\SYSTEM\CurrentControlSet\Services\EventLog\Application\$ServiceName"
+
+function Register-EventSource {
+    <#
+      Point the service's Event Log source at servicemanager's .pyd in the
+      install, the registration pywin32's own InstallService makes and `sc
+      create` does not. Best-effort: without it the service still runs and
+      still logs, its entries just read as empty -- not a reason to fail or
+      roll back an `enable` that otherwise worked.
+    #>
+    $installDir = Split-Path -Parent $script:DaemonExec
+    $messageFile = Get-ChildItem -LiteralPath $installDir -Recurse -File -Filter 'servicemanager*.pyd' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if (-not $messageFile) {
+        Write-Warn "no servicemanager*.pyd under $installDir -- the $ServiceName service's Event Log entries will show no message text"
+        return
+    }
+    try {
+        New-Item -Path $EventSourceKey -Force | Out-Null
+        New-ItemProperty -Path $EventSourceKey -Name 'EventMessageFile' -PropertyType ExpandString -Value $messageFile.FullName -Force | Out-Null
+        New-ItemProperty -Path $EventSourceKey -Name 'TypesSupported' -PropertyType DWord -Value 7 -Force | Out-Null
+        Write-Note "registered the $ServiceName Event Log source ($($messageFile.FullName))"
+    } catch {
+        Write-Warn "could not register the $ServiceName Event Log source: $($_.Exception.Message)"
+    }
+}
+
+function Unregister-EventSource {
+    # On `uninstall` and on a rolled-back `enable`, because the message file it
+    # names is in the program files the uninstaller is about to delete.
+    if (Test-Path -LiteralPath $EventSourceKey) {
+        Remove-Item -LiteralPath $EventSourceKey -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Start-DaemonService {
     <#
       Split from Install-DaemonService above so Invoke-Enable can create the
@@ -974,6 +1014,7 @@ function Undo-PartialEnable {
         }
         Uninstall-CompanionTask
         Uninstall-DaemonService
+        Unregister-EventSource
         Write-Note "rolled back -- this install is not separated; anything under $SystemRoot is left where it is"
     } catch {
         Write-Warn @"
@@ -1052,6 +1093,7 @@ function Invoke-Enable {
     # is a separated install with a broken daemon, which `sc query` and the
     # event log can both explain, and rolling the marker and the ACLs back
     # around it would trade a diagnosable problem for a silent one.
+    Register-EventSource
     Start-DaemonService
     Write-Note 'enable: done'
 
@@ -1173,6 +1215,7 @@ function Invoke-Uninstall {
 
     Uninstall-CompanionTask
     Uninstall-DaemonService
+    Unregister-EventSource
 
     if (-not $Purge) {
         Write-Host @"

@@ -1739,6 +1739,45 @@ class TestOrgModeWebAuthnUi:
         assert page.locator("#pf-add-passkey").is_enabled()
         assert console_errors == []
 
+    @pytest.mark.parametrize(
+        ("platform_available", "expected"),
+        [(False, "set up Windows Hello"), (True, "cancelled, timed out, or was blocked")],
+    )
+    def test_not_allowed_error_says_which_of_its_two_usual_causes_applies(
+        self, page, context, org_server, platform_available, expected,
+    ):
+        """The browser's own NotAllowedError text is the same whether the
+        human cancelled the prompt or the device has no platform
+        authenticator set up at all (Windows without Windows Hello) --
+        routes_security.py's pfExplainCreateError asks the browser which,
+        and the status line has to say so while still naming the error."""
+        server, sessions = org_server
+        principal = Principal(id="carol", email="carol@example.com", display_name="Carol")
+        _sign_in_org(context, server, sessions, principal=principal)
+
+        page.add_init_script(
+            f"""
+            navigator.credentials.create = function () {{
+                return Promise.reject(new DOMException(
+                    'The operation either timed out or was not allowed.', 'NotAllowedError'));
+            }};
+            PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = function () {{
+                return Promise.resolve({'true' if platform_available else 'false'});
+            }};
+            """
+        )
+        page.goto(f"{server.base_url}/security")
+        page.wait_for_load_state("load")
+        page.locator("#pf-add-passkey").click()
+        page.wait_for_function(
+            "() => { var el = document.getElementById('pf-passkey-status');"
+            " return !!el && el.textContent.indexOf('Could not add a passkey') === 0; }"
+        )
+        text = page.locator("#pf-passkey-status").text_content()
+        assert expected in text
+        assert "NotAllowedError" in text
+        assert page.locator("#pf-add-passkey").is_enabled()
+
     def test_security_page_renders_for_a_signed_in_principal(self, page, context, org_server):
         server, sessions = org_server
         principal = Principal(id="bob", email="bob@example.com", display_name="Bob")
