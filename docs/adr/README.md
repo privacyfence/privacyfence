@@ -174,7 +174,7 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0066](0066-step-up-falls-back-by-mode-and-require-passkey-closes-the-fallback.md) | Step-up falls back by mode, and `require_passkey` closes the fallback | Accepted (retroactive); implemented in part |
 | [0067](0067-the-default-step-up-scope-is-writes-and-pii-reads.md) | The default step-up scope is writes and PII-flagged reads | Accepted (retroactive) |
 | [0068](0068-step-up-is-turned-on-from-the-ui-and-off-only-by-a-config-edit.md) | Step-up is turned on from the UI and off only by a config edit | Accepted (retroactive) |
-| [0069](0069-require-passkey-with-nothing-enrolled-starts-and-releases-nothing.md) | With `require_passkey` on and nothing enrolled, the daemon starts and releases nothing step-up covers | Accepted (retroactive) |
+| [0069](0069-require-passkey-with-nothing-enrolled-starts-and-releases-nothing.md) | With `require_passkey` on and nothing enrolled, the daemon starts and releases nothing step-up covers | Accepted (retroactive); implemented in part |
 | [0070](0070-enabling-a-connector-is-sensitive-and-disabling-is-not.md) | Enabling a connector is a sensitive action, and disabling one is not | Accepted (retroactive) |
 | [0071](0071-audit-log-integrity-is-a-keyed-hash-chain-plus-off-host-forwarding.md) | Audit-log integrity is a keyed hash chain on the host, plus off-host forwarding | Accepted (retroactive) |
 | [0072](0072-org-mode-persists-only-sealed-refresh-tokens.md) | Org mode persists only refresh tokens, each sealed to its bearer | Accepted (retroactive) |
