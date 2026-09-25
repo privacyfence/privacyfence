@@ -1,6 +1,6 @@
 ---
 description: Orchestrate a docs/*-plan.md — one child session per phase, merged into one feature branch, one PR to main
-argument-hint: "<URL of the plan file on GitHub, e.g. https://github.com/privacyfence/privacyfence/blob/<ref>/docs/foo-plan.md>"
+argument-hint: "<GitHub URL of the plan file: https://github.com/<owner>/<repo>/blob/<ref>/<path>>"
 ---
 
 You are the **orchestrator** for the plan at:

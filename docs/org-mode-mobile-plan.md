@@ -1,13 +1,14 @@
-# Org mode on mobile — plan
+# Org mode on mobile, in the website's design — plan
 
 **Status:** proposed, 2026-09-25. Nothing here is implemented. This is a plan document per
 [`adr/README.md`](adr/README.md): it is deleted when its work lands, and the decisions below that
-meet the ADR bar (the framework choice and its rejected alternatives, the push-notification trust
-question) are extracted into ADRs first.
+meet the ADR bar (the styling approach and its rejected alternatives, the visual invariants, PDF
+rendering, the push-notification trust question) are extracted into ADRs first.
 
-**To run it:** start a Claude Code session with `/implement <GitHub URL of this file>`. If that
-session's checkout has no `/implement` command yet (it is added on the same branch as this plan),
-start it with `implement <URL>` instead: the session should read `.claude/commands/implement.md`
+**To run it:** start a Claude Code session with `/implement <GitHub URL of this file>`. The
+command lands on `main` separately
+([privacyfence/privacyfence#748](https://github.com/privacyfence/privacyfence/pull/748)). Until it
+does, start the session with `implement <URL>`, and it should read `.claude/commands/implement.md`
 from the same ref as this file and follow it.
 
 ## Goal
@@ -15,7 +16,8 @@ from the same ref as this file and follow it.
 A signed-in org-mode user can do everything they would do at a desk from a phone browser: sign in
 through the IdP, see and decide their pending approvals (including passkey step-up), manage their
 connections and passkeys, read their audit log, and, as an admin, edit settings. They also learn
-about a new approval without keeping a tab open.
+about a new approval without keeping a tab open. And the app looks like the website: the same
+tokens, components and responsive rules, in light and dark.
 
 Local mode renders the same pages ([ADR 0033](adr/0033-one-route-layer-per-surface-with-an-auth-adapter-per-mode.md)),
 so it gets every layout fix for free. It gets no mobile *reach*, though: local mode serves plain
@@ -64,17 +66,17 @@ What to do about each:
   reviewer must be able to tell that they saw part of the document, not all of it. Two
   alternatives were considered and rejected. **pdf.js** is a large runtime JavaScript bundle that
   would have to be served and nonced, and would also load in the native windows; it goes against
-  constraint 3. **"Open PDF in a new tab"** needs a new authenticated route for the raw bytes,
+  the no-runtime-framework constraint. **"Open PDF in a new tab"** needs a new authenticated route for the raw bytes,
   which is a new place card content is served from, and on Android it still hands the file to
   another app. The desktop `<embed>` can stay as is above that width. This is a new server-side
   parser of attacker-supplied files (a PDF is whatever the connector returned), so it runs with
   a page and time limit and inside the same failure handling as `text_extraction.py`. That point
   goes into the ADR.
 - **Tables:** below a container width breakpoint, render each row as a stacked label/value block
-  (the standard responsive-table pattern, which Tailwind container variants express directly).
+  (the standard responsive-table pattern), switched by a container query.
   Change `word-break` from breaking anywhere to `overflow-wrap: anywhere`, so text only breaks
   mid-word when a single word cannot fit on a line (an email address, say).
-- **Staged download links** (`GET /downloads/{token}`, see [`org-mode-download-delivery.md`](org-mode-download-delivery.md)):
+- **Staged download links** (`GET /downloads/{token}`, see [`org-mode-setup-guide.md`](org-mode-setup-guide.md)):
   signed out, the route redirects to a bare `/login` (`web/routes_downloads.py`) with no `next`,
   so after IdP sign-in the user lands on `/approvals` and the link is gone. On a desktop browser
   that already has a session this is rare. On a phone it is the normal case, because a link
@@ -92,67 +94,65 @@ flex/width rules in Python string literals and JavaScript string builders. The r
 far (list, card, dialog) were each a separate, later patch, and the one surface without a patch is
 the one nobody opened on a phone. Adding a fourth set of hand-written `@media` blocks to
 `settings_window_html.py` would fix today's bug and leave the pattern that caused it.
+The website hit the same problem, and fixed it structurally (see "Styling decision" below).
 
-## Constraints on any framework
-
-These rule candidates in or out, so they come before the choice:
+## Constraints on the styling approach
 
 1. **CSP:** `default-src 'none'`, with `<style>`/`<script>` elements allowed only with the
    per-response nonce ([`web/csp.py`](../src/privacyfence/web/csp.py)). No CDN and no third-party
-   origin. Any framework must ship as static CSS or JS inside the Python package.
-2. **The same document must also render without HTTP.** The native settings and approval windows
-   load these documents with `loadHTMLString_baseURL_` (see `web_shell.py`'s docstring), and card
-   documents are rendered once and reused. Styles must therefore be *inlined* into the document,
-   not linked, so the framework's shipped CSS must be small.
-3. **No frontend build exists for these pages.** Markup lives in Python f-strings and JavaScript
-   string concatenation. Node is already in the toolchain (`mcpb/shim`, pinned exact versions), so
-   one pinned build step is acceptable, but runtime JavaScript frameworks (React, Vue, Lit) would
-   mean rewriting the rendering model, and nothing here needs that.
+   origin. All CSS ships inside the Python package and is inlined.
+2. **Card documents are self-contained.** An approval card is rendered once and served again on
+   every `GET` until decided (see `csp.set_nonce`), and it carries its previews as `data:` URIs.
+   Its CSS is inlined too, so what it ships must be small.
+3. **No frontend build for these pages.** Markup lives in Python f-strings and JavaScript string
+   concatenation. Runtime JavaScript frameworks (React, Vue, Lit) would mean rewriting the
+   rendering model, and nothing here needs that.
 4. **One component, several containers.** An approval card renders full-screen on a phone, in a
-   fixed-size native window, and inline in an expanded list row. Its layout should respond to the
-   width of its *container*, not the viewport. That is the exact case the current viewport-only
+   desktop tab, and inline in an expanded list row. Its layout must respond to the width of its
+   *container*, not the viewport. That is the exact case the current viewport-only
    `@media (max-width: 700px)` rules get wrong in the inline-row context.
-5. **The look is ours, not the framework's.** The target look is the website's (see "Visual
-   design" below), expressed as our own design tokens. A framework that brings its own visual
-   language would have to be overridden everywhere to get there.
+5. **It must look like the website.** See "Visual design" below.
 
-## Framework decision
+## Styling decision: the app shares the website's design system
 
-### Recommended: Tailwind CSS v4, utilities-only, compiled at build time
+**Decided with the user on 2026-09-25.** The website already solved this problem for itself.
+[ADR 0049](adr/0049-website-css-is-plain-modern-css-without-a-framework.md) rebuilt
+`privacyfence.eu`'s CSS as design tokens (`website/tokens.css`: colour, a `clamp()` type scale,
+spacing, radius, the 44px tap size) plus five layout primitives in `website/chrome.css` (`.shell`,
+`.stack`, `.cluster`, `.grid-auto`, `.split`). `.split` stacks under a *container* query, not a
+viewport query. Nine written rules define what "responsive" means (the header comment of
+`website/styles.css`), and `tests/integration/test_website_layout.py` enforces them on every page
+at 320–1440px. The website's look, which is the target, *is* that CSS.
 
-- **Zero runtime.** The output is one static CSS file with no JavaScript, so it fits the nonce-only
-  CSP unchanged.
-- **Small enough to inline.** The compiler scans source files for class names and emits only the
-  ones used. It scans any text file, so it reads the `.py` modules directly (`@source "../src/privacyfence"`).
-  The expected output is in the low tens of KB, and it can be embedded exactly the way
-  `tokens.css` is today (constraint 2).
-- **Container queries are built in** (`@container`, `@sm:`/`@md:` variants), which handles
-  constraint 4 without hand-written rules.
-- **It uses our tokens, not its own.** v4's `@theme` block is plain CSS custom properties, so the
-  theme is the shared design tokens described under "Visual design" (constraint 5), and dark mode
-  comes from those tokens' own `prefers-color-scheme` block.
-- **Incremental adoption.** Importing only the `utilities` layer, with no Preflight reset, leaves
-  every existing page pixel-identical until it is migrated, so each surface can move in its own
-  small PR.
-- **One pinned build step.** Either `@tailwindcss/cli` at an exact version in a new
-  `web-ui/package.json` next to `mcpb/shim`, or the standalone CLI binary pinned by version and
-  SHA-256, the same way [ADR 0046](adr/0046-release-ci-pins-codesigntool-by-version-and-sha256.md)
-  pins CodeSignTool.
+So the app does not adopt a third-party framework. It adopts the website's system: the same token
+file, the same primitives, the same components (buttons, header, `<details>` menu), and the same
+rules and the same kind of test. It adds only what an application needs and a marketing site does
+not (see "Visual design"). This meets the aim behind "a framework, not custom responsiveness":
+no per-page media queries, and one tested set of primitives that pages are built from. Under
+ADR 0049's rule, "a page that needs its own media queries is a sign a primitive is missing".
+The difference is that this system is the one the website already runs on.
 
-Its one real cost: a class name must appear as a complete literal somewhere in the source. A class
-assembled from pieces (`'pf-' + kind`, or `"p-" + str(n)`) is never emitted. The JavaScript string
-builders in `settings_window_html.py` mostly use literal classes already, and a unit test that
-greps for concatenated class names (below) enforces the rule.
+Why this beats a framework here:
+
+- **One design system, not two.** Tailwind for the app while the website stays on plain CSS
+  would mean re-implementing the website's look in utility classes, and the two would drift apart,
+  which is the opposite of "make it look like the website".
+- **No build step and no new dependency.** The shared files are plain CSS inlined into the page,
+  exactly as `tokens.css` is today (constraints 1–3).
+- **Container queries are already the primitive** (constraint 4). `.shell` is a size container
+  and `.split` collapses by the space it actually has.
+- **Already proven**: the website went through the same audit (hidden nav, 22–40px tap targets,
+  per-page breakpoints) and came out passing a browser test at six widths.
 
 ### Alternatives considered
 
 | Option | Why not |
 |---|---|
-| **Bootstrap 5.3** (vendored, no build) | It has ready-made pieces this plan needs (an offcanvas drawer and a responsive grid) and no build step. But the compiled CSS is about 230KB, too much to inline in every card and settings document (constraint 2); trimming it requires a Sass build, which gives up the no-build advantage. Its visual language would also have to be overridden everywhere to match `tokens.css` (constraint 5), and it has no container-query grid. |
-| **Pico CSS** (classless) | Small, with good defaults on semantic HTML. But it styles elements, not layouts: it would not collapse the settings two-pane or three-pane layout, which is the actual bug. It would also restyle every button and input on every page. |
-| **Web component kits** (Shoelace/Web Awesome, Ionic) | Runtime JavaScript custom elements that have to be served, nonced and loaded in the native windows too. They fix components we don't have a problem with, and Ionic's app shell is a rewrite. |
-| **Open Props + "Every Layout" primitives** | Well regarded, but in practice it is a set of documented patterns we would copy in and maintain ourselves. That is the custom implementation this plan was asked to avoid. |
-| **Keep hand-written `@media` rules** | Rejected, for the reason given in "What is broken today". |
+| **Tailwind CSS v4 for the app only** (this plan's first draft) | Two styling systems in one repo. The website's look would be rebuilt in utility classes, where it drifts from the real thing. It also adds a pinned build step, a lock and a CI freshness check, and ADR 0049 already weighed and rejected it for the same look. |
+| **Tailwind for app and website** | Supersedes a decision taken earlier the same day, redoes the website's finished CSS, and adds a build to the site. Nothing about the app requires it. |
+| **Bootstrap 5.3** | About 230KB to inline into every card document; its own visual language would have to be overridden everywhere; its navbar needs its JavaScript. ADR 0049 rejected it for the site. |
+| **Pico CSS** (classless) | Styles elements, not layouts, so it would not fix the settings panes; it restyles everything. |
+| **Web component kits** (Shoelace/Web Awesome, Ionic) | Runtime JavaScript custom elements to serve and nonce; Ionic's app shell is a rewrite. |
 
 ## Beyond layout: what "works on mobile" also needs
 
@@ -177,71 +177,75 @@ greps for concatenated class names (below) enforces the rule.
 
 ## Visual design: the app adopts the website's look
 
-The website (`website/styles.css`, [privacyfence.eu](https://privacyfence.eu)) and the app look
-like two products. The website is calm and modern: a cool off-white page, white cards with 1px
-hairline borders, large radii (10–28px), soft wide shadows, one teal accent, dark-ink primary
-buttons, pill badges and small uppercase letter-spaced labels. The app has a warm grey page, blue
-and magenta accents, 1–4px radii, and a serif (Source Serif 4) on the approval card. This plan
-moves the app onto the website's look. The pages are being rebuilt for phones anyway, so each
-surface is restyled once, while its layout is already being rewritten.
+The website and the app look like two products. The website is calm and modern: a cool off-white
+page, white cards with 1px hairline borders, large radii, soft wide shadows, one teal accent,
+dark-ink primary buttons, pill badges and small uppercase letter-spaced labels. The app has a
+warm grey page, blue and magenta accents, 1–4px radii, and a serif (Source Serif 4) on the
+approval card. Because the pages are being rebuilt for phones anyway, each surface is restyled
+once, while its layout is already being rewritten.
 
 **What changes**
 
-| | App today (`resources/tokens.css`) | Target (from `website/styles.css`) |
+| | App today (`resources/tokens.css`) | Target (`website/tokens.css`, `chrome.css`) |
 |---|---|---|
 | Page / surface | `#f3f2f2` / `#eae9e9`, warm grey | `--bg #f6f8fb`, `--surface #fff`, `--surface-soft #eef3f8` |
-| Text | `#201e1d` | `--ink #14212b`, `--muted #60707d` |
+| Text | `#201e1d` | `--ink #14212b`, `--ink-soft #43535f`, `--muted #60707d` |
 | Lines | 16% text mix | `--line #dbe3e9` |
-| Accent | blue `#0088b0` plus magenta `#d6006c` | teal `--accent #167a70` / `--accent-dark #0e5f57` / `--accent-soft #e1f2ef`; no second accent |
-| Radii | 1 / 2 / 4px | about 10 (controls), 12–18 (cards), 22–28 (panels), 999 (pills) |
-| Elevation | none | the website's soft shadows, used sparingly |
-| Type | system sans in settings, Source Serif 4 on the card | one sans stack everywhere; the serif and its embedded font files go |
-| Primary button | filled accent | dark ink, the website's `.primary`; secondary is white with a line border |
-| Labels | mixed | uppercase, letter-spaced "kicker" labels (the card already has these) |
-| Header | flat grey bar | the website's floating, rounded, blurred sticky header |
+| Accent | blue `#0088b0` plus magenta `#d6006c` | teal `--accent #167a70` / `--accent-dark` / `--accent-soft`; no second accent |
+| Radii | 1 / 2 / 4px | `--radius-s 10px` (controls), cards about 12–18px, `--radius 22px` (panels), pills 999px |
+| Elevation | none | `--shadow`, used sparingly |
+| Type | system sans in settings, Source Serif 4 on the card | `--font-sans` and the website's type scale everywhere; the serif and its font files go |
+| Buttons | filled accent | `.button.primary` (dark ink) and `.button.secondary` (white, line border) |
+| Labels | mixed | `.kicker` (uppercase, letter-spaced); the card already has this shape |
+| Header | flat grey bar | the website's floating, rounded sticky header and its `<details>` menu below 900px |
 
-**Font.** The website names Inter but never loads it, so visitors see their system sans. The app
-uses the same system stack (`ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
-sans-serif`) and ships no webfont. This matches what people see on the website, and it also
-removes the Source Serif 4 files from every card document, which offsets the page images p4
-adds. Self-hosting Inter for both later is possible, but it is not part of this plan.
+**Font.** `--font-sans` names Inter first but the site never loads it, so visitors see their system
+sans. The app uses the same token and ships no webfont, so both look the same on a given device.
+Removing Source Serif 4 also takes its embedded files out of every card document, which offsets
+the page images p4 adds.
 
-**Decisions this needs, because the website does not have them.**
+**What the app adds, because the website does not have it.** These go in one app-only file next to
+the shared ones, never in the website's files:
 
-- **Dark mode.** The website has none; the app has one and keeps it. The dark palette is derived
-  from the website's own dark panel (`.privacy-card`: `#142b2b` surface, `#eaf4f3` text,
-  `#8fd3ca` accent), not invented from scratch.
-- **Status semantics.** The approval card carries meaning the website never had to show: deny or
+- **Dark mode.** The website rules it out of scope (rule 9); the app has one and keeps it. The
+  dark palette is derived from the website's own dark panel (`.privacy-card`: `#142b2b` surface,
+  `#eaf4f3` text, `#8fd3ca` accent), and it overrides the same token names, so every shared
+  primitive gets it for free. That requires the shared files to use tokens where they now
+  hard-code `#fff`, `#253743` and similar values. p1 makes that change, and it leaves the website
+  pixel-identical.
+- **Status semantics.** The approval card shows things the website never had to: deny or
   destructive, write versus read, PII detected, requester "not verified", step-up required. Each
-  gets a semantic token (`--danger`, `--warning`, `--info`, plus a `-soft` tint for each) chosen
-  to sit with the teal. Each also keeps a non-colour cue (text, icon or border style) that it
-  already has, so nothing relies on colour alone.
+  gets a semantic token (`--danger`, `--warning`, `--info`, `--success`, each with a `-soft` tint,
+  and `--focus-ring`) chosen to sit with the teal. Each keeps the non-colour cue it has today
+  (text, icon or border style), so nothing relies on colour alone.
+- **Application components.** `field` (input, select, textarea), `toggle`, `tabstrip` (the
+  settings section picker on a phone), `badge`, and `card`/`panel` as general classes rather than
+  the website's page-specific ones. They are built on the shared primitives and tokens.
 - **Action hierarchy on the card stays exactly as it is.** Which action is filled, which is
   outlined, and which is visually strongest is a security choice
   ([ADR 0036](adr/0036-card-copy-names-the-caller-through-one-placeholder.md) covers the copy;
   this covers the emphasis). The restyle changes colour and shape, never which button looks like
   the default. Card copy does not change at all.
 - **Contrast.** Every text/background token pair meets WCAG AA (4.5:1, or 3:1 for large text and
-  UI boundaries) in both themes, enforced by a unit test over the token file, not by eye.
+  UI boundaries) in both themes, enforced by a unit test over the token files.
 
-**One source of truth for both.** The tokens move to `web-ui/tokens.css`, the only place colour,
-radius, shadow and type values are defined. The app embeds it through the Tailwind build. The
-website loads it too: `pages.yml` already copies files from `src/privacyfence/resources/` into
-the site, and it copies this one the same way. `website/styles.css` then drops its own `:root`
-block. Changing the brand then changes both at once, and the two cannot drift. The website's
-look does not change in this plan, because the light values *are* its current values.
+**One physical source for the shared files.** `tokens.css` and the shared part of `chrome.css`
+(primitives, buttons, focus style) must reach both the website build and the Python wheel. They
+move to `src/privacyfence/resources/design/`, and `scripts/build_site.py`, which already maps
+`tokens.css` from a source path, copies them into the site at the same URLs. The site-only chrome
+(header menu, footer, consent banner) stays in `website/chrome.css`. A test fails if a token is
+defined anywhere else.
 
-**Components, not one-off styles.** A small set of primitives is defined once in
-`web-ui/tailwind.css` with Tailwind v4's `@utility`, and every page uses them: `btn-primary`,
-`btn-secondary`, `btn-danger`, `card`, `panel`, `badge`/`pill`, `kicker`, `field` (input, select,
-textarea), `toggle`, `tabstrip` (the phone nav pattern) and `header`. Pages then compose
-primitives and layout utilities and define no colours of their own. A test fails if a Python or
-JavaScript renderer contains a hex colour literal.
+**The rules travel too.** The website's nine responsive rules become the app's rules, minus rule
+9 (dark mode), plus one: the approval card's action hierarchy. They are written once, in the shared
+file's header comment. The app's phone-layout tests (p1) check the measurable ones on every app
+surface, the same way `test_website_layout.py` does for the site. A renderer that contains an
+`@media` width query or a colour literal fails a unit test.
 
 **Sign-off before rollout.** Design is a judgement call, and the orchestrator cannot make it.
-The design-system phase ends with a rendered style guide (every primitive, both themes, phone and
-desktop) plus a before/after of one settings page and one approval card. The run stops there until
-you approve it. Only then do the phases that restyle whole surfaces start.
+The design phase (p2) ends with a rendered style guide (every component, both themes, phone and
+desktop) plus a before/after of one settings page and one approval card. The run stops there
+until you approve it. Only then do the phases that restyle whole surfaces start.
 
 ## Phases
 
@@ -254,8 +258,8 @@ The prose above is the context each child reads first.
 Order and parallelism, from the manifest's `depends_on`:
 
 ```
-wave 1   p1-toolchain          (framework, test harness, xfail baseline; no visual change)
-wave 2   p2-design-system      (shared tokens, primitives, style guide)  ── you sign off here
+wave 1   p1-shared-design      (website design files shared with the app, test harness; no visual change)
+wave 2   p2-design-system      (app theme, components, style guide)  ── you sign off here
 wave 3   p3-settings       ∥   p4-review-content
 wave 4   p5-card-containers ∥  p6-remaining-pages
 wave 5   p7-push
@@ -272,8 +276,8 @@ phase is done when it has removed every xfail carrying its own id and those test
 the xfails are strict, a phase cannot fix another phase's case by accident without the suite
 noticing. By p8 no xfail from this plan may remain.
 
-**ADR numbers are pre-assigned**, so parallel phases do not collide: 0047 (p1), 0048 (p2),
-0049 (p4), 0050 (p5), 0051 (p7). If `main` has taken a number by the time the final PR opens, the
+**ADR numbers are pre-assigned**, so parallel phases do not collide: 0077 (p1), 0078 (p2),
+0079 (p4), 0080 (p7). If `main` has taken a number by the time the final PR opens, the
 orchestrator renumbers in its last merge of `main`.
 
 ## Implementation manifest
@@ -283,162 +287,144 @@ plan_slug: org-mode-mobile
 feature_branch: feature/org-mode-mobile
 max_parallel: 2
 verify_after_merge:
-  - python3 -m pytest tests/integration/test_browser_smoke.py -q
-  - python3 scripts/check_ui_css_fresh.py        # exists from p1 on
+  - python3 -m pytest tests/integration/test_browser_smoke.py tests/integration/test_website_layout.py -q
 screenshots_after_merge: python3 scripts/render_ui_review.py --out test-results/ui-review   # exists from p2 on
 final_checks:
   - "grep -rn 'reason=\"p[1-8]-' tests/ returns nothing: no xfail this plan added is left"
-  - docs/org-mode-mobile-plan.md is deleted, and docs/README.md no longer points to it
-  - ADRs 0047-0051 exist, are listed in docs/adr/README.md, and are Accepted
+  - the @media-width and colour-literal allow-lists added in p1 are empty
+  - docs/org-mode-mobile-plan.md is deleted, and no doc links to it
+  - ADRs 0077-0080 (or their renumbered successors) exist, are listed in docs/adr/README.md, and are Accepted
   - CHANGELOG.md has [Unreleased] entries for every user-visible change and no version heading
-  - src/privacyfence/resources/tokens.css and the Source Serif 4 font files are gone; web-ui/tokens.css is the only token source
+  - src/privacyfence/resources/tokens.css and the Source Serif 4 font files are gone; src/privacyfence/resources/design/ is the only token source for app and website
+  - test_website_layout.py passes and the website is visually unchanged
 manual:
   - "Real iPhone (Safari and the installed Home Screen app) and real Android Chrome: sign in through the IdP, approve a write with passkey step-up, approve with the IdP step-up fallback, read a PDF review card, open a staged download link from inside the Claude app, receive a push notification"
   - "Subjective look in light and dark at phone and desktop width (render_ui_review.py output, qa_web_smoke.py), per docs/release-testing.md"
 
 phases:
-  - id: p1-toolchain
-    title: Tailwind build, phone test harness, xfail baseline
+  - id: p1-shared-design
+    title: Share the website's design files with the app; phone test harness
     depends_on: []
     brief: |
-      1. Add a pinned Tailwind CSS v4 build. Put `web-ui/package.json` next to `mcpb/shim`,
-         with `@tailwindcss/cli` at an exact version (no ^ or ~) and a committed
-         package-lock.json. The entry file is `web-ui/tailwind.css`:
-         `@import "tailwindcss/theme.css" layer(theme); @import "tailwindcss/utilities.css" layer(utilities);`
-         No Preflight. For this phase only, an `@theme` block maps colours and radii onto the
-         *existing* `resources/tokens.css` variables, with `--color-*: initial` so no default
-         Tailwind palette leaks in (p2 replaces these tokens). Point `@source` at
-         `../src/privacyfence`. The compiled output is `src/privacyfence/resources/ui.css`,
-         minified and committed.
-      2. Add `scripts/check_ui_css_fresh.py`: rebuild into a temporary file, diff it against the
-         committed file, exit 1 on any difference. Wire it into tests.yml's lint job, which needs
-         Node (it already has it for the shim), and make sure the package data ships `ui.css`
-         (check MANIFEST.in and pyproject's package-data).
-      3. Embed ui.css immediately after tokens.css wherever tokens.css is embedded today:
-         web_shell.py, settings_window_html.py, approval_window_html.py, dialog_window_html.py.
-         Use the same read-once module constant, in the same nonce'd <style>.
-      4. Cascade-layer gotcha, so it is documented once: Tailwind v4's utilities live in
-         `@layer utilities`, and **unlayered** CSS beats any layered rule regardless of
-         specificity. A utility class therefore cannot override an existing hand-written rule; a
-         migrating phase must delete or narrow the hand-written rule it replaces. Write this in
-         ADR 0047 and as a comment at the top of web-ui/tailwind.css.
-      5. Find out whether any native WKWebView/WebView2 host still loads these documents
-         (approval_window.py and settings_window.py appear to be gone; confirm it). If one does,
-         check that Tailwind v4's browser floor (Safari 16.4) fits docs/platform-support.md's
-         macOS 13 minimum. If it does not, stop and report status=blocked. If no native host is
-         left, say so in ADR 0047: constraint 2 then reduces to "card documents are rendered
-         once and reused".
-      6. Test harness in tests/integration/test_browser_smoke.py. Build a phone context from the
-         existing `_MOBILE_EMULATION`. Give the `org_server` fixture's bundle at least one
-         configured connector service, so /connect renders instead of 404ing. Add parametrized
-         tests over: /approvals; /settings for each section, both admin and non-admin;
+      Read "Styling decision" and "Visual design" above in full, and ADR 0049.
+      1. Create `src/privacyfence/resources/design/`. Move `website/tokens.css` there. Split
+         `website/chrome.css`: the layout primitives (.shell, .stack, .cluster, .grid-auto,
+         .split), buttons (.actions, .button, .primary, .secondary), the focus style and
+         `.kicker`/`.eyebrow` go to `resources/design/base.css`; the site-only chrome (skip
+         link, header and its <details> menu, footer, consent banner, breakpoints for those)
+         stays in `website/chrome.css`. Update `scripts/build_site.py`'s file map, the /docs/
+         theme's extra_css, and every page's <link> so the built site serves the same files at
+         the same URLs (or updated URLs, consistently). Package data must ship the design/
+         folder (check MANIFEST.in and pyproject).
+      2. Replace hard-coded colours in the moved files (`#fff`, `#253743`, `rgba(...)` shadows
+         and so on) with tokens. Add new tokens with the exact current values where needed, so
+         the website renders pixel-identically. Prove it: before/after screenshots from
+         test_website_layout.py's saved output, compared per page and per width.
+      3. Move the header comment's nine rules into base.css's header as the shared rules, keep
+         styles.css pointing at them, and add a tenth for the app: "the approval card's action
+         hierarchy never changes with styling".
+      4. Embed tokens.css and base.css in the app's documents, inlined in the existing nonce'd
+         <style> next to the current resources/tokens.css: web_shell.py, settings_window_html.py,
+         approval_window_html.py, dialog_window_html.py. Check that no shared class name
+         collides with an existing app class (the app mostly uses a pf- prefix). This phase
+         changes nothing visually in the app: desktop screenshots of /settings, /approvals and
+         a card, before and after, must be identical.
+      5. Phone test harness in tests/integration/test_browser_smoke.py, mirroring
+         test_website_layout.py's rules. Build a phone context from the existing
+         `_MOBILE_EMULATION`, and also run at 320px and 1024px. Give the `org_server` fixture's
+         bundle at least one configured connector service, so /connect renders instead of
+         404ing. Cover: /approvals; /settings for each section, both admin and non-admin;
          /settings/privacy; /connect; /security; the three bare fallback pages
-         (routes_approvals.py:507/522, session_auth.py:461); and a WIDE read card for each preview
-         kind (PDF, image, Markdown, a 10-column record table), both full-page and expanded
-         inline in an /approvals list row. Assertions: (a) no horizontal document overflow;
-         (b) the main content region is at least 90% of the viewport width; (c) every visible
-         interactive element is at least 44x44 CSS px; (d) viewport meta is in effect
-         (innerWidth == 393); (e) for the PDF card, the preview shows document pixels, i.e. an
-         <img> of a rendered page, not an <embed>; (f) for table cards, no single word is broken
-         across lines. Every case that fails today gets `xfail(strict=True, reason="<owning
-         phase id>")`, assigned like this: settings → p3-settings; PDF, table and download →
-         p4-review-content; the card inline in a list row → p5-card-containers; shell, list,
-         connect, security and fallback pages → p6-remaining-pages. A case that already passes
-         gets no marker.
-      7. Unit test: fail when a class attribute is built by string concatenation in
-         src/privacyfence (Python f-string or JS `+` inside a class="..." value) outside an
-         explicit allow-list. Seed the allow-list with today's offenders, each naming the phase
-         that will clean it up.
-      8. Write ADR 0047 (Tailwind v4, utilities-only, compiled and inlined), using this plan's
-         "Constraints" and "Alternatives considered" sections.
-      This phase changes nothing visually. Screenshots before and after of /settings,
-      /approvals and a card at desktop width must be identical.
+         (routes_approvals.py:507/522, session_auth.py:461); and a WIDE read card for each
+         preview kind (PDF, image, Markdown, a 10-column record table), both full-page and
+         expanded inline in an /approvals list row. Assertions: (a) no horizontal document
+         overflow; (b) the main content region is at least 90% of the viewport width; (c) every
+         visible interactive element is at least 44x44 CSS px below 1024px; (d) viewport meta
+         is in effect; (e) for the PDF card, the preview shows an <img> of a rendered page, not
+         an <embed>; (f) for table cards, no single word is broken across lines. Every case that
+         fails today gets `xfail(strict=True, reason="<owning phase id>")`: settings →
+         p3-settings; PDF, table and download → p4-review-content; the card inline in a list row
+         → p5-card-containers; shell, list, connect, security and fallback pages →
+         p6-remaining-pages. A case that already passes gets no marker.
+      6. Unit tests, each with an allow-list seeded with today's offenders (each entry naming
+         the phase that removes it): (a) no `@media` width/height query in any renderer under
+         src/privacyfence or resources/approval_window/styles.css (prefers-color-scheme and
+         prefers-reduced-motion are allowed); (b) no hex or rgb() colour literal in those
+         renderers; (c) no CSS custom property named like a design token is defined outside
+         resources/design/.
+      7. Write ADR 0077: the app shares the website's design system (tokens, primitives, rules)
+         from one packaged source, instead of Tailwind or another framework. It extends ADR
+         0049 to the app and does not supersede it. Take the alternatives table from this plan.
     acceptance:
-      - web-ui builds reproducibly and check_ui_css_fresh.py passes in CI's lint job
-      - the new browser tests all pass or xfail strictly with an owning phase id
-      - no visual change at desktop width (screenshots in the report)
-      - ADR 0047 is written and listed in docs/adr/README.md
+      - website visually unchanged at every tested width, test_website_layout.py green
+      - app visually unchanged at desktop width (screenshots in the report)
+      - new browser tests all pass or xfail strictly with an owning phase id
+      - ADR 0077 written and listed in docs/adr/README.md
 
   - id: p2-design-system
-    title: Shared design tokens and primitives in the website's look
-    depends_on: [p1-toolchain]
+    title: The app's theme, components and style guide in the website's look
+    depends_on: [p1-shared-design]
     human_gate: true
     brief: |
-      Read "Visual design: the app adopts the website's look" above in full; it is the spec.
-      1. Create `web-ui/tokens.css`, the single token source. Light values are copied exactly
-         from website/styles.css's :root (bg, surface, surface-soft, ink, muted, line, accent,
-         accent-dark, accent-soft, shadow, radius), plus the radius and shadow scale the website
-         uses inline, and the sans font stack. Add semantic tokens the app needs and the website
-         lacks: danger, warning, info, success, each with a -soft tint, and focus-ring. Add a
-         dark theme under prefers-color-scheme: dark, derived from the website's .privacy-card
-         palette (#142b2b / #eaf4f3 / #8fd3ca / #c6d8d5 / #8fa7a4). Name tokens by role, not by
-         hue (`--accent`, not `--teal`).
-      2. Point the Tailwind `@theme` at the new tokens and remove p1's temporary mapping.
-         Delete `src/privacyfence/resources/tokens.css`, and replace its old variable names
-         everywhere they are used (a temporary alias block is fine within this phase, but none
-         may be left at the end). Have resources/approval_window/styles.css consume the shared
-         tokens instead of its own copy of the palette. Remove the Source Serif 4 @font-face
-         rules and delete the font files and OFL.txt from resources/approval_window/fonts
-         (check MANIFEST.in and package-data).
-      3. Define the primitives with Tailwind v4 `@utility` in web-ui/tailwind.css: btn-primary
-         (dark ink), btn-secondary (white with a line border), btn-danger, card, panel,
-         badge/pill, kicker, field (input, select, textarea), toggle, tabstrip and header.
-         Include hover, focus-visible, disabled and dark-mode states, and 44px minimum targets
-         on pointer-coarse.
-      4. Restyle the shared chrome only: web_shell.py's header becomes the website's floating
-         rounded, blurred sticky header, with the brand icon. On a phone its nav is a `tabstrip`
-         that never wraps into a second row. Pages below the header are restyled by later
-         phases; in between, they pick up the new colours through the tokens.
-      5. Approval card, colours and type only (its layout is p5's): it moves to the sans stack
-         and the new palette. **Keep the action hierarchy exactly as it is**: whichever of
+      "Visual design" above is the spec.
+      1. Add `resources/design/app.css`, which only the app loads: the dark theme (derived from
+         the website's .privacy-card palette, overriding the shared token names under
+         prefers-color-scheme: dark), the semantic status tokens (danger, warning, info, success,
+         each with -soft, and focus-ring), and the app components: field (input, select,
+         textarea), toggle, tabstrip, badge, card and panel. All are built on the shared tokens
+         and primitives, with hover, focus-visible, disabled and dark states and 44px targets
+         below 1024px. Any responsive behaviour uses container queries on .shell-style
+         containers, never a viewport width query.
+      2. Delete `src/privacyfence/resources/tokens.css` and replace its variable names
+         everywhere (a temporary alias block is fine within this phase, but none may be left at
+         the end). Have resources/approval_window/styles.css read the shared tokens instead of
+         its own palette copy. Remove the Source Serif 4 @font-face rules and delete the font
+         files and OFL.txt (check MANIFEST.in and package data).
+      3. Restyle the shared chrome: web_shell.py's header becomes the website's header, with the
+         same markup pattern, the brand icon, and the <details> menu below 900px. Pages below the
+         header are restyled by later phases; in between they pick up the new colours through
+         the tokens.
+      4. Approval card, colours and type only (its layout is p5's): it moves to --font-sans and
+         the new palette. **Keep the action hierarchy exactly as it is**: whichever of
          deny/allow/allow-always is filled, outlined or strongest today stays that way. Only
          colour and shape change, and no card copy changes. Read, write, PII, not-verified and
-         step-up indicators each keep their existing non-colour cue.
-      6. Website: pages.yml copies web-ui/tokens.css into the site next to styles.css, and
-         index.html and download/index.html load it before styles.css. website/styles.css drops
-         its own :root block. The website must render pixel-identically; prove it with
-         before/after screenshots of both pages.
-      7. Tests. A unit test computes WCAG contrast for every text/background and UI-boundary
-         token pair in both themes (4.5:1 for text, 3:1 for large text and boundaries), and
-         fails below threshold. Another unit test fails if any .py renderer in src/privacyfence
-         or web_shell/approval/settings JS contains a hex or rgb() colour literal, outside an
-         allow-list that p3–p6 empty. Keep the existing TestColorScheme structural dark-mode
-         tests passing, updated to the new token names.
-      8. Add `scripts/render_ui_review.py --out DIR`. It drives the existing Playwright fixtures
-         and writes PNGs of: a style guide page showing every primitive in every state, both
-         themes; /approvals, one card of each kind, /settings (General and Privacy Filter),
-         /connect and /security, at 393px and 1280px, light and dark. The style guide is a
-         test-only route or a static HTML file the script builds from the primitives, not a
-         product page. The orchestrator runs this after every merge and shows you the output.
-      9. Write ADR 0048: the app adopts the website's visual language through one shared token
-         file; how the dark palette was derived; the status-semantics and action-hierarchy
-         invariants; system font instead of a webfont; primitives, and no colour literals in
-         renderers.
+         step-up indicators each keep their non-colour cue.
+      5. Add a unit test that computes WCAG contrast for every text/background and UI-boundary
+         token pair in both themes (4.5:1 for text, 3:1 for large text and boundaries). Update
+         the existing TestColorScheme dark-mode tests to the new token names.
+      6. Add `scripts/render_ui_review.py --out DIR`. It drives the existing Playwright fixtures
+         and writes PNGs of: a style guide showing every shared and app component in every
+         state, both themes; /approvals, one card of each kind, /settings (General and Privacy
+         Filter), /connect and /security, at 393px and 1280px, light and dark. The style guide
+         is a static HTML file the script builds from the design files, not a product route.
+         The orchestrator runs this after every merge and shows you the output.
+      7. Write ADR 0078: the app's visual language is the website's; how the dark palette was
+         derived; the status-semantics and action-hierarchy invariants; system font instead of
+         a webfont.
     acceptance:
-      - web-ui/tokens.css is the only token source; resources/tokens.css and the serif fonts are deleted
+      - resources/tokens.css and the serif fonts are deleted
       - the contrast test passes in both themes
-      - website screenshots before and after are identical
-      - render_ui_review.py output is attached to the report for the human gate
       - the approval card's action emphasis is unchanged (say how you compared it)
-      - ADR 0048 written
+      - render_ui_review.py output is attached to the report for the human gate
+      - website still visually unchanged; ADR 0078 written
 
   - id: p3-settings
     title: Settings usable at phone width, in the new look
     depends_on: [p2-design-system]
     brief: |
       Fix and restyle settings_window_html.py, both the org and the local rendering, using the
-      p2 primitives. Below Tailwind's `md` breakpoint, `.pf-nav` becomes a `tabstrip` above the
-      content, and the Privacy Filter `.pf-subnav` becomes a second strip (or a native `field`
-      select), so the detail pane gets the full width. Above `md`, keep a left nav, styled like
-      the website's cards. Keep the existing `data-nav`/`data-privacy-nav` click handling and the
-      role=tablist ARIA; add no new JS framework. Settings rows become `card`s with the label and
-      description above the control at narrow widths; switches are the `toggle` primitive.
-      Delete each hand-written rule as it is replaced (the cascade-layer note in ADR 0047).
-      Remove every xfail with reason="p3-settings", and this module's entries from the
-      class-concatenation and colour-literal allow-lists.
+      shared primitives and p2's components. When the settings container is narrower than the
+      website's 900px breakpoint (a container query), `.pf-nav` becomes a `tabstrip` above the
+      content, and the Privacy Filter `.pf-subnav` becomes a second strip (or a `field` select),
+      so the detail pane gets the full width. At wider widths keep a left nav, styled like the
+      website's cards (.split is the likely primitive). Keep the existing
+      `data-nav`/`data-privacy-nav` click handling and the role=tablist ARIA. Settings rows
+      become `card`s with the label and description above the control at narrow widths;
+      switches are the `toggle` component. Remove every xfail with reason="p3-settings" and
+      this module's entries in the p1 allow-lists.
     acceptance:
       - all p3-settings xfails removed and passing
-      - settings_window_html.py has no entries left in either allow-list
+      - settings_window_html.py has no allow-list entries left
       - phone and desktop screenshots of each settings section in both themes in the report
 
   - id: p4-review-content
@@ -451,50 +437,47 @@ phases:
          rasterise the first N pages (N=5, configurable, width about 1000px, PNG) in a helper
          module with a page limit, a time limit and a byte limit, and the same failure handling
          text_extraction.py uses: if rendering fails, the card falls back to the text
-         extraction, never to nothing. build_preview_body_html emits both: the <embed> inside a
-         container shown only at `@md` container width and up, and the page images plus a
-         "Showing pages 1–N of M" note otherwise. Style the page images and the note with the
-         p2 primitives. The card stays self-contained (data: URIs), so CSP needs no change. Check
-         the card's size budget and say in the report how big a 5-page card gets, compared with
-         the serif font bytes p2 removed.
-      2. Tables. _table_html becomes stacked label/value blocks below the `@md` container
-         width, in the new look. Use `overflow-wrap:anywhere` instead of breaking at every
-         character.
+         extraction, never to nothing. build_preview_body_html emits both: the <embed> shown only
+         when the preview container is at least 600px wide (a container query), and otherwise
+         the page images plus a "Showing pages 1–N of M" note, in the new look. The card stays
+         self-contained (data: URIs), so CSP needs no change. Report how big a 5-page card gets,
+         compared with the serif font bytes p2 removed.
+      2. Tables. _table_html becomes stacked label/value blocks below the same container width.
+         Use `overflow-wrap:anywhere` instead of breaking at every character.
       3. Downloads. When GET /downloads/{token} finds no session, redirect to
          `/login?next=/downloads/<token>` through the existing _safe_next_path allow-list. Add a
          unit test that the claim still requires the same principal after sign-in, and a test
          that `next` cannot be turned into an open redirect.
-      4. Write ADR 0049: server-side rasterisation, rejecting pdf.js and an open-in-new-tab
-         route. Include the threat note that this is a new parser of untrusted input.
+      4. Write ADR 0079: server-side rasterisation, rejecting pdf.js (a large runtime bundle to
+         serve and nonce) and an open-in-new-tab route (a new place card content is served
+         from). Include the threat note that this is a new parser of untrusted input.
       Remove every xfail with reason="p4-review-content".
     acceptance:
       - all p4-review-content xfails removed and passing
       - a malformed or encrypted PDF falls back to text, with a unit test
       - dependency locks regenerated and committed; bandit clean
-      - ADR 0049 written
+      - ADR 0079 written
 
   - id: p5-card-containers
     title: Approval card and dialogs on container queries, in the new look
     depends_on: [p4-review-content]
     brief: |
-      Replace the viewport `@media (max-width: 700px)` layout rules in
+      Replace the viewport `@media (max-width: 700px)` rules in
       resources/approval_window/styles.css, approval_window_html.py and dialog_window_html.py
-      with container queries. Make the card root `@container`, and use `@md:`-style variants in
-      the markup. The card must stack correctly when it is inline in an expanded /approvals list
-      row on a desktop, not only on a phone. Finish the card's move onto the p2 primitives
-      (panels for the "already knows"/preview sections, kicker labels, badges, buttons), and
-      delete styles.css rules as they are replaced; ideally styles.css ends up empty and is
-      removed. Keep the action hierarchy and all copy unchanged (ADR 0048). Keep the existing
-      TestMobileLayoutViewport and TestResponsiveLayout tests green unchanged. Move the 3
-      hover-only rules and 7 title= tooltips in the three renderers onto visible or tap
-      equivalents. Write ADR 0050 (container queries for components rendered in more than one
-      host). Remove every xfail with reason="p5-card-containers", and these modules' entries
-      from both allow-lists.
+      with the shared primitives and container queries: the card root is a size container,
+      and its wide two-column layout is `.split` or an app component built on it. The card must
+      stack correctly when it is inline in an expanded /approvals list row on a desktop, not only
+      on a phone. Finish the card's move onto p2's components (panels for the "already
+      knows"/preview sections, kicker labels, badges, buttons), and delete styles.css rules as
+      they are replaced; ideally styles.css ends up empty and is removed. Keep the action
+      hierarchy and all copy unchanged (ADR 0078). Keep the existing TestMobileLayoutViewport and
+      TestResponsiveLayout tests green unchanged. Move the 3 hover-only rules and 7 title=
+      tooltips in the three renderers onto visible or tap equivalents. Remove every xfail with
+      reason="p5-card-containers", and these modules' allow-list entries.
     acceptance:
       - all p5-card-containers xfails removed and passing
       - existing responsive and mobile tests unchanged and green
       - card, PII dialog and choice dialog screenshots in both themes and both widths in the report
-      - ADR 0050 written
 
   - id: p6-remaining-pages
     title: List, connect, security and fallback pages, in the new look
@@ -502,15 +485,14 @@ phases:
     brief: |
       Move approval_list_html.py, routes_connect.py (including the Telegram phone/code/password
       form; set inputmode and autocomplete correctly for a phone keyboard) and
-      routes_security.py onto the p2 primitives, with 44px targets on coarse pointers. List rows
-      become `card`s. Connection rows use the website's connector-chip look for their service
-      name, and a `badge` for their state. Render the three bare fallback pages through one
-      small shared helper with viewport meta and the new look. Remove every xfail with
-      reason="p6-remaining-pages". Both allow-lists (class concatenation and colour literals)
-      must be empty at the end of this phase.
+      routes_security.py onto the shared primitives and p2's components. List rows become
+      `card`s. Connection rows use the website's connector-chip look for the service name and a
+      `badge` for their state. Render the three bare fallback pages through one small shared
+      helper with viewport meta and the new look. Remove every xfail with
+      reason="p6-remaining-pages". Every p1 allow-list must be empty at the end of this phase.
     acceptance:
       - all p6-remaining-pages xfails removed and passing
-      - both allow-lists are empty
+      - all p1 allow-lists are empty
       - screenshots of every touched page in both themes and both widths in the report
 
   - id: p7-push
@@ -519,7 +501,7 @@ phases:
     brief: |
       Org mode only; local mode keeps notification tiers 0–1 exactly as today.
       1. Web App Manifest (name, icons from resources/, display standalone, start_url
-         /approvals, theme_color and background_color from web-ui/tokens.css), served on an
+         /approvals, theme_color and background_color from the design tokens), served on an
          unauthenticated route classified per ADR 0014, and linked from web_shell.py when org
          mode is active. Check the CSP `manifest-src`.
       2. VAPID: a key pair generated on first start and stored with the org state that holds the
@@ -533,12 +515,11 @@ phases:
          for the whole org; default on. Rate-limit per principal, the same as tier 1.
       5. sw.js gets `push` and `notificationclick` handlers. The click opens or focuses /approvals.
       6. web_shell's existing permission pre-prompt subscribes in org mode. On iOS, when not
-         installed, show an "Add to Home Screen to get notifications" hint instead, styled with
-         the p2 primitives.
-      7. Write ADR 0051: the first time approval metadata leaves the org server (via Apple and
+         installed, show an "Add to Home Screen to get notifications" hint instead.
+      7. Write ADR 0080: the first time approval metadata leaves the org server (via Apple and
          Google push services), the payload limit, the org-wide off switch, and why local mode
          does not get it. Update docs/org-mode-setup-guide.md (egress to the push services, the
-         switch) and docs/approval-list-ui-ux.md's notifications section (tier 2 now exists for
+         switch) and docs/approvals-and-policy.md's Notifications section (push now exists for
          org mode).
       Tests: unit tests for payload minimisation, subscription auth, 410 cleanup, the switch
       off, and local mode having no route; a browser test that the manifest is served and linked.
@@ -546,26 +527,27 @@ phases:
     acceptance:
       - payload content is test-proven to be minimal
       - local mode route set is unchanged (test)
-      - ADR 0051 written; setup guide and approval-list-ui-ux.md updated
+      - ADR 0080 written; setup guide and approvals-and-policy.md updated
 
   - id: p8-retire
     title: Retire the plan
     depends_on: [p3-settings, p4-review-content, p5-card-containers, p6-remaining-pages, p7-push]
     brief: |
-      1. Confirm ADRs 0047–0051 cover every item in this plan's "Decisions to extract into ADRs"
+      1. Confirm ADRs 0077–0080 cover every item in this plan's "Decisions to extract into ADRs"
          list; add whatever is missing. Set each to Accepted and list them in docs/adr/README.md.
       2. Add this manifest's `manual` items to docs/release-testing.md as a standing "org mode on
-         a phone" checklist, and describe the new phone-layout, contrast and colour-literal tests
-         in docs/testing-policy.md.
-      3. Update docs/approval-list-ui-ux.md's responsive section to point at ui.css, container
-         queries and the new tests instead of hand-written breakpoints. Add a short "Design
-         system" section to docs/coding-and-testing-guidelines.md: tokens live in
-         web-ui/tokens.css, pages compose primitives, no colour literals.
-      4. Regenerate every screenshot in docs/images/screenshots/ with scripts/qa_readme_screenshots.py
-         and the approval-screenshot procedure in that folder's README, synthetic data only. The
-         website shows gmail-read-thread.png and sheets-write.png, so it will show the new UI.
-      5. Delete docs/org-mode-mobile-plan.md and restore docs/README.md's "no active plan"
-         sentence.
+         a phone" checklist, and describe the new phone-layout, contrast, @media and
+         colour-literal tests in docs/testing-policy.md.
+      3. Add a short "Design system" section to docs/coding-and-testing-guidelines.md, and
+         repoint any responsive-layout guidance there at the shared design files and rules
+         instead of hand-written breakpoints: tokens and primitives live in
+         resources/design/, shared with the website; pages compose them; no width media queries
+         and no colour literals in renderers.
+      4. Regenerate every screenshot in docs/images/screenshots/ with
+         scripts/qa_readme_screenshots.py and the approval-screenshot procedure in that folder's
+         README, synthetic data only. The website shows some of these, so it will show the new UI.
+      5. Delete docs/org-mode-mobile-plan.md, its entry in docs/README.md's contributor docs and
+         its entry in scripts/build_site.py's CONTRIBUTOR_DOCS.
       6. Consolidate this plan's CHANGELOG [Unreleased] lines into a coherent group.
     acceptance:
       - every final_check in this manifest passes
@@ -574,12 +556,11 @@ phases:
 
 ## Decisions to extract into ADRs when this plan retires
 
-- The app adopts the website's visual language through one shared token file used by both; the
-  dark palette's derivation; status semantics keep a non-colour cue; the restyle never changes
-  which approval action is visually the default.
-- Tailwind v4, utilities-only, inlined, instead of Bootstrap, Pico, web components, Open Props or
-  hand-written CSS (constraints 1–5 above).
-- Container queries, not viewport media queries, for components rendered in more than one host.
+- The app shares the website's design system (tokens, primitives, rules) from one packaged
+  source, instead of Tailwind, Bootstrap, Pico or web components. This extends ADR 0049 to the
+  app, and container queries come with it.
+- The app's visual language is the website's; how the dark palette was derived; status semantics
+  keep a non-colour cue; the restyle never changes which approval action is visually the default.
 - Server-side PDF rasterisation for review on narrow screens, instead of pdf.js or an
   open-in-new-tab route.
 - Web push as an off-server notification channel for org mode: its payload limit, and that local
