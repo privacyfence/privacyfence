@@ -44,6 +44,7 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import inspect
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -51,30 +52,23 @@ import pytest
 
 from privacyfence.auto_accept import TOOL_TO_GATE, ReviewContext
 from privacyfence.connector import ToolSpec
-from privacyfence.connectors.apps_script import AppsScriptConnector
-from privacyfence.connectors.calendar import CalendarConnector
-from privacyfence.connectors.confluence import ConfluenceConnector
-from privacyfence.connectors.contacts import ContactsConnector
-from privacyfence.connectors.drive import DriveConnector
-from privacyfence.connectors.gmail import GmailConnector
-from privacyfence.connectors.jira import JiraConnector
-from privacyfence.connectors.salesforce import SalesforceConnector
-from privacyfence.connectors.slack import SlackConnector
-from privacyfence.connectors.tasks import TasksConnector
-from privacyfence.connectors.telegram import TelegramConnector
 from privacyfence.policy.conditions import CONDITION_SELECTORS
 
 # Source-scanning assertions over real code, no I/O -- unit per
 # testing-policy.md's seven-layer taxonomy.
 pytestmark = pytest.mark.unit
 
-CONNECTOR_CLASSES = [
-    GmailConnector, DriveConnector, SlackConnector, CalendarConnector,
-    ContactsConnector, SalesforceConnector, JiraConnector, ConfluenceConnector,
-    TasksConnector, TelegramConnector, AppsScriptConnector,
-]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
-SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "privacyfence"
+# The connectors come from the tools-reference generator's package discovery rather than a list
+# written out here, so a new connector falls under these invariants the moment it exists instead of
+# only once someone remembers to add it.
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+import generate_tools_reference  # noqa: E402
+
+CONNECTOR_CLASSES = generate_tools_reference._connector_classes()
+
+SRC_ROOT = REPO_ROOT / "src" / "privacyfence"
 
 
 def _all_tool_specs() -> dict[str, ToolSpec]:
@@ -200,6 +194,12 @@ TOKEN_WRITE_SITES: tuple[tuple[str, str | None, str], ...] = (
 # TOKEN_WRITE_SITES's own comment above for why it's checked separately
 # rather than folded into that tuple/parametrize.
 _SYNC_ROOM_DIRECTORY_PATH = SRC_ROOT.parent.parent / "scripts" / "sync_room_directory.py"
+
+
+def test_discovered_connectors_offer_every_tool_in_the_gate_table():
+    # Guards the discovery itself: if it ever came back short, every parametrized check below would
+    # quietly run over fewer tools and still pass.
+    assert set(TOOL_TO_GATE) <= set(_all_tool_specs())
 
 
 class TestReasonParamOnEveryGatedTool:

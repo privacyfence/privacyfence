@@ -25,9 +25,10 @@ it if you like, but never report it as a failure of this gate.
 **Then check the conditional rows against the actual diff** (`git diff --stat origin/main...HEAD`),
 and for each one that applies, say whether it has been satisfied — do not silently drop it:
 
-- Touched `src/privacyfence/*_client.py` or `connectors/**`? → a `qa_fixture_recorder.py --check`
-  report is owed. No live credentials here: see `.claude/skills/steward/SKILL.md` and dispatch
-  `connector-live-check.yml` rather than marking the row done.
+- Touched `src/privacyfence/*_client.py` or `connectors/**`? → a
+  `scripts/qa_fixture_recorder.py --check <connector>` report against a dedicated QA account per
+  `docs/connector-qa.md` is owed. No live credentials here: see `.claude/skills/steward/SKILL.md`
+  and dispatch `connector-live-check.yml` rather than marking the row done.
 - Touched `web/mcp_dispatch.py`, `web/routes_mcp.py`, `connector.py`'s `ToolSpec`/`ToolParam`, or
   `web/server.py`'s socket-binding/lifecycle? → `pytest tests/integration -v`, and
   `test_mcp_daemon_contract.py` must pass.
@@ -35,9 +36,29 @@ and for each one that applies, say whether it has been satisfied — do not sile
   → `pytest tests/integration -v`, and `test_shim_mcp_contract.py` must pass.
 - Touched a dependency in `pyproject.toml`? → `scripts/update_dependency_locks.sh` (needs `uv`), and
   the resulting `requirements/*.lock.txt` must be committed.
-- Is there a user-visible change? → it needs a line under `CHANGELOG.md`'s `## [Unreleased]`, never
-  under a concrete version heading.
+- Touched `cloudflare/downloads/`? → in that directory, `npm test`, `npm run typecheck` and
+  `npm run dry-run` must pass.
 
-**Report** one row per check: the command, PASS/FAIL/`n/a`, and for a failure the actual error — not
+**Manual review items.** §2.7's other "every PR" rows are judgements no command can make. Read the
+diff for each one and report it as `ok`, `needs attention` (with the file and line) or `n/a` —
+never PASS, since nothing was run:
+
+- Is there a user-visible change? → it needs a line under `CHANGELOG.md`'s `## [Unreleased]`, never
+  under a concrete version heading. Internal-only changes don't need one.
+- A decision that is hard to reverse, moves a trust boundary, changes the build/release/
+  distribution path, or rejects a non-obvious alternative? → it needs an ADR in `docs/adr/`. A
+  deleted plan document needs its decisions extracted into ADRs first, or a PR description saying
+  it made none (`docs/adr/README.md`).
+- Every new or changed tool call still resolves through `gated_call` or an explicit
+  always-auto-approve connector, and leaves an audit trail either way.
+- No preview dict carries full content; no log line carries a credential or a message/document
+  body.
+- New client code has a matching `<Name>ClientError`; new connector code catches it and re-raises
+  as `RuntimeError`.
+- New module-level state has a reset added to `tests/conftest.py`.
+- Comments only where the *why* is non-obvious; no restated-*what* comments.
+
+**Report** one row per check: the command (or the manual item), PASS/FAIL/`n/a` (`ok`/`needs
+attention`/`n/a` for a manual item), and for a failure the actual error — not
 a paraphrase. Do not fix anything unless I ask; this command reports, it doesn't repair. End with a
 one-line verdict on whether this branch is ready to open or update a PR.
