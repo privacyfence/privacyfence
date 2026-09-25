@@ -127,20 +127,34 @@ async function handleStats(env: Env): Promise<Response> {
   }
 }
 
-// How long release metadata may be reused: by browsers and other HTTP caches for every
-// /api/releases* route, and by the history's own edge cache below. Short, so a new release shows
-// up within minutes; long enough that page views cannot drive the R2 list and manifest reads
-// behind every uncached history response.
+// How long release metadata may be reused, by browsers and other HTTP caches and by this
+// Worker's edge cache. Short, so a new release shows up within minutes; long enough that page
+// views cannot drive the R2 reads (and, for the history, list operations) behind every response.
 const RELEASES_MAX_AGE_SECONDS = 300;
 const RELEASES_CACHE_CONTROL = { "Cache-Control": `public, max-age=${RELEASES_MAX_AGE_SECONDS}` };
 
-async function handleHistory(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  // One cache entry for everyone: the key has no query string and no Origin (CORS is added by the
-  // caller, after the cache), so neither can be used to bypass it.
-  const cacheKey = new Request(new URL("/api/releases/history", request.url).toString());
+/**
+ * Serves a release-metadata route from the edge cache, or builds it with `produce` and caches it.
+ * One entry per route path: the key has no query string and no Origin (CORS is added by the
+ * caller, after the cache), so neither can be used to bypass it. Only a 200 is cached -- a 404
+ * for a channel with nothing published yet must not outlive its first release, and a 503 must
+ * not outlive the outage.
+ */
+async function cachedRelease(
+  path: string,
+  request: Request,
+  ctx: ExecutionContext,
+  produce: () => Promise<Response>,
+): Promise<Response> {
+  const cacheKey = new Request(new URL(path, request.url).toString());
   const cached = await caches.default.match(cacheKey);
   if (cached) return cached;
+  const response = await produce();
+  if (response.status === 200) ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
+  return response;
+}
 
+async function handleHistory(env: Env): Promise<Response> {
   let releases;
   try {
     releases = await listReleaseHistory(env.RELEASES);
@@ -149,32 +163,36 @@ async function handleHistory(request: Request, env: Env, ctx: ExecutionContext):
     // Not cached: the website falls back to /api/releases, and the next request retries.
     return jsonResponse({ error: "release history temporarily unavailable" }, 503, { "Cache-Control": "no-store" });
   }
-  const response = jsonResponse({ releases }, 200, RELEASES_CACHE_CONTROL);
-  ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
-  return response;
+  return jsonResponse({ releases }, 200, RELEASES_CACHE_CONTROL);
+}
+
+async function handleLatest(env: Env): Promise<Response> {
+  const entries = await Promise.all(
+    CHANNELS.map(async (channel) => {
+      const manifest = await resolveLatestManifest(env.RELEASES, channel);
+      return [channel, manifest && publicManifest(manifest)] as const;
+    }),
+  );
+  return jsonResponse({ channels: Object.fromEntries(entries) }, 200, RELEASES_CACHE_CONTROL);
+}
+
+async function handleChannel(env: Env, channel: Channel): Promise<Response> {
+  const manifest = await resolveLatestManifest(env.RELEASES, channel);
+  if (!manifest) return notFound(`no published release for channel: ${channel}`);
+  return jsonResponse(publicManifest(manifest), 200, RELEASES_CACHE_CONTROL);
 }
 
 async function routeApi(path: string, request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  if (path === "/api/releases") {
-    const entries = await Promise.all(
-      CHANNELS.map(async (channel) => {
-        const manifest = await resolveLatestManifest(env.RELEASES, channel);
-        return [channel, manifest && publicManifest(manifest)] as const;
-      }),
-    );
-    return jsonResponse({ channels: Object.fromEntries(entries) }, 200, RELEASES_CACHE_CONTROL);
-  }
+  if (path === "/api/releases") return cachedRelease(path, request, ctx, () => handleLatest(env));
 
   // Before the channel route, which would otherwise read "history" as an unknown channel.
-  if (path === "/api/releases/history") return handleHistory(request, env, ctx);
+  if (path === "/api/releases/history") return cachedRelease(path, request, ctx, () => handleHistory(env));
 
   const channelMatch = /^\/api\/releases\/([^/]+)$/.exec(path);
   if (channelMatch) {
     const channel = channelMatch[1]!;
     if (!isChannel(channel)) return notFound(`unknown channel: ${channel}`);
-    const manifest = await resolveLatestManifest(env.RELEASES, channel);
-    if (!manifest) return notFound(`no published release for channel: ${channel}`);
-    return jsonResponse(publicManifest(manifest), 200, RELEASES_CACHE_CONTROL);
+    return cachedRelease(path, request, ctx, () => handleChannel(env, channel));
   }
 
   if (path === "/api/stats/downloads") return handleStats(env);

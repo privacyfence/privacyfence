@@ -175,12 +175,16 @@ a wrong method returns 405 with `Allow`. `/api/*` accepts `GET` and `OPTIONS` on
 and `sha256` field by field, so a field added to the manifest later is not published until it is
 listed there. Only the `/download/...` routes read `key`, to find the object they stream.
 
-`/api/releases`, `/api/releases/<channel>` and `/api/releases/history` answer a 200 with
-`Cache-Control: public, max-age=300`, so a new release reaches every client within five minutes.
-Their 404s and 503s carry none, so a channel's first release is never hidden behind a cached
-404, and `/api/stats/downloads` carries none because its counts are live. The website's own
-fetches use `cache: 'no-store'` and always ask the Worker. Only the history route also keeps its
-response in the Worker's edge cache (below).
+**Release metadata is cached for five minutes.** `/api/releases`, `/api/releases/<channel>` and
+`/api/releases/history` answer a 200 with `Cache-Control: public, max-age=300` and keep it in the
+Worker's edge cache (`caches.default`, `cachedRelease()` in `src/index.ts`) for the same five
+minutes: one entry per route path, whatever the query string or `Origin` (CORS is added after the
+cache), so page views cannot drive the R2 reads behind them. A new release therefore reaches the
+API, and the website, within five minutes of `latest.json` moving; the `/download/...` routes
+are not cached and serve it at once. Only 200s are cached: a 404 for a channel with nothing
+published yet never outlives its first release, and a 503 never outlives the outage.
+`/api/stats/downloads` is not cached, because its counts are live. The website's own fetches use
+`cache: 'no-store'`, which skips the browser's cache but not the Worker's.
 
 Download responses carry `Content-Type` (by extension: `.dmg`, `.exe`, `.deb`, `.pkg`, else
 `application/octet-stream`), `Content-Length`, `ETag`, `Accept-Ranges: bytes` and
@@ -196,10 +200,9 @@ publishing, or one rolled back by promoting an older version. A channel with no 
 lists nothing, and a manifest that cannot be read is skipped rather than failing the list. Each
 entry is the public manifest (as above, without `key`) with its `kind: "installer"` artifacts
 only; downloads stay on `/download/version/<version>/<artifact-id>`. Ordering is major.minor.patch, then
-stable > rc > beta > alpha, then stage number (`compareVersions` in `src/channel.ts`). The
-response carries `Cache-Control: public, max-age=300` and is kept in the Worker's edge cache
-(`caches.default`) for the same five minutes, under one key whatever the query string or
-`Origin`, so page views cannot drive R2 list and read operations. An R2 failure returns 503 with
+stable > rc > beta > alpha, then stage number (`compareVersions` in `src/channel.ts`). It is
+cached like the other release routes (above), which matters most here: an uncached response is
+an R2 list per channel plus one read per version. An R2 failure returns 503 with
 `Cache-Control: no-store`, which is never cached. The route serves metadata only and counts
 nothing.
 

@@ -6,6 +6,7 @@
  */
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
+import { CHANNELS } from "../src/channel";
 import worker from "../src/index";
 import stableOldManifest from "./fixtures/stable/old-manifest.json";
 
@@ -20,6 +21,30 @@ async function call(path: string, init?: RequestInit): Promise<Response> {
   const response = await worker.fetch(request, env, ctx);
   await waitOnExecutionContext(ctx);
   return response;
+}
+
+// The Worker edge-caches these routes, and the Cache API (like R2 here) outlives each test: every
+// test starts without the responses an earlier one left behind.
+const CACHED_PATHS = [
+  "/api/releases",
+  "/api/releases/history",
+  ...CHANNELS.map((channel) => `/api/releases/${channel}`),
+];
+beforeEach(async () => {
+  await Promise.all(CACHED_PATHS.map((path) => caches.default.delete(new Request(`${ORIGIN}${path}`))));
+});
+
+/** Runs `check` with `key` removed from R2, then puts it back whatever the outcome. */
+async function withoutObject(key: string, check: () => Promise<void>): Promise<void> {
+  const original = await env.RELEASES.get(key);
+  if (!original) throw new Error(`fixture missing: ${key}`);
+  const body = await original.text();
+  await env.RELEASES.delete(key);
+  try {
+    await check();
+  } finally {
+    await env.RELEASES.put(key, body);
+  }
 }
 
 async function statsTotal(): Promise<number> {
@@ -205,11 +230,6 @@ async function history(init?: RequestInit): Promise<HistoryBody> {
 }
 
 describe("GET /api/releases/history", () => {
-  // Each test starts without the cached history an earlier one left behind.
-  beforeEach(async () => {
-    await caches.default.delete(new Request(`${ORIGIN}/api/releases/history`));
-  });
-
   it("lists every published version on every channel, newest first", async () => {
     const body = await history();
     expect(body.releases.map((release) => [release.version, release.channel])).toEqual([
@@ -324,6 +344,30 @@ describe("metadata routes", () => {
   it.each(["/api/releases/nightly", "/api/stats/downloads"])("%s carries no Cache-Control", async (path) => {
     // A 404 must not stick once the channel is published, and the stats are live counts.
     expect((await call(path)).headers.get("Cache-Control")).toBeNull();
+  });
+
+  it.each(["/api/releases", "/api/releases/beta"])("%s is served from the edge cache", async (path) => {
+    const first = await call(path);
+    expect(first.status).toBe(200);
+    const body = await first.text();
+    await withoutObject("releases/beta/latest.json", async () => {
+      const again = await call(`${path}?nocache=1`);
+      expect(again.status).toBe(200);
+      expect(await again.text()).toBe(body);
+    });
+  });
+
+  it("never caches a 404, so a channel's first release is not hidden behind one", async () => {
+    await withoutObject("releases/beta/latest.json", async () => {
+      expect((await call("/api/releases/beta")).status).toBe(404);
+    });
+    expect((await call("/api/releases/beta")).status).toBe(200);
+  });
+
+  it("caches each route separately", async () => {
+    await (await call("/api/releases/stable")).text();
+    const body = (await (await call("/api/releases/beta")).json()) as { version: string };
+    expect(body.version).toBe("4.4.0b1");
   });
 
   it("the latest-per-channel routes keep every other artifact field", async () => {
