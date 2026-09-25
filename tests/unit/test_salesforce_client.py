@@ -332,6 +332,41 @@ class TestTryRefresh:
         saved = load_token_file(token_file)
         assert saved == {"access_token": "new-tok", "refresh_token": "rt", "instance_url": "https://new.salesforce.com"}
 
+    def test_rotated_refresh_token_is_kept_and_persisted(self, monkeypatch, tmp_path):
+        response = MagicMock()
+        response.json.return_value = {
+            "access_token": "new-tok", "refresh_token": "rt-2", "instance_url": "https://new.salesforce.com",
+        }
+        sent = []
+        monkeypatch.setattr("requests.post", lambda url, data, **kw: sent.append(data["refresh_token"]) or response)
+
+        token_file = str(tmp_path / "token.json")
+        client = make_client(
+            {"refresh_token": "rt", "consumer_key": "ck", "consumer_secret": "cs"}, token_file=token_file,
+        )
+
+        client._try_refresh()
+        client._try_refresh()
+
+        assert sent == ["rt", "rt-2"]
+        assert load_token_file(token_file)["refresh_token"] == "rt-2"
+
+    def test_http_error_logs_oauth_error_description(self, monkeypatch, caplog):
+        import requests
+        error_response = MagicMock()
+        error_response.json.return_value = {
+            "error": "invalid_grant", "error_description": "expired access/refresh token",
+        }
+        def raise_it(*a, **kw):
+            raise requests.HTTPError("400 Client Error: Bad Request", response=error_response)
+        monkeypatch.setattr("requests.post", raise_it)
+
+        client = make_client({"refresh_token": "rt", "consumer_key": "ck", "consumer_secret": "cs"})
+        with caplog.at_level("WARNING", logger="privacyfence.salesforce_client"):
+            assert client._try_refresh() is False
+
+        assert "(invalid_grant: expired access/refresh token)" in caplog.text
+
     def test_http_failure_returns_false(self, monkeypatch):
         import requests
         def raise_it(*a, **kw):

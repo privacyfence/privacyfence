@@ -149,6 +149,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Salesforce stays signed in past its first token refresh.** With refresh token rotation on
+  (an option on Salesforce's External Client Apps), each refresh returns a new refresh token and
+  spends the old one; PrivacyFence kept the old one, so the connector worked for a few hours after
+  signing in and then failed with "Session expired or invalid" until you signed in again. A failed
+  refresh now also logs Salesforce's reason (e.g. `invalid_grant: expired access/refresh token`).
+
 - **Authenticate… for a Google connector opens the sign-in tab again.** On a desktop install,
   clicking *Authenticate…* for Gmail, Drive, Calendar, Contacts, Tasks or Apps Script only wrote
   the Google sign-in link to the log: PrivacyFence runs in the background without access to your
