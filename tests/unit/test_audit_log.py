@@ -478,12 +478,12 @@ class TestExportAllPending:
         logger = AuditLogger(str(tmp_path))
         logger.record(make_entry(week="2026-W01"))
         logger.record(make_entry(week="2026-W02"))
-        # Pre-create an xlsx for W01 so it should be skipped.
+        # Pre-create an xlsx for 2026-W01 so it should be skipped.
         (tmp_path / "2026-W01.xlsx").write_text("stub", encoding="utf-8")
 
         logger.export_all_pending()
 
-        # W01's stub should be untouched (not a real workbook, so if it were
+        # 2026-W01's stub should be untouched (not a real workbook, so if it were
         # regenerated openpyxl would have overwritten it with valid content).
         assert (tmp_path / "2026-W01.xlsx").read_text(encoding="utf-8") == "stub"
         assert (tmp_path / "2026-W02.xlsx").exists()
@@ -945,7 +945,7 @@ class TestExportIncludesBinderColumns:
 
 
 class TestAgentFields:
-    """Schema 5 (AGT-2, ADR 0006/0035): agent_id/agent_name/agent_version/agent_source,
+    """Schema 5 (agent attribution, ADR 0006/0035): agent_id/agent_name/agent_version/agent_source,
     stamped from agent_identity.current_agent() when a caller leaves them unset."""
 
     _AGENT_KEYS = ("agent_id", "agent_name", "agent_version", "agent_source")

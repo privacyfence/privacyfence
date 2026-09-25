@@ -266,7 +266,7 @@ class TestDeferredRegistry:
 
 
 class TestCardNamesTheCapturedAgent:
-    """AGT-4: the card shows the identity the approval captured at
+    """The card shows the identity the approval captured at
     registration; a direct call with none uses the calling context's."""
 
     def test_uses_the_approvals_own_agent(self):

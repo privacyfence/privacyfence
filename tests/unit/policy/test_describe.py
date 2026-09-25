@@ -106,7 +106,7 @@ class TestSentences:
         assert describe.rule_sentence(rule) == "Drive - owned by me: allow read"
 
     def test_a_condition_rule_says_it_is_unconditional_and_names_the_condition(self):
-        """D4: an unconditional grant should read as unconditional rather than hide behind a rule
+        """An unconditional grant should read as unconditional rather than hide behind a rule
         name under an operation key."""
         rule = PolicyRule(id="r", predicate="always_allow", value=None,
                           operations=frozenset({"calendar.read_event_details"}),

@@ -1,4 +1,4 @@
-"""agent_label.py -- how an AgentIdentity is shown on the approval card and list (AGT-4)."""
+"""agent_label.py -- how an AgentIdentity is shown on the approval card and list."""
 from __future__ import annotations
 
 import pytest

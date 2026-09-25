@@ -1,4 +1,4 @@
-"""AGT-5: the attested org pin (ADR 0006 option C, ADR 0035 decision 3), the local relabel (option D,
+"""The attested org pin (ADR 0006 option C, ADR 0035 decision 3), the local relabel (option D,
 ADR 0037) and the audit viewer's agent column.
 
 - Org mode: an admin pins a DCR ``client_id`` to a registry AI system -> ``oauth_client``. The pin
