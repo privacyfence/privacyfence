@@ -1,5 +1,4 @@
-"""The local-mode-fixes plan's Phase 2 (companion-as-daemon-manager):
-start/stop/restart the separated daemon's system service, with a real
+"""The companion as daemon manager (ADR 0026): start/stop/restart the separated daemon's system service, with a real
 elevation prompt.
 
 The counterpart to ``daemon_status.py`` -- see that module's own docstring
@@ -58,7 +57,7 @@ _ACTION_PAST_TENSE: dict[DaemonAction, str] = {
 #: end to end, prompt included -- longer than an ordinary command timeout on
 #: purpose, since the clock does not start until a human has answered the
 #: password dialog, and ``ensure-running``'s own retry loop (macOS's
-#: bootstrap/bootout race, #428 D1) can itself take up to half a minute.
+#: bootstrap/bootout race) can itself take up to half a minute.
 _ELEVATION_TIMEOUT_SECONDS = 120
 
 

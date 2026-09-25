@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from .principal import Principal
 
 # Deliberately strict -- principal ids reach here from an OAuth 2.1/OIDC
-# `sub` claim once P7 lands (today it's always "local"), and this is the one
+# `sub` claim in org mode (in local mode it's always "local"), and this is the one
 # place that string becomes a filesystem path component. Anything outside
 # this set (a "/", a leading "." that could hide a directory, ...) is
 # rejected rather than sanitized, so a hostile or malformed id fails loudly
@@ -52,7 +52,7 @@ def _is_safe_principal_id(principal_id: str) -> bool:
 
 def safe_principal_id(raw: str) -> str:
     """``raw`` unchanged if it's already filesystem-safe, otherwise a
-    stable hash of it (P7: an OIDC ``sub`` claim is opaque per spec and may
+    stable hash of it (an OIDC ``sub`` claim is opaque per spec and may
     contain characters ``_is_safe_principal_id`` rejects -- hashing keeps
     org_identity.py's ``principal_from_claims`` always able to produce a
     ``Principal`` rather than letting a login fail on an oddly-formatted
@@ -209,7 +209,7 @@ def org_dir() -> Path:
 
 
 def user_dir(principal: "Principal | None" = None) -> Path:
-    """Per-principal storage root (P6): ``config/settings.yaml``,
+    """Per-principal storage root: ``config/settings.yaml``,
     ``credentials/*``, ``logs/audit/*`` and the various per-connector cache
     files all live under here.
 

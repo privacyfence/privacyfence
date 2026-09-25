@@ -1,19 +1,19 @@
-"""NTFS ACLs -- the net-new half of #428 Phase 4's Windows phase (B5c).
+"""NTFS ACLs -- the Windows half of privilege separation's layout (ADR 0003).
 
-On macOS and Linux, Phase 4 (B5a/B5b) expressed its whole layout in POSIX
+On macOS and Linux, privilege separation expresses its whole layout in POSIX
 permission bits: ``0711`` on the root, ``0700`` on ``authority/``, ``3770``
 on ``handoff/``. Windows has none of those. ``secure_files.secure_mkdir``'s
 ``chmod`` there is the documented no-op its own docstring describes, and
-what protected the data directory until now was not a permission at all --
-it was ``%LOCALAPPDATA%`` sitting inside the user's own profile, which is
+what protects an unseparated data directory is not a permission at all --
+it is ``%LOCALAPPDATA%`` sitting inside the user's own profile, which is
 exactly the protection privilege separation has to give up when the data
-directory moves to ``%ProgramData%`` so a service account can own it.
+directory lives in ``%ProgramData%`` so a service account can own it.
 
 So this module is the Windows half of the boundary, and it is a *different*
 primitive rather than a translation of the same one:
 
 =================  ==============================================  ==========================
-POSIX (B5a/B5b)    Windows (B5c)                                   What it means
+POSIX              Windows                                         What it means
 =================  ==============================================  ==========================
 root ``0711``      ``Users:(X)``, no ``FILE_READ_DATA``            traverse, never enumerate
 authority ``0700`` service account only                            policy/passkeys/audit key
@@ -59,12 +59,12 @@ constant), an ACE that grants the owner rather than any fixed principal.
 
 ``SYSTEM`` and ``Administrators`` are ignored by every check below, which is
 a claim worth making explicitly rather than by omission: they are the
-service manager and the account that provisioned the install, and issue
-#428's own "Honest limits" already concedes that a local Administrator
-defeats the whole design by taking ownership. Reporting them would report
+service manager and the account that provisioned the install, and a local
+Administrator defeats the whole design by taking ownership anyway -- a
+limit of privilege separation, not something an ACL can close. Reporting them would report
 the design as a defect on every startup, exactly as auditing ``handoff/``
 against a flat ``0700`` would have on POSIX (see ``daemon_main.py``'s
-SEC-09 check). Everything else -- the logged-in user, ``Users``,
+storage-permissions check). Everything else -- the logged-in user, ``Users``,
 ``Authenticated Users``, ``Everyone``, a stale ``CREATOR OWNER`` ACE that
 means ``icacls /inheritance:r`` did not take -- is reported.
 """
@@ -302,9 +302,9 @@ def authority_problems(
 ) -> list[str]:
     """The Windows reading of ``0700``, and the check that actually matters:
     ``authority/`` holds the policy the agent may not edit, the WebAuthn
-    store #426 depends on being unforgeable, and the audit log's HMAC key.
-    Any ACE at all for anything but the service account defeats the whole
-    phase, so unlike the root this does not distinguish read from write --
+    store passkey step-up depends on being unforgeable, and the audit log's
+    HMAC key. Any ACE at all for anything but the service account defeats
+    the whole design, so unlike the root this does not distinguish read from write --
     reading ``settings.yaml`` is not harmless, it tells an agent exactly
     which approvals it can already grant itself.
     """
@@ -404,16 +404,15 @@ def image_problems(path: Path, aces: list[Ace], *, service_account: str) -> list
     ``binPath`` names, so an image the logged-in user can rewrite is not
     privilege separation -- it is a way for the agent to execute its own
     code *as the service account*, which is strictly worse than the
-    unseparated install it replaced. ``privilege_separation.
-    _posix_image_problems()`` is the POSIX half, added by B1 once it turned
-    out ``/Applications`` does not put a drag-installed ``.app`` somewhere
-    root owns the way ``/opt/privacyfence`` (dpkg-owned) does -- ADR 0002
-    §5a asserted otherwise and was wrong.
+    unseparated install. ``privilege_separation._posix_image_problems()``
+    is the POSIX half: ``/Applications`` does not put a drag-installed
+    ``.app`` somewhere root owns the way ``/opt/privacyfence`` (dpkg-owned)
+    does, whatever ADR 0002 §5a asserted.
 
-    §5a's own answer to this on Windows was a second install tier: an
-    elevated per-machine install under ``%ProgramFiles%`` that could be
+    ADR 0002 §5a's own answer to this on Windows was a second install tier:
+    an elevated per-machine install under ``%ProgramFiles%`` that could be
     separated, and a non-elevated per-user one under
-    ``%LOCALAPPDATA%\\Programs`` (#407) that could not. ADR 0003 decision 4
+    ``%LOCALAPPDATA%\\Programs`` that could not. ADR 0003 decision 4
     withdraws the tier rather than the requirement -- ``installer/
     privacyfence.iss`` is ``PrivilegesRequired=admin`` and runs ``enable``
     itself, so every shipped install lands somewhere only administrators

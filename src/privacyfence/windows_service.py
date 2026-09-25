@@ -1,9 +1,9 @@
-"""#428 Phase 4 (B5c): hosting the daemon as a real Windows service.
+"""Hosting the daemon as a real Windows service.
 
-macOS and Linux had a service manager to hand: B5a swapped a LaunchAgent for
-a LaunchDaemon, B5b a ``--user`` systemd unit for a system one, and in both
-cases the thing being started was the same unchanged executable, started by
-a different manager under a different account. Windows cannot do that. Its
+macOS and Linux have a service manager to hand: a separated install runs the
+daemon as a LaunchDaemon or a system systemd unit, and in both cases the
+thing being started is the same unchanged executable, started by a
+different manager under a different account. Windows cannot do that. Its
 Service Control Manager does not merely *launch* a binary -- it launches it
 and then waits for that process to call ``StartServiceCtrlDispatcher`` and
 report a status back, and a process that never does is killed after 30
@@ -11,7 +11,7 @@ seconds with error 1053 ("the service did not respond to the start request
 in a timely fashion"). Pointing ``sc create``'s ``binPath`` straight at
 ``privacyfence-app.exe`` produces exactly that, every time.
 
-So the Windows leg of Phase 4 needs one thing its POSIX siblings did not: a
+So privilege separation on Windows needs one thing its POSIX siblings do not: a
 service *host*. This module is it, and it is deliberately the thinnest one
 that can work -- it starts nothing of its own, owns no state, and makes no
 decision the ordinary entry point does not already make:
@@ -25,7 +25,7 @@ takes the identical shutdown path a human clicking Quit does, rather than a
 second one that would have to be kept working alongside it.
 
 **No new dependency.** ``pywin32`` is already required on Windows for the
-Phase 2 named pipes and arrives transitively through ``mcp`` besides, and
+control channel's named pipes and arrives transitively through ``mcp`` besides, and
 ``win32serviceutil.ServiceFramework`` is part of it. ADR 0002 decision 4's
 budget is about the *companion*; this is the daemon, whose dependency set
 that decision says must not change, and it does not.
@@ -57,7 +57,7 @@ SERVICE_DISPLAY_NAME = "PrivacyFence"
 SERVICE_DESCRIPTION = (
     "Runs the PrivacyFence approval daemon under its own account, so the AI agent it "
     "governs cannot read its session-minting channel, rewrite its policy, forge a passkey "
-    "or read its audit key (issue #428 Phase 4)."
+    "or read its audit key."
 )
 
 
