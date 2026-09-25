@@ -1,4 +1,4 @@
-"""#428 Phase 3 (ADR 0002): the companion app -- a human's own path into
+"""The companion app (ADR 0002) -- a human's own path into
 PrivacyFence's web UI that doesn't route a credential through the agent.
 
 See ``docs/adr/0002-local-mode-trust-boundary-and-companion-app.md`` for the
@@ -25,23 +25,23 @@ Platform behavior:
     While running, it also runs a ``CompanionChannelServer`` so the
     daemon's own connector OAuth flows (``oauth_loopback.py``) can hand it
     a URL to open instead of calling ``webbrowser.open()`` themselves
-    (decision 5) -- what Windows' Session 0 isolation will require once
-    #428 Phase 4 lands there. Requires ``pystray``/``Pillow``, declared
+    (decision 5) -- what Windows' Session 0 isolation requires on a
+    separated install. Requires ``pystray``/``Pillow``, declared
     platform-conditionally in ``pyproject.toml``.
   - **Linux**: no tray (decision 4's dependency-budget call) -- ``main()``
     instead dispatches once on a single ``--action`` and exits, invoked by
     ``resources/linux/privacyfence-companion.desktop``'s main ``Exec=``
     (Open Approvals) and its ``Desktop Action`` entries (Settings, New
     Recovery Code, Quit).
-    ``--serve`` is the third shape, added by #428 Phase 4 (B5b): the
+    ``--serve`` is the third shape: the
     ``CompanionChannelServer`` alone, with no tray and no menu, so a
-    separated install's daemon -- which now runs as its own account with no
+    separated install's daemon -- which runs as its own account with no
     desktop session -- has something in the user's session to hand a
     connector OAuth URL to. Still zero new dependencies, which is what
     decision 4's Linux budget actually constrains; what it rules out is a
     tray icon, not a socket. On an unseparated Linux install nothing starts
     this and ``oauth_loopback.py``'s direct ``webbrowser.open()`` fallback
-    keeps working exactly as before.
+    opens the browser itself.
 
 ``--launch`` (ADR 0031) is what clicking PrivacyFence itself runs -- the
 macOS app icon, whose bundle's main executable is a launcher rather than the
@@ -50,12 +50,11 @@ running companion, or becomes the tray itself when none is running; see
 ``_launch()``.
 
 Startup wiring (what autostarts the daemon vs. the companion, on each
-platform) did not change in Phase 3 -- that inversion is #428 Phase 4's
-job (ADR 0002's own "Consequences"), and has now happened on macOS (a
-LaunchAgent running the tray) and Linux (an XDG autostart entry running
-``--serve``). On an install that has not opted into privilege separation
-the daemon still autostarts itself exactly as before, and running this
-entry point is opt-in.
+platform) is privilege separation's job (ADR 0002's own "Consequences"):
+on macOS a LaunchAgent runs the tray, and on Linux an XDG autostart entry
+runs ``--serve``. On an install that has not opted into privilege
+separation the daemon autostarts itself, and running this entry point is
+opt-in.
 
 ADR 0003 decision 3 gives this process one job it did not have before, and
 it is the reason that decision works at all: ``enable``'s machine half can
@@ -67,12 +66,12 @@ whose membership is missing, so "nobody was logged in at install time" stops
 meaning "this install is unprotected forever" and starts meaning "the
 companion resolves this by existing". See ``_complete_pending_separation()``.
 
-Phase 1 of the self-approval hardening plan leans on that same property
-twice more, and both follow from "the only process that runs where a human
-is". Neither renders any PrivacyFence content of its own -- decision 2 still
-holds, and the module still imports nothing but ``web/control_channel.py``:
+Two more jobs lean on that same property, and both follow from "the only
+process that runs where a human is". Neither renders any PrivacyFence
+content of its own -- decision 2 still holds, and the module still imports
+nothing but ``web/control_channel.py``:
 
-- **The first passkey** (item 1.2). A packaged install now defaults
+- **The first passkey**. A packaged install defaults
   ``step_up.enabled``/``step_up.require_passkey`` on
   (``step_up_config.default_local_step_up()``), so a fresh one comes up
   requiring a passkey it does not have -- a fail-closed state in which
@@ -80,8 +79,8 @@ holds, and the module still imports nothing but ``web/control_channel.py``:
   asks the daemon whether that is the case at each start and, if it is,
   opens ``/security`` with a session already minted. See
   ``_offer_first_enrollment()``.
-- **The one-time recovery code** (item 1.3). It is no longer handed to a
-  browser on a packaged install; the daemon calls into this process's own
+- **The one-time recovery code**. It is not handed to a browser on a
+  packaged install; the daemon calls into this process's own
   channel to put it on the desktop. Re-presenting one means issuing a new
   one, since nothing keeps the plaintext, which is what the menu entry
   ``_show_recovery_code()`` backs does.
@@ -128,12 +127,12 @@ logger = logging.getLogger("privacyfence.companion")
 # (open-settings, quit).
 ACTION_OPEN_APPROVALS = "open-approvals"
 ACTION_OPEN_SETTINGS = "open-settings"
-# Plan item 1.3: the only way a recovery code is ever shown a second time.
+# The only way a recovery code is ever shown a second time.
 # It is a menu entry rather than anything on /security because the code is
 # not the daemon's to hand a browser any more -- see _show_recovery_code().
 ACTION_RECOVERY_CODE = "recovery-code"
-# The local-mode-fixes plan's Phase 2 (companion-as-daemon-manager): the
-# daemon-management surface ADR 0002's Amendment adds to the companion's
+# The daemon-management surface (companion-as-daemon-manager, ADR 0026)
+# that ADR 0002's Amendment adds to the companion's
 # menu -- see daemon_status.py/
 # service_control.py for the split behind these, and _menu_model() below for
 # how the macOS/Windows tray turns them into the dynamic status
@@ -241,8 +240,8 @@ def _menu_model(status: "daemon_status.DaemonStatus") -> list[_MenuEntry]:
         _MenuEntry("New Recovery Code…", ACTION_RECOVERY_CODE),
         # Renamed from "Quit" (ADR 0002's Amendment): on a privilege-
         # separated install this only ever quits the companion -- the
-        # daemon's own QUIT refuses outright (#428 B4) -- and the old label
-        # read as an offer this menu cannot make good on.
+        # daemon's own QUIT refuses outright (ADR 0026) -- and a plain
+        # "Quit" would read as an offer this menu cannot make good on.
         _MenuEntry("Quit Companion", ACTION_QUIT),
     ]
 
@@ -291,8 +290,8 @@ def _notification_decision(
 def _open_path(path: str) -> bool:
     """Mint a fresh bootstrap code over the daemon's own control channel and
     open ``path`` in the user's default browser -- this process's whole
-    product surface (ADR 0002 decision 2), and, since the self-approval
-    plan's Phase 2, the only route to a session that may *approve* rather
+    product surface (ADR 0002 decision 2), and the only route to a session
+    that may *approve* rather
     than merely view (web/session_auth.py's ``PROVENANCE_HUMAN``).
 
     What makes that session attestable is the daemon calling back to
@@ -358,8 +357,8 @@ def _quit_daemon() -> bool:
 
 
 def _show_recovery_code() -> bool:
-    """Ask the daemon for a *replacement* one-time recovery code (plan item
-    1.3). The code never comes back over this call -- the daemon puts it in
+    """Ask the daemon for a *replacement* one-time recovery code. The code
+    never comes back over this call -- the daemon puts it in
     front of the human by calling back into this process's own channel
     (``SHOW RECOVERY``), which is the whole point: nothing that merely
     speaks a socket ever reads one. What this returns is only whether the
@@ -397,7 +396,7 @@ def _show_message(text: str) -> bool:
 
 def _show_service_status() -> bool:
     """The ``Service Details…``/``service-status`` action: probe the daemon
-    (``daemon_status.probe()``, this plan's Phase 2) and put its one-sentence
+    (``daemon_status.probe()``) and put its one-sentence
     ``detail`` in front of the human -- the tray already shows the same
     state at a glance, so this is for whoever wants the sentence behind the
     symbol, and the whole of what Linux's one-shot ``ServiceStatus`` Desktop
@@ -408,7 +407,7 @@ def _show_service_status() -> bool:
 
 def _run_service_action(action: "service_control.DaemonAction") -> bool:
     """Start/Restart/Stop, elevated (``service_control.run_elevated()``,
-    this plan's Phase 2). Reports the outcome the same way ``_show_service_status``
+    ADR 0026). Reports the outcome the same way ``_show_service_status``
     does -- except a declined password prompt (``detail == "cancelled"``)
     says nothing further, the same restraint ``service_control.py``'s own
     docstring asks for: a human who just clicked Cancel does not need a
@@ -492,14 +491,12 @@ def _complete_pending_separation() -> None:
     membership is evaluated when a session is created, so a second attempt
     inside the same session could not observe its own result anyway.
 
-    ADR 0008 ("D2: two identities, not one, per install") retired the
-    local-mode-fixes plan's Phase 2 §2.6 interim guard: through that
-    guard, an account that was not this install's recorded owner got a
-    notification instead of a join, because completing it would have
-    silently handed them the owner's own principal. Now that a second
-    account gets its own isolated ``os-<uid>``/``os-<sid>`` principal
-    instead, there is nothing left to warn about -- any pending service-
-    group member is onboarded exactly like the owner always was.
+    ADR 0008 D2 ("two identities, not one, per install") is why any
+    pending service-group member is onboarded exactly like the owner:
+    completing the join does not hand a second account the owner's own
+    principal, because that account gets its own isolated
+    ``os-<uid>``/``os-<sid>`` principal instead, so there is nothing to
+    warn about.
     """
     # Read once, up front: the elevated command below rewrites the marker and
     # drops the cache, so asking again afterwards could answer None on an
@@ -521,7 +518,7 @@ def _complete_pending_separation() -> None:
 
 
 def _offer_first_enrollment() -> None:
-    """Plan item 1.2: if this install requires a passkey and has none
+    """If this install requires a passkey and has none
     enrolled, open ``/security`` with a freshly minted session so the human
     can add one now.
 
@@ -535,7 +532,7 @@ def _offer_first_enrollment() -> None:
     is the one thing that can put that page in front of somebody. From
     there, the existing flow takes over: the first-enrollment gate asks this
     same companion to confirm, and the recovery code comes back through it
-    too (item 1.3).
+    too.
 
     Deliberately re-offered at every companion start until a passkey exists,
     rather than once and never again: the state it is reacting to is one
@@ -672,7 +669,7 @@ def _run_tray(initial_path: str | None = None) -> int:
     never requires them on a platform where they aren't even declared as a
     dependency (``pyproject.toml``).
 
-    The local-mode-fixes plan's Phase 2 (ADR 0002's Amendment) adds a live
+    ADR 0002's Amendment (ADR 0026) adds a live
     status line and Start/Restart/Stop/Service Details items, backed by ``_menu_model()``
     above: the ``pystray.MenuItem``s built below never change identity or
     order once created -- only their ``text``/``enabled``/``visible``,
@@ -806,8 +803,8 @@ def _run_tray(initial_path: str | None = None) -> int:
 
 
 def _notify_send(text: str) -> None:
-    """``--serve``'s own counterpart to the tray's ``icon.notify()`` (this
-    plan's Phase 2): ``notify-send``, if this desktop has it. Silently a no-op
+    """``--serve``'s own counterpart to the tray's ``icon.notify()``:
+    ``notify-send``, if this desktop has it. Silently a no-op
     otherwise -- ``notify-send`` is not a PrivacyFence dependency any more
     than zenity/kdialog are (ADR 0002 decision 4's Linux budget), and a
     background poll finding no notifier installed is not worth a log line
@@ -822,15 +819,14 @@ def _notify_send(text: str) -> None:
 
 
 def _run_serve(wait: Callable[[], None] | None = None) -> int:
-    """``--serve``: the companion channel, plus (this plan's Phase 2) a background
+    """``--serve``: the companion channel, plus a background
     status poll, until killed.
 
-    #428 Phase 4 (B5b). A separated install's daemon runs under its own
+    A separated install's daemon runs under its own
     account with no desktop session, so ``oauth_loopback.py``'s
     ``webbrowser.open()`` has no browser to reach -- the same Session 0
-    problem ADR 0002 decision 5 anticipates for Windows, arriving on Linux
-    first because that is where Phase 4 landed second and where there is no
-    tray process already running a ``CompanionChannelServer``. This is that
+    problem ADR 0002 decision 5 anticipates for Windows, and on Linux there
+    is no tray process already running a ``CompanionChannelServer``. This is that
     server on its own: no ``pystray``, no icon, no menu, no imports beyond
     what the one-shot ``--action`` path already pulls in.
 
