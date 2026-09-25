@@ -45,25 +45,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **privacyfence.eu has a privacy policy and an imprint** (`/privacy/`, `/imprint/`), linked from
-  every page's footer together with the contact address, `info@privacyfence.eu`.
-- **The website uses Google Analytics, only if you accept it.** A banner asks first, with
-  *Accept* and *Decline* side by side. Until you accept, nothing is sent to Google and no cookie
-  is set; *Cookie settings* in the footer changes the answer at any time. Download counts are
-  still made without cookies, whatever you choose.
 - **The documentation is on the website,** at `privacyfence.eu/docs/`, with navigation, search
   and a layout for phones. It shows the docs of the latest stable release and says which version
   that is; contributor docs and design records stay on GitHub. The download page lists the
   current release's installers even without JavaScript, and the site offers `llms.txt` and
   `llms-full.txt` for AI assistants.
 
+## [4.6.0] — 2026-09-25
+
+### Added
+
+- **privacyfence.eu has a privacy policy and an imprint** (`/privacy/`, `/imprint/`), linked from
+  every page's footer together with the contact address, `info@privacyfence.eu`.
+
+- **The website uses Google Analytics, only if you accept it.** A banner asks first, with
+  *Accept* and *Decline* side by side. Until you accept, nothing is sent to Google and no cookie
+  is set; *Cookie settings* in the footer changes the answer at any time. Download counts are
+  still made without cookies, whatever you choose.
+
 ### Changed
 
 - **The website works on phones:** below tablet width the header links are in a menu instead of
   hidden, and links and buttons are large enough to tap. Pages now carry search and social-card
   metadata, and `robots.txt` and `sitemap.xml` welcome every crawler, AI crawlers included.
+
 - **New product description** on the homepage and in the README: an open-source privacy and
   approval gateway between AI assistants and your business systems.
+
 - **The user documentation is rewritten against the current code.** Installation is split into a
   short `docs/getting-started.md` and one page per platform (`install-macos.md`,
   `install-windows.md`, `install-linux.md`). New pages cover how PrivacyFence works
@@ -85,10 +93,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   change the scheme and client address a request appeared to have. A reverse proxy on the same
   host now has to be listed, as `--server-trusted-proxy 127.0.0.1`, which the setup guide's
   example already does.
+
 - **Reading a Drive document shows and PII-checks everything the AI system receives.** The
   approval card and the PII check used to see only the first 2,000 characters, while approving
   released up to 100 KB of text, so an IBAN or ID number further into a document raised no
   warning.
+
 - **Organization mode forwards each person's audit entries too.** With audit forwarding enabled,
   only the install's own log reached syslog or the HTTPS endpoint. The approve and deny decisions
   in each person's log were never sent, and they carried no `deployment_id`. They now reach the
@@ -2699,7 +2709,8 @@ Initial development releases (`v0.1.0` – `v0.1.3`), published under the projec
 - Slack uses a single user token (`xoxp-`), with the bot token dropped entirely, so the AI sees
   exactly what you see and no bot is visible to anyone else.
 
-[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.5.0...HEAD
+[Unreleased]: https://github.com/privacyfence/privacyfence/compare/v4.6.0...HEAD
+[4.6.0]: https://github.com/privacyfence/privacyfence/compare/v4.5.0...v4.6.0
 [4.5.0]: https://github.com/privacyfence/privacyfence/compare/v4.4.0...v4.5.0
 [4.4.0]: https://github.com/privacyfence/privacyfence/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/privacyfence/privacyfence/compare/v4.2.1...v4.3.0
