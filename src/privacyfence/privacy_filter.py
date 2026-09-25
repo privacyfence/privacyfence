@@ -7,8 +7,8 @@ ever actually read -- editing a category from ``allow`` to ``block`` changed not
 module is that policy, made real: connectors call ``apply_text``/``apply_list`` on a
 category's data *before* it reaches ``gated_call()``, so a category set to ``block``/
 ``redact`` never reaches the review UI, the audit log's ``filtered_data``, or Claude --
-matching ``coding-and-testing-guidelines.md`` §1.5's "the privacy filter is a floor under
-human review, not a substitute for it."
+matching ``docs/approvals-and-policy.md``'s "Privacy filter" section: the filter is a floor
+under human review, not a replacement for it.
 
 Scope, deliberately narrow: only the connectors with a category schema documented in
 ``settings.yaml.example`` -- Gmail via the top-level ``privacy`` group, Drive via
@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 
 _VALID_POLICIES = ("allow", "redact", "block")
 # Public alias for the same tuple. settings_controller.py has imported the
-# private name as PRIVACY_POLICIES since long before this; #400 C3e's
-# org-mode policy editor needs to validate an HTTP form value against it
+# private name as PRIVACY_POLICIES since long before this; the org-mode
+# admin policy editor needs to validate an HTTP form value against it
 # too, and two modules reaching for a leading-underscore name is one too
 # many.
 VALID_POLICIES = _VALID_POLICIES
@@ -64,8 +64,7 @@ _GROUP_NAMES = (
 # (fail open on missing config, same posture pii_detector.py takes when
 # disabled -- this module only ever narrows what already ships, it never
 # adds a new default-block surface a pre-existing install didn't have). One
-# dict per principal (P6), not
-# one per process -- each user's own privacy policy, isolated the same way
+# dict per principal, not one per process -- each user's own privacy policy, isolated the same way
 # their auto-accept rules already are.
 _REGISTRY: PrincipalRegistry[dict[str, dict[str, Any]]] = PrincipalRegistry(dict)
 
@@ -74,13 +73,13 @@ class PrivacyFilterConfigError(ValueError):
     """Raised by init_privacy_filter() for a privacy-filter settings.yaml
     section that is *present* but malformed -- not a dict, an unrecognised
     ``default_policy``, a non-dict ``categories``, or a category mapped to
-    an unrecognised policy (SEC-07). Before this, all four cases silently
+    an unrecognised policy. Before this, all four cases silently
     fell back to "allow" -- meaning a typo'd policy value (or a config file
     an attacker could write to) turned "block" into "everything passes
     through" with nothing but a log line most installs never look at.
 
     A ``ValueError`` subclass for the same reason ``org_mode.
-    ConfigurationError`` (SEC-04) is one: daemon_main.py's ``main()`` has no
+    ConfigurationError`` is one: daemon_main.py's ``main()`` has no
     special handling for this class specifically, it falls into the same
     "print and refuse to start" path every other startup configuration
     error already takes. There is still exactly one tolerated case, kept
@@ -95,7 +94,7 @@ def init_privacy_filter(config: dict[str, Any], *, org_managed: bool = False) ->
     ``tasks_privacy``/``confluence_privacy`` out of the loaded settings.yaml dict.
     Call once at daemon startup, same pattern as pii_detector.init_pii_detection().
 
-    Raises ``PrivacyFilterConfigError`` (SEC-07) for a group that's present
+    Raises ``PrivacyFilterConfigError`` for a group that's present
     but malformed -- see ``_parse_group``. ``org_managed`` (the caller's
     ``org_mode.resolve_mode(...) == "org"``) picks the fail-safe default
     used for a group that's genuinely absent from settings.yaml: "allow",
@@ -113,19 +112,18 @@ def init_privacy_filter(config: dict[str, Any], *, org_managed: bool = False) ->
 
 def reload_for_all_principals(config: dict[str, Any], *, org_managed: bool = True) -> list[str]:
     """Re-run ``init_privacy_filter`` for every principal this process has
-    already built a registry entry for, returning the ids refreshed (#400
-    C3e).
+    already built a registry entry for, returning the ids refreshed.
 
     The privacy/PII policy is install-wide -- one ``settings.yaml`` on the
-    server, no per-user override (docs/org-mode-setup-guide.md §9, "Where PII
-    policy and auto-accept rules live"). ``init_privacy_filter`` alone only
+    server, no per-user override (docs/org-mode-setup-guide.md's
+    "Install-wide and per-user policy"). ``init_privacy_filter`` alone only
     ever writes the *current* principal's entry, so an admin editing it from
     ``/settings/privacy`` would otherwise change it for their own session
     and nobody else's -- every other signed-in principal would keep
     enforcing the policy loaded when their entry was first built, with
-    nothing anywhere saying so. That is the failure mode #400's issue
-    means by "install-wide writes need a restart story": the answer here is
-    hot-reload, so this has to be the one that reaches everyone.
+    nothing anywhere saying so. An install-wide write needs a story for
+    reaching every already-loaded principal: the answer here is hot-reload,
+    so this has to be the one that reaches everyone.
 
     A principal who signs in *after* this returns needs no sweep of its
     own: ``daemon_main._load_principal_settings`` builds their entry from
@@ -157,7 +155,7 @@ def reload_for_all_principals(config: dict[str, Any], *, org_managed: bool = Tru
 
 
 def _parse_group(raw: Any, *, group: str, fail_safe_default: str = "allow") -> dict[str, Any]:
-    """Parse one group's raw settings.yaml value, failing closed (SEC-07) on
+    """Parse one group's raw settings.yaml value, failing closed on
     anything present but malformed instead of falling back to "allow":
 
       - ``raw is None`` (the group key isn't in settings.yaml at all) is the

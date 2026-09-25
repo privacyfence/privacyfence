@@ -3,17 +3,17 @@
  * spawned by Claude Desktop exactly the way it used to spawn
  * privacyfence-bridge (mcpb/manifest.json.tmpl's server.mcp_config -- same
  * shape, only the staged file changed, see scripts/build_mcpb.sh). This is
- * what replaces the bridge for Desktop once tool calls go over /mcp (P2)
- * instead of the IPC socket.
+ * what replaced the bridge for Desktop once tool calls moved to /mcp
+ * instead of the IPC socket (ADR 0012).
  *
- * Unlike the bridge (bridge/src/index.ts), this process has no knowledge of
+ * Unlike the bridge, this process has no knowledge of
  * ToolSpec, no manifest fetch, no tool registration, and no JSON-RPC framing
  * of its own -- see proxy.ts's module docstring for why that's a deliberate
  * design constraint, not an oversight. Its whole job:
  *
  * 1. Wait for the daemon's /mcp endpoint to be reachable, launching
  *    privacyfence-app first if it isn't running yet (daemon.ts -- the one
- *    piece of the bridge whose job survives verbatim, per D11).
+ *    piece of the bridge whose job survives verbatim).
  * 2. Get a bearer token for /mcp: mint one over the daemon's control
  *    channel (controlChannel.ts's ``mintMcpToken()``, ``MINT MCP\n``), which
  *    resolves to *this OS account's own* token (ADR 0008, ``docs/adr/
@@ -58,8 +58,7 @@ import { sessionSafeFetch } from "./sessionFetch.js";
  * Redirect console.log/info/debug/warn to stderr. stdout is the MCP wire
  * channel (StdioServerTransport owns it); a stray console.log from this
  * code or a dependency would corrupt the protocol stream, so every logging
- * path is forced through stderr instead -- identical to bridge/src/
- * index.ts's setupLogging().
+ * path is forced through stderr instead.
  */
 function setupLogging(): void {
   console.log = console.error;
@@ -256,8 +255,8 @@ export async function main(argv = process.argv.slice(2), opts: MainOptions = {})
 
   // Same origin /mcp itself is on, and the same bearer token already used
   // for it -- the file bridge's uploads/downloads endpoints sit behind the
-  // same auth as /mcp (routes_file_bridge.py), and Phase 1 has no second
-  // credential of its own to read (fileBridge.ts's own docstring).
+  // same auth as /mcp (routes_file_bridge.py), and the file bridge has no
+  // second credential of its own to read (fileBridge.ts's own docstring).
   const fileBridge = createFileBridge({ origin: new URL(mcpUrl).origin, authHeader });
 
   // Must run before either side's start() -- see proxy.ts's own doc comment.
