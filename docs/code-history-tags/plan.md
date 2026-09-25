@@ -50,7 +50,7 @@ Out of scope: `docs/adr/` (accepted ADRs are frozen and are history by design), 
    gets one in this PR.
 4. Behaviour is unchanged, apart from the wording of user-visible strings, and those get one
    `CHANGELOG.md` line under `## [Unreleased]`.
-5. The §2.7 definition of done passes, including the off-box rows (see step 6).
+5. The §2.7 definition of done passes, including the off-box rows (see step 7).
 6. This plan document is deleted, and the PR description lists the decisions it made and the ADRs
    they went into.
 7. **One PR**, from `claude/amazing-bohr-faqr6s` into `main`, closing #715.
@@ -64,7 +64,7 @@ Out of scope: `docs/adr/` (accepted ADRs are frozen and are history by design), 
 2. **Decisions link ADRs.** If a tag pointed at a decision, find its ADR in `docs/adr/README.md`'s
    index and cite it as `ADR NNNN`. If there is none and the decision meets the bar (hard to reverse,
    a trust boundary, the release path, or a non-obvious rejected alternative), **do not write the
-   ADR yourself.** Add an entry to your slice's ledger (below). ADR numbers are assigned in step 6 so
+   ADR yourself.** Add an entry to your slice's ledger (below). ADR numbers are assigned in step 7 so
    that parallel sessions cannot collide.
 3. **Open issues may stay, closed ones may not.** A pointer to work that is still open (a known
    limitation, a follow-up) may stay as a full URL, `https://github.com/privacyfence/privacyfence/issues/NNN`,
@@ -81,134 +81,130 @@ Out of scope: `docs/adr/` (accepted ADRs are frozen and are history by design), 
 7. **No other changes.** No behaviour changes, no reformatting, and no comment edits beyond the
    tag's sentence and the sentences that depend on it. If you find a real bug, put it in the ledger;
    do not fix it here.
-8. **Do not touch** `docs/`, `CHANGELOG.md`, `tests/fixtures/`, or any file outside your slice. If a
+8. **`§` references name their document.** `ADR 0002 §5a`, `RFC 6749 §3.3` and
+   `coding-and-testing-guidelines.md §2.7` are citations and pass the guard. A bare `§3` or `§10.6`
+   points into a deleted plan or UX spec: describe the thing ("the dialog's disclosure rows") instead.
+   The same applies to a plan item ID after an ADR: `ADR 0008 D3` passes, but a bare `D3` does not.
+9. **Do not touch** `docs/`, `CHANGELOG.md`, `tests/fixtures/`, or any file outside your slice. If a
    file outside your slice has to change (for example, a test in another slice asserts on your
-   string), record it in the ledger instead, and step 6 applies it.
+   string), record it in the ledger instead, and step 7 applies it.
 
 ## Steps
 
-The work runs as **step 0**, then **steps 1–5 in parallel**, then **step 6**. Steps 1–5 each own a
+The work runs as **step 0**, then **steps 1–6 in parallel**, then **step 7**. Steps 1–6 each own a
 disjoint set of files, so their branches merge without conflicts.
 
-### Step 0: scaffolding (orchestrator, on `claude/amazing-bohr-faqr6s`)
+### Step 0: scaffolding (done, on `claude/amazing-bohr-faqr6s`)
 
-1. Add `tests/unit/test_code_no_history.py`, modelled on `test_docs_no_history.py`:
-   - It scans `git ls-files` minus the out-of-scope set above.
-   - Its patterns cover phase names, phase IDs (`P\d{1,2}(\.\d+)?`), bare `#\d{3,4}` issue
-     numbers, `owner/repo#NNN`, `SEC-`/`TST-` finding IDs, `§` section references,
-     version-qualified history, and letter+number plan IDs (`[BDF]\d{1,2}`). Letter+number IDs are
-     not matched inside string literals, so data such as `"F1"` does not count.
-   - `_ALLOWED` holds `(path, matched text)` pairs, each with a reason. Start it with the real false
-     positives the sweep finds, such as colour literals.
-   - It includes a `test_the_patterns_catch_the_shapes_they_exist_for` self-test, like the docs guard.
-   - **Pending lists:** it skips every path named in `tests/unit/code_history_pending/step-N.txt`
-     (one file per step, one path per line). It also has a test that fails if any hit is in a file
-     that no pending list names. The guard is therefore live and blocking from step 0: new tags fail
-     everywhere, and a step is finished when its pending file can be deleted.
-2. Generate `step-1.txt` … `step-5.txt` from the slice definitions below. Assign every file that
-   has a hit to exactly one step, and check with a script that no file is in two lists and no hit
-   is unassigned.
-3. Create empty ledgers `docs/code-history-tags/ledger-step-N.md`, one per step, so that no two
-   steps edit the same file.
-4. Commit, run the full suite (it must pass, because every current hit is pending), and push.
+- `tests/unit/test_code_no_history.py` is the guard. Its docstring, `_PATTERNS`, `_CITATION` and
+  `_ALLOWED` are the exact definition of a tag, and the guard is blocking from now on. It skips every
+  path named in `tests/unit/code_history_pending/step-N.txt`, and fails on a tag anywhere else. A
+  step is done when it can delete its list.
+- To list your slice's remaining tags, run:
 
-### Steps 1–5: one slice each (child sessions, in parallel)
+  ```
+  python -c "import sys; sys.path.insert(0, '.'); from tests.unit import test_code_no_history as t; \
+  [print(h) for r in open('tests/unit/code_history_pending/step-N.txt').read().split() for h in t._file_hits(r)]"
+  ```
 
-Each child session starts from `claude/amazing-bohr-faqr6s` after step 0 and pushes to its own
-branch, `claude/715-step-N-<slug>`. The slice definitions are path prefixes. Tests go with the
-code they test, so that a string change and its assertion land together.
+- If you are sure a hit is not history (data, a product name, an external spec), add it to
+  `_ALLOWED` with its reason, and mention it in your ledger. This is the one shared file a step may
+  edit, and only by adding `_ALLOWED` lines. The orchestrator resolves the resulting trivial
+  conflicts when it merges.
+- Each step has its own ledger, `ledger-step-<N>.md` next to this plan.
 
-| Step | Slug | Files (approx. hits) |
-|---|---|---|
-| 1 | `install` | Install, privilege separation and packaging: `privilege_separation.py`, `windows_acl.py`, `windows_service.py`, `service_control.py`, `daemon_main.py`, `daemon_status.py`, `paths.py`, `secure_files.py`, `principal.py`; `scripts/*privilege_separation*`, `scripts/build_{pkg,dmg,deb,installer,mcpb}*`, `scripts/check_deb_glibc_floor.py`, `scripts/check_graphical_session_coverage.py`, `scripts/update_dependency_locks.sh`; `installer/`, `debian/`, `resources/`, `PrivacyFenceApp*.spec`, `com.privacyfence.app.plist`, `privacyfence.service`; `tests/platform/`, `tests/integration/test_{deb,macos,windows,linux}_*`, `tests/windows_task_contract.py`, `tests/packaged_policy_probe.py`, and the matching `tests/unit/test_*.py`. (56 files, ~330) |
-| 2 | `control` | Control channel, server, companion and shim: `companion.py`, `web_shell.py`, `web/{control_channel,server,state_stream,csp,routes_connect}.py`; `mcpb/`; `tests/control_channel_client.py`, `tests/integration/test_{browser_smoke,mcp_daemon_contract}.py`, and the matching unit tests, **excluding** `tests/unit/web/test_server_org_mode.py` (step 4). (21 files, ~230) |
-| 3 | `approvals` | Approvals, settings and step-up: `approval*.py`, `settings_*.py`, `step_up_config.py`, `webauthn_stepup.py`, `dialog_window_html.py`, `web/{routes_settings,routes_security,routes_approvals,approval_step_up,step_up_decide}.py`; `tests/system/`, `tests/integration/test_deferred_approval_round_trip.py`, and the matching unit tests. (29 files, ~370) |
-| 4 | `org-policy` | Org mode, auth, audit and policy: `org_*.py`, `audit_*.py`, `audit_log.py`, `gate.py`, `policy/`, `web/{oauth_provider,session_auth,org_*,routes_org_*,mcp_auth,sealed_refresh_store}.py`; `scripts/{build_org_bundle,verify_audit_log}.py`; `tests/unit/policy/`, `tests/unit/abuse/`, `tests/unit/test_p6_principal_isolation.py`, `tests/unit/test_systemic_gate_invariants.py`, `tests/unit/web/test_server_org_mode.py`, `tests/integration/mock_idp.py`, and the matching unit tests. (48 files, ~330) |
-| 5 | `connectors` | Everything else: connectors and clients, `local_files.py`, upload/download staging, `text_extraction.py`, `pii_detector.py`, `web/{routes_mcp,mcp_tools,routes_file_bridge,routes_downloads,__init__}.py`, `connector_registry.py`, `connector_host.py`, OAuth helpers, remaining `scripts/` (QA, release, site), `pyproject.toml`, `.gitignore`, `src/privacyfence/resources/sw.js`, and their tests. Also `test_docs_no_history.py` and `test_docs_references_exist.py`, where the hits are probably pattern self-test samples that belong in `_ALLOWED`, not rewrites. (65 files, ~260) |
+### Steps 1–6: one slice each (child sessions, in parallel)
 
-Step 0's pending lists are the authoritative assignment. This table is the rule used to generate
-them.
+Each child session starts from `claude/amazing-bohr-faqr6s` and pushes to its own branch,
+`claude/715-step-N-<slug>`. **Its pending list is its slice**; the table only says how the lists
+were cut. Tests go with the code they test, so that a string change and its assertion land together.
+
+| Step | Slug | Area | Files / tags |
+|---|---|---|---|
+| 1 | `install` | Install, privilege separation and packaging: `privilege_separation.py`, `windows_acl.py`, `daemon_main.py`, `paths.py` and the like; `scripts/*privilege_separation*`, `scripts/build_*`, `check_graphical_session_coverage.py`; `installer/`, `debian/`, `resources/`, the `.spec`/plist/unit files; `tests/platform/`, the packaged and graphical-session integration tests, and matching unit tests | 58 / 493 |
+| 2 | `control` | Control channel, server, companion and shim: `companion.py`, `web_shell.py`, `web/{control_channel,server,state_stream,csp,routes_connect}.py`, `mcpb/`, and their tests | 23 / 326 |
+| 3 | `approvals` | The approval window and list, cards, the deferred approval route: `approval*.py`, `card_builder.py`, `write_effects.py`, `dialog_window_html.py`, `auto_accept.py`, `web/routes_approvals.py`, `tests/system/`, and their tests | 18 / 216 |
+| 4 | `org-policy` | Org mode, auth, audit and policy: `org_*.py`, `audit_*.py`, `gate.py`, `policy/`, `web/{oauth_provider,session_auth,org_*,routes_org_*,mcp_auth,sealed_refresh_store}.py`, `scripts/{build_org_bundle,verify_audit_log}.py`, `tests/unit/{policy,abuse}/`, `test_p6_principal_isolation.py`, `test_server_org_mode.py`, and their tests | 52 / 435 |
+| 5 | `connectors` | Everything else: connectors and clients, file staging, text extraction, PII, `web/{routes_mcp,mcp_tools,routes_file_bridge,routes_downloads}.py`, remaining `scripts/`, `pyproject.toml`, `.gitignore`, `website/`, and their tests | 76 / 295 |
+| 6 | `settings` | Settings and passkey step-up: `settings_controller.py`, `settings_window_html.py`, `step_up_config.py`, `webauthn_stepup.py`, `web/{routes_settings,routes_security,approval_step_up,step_up_decide}.py`, and their tests | 13 / 362 |
 
 **Each child session's definition of done:**
 
-1. Its `step-N.txt` is deleted, and `pytest tests/unit/test_code_no_history.py` passes.
+1. It has deleted its `step-N.txt`, and `pytest tests/unit/test_code_no_history.py` passes.
 2. `ruff check .` and the full `pytest -q` pass. Step 2 also runs `npm test && npm run typecheck`
-   in `mcpb/shim/`. Step 1 also runs `bash -n` on every shell script it touched, and `shellcheck`
-   if it is installed.
-3. `git diff main -- <slice>` has been re-read against rules 1–8. Spot-check: no comment was
-   emptied into nothing where a why was needed, and no string changed that a test elsewhere asserts
-   on.
-4. Its ledger `docs/code-history-tags/ledger-step-N.md` lists: ADR candidates (the decision, the
-   files that cite it, and why it meets the bar); changed user-visible strings; cross-slice edits it
-   needs; bugs noticed; and issue links kept under rule 3.
-5. It pushes its branch and ends with a short summary: files changed, hits removed, and the number
-   of ledger entries. It does not open a PR.
+   in `mcpb/shim/`. Step 1 also runs `bash -n` on every shell script it touched, and `shellcheck` if
+   it is installed.
+3. It has re-read its own diff against rules 1–9. Spot-check that no comment was emptied where a
+   why was needed, and that no changed string is asserted on by a test outside the slice (`git grep`
+   the old string).
+4. Its ledger lists: ADR candidates (the decision, the files that cite it, and why it meets the
+   bar); changed user-visible strings; cross-slice edits it needs; bugs noticed; and issue URLs kept
+   under rule 3, with each issue's state.
+5. It has pushed its branch, and it ends with a short summary: files changed, tags removed, and the
+   number of ledger entries. It does not open a PR.
 
-Commit messages are written for `main`'s history (PRs merge with a merge commit). Commit per area
-within the slice, for example `Drop tracker tags from privilege separation comments`, and never put
+Commit messages are written for `main`'s history, because PRs merge with a merge commit. Commit per
+area within the slice, for example `Drop tracker tags from privilege separation comments`. Never put
 a model name in them.
 
-### Step 6: consolidate and ship (child session, then the orchestrator)
+### Step 7: consolidate and ship (child session, then the orchestrator)
 
-1. Merge steps 1–5 into `claude/amazing-bohr-faqr6s` (the orchestrator does this; see below).
+1. The orchestrator merges steps 1–6 into `claude/amazing-bohr-faqr6s` (see the runbook below).
 2. Apply the ledgers' cross-slice edits.
-3. **ADRs:** for each ADR candidate, check that it meets the bar, then write the ADR with the next
-   free numbers (after 0055), add it to `docs/adr/README.md`'s index, and change the citing comments
-   to `ADR NNNN`. Add one more ADR for this change itself: code carries no project history; a
-   blocking guard enforces it; open issues may be cited only by full URL. It records the rejected
-   alternative of keeping IDs and relying on a tracker.
-4. Add the rule to `docs/coding-and-testing-guidelines.md`'s comment conventions (§2.7's "Comments
-   only where the *why* is non-obvious" row, and the section it refers to). That document is itself
-   scanned by `test_docs_no_history.py`, so describe the shapes in words, not with literal examples.
-5. In `test_code_no_history.py`, remove the pending-list mechanism and its directory. Nothing is
-   pending any more, and the test now covers the whole tree without exceptions beyond `_ALLOWED`.
-6. Add a `CHANGELOG.md` line under `## [Unreleased]` (Changed) for the user-visible strings from
-   the ledgers.
-7. Delete `docs/code-history-tags/`, which holds this plan and the ledgers. File any bugs from the ledgers as issues.
-8. Run `/dod`. Because the diff touches connector clients, installers, `debian/` and privilege
-   separation scripts, dispatch the off-box rows against the branch as `.claude/skills/steward/SKILL.md`
-   directs: `build.yml` (packaged smoke tests on all three platforms), `linux-`, `macos-` and
-   `windows-graphical-session.yml`, and `connector-live-check.yml` for §2.7's QA row. Link the runs
-   in the PR.
+3. **ADRs:** check each ADR candidate against the bar, then write the ADR with the next free number
+   (after 0055), add it to `docs/adr/README.md`'s index, and change the citing comments to
+   `ADR NNNN`. Add one more ADR for this change itself: code carries no project history, a blocking
+   guard enforces it, and open issues are cited only by full URL. It records the rejected
+   alternative of keeping IDs and relying on the tracker.
+4. Add the rule to `docs/coding-and-testing-guidelines.md`'s comment conventions (the section behind
+   §2.7's "Comments only where the *why* is non-obvious" row). That document is scanned by
+   `test_docs_no_history.py`, so describe the shapes in words, not with literal examples.
+5. In `test_code_no_history.py`, remove the pending-list mechanism (`PENDING_DIR`, `_pending`,
+   `test_pending_lists_name_each_existing_file_once`, and the directory itself). The guard then
+   covers the whole tree, with no exceptions beyond `_ALLOWED`.
+6. Add a `CHANGELOG.md` line under `## [Unreleased]` (Changed) for the user-visible strings from the
+   ledgers.
+7. File the ledgers' bugs as issues, then delete `docs/code-history-tags/` (this plan and the
+   ledgers).
+8. Run `/dod`. The diff touches connector clients, installers, `debian/` and the privilege
+   separation scripts, so dispatch the off-box rows against the branch as
+   `.claude/skills/steward/SKILL.md` directs: `build.yml` (packaged smoke tests on all three
+   platforms), `linux-`, `macos-` and `windows-graphical-session.yml`, and `connector-live-check.yml`
+   for §2.7's QA row. Record the run links for the PR.
 9. The orchestrator opens the single PR and drives it to green.
 
 ## Orchestration runbook
 
 This is for the session that is told "implement #715". That session is the **orchestrator**. It
-owns `claude/amazing-bohr-faqr6s`, does step 0 itself, and creates one child session per remaining
-step with the Claude Code Remote tools.
+owns `claude/amazing-bohr-faqr6s`, has done step 0, and creates one child session per remaining step
+with the Claude Code Remote tools.
 
-1. **Step 0** in the orchestrator itself, then push.
-2. **Create steps 1–5** with `create_session`, five calls in one message:
+1. **Create steps 1–6** with `create_session`, six calls in one message:
    - `source_url`: `https://github.com/privacyfence/privacyfence`
-   - `source_revision`: `claude/amazing-bohr-faqr6s` (after step 0 has been pushed)
+   - `source_revision`: `claude/amazing-bohr-faqr6s`
    - `outcome_branch`: `claude/715-step-N-<slug>`
    - `title`: `#715 step N: <slug>`, and `tags`: `["issue-715"]`
    - `permission_mode`: leave unset so that it is inherited. Never use `plan`, because no one is
      watching the children.
-   - `prompt`: *"You are step N of the plan in `docs/code-history-tags/plan.md` on this branch
-     (issue #715). Read the whole plan first. Your slice is `tests/unit/code_history_pending/step-N.txt`;
-     change no file outside it. Follow the rewrite rules, meet the child definition of done, push to
-     your branch, and do not open a PR."*
-3. **Monitor without polling tightly.** Schedule a `send_later` check-in about every 45 minutes.
-   On each check-in, `get_session` each child. For `status_bucket` values:
-   - `review_ready`/`completed` with the branch pushed: go to step 4 for that branch.
-   - `failed` or `blocked`: read `list_events`, then either `send_message` a correction or recreate
-     the session from the same branch.
-   - Still working: re-arm the check-in and do nothing else.
-4. **Merge each finished branch as it arrives**, not all at the end:
+   - `prompt`: the step's number, slug and branch, telling it to read this plan first, change only
+     the files in its pending list (plus `_ALLOWED` lines and its own ledger), meet the child
+     definition of done, push, and not open a PR.
+2. **Monitor without polling tightly.** Schedule a `send_later` check-in about every 45 minutes. On
+   each check-in, run `get_session` for each child that has not merged yet:
+   - Idle, `review_ready` or `completed`, with the branch pushed and its list deleted: merge it
+     (step 3 of this runbook).
+   - `failed`, `blocked`, or idle without a finished branch: read `list_events`, then `send_message`
+     a correction, or recreate the session from its branch.
+   - Still working: do nothing.
+3. **Merge each finished branch as it arrives**, not all at the end:
    `git fetch origin claude/715-step-N-<slug> && git merge --no-ff FETCH_HEAD`. Then check that
    `step-N.txt` is gone and that `pytest tests/unit/test_code_no_history.py` and `ruff check .`
-   pass, and push. A conflict means a slice boundary was crossed. Resolve it in the child's favour
-   only for its own files, and send the child a correction if needed.
-5. **When all five have merged**, create the step 6 child session on `claude/amazing-bohr-faqr6s`
-   with `outcome_branch` `claude/715-step-6-consolidate`, then merge it the same way. Alternatively,
-   do step 6 in the orchestrator if its context is fresh enough.
-6. **Open the PR** from `claude/amazing-bohr-faqr6s` into `main`. Use
-   `.github/pull_request_template.md`, include `Closes #715`, link the step 6 workflow runs, and list
+   pass, and push. A conflict outside `_ALLOWED` means a slice boundary was crossed.
+4. **When all six have merged**, run step 7 in a child session on `claude/amazing-bohr-faqr6s`
+   (`outcome_branch` `claude/715-step-7-consolidate`) and merge it the same way, or do step 7 in the
+   orchestrator.
+5. **Open the PR** from `claude/amazing-bohr-faqr6s` into `main`. Use
+   `.github/pull_request_template.md`, include `Closes #715`, link step 7's workflow runs, and list
    the ADRs added. Subscribe to it, and drive it to green under the steward skill.
-7. **Clean up:** `archive_session` each child once its branch has merged, and delete the
+6. **Clean up:** `archive_session` each child once its branch has merged, and delete the
    `claude/715-step-*` branches after the PR merges.
-
-Total: 7 sessions (the orchestrator, five slices, and consolidation). This is within the default
-workflow size guideline.
