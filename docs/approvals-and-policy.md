@@ -316,7 +316,7 @@ starts. See [ADR 0041](adr/0041-only-the-current-install-layout-is-supported.md)
 
 | Scope | Kind | Value | Predicate(s) | Matches when |
 |---|---|---|---|---|
-| Drive folder | identity | folder ids | `approved_folder`, `approved_sandbox_folder`, `parent_folder_allowlist`, `move_within_approved_folders` | the file's direct parent is one of the folders (not recursive). For an upload or new file, the destination folder. For a move, the file's current folder — the destination is not checked |
+| Drive folder | identity | folder ids | `approved_folder`, `approved_sandbox_folder`, `parent_folder_allowlist`, `move_within_approved_folders` | the file's direct parent is one of the folders (not recursive). For an upload or new file, the destination folder. For a move, both the file's current folder and the destination must be among them |
 | Drive file | identity | file ids | `drive.file` | the file is one of these |
 | Drive file type | attribute | MIME types | `file_type_allowlist` | the file has one of these MIME types |
 | Drive files I own | attribute | — | `i_am_owner`, `created_by_me` | you are an owner of the file |

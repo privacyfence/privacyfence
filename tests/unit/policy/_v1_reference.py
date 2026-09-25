@@ -221,7 +221,16 @@ class V1Reference:
         return self._rule_approved_folder(value, ctx)
 
     def _rule_move_within_approved_folders(self, value, ctx):
-        return self._rule_approved_folder(value, ctx)
+        # Deliberately not verbatim: v1 checked only the source folder, so a folder grant
+        # approved moving a file out of the folder. Both engines now also require the destination.
+        if not self._rule_approved_folder(value, ctx):
+            return False
+        allowed = set(value if isinstance(value, list) else [value])
+        raw = ctx.raw_data
+        destination = ctx.args.get("destination_folder_id") or (
+            raw.get("destination_folder_id") if isinstance(raw, dict) else ""
+        )
+        return bool(destination) and destination in allowed
 
     def _rule_file_type_allowlist(self, value, ctx):
         if not value:

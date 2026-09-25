@@ -8,9 +8,10 @@ module holds a `ScopeSelector` for each of the redesign proposal's 35 scope-boun
 selecting resources on their own.
 
 Several predicates collapse onto one v2 scope type because they were always the same selector
-wearing a different name for each verb that happened to need it (F1: `approved_folder`,
-`approved_sandbox_folder` and `move_within_approved_folders` are the *same function* -- see
-`_approved_folder_matches` below, reused three times) -- but `SCOPE_SELECTORS` is keyed by
+wearing a different name for each verb that happened to need it (`approved_folder` and
+`approved_sandbox_folder` are the *same function* -- see `_approved_folder_matches` below;
+`move_within_approved_folders` reuses it for the source and also checks the move's destination)
+-- but `SCOPE_SELECTORS` is keyed by
 **predicate name**, one entry per `auto_accept.AutoAcceptEvaluator._rule_*` method, not by scope
 type. That is what makes each entry directly, individually testable against its old counterpart:
 `test_scopes.py` asserts every selector here agrees with its `_rule_*` counterpart on every
@@ -188,6 +189,19 @@ def _approved_folder_matches(value: Any, ctx: ReviewContext) -> bool:
     f = _file_from(ctx.raw_data)
     parents = getattr(f, "parent_ids", []) or []
     return bool(set(parents) & allowed)
+
+
+def _move_within_approved_folders_matches(value: Any, ctx: ReviewContext) -> bool:
+    """A move stays inside the approved set only if it both starts and ends there: checking the
+    source alone would let a folder grant auto-approve moving a file out of that folder into any
+    folder the account can write to."""
+    if not _approved_folder_matches(value, ctx):
+        return False
+    raw = ctx.raw_data
+    destination = ctx.args.get("destination_folder_id") or (
+        raw.get("destination_folder_id") if isinstance(raw, dict) else ""
+    )
+    return bool(destination) and destination in set(_values_of(value))
 
 
 def _parent_folder_allowlist_matches(value: Any, ctx: ReviewContext) -> bool:
@@ -411,12 +425,9 @@ SCOPE_SELECTORS: dict[str, ScopeSelector] = {
         predicate="approved_sandbox_folder", scope_type="drive.folder", kind=ScopeKind.IDENTITY,
         resolves_from=ResolvesFrom.FETCHED, matches=_approved_folder_matches,
     ),
-    # F3: checks only the file's *current* parent, same as approved_folder -- not the move's
-    # destination. Reproducing that gap exactly is this phase's job (P2 is behavior-preserving);
-    # fixing it is D1's own, separately-decided PR (see the redesign proposal).
     "move_within_approved_folders": ScopeSelector(
         predicate="move_within_approved_folders", scope_type="drive.folder", kind=ScopeKind.IDENTITY,
-        resolves_from=ResolvesFrom.FETCHED, matches=_approved_folder_matches,
+        resolves_from=ResolvesFrom.FETCHED, matches=_move_within_approved_folders_matches,
     ),
     "parent_folder_allowlist": ScopeSelector(
         predicate="parent_folder_allowlist", scope_type="drive.folder", kind=ScopeKind.IDENTITY,

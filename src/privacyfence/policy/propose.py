@@ -116,12 +116,21 @@ def _no_value_needed(_ctx: ReviewContext) -> Any:
 
 
 def _folder_ids(ctx: ReviewContext) -> Any:
-    """The folder(s) a Drive/Sheets/Docs item currently lives in -- what ``approved_folder``/
-    ``approved_sandbox_folder``/``move_within_approved_folders`` all read (F1: one selector, three
-    v1 names). For a move, ``raw_data``'s file is the file *before* the move, i.e. its source
-    folder."""
+    """The folder(s) a Drive/Sheets/Docs item currently lives in -- what ``approved_folder`` and
+    ``approved_sandbox_folder`` read."""
     parents = list(getattr(_file_from(ctx.raw_data), "parent_ids", []) or [])
     return parents or NO_VALUE
+
+
+def _move_folder_ids(ctx: ReviewContext) -> Any:
+    """Both ends of a move: the file's current folder(s) and ``destination_folder_id``. A rule for
+    a move must name both, because ``move_within_approved_folders`` matches only when the source and
+    the destination are in its set."""
+    parents = _folder_ids(ctx)
+    destination = ctx.args.get("destination_folder_id", "") or ""
+    if parents is NO_VALUE or not destination:
+        return NO_VALUE
+    return sorted({*parents, destination})
 
 
 def _args_values(name: str) -> Callable[[ReviewContext], Any]:
@@ -287,7 +296,7 @@ PROPOSABLE_SCOPES: tuple[ProposableScope, ...] = (
         _folder_ids, "this folder",
     ),
     _scope("parent_folder_allowlist", "drive.folder", "drive", (Verb.CREATE,), _args_values("parent_folder_id"), "this folder"),
-    _scope("move_within_approved_folders", "drive.folder", "drive", (Verb.MOVE,), _folder_ids, "this folder"),
+    _scope("move_within_approved_folders", "drive.folder", "drive", (Verb.MOVE,), _move_folder_ids, "this folder"),
     _scope("i_am_owner", "drive.owned_by_me", "drive", (Verb.READ, Verb.DOWNLOAD), _no_value_needed, "if I own it"),
     # ── Gmail ─────────────────────────────────────────────────────────────────────────────────
     _scope("i_am_sender", "gmail.sender", "gmail", (Verb.READ, Verb.DOWNLOAD, Verb.ARCHIVE), _no_value_needed, "if I'm sender"),
