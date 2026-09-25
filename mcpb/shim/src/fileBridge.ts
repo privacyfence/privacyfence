@@ -638,7 +638,7 @@ export interface FileBridgeOptions {
    * index.ts already derives it from the discovered ``mcp_url``. */
   origin: string;
   /** The same ``Authorization: Bearer <token>`` header value the MCP
-   * transport itself sends -- Phase 1 reuses that token verbatim rather
+   * transport itself sends -- the file bridge reuses that token verbatim rather
    * than reading a second credential; see the module docstring. */
   authHeader: string;
   /** Overridable for tests; defaults to the global ``fetch``. */
