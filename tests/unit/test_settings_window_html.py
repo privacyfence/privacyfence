@@ -375,7 +375,7 @@ class TestTelegramModalTemplate:
 
 class TestNotificationsCard:
     """renderNotificationsCard's own comment: web.notifications.detail
-    (settings.yaml.example, docs/approval-list-ui-ux.md §4.3) is a real,
+    (settings.yaml.example, 5deef1d8:docs/approval-list-ui-ux.md §4.3) is a real,
     mutable setting -- set_notifications_detail persists it and the card's
     segmented control (segGroupHtml, the same primitive the Audit page's
     Log level row and the Privacy Filter's policy rows already use) is

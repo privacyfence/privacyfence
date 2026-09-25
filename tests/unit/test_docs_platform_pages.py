@@ -42,7 +42,7 @@ def _matrix_rows() -> list[dict[str, str]]:
     lines = text.split("## Support matrix", 1)[1].split("\n\n", 2)[1].splitlines()
     header = [cell.strip() for cell in lines[0].strip("|").split("|")]
     return [
-        dict(zip(header, (cell.strip() for cell in line.strip("|").split("|"))))
+        dict(zip(header, [cell.strip() for cell in line.strip("|").split("|")], strict=True))
         for line in lines[2:]
     ]
 

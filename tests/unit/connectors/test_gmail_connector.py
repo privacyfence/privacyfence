@@ -1004,7 +1004,7 @@ class TestMarkdownPreviewFallback:
     """The non-image fallback for a prefetched attachment is the file's own
     extracted content (text_extraction.extract_text()), rendered as a
     "markdown" preview_blocks entry -- replacing the old QuickLook-thumbnail
-    fallback (see docs/file-type-support.md). These tests pin the wiring:
+    fallback (see 5deef1d8:docs/file-type-support.md). These tests pin the wiring:
     when a markdown block is added, when it isn't, and that images still
     only ever get the direct image preview, never a markdown block too."""
 

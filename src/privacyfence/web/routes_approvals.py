@@ -135,7 +135,7 @@ _STREAM_POLL_SECONDS = 1.0
 
 logger = logging.getLogger(__name__)
 
-# resources/sw.js -- tier 0/1 notifications (docs/approval-list-ui-ux.md
+# resources/sw.js -- tier 0/1 notifications (5deef1d8:docs/approval-list-ui-ux.md
 # §4). Served at the origin root, not under /api, so its default scope
 # covers the whole app (a service worker's scope can never be wider than the
 # path it's served from) -- see web_shell.py's own registration call. Shared
@@ -230,7 +230,7 @@ def _bridge_shim(*, decide_url: str, csrf: str, stepup_options_url: str, nonce: 
     local mode has no IdP alternative to link a client toward, see
     ``_org_bridge_shim`` for the mode that does.
 
-    docs/approval-list-ui-ux.md §3 ("After a decision: back to the list"):
+    5deef1d8:docs/approval-list-ui-ux.md §3 ("After a decision: back to the list"):
     on a 2xx or a 409 (``already_decided`` -- a rule elsewhere resolved this
     one first, a genuinely common case once rules-changed re-evaluation is
     live, not an error), navigate straight back to ``/approvals`` via

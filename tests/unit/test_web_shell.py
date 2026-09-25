@@ -135,7 +135,7 @@ class TestDismissibleNotice:
 
 
 class TestNotifications:
-    """W8, docs/approval-list-ui-ux.md §4: tiers 0-1 only."""
+    """W8, 5deef1d8:docs/approval-list-ui-ux.md §4: tiers 0-1 only."""
 
     def test_registers_the_service_worker(self):
         html = web_shell.wrap("", title="t", active="approvals")
@@ -172,7 +172,7 @@ class TestNotifications:
             assert forbidden not in notify_fn_body, forbidden
 
     def test_notification_body_allowlist_by_detail_level(self):
-        # P5's per-field content allowlist (docs/approval-list-ui-ux.md
+        # P5's per-field content allowlist (5deef1d8:docs/approval-list-ui-ux.md
         # §4.3): minimal (or a multi-approval grouped notification, which
         # has no richer copy defined -- §4.2) never touches a row at all;
         # `summary` -- the one field that can carry real gated content

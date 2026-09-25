@@ -618,7 +618,7 @@ class TestApprovalDecisionFlow:
             thread.join(timeout=5)
 
     def test_list_refreshes_live_without_a_manual_reload(self, page, local_server):
-        """docs/approval-list-ui-ux.md's ``/api/approvals/stream`` SSE
+        """5deef1d8:docs/approval-list-ui-ux.md's ``/api/approvals/stream`` SSE
         push, driven by a real ``EventSource`` in a real page -- a new
         approval registered *after* the page already loaded must appear
         with no navigation/reload, within the stream's own ~1s poll

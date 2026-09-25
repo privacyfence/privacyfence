@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         "log_dir", help='Audit log directory, e.g. "~/.privacyfence/logs/audit" (local mode) or '
                         'a principal\'s own "logs/audit" under an org-mode server\'s data '
                         'directory. This is the same directory AuditLogger writes to -- see '
-                        "docs/TECHNICAL_REFERENCE.md's \"Audit log\" section.",
+                        "docs/security-and-compliance.md's \"Audit log integrity\" section.",
     )
     parser.add_argument(
         "--week", metavar="YYYY-WNN", action="append", dest="weeks", default=None,

@@ -7,7 +7,7 @@ Accepted (recorded retroactively on 2026-09-23; decided around 2026-07-13 in
 2026-07-14, and deleted in `82607602` on 2026-07-15. Read it with
 `git show 82607602^:docs/cowork-scheduled-tasks-design.md`, sections "Part 3" and "Alternatives
 considered"). Implemented. The mechanism is described in
-[`docs/TECHNICAL_REFERENCE.md`](../TECHNICAL_REFERENCE.md)'s "Scheduled / unattended Cowork tasks"
+[`docs/TECHNICAL_REFERENCE.md`](https://github.com/privacyfence/privacyfence/blob/5deef1d8/docs/TECHNICAL_REFERENCE.md)'s "Scheduled / unattended Cowork tasks"
 section. That section covers the mechanism but not the rejected alternatives recorded here.
 
 ## Context

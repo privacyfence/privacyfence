@@ -309,7 +309,7 @@ class ConfluenceConnector(Connector):
         # confluence_search/confluence_cql_search. Author/Last modified are
         # only ever known via confluence_list_pages -- confluence_search's
         # own ConfluenceSearchResult has no author/updated field at all (see
-        # claude-knowledge-boundary.md) -- so, unlike Drive's "known if that
+        # 5deef1d8:docs/claude-knowledge-boundary.md) -- so, unlike Drive's "known if that
         # other call happened first" caveat, there's a real, likely path
         # (search) that never surfaces them, and they're treated as new
         # rather than assumed known. Page body has no fixed size, so it gets
@@ -411,7 +411,7 @@ class ConfluenceConnector(Connector):
         # Title/Space are known for free via confluence_list_pages/
         # confluence_search; Attachment/Type/Size are known for free via
         # confluence_list_attachments -- same knowledge-boundary reasoning
-        # as gmail_download_attachment (see claude-knowledge-boundary.md's
+        # as gmail_download_attachment (see 5deef1d8:docs/claude-knowledge-boundary.md's
         # Gmail worked example). The only genuinely new fact from approving
         # this call is *how* the attachment reaches Claude -- see
         # connectors/drive.py's _download_file for the same mode/delivery-

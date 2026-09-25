@@ -99,7 +99,7 @@ ALL_CONNECTORS: list[str] = [
 ]
 
 # web.notifications.detail's own three values (settings.yaml.example,
-# docs/approval-list-ui-ux.md §4.3) -- see set_notifications_detail below
+# 5deef1d8:docs/approval-list-ui-ux.md §4.3) -- see set_notifications_detail below
 # and web_shell.py's notificationBody() for what each level is allowed to
 # read off a pending-approval row.
 NOTIFICATIONS_DETAIL_LEVELS: tuple[str, ...] = ("minimal", "standard", "detailed")

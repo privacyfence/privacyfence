@@ -12,7 +12,8 @@ checkout has its git history, the test also checks that each such citation resol
 
 Two places are exempt. `CHANGELOG.md` records what each release shipped, including the docs it
 had then. `docs/adr/` records are frozen once accepted; their Markdown links are still checked by
-`test_docs_links.py`, and fixing one is a permitted edit.
+`test_docs_links.py`, and fixing one is a permitted edit. This file is skipped too: its
+examples name files that do not exist on purpose.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 _REF = re.compile(r"(?:\b([0-9a-f]{7,40}\^?):)?(?<![\w-])(docs/[A-Za-z0-9_./-]+?\.md)\b")
 
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build", "htmlcov", "_site"}
-_EXEMPT = ("CHANGELOG.md", "docs/adr/")
+_EXEMPT = ("CHANGELOG.md", "docs/adr/", "tests/unit/test_docs_references_exist.py")
 _BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".icns", ".pdf", ".woff", ".woff2", ".zip", ".db"}
 
 
