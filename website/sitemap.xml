@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!-- Hand-written until the site build generates it. tests/unit/test_website_pages.py requires
-     one <loc> per page under website/. -->
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://privacyfence.eu/</loc></url>
-  <url><loc>https://privacyfence.eu/download/</loc></url>
-  <url><loc>https://privacyfence.eu/privacy/</loc></url>
-  <url><loc>https://privacyfence.eu/imprint/</loc></url>
-</urlset>

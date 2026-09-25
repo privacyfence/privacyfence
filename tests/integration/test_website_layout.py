@@ -1,9 +1,11 @@
 """Guardrail 12: every privacyfence.eu page is responsive, from a 320 px phone to a desktop.
 
 Layout can only be measured in a rendering engine, so this is the website's one guardrail that
-needs a browser. It loads every hand-written page (`website/**/index.html`, staged exactly as
-pages.yml deploys them, see tests/website_site.py) at each tested viewport and checks the
-measurable rules from the header comment of `website/styles.css`:
+needs a browser. It loads every page in the build manifest -- each hand-written page, and a sample
+of /docs/ pages when the docs were built (getting-started, tools-reference for its wide tables,
+the organization guide for its long code blocks) -- from the site exactly as
+scripts/build_site.py builds it (see tests/website_site.py), at each tested viewport, and checks
+the measurable rules from the header comment of `website/styles.css`:
 
 - no page-level horizontal scroll;
 - no element's box extends past the viewport, except inside a scroll container (wide code and
@@ -28,13 +30,15 @@ from pathlib import Path
 import pytest
 
 from tests.website_site import (
+    build_site,
+    docs_built,
     API_ORIGIN,
     REPO,
     STABLE_MANIFEST,
     chromium_launch_kwargs,
     page_paths,
     serve,
-    stage_site,
+    built_site,
 )
 
 pytest.importorskip(
@@ -54,8 +58,8 @@ SCREENSHOTS = REPO / "test-results" / "website-layout"
 
 
 @pytest.fixture(scope="module")
-def site_url(tmp_path_factory):
-    with serve(stage_site(tmp_path_factory.mktemp("site"))) as url:
+def site_url():
+    with serve(built_site()) as url:
         yield url
 
 
@@ -88,8 +92,10 @@ def _stub_network(page, site_url):
 
 
 # Every element whose box ends outside [0, innerWidth], skipping what is legitimately allowed to:
-# content inside a scroll/clip container, content of a closed <details>, and the 1 px
-# visually-hidden helpers.
+# content inside a scroll/clip container, content of a closed <details>, the 1 px
+# visually-hidden helpers, and a closed off-canvas drawer (the /docs/ navigation on a phone), which
+# sits entirely left of the viewport until opened -- test_docs_navigation_drawer_opens_on_screen
+# checks it once open.
 OVERFLOW_JS = """
 () => {
   const width = window.innerWidth;
@@ -99,6 +105,7 @@ OVERFLOW_JS = """
     if (rect.width === 0 || rect.height === 0) continue;
     if (rect.width <= 1 && rect.height <= 1) continue;
     if (el.closest('details:not([open]) > :not(summary)')) continue;
+    if (rect.right <= 0.5) continue;
     let clipped = false;
     for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
       const overflow = getComputedStyle(a).overflowX;
@@ -199,9 +206,11 @@ def test_page_layout(browser, site_url, path, width):
 
 
 def test_every_page_is_covered():
-    # page_paths() globs website/; this pins that the glob still finds the pages the site has,
-    # so a moved directory can't silently shrink the test to nothing.
+    # page_paths() reads the build manifest; this pins that it still lists the pages the site
+    # has, so a manifest change can't silently shrink the test to nothing.
     assert {"/", "/download/", "/privacy/", "/imprint/"} <= set(PAGES)
+    if docs_built():
+        assert set(build_site.DOCS_LAYOUT_SAMPLE) <= set(PAGES)
 
 
 def test_desktop_shows_inline_links_and_no_menu(browser, site_url):
@@ -221,6 +230,28 @@ def test_the_menu_works_by_keyboard(browser, site_url):
         assert page.locator(".nav-menu-panel a").first.is_visible()
         page.keyboard.press("Enter")  # focus is still on the summary: toggles it closed again
         assert not page.locator(".nav-menu-panel a").first.is_visible()
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize("width", [320, 768])
+def test_docs_navigation_drawer_opens_on_screen(browser, site_url, width):
+    # Below the docs generator's own breakpoint the docs navigation is a drawer behind the menu
+    # button in the docs bar. Opened, it must sit fully inside the viewport with every link in it.
+    if not docs_built():
+        pytest.skip("/docs/ was not built (the docs extra is not installed)")
+    context, page = _open(browser, site_url, "/docs/getting-started/", width)
+    try:
+        page.locator('label.md-header__button[for="__drawer"]').click()
+        page.wait_for_timeout(400)  # the drawer slides in
+        drawer = page.locator(".md-sidebar--primary")
+        box = drawer.bounding_box()
+        assert box and box["x"] >= -0.5 and box["x"] + box["width"] <= width + 0.5, box
+        assert page.evaluate(OVERFLOW_JS) == []
+        # Sections open as sub-panels: the last one's docs are one tap away.
+        drawer.get_by_text("Reference appendices", exact=True).first.click()
+        page.wait_for_timeout(400)
+        assert drawer.locator('a[href$="tools-reference/"]').first.is_visible()
     finally:
         context.close()
 

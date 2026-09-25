@@ -34,7 +34,7 @@ from tests.website_site import (
     chromium_launch_kwargs,
     page_paths,
     serve,
-    stage_site,
+    built_site,
 )
 
 pytest.importorskip(
@@ -52,8 +52,8 @@ BANNER = ".consent-banner"
 
 
 @pytest.fixture(scope="module")
-def site_url(tmp_path_factory):
-    with serve(stage_site(tmp_path_factory.mktemp("site"))) as url:
+def site_url():
+    with serve(built_site()) as url:
         yield url
 
 

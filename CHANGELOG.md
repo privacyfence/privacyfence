@@ -43,6 +43,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The documentation is on the website,** at `privacyfence.eu/docs/`, with navigation, search
+  and a layout for phones. It shows the docs of the latest stable release and says which version
+  that is; contributor docs and design records stay on GitHub. The download page lists the
+  current release's installers even without JavaScript, and the site offers `llms.txt` and
+  `llms-full.txt` for AI assistants.
+
 ## [4.6.0] — 2026-09-25
 
 ### Added

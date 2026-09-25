@@ -156,3 +156,6 @@ Issues, PRs, commits, other ADRs. For a deleted source document: `git show <sha>
 | [0048](0048-every-crawler-is-allowed-including-ai-training.md) | privacyfence.eu allows every crawler, AI search and AI training included | Accepted |
 | [0049](0049-website-css-is-plain-modern-css-without-a-framework.md) | The website's CSS is plain modern CSS, with no framework | Accepted |
 | [0050](0050-website-analytics-is-ga4-behind-consent.md) | Website analytics is GA4, loaded only after consent; Google is the only search tooling | Accepted |
+| [0051](0051-privacyfence-eu-publishes-the-user-and-operator-docs-only.md) | privacyfence.eu publishes the user and operator docs only; links out of that set go to GitHub at the same tag | Accepted |
+| [0052](0052-docs-are-built-with-zensical-from-the-latest-stable-tag.md) | The docs are built with Zensical, from the latest stable release tag | Accepted |
+| [0053](0053-the-website-is-hosted-on-github-pages-behind-cloudflare.md) | The website is hosted on GitHub Pages, behind the Cloudflare proxy | Accepted |
