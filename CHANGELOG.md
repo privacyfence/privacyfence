@@ -103,6 +103,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The "Not authorized" page describes how sign-in works today instead of what changed.** It now
   reads "PrivacyFence never gives a sign-in link to the program it governs." and "The link is not
   written to any file either, where every program running as you could read it."
+  `privacyfence_status`'s "not set up" message to the AI client likewise says PrivacyFence "never
+  issues" it a sign-in link.
 
 ### Fixed
 
