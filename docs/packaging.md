@@ -44,7 +44,7 @@ cannot start ([ADR 0039](adr/0039-installers-refuse-an-os-below-the-support-matr
 | Installer | Floor | Where it is declared |
 |---|---|---|
 | `.pkg` | macOS 13.0, arm64 | `build_pkg.sh` reads `LSMinimumSystemVersion` (set in `PrivacyFenceApp.spec`) back from the built bundle into `<allowed-os-versions>`, and sets `hostArchitectures="arm64"`; it refuses to package a bundle `lipo -archs` does not report as `arm64` |
-| Inno Setup | Windows 10 / Server 2016, x64 | `MinVersion=10.0`, `ArchitecturesInstallIn64BitMode=x64compatible` in `installer/privacyfence.iss` |
+| Inno Setup | Windows 10 / Server 2016, x64 | `MinVersion=10.0` and `ArchitecturesAllowed=x64os` in `installer/privacyfence.iss`; `x64os` refuses 32-bit and arm64 Windows, Windows 11 on arm64 included ([ADR 0054](adr/0054-the-windows-installer-refuses-anything-but-native-x64.md)). `ArchitecturesInstallIn64BitMode` only picks the install mode and refuses nothing |
 | `.deb` | glibc 2.38, systemd 242, amd64 | `Depends: libc6 (>= 2.38), systemd (>= 242)` and `Architecture: amd64` in `debian/control` |
 
 The `.deb`'s glibc floor is whatever the build host linked the bundled Python against;
