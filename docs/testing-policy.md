@@ -67,8 +67,9 @@ that raises its coverage; lowering one is a regression, not a config edit.
 
 **Required checks.** `REQUIRED_STATUS_CHECKS` in `scripts/update_branch_protection.py` is the
 reviewed list: `test`, `platform-windows`, `platform-macos`, the three `Test (Python 3.x, core
-suite)` checks, `static-analysis`, `org-mode-smoke`. Update it in the PR that adds, renames or
-removes a `tests.yml` job. It is applied to the live repository ruleset by hand (`... apply`, and
+suite)` checks, `static-analysis`, `org-mode-smoke`, and `website-build` (`website-build.yml`'s
+job, which also runs on every PR). Update it in the PR that adds, renames or removes one of those
+jobs. It is applied to the live repository ruleset by hand (`... apply`, and
 `--branch "releases/**" apply` for the release branches) — no CI job does it; `... show` compares
 intent with what is live.
 

@@ -27,6 +27,10 @@ concurrency:
 
 jobs:
   build:
+    # The check's name, and so what scripts/update_branch_protection.py requires. Unique on purpose:
+    # build.yml and publish-pypi.yml also have a job called `build`, and a required check matches by
+    # name alone.
+    name: website-build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
