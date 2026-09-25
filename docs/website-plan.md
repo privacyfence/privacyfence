@@ -1,9 +1,12 @@
 # Website, documentation and SEO plan (privacyfence.eu)
 
-**Active plan.** This file is temporary, per [`README.md`](README.md)'s documentation rules and
-`CLAUDE.md` "Decisions, plans and ADRs": it lives here while the work below is open and is deleted
-by the PR that lands the last wave, after every decision it records has an ADR (see
-[ADRs this plan creates](#adrs-this-plan-creates)).
+**Active plan, kept off `main`.** This file lives only on the branch `claude/website-refactor-plan-za8g95`
+([PR #683](https://github.com/privacyfence/privacyfence/pull/683), which is never merged). The
+orchestrator and every wave session read it from there. Wave work branches from `main`, and no
+wave PR carries this file or links to it. Its decisions reach `main` as ADRs, per `CLAUDE.md`
+"Decisions, plans and ADRs" (see [ADRs this plan creates](#adrs-this-plan-creates)). When the last
+wave has landed, PR #683 is closed unmerged and the branch deleted
+([Retiring this plan](#retiring-this-plan)).
 
 **Scope: documentation and website only.** The code changes the audit found were done by the
 product cleanup plan, now retired (merged 2026-09-24, first shipped in `v4.5.0a1`; see [What the
@@ -42,10 +45,10 @@ questionnaire answers (2026-09-23); a source-code audit of every document (2026-
 
 ### Open questions
 
-**All seven were answered on 2026-09-25**; the answers are in the table. The orchestrator passes
-them to every session as they stand. If a later question comes up, add it here with what it
-blocks and a default. A wave drafts with the default and cannot merge until the question is
-answered.
+Q1–Q7 were answered on 2026-09-25; the answers are in the table. **Q8 is open** (raised by the
+4.5.0 review). The orchestrator passes the answers to every session as they stand. If a later
+question comes up, add it here with what it blocks and a default. A wave drafts with the default
+and cannot merge until the question is answered.
 
 | # | Question | Blocks | Default if unanswered |
 |---|---|---|---|
@@ -56,6 +59,7 @@ answered.
 | Q5 | ~~Which stable release takes the new docs live?~~ **Answered 2026-09-25: 4.6.0**, cut once Wave 1 has merged (M13). 4.5.0 ships first, without Wave 1. `/docs/` publishes from the latest stable tag (C4), so the new docs go live with 4.6.0. | — | — |
 | Q6 | ~~Wave 1 as one PR or three?~~ **Answered 2026-09-25: one PR** (F3), one session. The session may use sub-agents internally. | — | — |
 | Q7 | ~~When do ChatGPT and Gemini support ship?~~ **Answered 2026-09-25:** in the release after this plan's work (after 4.6.0). No page in this plan names them. The clients data file (guardrail 10) keeps adding them a one-line change for that release. | — | — |
+| Q8 | **Does G1 ("there are no existing users; docs describe only the current version, no upgrade paths") still hold?** 4.5.0 shipped upgrade handling for 4.1–4.4 installs: [ADR 0047](adr/0047-settings-an-earlier-release-converted-are-cleaned-up-not-refused.md) cleans up converted v1 policy sections instead of refusing them, and #687's commit message names a real 4.1.0b6 → 4.5.0a3 Windows upgrade. | Wave 1 merge (whether `install-*.md` get an "Upgrading" section) | **G1 stands for docs:** no upgrade guide and no history. Where an earlier install leaves something the current code acts on, it is documented as current behavior with no "used to", e.g. in the configuration reference: "a `settings.yaml` with `auto_accept_rules`/`auto_accept_grants` and the `migrated_to_policy_v2` marker is cleaned up at startup; without the marker it is refused." Installing over an existing install is described as an install step ("run the new installer; your data is kept"). Upgrade specifics stay in `CHANGELOG.md`. |
 
 Wording you review in the PRs, not questions: the privacy policy and consent banner (Wave 0), every
 doc (Waves 1–2), every page (Waves 0, 4, 5).
@@ -107,15 +111,25 @@ follow CLAUDE.md's `<type>/<kebab-case>` rule.
 
 **The orchestrator:**
 
-- starts each session with the prompt below, pasting in the answers to the open questions so far;
+- starts each session with the prompt below, pointing it at this plan on `claude/website-refactor-plan-za8g95`;
 - keeps status in a tracking issue (one checkbox per session, Q and M item), not in this file;
 - passes a new answer to every running session it affects;
 - after each merge, reads the PR's "For later waves" list. When an item changes a later brief, it
-  folds it into this plan with a small plan-update PR before starting that session.
+  commits the change to this plan directly on `claude/website-refactor-plan-za8g95` (no PR needed: the branch is never merged)
+  before starting that session;
+- before each new session, re-checks the plan against `main` the same way this plan's
+  "Re-checked" sections do, and records what changed.
 
 **Rules every session follows,** so three parallel sessions don't collide:
 
-- **Branch from current `origin/main`**, and bring `main` in with a merge, never a rebase.
+- **Read the plan from `claude/website-refactor-plan-za8g95`, branch the work from `origin/main`.** Fetch the plan with
+  `git fetch origin claude/website-refactor-plan-za8g95` and read it with
+  `git show origin/claude/website-refactor-plan-za8g95:docs/website-plan.md`; do not check the plan branch out as your base.
+  Bring `main` in with a merge, never a rebase.
+- **Never carry the plan into a wave PR.** `docs/website-plan.md` must not appear in the PR's diff,
+  and nothing on `main` links to it (guardrail 9 would fail). ADRs, commits and PR descriptions cite
+  [PR #683](https://github.com/privacyfence/privacyfence/pull/683) or the decision's own ID (for
+  example "decision H2 of the website plan, PR #683") instead.
 - **Stay inside the brief's "Owns" list.** Anything else found along the way goes into the PR's
   "For later waves" list, not into the diff. The shared files have one owner each:
 
@@ -126,7 +140,7 @@ follow CLAUDE.md's `<type>/<kebab-case>` rule.
   | `CLAUDE.md` | S2 (dedupe) | S1 changes only links to docs it deletes. |
   | `website/**`, `.github/workflows/pages.yml` | S0, then S3, S4, S5, S6 in turn | S1 and S2 never touch them. |
   | `CHANGELOG.md` `[Unreleased]` | everyone | Add your own lines. Conflicts are line merges. |
-  | `docs/website-plan.md` | orchestrator | Sessions never edit it; the S5 PR deletes it. |
+  | `docs/website-plan.md` | orchestrator, on `claude/website-refactor-plan-za8g95` only | Never on `main`; sessions never edit it. |
 
 - **ADR numbers:** take the next free number when opening the PR. If another PR takes it first,
   renumber the file, its heading and `docs/adr/README.md`'s index in your PR.
@@ -142,12 +156,15 @@ follow CLAUDE.md's `<type>/<kebab-case>` rule.
 **Session prompt** (the orchestrator fills in the angle brackets):
 
 ```text
-Run <Wave N | the /releases/ page> of docs/website-plan.md on main.
+Run <Wave N | the /releases/ page> of the website plan. The plan is NOT on main:
+read it with `git fetch origin claude/website-refactor-plan-za8g95` and
+`git show origin/claude/website-refactor-plan-za8g95:docs/website-plan.md`.
 Read CLAUDE.md, then in the plan: "Start here" (the session rules), Decisions,
 Documentation principles, Guardrails, and your brief (<link>) plus every section
 it links to. Your brief's "Owns" list is your whole scope; anything else goes in
 the PR's "For later waves" list.
-Branch: <branch> from current origin/main.
+Branch: <branch> from current origin/main (not from the plan branch). The PR
+must not contain docs/website-plan.md or link to it; cite PR #683 instead.
 Maintainer answers: the "Open questions" table in the plan (all answered),
 plus anything newer: <paste, or "nothing newer">.
 Open one PR. Its description has: what was done, anything in the brief not done
@@ -298,15 +315,25 @@ times out. For Wave 1, `connecting-a-service.md` describes one Authenticate flow
 connector and the timeout, and `google-cloud-setup.md`'s local redirect row matches a loopback
 desktop-app client. Before writing that row, re-read `google_oauth.authorize_local()`.
 
+Re-checked on 2026-09-25 against `v4.5.0` (`5deef1d8`, the tip of `main`): four more PRs, and
+ADR 0047. None removes a finding; these change what Wave 1 must cover:
+
+| Change on `main` | Where the target set absorbs it |
+|---|---|
+| **Converted v1 policy sections are cleaned up, not refused** ([ADR 0047](adr/0047-settings-an-earlier-release-converted-are-cleaned-up-not-refused.md), amending ADR 0041). With the `migrated_to_policy_v2` marker, `load_config` removes `auto_accept_rules`/`auto_accept_grants` and the marker, rewrites the file, logs `policy.store.drop_converted_v1_sections`; without the marker it still refuses. | `configuration-reference.md` (the startup rule for those keys, stated as current behavior, see Q8), troubleshooting in `getting-started.md` (the refusal message and what to do). |
+| **Windows: a refused start is written to the Application event log** ("PrivacyFence exited with status 1: …"), and the installer registers PrivacyFence as an event-log source (removed on uninstall), so entries show their text. | `install-windows.md` troubleshooting ("service stops within seconds → Event Viewer → Application, source PrivacyFence", or `Get-WinEvent -FilterHashtable @{ProviderName='PrivacyFence'}`); `platform-support.md`'s Windows logs row. |
+| **Passkey errors on Windows are explained**: `NotAllowedError` is told apart (prompt cancelled or timed out vs. no Windows Hello PIN or fingerprint), and an already-enrolled device says so. | `install-windows.md` (set up Windows Hello before the first passkey step-up), `approvals-and-policy.md`'s step-up part, `security-and-compliance.md`'s step-up table only if it names the error. |
+| **Salesforce keeps its rotated refresh token.** With refresh token rotation on (an External Client App option), each refresh's new token is stored. | `salesforce-setup.md`: rotation on or off both work; say which the guide recommends. |
+| **Release notes for 4.5.0** (`CHANGELOG.md`). | Nothing: history stays in the changelog. The 4.5.0 section is a good cross-check that Wave 1 has absorbed every behavior change from the product cleanup. |
+
 Two consequences for how the waves run:
 
-- **Branch every wave from current `main`**, not from `claude/documentation-refactoring`, which
-  only holds this plan and is behind `main`. Waves 1–2 rewrite docs that keep changing under them;
+- **Branch every wave from current `main`**, never from `claude/website-refactor-plan-za8g95` (which holds only this plan) or
+  the retired `claude/documentation-refactoring`. Waves 1–2 rewrite docs that keep changing under them;
   each wave PR re-reads its target docs on `main` when it starts.
-- **Latest stable is now 4.4.0**, and `v4.5.0a1` (the product cleanup) is the current
-  pre-release. Wave 3 still publishes the first stable release that contains Wave 1, so the "plan
-  a release between Wave 1 and Wave 3" note below stands. 4.5.0 is released before Wave 1, so the
-  release that takes the new docs live is 4.6.0 (Q5).
+- **Latest stable is 4.5.0** (tagged 2026-09-25 at `5deef1d8`), without Wave 1. The release that
+  takes the new docs live is 4.6.0 (Q5), and Wave 3's stale-tag guard keeps `/docs/` off until
+  then.
 
 ## Target documentation set
 
@@ -790,8 +817,8 @@ Deliverables:
 
 - **Session:** S5 · **Starts:** S4 merged
 - **Needs before merge:** M10.
-- **Owns:** the five connector pages, `/faq/`, guardrail 8, and this plan's retirement (see
-  [Retiring this plan](#retiring-this-plan)).
+- **Owns:** the five connector pages, `/faq/`, guardrail 8. Its merge triggers the plan's
+  [retirement](#retiring-this-plan), which the orchestrator does.
 
 Deliverables:
 
@@ -803,8 +830,9 @@ Deliverables:
   approval? Is PrivacyFence certified? Local or organization mode? Is it free? How do I verify a
   download?
 
-Done when (in the PR): guardrail 8 passes, and guardrails 10–13 pass on the new pages; this plan
-is deleted and its ADRs exist.
+Done when (in the PR): guardrail 8 passes, and guardrails 10–13 pass on the new pages; the PR does
+not contain or link to `docs/website-plan.md`. After it merges, the orchestrator
+[retires the plan](#retiring-this-plan).
 
 ## Release history page (`/releases/`, #365)
 
@@ -890,7 +918,7 @@ Record the ranking monthly with the other numbers. When you read it:
 ## ADRs this plan creates
 
 Next free numbers when each PR lands (0039–0043 were taken by the product cleanup, 0044 by the
-amd64-only `.deb`, 0045–0046 by #682's installer and signing changes; 0047+ as of 2026-09-25).
+amd64-only `.deb`, 0045–0046 by #682's installer and signing changes, 0047 by 4.5.0's converted-settings cleanup; 0048+ as of 2026-09-25).
 
 | ADR | Wave |
 |---|---|
@@ -906,7 +934,15 @@ Positioning (B1) and the documentation principles are not ADRs: the first lives 
 
 ## Retiring this plan
 
-The Wave 5 PR deletes this file after confirming the ADRs above exist and `docs/README.md` no
-longer names an active plan. Before that, the orchestrator adds this plan's additions to #365's
+The plan is never on `main`, so no PR deletes it. When the Wave 5 PR has merged, the orchestrator:
+
+1. confirms every ADR in [ADRs this plan creates](#adrs-this-plan-creates) exists on `main`, and
+   that each decision here meeting `CLAUDE.md`'s ADR bar has one (the rule for retiring a plan
+   applies to this one too);
+2. confirms `main` has no reference to `docs/website-plan.md`;
+3. closes [PR #683](https://github.com/privacyfence/privacyfence/pull/683) unmerged, with a comment
+   linking the wave PRs and ADRs, and deletes the branch.
+
+Before that, the orchestrator adds this plan's additions to #365's
 scope (see [Release history page](#release-history-page-releases-365)) to the issue if S6 has not
 run, and closes the tracking issue once M14 is done.
