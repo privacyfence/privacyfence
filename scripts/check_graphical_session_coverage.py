@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Report whether the graphical-session/autostart workflows have a green run behind this release
-tag, and (stable channel only) actually gate on it -- privacyfence/privacyfence#374, options 1
-("Report, don't gate") and 3 ("Gate stable tags only").
+tag: report a gap on every channel, and gate on it for stable tags only.
 
 `linux-graphical-session.yml`, `windows-graphical-session.yml` and `macos-graphical-session.yml`
 are the only automated coverage for the thing every desktop user depends on and nobody notices
@@ -24,11 +23,10 @@ yet reachable from this tag, or a reachable run that failed -- is a coverage gap
 
 What happens with a gap depends on `--channel` (the same value `scripts/r2_release.py channel`
 already resolves for the tag): on every channel it prints a `::warning::` per gap and nothing
-more (option 1); on `stable` specifically, a gap additionally fails this script, which
+more; on `stable` specifically, a gap additionally fails this script, which
 `finalize-release` runs as an ordinary step ahead of anything that attaches or publishes
-anything -- so a stable tag with broken or stale autostart coverage never ships (option 3).
-Pre-release tags stay ungated on purpose, per the issue's own reasoning: that's where a flake is
-cheapest to absorb, and this is still not a live wait -- a stable tag with a real coverage gap
+anything -- so a stable tag with broken or stale autostart coverage never ships.
+Pre-release tags stay ungated on purpose: that's where a flake is cheapest to absorb, and this is still not a live wait -- a stable tag with a real coverage gap
 fails immediately rather than blocking on a fresh run, so the "off the release's critical path"
 property this tier was built around never breaks. One re-run allowance: a run this finds red is
 not necessarily this release's fault -- if a maintainer judges it a flake, re-running that
@@ -64,7 +62,7 @@ from typing import Any
 
 API_ROOT = "https://api.github.com"
 
-# The three workflows privacyfence/privacyfence#374 is about -- see module docstring.
+# The three graphical-session/autostart workflows -- see module docstring.
 WORKFLOWS = ("linux-graphical-session.yml", "windows-graphical-session.yml", "macos-graphical-session.yml")
 
 
@@ -174,8 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "the release channel this commit resolves to (scripts/r2_release.py channel's own "
             "output). A coverage gap only fails this script -- rather than just warning -- when "
-            "this is exactly 'stable' (privacyfence/privacyfence#374, option 3); left empty or "
-            "anything else, this always exits 0, same as before --channel existed."
+            "this is exactly 'stable'; left empty or anything else, this always exits 0."
         ),
     )
     args = parser.parse_args(argv)
@@ -206,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # Any other channel (pre-release, or none resolved at all): report only, never gate -- see
-    # module docstring's option 1.
+    # module docstring.
     return 0
 
 

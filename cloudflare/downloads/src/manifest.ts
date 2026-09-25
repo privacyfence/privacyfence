@@ -2,7 +2,7 @@
  * Release manifest types and R2 lookups. Schema matches exactly what
  * `scripts/r2_release.py finalize` writes (schema `1`) -- see docs/downloads-and-release-kpi.md
  * "Publication is transactional". This Worker only ever reads manifests; the test suite reads
- * hand-written fixtures of the same shape (see test/fixtures.ts).
+ * hand-written fixtures of the same shape (see the test/fixtures/ directory).
  */
 import { channelForVersion, type Channel } from "./channel.js";
 

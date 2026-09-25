@@ -74,7 +74,14 @@ SolidCompression=yes
 ; SeCreateGlobalPrivilege) is in git history, with the daemon sign-in task it
 ; was about.
 PrivilegesRequired=admin
-ArchitecturesInstallIn64BitMode=x64compatible
+; ADR 0054. Only a native x64 Windows: `x64os` (Inno Setup 6.3+) refuses
+; 32-bit Windows and every arm64 Windows, including Windows 11, whose x64
+; emulation would otherwise count as x64-compatible. Without
+; ArchitecturesAllowed Setup runs anywhere, and on a system that is not
+; x64-compatible it installs in 32-bit mode under Program Files (x86), where
+; the x64 service cannot run and every path the fix-it text quotes is wrong.
+ArchitecturesAllowed=x64os
+ArchitecturesInstallIn64BitMode=x64os
 ; The OS floor (docs/platform-support.md's support matrix;
 ; tests/unit/test_minimum_os_versions.py keeps the two in step): Windows 10 /
 ; Server 2016. Setup refuses to run on anything older rather than installing

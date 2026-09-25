@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """Run mypy, blocking, over exactly the modules promoted by the strictness ratchet.
 
-TST-07 describes mypy as "non-blocking -> blocking per module", and `[tool.mypy]` in
-pyproject.toml says per-module `[[tool.mypy.overrides]]` blocks "should be added below as modules
-get cleaned up and promoted to blocking". That word -- blocking -- was aspirational: the only mypy
-step in `.github/workflows/tests.yml`'s `static-analysis` job was `continue-on-error: true`, so a
-promoted module's strict flags changed which errors mypy *printed* and nothing else. Five modules
-were promoted that way (privacyfence/privacyfence#377 and the url_safety.py override before it) and
-all five could have regressed without failing a single check.
+mypy is meant to go "non-blocking -> blocking per module": `[tool.mypy]` in pyproject.toml says
+per-module `[[tool.mypy.overrides]]` blocks "should be added below as modules get cleaned up and
+promoted to blocking". The whole-tree mypy step in `.github/workflows/tests.yml`'s
+`static-analysis` job is `continue-on-error: true`, so on its own a promoted module's strict flags
+would change which errors mypy *prints* and nothing else.
 
-This script is the missing half. CI runs it as an ordinary, non-`continue-on-error` step beside the
+This script is what makes promotion blocking. CI runs it as an ordinary, non-`continue-on-error` step beside the
 informational whole-tree run, so the ratchet's promoted modules genuinely gate the merge while the
 ~87 pre-existing errors in the rest of the tree stay visible-but-advisory, exactly as before.
 
@@ -54,7 +52,7 @@ DEFAULT_PYPROJECT = REPO_ROOT / "pyproject.toml"
 SRC_ROOT = REPO_ROOT / "src"
 
 # The flags an override sets to promote a module to blocking. This is the list url_safety.py's
-# override spells out and the four in privacyfence/privacyfence#377 copied -- deliberately the
+# override spells out and the later promotions copied -- deliberately the
 # individual components of `strict` rather than `strict = true`, because on mypy 2.3.1 a
 # per-module `strict = true` leaks its global-only components (e.g. `warn_unused_configs`) into
 # every other module; see that override's own comment in pyproject.toml.

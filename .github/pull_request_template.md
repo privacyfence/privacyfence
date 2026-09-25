@@ -12,27 +12,37 @@ reason rather than leaving it blank.
 ### Every PR
 
 - [ ] `pytest -v --cov=src/privacyfence --cov-branch --cov-report=term-missing --cov-report=json:coverage.json`
-      passes at 100%, and `python scripts/check_coverage_floor.py coverage.json` passes.
+      passes at 100%, and `python3 scripts/check_coverage_floor.py coverage.json` passes (the
+      coverage ratchet).
 - [ ] `ruff check .`, `bandit -c pyproject.toml -r src` and `python3 scripts/mypy_strict_modules.py`
-      all pass. A genuine Bandit false positive gets a `# nosec BXXX  # <reason>` at the call
-      site, never a suppression in `pyproject.toml`.
+      all pass. The whole-tree `mypy src/privacyfence` run is informational only; the modules with a
+      `[[tool.mypy.overrides]]` entry are what the third command checks and CI blocks on. A genuine
+      Bandit false positive gets a `# nosec BXXX  # <reason>` at the call site, never a suppression
+      in `pyproject.toml`.
+- [ ] In `mcpb/shim/`: `npm test` and `npm run typecheck` pass (CI blocks on both on every PR,
+      whether or not it touches the shim).
 - [ ] A user-visible change has a line under `CHANGELOG.md`'s `## [Unreleased]` heading — **not**
       under a concrete `## [X.Y.Z]` heading, which a feature branch must never open (CLAUDE.md,
       "Release notes come from CHANGELOG.md"). Internal-only changes don't need one.
+- [ ] A decision that is hard to reverse, moves a trust boundary, changes the build/release/
+      distribution path, or rejects a non-obvious alternative has an ADR in `docs/adr/`. A PR that
+      deletes a plan document extracts that plan's decisions into ADRs first, or says below that it
+      made none (`docs/adr/README.md`).
 - [ ] Every new/changed tool call still resolves through `gated_call` or an explicit
       always-auto-approve connector, and leaves an audit trail either way.
 - [ ] No preview dict carries full content; no log line carries a credential or a
       message/document body.
 - [ ] New client code has a matching `<Name>ClientError`; new connector code catches it and
       re-raises as `RuntimeError`.
-- [ ] New module-level singletons have a reset added to `tests/conftest.py`.
+- [ ] New module-level state has a reset added to `tests/conftest.py`.
 - [ ] Comments only where the *why* is non-obvious; no restated-*what* comments.
 
 ### Only if this PR touches those files
 
 - [ ] **`src/privacyfence/*_client.py` or `src/privacyfence/connectors/**`** —
-      `scripts/qa_fixture_recorder.py --check <connector>` run against a real QA account, report
-      pasted below.
+      `scripts/qa_fixture_recorder.py --check <connector>` run against a dedicated QA account per
+      `docs/connector-qa.md`, report pasted below. Without local QA credentials, dispatch
+      `connector-live-check.yml` against the branch and link the run instead.
 - [ ] **`web/mcp_dispatch.py`, `web/routes_mcp.py`, `connector.py`'s `ToolSpec`/`ToolParam`, or
       `web/server.py`'s socket-binding/lifecycle** — `pytest tests/integration -v` run locally,
       `test_mcp_daemon_contract.py` still passes.
@@ -42,12 +52,14 @@ reason rather than leaving it blank.
 - [ ] **A dependency in `pyproject.toml`** — `scripts/update_dependency_locks.sh` run (needs `uv`)
       and the resulting `requirements/*.lock.txt` committed, or `dependency-audit.yml`'s
       `lockfile-freshness` job fails.
+- [ ] **`cloudflare/downloads/`** — `npm test`, `npm run typecheck` and `npm run dry-run` pass
+      there.
 
 ## QA fixture report
 
 <!--
-Paste the `qa_fixture_recorder.py --check` report here if the row above applies; delete this
-section otherwise.
+Paste the `qa_fixture_recorder.py --check` report, or the link to the `connector-live-check.yml`
+run, here if the row above applies; delete this section otherwise.
 
 No live QA credentials to hand (a Claude Code on the web session never has them)? Don't skip the
 row — dispatch `connector-live-check.yml` or `qa-record-fixture.yml` and link the run instead of

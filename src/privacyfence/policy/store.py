@@ -120,9 +120,8 @@ def merge_rules(rules: list[PolicyRule]) -> list[PolicyRule]:
     """Union rules that share a ``(predicate, value, conditions)`` key into one rule spanning every
     operation any of them covered, preserving first-seen order. This changes nothing about *whether*
     a call matches -- ``policy.engine.evaluate`` already treats ``rule.operations`` as an unordered
-    set membership test -- it only makes the on-disk config as compact as the redesign proposal's
-    "Model" section describes ("one sentence... Allow read, update and format on the folder...")
-    instead of one row per v1 operation key.
+    set membership test -- it only makes the on-disk config read as one sentence per intent ("allow
+    read, update and format on the folder") instead of one row per operation key.
     """
     merged: dict[tuple[str, Any, tuple[tuple[str, Any], ...]], PolicyRule] = {}
     order: list[tuple[str, Any, tuple[tuple[str, Any], ...]]] = []

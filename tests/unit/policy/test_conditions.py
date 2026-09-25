@@ -95,8 +95,9 @@ FIXTURES: dict[str, list] = {
         (None, make_ctx(raw_data=None)),
     ],
     "shared_drive_exclusion": [
-        (None, make_ctx(raw_data=SimpleNamespace(shared=False))),
-        (None, make_ctx(raw_data=SimpleNamespace(shared=True))),
+        (None, make_ctx(raw_data=SimpleNamespace(drive_id=""))),
+        (None, make_ctx(raw_data=SimpleNamespace(drive_id="0AShared"))),
+        (None, make_ctx(raw_data=SimpleNamespace(drive_id="", shared=True))),
         (None, make_ctx(raw_data=SimpleNamespace())),
         (None, make_ctx(raw_data=None)),
     ],
@@ -148,6 +149,21 @@ class TestNoAttachmentsUnknownConnector:
         selector = CONDITION_SELECTORS["no_attachments"]
         ctx = make_ctx(connector="jira", raw_data=SimpleNamespace())
         assert selector.holds(None, ctx) is False
+
+
+class TestNotSharedDrive:
+    """Drive's `shared` flag means "shared with someone", not "lives in a shared drive"; only a
+    non-empty `drive_id` identifies a shared-drive file."""
+
+    def test_a_shared_drive_file_fails(self):
+        selector = CONDITION_SELECTORS["not_shared_drive"]
+        ctx = make_ctx(raw_data=SimpleNamespace(drive_id="0AShared", shared=False))
+        assert selector.holds(None, ctx) is False
+
+    def test_a_my_drive_file_shared_with_a_colleague_holds(self):
+        selector = CONDITION_SELECTORS["not_shared_drive"]
+        ctx = make_ctx(raw_data=SimpleNamespace(drive_id="", shared=True))
+        assert selector.holds(None, ctx) is True
 
 
 class TestVocabularyCompleteness:

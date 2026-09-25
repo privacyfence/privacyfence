@@ -1,20 +1,20 @@
-"""The scope catalogue a surface offers for "add a rule" -- lifted out of ``settings_controller.py``
-at P7 of the policy v2 redesign so the bridge's ``privacyfence_propose_policy_change`` (P7) can
-share it with the Auto-accept Settings page (P6) instead of re-deriving it a second time, which is
-exactly the F10 mistake ("seven tables must agree, by hand") the redesign exists to stop
-recurring -- one phase later would have made it eight.
+"""The scope catalogue a surface offers for "add a rule".
+
+The bridge's ``privacyfence_propose_policy_change`` and the Auto-accept Settings page share this one
+definition rather than each deriving their own, because tables that must agree by hand are how the
+old rule model drifted.
 
 ``settings_controller.py`` re-exports every name here under its old, private spelling
 (``_PolicyExtraScope``, ``_POLICY_EXTRA_SCOPES``, ``_policy_scope_catalogue``, ...) so its own
-callers and tests are unaffected by the move; this module is the one definition both it and
-``gate.py``'s bridge writer now call.
+callers and tests are unaffected; this module is the one definition both it and ``gate.py``'s
+bridge writer call.
 
-``EXTRA_SCOPES`` covers the three F5 operation groups ``policy.propose.PROPOSABLE_SCOPES``
-deliberately does not offer to the reactive "Always allow" popup (see that module's own docstring):
-Apps Script's tools had no v1 predicate at all; Gmail's two filter tools and Slack's group-chat tool
-have no resource identity to scope to. Both P6's Settings page and P7's bridge tool configure them
-the same deliberate way -- pick a connector and a verb, see "what this unblocks" before committing --
-rather than reactively, off one gated call's own popup.
+``EXTRA_SCOPES`` covers the three operation groups ``policy.propose.PROPOSABLE_SCOPES`` deliberately
+does not offer to the reactive "Always allow" popup (see that module's own docstring): Apps Script's
+tools, which had no predicate at all, and Gmail's two filter tools and Slack's group-chat tool,
+which have no resource identity to scope to. The Settings page and the bridge tool configure them
+the same deliberate way -- pick a connector and a verb, see "what this unblocks" before committing
+-- rather than reactively, off one gated call's own popup.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from .registry import Verb
 
 @dataclass(frozen=True)
 class PolicyExtraScope:
-    """One of the three F5 operation groups with no ``policy.propose.PROPOSABLE_SCOPES`` entry of
+    """One of the three operation groups with no ``policy.propose.PROPOSABLE_SCOPES`` entry of
     its own. Keys are this catalogue's own ids, distinct from any ``policy.propose.SCOPES_BY_GROUP``
     key (that module already uses ``"gmail.anything"`` for its own, unrelated unconditional-drafting
     entry) -- see ``policy.scopes.NEW_SCOPE_SELECTORS``' own comment on why the predicates themselves
@@ -61,8 +61,7 @@ EXTRA_SCOPES: dict[str, PolicyExtraScope] = {
     ),
 }
 
-# Example values for an "add a rule" form's value field, keyed by v2 predicate -- the P6 counterpart
-# of the old per-connector Rules page's own RULE_HINTS (removed alongside it), scoped down to the
+# Example values for an "add a rule" form's value field, keyed by predicate, scoped down to the
 # predicates ``policy.propose.PROPOSABLE_SCOPES`` actually offers. Condition-only predicates
 # (age_threshold_days, time_window_days, ...) never appear: this catalogue writes scopes, not
 # conditions -- see ``rules_for_catalogue_entry``'s own docstring.
@@ -89,7 +88,7 @@ VALUE_HINTS: dict[str, str] = {
 
 def extra_operations_for(connector: str, verb: Verb) -> frozenset[str]:
     """Every operation key one of ``EXTRA_SCOPES``' verbs governs, for ``connector`` -- derived from
-    P1's tool registry the same way ``policy.propose.operations_for`` derives a
+    the tool registry the same way ``policy.propose.operations_for`` derives a
     ``PROPOSABLE_SCOPES`` entry's own operations, since none of these three predicates is declared
     there (see this module's own docstring)."""
     return frozenset(
@@ -103,7 +102,7 @@ def extra_operations_for(connector: str, verb: Verb) -> frozenset[str]:
 def scope_catalogue() -> list[dict[str, Any]]:
     """Every scope an "add a rule" picker offers: one entry per ``policy.propose.SCOPES_BY_GROUP``
     widening group, plus ``EXTRA_SCOPES`` above. What ``rules_for_catalogue_entry`` below validates
-    an incoming ``group`` id against, and what ``privacyfence_list_policy`` (P7) reports back as
+    an incoming ``group`` id against, and what ``privacyfence_list_policy`` reports back as
     ``scope_groups`` so a model knows which verbs a given group can actually govern before calling
     ``privacyfence_propose_policy_change``."""
     entries: list[dict[str, Any]] = []
@@ -160,8 +159,8 @@ def rules_for_catalogue_entry(group: str, value: list[str] | None, verbs: list[V
     or ``[]`` for an unrecognized group, a group none of the requested verbs govern, or (for the one
     valued extra, ``apps_script.project``) a value-needing scope submitted with none.
 
-    This is also P7's write-time validation (the redesign proposal's exit criterion "write-time
-    validation rejects a verb the scope type cannot govern"): a caller asking for a verb ``group``
+    This is also the write-time validation that rejects a verb the scope type cannot govern: a
+    caller asking for a verb ``group``
     doesn't list -- or one that derives no operation key for this group at all, which is what
     ``ProposableScope.excludes`` means -- gets no rules back, the same fail-closed-and-quiet
     response an unknown group already gets. ``gate.propose_policy_change`` turns that empty result

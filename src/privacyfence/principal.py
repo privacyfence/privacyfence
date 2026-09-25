@@ -1,9 +1,9 @@
-"""Principal identity and per-request scoping (P6).
+"""Principal identity and per-request scoping.
 
 An unseparated local-mode install has exactly one user, but the code from
 here on treats that user as ``Principal(id="local")`` — a principal like
 any other — rather than as an implicit absence of multi-tenancy. That is
-what makes org mode (P7+) additive: nothing downstream of this module needs
+what makes org mode additive: nothing downstream of this module needs
 to learn a new concept when a second principal shows up, it just starts
 seeing a second id. It is also what makes ADR 0008's local-mode multi-user
 support (a privilege-separated install with more than one OS account in its
@@ -12,7 +12,7 @@ principal is just another id this module already knew how to carry, once
 ``web/control_channel.py`` started minting one from the kernel's own peer
 credentials.
 
-This mirrors a pattern the codebase already had, twice, before this phase:
+This mirrors a pattern the codebase already had, twice, before this module:
 ``gate.py``'s ``reason_scope``/``unattended_scope`` are ``contextvars`` set
 once, centrally, by whichever surface is dispatching a call, so that call
 sites deep in the policy engine never need a "which session is this"
@@ -27,7 +27,7 @@ Verifier`` resolved it to); web/server.py's ``_PrincipalScopeMiddleware``
 connection minted the request's own ``pf_session``); and
 web/control_channel.py's own ``_LineProtocolServer._dispatch`` (the control
 channel itself, reading the connecting peer's kernel-verified identity
-directly). Org mode's OIDC/OAuth 2.1 sign-in (P7) and local mode's kernel-
+directly). Org mode's OIDC/OAuth 2.1 sign-in (ADR 0011) and local mode's kernel-
 verified OS accounts (ADR 0008) are two different ways of answering "who is
 this", but neither entry point above needed to change shape to add the
 second one — only what each resolves to.
@@ -50,8 +50,8 @@ class Principal:
     cosmetic (a label for a settings page or an audit entry), never a lookup
     key, and are empty for the ``local`` principal, exactly as today.
 
-    ``is_admin`` (P7: "Group/claim mapping decides who is an admin ...
-    versus a plain user") is
+    ``is_admin`` (org mode's group/claim mapping of who is an admin versus a
+    plain user -- see docs/org-mode-setup-guide.md's "Who is an admin") is
     resolved once, at sign-in, from whatever the org's IdP claims say
     (org_identity.py's ``principal_from_claims``) -- never recomputed
     per-request, so a change to a user's group membership takes effect on
@@ -69,9 +69,9 @@ LOCAL_PRINCIPAL = Principal(id=LOCAL_PRINCIPAL_ID)
 
 # The principal an unauthenticated org-mode HTTP request is scoped to for
 # the (brief) window before its own route's auth check runs and rejects it
-# (P7, §9.1: principal_scope() is entered once per request, before any
-# route-specific logic, including the auth check itself -- see
-# web/server.py's _PrincipalScopeMiddleware). Deliberately not
+# (principal_scope() is entered once per request, before any route-specific
+# logic, including the auth check itself -- see web/server.py's
+# _PrincipalScopeMiddleware). Deliberately not
 # LOCAL_PRINCIPAL: an org deployment conflating "not yet authenticated"
 # with "the local single-user principal" would be actively misleading if a
 # future route ever forgot to auth-gate before touching per-principal
@@ -80,13 +80,13 @@ LOCAL_PRINCIPAL = Principal(id=LOCAL_PRINCIPAL_ID)
 # defined rather than raising or falling through to another user's data.
 ANONYMOUS_PRINCIPAL = Principal(id=ANONYMOUS_PRINCIPAL_ID)
 
-# Default is LOCAL_PRINCIPAL, not None: every call site written before this
-# phase runs with no principal_scope() around it at all (daemon_main.py's
+# Default is LOCAL_PRINCIPAL, not None: every call site that predates
+# principal scoping runs with no principal_scope() around it at all (daemon_main.py's
 # startup sequence, every existing test, every connector method) and must
 # keep behaving exactly as if there were exactly one user -- which is true
 # by construction if "no scope entered" and "the local principal's scope"
-# resolve to the same thing. See this phase's own exit criterion: "local
-# mode byte-identical to before."
+# resolve to the same thing, which keeps local mode unchanged by the
+# existence of other principals.
 _principal_ctx: contextvars.ContextVar[Principal] = contextvars.ContextVar(
     "privacyfence_principal", default=LOCAL_PRINCIPAL
 )
@@ -124,9 +124,8 @@ T = TypeVar("T")
 
 class PrincipalRegistry(Generic[T]):
     """Turns a module-level singleton into a per-principal one, behind the
-    same accessor names the singleton already had (§9.2: "Each global ...
-    becomes a per-principal registry behind its existing accessor name, so
-    call sites do not change"). ``auto_accept.py``, ``audit_log.py``,
+    same accessor names the singleton already had, so call sites do not
+    change when a second principal shows up. ``auto_accept.py``, ``audit_log.py``,
     ``pii_detector.py``, ``privacy_filter.py`` and ``resource_names.py``
     each hold one of these instead of a bare ``_INSTANCE`` (or, for
     ``pii_detector``/``privacy_filter``, a small private state object
@@ -177,7 +176,7 @@ class PrincipalRegistry(Generic[T]):
     def reset(self) -> None:
         """Test-only: drop every principal's instance. Called from
         tests/conftest.py's autouse fixture, the same role clearing a bare
-        ``_INSTANCE = None`` played before this phase."""
+        ``_INSTANCE = None`` used to play."""
         with self._lock:
             self._instances.clear()
 
@@ -191,8 +190,8 @@ class PrincipalRegistry(Generic[T]):
         """A snapshot of every principal id this registry has built an
         instance for. For an *install-wide* setting -- one with no
         per-principal dimension at all, like org mode's privacy/PII policy
-        (see docs/org-mode-setup-guide.md: "there is no per-user
-        override") -- changing it has to reach every principal already
+        (see docs/org-mode-setup-guide.md's "Install-wide and per-user
+        policy") -- changing it has to reach every principal already
         holding a copy, not just whoever happened to make the change.
         ``set()``/``get()`` both resolve against ``current_principal()``
         alone, so there was no way to ask that question before.

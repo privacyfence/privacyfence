@@ -13,7 +13,8 @@ Architecture: amd64
 # scripts/build_deb.sh builds for the host it runs on (PyInstaller doesn't cross-compile) and
 # refuses a host architecture this line doesn't list. Add arm64 here together with an arm64
 # build-deb leg and its packaged lifecycle test, and to docs/platform-support.md's support matrix
-# (tests/unit/test_minimum_os_versions.py keeps the matrix and this line in step) -- #679.
+# (tests/unit/test_minimum_os_versions.py keeps the matrix and this line in step) -- see
+# docs/adr/0044-the-deb-declares-only-the-architectures-ci-builds.md.
 # The OS floor (docs/platform-support.md's support matrix; tests/unit/test_minimum_os_versions.py
 # keeps the two in step). The bundle carries its own Python, so glibc is the one system library it
 # links against: the build host's, which scripts/check_deb_glibc_floor.py checks against this

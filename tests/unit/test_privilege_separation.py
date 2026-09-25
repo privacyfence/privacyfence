@@ -1045,6 +1045,21 @@ class TestInstallerContract:
         # And that what it installs there really is this platform's installer.
         assert "install -m 0755 scripts/linux_privilege_separation.sh" in build_deb
 
+    def test_the_darwin_commands_name_the_script_the_pkg_installs(self):
+        # Every separated Mac is a .pkg install, so the commands quote the
+        # bundle's absolute path, never one relative to a checkout.
+        layout = privilege_separation.PLATFORM_LAYOUTS["darwin"]
+        packaged = "/Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh"
+
+        assert layout.status_command == f"sudo {packaged} status"
+        assert layout.enable_command == f"sudo {packaged} enable"
+        for command in (layout.status_command, layout.enable_command):
+            assert command.startswith("sudo /Applications/")
+        build_dmg = (REPO_ROOT / "scripts" / "build_dmg.sh").read_text(encoding="utf-8")
+        assert 'cp -p scripts/macos_privilege_separation.sh "${RESOURCES}/scripts/macos_privilege_separation.sh"' in (
+            build_dmg
+        )
+
     def test_the_deb_ships_the_templates_that_script_renders(self):
         # The script resolves a checkout layout first and /usr/share second;
         # a packaged install has only the latter, so a template missing from
@@ -2559,7 +2574,7 @@ class TestWindowsLayoutAudit:
 
     def test_reports_a_handoff_dir_the_group_cannot_read(self, separated_windows, monkeypatch):
         # The failure that presents as "the daemon is not running": the shim
-        # cannot read mcp_token, so it reports no daemon against one that is
+        # cannot read mcp_url, so it reports no daemon against one that is
         # running perfectly well.
         self._install_dacls(monkeypatch, separated_windows, {
             separated_windows / privilege_separation.HANDOFF_DIR_NAME: [
@@ -2569,7 +2584,7 @@ class TestWindowsLayoutAudit:
 
         problems = privilege_separation.audit_layout()
 
-        assert any("cannot reach mcp_token" in problem for problem in problems)
+        assert any("cannot read mcp_url, web_base_url" in problem for problem in problems)
 
     def test_reports_a_handoff_dir_the_group_can_write(self, separated_windows, monkeypatch):
         # Nothing in the user's session creates anything there on Windows --

@@ -3,9 +3,13 @@
 
 Run this once per organization after registering each cloud app (see the
 "For IT admins" section of docs/google-cloud-setup.md, docs/slack-setup.md,
-docs/salesforce-setup.md, and docs/atlassian-setup.md). The output file is
-what you distribute to your users — they install it via "Install/Update
-Organization Config…" on the General page of PrivacyFence Settings (the embedded web page).
+docs/salesforce-setup.md, and docs/atlassian-setup.md). For a local-mode
+bundle, the output file is what you distribute to your users — they install
+it via "Install/Update Organization Config…" on the General page of
+PrivacyFence Settings (the embedded web page). An org-mode bundle (--mode org)
+is installed on the server instead: copy it to <data>/org/org_config.json
+and restart the daemon (see docs/org-mode-setup-guide.md) — Settings has no
+install button in org mode.
 
 Telegram is not part of this bundle: its api_id/api_hash identify the
 PrivacyFence app itself (not your organization) and are baked into the
@@ -41,6 +45,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Each bundle section's org-mode connector callbacks
+# (<issuer-url>/oauth/callback/<name>); Jira and Confluence share one
+# Atlassian app and therefore one callback.
+_CONNECTOR_CALLBACKS: dict[str, tuple[str, ...]] = {
+    "google": ("gmail", "drive", "calendar", "contacts", "tasks", "apps_script"),
+    "slack": ("slack",),
+    "salesforce": ("salesforce",),
+    "atlassian": ("atlassian",),
+}
 
 
 def _canonical_payload_bytes(bundle: dict[str, Any]) -> bytes:
@@ -154,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
              "(useful for adding one more service to an already-distributed bundle).",
     )
 
-    google = parser.add_argument_group("Google (Gmail, Drive, Calendar, Contacts, Tasks)")
+    google = parser.add_argument_group("Google (Gmail, Drive, Calendar, Contacts, Tasks, Apps Script)")
     google.add_argument(
         "--google-client-secret", metavar="PATH",
         help="Path to the client_secret.json downloaded from Google Cloud Console "
@@ -197,8 +211,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--server-issuer-url", metavar="URL",
         help="This daemon's own externally-reachable origin, e.g. https://pf.acme.example.com "
              "-- required with --mode org. Used to build the fixed OAuth/OIDC redirect URIs "
-             "you register with your IdP below (<issuer-url>/oauth/idp/callback and "
-             "<issuer-url>/oauth/idp/login-callback).",
+             "you register with your IdP below (<issuer-url>/oauth/idp/callback, "
+             "<issuer-url>/oauth/idp/login-callback and <issuer-url>/oauth/stepup/callback).",
     )
     mode.add_argument(
         "--server-bind-host", default="127.0.0.1",
@@ -229,8 +243,9 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument(
         "--idp-client-id", metavar="ID",
         help="The client_id PrivacyFence is registered under with your IdP -- required with "
-             "--mode org. Register it with two redirect URIs: <server-issuer-url>/oauth/idp/"
-             "callback and <server-issuer-url>/oauth/idp/login-callback.",
+             "--mode org. Register it with three redirect URIs: <server-issuer-url>/oauth/idp/"
+             "callback, <server-issuer-url>/oauth/idp/login-callback and "
+             "<server-issuer-url>/oauth/stepup/callback.",
     )
     mode.add_argument("--idp-client-secret", metavar="SECRET", help="Paired with --idp-client-id.")
     mode.add_argument(
@@ -681,21 +696,37 @@ def main(argv: list[str] | None = None) -> int:
     summary += f", signed={'signature' in bundle}"
     print(f"Wrote {out_path} with: {summary}")
     if bundle.get("mode") == "org":
+        # Read from the bundle, not args: a --merge run without --mode org
+        # keeps the existing server/idp sections and has none of those flags set.
+        issuer = bundle["server"]["issuer_url"].rstrip("/")
         print(
-            f"Org mode: register {args.server_issuer_url}/oauth/idp/callback and "
-            f"{args.server_issuer_url}/oauth/idp/login-callback as redirect URIs for client_id "
-            f"{args.idp_client_id!r} with your IdP, if you haven't already."
+            f"Org mode: register {issuer}/oauth/idp/callback, {issuer}/oauth/idp/login-callback and "
+            f"{issuer}/oauth/stepup/callback as redirect URIs for client_id "
+            f"{bundle['idp']['client_id']!r} with your IdP, if you haven't already."
         )
+        connector_uris = [
+            f"{issuer}/oauth/callback/{name}" for section in services for name in _CONNECTOR_CALLBACKS[section]
+        ]
+        if connector_uris:
+            print("Register these redirect URIs with each connector's own app:")
+            for uri in connector_uris:
+                print(f"  {uri}")
     if "signature" in bundle:
         print(
             "This bundle is signed. The first install that reads it will trust and pin its "
             "signing key (trust-on-first-use) -- every bundle installed on that machine "
             "afterwards, including any future unsigned one, must verify against that same key."
         )
-    print(
-        'Distribute this file to your users. They install it via "Install/Update '
-        'Organization Config…" on the General page of PrivacyFence Settings.'
-    )
+    if bundle.get("mode") == "org":
+        print(
+            "Install it on the server: copy it to <data>/org/org_config.json (owner-only, mode 0600) "
+            "and restart the daemon. Settings has no install button in org mode."
+        )
+    else:
+        print(
+            'Distribute this file to your users. They install it via "Install/Update '
+            'Organization Config…" on the General page of PrivacyFence Settings.'
+        )
     return 0
 
 

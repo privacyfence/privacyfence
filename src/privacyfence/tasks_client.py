@@ -110,7 +110,7 @@ class TasksClient:
             if not os.path.exists(self._token_file):
                 raise TasksClientError(
                     f"No OAuth token found at '{self._token_file}'. "
-                    "Run with '--tasks-oauth' to authorize."
+                    "Authenticate Google Tasks from PrivacyFence Settings (Connectors), or from /connect in org mode, to authorize."
                 )
             creds = Credentials.from_authorized_user_file(self._token_file, SCOPES)
             if creds.valid:
@@ -122,12 +122,13 @@ class TasksClient:
                 except Exception as exc:
                     raise TasksClientError(
                         f"Failed to refresh Tasks OAuth token: {exc}. "
-                        "Re-run with '--tasks-oauth' to re-authorize."
+                        "Reconnect Google Tasks from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
                     ) from exc
                 self._save_token(creds)
                 return creds
             raise TasksClientError(
-                "Cached Tasks OAuth token is invalid. Re-run with '--tasks-oauth'."
+                "Cached Tasks OAuth token is invalid and cannot be refreshed. "
+                "Reconnect Google Tasks from PrivacyFence Settings (Connectors), or from /connect in org mode, to re-authorize."
             )
 
     def _save_token(self, creds: Credentials) -> None:

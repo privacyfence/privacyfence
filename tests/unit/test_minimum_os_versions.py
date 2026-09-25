@@ -74,6 +74,12 @@ def test_windows_installer_floor_matches_matrix():
     declared = re.findall(r"^MinVersion=(\S+)$", setup, flags=re.MULTILINE)
     assert declared == ["10.0"]
     assert _matrix_floor("Windows") == "Windows 10 / Windows Server 2016 (x64)"
+    # The matrix's "(x64)" is enforced only by ArchitecturesAllowed; the 64-bit
+    # install mode on its own refuses nothing.
+    allowed = re.findall(r"^ArchitecturesAllowed=(\S+)$", setup, flags=re.MULTILINE)
+    assert allowed == ["x64os"], allowed
+    mode = re.findall(r"^ArchitecturesInstallIn64BitMode=(\S+)$", setup, flags=re.MULTILINE)
+    assert mode == ["x64os"], mode
 
 
 def _deb_depends() -> str:
