@@ -57,10 +57,8 @@ successful release. See [ADR 0021](docs/adr/0021-release-tag-push-never-uses-git
 `changelog_section.py`, `tag_release.py`'s sequencing guards) — it touches no packaged artifact.
 Every `pytest.mark.packaged` test (the macOS DMG/`.pkg`, Windows installer, and `.deb` lifecycle
 smoke tests — see `docs/testing-policy.md`'s layer 6) runs only inside `build.yml`'s
-`build`/`build-windows`/`build-deb` jobs, which otherwise only trigger on an actual tag push. That
-gap is exactly what let `v4.2.0` reach a real tag broken: a `principal_id` regression that only
-`pytest.mark.packaged` could catch sat on `main` for a full cycle, and only surfaced once
-`build.yml` ran for real against the pushed tag — see `CHANGELOG.md`'s `[4.2.1]` entry and
+`build`/`build-windows`/`build-deb` jobs, which otherwise only trigger on an actual tag push, so a
+regression only a packaged test catches would otherwise first surface on a real tag — see
 [ADR 0030](docs/adr/0030-preflight-dispatches-build-yml-before-tagging.md).
 
 Before dispatching `release.yml` — dry run or real — dispatch `build.yml` itself
@@ -76,14 +74,11 @@ The `.claude/commands/cut-release.md` command runs this pre-flight automatically
 **One release tag per commit.** `setuptools_scm` resolves the version through `git describe`,
 which reports *a* tag on the commit being built rather than specifically the one whose push started
 the run — so a commit carrying two release tags builds as whichever one `describe` prefers (the
-alphabetically earlier, for two lightweight tags of the same age), not as the tag just pushed. That
-is not hypothetical: `v4.1.0a7` was tagged onto the same commit as a stuck `v4.1.0a6` and the whole
-run built, signed and tried to publish `4.1.0a6` a second time, which R2's immutability guard
-refused ([the run](https://github.com/privacyfence/privacyfence/actions/runs/35388772087)). Every job that resolves a version now runs
+alphabetically earlier, for two lightweight tags of the same age), not as the tag just pushed. Every job that resolves a version runs
 `scripts/r2_release.py check-tag` before publishing anything — as the first step in each of
 `build.yml`'s jobs, so this fails in the first few seconds instead of after a full artifact set has
 been built; `publish-pypi.yml`'s `build` job runs it after building the sdist/wheel. The fix is
-still to move the release forward onto a new commit, or to delete the unwanted tag before
+to move the release forward onto a new commit, or to delete the unwanted tag before
 retagging. A version that has already published artifacts stays published; cut the next one. See
 [ADR 0022](docs/adr/0022-one-release-tag-per-commit.md).
 
@@ -147,23 +142,20 @@ above it, and the two link definitions at the bottom updated — before tagging.
 
 Usually that means renaming `## [Unreleased]`. **Check first whether a section for that version
 already exists**, because renaming on top of one produces a *second* `## [X.Y.Z]` rather than the
-first: 4.0.0's section was opened early, while the changelog was being written, so its release PR
-must merge `[Unreleased]`'s entries into the existing `## [4.0.0]` section and correct its date
-instead of renaming anything.
+first. If a section was opened early, the release PR merges `[Unreleased]`'s entries into it and
+corrects its date instead of renaming anything.
 
 A stable tag with no matching section fails the release build at the render step, which is
 deliberate: `action-gh-release` silently keeps the release's existing body when `body_path` can't be
 read, so failing loudly is the only way not to ship the auto-generated pull-request wall by
-accident. A *duplicated* section fails the same way and for the same reason — before that guard
-existed, `changelog_section.py` matched the first heading and stopped at the next `##`, emitting
-whichever half came first, dropping the other, and exiting 0.
+accident. A *duplicated* section fails the same way and for the same reason: otherwise only one half of it
+would ship.
 
 **A still-populated `## [Unreleased]` fails the render too**, and that is the half the duplicate
 guard does not catch: do only the "correct its date" part of the step above and you are left with
-exactly one, correct `## [4.0.0]` heading and every entry from the cycle stranded above it, which
-the duplicate check is right not to complain about. Measured against the real file on 2026-09-17,
-that shipped a 142-line body containing none of the eSigner, `%LOCALAPPDATA%`,
-`privacyfence_status` or `SameSite` entries, green, at exit 0. Merging `[Unreleased]` is therefore
+exactly one, correct `## [X.Y.Z]` heading and every entry from the cycle stranded above it, which
+would ship green with none of those entries in the notes (see
+[ADR 0023](docs/adr/0023-changelog-is-the-only-source-of-release-notes.md)). Merging `[Unreleased]` is therefore
 not housekeeping to do eventually — it is what makes the release notes the release notes.
 `changelog_section.py --allow-unreleased` renders anyway, for reading a section by hand mid-cycle;
 nothing in `.github/workflows/` passes it, and a release build must not.

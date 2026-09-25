@@ -9,8 +9,6 @@ This directory documents PrivacyFence as it works in the current source tree. Ru
 - [`../CHANGELOG.md`](../CHANGELOG.md) — release history. The history this directory deliberately doesn't carry (see "Documentation rules" below) lives there.
 - [`TECHNICAL_REFERENCE.md`](TECHNICAL_REFERENCE.md) — architecture, runtime, MCP transport, configuration, state, approvals, connectors, audit logging, and packaging.
 - [`security-and-compliance.md`](security-and-compliance.md) — security boundaries, authentication, authorization, privacy controls, audit integrity, and deployment considerations.
-- [`testing-policy.md`](testing-policy.md) — test layers, CI execution, live-provider checks, and what remains manual.
-- [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — how a release reaches a user and how installer downloads are counted (the `downloads.privacyfence.eu` Worker, release manifests, and the Cloudflare resources and credentials behind them).
 
 ## User and operator guides
 
@@ -18,8 +16,6 @@ This directory documents PrivacyFence as it works in the current source tree. Ru
 - [`org-mode-operational-readiness.md`](org-mode-operational-readiness.md) — backup, restore, upgrades, restart behavior, availability, and operations.
 - [`org-mode-download-delivery.md`](org-mode-download-delivery.md) — org-mode inline and staged file delivery.
 - [`platform-support.md`](platform-support.md) — macOS, Windows, and Linux packaging/support matrix, including currently-known open items.
-- [`dev-vs-live-setup.md`](dev-vs-live-setup.md) — isolate source-development and packaged installations.
-- [`release-testing.md`](release-testing.md) — current release validation that still requires a human.
 
 ## Approval, policy, and data handling
 
@@ -42,21 +38,27 @@ The primary runtime modules for this area are `src/privacyfence/gate.py`, `appro
 
 Connector implementation lives under `src/privacyfence/connectors/`; daemon construction and per-principal connector lifecycle are in `daemon_main.py`, `connector_host.py`, and `connector_registry.py`.
 
-## Development and QA
+## Contributor documentation (GitHub only)
 
-- [`coding-and-testing-guidelines.md`](coding-and-testing-guidelines.md) — coding and test-writing expectations.
-- [`testing-policy.md`](testing-policy.md) — what runs automatically and where.
-- [`connector-live-check-setup.md`](connector-live-check-setup.md) — self-hosted live-provider runner setup.
-- [`qa-environment-setup.md`](qa-environment-setup.md) — dedicated QA accounts and reusable seed data.
-- [`connector-qa-testing.md`](connector-qa-testing.md) — extended connector/gate exploratory QA.
-- [`release-testing.md`](release-testing.md) — manual release checks that automation cannot reliably judge.
+These describe how PrivacyFence is built, tested and released. They are for people changing the
+code, and are not published on privacyfence.eu.
 
-CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tests/`, and `scripts/`.
+- [`../CONTRIBUTING.md`](../CONTRIBUTING.md) — how to propose a change: issues, forks, pull requests, license.
+- [`../CLAUDE.md`](../CLAUDE.md) — release mechanics and branch hygiene: cutting a tag, release notes, branch naming, `releases/*`, worktrees.
+- [`coding-and-testing-guidelines.md`](coding-and-testing-guidelines.md) — code and test conventions, adding a connector, and the definition of done for a pull request (§2.7).
+- [`dev-vs-live-setup.md`](dev-vs-live-setup.md) — running PrivacyFence from source without clashing with a packaged install.
+- [`testing-policy.md`](testing-policy.md) — the test layers, which workflow runs which layer, and where.
+- [`release-testing.md`](release-testing.md) — the release gates and the manual checks every release still needs.
+- [`packaging.md`](packaging.md) — how the DMG, `.pkg`, `.mcpb`, Windows installer and `.deb` are built, signed and installed.
+- [`connector-qa.md`](connector-qa.md) — QA accounts and seed data, the self-hosted live-check runner, recorded fixtures, and exploratory connector QA.
+- [`downloads-and-release-kpi.md`](downloads-and-release-kpi.md) — the R2 release archive, the `downloads.privacyfence.eu` Worker, and how downloads are counted.
+- [`images/screenshots/README.md`](images/screenshots/README.md) — how the documentation screenshots are produced.
+
+CI and build behavior is defined in `.github/workflows/`, `pyproject.toml`, `tests/` and `scripts/`.
 
 ## Architecture decisions and assets
 
 - [`adr/README.md`](adr/README.md) — Architecture Decision Records: the index of every recorded decision, when a decision needs one, the rules for keeping them, and the template. Standing docs here say what the code does; ADRs say why, and what was rejected.
-- [`images/screenshots/README.md`](images/screenshots/README.md) — screenshot generation and maintenance.
 - `images/` — diagrams and screenshots referenced by documentation.
 
 ## Documentation rules
