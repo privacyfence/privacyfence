@@ -652,8 +652,10 @@ class AuditLogger:
 
     def close(self) -> None:
         """Stop this logger's forwarder (if any) -- called once, from
-        daemon_main.run_app()'s own shutdown path. A no-op when forwarding
-        was never enabled."""
+        daemon_main.run_app()'s own shutdown path, on the install's logger.
+        Every principal's logger shares that one forwarder (see
+        ``_InstallAuditSettings``), so this stops forwarding for all of
+        them. A no-op when forwarding was never enabled."""
         if self._forwarder is not None:
             self._forwarder.stop()
 
@@ -1037,11 +1039,35 @@ def _fallback_log_dir() -> str:
     return str(paths.user_dir(principal) / "logs" / "audit")
 
 
+@dataclass
+class _InstallAuditSettings:
+    """The install-wide values every principal's logger carries, not just
+    the one ``init_audit_logger()`` builds. In org mode each person's
+    logger is built lazily by ``_REGISTRY``'s factory; without these it
+    would have no forwarder (so that person's approve/deny decisions never
+    reach the central sink) and an empty ``deployment_id``."""
+
+    deployment_id: str = ""
+    security_config_hash: str = ""
+    forwarder: "AuditForwarder | None" = None
+
+
+_INSTALL_SETTINGS = _InstallAuditSettings()
+
+
+def _build_principal_logger() -> AuditLogger:
+    settings = _INSTALL_SETTINGS
+    return AuditLogger(
+        _fallback_log_dir(), deployment_id=settings.deployment_id,
+        security_config_hash=settings.security_config_hash, forwarder=settings.forwarder,
+    )
+
+
 # PrincipalRegistry.get() already serializes construction per principal
 # (see that class's own docstring on why it needs to be thread-safe), so
 # the double-checked-locking dance the original bare singleton needed here
 # is now the registry's job, not this module's.
-_REGISTRY: PrincipalRegistry[AuditLogger] = PrincipalRegistry(lambda: AuditLogger(_fallback_log_dir()))
+_REGISTRY: PrincipalRegistry[AuditLogger] = PrincipalRegistry(_build_principal_logger)
 
 
 def get_audit_logger() -> AuditLogger:
@@ -1061,6 +1087,9 @@ def set_security_config_hash_for_all_principals(value: str) -> list[str]:
     recorded (this field's whole purpose, SEC-23) gets a stale answer
     otherwise.
     """
+    # First, so a logger built for a principal first seen during or after
+    # the sweep below starts with the new value too.
+    _INSTALL_SETTINGS.security_config_hash = value
     updated: list[str] = []
     for principal_id in _REGISTRY.principal_ids():
         with principal_scope(Principal(id=principal_id)):
@@ -1076,6 +1105,14 @@ def init_audit_logger(
     security_config_hash: str = "",
     forwarder: "AuditForwarder | None" = None,
 ) -> AuditLogger:
+    """Install the current principal's logger at ``log_dir``, and record
+    ``deployment_id``, ``security_config_hash`` and ``forwarder`` as the
+    install's, for every other principal's logger built after this."""
+    global _INSTALL_SETTINGS
+    _INSTALL_SETTINGS = _InstallAuditSettings(
+        deployment_id=deployment_id, security_config_hash=security_config_hash,
+        forwarder=forwarder,
+    )
     return _REGISTRY.set(AuditLogger(
         log_dir, deployment_id=deployment_id, security_config_hash=security_config_hash,
         forwarder=forwarder,

@@ -1,7 +1,6 @@
 /**
  * Discovery-file constants, ported from what web/server.py and
- * web/mcp_auth.py write on the daemon side (docs/https-connector-refactor-
- * plan.md §12's "Gap found while implementing P2" / D11):
+ * web/mcp_auth.py write on the daemon side (ADR 0012):
  *
  * - <data dir>/mcp_url   -- written by WebServer.start() once the
  *   embedded HTTP server is actually bound, cleared on stop(). The direct
@@ -11,10 +10,10 @@
  * ``<data dir>`` mirrors paths.py's ``data_dir()``: ``~/.privacyfence`` on
  * POSIX, ``%LOCALAPPDATA%\PrivacyFence`` on Windows (not the same dotfile
  * name reused under ``%USERPROFILE%`` -- see that function's own docstring
- * for why). This shim has no install-mode branch of its own (dev-checkout
- * vs. bundled) because it only ever runs from a built ``.mcpb`` -- Claude
- * Desktop never spawns it out of a source tree -- so it always resolves the
- * per-user data dir, matching paths.py's bundled/installed branch.
+ * for why), matching paths.py's bundled/installed branch. A source
+ * checkout's daemon uses the checkout root instead, which this shim cannot
+ * work out for itself; scripts/dev_start.sh passes it in (see
+ * ``DEV_DATA_DIR_ENV``).
  *
  * Privilege separation adds one more branch, and it is the reason this path goes
  * through ``handoffDir()`` rather than ``dataDir()`` directly: on an install
@@ -51,8 +50,25 @@ export function windowsDataDir(): string {
   return path.join(localAppData, "PrivacyFence");
 }
 
-/** Exported only for tests -- see windowsDataDir()'s docstring. */
-export function dataDir(): string {
+/** The environment variable scripts/dev_start.sh sets in the MCP entry it
+ * registers: the source daemon's own ``paths.data_dir()``, which for a
+ * checkout is the checkout root rather than the per-user directory below.
+ * Without it a dev shim looks for ``mcp_url`` and the control socket where
+ * no source daemon writes them. Ignored on a privilege-separated install,
+ * for the same reason privilegeSeparationRoot() refuses
+ * PRIVACYFENCE_SYSTEM_ROOT there: a user-session variable must not redirect
+ * the shim away from a provisioned install. tests/unit/test_dev_start.py
+ * checks dev_start.sh uses this exact name. */
+export const DEV_DATA_DIR_ENV = "PRIVACYFENCE_DEV_DATA_DIR";
+
+/** The data directory paths.py's ``data_dir()`` resolves on an unseparated
+ * install: ``DEV_DATA_DIR_ENV`` when set to an absolute path, otherwise the
+ * per-user directory. Exported only for tests. */
+export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
+  const devDataDir = env[DEV_DATA_DIR_ENV];
+  if (devDataDir && path.isAbsolute(devDataDir) && privilegeSeparationRoot(env) === null) {
+    return devDataDir;
+  }
   return process.platform === "win32" ? windowsDataDir() : path.join(os.homedir(), ".privacyfence");
 }
 
@@ -144,7 +160,7 @@ export function privilegeSeparationRoot(env: NodeJS.ProcessEnv = process.env): s
  * privilege-separated install. Exported only for tests. */
 export function handoffDir(env: NodeJS.ProcessEnv = process.env): string {
   const root = privilegeSeparationRoot(env);
-  return root === null ? dataDir() : path.join(root, "handoff");
+  return root === null ? dataDir(env) : path.join(root, "handoff");
 }
 
 export const MCP_URL_FILE = path.join(handoffDir(), "mcp_url");
@@ -204,7 +220,7 @@ export const MAX_SUN_PATH_BYTES = 100;
  * use handoffDir()" answers happen to coincide for it without being the
  * same question. */
 export function controlSocketDir(env: NodeJS.ProcessEnv = process.env): string {
-  return privilegeSeparationRoot(env) !== null ? handoffDir(env) : path.join(dataDir(), "authority");
+  return privilegeSeparationRoot(env) !== null ? handoffDir(env) : path.join(dataDir(env), "authority");
 }
 
 /**
@@ -258,15 +274,9 @@ export function pipeNameFor(dataDirPath: string): string {
  * directory that might move; only the ACL on it changes with separation,
  * not the name (the Python docstring's own note, restated here verbatim
  * because it is exactly as easy to get backwards in this file as in that
- * one). ``env`` is accepted for symmetry with every other function in this
- * section even though ``dataDir()`` itself is not yet env-parameterized --
- * see that function's own definition above; this shim is a single process
- * per launch, so ``process.env`` there is never something a caller needs to
- * override independently of the real environment the way tests override it
- * elsewhere in this file. */
+ * one). */
 export function windowsControlPipeName(env: NodeJS.ProcessEnv = process.env): string {
-  void env;
-  return pipeNameFor(dataDir());
+  return pipeNameFor(dataDir(env));
 }
 
 /** Reads and validates the daemon's current /mcp URL. Throws if the file is

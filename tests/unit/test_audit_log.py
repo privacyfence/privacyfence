@@ -19,7 +19,9 @@ from privacyfence.audit_log import (
     current_week,
     get_audit_logger,
     init_audit_logger,
+    set_security_config_hash_for_all_principals,
 )
+from privacyfence.principal import Principal, principal_scope
 
 
 def make_entry(**overrides) -> AuditEntry:
@@ -850,6 +852,38 @@ class TestForwarding:
         logger = AuditLogger(str(tmp_path), forwarder=forwarder)
         logger.close()
         assert forwarder.stopped is True
+
+    def test_another_principals_decision_reaches_the_install_forwarder(self, tmp_path, monkeypatch):
+        # Org mode: init_audit_logger() builds the install's logger, and each
+        # person's logger is built later by the registry's factory. That
+        # logger must carry the same forwarder and deployment_id.
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path / "data")
+        forwarder = self._FakeForwarder()
+        init_audit_logger(
+            str(tmp_path / "install-audit"), deployment_id="dep-1",
+            security_config_hash="hash-1", forwarder=forwarder,
+        )
+
+        with principal_scope(Principal(id="alice")):
+            alice_logger = get_audit_logger()
+            alice_logger.record(make_entry(decision="denied"))
+
+        assert alice_logger._log_dir == tmp_path / "data" / "users" / "alice" / "logs" / "audit"
+        assert len(forwarder.submitted) == 1
+        assert forwarder.submitted[0]["decision"] == "denied"
+        assert forwarder.submitted[0]["deployment_id"] == "dep-1"
+        assert forwarder.submitted[0]["security_config_hash"] == "hash-1"
+
+    def test_policy_hash_change_reaches_principals_first_seen_afterwards(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(paths, "data_dir", lambda: tmp_path / "data")
+        forwarder = self._FakeForwarder()
+        init_audit_logger(str(tmp_path / "install-audit"), security_config_hash="old", forwarder=forwarder)
+
+        set_security_config_hash_for_all_principals("new")
+        with principal_scope(Principal(id="bob")):
+            get_audit_logger().record(make_entry())
+
+        assert forwarder.submitted[0]["security_config_hash"] == "new"
 
     def test_close_without_forwarder_does_not_error(self, tmp_path):
         logger = AuditLogger(str(tmp_path))

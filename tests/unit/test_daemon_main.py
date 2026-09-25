@@ -153,7 +153,7 @@ class TestResolvePath:
 
 class TestResolveAuthorityPath:
     @pytest.mark.skipif(
-        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a genuine finding from promoting this suite to Windows CI (docs/testing-policy.md's Phase 2.1), tracked in `git show be78e7ee^:docs/windows-support-plan.md` rather than guessed at here",
+        sys.platform == "win32", reason="_resolve_path()/os.path.join() give a different (and, for the absolute-path case, wrong-drive) result on Windows for a POSIX-style path literal like the ones this test hardcodes -- a known gap, found when this suite first ran on Windows CI",
     )
     def test_absolute_path_is_returned_unchanged(self):
         assert daemon_main._resolve_authority_path("/etc/hosts") == "/etc/hosts"
@@ -1376,11 +1376,10 @@ class TestSetupLogging:
 
 
 # ---------------------------------------------------------------------------- #
-# _maybe_start_web_server -- since P10 (see docs/https-connector-refactor-
-# plan.md §12, D6) the web approval UI is unconditionally installed and the
-# embedded server unconditionally started in local mode -- there is no
-# native alternative left to select, and no config key that turns the
-# server off entirely (§12: "P10 is the one phase with no rollback"). web.
+# _maybe_start_web_server -- the web approval UI is unconditionally installed
+# and the embedded server unconditionally started in local mode -- there is
+# no native alternative to select (ADR 0001), and no config key that turns
+# the server off entirely. web.
 # mcp.enabled/web.settings.enabled remain independent levers for those two
 # surfaces specifically; either can be on or off without affecting whether
 # the server itself (and /approvals) runs.
@@ -1455,8 +1454,7 @@ class TestMaybeStartWebServer:
         assert result.mcp_url == f"{result.base_url}/mcp"
 
     def test_web_mode_registry_gets_the_real_base_url_once_started(self, monkeypatch, tmp_path):
-        # P3: gate.py's pending-result URL (docs/https-connector-refactor-
-        # plan.md §5.2 point 4) needs the registry to know the server's real
+        # gate.py's pending-result URL needs the registry to know the server's real
         # base_url, not just exist -- set once the server actually starts,
         # not at construction time.
         from privacyfence.web_approval_ui import get_web_approval_ui
@@ -1833,8 +1831,7 @@ class TestMaybeStartWebServer:
 
 
 # ---------------------------------------------------------------------------- #
-# _maybe_start_web_server -- org mode (P7, docs/https-connector-refactor-
-# plan.md §4/§9.4). org_config.json's "mode" selects this branch; every
+# _maybe_start_web_server -- org mode. org_config.json's "mode" selects this branch; every
 # TestMaybeStartWebServer test above passes no org_config at all (or {}),
 # so mode always defaults to "local" there -- this class is additive.
 # ---------------------------------------------------------------------------- #

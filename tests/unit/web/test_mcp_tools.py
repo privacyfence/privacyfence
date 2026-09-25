@@ -1,6 +1,5 @@
 """Tests for mcp_tools.py's ``ToolSpec`` -> MCP ``Tool``/``CallToolResult``
-translation, plus TST-02's coverage gap (`git show ba1ec76e^:docs/
-security-remediation-plan.md` phase 1.9) for ``privacyfence_begin_unattended_
+translation, plus TST-02's coverage gap for ``privacyfence_begin_unattended_
 session`` refused when disabled. TST-02's other two original gaps -- a
 rule-change proposal denied inside an unattended session, and the v1
 rule-listing tool's disclosure being audited -- went with the deprecated v1

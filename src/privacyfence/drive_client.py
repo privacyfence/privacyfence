@@ -1538,8 +1538,7 @@ class DriveClient:
 
     def download_file_bytes(self, file_id: str) -> dict[str, Any]:
         """Org-mode inline/staged delivery entry point (connectors/
-        drive.py's ``_download_file``, docs/org-mode-download-delivery-
-        plan.md Phase 2): the same complete-file fetch ``download_file``
+        drive.py's ``_download_file``, ADR 0017): the same complete-file fetch ``download_file``
         does, returned as bytes instead of written to disk --
         ``download_file``'s own ``destination_dir`` doesn't correspond to
         anything reachable on an org-mode server. Returns a dict with

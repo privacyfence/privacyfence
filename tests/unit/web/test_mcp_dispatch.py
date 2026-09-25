@@ -258,7 +258,7 @@ class TestCall:
         assert len(connector.calls) == 1
 
     async def test_a_failed_call_is_not_reused_by_a_later_sequential_call(self):
-        # B3 (`git show 453ae02e:local-mode-fixes-plan.md`): a failed call is popped from
+        # A failed call is popped from
         # _inflight once its exception is set, so a *new*, sequential call
         # in the same dedupe window re-runs instead of replaying the same
         # failure -- unlike a concurrent retry racing the original call
@@ -663,8 +663,7 @@ class TestToolsChangedBroadcast:
 
 
 class TestAwaitApproval:
-    """privacyfence_await_approval's handler (P3, `git show 96cd5af4^:docs/https-
-    connector-refactor-plan.md` §5.2 point 7): long-poll the registry, status only."""
+    """privacyfence_await_approval's handler: long-poll the registry, status only."""
 
     async def test_no_registry_reports_every_id_as_unknown(self):
         dispatcher = _dispatcher({})  # registry=None, the default

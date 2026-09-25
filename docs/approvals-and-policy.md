@@ -473,7 +473,7 @@ Limits:
 
 Reading a document with `drive_get_file_content` is different: it fetches at most the first
 100 KB (102,400 bytes) of the file, and that text is what the AI system receives. The card shows,
-and the PII check scans, only the first 2,000 characters of it. A PDF that fits within 100 KB is
+and the PII check scans, all of that text. A PDF that fits within 100 KB is
 rendered on the card as a PDF when the file's content is allowed by the privacy filter. A sheet
 read (`drive_sheets_get_values`) shows and scans the first 50 rows.
 

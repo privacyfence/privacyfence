@@ -72,6 +72,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `org-mode-download-delivery.md` are removed; their content is in the pages above. The approval
   screenshots show the current approval list.
 
+### Security
+
+- **An organization server trusts `X-Forwarded-For`/`X-Forwarded-Proto` only from the addresses
+  given with `--server-trusted-proxy`.** Before, its web server also trusted them from
+  `127.0.0.1` and `::1` (or from `$FORWARDED_ALLOW_IPS`) by default, so any local process could
+  change the scheme and client address a request appeared to have. A reverse proxy on the same
+  host now has to be listed, as `--server-trusted-proxy 127.0.0.1`, which the setup guide's
+  example already does.
+- **Reading a Drive document shows and PII-checks everything the AI system receives.** The
+  approval card and the PII check used to see only the first 2,000 characters, while approving
+  released up to 100 KB of text, so an IBAN or ID number further into a document raised no
+  warning.
+- **Organization mode forwards each person's audit entries too.** With audit forwarding enabled,
+  only the install's own log reached syslog or the HTTPS endpoint. The approve and deny decisions
+  in each person's log were never sent, and they carried no `deployment_id`. They now reach the
+  same destination with the install's `deployment_id`.
+
 ## [4.5.0] — 2026-09-25
 
 ### Added

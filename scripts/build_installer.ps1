@@ -1,7 +1,6 @@
 # Build PrivacyFence-<version>-setup.exe -- the Windows installer.
 #
-# Written for Phase 4 (B4 in `git show be78e7ee^:docs/windows-linux-support-
-# plan.md`). PowerShell, not bash, since this step only ever runs on a
+# PowerShell, not bash, since this step only ever runs on a
 # Windows build host -- mirrors build_dmg.sh being bash because it only
 # ever runs on macOS.
 #

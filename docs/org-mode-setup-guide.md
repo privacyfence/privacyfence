@@ -338,9 +338,9 @@ proxy in front of it that:
 - does not buffer responses: the approvals page and `/mcp` stream events;
 - allows request bodies of at least 50 MB, the size of an upload slot ([section 13](#13-file-delivery)).
 
-The daemon trusts forwarded headers from every address you list with `--server-trusted-proxy`, and
-also from `127.0.0.1` and `::1`, which its web server trusts by default. List the proxy explicitly
-anyway. A proxy on another host is trusted only when listed.
+The daemon trusts forwarded headers only from the addresses you list with
+`--server-trusted-proxy`, and from nowhere by default. A proxy on the same host must be listed as
+`127.0.0.1` (or `::1`) like any other.
 
 Rate-limit `/register`, `/authorize` and `/token` at the proxy. `/register` accepts anonymous
 requests by design (that is dynamic client registration). The daemon caps registered clients at
@@ -744,11 +744,10 @@ are removed and the file is rewritten.
   `Connector registry is at capacity`, `registered-client limit`, and failures to reach the identity
   provider.
 - **Disk:** the data directory grows with audit logs and staged downloads.
-- **Audit forwarding:** with `--enable-audit-forwarding`, the install's audit log
-  (`authority/logs/audit/`) is also sent to syslog or your HTTPS endpoint. The local log stays the
-  authoritative record, with a hash chain over its entries. Each person's decisions are recorded in
-  their own log under `users/<principal>/logs/audit/`; check that your collector receives the
-  entries you need, and collect those directories as well if it does not.
+- **Audit forwarding:** with `--enable-audit-forwarding`, every audit entry is also sent to syslog
+  or your HTTPS endpoint: the install's own log (`authority/logs/audit/`) and each person's
+  (`users/<principal>/logs/audit/`), all carrying the install's `deployment_id`. The local logs
+  stay the authoritative record, each with a hash chain over its entries.
 
 ### Key and secret rotation
 

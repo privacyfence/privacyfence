@@ -1,7 +1,6 @@
 ; PrivacyFence Windows installer (Inno Setup 6).
 ;
-; `git show be78e7ee^:docs/windows-support-plan.md` Phase 4 (B4 in the now-removed docs/windows-linux-support-
-; plan.md) -- the Windows analogue of build_dmg.sh's DMG: one distributable
+; The Windows analogue of build_dmg.sh's DMG: one distributable
 ; carrying both the daemon and the Claude Desktop extension (.mcpb), plus
 ; the privilege-separation step (ADR 0003 decision 4) that installs the
 ; daemon as a Windows service and the companion's sign-in task, and the
@@ -38,8 +37,7 @@
 #define AppName "PrivacyFence"
 #define AppExeName "PrivacyFenceApp.exe"
 #define AliasExeName "privacyfence-app.exe"
-; Matches daemon.ts's Windows DEFAULT_APP_PATH (docs/windows-support-
-; plan.md Phase 7 / B6) -- keep these in sync if this changes.
+; Matches daemon.ts's Windows DEFAULT_APP_PATH -- keep these in sync if this changes.
 #define InstallDirName "PrivacyFence"
 ; #428 Phase 4 (B5c). Both of these are created by
 ; scripts/windows_privilege_separation.ps1's `enable` -- which, since ADR 0003
@@ -444,7 +442,7 @@ begin
   Result := True;
 end;
 
-(* #428 Phase 2 (local-mode-fixes-plan.md §2.1): stop whatever a previous
+(* ADR 0045: stop whatever a previous
    install left running BEFORE Setup copies a single file over it.
 
    PrepareToInstall is Inno Setup's own hook for exactly this timing -- it
@@ -497,8 +495,7 @@ begin
       Log('PrepareToInstall: sc.exe stop exit code = ' + IntToStr(ResultCode));
     end;
 
-    (* Poll `sc.exe query` for up to 30s (60 attempts, 500ms apart) -- the
-       same 30s local-mode-fixes-plan.md §2.1 names. A nonzero exit from
+    (* Poll `sc.exe query` for up to 30s (60 attempts, 500ms apart). A nonzero exit from
        `sc.exe query` means the service does not exist at all (a fresh
        install, or one already uninstalled), which ends the wait
        immediately rather than polling out the full 30s for an answer that

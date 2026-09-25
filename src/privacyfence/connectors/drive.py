@@ -41,7 +41,7 @@ _UPLOAD_PREVIEW_MAX_BYTES = 5_000_000
 # not just a preview-read cap like _UPLOAD_PREVIEW_MAX_BYTES above.
 _UPLOAD_MAX_BYTES = 50_000_000
 
-# B4 (`git show 453ae02e:local-mode-fixes-plan.md`): reuses the same 5MB value gmail.py's
+# Reuses the same 5MB value gmail.py's
 # _ATTACHMENT_PREFETCH_MAX_BYTES already uses for "small enough to just
 # fetch the whole thing instead of a bounded prefetch" -- see
 # _download_file's own PII-scan comment for why a *truncated* prefetch is
@@ -792,8 +792,12 @@ class DriveConnector(Connector):
             filtered_data=filtered,
             gate="review",
             preview=preview,
-            details_text=text[:2000],
-            pii_scan_text=text[:2000],
+            # The whole of what the AI receives (up to get_file_content's
+            # cap), not a prefix: a shorter card would let the reviewer
+            # approve text they never saw, and PII past the cut would go
+            # unflagged.
+            details_text=text,
+            pii_scan_text=text,
             visibility={
                 "File metadata": category_policy("drive_privacy", "file_metadata"),
                 "Document content": category_policy("drive_privacy", "file_content"),
@@ -914,8 +918,7 @@ class DriveConnector(Connector):
         # File/Owner/Size/Modified are known via drive_get_file_metadata (or
         # this call's own fetch of it above) -- the only genuinely new fact
         # from approving this call is *how* the file reaches Claude, which
-        # is mode/delivery-conditional (docs/org-mode-download-delivery-
-        # plan.md's "Gate preview honesty"): local mode's bytes never leave
+        # is mode/delivery-conditional (ADR 0017): local mode's bytes never leave
         # this machine; org mode's own preview must say plainly whether
         # bytes are about to flow into Claude's context or stay
         # server-side behind a one-time link, using drive_file.size (the

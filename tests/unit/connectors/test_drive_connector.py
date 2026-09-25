@@ -225,6 +225,23 @@ class TestGetFileContentBugFix:
         assert kwargs["preview"]["Owner"] == "alice@example.com"  # still shown in the popup
         assert "alice@example.com" not in kwargs["pii_scan_text"]
 
+    async def test_card_and_pii_scan_cover_everything_released(self, gated_call_spy):
+        # A long document: the card and the PII check must see exactly what
+        # the AI receives, not a prefix -- an IBAN far into the text still
+        # has to be flagged.
+        connector, client = make_connector()
+        long_text = ("Quarterly narrative. " * 2000) + "Pay to DE89370400440532013000."
+        content = DriveFileContent(file=make_file(), content_text=long_text)
+        client.get_file_content.return_value = content
+
+        await connector.call("drive_get_file_content", {"file_id": "f1"})
+
+        kwargs = gated_call_spy[0]
+        released = kwargs["filtered_data"]["content"]
+        assert released == long_text
+        assert kwargs["details_text"] == released
+        assert kwargs["pii_scan_text"] == released
+
 
 class TestGetFileContentColorSidecar:
     """DriveFileContent's highlights/text_colors only reach filtered_data

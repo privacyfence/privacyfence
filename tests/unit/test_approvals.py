@@ -1,6 +1,5 @@
 """Unit tests for privacyfence.approvals.PendingApprovalRegistry -- the
-deferred-approval protocol's domain object (docs/https-connector-refactor-
-plan.md §5-§6). See that module's own docstring for the two-layer
+deferred-approval protocol's domain object. See that module's own docstring for the two-layer
 answer()/finalize() design these tests exercise directly, without gate.py's
 own orchestration in the way.
 """

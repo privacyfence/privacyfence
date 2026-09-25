@@ -459,7 +459,7 @@ runtime or in review, so work through them deliberately.
 | Interactive auth: a `run_<name>_oauth()` and `--<name>-oauth` flag | `daemon_main.py` | review |
 | Settings page: connector list, label, org-bundle section, client class | `settings_controller.py`: `ALL_CONNECTORS`, `_CONNECTOR_LABEL_OVERRIDES`, `ORG_CONFIG_SERVICE`, and for Google `GOOGLE_CONNECTORS`/`_GOOGLE_CLIENTS` | review |
 | Org-mode per-user connect page: scopes, label, row | `web/routes_connect.py` | review |
-| Explicit PyInstaller hidden import | `scripts/pyinstaller_common.py`'s `privacyfence.connectors.*` list | review |
+| Explicit PyInstaller hidden import | `scripts/pyinstaller_common.py`'s `privacyfence.connectors.*` list | **enforced**: `tests/unit/test_pyinstaller_hidden_imports.py` (the list equals the modules in `connectors/`) |
 | Approval-card icon (real brand asset only) | `src/privacyfence/resources/connector_icons/<name>.png` | optional; no icon renders cleanly |
 
 **QA and docs**

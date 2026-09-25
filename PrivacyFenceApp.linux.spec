@@ -1,8 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
 # PyInstaller spec for PrivacyFenceApp (Linux onedir build) -- the Linux equivalent of
-# PrivacyFenceApp.spec's macOS .app, packaged into a .deb by scripts/build_deb.sh (see
-# `git show be78e7ee^:docs/linux-local-deb-packaging-plan.md`, Phase 1).
+# PrivacyFenceApp.spec's macOS .app, packaged into a .deb by scripts/build_deb.sh (see ADR 0018
+# for why the .deb is a self-contained PyInstaller bundle).
 #
 # Produces:
 #   dist/PrivacyFenceApp/
@@ -33,7 +33,7 @@
 #
 # Notes:
 #   - Run on the target architecture -- PyInstaller doesn't cross-compile, so an arm64 build
-#     needs an arm64 build host (`git show be78e7ee^:docs/linux-local-deb-packaging-plan.md` P4.2).
+#     needs an arm64 build host (ADR 0044: the .deb declares only the architectures CI builds).
 #   - `.deb` packaging (debian/ metadata, dpkg-deb, lintian) is handled by scripts/build_deb.sh,
 #     not this spec -- this spec's only job is producing the onedir bundle.
 
@@ -88,10 +88,9 @@ daemon_exe = EXE(
     bootloader_ignore_signals=False,
     # Unlike PrivacyFenceApp.spec's strip=False (kept that way there to stay safe for macOS
     # codesigning), Linux binaries built here get stripped -- there's no signing step to worry
-    # about, and lintian's `unstripped-binary-or-object` check (scripts/build_deb.sh's lint gate,
-    # P4.3 in `git show be78e7ee^:docs/linux-local-deb-packaging-plan.md`) treats leaving debug symbols in as an error
-    # for a shipped .deb. Verified this doesn't break the frozen app (see that plan's Phase 1/7
-    # notes).
+    # about, and lintian's `unstripped-binary-or-object` check (scripts/build_deb.sh's lint gate)
+    # treats leaving debug symbols in as an error for a shipped .deb. The frozen app still runs
+    # stripped: build.yml's packaged .deb lifecycle test starts it.
     strip=True,
     upx=True,
     console=False,      # no terminal window
