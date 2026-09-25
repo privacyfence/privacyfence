@@ -37,7 +37,9 @@
 #define AppName "PrivacyFence"
 #define AppExeName "PrivacyFenceApp.exe"
 #define AliasExeName "privacyfence-app.exe"
-; Matches daemon.ts's Windows DEFAULT_APP_PATH -- keep these in sync if this changes.
+; The name the PrivacyFence service's binPath (windows_privilege_separation.ps1's
+; $DefaultDaemonExecName) and the .mcpb shim (daemon.ts's windowsDefaultAppPaths())
+; start the daemon by -- keep all three in sync if this changes.
 #define InstallDirName "PrivacyFence"
 ; Both of these are created by
 ; scripts/windows_privilege_separation.ps1's `enable` -- which, per ADR 0003
