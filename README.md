@@ -1,8 +1,12 @@
 # PrivacyFence
 
-**Human control and policy enforcement for AI access to enterprise data.**
+**AI access without giving AI the keys.** Approve the sensitive. Automate the routine.
 
-PrivacyFence is a local enterprise AI governance layer for macOS, Windows, and Linux. It sits between an MCP-compatible AI assistant and the business systems it can access, so data reads and actions are reviewed, governed, and logged before they are executed.
+PrivacyFence is an open-source privacy and approval gateway between AI assistants and your business systems. It connects MCP-compatible assistants such as Claude Desktop and Claude Code to Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence, Telegram, and more.
+
+PrivacyFence enforces, independently of the AI, what an assistant may see and do. Sensitive reads and consequential actions require human approval, while routine requests can be automated by policy. Optional PII detection runs locally before personal data reaches the AI, and every decision is audited.
+
+PrivacyFence runs on an employee’s own computer (macOS, Windows, or Linux) or as a central deployment on infrastructure the organization controls, allowing web clients such as claude.ai to connect as well. Connector credentials stay with PrivacyFence, never with the AI client, and no data passes through PrivacyFence-operated servers — there are none.
 
 Instead of granting an AI assistant broad, persistent access and relying on the assistant to use it safely, PrivacyFence applies an independent control point:
 

@@ -1,0 +1,6 @@
+# privacyfence.eu welcomes every crawler: search engines, AI search and AI training alike.
+# See docs/adr/0048-every-crawler-is-allowed-including-ai-training.md.
+User-agent: *
+Allow: /
+
+Sitemap: https://privacyfence.eu/sitemap.xml

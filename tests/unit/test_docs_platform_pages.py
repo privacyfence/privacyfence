@@ -100,7 +100,7 @@ def test_the_download_page_offers_every_installer_platform():
     # the grid they go into), so both halves have to be there.
     page = DOWNLOAD_PAGE.read_text(encoding="utf-8")
     assert 'id="download-grid"' in page
-    assert '<script src="download.js"' in page
+    assert re.search(r'<script src="(?:/download/)?download\.js"', page), "the page does not load download.js"
     script = DOWNLOAD_SCRIPT.read_text(encoding="utf-8")
     table = script.split("const PLATFORMS = {", 1)[1].split("};", 1)[0]
     offered = set(re.findall(r"^\s*'([a-z0-9-]+)':\s*\{", table, flags=re.MULTILINE))
