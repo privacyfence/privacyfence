@@ -372,8 +372,7 @@ server {
 }
 
 server {
-    listen 443 ssl;
-    http2 on;
+    listen 443 ssl http2;
     server_name pf.acme.example.com;
 
     ssl_certificate     /etc/letsencrypt/live/pf.acme.example.com/fullchain.pem;
@@ -400,6 +399,10 @@ server {
 ```
 
 `proxy_read_timeout` is long because a tool call can wait for a person to approve it.
+
+`listen 443 ssl http2` works on the nginx 1.24 that Ubuntu 24.04 ships. From nginx 1.25.1,
+`http2` on `listen` is deprecated in favour of a separate `http2 on;` line, which older versions
+reject as an unknown directive; switch to it only on a newer nginx.
 
 ### TLS in the daemon instead
 
