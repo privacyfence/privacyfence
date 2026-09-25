@@ -361,7 +361,7 @@ and "non-private events"; add any other condition by editing `settings.yaml`.
 | `no_external_attendees` | — | every attendee's address contains your own domain |
 | `no_conferencing_link` | — | the event has no meeting link |
 | `not_private` | — | the event's visibility is not private |
-| `not_shared_drive` | — | Google Drive reports the file as not shared. Despite the name, this reads Drive's "shared" flag, which Drive does not set for files in a shared drive — so it does not exclude shared-drive files |
+| `not_shared_drive` | — | the file is not in a shared drive (it lives in someone's My Drive, whether or not it is shared with others) |
 | `no_contact_info_change` | — | a contact edit changes no email address or phone number |
 | `in_existing_thread` | — | the Slack message is a reply in an existing thread |
 

@@ -236,7 +236,7 @@ class V1Reference:
 
     def _rule_shared_drive_exclusion(self, _v, ctx):
         f = self._file_from(ctx.raw_data)
-        return not getattr(f, "shared", False)
+        return not getattr(f, "drive_id", "")
 
     # ── Slack ─────────────────────────────────────────────────────────────
 

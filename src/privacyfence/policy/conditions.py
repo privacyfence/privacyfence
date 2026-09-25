@@ -140,8 +140,10 @@ def _not_private_holds(_value: Any, ctx: ReviewContext) -> bool:
 
 
 def _not_shared_drive_holds(_value: Any, ctx: ReviewContext) -> bool:
+    # A shared-drive file is identified by a non-empty driveId; Drive's "shared" flag means
+    # "shared with someone" and is not set for shared-drive files.
     f = _file_from(ctx.raw_data)
-    return not getattr(f, "shared", False)
+    return not getattr(f, "drive_id", "")
 
 
 def _no_contact_info_change_holds(_value: Any, ctx: ReviewContext) -> bool:
