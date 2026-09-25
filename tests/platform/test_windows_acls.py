@@ -1,4 +1,4 @@
-"""#428 Phase 4 (B5c): NTFS ACLs, against a real filesystem.
+"""NTFS ACLs, against a real filesystem.
 
 Every other test of this feature works on a model. ``windows_acl``'s audit
 functions take a list of dataclasses, ``TestWindowsLayoutAudit`` hands
@@ -263,12 +263,12 @@ class TestSharedDirectoriesSkipTheChmod:
 
     On a separated install the companion and the MCP client resolve
     ``paths.handoff_dir()`` constantly while holding read access to it and
-    nothing more. ``os.chmod`` there fails, and since SEC-09 that failure is
-    a ``warning`` rather than a swallowed ``debug`` line -- so getting this
+    nothing more. ``os.chmod`` there fails, and that failure is a
+    ``warning`` rather than a swallowed ``debug`` line -- so getting this
     wrong does not break anything, it just fires a permissions warning on
     every path resolution in the two processes that are behaving correctly,
-    which is precisely how a reader learns to ignore the warnings SEC-09
-    added the logging for.
+    which is precisely how a reader learns to ignore the permission warnings
+    that logging exists for.
     """
 
     def test_windows_is_never_treated_as_the_owner(self):
@@ -286,7 +286,7 @@ class TestSharedDirectoriesSkipTheChmod:
 
     def test_an_ordinary_directory_still_gets_the_call(self, tmp_path):
         # The skip is scoped to foreign_owner_ok: every other caller keeps
-        # the same behavior it had before #428 Phase 4, which on Windows is
+        # the ordinary behavior, which on Windows is
         # "attempt it, and it does nothing" rather than "do not attempt it".
         ordinary = tmp_path / "credentials"
 

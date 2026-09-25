@@ -92,8 +92,9 @@ def assert_task_xml_matches_companion_contract(xml_text: str, *, exec_path: str)
     )
     run_level = (principal.findtext(f"{TASK_NS}RunLevel") or "LeastPrivilege").strip()
     # Not merely the default: the companion is deliberately on the *agent's*
-    # side of the #428 trust boundary, and an elevated one would be able to
-    # reach the authority directory the whole phase exists to take away.
+    # side of the privilege-separation trust boundary (ADR 0003), and an
+    # elevated one would be able to reach the authority directory that
+    # boundary exists to take away.
     assert run_level == "LeastPrivilege", f"unexpected RunLevel {run_level!r}\n{context}"
 
     actions = root.find(f"{TASK_NS}Actions")

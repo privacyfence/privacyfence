@@ -99,7 +99,7 @@ def test_deb_floor_matches_matrix():
 
 
 def test_deb_architectures_match_matrix():
-    # debian/control may only claim what the matrix (and so CI) ships -- #679.
+    # debian/control may only claim what the matrix (and so CI) ships -- ADR 0044.
     control = (REPO_ROOT / "debian" / "control").read_text(encoding="utf-8")
     package_stanza = control.strip().split("\n\n")[-1]
     declared = re.findall(r"^Architecture: (.+)$", package_stanza, flags=re.MULTILINE)
