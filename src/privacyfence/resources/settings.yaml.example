@@ -124,7 +124,7 @@ pii_detection:
   # popup for likely personal data (Hungarian, English, and German — IBANs,
   # credit card numbers, national ID/tax/social-security numbers, and
   # similar; email addresses and phone numbers are deliberately not
-  # detected, see docs/TECHNICAL_REFERENCE.md). When something is flagged,
+  # detected, see docs/pii-detection-keywords.md). When something is flagged,
   # the popup is tinted red and a second "Are you sure?" dialog is required
   # before Allow once (or Always allow) takes effect. Toggled automatically
   # when you use "PII Detection Gate" in PrivacyFence Settings.
@@ -141,8 +141,8 @@ pii_detection:
   # PII-refinement trial capture -- OFF by default, and not meant to stay on
   # indefinitely. When true, the audit log's "PII Match Details" column also
   # records the literal matched text (redacted for value-bearing categories
-  # like IBAN/credit card/national IDs -- see docs/TECHNICAL_REFERENCE.md's
-  # "PII detection gate" section) for a request that was actually approved,
+  # like IBAN/credit card/national IDs -- see docs/approvals-and-policy.md's
+  # "The PII check" section) for a request that was actually approved,
   # or a fixed "details hidden" placeholder for one that was denied. There's
   # no Settings-page toggle for this one deliberately -- set it for a bounded
   # trial window (restart required to pick it up), review the weekly Excel
@@ -167,8 +167,8 @@ update_check:
 # opt-in gate) is NOT set here. It's a deliberate per-organization choice,
 # not a per-user setting, so it lives in the organization config bundle
 # (org_config.json, installed via "Install/Update Organization Config…" in
-# PrivacyFence Settings) — see docs/TECHNICAL_REFERENCE.md's "Scheduled /
-# unattended Cowork tasks" section.
+# PrivacyFence Settings) — see docs/how-it-works.md's "Unattended
+# sessions" section.
 
 # Auto-accept rules: requests PrivacyFence approves without showing you a
 # card. Managed from PrivacyFence Settings' "Auto-accept" page, the approval
@@ -177,8 +177,8 @@ update_check:
 # rule and mint its "id" from (predicate, value, conditions), which is what
 # the Auto-accept page's usage counts are keyed on. Each rule is a scope
 # ("predicate" + "value": which resources it trusts), the operations it
-# covers, and optional conditions that must also hold. See "Auto-accept" in
-# docs/TECHNICAL_REFERENCE.md for every predicate and condition.
+# covers, and optional conditions that must also hold. See "Always-allow and
+# policy rules" in docs/approvals-and-policy.md for every scope and condition.
 auto_accept:
   version: 2
   rules:
@@ -240,8 +240,8 @@ web:
     allow_quit: true
   notifications:
     # Desktop notifications for a new pending approval while the
-    # /approvals tab is open but not focused (docs/approval-list-ui-ux.md
-    # §4) -- tiers 0 (title badge, aria-live announcement) and 1
+    # /approvals tab is open but not focused (docs/approvals-and-policy.md's
+    # "Notifications") -- tiers 0 (title badge, aria-live announcement) and 1
     # (registration.showNotification(), no push service involved, nothing
     # leaves the machine) only. Tier 2 (web push, a closed tab, a phone) is
     # org mode/P7+ work and has no key here yet.
@@ -257,8 +257,8 @@ web:
     #   detailed  adds the row's own title/summary line too (e.g. "Send
     #             email to alice@example.com") -- the one level that can
     #             put gated content on a lock screen/watch/meeting-room
-    #             mirror; never the default (docs/approval-list-ui-ux.md
-    #             §4.3)
+    #             mirror; never the default (docs/approvals-and-policy.md's
+    #             "Notifications")
     detail: standard # minimal | standard | detailed
 
 # WebAuthn passkey step-up (#426 Phase 1/2) -- enrolling a passkey here

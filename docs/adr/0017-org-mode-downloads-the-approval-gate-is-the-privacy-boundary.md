@@ -7,7 +7,7 @@ Accepted (recorded retroactively on 2026-09-23; decided around 2026-09-09 in
 and deleted in `04d08f4a` the same day. Read it with
 `git show 04d08f4a^:docs/org-mode-download-delivery-plan.md`, section "What these tools are
 actually for, and what that means for priority"). Implemented. The mechanism is described in
-[`docs/org-mode-download-delivery.md`](../org-mode-download-delivery.md). That document's
+[`docs/org-mode-download-delivery.md`](https://github.com/privacyfence/privacyfence/blob/5deef1d8/docs/org-mode-download-delivery.md). That document's
 "Local mode" section was later amended by [ADR 0007](0007-local-file-bridge.md). This ADR concerns
 org mode only.
 

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy policy — PrivacyFence</title>
+  <meta name="description" content="How privacyfence.eu handles your data: hosting, cookie-free download counts, and Google Analytics only with your consent.">
+  <meta name="pf-content-group" content="marketing">
+  <meta name="theme-color" content="#f6f8fb">
+  <link rel="canonical" href="https://privacyfence.eu/privacy/">
+  <link rel="icon" type="image/png" href="/assets/icon.png">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#top">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="PrivacyFence home">
+      <img src="/assets/icon.png" alt="" width="38" height="38">
+      <span>PrivacyFence</span>
+    </a>
+    <nav aria-label="Primary navigation">
+      <div class="nav-links">
+        <a href="/#how-it-works">How it works</a>
+        <a href="/#privacy">Privacy</a>
+        <a href="https://github.com/privacyfence/privacyfence">GitHub</a>
+      </div>
+      <details class="nav-menu">
+        <summary><span class="nav-menu-label">Menu</span></summary>
+        <div class="nav-menu-panel">
+          <a href="/#how-it-works">How it works</a>
+          <a href="/#privacy">Privacy</a>
+          <a href="https://github.com/privacyfence/privacyfence">GitHub</a>
+        </div>
+      </details>
+      <a class="nav-cta" href="/download/">Download</a>
+    </nav>
+  </header>
+
+  <main id="top" class="shell prose-page">
+    <article class="prose">
+      <p class="kicker">Legal</p>
+      <h1>Privacy policy</h1>
+      <p class="updated">Last updated: 25 September 2026</p>
+      <p>
+        This policy covers the website <strong>privacyfence.eu</strong> and the download service at
+        <strong>downloads.privacyfence.eu</strong>, and nothing else.
+      </p>
+
+      <h2 id="controller">Who is responsible, and for what</h2>
+      <p>
+        Andras Takacs, Budapest, Hungary. Email:
+        <a href="mailto:info@privacyfence.eu">info@privacyfence.eu</a>. PrivacyFence is a
+        non-commercial open-source project run by a private person; there is no company behind it
+        and no data protection officer.
+      </p>
+      <p>
+        That responsibility covers only what this website and the download service do with data
+        about their visitors, as described below: hosting, download counts, analytics (only with
+        your consent) and email you send us.
+      </p>
+
+      <h2 id="software">The PrivacyFence software is not covered</h2>
+      <p>
+        We do not operate the PrivacyFence software for you and never receive the data it
+        processes. You, or your organization, install and run it on your own computer or your own
+        server. It sends nothing to the project: no emails, files, messages, approvals, audit
+        records, usage statistics or crash reports, because there is no PrivacyFence server to send
+        them to. Its only connections are to the AI assistant and the services you connect it to
+        (such as Google, Slack, Salesforce, Atlassian or Telegram, and in an organization
+        deployment your identity provider), and to GitHub's public API to check for a newer
+        release.
+      </p>
+      <p>
+        Whoever runs the software, you or your organization, is therefore responsible for the
+        personal data it processes. The same holds for the AI assistant you connect it to, which
+        is governed by that assistant's provider's own terms and privacy policy. The software is
+        provided under the
+        <a href="https://github.com/privacyfence/privacyfence/blob/main/LICENSE">Apache License 2.0</a>,
+        "as is", without warranty of any kind; see the license for the full terms.
+      </p>
+
+      <h2 id="summary">In short</h2>
+      <ul>
+        <li>The site works without cookies. Nothing is stored on your device until you make a choice in the cookie banner, and only your choice itself is stored.</li>
+        <li>Google Analytics runs only if you click <strong>Accept</strong>. If you decline, or ignore the banner, no request goes to Google.</li>
+        <li>Downloads are counted by version, platform and day only: no IP address, cookie or browser details.</li>
+        <li>The site is hosted on GitHub Pages behind Cloudflare. Both process your IP address to deliver the pages.</li>
+      </ul>
+
+      <h2 id="hosting">Hosting: GitHub Pages and Cloudflare</h2>
+      <p>
+        The pages are served by <strong>GitHub Pages</strong> (GitHub, Inc.) through
+        <strong>Cloudflare</strong> (Cloudflare, Inc.), which acts as a content delivery network and
+        protects the site against attacks. To deliver a page, both receive the technical data every
+        web request carries: your IP address, the requested address, the time, and your browser's
+        request headers (such as its user agent and language). GitHub logs visitor IP addresses for
+        security purposes. Neither is given anything else by this site, and Cloudflare's own web
+        analytics are switched off for it.
+      </p>
+      <p>
+        Legal basis: legitimate interest in delivering a secure website (Art. 6(1)(f) GDPR). Both
+        companies may process data in the United States; both are certified under the EU–US Data
+        Privacy Framework. See the
+        <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement">GitHub privacy statement</a>
+        and the <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare privacy policy</a>.
+      </p>
+
+      <h2 id="downloads">Downloads and download counts</h2>
+      <p>
+        Installers are served by <strong>downloads.privacyfence.eu</strong>, a small service run
+        on Cloudflare (Workers, R2 storage and a D1 database). The download page also asks it for the
+        list of current releases, and the homepage and download page for the total number of
+        downloads. When you
+        download an installer, it adds one to a counter, and that counter is all it stores:
+      </p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Stored per download</th><th scope="col">Example</th></tr></thead>
+          <tbody>
+            <tr><td>Day</td><td><code>2026-09-25</code></td></tr>
+            <tr><td>Release channel</td><td><code>stable</code></td></tr>
+            <tr><td>Version</td><td><code>4.5.0</code></td></tr>
+            <tr><td>Platform and architecture</td><td><code>windows</code>, <code>x64</code></td></tr>
+            <tr><td>Kind of file</td><td><code>installer</code></td></tr>
+            <tr><td>Count</td><td><code>+1</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        No IP address, user agent, cookie, fingerprint or any other identifier is stored with the
+        count, so the counts cannot be linked to you. Cloudflare processes the request itself as
+        described under hosting. Legal basis: legitimate interest in knowing how often the software
+        is downloaded (Art. 6(1)(f) GDPR).
+      </p>
+
+      <h2 id="analytics">Google Analytics (only with your consent)</h2>
+      <p>
+        If you click <strong>Accept</strong> in the cookie banner, the site loads
+        <strong>Google Analytics 4</strong> to see how many people visit, which pages they read and
+        where they came from. Until you accept, the Google Analytics code is not loaded at all and
+        no request goes to Google.
+      </p>
+      <p>Once you accept, Google Analytics collects:</p>
+      <ul>
+        <li>the pages you view, the page that referred you, and the time of your visit;</li>
+        <li>your browser, operating system, device type, screen size and language;</li>
+        <li>your approximate location (country and city), which Google derives from your IP address. Google Analytics 4 does not store IP addresses;</li>
+        <li>interactions on the page: scrolling, clicks on links to other sites, file downloads, and which platform's download button you click;</li>
+        <li>the section of the site a page belongs to (for example, download or documentation).</li>
+      </ul>
+      <p>It sets two cookies on privacyfence.eu:</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">Cookie</th><th scope="col">Purpose</th><th scope="col">Lifetime</th></tr></thead>
+          <tbody>
+            <tr><td><code>_ga</code></td><td>Tells visits by the same browser apart, with a random ID</td><td>2 years</td></tr>
+            <tr><td><code>_ga_7Z3PFP4XPT</code></td><td>Keeps the state of the current visit</td><td>2 years</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The property is set up to collect as little as possible: data is kept for
+        <strong>2 months</strong>; Google Signals, advertising personalization and data sharing
+        with Google are switched off; and no user ID or other personal identifier is sent.
+      </p>
+      <p>
+        Google Ireland Limited processes the data on our behalf. Data may be transferred to Google
+        LLC in the United States, which is certified under the EU–US Data Privacy Framework. See
+        <a href="https://policies.google.com/privacy">Google's privacy policy</a> and
+        <a href="https://business.safety.google/privacy/">how Google uses data from its business products</a>.
+      </p>
+      <p>
+        Legal basis: your consent (Art. 6(1)(a) GDPR, and Art. 5(3) of the ePrivacy Directive for the
+        cookies). You can <strong>withdraw it at any time</strong>: choose
+        <strong>Cookie settings</strong> at the bottom of any page and click
+        <strong>Decline</strong>. That stops Google Analytics on this site and deletes its cookies.
+        Withdrawing does not affect what was collected before.
+      </p>
+
+      <h2 id="your-choice">Your cookie choice</h2>
+      <p>
+        Your answer to the banner is kept in your browser's local storage under the name
+        <code>pf-analytics-consent</code>, so the banner does not reappear on every page. It is
+        never sent anywhere and stays until you change it or clear your browser's site data.
+      </p>
+
+      <h2 id="contact">When you contact us</h2>
+      <p>
+        If you email <a href="mailto:info@privacyfence.eu">info@privacyfence.eu</a>, your address and
+        message are used to answer you and kept only as long as the conversation needs. Legal basis:
+        legitimate interest in answering (Art. 6(1)(f) GDPR). Issues and discussions on
+        GitHub are covered by GitHub's own privacy statement.
+      </p>
+
+      <h2 id="rights">Your rights</h2>
+      <p>
+        You have the right to access, correct and delete your personal data, to restrict or object
+        to its processing, and to data portability, as far as the GDPR provides. Write to
+        <a href="mailto:info@privacyfence.eu">info@privacyfence.eu</a>. For the counters and the
+        analytics data we hold nothing that identifies you, so we usually cannot find your data in
+        them.
+      </p>
+      <p>
+        You can also complain to a data protection authority. In Hungary that is the
+        <a href="https://naih.hu/">Nemzeti Adatvédelmi és Információszabadság Hatóság (NAIH)</a>,
+        Falk Miksa utca 9–11, 1055 Budapest.
+      </p>
+
+      <h2 id="changes">Changes</h2>
+      <p>
+        This policy changes when the site changes. Its full history is public in the
+        <a href="https://github.com/privacyfence/privacyfence/commits/main/website/privacy/index.html">project's repository</a>.
+      </p>
+    </article>
+  </main>
+
+  <footer class="site-footer shell">
+    <div class="footer-brand"><img src="/assets/icon.png" alt="" width="28" height="28"><span>PrivacyFence</span></div>
+    <p>Independent open-source software for human control of AI access to business systems.</p>
+    <ul class="footer-links cluster" aria-label="Site information">
+      <li><a href="/privacy/" data-privacy-link>Privacy</a></li>
+      <li><a href="/imprint/">Imprint</a></li>
+      <li><a href="/privacy/#your-choice" data-cookie-settings>Cookie settings</a></li>
+      <li><a href="https://github.com/privacyfence/privacyfence">GitHub</a></li>
+      <li><a href="https://github.com/privacyfence/privacyfence/blob/main/LICENSE">Apache 2.0</a></li>
+      <li><a href="mailto:info@privacyfence.eu">info@privacyfence.eu</a></li>
+    </ul>
+  </footer>
+
+  <script src="/site.js" defer></script>
+</body>
+</html>

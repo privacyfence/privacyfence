@@ -43,6 +43,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **privacyfence.eu has a privacy policy and an imprint** (`/privacy/`, `/imprint/`), linked from
+  every page's footer together with the contact address, `info@privacyfence.eu`.
+- **The website uses Google Analytics, only if you accept it.** A banner asks first, with
+  *Accept* and *Decline* side by side. Until you accept, nothing is sent to Google and no cookie
+  is set; *Cookie settings* in the footer changes the answer at any time. Download counts are
+  still made without cookies, whatever you choose.
+
+### Changed
+
+- **The website works on phones:** below tablet width the header links are in a menu instead of
+  hidden, and links and buttons are large enough to tap. Pages now carry search and social-card
+  metadata, and `robots.txt` and `sitemap.xml` welcome every crawler, AI crawlers included.
+- **New product description** on the homepage and in the README: an open-source privacy and
+  approval gateway between AI assistants and your business systems.
+- **The user documentation is rewritten against the current code.** Installation is split into a
+  short `docs/getting-started.md` and one page per platform (`install-macos.md`,
+  `install-windows.md`, `install-linux.md`). New pages cover how PrivacyFence works
+  (`how-it-works.md`), approvals and policy (`approvals-and-policy.md`), every connector tool and
+  its gate (`tools-reference.md`, generated from the code), every configuration key
+  (`configuration-reference.md`) and the connect flow shared by all services
+  (`connecting-a-service.md`). The three organization-mode docs are one guide,
+  `org-mode-setup-guide.md`. `docs/TECHNICAL_REFERENCE.md`, `migration-guide.md`,
+  `approval-list-ui-ux.md`, `approval-window-content-reference.md`, `file-type-support.md`,
+  `claude-knowledge-boundary.md`, `org-mode-operational-readiness.md` and
+  `org-mode-download-delivery.md` are removed; their content is in the pages above. The approval
+  screenshots show the current approval list.
+
 ## [4.5.0] — 2026-09-25
 
 ### Added

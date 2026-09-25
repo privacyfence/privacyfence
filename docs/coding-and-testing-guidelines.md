@@ -493,5 +493,5 @@ behavior, not implementation history: no phase narratives, issue numbers, versio
 home.
 
 A new testing gap belongs in [`testing-policy.md`](testing-policy.md) if it changes current policy,
-or in [`platform-support.md`](platform-support.md)'s "Known open items" if it's a standing open
-item — not in a plan document written to hold it.
+or in [`release-testing.md`](release-testing.md#what-stays-manual)'s "What stays manual" if it's a
+standing open item — not in a plan document written to hold it.

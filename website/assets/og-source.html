@@ -1,0 +1,63 @@
+<!doctype html>
+<!--
+Source of assets/og.png, the 1200x630 OpenGraph/Twitter card image. Repository-only: pages.yml
+publishes the rendered PNG, not this file. To re-render after an edit, from the repository root:
+
+  python - <<'PY'
+  from pathlib import Path
+  from playwright.sync_api import sync_playwright
+  with sync_playwright() as p:
+      b = p.chromium.launch()
+      page = b.new_page(viewport={"width": 1200, "height": 630})
+      page.goto(Path("website/assets/og-source.html").resolve().as_uri())
+      page.screenshot(path="website/assets/og.png")
+      b.close()
+  PY
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { width: 1200px; height: 630px; overflow: hidden; font-family: Inter, ui-sans-serif, -apple-system, "Segoe UI", "DejaVu Sans", sans-serif; color: #14212b; background: #f6f8fb; -webkit-font-smoothing: antialiased; }
+  .frame { position: absolute; inset: 0; display: grid; grid-template-columns: 1.15fr .85fr; gap: 48px; align-items: center; padding: 64px 72px; background: radial-gradient(circle at 88% 12%, #e1f2ef 0, rgba(225,242,239,0) 45%), #f6f8fb; }
+  .brand { display: flex; align-items: center; gap: 14px; font-size: 30px; font-weight: 750; letter-spacing: -.02em; }
+  .brand img { width: 58px; height: 58px; }
+  h1 { margin: 34px 0 22px; font-size: 68px; line-height: 1.0; letter-spacing: -.05em; font-weight: 780; }
+  h1 span { color: #167a70; }
+  .tagline { font-size: 25px; font-weight: 650; color: #43535f; letter-spacing: -.01em; }
+  .foot { margin-top: 40px; font-size: 19px; color: #60707d; }
+  .foot strong { color: #0e5f57; }
+  .visual { background: #fff; border: 1px solid #dbe3e9; border-radius: 26px; padding: 28px; box-shadow: 0 22px 70px rgba(25,48,62,.12); }
+  .label { width: fit-content; margin: 0 auto; padding: 10px 18px; border-radius: 10px; background: #eef3f8; font-size: 19px; font-weight: 700; }
+  .line { width: 2px; height: 26px; margin: 0 auto; background: #dbe3e9; }
+  .pf { border: 1px solid #badbd6; background: linear-gradient(145deg, #f4fbfa, #e8f5f3); border-radius: 18px; padding: 18px; }
+  .pf-title { display: flex; align-items: center; gap: 10px; font-size: 21px; font-weight: 750; margin-bottom: 12px; }
+  .pf-title img { width: 34px; height: 34px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .grid span { background: rgba(255,255,255,.8); border: 1px solid rgba(186,219,214,.8); padding: 8px 10px; border-radius: 9px; font-size: 16px; color: #3c5d59; font-weight: 600; }
+  .services { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; }
+  .services span { padding: 7px 10px; border: 1px solid #dbe3e9; border-radius: 9px; font-size: 14px; font-weight: 650; color: #53636f; }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div>
+      <div class="brand"><img src="../../src/privacyfence/resources/icon_512.png" alt=""><span>PrivacyFence</span></div>
+      <h1>AI access without <span>giving AI the keys.</span></h1>
+      <p class="tagline">Approve the sensitive. Automate the routine.</p>
+      <p class="foot">Open-source privacy and approval gateway for AI assistants (MCP) · <strong>privacyfence.eu</strong></p>
+    </div>
+    <div class="visual">
+      <div class="label">AI assistant</div>
+      <div class="line"></div>
+      <div class="pf">
+        <div class="pf-title"><img src="../../src/privacyfence/resources/icon_512.png" alt=""><span>PrivacyFence</span></div>
+        <div class="grid"><span>Policy</span><span>Human approval</span><span>PII checks</span><span>Audit</span></div>
+      </div>
+      <div class="line"></div>
+      <div class="services"><span>Gmail</span><span>Drive</span><span>Slack</span><span>Salesforce</span><span>Jira</span><span>Confluence</span><span>More</span></div>
+    </div>
+  </div>
+</body>
+</html>

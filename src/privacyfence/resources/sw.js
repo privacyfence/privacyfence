@@ -1,5 +1,5 @@
 // PrivacyFence's service worker -- tier 1 notifications only
-// (docs/approval-list-ui-ux.md §4.1). Its one job is to host
+// (5deef1d8:docs/approval-list-ui-ux.md §4.1). Its one job is to host
 // registration.showNotification() calls the page itself makes (see
 // web_shell.py's own script) and to route a click on one of those back to
 // an open /approvals tab -- there is no `push` handler here, because tier

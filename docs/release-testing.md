@@ -79,8 +79,8 @@ never on a machine whose data you need.
    completes. CI only runs `installer -pkg` from the command line, which shows neither.
 2. **Separation**, when a release touches privilege separation (`privilege_separation.py`, the
    data-directory resolution in `paths.py`, the control channel, the companion, or the shim's
-   discovery), and on every stable release until the item in
-   [`platform-support.md`](platform-support.md)'s "Known open items" is closed. After a logout and
+   discovery), and on every stable release until the privilege-separation item in
+   [What stays manual](#what-stays-manual) is closed. After a logout and
    login:
    - `sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh status`
      reports a clean layout;

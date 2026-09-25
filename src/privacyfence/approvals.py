@@ -149,7 +149,7 @@ CONFIRM_RESULTS = ("confirm", "cancel")
 # PendingApprovalRegistry.answer_batch's own docstring.
 BATCH_RESULTS = ("accept", "deny")
 
-# Approval binder (Phase 1 of docs/approval-list-ui-ux.md's future batching
+# Approval binder (Phase 1 of 5deef1d8:docs/approval-list-ui-ux.md's future batching
 # work): every value PendingApproval.kind can take -- "card" (web_prompt.
 # block_on_card), "confirm" (block_on_confirm), "choice" (block_on_choice).
 # PendingApproval.is_batchable()/blocked_reason() below classify by explicit
@@ -354,7 +354,7 @@ class PendingApproval:
             # dialog -- safe to expose unconditionally (it names a category,
             # never gated content) and is exactly the "direction" field
             # web_shell.py's notification-detail allowlist needs (P5,
-            # docs/approval-list-ui-ux.md §4.3): never derived from
+            # 5deef1d8:docs/approval-list-ui-ux.md §4.3): never derived from
             # ``summary``, which is the one field that can carry real gated
             # content (see that field's own docstring below).
             "gate_kind": self.gate_kind,

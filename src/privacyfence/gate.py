@@ -643,7 +643,7 @@ def preflight_auto_accept(operation_key: str, args: dict, my_email: str = "") ->
 # request came in on a Streamable HTTP session that called
 # privacyfence_begin_unattended_session() and hasn't since called
 # privacyfence_end_unattended_session() -- see unattended_scope() below and
-# docs/TECHNICAL_REFERENCE.md's "Scheduled / unattended Cowork tasks"
+# 5deef1d8:docs/TECHNICAL_REFERENCE.md's "Scheduled / unattended Cowork tasks"
 # section. Deliberately NOT a module-level bool: a plain bool would be
 # shared across every concurrent request on
 # every session, but unattended mode is a per-session state (tracked in
@@ -1378,7 +1378,7 @@ async def propose_policy_change(
 def _deny_unattended(audit, connector: str, tool: str, *, pii_categories: list[str]) -> None:
     """Fail-fast path for unattended sessions: same outcome as a human
     clicking Deny, minus the popup nobody's there to answer -- see
-    unattended_scope() above and docs/TECHNICAL_REFERENCE.md's
+    unattended_scope() above and 5deef1d8:docs/TECHNICAL_REFERENCE.md's
     "Scheduled / unattended Cowork tasks" section.
 
     Always raises; the "-> None" return type documents that this never

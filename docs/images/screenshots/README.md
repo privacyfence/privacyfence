@@ -6,40 +6,40 @@ Documentation assets. Each file here is used by at least one of the places below
 | ---- | ------- | ------------ |
 | `settings-connectors.png` | `README.md` | `scripts/qa_readme_screenshots.py` |
 | `settings-auto-accept-rules.png` | `README.md` | `scripts/qa_readme_screenshots.py` |
-| `gmail-read-thread.png` | `README.md`, website homepage | no script in this repository |
-| `sheets-write.png` | `README.md`, website homepage | no script in this repository |
+| `gmail-read-thread.png` | `README.md`, website homepage | `scripts/qa_readme_screenshots.py` |
+| `sheets-write.png` | `README.md`, website homepage | `scripts/qa_readme_screenshots.py` |
 
 `README.md` embeds all four through `raw.githubusercontent.com/.../main/docs/images/screenshots/…`
 URLs, so a change here shows up there once it is on `main`. `.github/workflows/pages.yml` copies
 `gmail-read-thread.png` and `sheets-write.png` into the site's `assets/` (referenced by
 `website/index.html`), and a push to `main` touching `docs/images/**` redeploys the site.
 
-## Settings screenshots
+## Regenerating
 
 ```bash
-.venv/bin/pip install playwright   # once, locally; not a project dependency
-.venv/bin/python scripts/qa_readme_screenshots.py [--chromium-path /path/to/chrome]
+.venv/bin/pip install -e ".[test]"   # playwright is in the [test] extra
+.venv/bin/python scripts/qa_readme_screenshots.py [--only all|settings|approvals] [--chromium-path /path/to/chrome]
 ```
 
 The script starts the real embedded web server (`WebServer`) in-process on `127.0.0.1:18701` with
 a temporary data directory, a seeded `settings.yaml` (four sample auto-accept rules) and four
-connectors shown as connected (`gmail`, `drive`, `slack`, `calendar`) — no real connector account
-or credentials. It signs in with a one-time bootstrap link, opens `/settings` in headless Chromium
-at a 1000×720 viewport, and captures the `#app` element on the **Connectors** and **Auto-accept**
-pages, writing both files straight into this directory. Pass `--chromium-path` if Playwright's
-own Chromium is not installed (`playwright install chromium`).
+connectors shown as connected (`gmail`, `drive`, `slack`, `calendar`). No real connector account
+or credentials are involved. It signs in with a one-time bootstrap link and drives headless
+Chromium in the light color scheme, writing every file straight into this directory:
 
-Regenerate when the settings page's visual design changes meaningfully, not on every settings
-change.
+- **Settings** (`--only settings`): opens `/settings` at a 1000×720 viewport and captures the
+  `#app` element on the **Connectors** and **Auto-accept** pages.
+- **Approval cards** (`--only approvals`): calls the real connector tools `gmail_get_thread` and
+  `drive_sheets_write_range` against fake Google clients with synthetic content, so each card is
+  what the real gate builds for that call (PII highlighting, the "AI will receive" list, the
+  stated reason and the calling AI system included). It opens each card from `/approvals` →
+  Review, the way a person reaches it, at 2× device scale and a width of 1000.
 
-## Approval screenshots
+`--only` defaults to `all`. Pass `--chromium-path` if Playwright's own Chromium is not installed
+(`playwright install chromium`).
 
-`gmail-read-thread.png` and `sheets-write.png` are not produced by any script in this repository,
-and they do not show the current web approval surface. Do not hand-edit them. Any replacement must
-be generated from the running web approval surface with synthetic approval data, through the same
-HTML builders and browser routes the application serves — never a separate mockup that can drift
-from runtime behavior. `scripts/qa_readme_screenshots.py` (above) and `scripts/qa_web_smoke.py`
-show how to drive the embedded web server in a real browser.
+Regenerate when the settings page's or the approval card's visual design changes meaningfully,
+not on every settings or card change. Never hand-edit an image here.
 
 ## Maintenance
 

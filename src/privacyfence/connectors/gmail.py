@@ -861,7 +861,7 @@ class GmailConnector(Connector):
         # Every one of these is already known for free by the time this
         # gates: From/Subject via gmail_list_messages, Attachment/Type/Size
         # via gmail_list_message_attachments -- see
-        # claude-knowledge-boundary.md's Gmail worked example ("by the time
+        # 5deef1d8:docs/claude-knowledge-boundary.md's Gmail worked example ("by the time
         # gmail_download_attachment gates, none of that metadata is new").
         # The only genuinely new fact from approving this call is *how* the
         # attachment reaches Claude -- see connectors/drive.py's

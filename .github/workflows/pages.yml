@@ -59,14 +59,19 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf _site
-          mkdir -p _site/assets _site/download
+          mkdir -p _site/assets _site/download _site/privacy _site/imprint
           # Named explicitly rather than `cp -r website/ _site/` so nothing lands on the public
           # site by accident. The cost of that is that a new website file is invisible until it is
           # added here -- which is exactly how the download page shipped as a 404 once the homepage
           # CTAs already pointed at it. tests/unit/test_website_download_cta.py now asserts every
-          # file under website/ appears in this step, so that cannot happen silently again.
-          cp website/index.html website/styles.css website/stats.js _site/
+          # file under website/ appears in this step (or is in its short repository-only list,
+          # like website/canonical-description.md), so that cannot happen silently again.
+          cp website/index.html website/styles.css website/site.js website/stats.js _site/
+          cp website/robots.txt website/sitemap.xml _site/
           cp website/download/index.html website/download/download.js _site/download/
+          cp website/privacy/index.html _site/privacy/
+          cp website/imprint/index.html _site/imprint/
+          cp website/assets/og.png _site/assets/
           cp src/privacyfence/resources/icon_512.png _site/assets/icon.png
           cp docs/images/screenshots/gmail-read-thread.png _site/assets/
           cp docs/images/screenshots/sheets-write.png _site/assets/

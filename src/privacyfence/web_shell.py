@@ -18,7 +18,7 @@ Deliberately **not** used by:
   cross-page nav bar at all.
 - an individual approval card's own page (``GET /approvals/{id}``) -- that
   page *is* the decision screen, full-window, same as the native dialog it
-  replaces; the list it returns to (§3 of docs/approval-list-ui-ux.md) is
+  replaces; the list it returns to (§3 of 5deef1d8:docs/approval-list-ui-ux.md) is
   where the shell belongs, not the card itself.
 
 Owns the one thing every shell-wrapped page needs and none of them should
@@ -151,7 +151,7 @@ body {
 # own page's markup entirely, same separation settings_window_html.py's own
 # bridge already has between "receive a message" and "render it".
 #
-# Notifications (docs/approval-list-ui-ux.md §4), tiers 0-1 only -- no
+# Notifications (5deef1d8:docs/approval-list-ui-ux.md §4), tiers 0-1 only -- no
 # push, no VAPID, nothing leaving the machine (tier 2 is org mode/P7+):
 #   - tier 0: the document title gains a "(N) " badge and a visually
 #     hidden aria-live region announces the count, whenever the approvals
@@ -188,7 +188,7 @@ _STREAM_JS = """
   // indicator above is unaffected (it isn't a notification).
   var NOTIFICATIONS_ENABLED = %(notifications_enabled)s;
   // web.notifications.detail -- "minimal" | "standard" | "detailed" (P5,
-  // docs/approval-list-ui-ux.md §4.3). See notificationBody() below for
+  // 5deef1d8:docs/approval-list-ui-ux.md §4.3). See notificationBody() below for
   // what each level is allowed to read off a pending-approval row.
   var NOTIFICATIONS_DETAIL = %(notifications_detail)s;
   // __pfNotificationsEnabled is exposed globally so the settings page's own
@@ -232,7 +232,7 @@ _STREAM_JS = """
     return count === 1 ? '1 approval pending' : count + ' approvals pending';
   }
 
-  // The notification-detail allowlist (P5, docs/approval-list-ui-ux.md
+  // The notification-detail allowlist (P5, 5deef1d8:docs/approval-list-ui-ux.md
   // §4.3) -- see this file's own comment above _STREAM_JS for what each
   // level is allowed to read off `row`. Only ever called with exactly the
   // one row a count-increase-to-1 identifies unambiguously (see
@@ -409,7 +409,7 @@ def wrap(
     service worker registration, the permission pre-prompt), per that
     config key's own comment. ``notifications_detail`` is that same config
     block's ``detail`` (``"minimal"``/``"standard"``/``"detailed"``, P5 --
-    docs/approval-list-ui-ux.md §4.3) -- see _STREAM_JS's own
+    5deef1d8:docs/approval-list-ui-ux.md §4.3) -- see _STREAM_JS's own
     notificationBody() for exactly what each level is allowed to say.
 
     ``nonce``: the

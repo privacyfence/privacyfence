@@ -4,7 +4,7 @@ How each release artifact is built, signed and installed, and which CI job prove
 support matrix and what a user does to install, see [`platform-support.md`](platform-support.md);
 for cutting a release, see [`CLAUDE.md`'s "Releasing"](../CLAUDE.md#releasing); for what
 privilege separation protects, see
-[`security-and-compliance.md`](security-and-compliance.md#privilege-separation-macos-linux-and-windows).
+[`security-and-compliance.md`](security-and-compliance.md#privilege-separation).
 
 ## What ships
 
