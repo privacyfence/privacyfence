@@ -230,7 +230,7 @@ The installer:
   **Delete PrivacyFence data** checkbox, unchecked by default, which adds `-Purge` and deletes those
   too; a silent uninstall never purges.
 
-Optional signing is configured through `CODESIGNTOOL_DIR`, `ES_USERNAME`, `ES_PASSWORD`, `ES_CREDENTIAL_ID`, and `ES_TOTP_SECRET` — see `scripts/build_installer.ps1`'s header comment. Signing goes through SSL.com's eSigner CodeSignTool rather than a local Authenticode `.pfx`, since CA/B Forum's 2023 key-storage rules mean code-signing private keys can no longer be exported to a portable `.pfx` at all.
+Optional signing is configured through `CODESIGNTOOL_DIR`, `ES_USERNAME`, `ES_PASSWORD`, `ES_CREDENTIAL_ID`, and `ES_TOTP_SECRET` — see `scripts/build_installer.ps1`'s header comment. Signing goes through SSL.com's eSigner CodeSignTool rather than a local Authenticode `.pfx`, since CA/B Forum's 2023 key-storage rules mean code-signing private keys can no longer be exported to a portable `.pfx` at all. Release CI (`build.yml`'s `build-windows`) installs one pinned CodeSignTool version and checks its SHA-256 before signing; updating it is the two `env:` lines on that step — see [ADR 0046](adr/0046-release-ci-pins-codesigntool-by-version-and-sha256.md).
 
 ### Privilege separation (mandatory)
 

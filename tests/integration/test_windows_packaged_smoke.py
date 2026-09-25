@@ -87,8 +87,11 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
+import warnings
 from pathlib import Path
+from typing import NamedTuple, NoReturn
 from urllib.parse import urlsplit
 
 import httpx2
@@ -148,6 +151,36 @@ MARKER_PATH = WINDOWS_SYSTEM_ROOT / MARKER_FILE_NAME
 # quoting at all.
 INSTALL_DIR_NAME = "Program Folder"
 
+# How long one silent Setup / uninstaller run may take before it is treated as
+# hung, from twelve build.yml runs on fresh windows-latest runners (2026-09-24;
+# the run list is in the commit that set these values):
+#
+#   first (cold) install    28.2-58.3 s in eleven runs, 102.5 s in one
+#                           (median 36.6 s)                      p100 102.5 s
+#     of which `sc start`   16.6-27.6 s -- nearly all of it before the service
+#                           process exists (15.2 / 17.8 s where measured; the
+#                           executable then reaches its dispatcher in 0.3 s)
+#     PowerShell's start    0.4-31.6 s;  file copy 6.4-26.7 s
+#   every later install     8.5-19.0 s  (`sc start` 0.6-1.1 s)
+#   uninstaller             1.6-12.9 s  (the first one on a runner is slowest)
+#
+# The 102.5 s run was slow everywhere at once (file copy 26.7 s against ~7 s,
+# PowerShell's start 31.6 s against ~0.4 s): a slow runner rather than a slow
+# step, and the shape v4.5.0a1's tag run most likely had when its first install
+# overran the old 120 s. The installer gets ~3.5x that p100. The uninstaller
+# keeps 120 s -- ~9x its p100 -- because `uninstall` itself may legitimately
+# spend 60 s waiting on the service and 30 s on the companion before it moves on.
+INSTALLER_TIMEOUT_S = 360.0
+UNINSTALLER_TIMEOUT_S = 120.0
+# pytest-timeout must outlast the subprocess timeouts above, or it kills the
+# run before an installer's TimeoutExpired can say which step hung. One hung
+# Setup or uninstaller run plus the service's own start/serve waits (~120 s).
+# Observed whole tests, green: 8-78 s; the whole module 158-236 s.
+TEST_TIMEOUT_S = INSTALLER_TIMEOUT_S + UNINSTALLER_TIMEOUT_S + 120.0
+# Tests 2 and 4 install twice: the same one-hang allowance, plus 3x the
+# slowest such test observed (78 s) for everything else they do.
+MULTI_INSTALL_TEST_TIMEOUT_S = TEST_TIMEOUT_S + 3 * 78.0
+
 # The separated layout's own files, as `enable` leaves them on disk. Readable
 # directly rather than through an elevation shim, unlike the POSIX modules'
 # `sudo` reads: Set-Layout grants Administrators full control of the whole
@@ -183,8 +216,8 @@ pytestmark = [
     ),
     # A real silent install + a real daemon cold start + a real silent uninstall is comfortably
     # slower than the suite's default timeout=30 -- same reasoning as every other packaged/system
-    # test in this repo.
-    pytest.mark.timeout(180),
+    # test in this repo. See TEST_TIMEOUT_S for how long.
+    pytest.mark.timeout(TEST_TIMEOUT_S),
 ]
 
 
@@ -195,70 +228,6 @@ pytestmark = [
 def _task_exists(name: str) -> bool:
     result = subprocess.run(["schtasks", "/query", "/tn", name], capture_output=True, text=True, timeout=15)
     return result.returncode == 0
-
-
-def _stop_daemon_service(*, timeout: float = 60.0) -> None:
-    """``sc stop`` the real service and wait for it to actually reach STOPPED.
-
-    Not ``taskkill``, and the difference is the whole point:
-    Install-DaemonService configures failure actions (``sc failure ... actions=
-    restart/5000/restart/10000/restart/30000``), so a service process that dies
-    *unexpectedly* is restarted by the SCM within five seconds. Killing it by
-    image name therefore buys about five seconds -- which is exactly what Inno
-    Setup's own four one-second DeleteFile retries were losing to:
-
-        _internal\\PIL\\_imaging.cp312-win_amd64.pyd
-        DeleteFile: The existing file appears to be in use (5). Retrying.
-        ... DeleteFile failed; code 5. Access is denied.
-
-    A clean stop is not an unexpected termination, so the SCM leaves it
-    stopped, and every ``_internal`` DLL the daemon had mapped is released for
-    good. A no-op when the service does not exist (``sc query`` exits
-    non-zero), which is the unseparated case and every test that never
-    installed."""
-    if subprocess.run(
-        ["sc.exe", "query", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
-    ).returncode != 0:
-        return
-    subprocess.run(["sc.exe", "stop", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        result = subprocess.run(
-            ["sc.exe", "query", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode != 0 or "STOPPED" in result.stdout:
-            return
-        time.sleep(0.5)
-
-
-def _kill_stray_app_processes() -> None:
-    """Best-effort ``taskkill`` sweep for any process still running against
-    ``MAIN_EXE_NAME``/``ALIAS_EXE_NAME``, by image name rather than PID.
-
-    v4.1.0a9's release build failed here: the upgrade-install step's Inno
-    Setup run exited 5 ("Some applications could not be shut down") because
-    RestartManager still found a running ``privacyfence-app`` at the moment
-    it tried to close applications ahead of overwriting files -- even though
-    this test's own daemon had already been confirmed exited beforehand.
-    Whatever is actually holding the handle at that point (the OS's own
-    deferred teardown of the just-exited process's image sections, or a
-    second process this test never tracked), taskkill-by-image-name clears it
-    either way; killing an already-gone process is simply a no-op (taskkill
-    exits non-zero, which is why this ignores the result).
-
-    ``COMPANION_EXE_NAME`` is in the sweep because a *separated* install has
-    one running: ``Install-CompanionTask`` registers and starts it, and it is
-    what RestartManager now names ("an application using one of our files:
-    PrivacyFenceCompanion"). It could not appear here before, because until
-    the Windows ``enable`` was fixed no install ever got far enough to start
-    a companion at all.
-
-    The daemon is stopped rather than killed, and before the sweep: on a
-    separated install it is a *service*, and the SCM restarts a killed one
-    within five seconds. See _stop_daemon_service()."""
-    _stop_daemon_service()
-    for image_name in (ALIAS_EXE_NAME, MAIN_EXE_NAME, COMPANION_EXE_NAME):
-        subprocess.run(["taskkill", "/F", "/IM", image_name], capture_output=True, text=True, timeout=15)
 
 
 # --------------------------------------------------------------------------- #
@@ -437,18 +406,29 @@ def _task_state(name: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
-def _tear_down_separation() -> None:
+def _tear_down_separation() -> tuple[list[_Process], list[_Process]]:
     """Removes whatever an installer-run ``enable`` left behind, without going
-    through the script.
+    through the script, and returns ``(found, survivors)``: every
+    PrivacyFence-related process alive before the sweep started, and every one
+    still alive once it gave up waiting -- empty on a clean machine and after a
+    successful sweep respectively. Judging either is the caller's business
+    (see ``_clean_separation_state``).
 
     ``uninstall -Purge`` is the supported route; this is the floor under it,
     for a run that died between ``enable`` and its own teardown, or one where
     the install directory (and with it the script) is already gone -- which
     after a silent uninstall is the ordinary case, since that keeps the data
-    (ADR 0042). Machine-wide state -- a service, a scheduled task
-    and a directory under ``%ProgramData%`` -- is not something ``tmp_path``
-    isolates, so leaving any of it behind would poison whatever runs next on
-    this runner.
+    (ADR 0042). Machine-wide state -- a service, a scheduled task, a directory
+    under ``%ProgramData%`` and the processes behind them -- is not something
+    ``tmp_path`` isolates, so leaving any of it behind would poison whatever
+    runs next on this runner.
+
+    Inno Setup processes go first, so that an installer still running
+    ``enable`` (or an uninstaller's clean-up helper still deleting files) is
+    not re-creating what the rest of the sweep removes. Every process is then
+    waited for until it is gone from the process table, not just until
+    ``taskkill`` returned: ``taskkill /F`` and ``sc.exe stop`` both only ask,
+    and a dying process still holds its files and its image open.
 
     ``takeown`` before the delete because a separated root is owned by
     Administrators and its ``authority\\`` subtree grants the service account
@@ -457,6 +437,11 @@ def _tear_down_separation() -> None:
     left alone -- a plain ``uninstall`` leaves it too, and re-adding a member
     is idempotent.
     """
+    found = _privacyfence_processes()
+    for process in _inno_processes():
+        subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, text=True, timeout=30,
+            )
     subprocess.run(["sc.exe", "stop", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=60)
     subprocess.run(["sc.exe", "delete", WINDOWS_SERVICE_NAME], capture_output=True, text=True, timeout=60)
     subprocess.run(
@@ -471,10 +456,11 @@ def _tear_down_separation() -> None:
     # could not be shut down" -- Inno exit 5, a rolled-back install, and a
     # failure that lands in whatever test asked for that install rather than
     # in the one that leaked the process. Same reasoning as the service stop
-    # above: what `enable` started, the floor under it has to end.
-    subprocess.run(
-        ["taskkill", "/f", "/im", COMPANION_EXE_NAME], capture_output=True, text=True, timeout=30,
-    )
+    # above: what `enable` started, the floor under it has to end. The daemon's
+    # images are killed too because `sc.exe stop` only asks; the service is
+    # already marked for deletion by then, so the SCM's restart-on-failure
+    # action cannot bring it back.
+    survivors = _wait_for_no_privacyfence_processes(timeout=_SWEEP_TIMEOUT)
     if WINDOWS_SYSTEM_ROOT.exists():
         subprocess.run(
             ["takeown", "/f", str(WINDOWS_SYSTEM_ROOT), "/r", "/d", "Y"],
@@ -483,16 +469,120 @@ def _tear_down_separation() -> None:
         _icacls(str(WINDOWS_SYSTEM_ROOT), "/grant", f"{SID_ADMINISTRATORS}:(OI)(CI)(F)", "/t", "/c", "/q",
                 check=False)
         shutil.rmtree(WINDOWS_SYSTEM_ROOT, ignore_errors=True)
+    return found, survivors
+
+
+# The images a PrivacyFence install runs: the app, its alias (the service's
+# binPath image) and the companion. Inno Setup's own processes are matched by
+# _inno_processes()'s rules instead.
+_PRIVACYFENCE_IMAGE_NAMES = frozenset(name.lower() for name in (MAIN_EXE_NAME, ALIAS_EXE_NAME, COMPANION_EXE_NAME))
+# How long a sweep waits for what it killed to leave the process table.
+_SWEEP_TIMEOUT = 30.0
+
+
+def _privacyfence_processes() -> list[_Process]:
+    """Every live process a test in this module can have started, directly or
+    through the installer: Inno Setup's (``_inno_processes``) and the
+    installed app's own images."""
+    inno = _inno_processes()
+    inno_pids = {process.pid for process in inno}
+    return inno + [
+        process for process in _win32_processes()
+        if process.name.lower() in _PRIVACYFENCE_IMAGE_NAMES and process.pid not in inno_pids
+    ]
+
+
+def _wait_for_no_privacyfence_processes(timeout: float) -> list[_Process]:
+    """Kills every ``_privacyfence_processes()`` match and polls until none is
+    left, or ``timeout`` runs out; returns whatever was still alive then.
+
+    Kills on every round, not once, because what the first round kills can
+    have started a successor in between (an installer's child, a restarted
+    service) -- the wait is for the table to be empty, not for one PID."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = _privacyfence_processes()
+        if not remaining or time.monotonic() >= deadline:
+            return remaining
+        for process in remaining:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, text=True, timeout=30,
+            )
+        time.sleep(0.5)
+
+
+def _process_list(processes: list[_Process]) -> str:
+    return "\n".join(f"  {process}" for process in processes)
 
 
 @pytest.fixture(autouse=True)
-def _clean_separation_state():
-    """Guaranteed on both sides: a service, a scheduled task and a directory
-    under ``%ProgramData%`` are machine-wide, not something ``tmp_path``
-    isolates, and every test here creates all three."""
-    _tear_down_separation()
+def _clean_separation_state(request):
+    """Guaranteed on both sides: a service, a scheduled task, a directory
+    under ``%ProgramData%`` and the processes behind them are machine-wide, not
+    something ``tmp_path`` isolates, and every test here creates all of them.
+
+    **The leak rule.** Every test in this module ends with nothing of
+    PrivacyFence running: tests 1-4 finish by uninstalling (the uninstaller's
+    own ``privilege-separation.ps1 uninstall`` stops the service and ends the
+    companion, and waits for both to be gone), and test 5's install never gets
+    as far as starting either. So once a test body has *passed*, any
+    PrivacyFence-related process still alive -- an Inno Setup installer or
+    uninstaller or one of their ``.tmp`` helpers, ``PrivacyFenceApp.exe``,
+    ``privacyfence-app.exe`` or ``PrivacyFenceCompanion.exe`` -- is something
+    that test started and did not see finish, and the teardown half fails that
+    test with the process list. That is the same shape as every instability
+    this module has had (a timed-out install's ``enable`` still running, an
+    uninstall helper outliving the uninstall, a companion outliving its task):
+    a failure here lands in the test that leaked, not in whichever test next
+    asked for an install.
+
+    A body that failed or was skipped leaves whatever it was in the middle of
+    -- the service and companion of a half-finished test are expected there,
+    not a second defect -- so its leftovers are only reported as a warning.
+    What survives the sweep itself fails the teardown either way: it would
+    carry into the next test regardless of whose it was.
+
+    The setup half sweeps and waits the same way but never fails: anything it
+    finds belongs to whatever ran before this test (which, if it was a test in
+    this module, has already failed for it), so it is only warned about.
+    """
+    found, survivors = _tear_down_separation()
+    if found:
+        warnings.warn(
+            "PrivacyFence processes were already running before this test and were swept:\n"
+            + _process_list(found),
+            stacklevel=1,
+        )
+    if survivors:
+        warnings.warn(
+            f"PrivacyFence processes were still running {_SWEEP_TIMEOUT:.0f}s after the setup sweep "
+            f"killed them -- this test runs against a machine something else is still changing:\n"
+            + _process_list(survivors),
+            stacklevel=1,
+        )
     yield
-    _tear_down_separation()
+    found, survivors = _tear_down_separation()
+    call = getattr(request.node, "rep_call", None)
+    body_passed = call is not None and call.passed
+    problems = []
+    if found and body_passed:
+        problems.append(
+            "this test passed but left PrivacyFence processes running when it returned -- every test in "
+            "this module ends uninstalled, so these are something it started and did not wait for (see "
+            "_clean_separation_state's docstring):\n" + _process_list(found)
+        )
+    elif found:
+        warnings.warn(
+            "swept PrivacyFence processes this (failed or skipped) test left behind:\n" + _process_list(found),
+            stacklevel=1,
+        )
+    if survivors:
+        problems.append(
+            f"PrivacyFence processes were still running {_SWEEP_TIMEOUT:.0f}s after the teardown sweep "
+            f"killed them, and will carry into the next test:\n" + _process_list(survivors)
+        )
+    if problems:
+        pytest.fail("\n\n".join(problems), pytrace=False)
 
 
 def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None:
@@ -508,38 +598,388 @@ def _wait_until_connectable(host: str, port: int, timeout: float = 30.0) -> None
     raise TimeoutError(f"{host}:{port} never became connectable") from last_exc
 
 
-def _run_installer(*args: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
-    result = subprocess.run(list(args), capture_output=True, text=True, timeout=timeout)
-    return result
+# --------------------------------------------------------------------------- #
+# Inno Setup processes -- running Setup or the uninstaller, and knowing when
+# every process it started has really gone
+# --------------------------------------------------------------------------- #
+#
+# Neither `setup.exe` nor `unins000.exe` is the process that does the work.
+# Setup extracts its real installer to `%TEMP%\is-XXXXX.tmp\<name>.tmp` and
+# runs that as a child (which in turn runs `privilege-separation.ps1 enable`);
+# the uninstaller copies itself to a `_iu*.tmp` in `%TEMP%` and runs the copy,
+# and a `_un*.tmp` helper deletes `unins000.exe`, `unins000.dat` and the
+# install directory *after* the process that was waited on has exited. So a
+# timeout that kills only the process `subprocess` started leaves the
+# installer running -- still registering the service, the companion task and
+# `%ProgramData%` state underneath the fixture teardown and whatever test runs
+# next -- and "the uninstaller returned" does not mean "the uninstall is
+# finished". The helpers below are how this module handles both.
+
+# Setup's bootstrap and the uninstaller's own image, by name. The helpers they
+# start all run from a `.tmp` image (see above), which nothing else on a CI
+# runner does, so those are matched by extension rather than by the exact
+# naming scheme of whichever Inno Setup version built the installer.
+_INNO_LAUNCHER_NAME = re.compile(r"^(unins\d{3}\.exe|PrivacyFence-.*setup\.exe)$", re.IGNORECASE)
+# How many lines of an installer's /LOG= file a timeout failure quotes.
+_INSTALL_LOG_TAIL_LINES = 100
+
+
+class _Process(NamedTuple):
+    """One row of ``Win32_Process``. ``path``/``command_line`` are None where
+    Windows declines to say (a protected process, or one already exiting)."""
+
+    pid: int
+    parent_pid: int
+    name: str
+    path: str | None
+    command_line: str | None
+
+    def __str__(self) -> str:
+        return f"pid {self.pid} (parent {self.parent_pid}): {self.command_line or self.path or self.name}"
+
+
+def _win32_processes() -> list[_Process]:
+    """Every live process, with executable path and command line --
+    ``tasklist`` reports neither, and the path (``is-XXXXX.tmp``) and command
+    line (which ``privilege-separation.ps1`` step) are what a hung install's
+    diagnosis needs."""
+    script = (
+        "$ErrorActionPreference = 'Stop'; "
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+        "ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | "
+        "Select-Object ProcessId, ParentProcessId, Name, ExecutablePath, CommandLine)"
+    )
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, encoding="utf-8", errors="replace", timeout=60,
+    )
+    assert result.returncode == 0, f"listing processes failed (exit {result.returncode}):\n{result.stderr}"
+    rows = json.loads(result.stdout or "[]")
+    if isinstance(rows, dict):  # defensive: a single object rather than a one-element array
+        rows = [rows]
+    return [
+        _Process(
+            pid=int(row["ProcessId"]),
+            parent_pid=int(row["ParentProcessId"] or 0),
+            name=row["Name"] or "",
+            path=row["ExecutablePath"],
+            command_line=row["CommandLine"],
+        )
+        for row in rows
+    ]
+
+
+def _inno_processes() -> list[_Process]:
+    """Every live Inno Setup process on the machine: Setup's bootstrap
+    (``PrivacyFence-*setup.exe``) and its ``is-*.tmp\\*.tmp`` installer, and
+    the uninstaller (``unins000.exe``) and its ``_iu*.tmp``/``_un*.tmp``
+    copies and clean-up helpers.
+
+    Machine-wide, not scoped to one run: an Inno process left over from an
+    earlier step is exactly as able to change machine state under a later one
+    as the current run's own. Includes a run the caller is itself still
+    waiting on, so call this after that run has returned."""
+    return [
+        process for process in _win32_processes()
+        if process.name.lower().endswith(".tmp") or _INNO_LAUNCHER_NAME.match(process.name)
+    ]
+
+
+def _wait_for_no_inno_processes(timeout: float = 60.0) -> list[_Process]:
+    """Polls until ``_inno_processes()`` is empty, or ``timeout`` runs out.
+
+    Returns whatever was still alive at the deadline -- empty on success --
+    rather than failing itself, so that each caller can say in its own
+    assertion what the survivors mean for the step it was waiting on."""
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = _inno_processes()
+        if not remaining or time.monotonic() >= deadline:
+            return remaining
+        time.sleep(0.5)
+
+
+def _descendants(pid: int, processes: list[_Process]) -> list[_Process]:
+    children: dict[int, list[_Process]] = {}
+    for process in processes:
+        if process.pid != process.parent_pid:  # the System Idle Process is its own parent
+            children.setdefault(process.parent_pid, []).append(process)
+    found: list[_Process] = []
+    seen = {pid}
+    pending = [pid]
+    while pending:
+        for child in children.get(pending.pop(), []):
+            if child.pid not in seen:  # a reused PID can make the parent links loop
+                seen.add(child.pid)
+                found.append(child)
+                pending.append(child.pid)
+    return found
+
+
+def _log_tail(log_path: Path | None) -> str:
+    if log_path is None:
+        return "(this run was not given a /LOG= file)"
+    if not log_path.exists():
+        return f"({log_path} was never written)"
+    lines = log_path.read_text(errors="replace").splitlines()
+    return "\n".join(lines[-_INSTALL_LOG_TAIL_LINES:])
+
+
+# `installer/privacyfence.iss`'s SeparateInstall runs `enable` through
+# `cmd /C "... > "<is-XXXXX.tmp>\privilege-separation.out" 2>&1"` and copies
+# that file into the /LOG= file only once `enable` returns -- so for an install
+# that hangs *in* `enable`, the log's last line is "SeparateInstall: running"
+# and what `enable` was doing is only in the redirect target, which a killed
+# installer leaves behind in its temp directory.
+_REDIRECT_TARGET = re.compile(r'>\s*"([^"]+)"')
+
+
+def _redirect_tails(tree: list[_Process]) -> str:
+    sections = []
+    for member in tree:
+        for target in _REDIRECT_TARGET.findall(member.command_line or ""):
+            sections.append(f"---- last {_INSTALL_LOG_TAIL_LINES} lines of {target} ----\n{_log_tail(Path(target))}")
+    return "\n".join(sections)
+
+
+def _kill_installer_tree(process: subprocess.Popen, timeout: float, log_path: Path | None) -> NoReturn:
+    """Ends an installer run that outlived ``timeout``, all of it, and fails
+    with what it was doing.
+
+    ``subprocess.run(timeout=)`` would kill ``process`` alone, which is the
+    one process in the tree doing nothing but waiting (see this section's
+    header). So the tree is walked from ``process`` while it is still alive
+    to anchor it -- ``taskkill /T`` finds children through their parent PID --
+    and then nothing is reported until no Inno process remains, so that the
+    fixture teardown this failure hands over to runs against a machine
+    nothing else is still changing."""
+    snapshot = _win32_processes()
+    tree = [p for p in snapshot if p.pid == process.pid] + _descendants(process.pid, snapshot)
+    killed = subprocess.run(
+        ["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, text=True, timeout=60,
+    )
+    if killed.returncode != 0:
+        # The root exited between the timeout and the taskkill, so /T had
+        # nothing to walk from; end what the snapshot saw under it instead.
+        for member in tree:
+            subprocess.run(["taskkill", "/F", "/PID", str(member.pid)], capture_output=True, text=True, timeout=15)
+    survivors = _wait_for_no_inno_processes(timeout=20.0)
+    for survivor in survivors:
+        subprocess.run(["taskkill", "/F", "/PID", str(survivor.pid)], capture_output=True, text=True, timeout=15)
+    still_alive = _wait_for_no_inno_processes(timeout=20.0) if survivors else []
+    try:
+        process.communicate(timeout=15)
+    except subprocess.TimeoutExpired:
+        pass  # something outside the tree still holds its pipes; the failure below matters more
+    pytest.fail(
+        f"{process.args[0]} did not finish within {timeout:.0f}s, so its whole process tree was killed.\n"
+        f"---- process tree at the timeout ----\n"
+        + ("\n".join(str(p) for p in tree) or "(the root had already exited)")
+        + f"\n---- taskkill /T /F /PID {process.pid} (exit {killed.returncode}) ----\n"
+        f"{killed.stdout}{killed.stderr}"
+        f"---- Inno Setup processes that survived it, and were killed by PID ----\n"
+        + ("\n".join(str(p) for p in survivors) or "(none)")
+        + "\n---- Inno Setup processes still alive after that ----\n"
+        + ("\n".join(str(p) for p in still_alive) or "(none)")
+        + f"\n---- last {_INSTALL_LOG_TAIL_LINES} lines of the install log ----\n{_log_tail(log_path)}\n"
+        + _redirect_tails(tree)
+    )
+
+
+def _run_installer(
+    *args: str, timeout: float = INSTALLER_TIMEOUT_S, log_path: Path | None = None,
+) -> subprocess.CompletedProcess:
+    """Runs Setup or an uninstaller and returns its result. Past ``timeout``,
+    kills the whole Inno process tree and fails with the tail of ``log_path``
+    (the run's ``/LOG=`` file, when it has one) -- see _kill_installer_tree."""
+    process = subprocess.Popen(list(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_installer_tree(process, timeout, log_path)
+    return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+
+
+# --------------------------------------------------------------------------- #
+# Install timings -- where a silent install's time goes, in a *passing* job's
+# log too. Setup's /LOG timestamps every line; `enable`'s own lines arrive in
+# it only after the script exits (all stamped with that one moment), so they
+# carry their own [HH:mm:ss.fff] (scripts/windows_privilege_separation.ps1's
+# Write-Note) and are timed from that instead.
+# --------------------------------------------------------------------------- #
+
+_INNO_LINE = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d{3})\s+(.*)$")
+_ENABLE_NOTE = re.compile(r"^SeparateInstall: (?:WARNING: )?\[(\d\d:\d\d:\d\d\.\d{3})\] (?:-> )?(.*)$")
+# Checkpoints in the order Setup reaches them; each phase runs from its own
+# checkpoint to the next one found.
+_INSTALL_PHASES = (
+    ("start", "Log opened."),
+    ("prepare", "PrepareToInstall:"),
+    ("files", "Starting the installation process."),
+    ("enable", "SeparateInstall: running"),
+    ("finish", "SeparateInstall: exit code"),
+    ("end", "Log closed."),
+)
+_terminal_reporter = None
+
+
+def _seconds(clock: str) -> float:
+    hours, minutes, seconds = clock.split(":")
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def _install_timing_summary(log_path: Path) -> list[str]:
+    """Two lines: Setup's phases, then `enable`'s own steps. Timings only --
+    nothing here asserts, so a log in an unexpected shape reports less rather
+    than failing a test that otherwise passed."""
+    if not log_path.exists():
+        return [f"install timings ({log_path.name}): no log"]
+    stamped = []
+    for line in log_path.read_text(errors="replace").splitlines():
+        match = _INNO_LINE.match(line)
+        if match:
+            stamped.append((_seconds(match.group(2)), match.group(3)))
+    if not stamped:
+        return [f"install timings ({log_path.name}): no timestamped lines"]
+    found = []
+    for name, marker in _INSTALL_PHASES:
+        hit = next((t for t, text in stamped if text.startswith(marker)), None)
+        if hit is not None:
+            found.append((name, hit))
+    last = stamped[-1][0]
+    total = (last - stamped[0][0]) % 86400
+    phases = [
+        f"{name} {((found[i + 1][1] if i + 1 < len(found) else last) - t) % 86400:.1f}s"
+        for i, (name, t) in enumerate(found) if name != "end"
+    ]
+    lines = [f"install timings ({log_path.name}): total {total:.1f}s | " + " | ".join(phases)]
+
+    notes = [(_seconds(m.group(1)), m.group(2)) for m in
+             (_ENABLE_NOTE.match(text) for _, text in stamped) if m]
+    if notes:
+        enable_start = next((t for name, t in found if name == "enable"), notes[0][0])
+        enable_end = next((t for name, t in found if name == "finish"), notes[-1][0])
+        steps = [f"powershell start {(notes[0][0] - enable_start) % 86400:.1f}s"]
+        for i, (t, text) in enumerate(notes):
+            until = notes[i + 1][0] if i + 1 < len(notes) else enable_end
+            steps.append(f"{text[:48]} {(until - t) % 86400:.1f}s")
+        lines.append(f"  enable steps ({log_path.name}): " + " | ".join(steps))
+    return lines
+
+
+def _report(lines: list[str]) -> None:
+    """Into the job log even when the test passes (pytest's own capture would
+    swallow a print), and into the step summary when there is one."""
+    if _terminal_reporter is not None:
+        for line in lines:
+            _terminal_reporter.write_line(line)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as handle:
+            handle.write("".join(f"    {line}\n" for line in lines))
+
+
+@pytest.fixture(autouse=True)
+def _installer_timings(pytestconfig, monkeypatch):
+    """Reports every Setup/uninstaller run's wall time, whichever helper or
+    test made it, by wrapping ``_run_installer`` for the test's duration."""
+    global _terminal_reporter
+    _terminal_reporter = pytestconfig.pluginmanager.get_plugin("terminalreporter")
+    module = sys.modules[__name__]
+    wrapped = module._run_installer
+
+    def _timed(*args, **kwargs):
+        started = time.monotonic()
+        outcome = "timed out"
+        try:
+            result = wrapped(*args, **kwargs)
+            outcome = f"exit {result.returncode}"
+            return result
+        finally:
+            _report([f"installer run {Path(args[0]).name}: {time.monotonic() - started:.1f}s ({outcome})"])
+
+    monkeypatch.setattr(module, "_run_installer", _timed)
+    yield
+    _terminal_reporter = None
 
 
 def _install(setup_exe: Path, install_dir: Path, log_path: Path) -> None:
-    result = _run_installer(
-        str(setup_exe),
-        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
-        f"/DIR={install_dir}",
-        f"/LOG={log_path}",
-    )
+    try:
+        result = _run_installer(
+            str(setup_exe),
+            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
+            f"/DIR={install_dir}",
+            f"/LOG={log_path}",
+            timeout=INSTALLER_TIMEOUT_S,
+            log_path=log_path,
+        )
+    finally:
+        _report(_install_timing_summary(log_path))
     assert result.returncode == 0, (
         f"installer failed (exit {result.returncode}):\n{result.stdout}{result.stderr}\n"
         f"---- install log ----\n{log_path.read_text(errors='replace') if log_path.exists() else '(missing)'}"
     )
 
 
-def _silent_uninstall(install_dir: Path) -> None:
-    """``unins000.exe /VERYSILENT``, and wait for the install directory to go.
+def _uninstall_leftovers(install_dir: Path) -> list[str]:
+    """Everything still under ``install_dir`` -- the uninstaller's own
+    ``unins000.exe``/``unins000.dat`` included -- which an uninstall that has
+    really finished leaves none of.
 
-    Inno's uninstaller spawns a short-lived helper process to delete its own
-    directory/log after the foreground process it just waited on exits --
-    poll rather than assume the directory is already gone the instant the
-    process returns."""
+    The directory itself may stay, empty. Inno removes ``{app}`` only if Setup
+    created it (``MakeDir`` in is-6_7_3's ``Setup.Install.pas`` logs a
+    directory for uninstall only when it did not exist yet), and every test
+    here pre-creates it with ``_admin_only_writable_dir``."""
+    return sorted(str(path) for path in install_dir.iterdir()) if install_dir.is_dir() else []
+
+
+def _silent_uninstall(install_dir: Path, settle_timeout: float = 60.0) -> None:
+    """``unins000.exe /VERYSILENT``, and wait until the uninstall has really
+    finished: ``unins000.exe``, ``unins000.dat`` and everything else under
+    ``install_dir`` gone, and no Inno Setup process left alive.
+
+    ``unins000.exe`` returning is not that. Per is-6_7_3's
+    ``Setup.Uninstall.pas``, it is only the first phase: it copies itself to
+    ``%TEMP%\\is-XXXXXXXXXX-uninstall.tmp\\_unins.tmp`` and waits for that
+    second phase, which does the uninstall and, at the very end
+    (``DeleteUninstallDataFiles``), deletes ``unins000.dat``, tells the first
+    phase to exit, waits for it, sleeps 500 ms, deletes ``unins000.exe``
+    (retrying for up to ~3 s), removes the directories it could not remove
+    before, and only then exits itself. So for a moment after this function's
+    ``_run_installer`` returns, a process is still deleting files by *name*
+    under ``install_dir``. A caller that reinstalls into the same directory
+    straight away -- ``test_windows_uninstall_keeps_data_and_purge_deletes_it``
+    does, as a real user would -- can have the new install's ``unins000.exe``
+    deleted by the old uninstall's second phase, which is how the v4.5.0a1
+    tag's first ``build-windows`` run failed.
+
+    Fails, naming what is still there and which processes are still alive,
+    if that has not happened within ``settle_timeout`` seconds, rather than
+    carrying on into a step that would race it."""
     uninstaller = install_dir / "unins000.exe"
     assert uninstaller.is_file(), f"{uninstaller} missing -- was the install actually silent/complete?"
-    result = _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
+    result = _run_installer(
+        str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", timeout=UNINSTALLER_TIMEOUT_S,
+    )
     assert result.returncode == 0, f"uninstall failed (exit {result.returncode}):\n{result.stdout}{result.stderr}"
-    deadline = time.monotonic() + 15.0
-    while (install_dir / MAIN_EXE_NAME).exists() and time.monotonic() < deadline:
-        time.sleep(0.2)
+    deadline = time.monotonic() + settle_timeout
+    while True:
+        # Processes first: once none is left, nothing can delete anything
+        # else, so leftovers seen after that are really left over.
+        processes = _inno_processes()
+        leftovers = _uninstall_leftovers(install_dir)
+        if not processes and not leftovers:
+            return
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    pytest.fail(
+        f"{uninstaller} /VERYSILENT exited 0, but the uninstall had not finished {settle_timeout:.0f}s later.\n"
+        f"---- still under {install_dir} ----\n"
+        + ("\n".join(leftovers) or "(nothing)")
+        + "\n---- Inno Setup processes still alive ----\n"
+        + ("\n".join(str(p) for p in processes) or "(none)")
+    )
 
 
 def _local_app_data_privacyfence() -> Path | None:
@@ -550,11 +990,6 @@ def _local_app_data_privacyfence() -> Path | None:
 # --------------------------------------------------------------------------- #
 # Test 1 -- install / validate / start+scenario / uninstall
 # --------------------------------------------------------------------------- #
-
-def _run_installer(*args: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
-    result = subprocess.run(list(args), capture_output=True, text=True, timeout=timeout)
-    return result
-
 
 async def test_windows_install_validate_scenario_uninstall_lifecycle(tmp_path):
     setup_exe = _built_installers()[-1]
@@ -673,9 +1108,8 @@ def _synthetic_next_version_installer(setup_exe: Path, output_dir: Path) -> tupl
     return new_setup, new_version
 
 
-@pytest.mark.timeout(300)   # builds a second installer *and* boots the daemon twice -- the module's
-                             # default timeout=180 (sized for test 1's single install/boot/uninstall)
-                             # isn't enough headroom for both in one test.
+@pytest.mark.timeout(MULTI_INSTALL_TEST_TIMEOUT_S)   # builds a second installer *and* boots the
+                                                     # daemon twice -- see that constant.
 async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     setup_exe_n = _built_installers()[-1]
     install_dir = _admin_only_writable_dir(tmp_path / INSTALL_DIR_NAME)
@@ -703,30 +1137,22 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
     setup_exe_n1, new_version = _synthetic_next_version_installer(setup_exe_n, tmp_path / "upgrade-build")
     upgrade_log_path = tmp_path / "install-n1.log"
 
-    # v4.1.0a9's release build failed exactly here: Setup exited 5 because
-    # RestartManager found a still-running "privacyfence-app" and, under
-    # /SUPPRESSMSGBOXES, defaulted the resulting Abort/Retry/Ignore prompt to
-    # Abort rather than actually retrying -- see _kill_stray_app_processes's
-    # own comment. Sweep for one before the attempt, and again before a
-    # single retry if Setup still reports that exact failure, rather than
-    # failing the whole release on what a real interactive install would
-    # have shrugged off with one manual Retry click.
-    _kill_stray_app_processes()
-    for attempt in (1, 2):
-        upgrade_result = _run_installer(
-            str(setup_exe_n1),
-            "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
-            f"/DIR={install_dir}",
-            f"/LOG={upgrade_log_path}",
-        )
-        if upgrade_result.returncode == 0:
-            break
-        log_text = upgrade_log_path.read_text(errors="replace") if upgrade_log_path.exists() else ""
-        if attempt == 2 or upgrade_result.returncode != 5 or "could not be shut down" not in log_text:
-            break
-        _kill_stray_app_processes()
-        time.sleep(2)
-
+    # No sweep of our own and no retry: the service and the companion that
+    # version N started are still running here, exactly as on a real
+    # upgrade, and stopping them is the installer's job (PrepareToInstall,
+    # ADR 0045). This test used to stop and taskkill them itself and retry
+    # Setup once past RestartManager's "Some applications could not be shut
+    # down" (f3883ac6, 3079c985, df1a403d), which proved the harness could
+    # clear the way rather than that the installer does.
+    upgrade_result = _run_installer(
+        str(setup_exe_n1),
+        "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
+        f"/DIR={install_dir}",
+        f"/LOG={upgrade_log_path}",
+        timeout=INSTALLER_TIMEOUT_S,
+        log_path=upgrade_log_path,
+    )
+    _report(_install_timing_summary(upgrade_log_path))
     assert upgrade_result.returncode == 0, (
         f"upgrade install (version {new_version}) failed (exit {upgrade_result.returncode}):\n"
         f"{upgrade_result.stdout}{upgrade_result.stderr}\n"
@@ -734,6 +1160,12 @@ async def test_windows_upgrade_in_place_preserves_user_state(tmp_path):
         f"{upgrade_log_path.read_text(errors='replace') if upgrade_log_path.exists() else '(missing)'}"
     )
     assert alias_exe.is_file(), f"{alias_exe} missing after upgrade install"
+    upgrade_log = upgrade_log_path.read_text(errors="replace")
+    assert "PrepareToInstall: no PrivacyFence process is still running" in upgrade_log, (
+        "the upgrade succeeded, but PrepareToInstall did not confirm it had ended every "
+        "PrivacyFence process before copying files -- RestartManager or luck did its job:\n"
+        f"{upgrade_log}"
+    )
 
     # ── The companion task is still registered -- `enable` re-registers it
     # (with /f) on every install, upgrades included ────────────────────────
@@ -850,16 +1282,18 @@ def test_windows_install_separates_with_no_manual_enable(tmp_path):
             f"a {REMOVED_DAEMON_TASK_NAME!r} daemon sign-in task is registered"
         )
     finally:
-        uninstaller = install_dir / "unins000.exe"
-        if uninstaller.is_file():
-            _run_installer(str(uninstaller), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART")
+        # _silent_uninstall, not a bare _run_installer: unins000.exe returning
+        # is only the uninstall's first phase, and a second phase still running
+        # when this test returns is a leak _clean_separation_state fails it for.
+        if (install_dir / "unins000.exe").is_file():
+            _silent_uninstall(install_dir)
 
 
 # --------------------------------------------------------------------------- #
 # Test 4 -- remove keeps data, reinstall picks it up, purge deletes it (ADR 0042)
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.timeout(300)   # two installs, two service cold starts and a purge
+@pytest.mark.timeout(MULTI_INSTALL_TEST_TIMEOUT_S)   # two installs, two service cold starts and a purge
 async def test_windows_uninstall_keeps_data_and_purge_deletes_it(tmp_path):
     """The Windows spelling of the ``.deb``'s ``apt remove``/``apt purge``.
 
@@ -947,6 +1381,8 @@ def test_windows_install_fails_when_the_image_is_user_writable(tmp_path):
         "/VERYSILENT", "/SUPPRESSMSGBOXES", "/SP-", "/NORESTART",
         f"/DIR={install_dir}",
         f"/LOG={log_path}",
+        timeout=INSTALLER_TIMEOUT_S,
+        log_path=log_path,
     )
     install_log = log_path.read_text(errors="replace") if log_path.exists() else ""
 

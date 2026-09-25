@@ -2032,6 +2032,32 @@ class TestWindowsInstallerContract:
         assert "if not SeparateInstall(SeparationOutput) then" in post_install
         assert "RaiseException(" in post_install
 
+    def test_setup_ends_its_own_processes_and_force_closes_what_is_left(self):
+        # ADR 0045. PrepareToInstall ends every PrivacyFence process and waits
+        # until tasklist no longer lists one; RestartManager is only the
+        # backstop, and with the default CloseApplications=yes it merely asks,
+        # which a headless daemon or a tray icon never answers -- so under
+        # /SUPPRESSMSGBOXES it aborted Setup (exit 5) instead of closing them.
+        # The packaged upgrade test asserts the confirmation line from Setup's
+        # log, so the two files have to carry the same string.
+        inno = WINDOWS_INNO_SETUP.read_text(encoding="utf-8")
+        setup = inno.split("\n[Setup]\n", 1)[1].split("\n[Files]\n", 1)[0]
+        prepare = inno.split("function PrepareToInstall", 1)[1].split("\nend;", 1)[0]
+        listing = inno.split("function ListPrivacyFenceProcesses", 1)[1].split("\nend;", 1)[0]
+        kill = inno.split("procedure KillPrivacyFenceProcesses", 1)[1].split("\nend;", 1)[0]
+        confirmation = "PrepareToInstall: no PrivacyFence process is still running"
+        smoke = (REPO_ROOT / "tests" / "integration" / "test_windows_packaged_smoke.py").read_text(encoding="utf-8")
+
+        assert re.search(r"^CloseApplications=force$", setup, re.MULTILINE)
+        assert "sc.exe') +\n      '\" stop " in prepare
+        assert "KillPrivacyFenceProcesses();" in prepare
+        assert "ListPrivacyFenceProcesses(Running)" in prepare
+        assert f"Log('{confirmation}')" in prepare
+        assert confirmation in smoke
+        for image in ("{#CompanionExeName}", "{#AppExeName}", "{#AliasExeName}"):
+            assert f"'/F /IM \"{image}\"'" in kill
+            assert f"Lowercase('{image}')" in listing
+
     def test_no_code_line_reads_as_a_section_tag_or_a_directive(self):
         # iscc reads a line whose first non-blank character is '[' as a
         # section tag and one starting with '#' as an ISPP directive -- even
@@ -2690,6 +2716,48 @@ class TestWindowsServiceHost:
         # daemon_main's own argument routing) never requires Windows.
         assert windows_service.SERVICE_DISPLAY_NAME
         assert "#428" in windows_service.SERVICE_DESCRIPTION
+
+    @staticmethod
+    def _run_isolated(code: str) -> str:
+        # A fresh interpreter, because this one imported daemon_main long ago
+        # and "is it in sys.modules" is the whole question.
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=60, cwd=REPO_ROOT,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return result.stdout.strip()
+
+    def test_the_frozen_entry_reaches_the_dispatcher_without_importing_the_daemon(self):
+        # The SCM kills a service that has not called StartServiceCtrlDispatcher
+        # within 30 seconds (error 1053), and importing daemon_main is not
+        # needed to make that call. src/_daemon_entry.py is the frozen build's
+        # entry point, so it is where the flag has to be routed first.
+        output = self._run_isolated(
+            "import runpy, sys\n"
+            "import privacyfence.windows_service as ws\n"
+            "ws.run_service = lambda: print('privacyfence.daemon_main' in sys.modules) or 0\n"
+            "sys.argv = ['privacyfence-app.exe', '--windows-service']\n"
+            "try:\n"
+            "    runpy.run_path('src/_daemon_entry.py', run_name='__main__')\n"
+            "except SystemExit as exc:\n"
+            "    print('exit', exc.code)\n"
+        )
+        assert output.splitlines() == ["False", "exit 0"]
+
+    def test_building_the_service_class_does_not_import_the_daemon(self):
+        # _service_class() runs before StartServiceCtrlDispatcher too; the
+        # daemon is imported in SvcDoRun, after the framework has reported
+        # SERVICE_RUNNING. Stand-in pywin32 modules, so this runs anywhere.
+        output = self._run_isolated(
+            "import sys, types\n"
+            "for name in ('servicemanager', 'win32service', 'win32serviceutil'):\n"
+            "    sys.modules[name] = types.ModuleType(name)\n"
+            "sys.modules['win32serviceutil'].ServiceFramework = object\n"
+            "from privacyfence import windows_service\n"
+            "windows_service._service_class()\n"
+            "print('privacyfence.daemon_main' in sys.modules)\n"
+        )
+        assert output == "False"
 
 
 class TestWindowsChannelTrustees:
