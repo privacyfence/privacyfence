@@ -33,16 +33,13 @@ page's own search/filter/add-rule-form state) lives in the JS-side ``ui``
 object below and is merged with the Python-pushed state on every render,
 using the same field-naming convention the design's own ``Component.state``
 established (``section``, ``privacyGroup``, ...) -- never sent to Python.
-Text inputs (grant name/id -- through P5; the Auto-accept page's own value
-field, since P6) commit on blur/Enter, not per keystroke, so a bridge
+Text inputs (the Auto-accept page's own value field) commit on blur/Enter, not per keystroke, so a bridge
 round-trip mid-typing can't steal focus/cursor position; toggles/segmented
 controls/buttons act immediately on click since they're discrete, not free
-text. The Auto-accept page's own search/filter inputs are the one exception
-(P6, following the same pattern this module's pre-P6 rules search already
-used): every keystroke re-renders, since filtering that list is itself the
-whole point of typing into it, and ``onInput`` below restores focus/cursor
-position across that re-render the same way it already did for the old
-search box.
+text. The Auto-accept page's own search/filter inputs are the one exception:
+every keystroke re-renders, since filtering that list is itself the whole
+point of typing into it, and ``onInput`` below restores focus/cursor
+position across that re-render.
 """
 from __future__ import annotations
 
@@ -60,7 +57,7 @@ from .web.org_settings_scope import LOCAL_MODE, ORG_MODE, NOT_APPLICABLE_ACTIONS
 # stays a separate export rather than a single shared @import source),
 # rather than the two documents' hand-tuned, independently-drifting hex
 # values they had before this phase. This is a palette swap, not a layout
-# change (§16.8's risk #5) -- every rule below keeps its original spacing/
+# change -- every rule below keeps its original spacing/
 # radius/structure; only color values became var(--pf-*)/var(--color-*)
 # references, which is also what makes @media(prefers-color-scheme: dark)
 # (embedded in tokens.css) apply here for the first time, with no second
@@ -226,8 +223,8 @@ select.pf-input { cursor: pointer; }
 .pf-auth-link { font-size: 12.5px; color: var(--pf-accent); cursor: pointer; white-space: nowrap; }
 .pf-auth-link.disabled { color: var(--pf-text-dim); cursor: default; pointer-events: none; }
 
-/* ---- Privacy's 2-pane layout -- Auto-accept (below) is a single flat page, no subnav, since P6
-   replaced its old per-connector subnav with one filterable list ---- */
+/* ---- Privacy's 2-pane layout -- Auto-accept (below) is a single flat page, no subnav: one
+   filterable list across every connector ---- */
 .pf-subnav {
   width: 170px; flex-shrink: 0; background: var(--pf-surface); border-right: 1px solid var(--pf-border);
   padding: 12px 10px; display: flex; flex-direction: column; overflow-y: auto;
@@ -250,7 +247,7 @@ select.pf-input { cursor: pointer; }
 .pf-cap-chip { padding: 4px 10px; border-radius: 5px; font-size: 11px; cursor: pointer; font-weight: 500; background: var(--pf-surface-2); color: var(--pf-text-muted); }
 .pf-cap-chip.on { background: var(--pf-accent); color: #fff; }
 
-/* ---- Auto-accept (policy v2) -- P6 ---- */
+/* ---- Auto-accept (policy v2) ---- */
 .pf-rules-empty { font-size: 13px; color: var(--pf-text-dim); }
 .pf-aa-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 18px; max-width: 720px; }
 .pf-aa-search { flex: 1 1 220px; min-width: 180px; }
@@ -402,7 +399,7 @@ _JS = r"""
   }
 
   var ui = {
-    // issue #396 Part C: window.__pfInitialSection lets one specific route
+    // window.__pfInitialSection lets one specific route
     // (GET /settings/connectors, see web/routes_settings.py) land here with
     // Connectors already selected -- a real, server-decided initial value
     // for what's otherwise purely client-side UI state (see this module's
@@ -414,7 +411,7 @@ _JS = r"""
     // section every org principal, admin or not, always gets.
     section: (window.__pfInitialSection || (CAPS.sections.general ? 'general' : 'auto_accept')),
     privacyGroup: null,
-    // Auto-accept page (P6) -- see renderAutoAccept below for how each is used.
+    // Auto-accept page -- see renderAutoAccept below for how each is used.
     aaSearch: '', aaConnectorFilter: [], aaFamilyFilter: [], aaExpanded: {},
     aaGroup: null, aaValue: '', aaCheckedVerbs: {},
     // Dismissible client-side only (never sent to Python, same reasoning
@@ -541,9 +538,8 @@ _JS = r"""
   // __pfNotifPrompt's own one-shot toast (web_shell.py): that toast fires
   // once, right after a first decision, and never again once shown; this
   // card is the permanent, re-visitable home for the same action -- exactly
-  // what §4.4 calls for and the toast alone can't be ("a header toggle...
-  // if permission is denied, say so and link to the browser's own
-  // instructions"). Granting (or denying) here also means the toast simply
+  // what the toast alone can't be: a toggle that, if permission is
+  // denied, says so and links to the browser's own instructions. Granting (or denying) here also means the toast simply
   // won't fire later: its own guard is `Notification.permission ===
   // 'default'`, which this card's own Enable click has already moved past.
   //
@@ -625,10 +621,9 @@ _JS = r"""
     html += '<div class="pf-page-title">General</div>';
     html += renderNotificationsCard(state);
 
-    // §16.2.4: the web surface's replacement for _show_update_available_
-    // alert's native rumps.alert() -- an in-page banner whose three
-    // buttons map onto the exact same three outcomes (skip this version /
-    // remind me later / download), rather than a blocking native modal an
+    // The update-available notice is an in-page banner whose three
+    // buttons map onto three outcomes (skip this version / remind me
+    // later / download), rather than a blocking native modal an
     // HTTP request has no business popping up on the daemon's machine.
     if (g.update_available) {
       html += '<div class="pf-card pf-update-banner"><div class="pf-card-row">';
@@ -658,14 +653,14 @@ _JS = r"""
     html += toggleHtml(g.pii_financial, 'toggle_pii_category', { category_key: 'detect_financial_figures' }, !g.pii_enabled, 'Detect financial figures');
     html += '</div></div>';
 
-    // #426 Phase 1: a plain same-origin <a>, not a data-action AJAX call --
+    // A plain same-origin <a>, not a data-action AJAX call --
     // /security is its own standalone page (web/routes_security.py), not
     // part of this SPA's own render() dispatch.
     html += '<div class="pf-card"><div class="pf-card-row"><div><div class="pf-card-title">Security</div>';
     html += '<div class="pf-card-desc">Manage passkeys (Face ID, Touch ID, Windows Hello) enrolled against this install.</div></div>';
     html += '<a class="pf-btn-secondary" style="text-decoration:none;display:inline-block" href="/security">Manage passkeys</a>';
     html += '</div>';
-    // B9: the "turn step-up on" control -- one-directional (see
+    // The "turn step-up on" control -- one-directional (see
     // SettingsController.enable_step_up's own docstring for why turning
     // it back off stays a config.yaml-plus-restart operation with no
     // control here). Three states, mirroring what enable_step_up itself
@@ -749,7 +744,7 @@ _JS = r"""
     return { text: 'Not connected', cls: 'pf-pill-neutral' };
   }
 
-  // issue #396 Part C: shown on first run (nothing authenticated yet) so
+  // Shown on first run (nothing authenticated yet) so
   // landing here from the companion's Open Settings item isn't a blank
   // connector list with no explanation of what any of it means or what
   // order to do things in. Dismissible, client-side only -- see ui.
@@ -803,7 +798,7 @@ _JS = r"""
           '" role="button" tabindex="0" aria-label="' + esc(c.auth_label) + ' ' + esc(c.label) + '" ' +
           (authDisabled ? '' : dataAttr('authenticate_connector', { connector: c.key })) + '>' + esc(c.auth_label) + '</div>';
       }
-      // F6 of the self-approval review: directional, not a single
+      // Directional, not a single
       // toggle_connector -- re-enabling a connector is gated
       // (_SENSITIVE_ACTIONS) differently from disabling one (see
       // web/routes_settings.py's own classification comment), so the
@@ -817,20 +812,17 @@ _JS = r"""
   }
 
   // -------------------------------------------------------------------- //
-  // Auto-accept (policy v2) -- P6 of the policy v2 redesign. One filterable
-  // rule list, sentence-rendered server-side (policy.describe), replacing
-  // the old per-connector Trusted-*/parallel-rule-row/Sheets-Docs-pointer-
-  // page surface this file used to carry (see git history for renderRules'
-  // pre-P6 shape). Every "Add rule" submission writes straight to the v2
+  // Auto-accept (policy v2). One filterable rule list, sentence-rendered
+  // server-side (policy.describe). Every "Add rule" submission writes straight to the v2
   // auto_accept: section (settings_controller.add_policy_rule) -- there is
   // no rule_type dropdown here the way the old per-operation rows had one,
   // because a scope's own verb checkboxes (aa.scope_groups[].verbs) are
   // what a v2 rule is actually keyed on, not a v1 rule name.
   //
-  // P8 adds each row's own usage line (settings_controller._auto_accept_state, from
+  // Each row carries its own usage line (settings_controller._auto_accept_state, from
   // AuditLogger.rule_usage()) -- "Matched Nx, last <when>" for a rule that has actually let
-  // something through, or a distinct stale badge next to the (already-existing) Remove link
-  // for one that never has, resolving F9's "which of my rules have never matched" question.
+  // something through, or a distinct stale badge next to the Remove link for one that never
+  // has, answering "which of my rules have never matched".
   // -------------------------------------------------------------------- //
 
   function verbChipsHtml(verbs) {
@@ -894,7 +886,7 @@ _JS = r"""
       html += '<div class="pf-link-danger" role="button" tabindex="0" aria-label="Remove rule" ' +
         dataAttr('remove_policy_rule', { rule_id: r.id }) + '>✕ Remove</div>';
       html += '</div>';
-      // P8: per-rule usage -- "Matched 42x, last 3 days ago" or, for a rule that has never
+      // Per-rule usage -- "Matched 42x, last 3 days ago" or, for a rule that has never
       // fired, a distinct stale badge nudging toward the Remove link right above it.
       html += '<div class="pf-aa-usage' + (r.never_matched ? ' pf-aa-usage-stale' : '') + '">' +
         (r.never_matched
@@ -1369,7 +1361,7 @@ _JS = r"""
   }
 
 
-  // The Auto-accept page's own "Add rule" submit (P6) -- reads the current form state straight off
+  // The Auto-accept page's own "Add rule" submit -- reads the current form state straight off
   // the DOM (the value field, whichever verb chips are checked) rather than from `ui`, since only
   // the selected group id is actually tracked there (see renderAutoAccept). Client-side no-ops
   // (rather than posting nothing useful) when no verb is checked -- add_policy_rule itself would
@@ -1383,7 +1375,7 @@ _JS = r"""
     ui.aaValue = '';
   }
 
-  // No blur-commit fields left as of P6 (the Auto-accept page's own value field commits live via
+  // No blur-commit fields are left (the Auto-accept page's own value field commits live via
   // onInput instead -- see its own comment) -- kept wired (a no-op) rather than unregistered, so a
   // future blur-commit field doesn't also need to re-add the listener itself.
   function onBlur(e) {}
@@ -1529,7 +1521,7 @@ def _capabilities_for(mode: str, *, is_admin: bool) -> dict[str, Any]:
     ``not_applicable_actions``; AI systems (AGT-5) is org-admin-only and
     never shown in local mode; General and Privacy
     Filter are further gated on ``is_admin`` -- the admin-only privacy/PII
-    split #400 established and this phase keeps (every action either page
+    split (every action either page
     can post is itself ``admin_only`` in ``ACTION_SCOPES``, so a non-admin
     who somehow reached one would have every mutation 403 anyway; hiding
     the page is the same authorization decision, applied to rendering).
@@ -1581,7 +1573,7 @@ def build_html(
     header. Defaults to a fresh one when omitted (every real caller passes
     the actual per-request value explicitly).
 
-    ``initial_section`` (issue #396 Part C): a deliberate, narrow exception
+    ``initial_section``: a deliberate, narrow exception
     to ``ui.section`` otherwise being purely client-side state (see this
     module's own docstring) -- ``GET /settings/connectors`` passes
     ``"connectors"`` so a link opened while un-onboarded lands
