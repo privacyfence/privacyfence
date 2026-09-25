@@ -1,23 +1,34 @@
-"""Test-only helpers for the browser tests of privacyfence.eu's hand-written pages.
+"""Test-only helpers for the tests of privacyfence.eu.
 
-`stage_site()` builds the site the way `.github/workflows/pages.yml` does, by replaying that
-workflow's own `cp` lines into a temporary directory, rather than serving `website/` as it
-sits in the repository. The deployed site is assembled from more than `website/` (the icon and
-the screenshots come from elsewhere in the repo), so serving the source tree would test pages
-with missing images. Replaying the workflow's copy step also means a file that
-pages.yml forgets to deploy is missing here too.
+`built_site()` is the site exactly as `scripts/build_site.py` builds it for deployment: the
+hand-written pages assembled from their partials, the static files from the build manifest, and
+`/docs/` when the docs generator is installed. The tests check that output rather than `website/`
+as it sits in the repository, because the deployed site is assembled from more than `website/`
+(the partials, the icon and screenshots from elsewhere in the repo, the docs), and because a file
+the build manifest forgets is then missing here too.
 
-Used by tests/integration/test_website_layout.py (guardrail 12) and
-tests/integration/test_website_consent.py (guardrail 13).
+Built once per test session, offline: `/download/` is not pre-rendered from the live Worker, so
+what the browser tests see is download.js rendering the manifest they stub. `/docs/` is rendered
+from the working tree when the `docs` extra is installed (the website-build workflow installs it)
+and left out otherwise. `PRIVACYFENCE_SITE_DIR` points the tests at a site built beforehand
+instead, which is how .github/workflows/website-build.yml runs them on its own build.
+
+Used by the website guardrail tests: tests/integration/test_website_layout.py (12),
+tests/integration/test_website_consent.py (13), tests/unit/test_website_pages.py and the rest of
+tests/unit/test_website_*.py.
 """
 
 from __future__ import annotations
 
+import atexit
+import functools
 import http.server
+import importlib.util
 import os
-import shlex
 import shutil
 import socket
+import sys
+import tempfile
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,38 +36,46 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 WEBSITE = REPO / "website"
-PAGES_WORKFLOW = REPO / ".github" / "workflows" / "pages.yml"
+
+sys.path.insert(0, str(REPO / "scripts"))
+import build_site  # noqa: E402 -- scripts/ is not a package
 
 API_ORIGIN = "https://downloads.privacyfence.eu"
 GA_ORIGIN = "https://www.googletagmanager.com"
 
 
-def page_paths() -> list[str]:
-    """URL path of every hand-written page: `/`, `/download/`, `/privacy/`, ..."""
-    paths = []
-    for index in sorted(WEBSITE.rglob("index.html")):
-        rel = index.parent.relative_to(WEBSITE).as_posix()
-        paths.append("/" if rel == "." else f"/{rel}/")
-    return paths
+def docs_generator_installed() -> bool:
+    return importlib.util.find_spec("zensical") is not None
 
 
-def stage_site(dest: Path) -> Path:
-    """Replays pages.yml's `cp` lines with `_site` pointed at `dest`. Returns `dest`."""
-    dest.mkdir(parents=True, exist_ok=True)
-    for raw in PAGES_WORKFLOW.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if line.startswith("mkdir -p "):
-            for target in shlex.split(line)[2:]:
-                (dest / Path(target).relative_to("_site")).mkdir(parents=True, exist_ok=True)
-        elif line.startswith("cp "):
-            *sources, target = shlex.split(line)[1:]
-            target_path = dest / Path(target.rstrip("/")).relative_to("_site")
-            for source in sources:
-                if target.endswith("/"):
-                    shutil.copy(REPO / source, target_path / Path(source).name)
-                else:
-                    shutil.copy(REPO / source, target_path)
-    return dest
+@functools.cache
+def built_site() -> Path:
+    """The built site's directory: `PRIVACYFENCE_SITE_DIR`, or a fresh offline build."""
+    prebuilt = os.environ.get("PRIVACYFENCE_SITE_DIR")
+    if prebuilt:
+        return Path(prebuilt).resolve()
+    tmp = Path(tempfile.mkdtemp(prefix="pf-site-"))
+    atexit.register(shutil.rmtree, tmp, ignore_errors=True)
+    out = tmp / "_site"
+    build_site.build(out, docs_ref="worktree" if docs_generator_installed() else None, fetch_manifest=False)
+    return out
+
+
+def docs_built(site: Path | None = None) -> bool:
+    return ((site or built_site()) / "docs" / "index.html").is_file()
+
+
+def page_paths(site: Path | None = None) -> list[str]:
+    """URL paths the browser guardrails load: every hand-written page in the build manifest, and
+    the docs layout sample when /docs/ was built."""
+    site = site or built_site()
+    return list(build_site.PAGES) + [
+        p for p in build_site.DOCS_LAYOUT_SAMPLE if (site / p.lstrip("/") / "index.html").is_file()
+    ]
+
+
+def read_page(path: str, site: Path | None = None) -> str:
+    return ((site or built_site()) / path.lstrip("/") / "index.html").read_text(encoding="utf-8")
 
 
 @contextmanager

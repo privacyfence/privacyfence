@@ -2,7 +2,7 @@
 The one canonical description of PrivacyFence. tests/unit/test_website_canonical_description.py
 requires this text, verbatim (whitespace-normalized, tags stripped), in README.md and on the
 homepage (website/index.html). Change it here first, then in both places, in the same PR.
-This file is repository-only: pages.yml does not publish it.
+This file is repository-only: scripts/build_site.py does not publish it.
 -->
 
 PrivacyFence is an open-source privacy and approval gateway between AI assistants and your business systems. It connects MCP-compatible assistants such as Claude Desktop and Claude Code to Gmail, Google Drive, Calendar, Slack, Salesforce, Jira, Confluence, Telegram, and more.

@@ -1,0 +1,75 @@
+{#-
+  The privacyfence.eu theme for /docs/: the docs generator's own layout (navigation drawer,
+  table of contents, search), inside the site's shared header and footer.
+
+  scripts/build_site.py renders website/_partials/header.html and footer.html into
+  partials/pf-site-header.html and partials/pf-site-footer.html before the generator runs, so the
+  docs carry the same header, <details> menu and footer as every hand-written page. The front
+  matter the build adds to each exported doc supplies `description` and `pf_content_group`
+  (install-*.md -> platform, the five connector setup guides -> connector, the rest -> docs).
+  /site.js is the site's consent banner and Google Analytics code: nothing third-party loads
+  before the visitor accepts (tests/integration/test_website_consent.py covers docs pages too).
+-#}
+{% extends "base.html" %}
+
+{% block site_meta %}
+  {{ super() }}
+  <meta name="theme-color" content="#f6f8fb">
+  {% set group = page.meta.pf_content_group if page.meta and page.meta.pf_content_group else "docs" %}
+  <meta name="pf-content-group" content="{{ group }}">
+{% endblock %}
+
+{% block extrahead %}
+  {% set is_index = page.url in ["", "."] %}
+  {% set description = page.meta.description if page.meta and page.meta.description else config.site_description %}
+  {% set headline = config.site_name if is_index else page.title %}
+  {% set breadcrumb = [
+    {"@type": "ListItem", "position": 1, "name": "PrivacyFence", "item": "https://privacyfence.eu/"},
+    {"@type": "ListItem", "position": 2, "name": "Documentation", "item": config.site_url}
+  ] %}
+  {% if not is_index %}
+    {% set breadcrumb = breadcrumb + [{"@type": "ListItem", "position": 3, "name": page.title, "item": page.canonical_url}] %}
+  {% endif %}
+  <script type="application/ld+json">
+  {{ {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "TechArticle",
+        "headline": headline,
+        "description": description,
+        "url": page.canonical_url,
+        "inLanguage": "en",
+        "version": config.extra.pf_version,
+        "about": {"@id": "https://privacyfence.eu/#software"},
+        "isPartOf": {"@id": "https://privacyfence.eu/#website"},
+        "publisher": {"@type": "Person", "@id": "https://privacyfence.eu/#publisher", "name": "Andras Takacs"}
+      },
+      {"@type": "BreadcrumbList", "itemListElement": breadcrumb}
+    ]
+  } | tojson }}
+  </script>
+{% endblock %}
+
+{% block header %}
+  {% include "partials/pf-site-header.html" %}
+  {{ super() }}
+{% endblock %}
+
+{% block content %}
+  <span id="pf-content"></span>
+  <p class="pf-version-note">These pages describe {{ config.extra.pf_version_label }}.
+    <a href="/download/">Download it</a> ·
+    <a href="{{ config.extra.pf_changelog_url }}">What changed</a></p>
+  {{ super() }}
+{% endblock %}
+
+{% block footer %}
+  {{ super() }}
+  {% include "partials/pf-site-footer.html" %}
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script src="/site.js" defer></script>
+{% endblock %}

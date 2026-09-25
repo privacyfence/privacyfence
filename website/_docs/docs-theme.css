@@ -1,0 +1,43 @@
+/* The /docs/ theme on the site's tokens (website/tokens.css), loaded after the docs generator's
+   own stylesheet together with chrome.css through its extra_css hook (scripts/build_site.py).
+   The generator keeps its layout -- navigation drawer, table of contents, search, fluid tables --
+   and takes the site's colour and type from here, so /docs/ and the hand-written pages read as
+   one site. Light only: dark mode is out of scope for the whole site. */
+
+:root, [data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--ink);
+  --md-primary-fg-color--light: var(--ink-soft);
+  --md-primary-fg-color--dark: #0b141a;
+  --md-primary-bg-color: #ffffff;
+  --md-accent-fg-color: var(--accent);
+  --md-accent-fg-color--transparent: rgba(22, 122, 112, .1);
+  --md-default-fg-color: var(--ink);
+  --md-default-fg-color--light: var(--ink-soft);
+  --md-default-bg-color: var(--bg);
+  --md-typeset-color: var(--ink);
+  --md-typeset-a-color: var(--accent-dark);
+  --md-code-bg-color: var(--surface-soft);
+  --md-text-font-family: var(--font-sans);
+  --md-code-font-family: var(--font-mono);
+}
+
+/* The site header scrolls away with the page; the generator's own bar under it (navigation
+   drawer and search) is the one that stays at the top. Its stacking level sits between the
+   generator's: above its bar (4), so the open menu covers it, and level with its drawer (5),
+   which comes later in the page and so opens over the header. Its text size is the site's,
+   not the generator's smaller base size. */
+.site-header { position: relative; top: auto; z-index: 5; font-size: 16px; line-height: 1.6; }
+
+/* The site footer sits below the generator's previous/next bar, on the site's background. */
+.site-footer { font-size: 13px; line-height: 1.6; }
+.site-footer a { color: inherit; }
+
+.pf-version-note { margin: 0 0 1.2em; padding: .5em .8em; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 var(--radius-s) var(--radius-s) 0; color: var(--ink-soft); font-size: .72rem; }
+.pf-version-note a { color: var(--accent-dark); font-weight: 650; }
+
+/* Wide tables and code scroll inside their own box, never the page (layout rule 2). */
+.md-typeset__scrollwrap, .md-typeset pre > code { overflow-x: auto; }
+
+/* The generator's own footer line (its copyright and "made with" credit) is turned off; the
+   site footer below carries the project's links instead. */
+.md-footer-meta { display: none; }
