@@ -100,11 +100,10 @@ class TestEvaluateTempAccept:
 
 
 class TestFindMatchingRule:
-    """Rule attribution: the rule *object* ``evaluate()`` matched, factored
-    out so a caller (gate.py's ``_evaluate_auto_accept``) can derive a canonical, content-based
-    id from it (``policy.store.rule_id_for_rule``) instead of the possibly-ambiguous name
-    ``evaluate()`` itself returns -- see that function's own docstring for why looking a rule back
-    up by name is unsafe when two rows can share one."""
+    """Rule attribution: the rule *object* ``evaluate()`` matched, so a caller (gate.py's
+    ``_evaluate_auto_accept``) records that rule's own stored ``.id`` (ADR 0074) rather than
+    looking a rule back up by an id -- see that function's own docstring for why that is unsafe
+    when two rows can share one."""
 
     def test_returns_the_matching_rule_object(self):
         rule = PolicyRule(id="r1", predicate="always_allow", value=None, operations=frozenset({"op"}))
