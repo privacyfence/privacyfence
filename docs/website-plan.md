@@ -5,39 +5,153 @@
 by the PR that lands the last wave, after every decision it records has an ADR (see
 [ADRs this plan creates](#adrs-this-plan-creates)).
 
-**Scope: documentation and website only.** The code changes the audit found — product fixes and
-legacy/migration-code removal — were done by the product cleanup plan, now retired (all phases
-merged 2026-09-24, first shipped in `v4.5.0a1`; see [What the product cleanup
-changed](#what-the-product-cleanup-changed)). Wave 1 documents that post-cleanup code directly.
+**Scope: documentation and website only.** The code changes the audit found were done by the
+product cleanup plan, now retired (merged 2026-09-24, first shipped in `v4.5.0a1`; see [What the
+product cleanup changed](#what-the-product-cleanup-changed)).
 
-It combines four inputs:
+**How to read it.** The plan is written to be run by an orchestrating session that starts one
+Claude Code session per wave. [Start here](#start-here) has everything a person has to do or
+decide: open questions, manual steps outside the repo, and how the sessions are run. Everything
+below it is the reference the sessions work from. Each [wave](#waves) is a self-contained brief:
+what it owns, what it must not touch, what it waits for, and when it is done.
 
-- the external "Website & Docs Strategy" review (2026-09-23);
-- the maintainer's answers to the follow-up questionnaire (2026-09-23);
-- a **source-code audit of every document** in the repo (2026-09-24): each doc's claims checked
-  against `src/`, `scripts/`, `installer/`, `debian/`, `mcpb/`, `cloudflare/` and the workflows,
-  with file:line evidence. Its findings drive [Wave 1](#wave-1--user-documentation),
-  [Wave 2](#wave-2--contributor-documentation) and, for the code, the product cleanup (retired);
-- the maintainer's responsive-layout requirement (2026-09-25), decided in
-  [Responsive layout](#responsive-layout).
+Inputs: the external "Website & Docs Strategy" review (2026-09-23); the maintainer's
+questionnaire answers (2026-09-23); a source-code audit of every document (2026-09-24, see
+[Audit summary](#audit-summary)); the maintainer's responsive-layout, analytics and #365 decisions
+(2026-09-25).
 
 ## Contents
 
+- [Start here](#start-here) — open questions, manual steps, running it as sessions
 - [Decisions](#decisions)
 - [Documentation principles](#documentation-principles)
 - [Audit summary](#audit-summary)
 - [Target documentation set](#target-documentation-set)
 - [Target site](#target-site)
-- [Responsive layout](#responsive-layout) — desktop and mobile, no CSS framework
+- [Responsive layout](#responsive-layout)
+- [Analytics](#analytics-google-analytics-4-behind-consent)
 - [Guardrails](#guardrails)
 - [Canonical product description](#canonical-product-description-draft-for-review)
-- [Waves](#waves) — order, dependencies, and each wave's scope
-- [Analytics](#analytics-google-analytics-4-behind-consent)
+- [Waves](#waves)
+- [Release history page](#release-history-page-releases-365)
 - [Measurement](#measurement)
-- [Release history page](#release-history-page-releases-365) — #365, gated
 - [ADRs this plan creates](#adrs-this-plan-creates)
-- [Inputs needed from the maintainer](#inputs-needed-from-the-maintainer)
 - [Retiring this plan](#retiring-this-plan)
+
+## Start here
+
+### Open questions
+
+Answer these in the orchestrating session. It passes the answers to the wave sessions. A wave can
+start before its questions are answered; it drafts with the default and cannot merge until the
+question is answered. The PR says which placeholders are waiting.
+
+| # | Question | Blocks | Default if unanswered |
+|---|---|---|---|
+| Q1 | Approve the [canonical product description](#canonical-product-description-draft-for-review), homepage `<title>` and H1, or edit them. | Wave 0 merge | The draft as written. |
+| Q2 | **Imprint:** your name as it should appear, and a postal or service address. | Wave 0 merge | None. `/imprint/` cannot ship without it. |
+| Q3 | **GA4 measurement ID** (`G-…`, from M4). | GA going live, not the Wave 0 merge | The consent banner and GA wiring ship with the ID empty and GA disabled; the banner is not shown until an ID is set. Setting the ID later is a one-line PR. |
+| Q4 | **Repository description** for GitHub's About box (M6). Proposed: *"Open-source privacy and approval gateway for AI assistants (MCP): human approval, local PII checks and audit for Gmail, Drive, Slack, Salesforce, Jira and more."* | Nothing in the repo | The proposal. |
+| Q5 | **Cut 4.5.0 stable once Wave 1 has merged?** `/docs/` publishes from the latest stable tag (C4), so the new docs go live only with a stable release that contains them. | `/docs/` going live (Wave 3 can merge without it, see its brief) | Yes: 4.5.0 is the first stable after Wave 1. |
+| Q6 | **Wave 1 as one PR (F3) or three?** One PR is ~15 docs for one review. Three (1a install + platform + how it works; 1b security + organization deployment + configuration; 1c approvals + tools + connector guides) can run as three parallel sessions, each reviewed separately. | How Wave 1 is started | One PR, as decided in F3. The session may use sub-agents internally. |
+| Q7 | **When do ChatGPT and Gemini support ship?** | Nothing. B6 adds them to the clients data file in the release that ships them. | Not before they ship. |
+
+Wording you review in the PRs, not questions: the privacy policy and consent banner (Wave 0), every
+doc (Waves 1–2), every page (Waves 0, 4, 5).
+
+### Manual steps (outside the repo)
+
+Only the maintainer can do these: they need dashboards, accounts or a tag push. A session never
+blocks waiting for one silently. If a step is missing, it says which one in its PR.
+
+| # | When | Step |
+|---|---|---|
+| M1 | Before Wave 0 merges | **Cloudflare → Bots:** "Block AI bots" off, and "Managed robots.txt" off (D1, D2). |
+| M2 | Before Wave 0 merges | **Cloudflare → Web Analytics:** off for `privacyfence.eu`, including automatic setup. Otherwise Cloudflare injects its beacon at the edge, alongside GA ([Analytics](#analytics-google-analytics-4-behind-consent)). |
+| M3 | Before Wave 0 merges | **Cloudflare:** Redirect Rule `www` → apex (301). Confirm the GitHub Pages custom domain is the apex (D6). |
+| M4 | Before GA goes live (Q3) | **Google Analytics:** create the GA4 property and web stream. Set data retention to 2 months, and turn off Google Signals, ads personalization and data sharing. Send the measurement ID (Q3). |
+| M5 | Before Wave 0 merges | **Mailbox:** confirm `info@privacyfence.eu` delivers (E5). |
+| M6 | Any time | **GitHub → About:** set the description (Q4), website `https://privacyfence.eu`, and topics `mcp`, `mcp-server`, `claude`, `privacy`, `human-in-the-loop`, `pii`, `ai-security`. |
+| M7 | After Wave 0 deploys | **Search Console:** submit `https://privacyfence.eu/sitemap.xml` and link the GA4 property. |
+| M8 | After Wave 0 deploys | **Baseline:** record 3 months of Search Console impressions and clicks, the download total and the star count ([Measurement](#measurement)). |
+| M9 | After Wave 0 deploys | **Live checks:** Wave 0's post-deploy "Done when" list: bot user agents, Rich Results Test, OG card, GA Realtime only after "Accept", and one real phone. |
+| M10 | Every wave | **Review and merge** each wave's PR. |
+| M11 | After Wave 1 merges | **Fresh install per platform** using only `getting-started.md`. Record it in `release-testing.md`'s manual checks. |
+| M12 | Before the next stable release | **Windows uninstaller:** click through the "Delete PrivacyFence data" checkbox, which has only been compiled in CI ([#674](https://github.com/privacyfence/privacyfence/pull/674)). |
+| M13 | After Wave 1 merges (Q5) | **Cut the stable release** through `/cut-release` or the Actions tab (`release.yml`). A Claude Code on the web container cannot push tags. |
+| M14 | After Wave 3 deploys and M13 | Check that `/docs/getting-started/` shows the released text, and that Search Console accepts the regenerated sitemap. |
+| M15 | Monthly | [Measurement](#measurement), and [#365's gate check](#release-history-page-releases-365) (`curl -s https://downloads.privacyfence.eu/api/stats/downloads`). |
+
+### Running it as sessions
+
+```
+        ┌─ S0  Wave 0  crawlability, legal, analytics, responsive base ─┐
+now ────┼─ S1  Wave 1  user docs ───────────────────────────────────────┼─► S3 Wave 3 ─► S4 Wave 4 ─► S5 Wave 5
+        └─ S2  Wave 2  contributor docs ────────────────────────────────┘        │
+                                                              (#365 gate) ───────┴─► S6 /releases/
+```
+
+| Session | Brief | Starts when | Suggested branch |
+|---|---|---|---|
+| S0 | [Wave 0](#wave-0--crawlability-legal-analytics-responsive-base) | now | `feature/website-wave-0-foundation` |
+| S1 | [Wave 1](#wave-1--user-documentation) | now | `chore/docs-wave-1-user-docs` |
+| S2 | [Wave 2](#wave-2--contributor-documentation) | now | `chore/docs-wave-2-contributor-docs` |
+| S3 | [Wave 3](#wave-3--build-pipeline-and-docs-site) | S0, S1 and S2 merged | `feature/website-wave-3-docs-site` |
+| S4 | [Wave 4](#wave-4--positioning-and-core-pages) | S3 merged | `feature/website-wave-4-core-pages` |
+| S5 | [Wave 5](#wave-5--connector-pages-and-faq) | S4 merged | `feature/website-wave-5-connectors-faq` |
+| S6 | [`/releases/`](#release-history-page-releases-365) | S3 merged **and** #365's gate open | `feature/website-releases-page` |
+
+If the session environment assigns its own branch name, use that one instead. Branch names
+follow CLAUDE.md's `<type>/<kebab-case>` rule.
+
+**The orchestrator:**
+
+- starts each session with the prompt below, pasting in the answers to the open questions so far;
+- keeps status in a tracking issue (one checkbox per session, Q and M item), not in this file;
+- passes a new answer to every running session it affects;
+- after each merge, reads the PR's "For later waves" list. When an item changes a later brief, it
+  folds it into this plan with a small plan-update PR before starting that session.
+
+**Rules every session follows,** so three parallel sessions don't collide:
+
+- **Branch from current `origin/main`**, and bring `main` in with a merge, never a rebase.
+- **Stay inside the brief's "Owns" list.** Anything else found along the way goes into the PR's
+  "For later waves" list, not into the diff. The shared files have one owner each:
+
+  | File | Owner | Others |
+  |---|---|---|
+  | `README.md` | S1 (drift fixes), later S4 (shrink) | S0 replaces only the opening description paragraph. S1 merges `main` after S0 lands and keeps it. |
+  | `docs/README.md` | S1 (published index + principles) | S2 adds the contributor half. If S1 has not merged yet, S2 merges `main` again before merging and resolves the conflict. |
+  | `CLAUDE.md` | S2 (dedupe) | S1 changes only links to docs it deletes. |
+  | `website/**`, `.github/workflows/pages.yml` | S0, then S3, S4, S5, S6 in turn | S1 and S2 never touch them. |
+  | `CHANGELOG.md` `[Unreleased]` | everyone | Add your own lines. Conflicts are line merges. |
+  | `docs/website-plan.md` | orchestrator | Sessions never edit it; the S5 PR deletes it. |
+
+- **ADR numbers:** take the next free number when opening the PR. If another PR takes it first,
+  renumber the file, its heading and `docs/adr/README.md`'s index in your PR.
+- **Guardrails are new test files,** one per guardrail (`tests/unit/test_docs_*.py`,
+  `tests/unit/test_website_*.py`, `tests/integration/test_website_*.py`), so parallel sessions do
+  not edit the same test.
+- **Questions go to the orchestrator, not into guesses.** An unanswered question means use the
+  default in the table above and name the placeholder in the PR.
+- **Done means** the brief's "Done when (in the PR)" list plus
+  [`coding-and-testing-guidelines.md` §2.7](coding-and-testing-guidelines.md#27-definition-of-done-for-a-pr-touching-this-repo);
+  then drive the PR to green. The "after merge" items are the maintainer's M steps.
+
+**Session prompt** (the orchestrator fills in the angle brackets):
+
+```text
+Run <Wave N | the /releases/ page> of docs/website-plan.md on main.
+Read CLAUDE.md, then in the plan: "Start here" (the session rules), Decisions,
+Documentation principles, Guardrails, and your brief (<link>) plus every section
+it links to. Your brief's "Owns" list is your whole scope; anything else goes in
+the PR's "For later waves" list.
+Branch: <branch> from current origin/main.
+Answers so far: <Q1: …, Q2: …, or "none, use the defaults">.
+Open one PR. Its description has: what was done, anything in the brief not done
+and why, placeholders waiting on open questions, and "For later waves".
+Then drive the PR to green.
+```
 
 ## Decisions
 
@@ -337,6 +451,46 @@ Doing it in Wave 0 rather than bundling it into Wave 4's redesign means the nav 
 before the page count grows. Every later wave is then checked against the rules instead of
 retrofitted to them.
 
+## Analytics: Google Analytics 4 behind consent
+
+Decided 2026-09-25 (D3, D4), replacing Cloudflare Web Analytics and dropping Bing Webmaster
+Tools. The maintainer works in the Google ecosystem: Search Console is already set up, so one
+vendor is simpler to run than three. GA4 also links to Search Console, which puts search queries
+and on-site behavior in one place.
+
+**What this changes, stated plainly so the ADR can record it:**
+
+- **Consent is required.** GA4 sets cookies (`_ga`, `_ga_<id>`) and reads device storage. On an EU
+  site that needs prior opt-in consent (ePrivacy Art. 5(3)). Cloudflare Web Analytics set no
+  cookie and needed no banner. The site therefore gets a consent banner. It is
+  self-hosted, with no third-party consent platform, and offers **Accept** and **Decline** with
+  equal weight and nothing pre-selected. The choice is stored in `localStorage` and can be
+  reopened from "Cookie settings" in the footer.
+- **Nothing reaches Google before "Accept."** The GA snippet is injected only after consent. This
+  is Consent Mode's *basic* implementation. The *advanced* mode, which sends cookieless pings
+  before consent, is rejected: it is a third-party request the visitor has not agreed to.
+  Guardrail 13 tests this.
+- **GA4 settings:** Google Signals off, ads personalization and data sharing off, data retention
+  2 months, no User-ID, no custom dimensions carrying anything visitor-specific.
+- **`/privacy/`** names Google as a processor and lists the cookies and their lifetime, the
+  EU–US Data Privacy Framework transfer, the retention period, and how to withdraw consent.
+- **Coverage is partial.** GA4 counts only visitors who accept, so it shows trends and referral
+  sources, not totals. Downloads keep coming from the Worker's own cookieless counter, which stays
+  the headline KPI (A3).
+- **Reputational trade-off, accepted.** A privacy product's own site runs Google Analytics. The
+  mitigations (consent-only, minimal settings, disclosed on `/privacy/`) are what keep that
+  defensible. `/faq/` must not claim the site is tracker-free.
+- **Cloudflare's own Web Analytics must stay off.** For proxied sites Cloudflare can inject its
+  beacon at the edge, outside the repo, where guardrail 13 cannot see it in the source. The Wave 0
+  dashboard steps confirm it is disabled, and Wave 0's done-check fetches the live `/` and asserts
+  no `cloudflareinsights` script is present.
+
+**Dropping Bing Webmaster Tools** costs Bing-side reporting and sitemap submission, not
+indexing. Bingbot still finds the sitemap through `robots.txt`'s `Sitemap:` line, and D1/D5
+(crawlers allowed, `llms.txt`) are unchanged. Bing's index feeds ChatGPT search and Copilot,
+so if the Measurement check shows those assistants lagging behind Google-backed answers,
+re-adding Bing Webmaster Tools (a 5-minute import from Search Console) is the first remedy.
+
 ## Guardrails
 
 Each is a static unit test in the style of `tests/unit/test_website_download_cta.py` (no browser,
@@ -384,20 +538,10 @@ H1 "The approval gateway between AI assistants and your business systems.", tagl
 
 ## Waves
 
-```
-Wave 0  crawlability & legal ───────────────────────────────────────┐
-Wave 1 user docs ─┐                                                  │
-Wave 2 contributor docs ─┴─► Wave 3 docs site ─► Wave 4 core pages ─► Wave 5 connector pages & FAQ
-```
-
-- **Wave 0** is independent and can land first.
-- **`/releases/`** ([#365](https://github.com/privacyfence/privacyfence/issues/365)) is built
-  after Wave 3 and is gated on the issue's own conditions, not on a wave. See
-  [Release history page](#release-history-page-releases-365).
-- **Waves 1 and 2** can run in parallel. Wave 1 must land before Wave 3, because Wave 3 publishes it.
-- **Wave 3** renders from the latest *stable tag* (C4), so the new docs appear on the site only
-  after a stable release that contains Wave 1. Plan a release between Wave 1 and Wave 3's launch,
-  or accept that `/docs/` launches with the first release after Wave 1.
+The order and the session map are in [Running it as sessions](#running-it-as-sessions). Each brief
+below is what its session reads. **Owns** is the whole scope. **Needs** lists the open questions
+(Q) and manual steps (M) the PR waits for before merging. **Done when** is split between what the
+PR proves and what the maintainer checks after the deploy.
 
 ### What the product cleanup changed
 
@@ -430,9 +574,15 @@ Doc findings the cleanup PRs recorded and left for Wave 1:
   in `release-testing.md`'s manual Windows checks and must be clicked through before the next
   stable release ([#674](https://github.com/privacyfence/privacyfence/pull/674)).
 
-### Wave 0 — crawlability and legal
+### Wave 0 — crawlability, legal, analytics, responsive base
 
-Unchanged in scope from the first revision, minus the README drift fixes (now in Wave 1):
+- **Session:** S0 · **Starts:** now · **Parallel with:** S1, S2
+- **Needs before merge:** Q1, Q2; M1–M3, M5. (Q3/M4 only for GA to go live.)
+- **Owns:** `website/**`, `.github/workflows/pages.yml`, `website/canonical-description.md`, README's
+  opening description paragraph (nothing else in README), the Wave 0 guardrail tests, three ADRs.
+- **Must not touch:** `docs/**` other than new ADRs and `docs/adr/README.md`.
+
+Deliverables:
 
 - `website/canonical-description.md`, guardrail 1, and the README opener replaced with it.
 - Homepage and download page: canonical link (apex), OpenGraph/Twitter tags, `og:image`
@@ -455,26 +605,30 @@ Unchanged in scope from the first revision, minus the README drift fixes (now in
 - **ADRs: crawler and training-bot policy; website CSS without a framework; website analytics
   (GA4 behind consent, Google-only search tooling).**
 
-Outside the repo (maintainer, ~30 min): Cloudflare → Bots: "Block AI bots" off **and "Managed
-robots.txt" off**; Redirect Rule `www` → apex (301). Google: create the GA4 property and web
-stream (measurement ID `G-…` goes in the repo; it is not a secret), set data retention, turn off
-Google Signals and ads personalization, link it to Search Console, and submit the sitemap in
-Search Console. GitHub: change the repository description from "Enterprise AI governance platform
-…" to the B1 category and set topics (`mcp`, `mcp-server`, `claude`, `privacy`,
-`human-in-the-loop`, …). The About box feeds GitHub search and link previews, and it currently
-contradicts B1. Confirm `info@privacyfence.eu` delivers; record the baseline (3 months of Search
-Console, download total, stars).
+The GA4 measurement ID goes in the repo; it is not a secret. The Cloudflare, Google and GitHub
+dashboard work is M1–M7.
 
-Done when: `curl -A` as GPTBot, OAI-SearchBot, ClaudeBot and Googlebot gets 200 on `/`,
-`/robots.txt`, `/sitemap.xml`; Rich Results Test parses the JSON-LD; the OG card renders;
-guardrail 12 passes and the maintainer has looked at its 360 px and 1440 px screenshots of every
-page, plus one real phone; guardrail 13 passes; on the live site, GA4's Realtime report shows a
-visit only after "Accept", and the served `/` contains no `cloudflareinsights` script.
+Done when (in the PR): guardrails 1, 12 and 13 pass, and the existing website tests pass. The PR
+links guardrail 12's 360 px and 1440 px screenshots of every page for review.
+
+Done when (after deploy, M9): `curl -A` as GPTBot, OAI-SearchBot, ClaudeBot and Googlebot gets
+200 on `/`, `/robots.txt` and `/sitemap.xml`; the Rich Results Test parses the JSON-LD; the OG card
+renders; one real phone looks right; GA4's Realtime report shows a visit only after "Accept"; the
+served `/` contains no `cloudflareinsights` script.
 
 ### Wave 1 — user documentation
 
-Produces the [published set](#published-docs--privacyfenceeudocs). One PR, drafted by Claude,
-reviewed by the maintainer doc by doc.
+- **Session:** S1 (or S1a–c, see Q6) · **Starts:** now · **Parallel with:** S0, S2
+- **Needs before merge:** nothing blocking; maintainer review of every doc (M10).
+- **Owns:** every doc in the [published set](#published-docs--privacyfenceeudocs), the
+  [deleted](#deleted) docs, README (except the opening paragraph S0 owns), `docs/README.md`'s
+  published index and principles, `docs/images/screenshots/*.png` and the screenshot script, the
+  Wave 1 guardrail tests and generator, and links to deleted docs anywhere in the repo.
+- **Must not touch:** contributor docs' content (S2), `website/**`, CLAUDE.md beyond link updates.
+- **Re-read on start:** each target doc on `main` when you begin it; they keep changing.
+
+Produces the [published set](#published-docs--privacyfenceeudocs). One PR (F3, unless Q6 splits
+it), drafted by Claude, reviewed by the maintainer doc by doc. Deliverables:
 
 1. Move every still-current fact out of `migration-guide.md` first (step-up keys and "Turn on"
    button → configuration reference; `--step-up-scope` → org guide; human vs unattested sessions
@@ -496,22 +650,46 @@ reviewed by the maintainer doc by doc.
    "ask that client to open PrivacyFence for you", "one persistent macOS daemon", Windows sign-out,
    packaged script paths); README shrink (C5) happens in Wave 4 once `/docs/` URLs exist.
 
-Done when: every published doc has been read end to end by the maintainer; guardrails 2, 3, 4, 9
-pass; a fresh install on each platform can be completed using only `getting-started.md` (this is
-a manual check — record it in `release-testing.md`).
+Done when (in the PR): guardrails 2, 3, 4 and 9 pass; every item in the [cleanup
+table](#what-the-product-cleanup-changed) and every audit finding for each doc is applied or listed
+as not applied, with the reason; the maintainer has read every published doc end to end.
+
+Done when (after merge): M11, a fresh install on each platform using only `getting-started.md`.
+Then Q5/M13: the stable release that takes these docs live.
 
 ### Wave 2 — contributor documentation
 
-The [contributor table](#contributor-docs-github-only) above, one PR. Includes restoring the QA
+- **Session:** S2 · **Starts:** now · **Parallel with:** S0, S1
+- **Needs before merge:** maintainer review (M10).
+- **Owns:** every doc in the [contributor table](#contributor-docs-github-only), CLAUDE.md,
+  `docs/README.md`'s contributor half, and the dangling references named below.
+- **Must not touch:** published docs (S1), `website/**`.
+
+The [contributor table](#contributor-docs-github-only) above, one PR. It includes restoring the QA
 seed-data checklist from `6de7f7cd^` (updated to the current recorder), fixing the dangling
 references in `qa_fixture_recorder.py`, `qa_environment.yaml.example`,
 `qa_authenticate_connectors.py` and `tests/unit/test_gate_real_evaluator.py`, and deduplicating
 CLAUDE.md against `downloads-and-release-kpi.md` and `testing-policy.md` (CLAUDE.md keeps the
-process, the docs keep the facts, each links to the other).
+process, the docs keep the facts, each links to the other). `packaging.md` also takes the
+CodeSignTool pin (ADR 0046); `release-testing.md` takes the Windows installer's process handling
+(ADR 0045) and M12's checkbox check.
+
+Done when (in the PR): guardrail 2 passes on contributor docs; guardrail 9 passes (if S1 has not
+merged yet, for the references this PR fixes); `/dod` passes.
 
 ### Wave 3 — build pipeline and docs site
 
-As in the first revision:
+- **Session:** S3 · **Starts:** S0, S1 and S2 merged (the published/contributor split must be
+  final for guardrail 5) · **Parallel with:** nothing
+- **Needs before merge:** nothing. `/docs/` goes live only after M13 (see the stale-tag guard
+  below).
+- **Owns:** `scripts/build_site.py`, the docs generator config and theme overrides,
+  `website/**` restructured into partials, `pages.yml`, the new PR build job, the `docs` extra and
+  its lock, guardrails 5–7 and guardrail 12's move to `_site/`, three ADRs.
+- **Must not touch:** doc content. A doc that fails strict rendering is fixed minimally, and the
+  fix is named in the PR.
+
+Deliverables:
 
 - **Generator choice first (half a day):** Zensical, falling back to pinned MkDocs + Material;
   all transforms happen in our own export step so the generator stays swappable. The trial
@@ -527,16 +705,32 @@ As in the first revision:
   `https://downloads.privacyfence.eu/api/releases/stable` (warn, don't fail, if unreachable) and
   fill JSON-LD `softwareVersion` · generate `sitemap.xml`, `robots.txt`, `llms.txt`,
   `llms-full.txt` · run the link walker.
+- **Stale-tag guard:** if the latest stable tag predates Wave 1 (it has no `docs/how-it-works.md`),
+  the build skips `/docs/` and `llms-full.txt` with a warning and leaves those docs links pointing
+  at GitHub. Wave 3 can then merge before M13 without publishing the old doc set. The first stable
+  release after Wave 1 turns `/docs/` on by itself.
 - **CI:** `pages.yml` runs the script (the existing release → redispatch-to-`main` path refreshes
   docs after each release); a new build-only job on PRs and on `main`/`releases/**` pushes;
   `docs` extra with `requirements/docs.lock.txt`, audited like the other locks.
 - Guardrails 5–7, and 12 on `_site/`; a `CHANGELOG.md` line; **ADRs:** docs publishing scope, docs generator + docs
   version, hosting.
 
-Done when: `/docs/getting-started/` shows the latest stable's text; `/download/` shows the current
-version without JavaScript; the sitemap lists docs pages and both search consoles accept it.
+Done when (in the PR): guardrails 5, 6 and 7 pass, and guardrail 12 passes on `_site/`; the PR
+build job produces `_site/` both with a post-Wave 1 tag and with the stale-tag guard active;
+`/download/` in the built output shows a version without JavaScript.
+
+Done when (after deploy, M14): `/docs/getting-started/` shows the released text; Search Console
+accepts the sitemap with the docs pages in it.
 
 ### Wave 4 — positioning and core pages
+
+- **Session:** S4 · **Starts:** S3 merged · **Parallel with:** S6, if its gate is open
+- **Needs before merge:** M10 (page review).
+- **Owns:** the homepage, `/how-it-works/`, `/security/`, `/enterprise/`, `/connectors/`, the
+  clients data file, the SVG diagram, README's shrink, guardrails 10–11.
+- **Must not touch:** doc content (link to it; propose changes under "For later waves").
+
+Deliverables:
 
 - **Homepage** rewrite (B1/B2): the three "see / do / independent decision" cards stay; a
   "Works with" strip from the clients data file (guardrail 10); CTAs Download · How it works ·
@@ -561,6 +755,13 @@ version without JavaScript; the sitemap lists docs pages and both search console
 
 ### Wave 5 — connector pages and FAQ
 
+- **Session:** S5 · **Starts:** S4 merged
+- **Needs before merge:** M10.
+- **Owns:** the five connector pages, `/faq/`, guardrail 8, and this plan's retirement (see
+  [Retiring this plan](#retiring-this-plan)).
+
+Deliverables:
+
 - **Five connector pages**, each answering one D7 search intent in its own words, with what the
   assistant can do, what is reviewed vs automatic, PII behavior for that connector's content, a
   screenshot where one exists, and "Set it up" → its setup guide. Guardrail 8.
@@ -569,57 +770,15 @@ version without JavaScript; the sitemap lists docs pages and both search console
   approval? Is PrivacyFence certified? Local or organization mode? Is it free? How do I verify a
   download?
 
-## Analytics: Google Analytics 4 behind consent
-
-Decided 2026-09-25 (D3, D4), replacing Cloudflare Web Analytics and dropping Bing Webmaster
-Tools. The maintainer works in the Google ecosystem: Search Console is already set up, so one
-vendor is simpler to run than three. GA4 also links to Search Console, which puts search queries
-and on-site behavior in one place.
-
-**What this changes, stated plainly so the ADR can record it:**
-
-- **Consent is required.** GA4 sets cookies (`_ga`, `_ga_<id>`) and reads device storage. On an EU
-  site that needs prior opt-in consent (ePrivacy Art. 5(3)). Cloudflare Web Analytics set no
-  cookie and needed no banner. The site therefore gets a consent banner. It is
-  self-hosted, with no third-party consent platform, and offers **Accept** and **Decline** with
-  equal weight and nothing pre-selected. The choice is stored in `localStorage` and can be
-  reopened from "Cookie settings" in the footer.
-- **Nothing reaches Google before "Accept."** The GA snippet is injected only after consent. This
-  is Consent Mode's *basic* implementation. The *advanced* mode, which sends cookieless pings
-  before consent, is rejected: it is a third-party request the visitor has not agreed to.
-  Guardrail 13 tests this.
-- **GA4 settings:** Google Signals off, ads personalization and data sharing off, data retention
-  2 months, no User-ID, no custom dimensions carrying anything visitor-specific.
-- **`/privacy/`** names Google as a processor and lists the cookies and their lifetime, the
-  EU–US Data Privacy Framework transfer, the retention period, and how to withdraw consent.
-- **Coverage is partial.** GA4 counts only visitors who accept, so it shows trends and referral
-  sources, not totals. Downloads keep coming from the Worker's own cookieless counter, which stays
-  the headline KPI (A3).
-- **Reputational trade-off, accepted.** A privacy product's own site runs Google Analytics. The
-  mitigations (consent-only, minimal settings, disclosed on `/privacy/`) are what keep that
-  defensible. `/faq/` must not claim the site is tracker-free.
-- **Cloudflare's own Web Analytics must stay off.** For proxied sites Cloudflare can inject its
-  beacon at the edge, outside the repo, where guardrail 13 cannot see it in the source. The Wave 0
-  dashboard steps confirm it is disabled, and Wave 0's done-check fetches the live `/` and asserts
-  no `cloudflareinsights` script is present.
-
-**Dropping Bing Webmaster Tools** costs Bing-side reporting and sitemap submission, not
-indexing. Bingbot still finds the sitemap through `robots.txt`'s `Sitemap:` line, and D1/D5
-(crawlers allowed, `llms.txt`) are unchanged. Bing's index feeds ChatGPT search and Copilot,
-so if the Measurement check shows those assistants lagging behind Google-backed answers,
-re-adding Bing Webmaster Tools (a 5-minute import from Search Console) is the first remedy.
-
-## Measurement
-
-Monthly, against the Wave 0 baseline: downloads (existing KPI), Search Console
-impressions/clicks for the D7 intents, AI referrals in GA4's traffic-acquisition report
-(`chatgpt.com`, `claude.ai`, `perplexity.ai`, `copilot.microsoft.com`, `gemini.google.com`), GitHub
-stars. GA4 sees only visitors who accepted, so read its numbers as trends, not totals. The download
-count (Worker-side, cookieless) stays the headline KPI. After each wave, ask ChatGPT,
-Claude and Perplexity "What is PrivacyFence?" and "How do I install PrivacyFence on Windows?" and
-note whether the answers match the canonical description and the current install flow.
+Done when (in the PR): guardrail 8 passes, and guardrails 10–13 pass on the new pages; this plan
+is deleted and its ADRs exist.
 
 ## Release history page (`/releases/`, #365)
+
+- **Session:** S6 · **Starts:** S3 merged **and** both gate conditions below hold (checked monthly,
+  M15) · **Parallel with:** S4 or S5
+- **Owns:** `website/releases/**`, its entry in `build_site.py`'s manifest and pre-render step,
+  the footer and `/download/` links to it. The PR closes #365.
 
 [#365](https://github.com/privacyfence/privacyfence/issues/365) (carried over from the retired
 release-publishing KPI plan) joins this plan. The issue stays open and is closed by the PR that
@@ -660,6 +819,16 @@ If the gate opens before Wave 3 lands, build the page on the Wave 0 foundation w
 for `/releases/`: if Wave 5 lands with the gate still closed, #365 remains the tracking issue.
 Before this file is deleted, update the issue with the additions above.
 
+## Measurement
+
+Monthly, against the Wave 0 baseline: downloads (existing KPI), Search Console
+impressions/clicks for the D7 intents, AI referrals in GA4's traffic-acquisition report
+(`chatgpt.com`, `claude.ai`, `perplexity.ai`, `copilot.microsoft.com`, `gemini.google.com`), GitHub
+stars. GA4 sees only visitors who accepted, so read its numbers as trends, not totals. The download
+count (Worker-side, cookieless) stays the headline KPI. After each wave, ask ChatGPT,
+Claude and Perplexity "What is PrivacyFence?" and "How do I install PrivacyFence on Windows?" and
+note whether the answers match the canonical description and the current install flow.
+
 ## ADRs this plan creates
 
 Next free numbers when each PR lands (0039–0043 were taken by the product cleanup, 0044 by the
@@ -677,18 +846,9 @@ amd64-only `.deb`, 0045–0046 by #682's installer and signing changes; 0047+ as
 Positioning (B1) and the documentation principles are not ADRs: the first lives in
 `website/canonical-description.md`, the second in `docs/README.md`.
 
-## Inputs needed from the maintainer
-
-- **Imprint**: postal (or service) address and the name as it should appear.
-- **Cloudflare**: the Wave 0 dashboard steps; confirm the Pages custom domain is the apex.
-- **Google**: the GA4 property and its measurement ID; the Search Console link.
-- **GitHub**: the repository description and topics (Wave 0).
-- **Mailbox**: confirm `info@privacyfence.eu` delivers.
-- **Review**: every doc (Waves 1–2) and every page (Waves 0, 4, 5) in its PR.
-- **ChatGPT/Gemini**: say when the release that adds them ships.
-- **`/releases/`**: nothing. Its gate is checkable (see [#365](#release-history-page-releases-365)).
-
 ## Retiring this plan
 
 The Wave 5 PR deletes this file after confirming the ADRs above exist and `docs/README.md` no
-longer names an active plan.
+longer names an active plan. Before that, the orchestrator adds this plan's additions to #365's
+scope (see [Release history page](#release-history-page-releases-365)) to the issue if S6 has not
+run, and closes the tracking issue once M14 is done.
