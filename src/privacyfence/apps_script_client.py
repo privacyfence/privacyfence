@@ -16,8 +16,8 @@ projects show up there with mime type
 ``drive.metadata.readonly`` scope below, kept as narrow as it can be (just
 enough to list/name script projects, not read Drive file content).
 ``get_execution_log`` uses the Processes API's ``listScriptProcesses``:
-status/duration/function name per
-recent run, not a full ``console.log`` transcript -- the Apps Script
+status/duration/function name per recent run, not a full ``console.log``
+transcript -- the Apps Script
 editor's "Executions" panel transcript would need the script bound to a
 standard, Cloud-Logging-enabled GCP project plus a `logging.read` scope,
 extra per-script user setup this client deliberately doesn't require.

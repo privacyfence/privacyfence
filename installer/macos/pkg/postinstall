@@ -84,8 +84,8 @@ fi
 # already-running daemon) and catches the case where it did not -- whether
 # `enable --auto` above reported success or not: ENABLE_STATUS above is
 # about `enable` completing, not about the daemon specifically ending up
-# running, and a daemon that came up as root is exactly a case where the two
-# come apart.
+# running, and an upgrade that leaves the daemon stopped, or running as root,
+# is exactly a case where the two come apart.
 ENSURE_RUNNING_OUTPUT="$("$SEPARATION_SCRIPT" daemon ensure-running 2>&1)"
 ENSURE_RUNNING_STATUS=$?
 if [ "$ENSURE_RUNNING_STATUS" -eq 0 ]; then

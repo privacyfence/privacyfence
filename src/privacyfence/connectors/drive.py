@@ -987,12 +987,12 @@ class DriveConnector(Connector):
         # content -- since no file content ever reaches Claude for this
         # tool, showing the human the real content here is strictly more
         # useful than a visual-only thumbnail ever was.
-        # A >100KB file would hit get_file_content()'s default
-        # 100KB prefetch cap, so extract_text() would run on a truncated prefix --
+        # A >100KB file would hit get_file_content()'s default 100KB
+        # prefetch cap, so extract_text() would run on a truncated prefix --
         # fine for text, but pypdf needs a PDF's trailer, at the *end* of
         # the file, so a truncated prefix throws instead of returning
-        # anything usable ("EOF marker not found"). Below a sane size, fetch the whole file instead
-        # of guessing at a cap; above it, skip extract_text() on a
+        # anything usable ("EOF marker not found"). Below a sane size, fetch
+        # the whole file instead of guessing at a cap; above it, skip extract_text() on a
         # truncated result rather than feed it something it can't parse.
         # `full_bytes` is reused below for the actual delivery when this
         # download turns out to need the file bridge, so a small file is
@@ -1277,9 +1277,10 @@ class DriveConnector(Connector):
         if effective_local_path:
             # ADR 0007: raises immediately -- LocalFileAccessError if
             # there's no way to reach this path at all, or LocalFilesNeeded
-            # to start the upload handshake -- rather than reporting
-            # "0 bytes" for a file this process can't read and only failing
-            # once the human has already approved the upload.
+            # to start the upload handshake -- rather than letting a plain
+            # os.path.getsize() report "0 bytes" for a file this process
+            # can't read and only failing once the human has already
+            # approved the upload.
             local_files.require_local_files(
                 [effective_local_path], max_total_bytes=_UPLOAD_MAX_BYTES, download_mode=self.download_mode,
             )

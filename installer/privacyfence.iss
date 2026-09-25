@@ -144,9 +144,9 @@ Name: "{group}\{#AppName}"; Filename: "{app}\{#CompanionExeName}"; Parameters: "
 ; icon has been quit or has crashed -- the daemon is a service by then, so
 ; there is nothing else in the user's session that can mint a sign-in link or
 ; open a browser for a connector's OAuth flow. On an ordinary install it is
-; simply the opt-in way to run it (ADR 0002). The entry above covers the same recovery (--launch starts the
-; tray when none is running) and opens Approvals as well; this one only
-; starts the tray.
+; simply the opt-in way to run it (ADR 0002). The entry above covers the
+; same recovery (--launch starts the tray when none is running) and opens
+; Approvals as well; this one only starts the tray.
 Name: "{group}\{#AppName} Companion"; Filename: "{app}\{#CompanionExeName}"; \
     IconFilename: "{app}\{#CompanionExeName}"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
@@ -599,8 +599,8 @@ begin
        bare #13#10 -- Inno's preprocessor (ISPP) treats a line whose first
        non-blank character is '#' as a directive line, and "unknown
        preprocessor directive" is a compile-time error, not a Pascal one, and
-       only the Windows build job would find it. Each #13#10 pair stays glued to the end of the previous line
-       instead. *)
+       only the Windows build job would find it. Each #13#10 pair stays
+       glued to the end of the previous line instead. *)
     if not SeparateInstall(SeparationOutput) then
     begin
       Log('SeparateInstall: FAILED; aborting the installation.');

@@ -1862,9 +1862,9 @@ def lifecycle_calendar(manifest: dict[str, Any]) -> LifecycleResult:
                 if confirm_note:
                     note = f"{note}; {confirm_note}" if note else confirm_note
 
-    # The recurring-event delete round trip, a second and independent check alongside
-    # the plain event above -- see _lifecycle_calendar_recurrence's own
-    # docstring for why it's split out and what it does and doesn't cover.
+    # The recurring-event delete round trip, a second and independent check
+    # alongside the plain event above -- see _lifecycle_calendar_recurrence's
+    # own docstring for why it's split out and what it does and doesn't cover.
     # Its own cleanup failure folds into cleanup_ok (same meaning as the
     # plain event's: "something this run created didn't get cleaned up"),
     # never into ok -- ok stays "the create/read/update assertions

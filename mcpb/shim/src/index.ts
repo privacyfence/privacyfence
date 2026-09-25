@@ -183,8 +183,8 @@ function isRetryableMintError(err: unknown): boolean {
 
 /**
  * Mints this OS account's own MCP token over the control channel
- * (ADR 0008 D3), retrying a mint nobody answered for up to MINT_RETRY_WINDOW_MS (see
- * above). A plain connection error and a ``ControlChannelError`` (the daemon
+ * (ADR 0008 D3), retrying a mint nobody answered for up to
+ * MINT_RETRY_WINDOW_MS (see above). A plain connection error and a ``ControlChannelError`` (the daemon
  * answered but refused) both end the same way: a ``ShimExitError`` whose
  * message carries ``err.message``, so whoever reads privacyfence.log next
  * can tell which one it was.

@@ -140,9 +140,9 @@ function isRealMarker(marker: { version?: unknown; platform?: unknown } | null):
  * PRIVACYFENCE_SYSTEM_ROOT: this shim's environment is whatever the
  * logged-in user's session set, so once a real install is provisioned at
  * the platform's actual root, that variable is refused rather than letting
- * a user-session process redirect the shim onto a root it controls (ADR 0060). It is
- * still honoured on the common dev/CI machine, which has no real marker at
- * that literal system root to begin with.
+ * a user-session process redirect the shim onto a root it controls
+ * (ADR 0060). It is still honoured on the common dev/CI machine, which has
+ * no real marker at that literal system root to begin with.
  * Exported only for tests, which need to point it at a temp directory. */
 export function privilegeSeparationRoot(env: NodeJS.ProcessEnv = process.env): string | null {
   const override = env.PRIVACYFENCE_SYSTEM_ROOT;

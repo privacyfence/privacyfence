@@ -14,7 +14,7 @@ and the human-authority files are ``0700`` under the latter.
 
 **All three platforms.** ``SUPPORTED_PLATFORMS`` is the single gate: an
 install that has not run its platform's installer resolves every path in
-``paths.py`` as an unseparated install, byte for byte, everywhere.
+``paths.py`` to its unseparated location, byte for byte, everywhere.
 
 ## The layout
 
@@ -104,9 +104,10 @@ the whole of what privilege separation claims.
 ## What this does not defend against
 
 An agent that can obtain root. ``sudo`` re-owns any file and reconfigures any
-LaunchDaemon or systemd unit; ``docs/security-and-compliance.md`` says so. The guarantee is against an agent
-running with the user's *normal* privileges, which is the ordinary case, and
-it makes escalation require an authentication prompt a human sees.
+LaunchDaemon or systemd unit; ``docs/security-and-compliance.md`` says so.
+The guarantee is against an agent running with the user's *normal*
+privileges, which is the ordinary case, and it makes escalation require an
+authentication prompt a human sees.
 """
 from __future__ import annotations
 
@@ -164,10 +165,10 @@ WINDOWS_SERVICE_GROUP_NAME = "PrivacyFenceUsers"
 # *companion* at sign-in.
 WINDOWS_COMPANION_TASK_NAME = "PrivacyFenceCompanion"
 
-# Where a separated install keeps everything ``paths.data_dir()`` used to put
-# under ``~/.privacyfence``. A service account cannot sensibly own something
+# Where a separated install keeps everything an unseparated one keeps under
+# ``~/.privacyfence``. A service account cannot sensibly own something
 # inside a human's home directory -- the same reasoning that puts Windows'
-# in ``%ProgramData%`` rather than ``%LOCALAPPDATA%``.
+# root in ``%ProgramData%`` rather than ``%LOCALAPPDATA%``.
 # macOS's is the system-wide twin of the ``~/Library/Application Support``
 # every app already uses; Linux's is FHS 3.0 §5.8's ``/var/lib/<package>``,
 # "variable state information" a program modifies as it runs, which is
@@ -287,9 +288,9 @@ class PlatformLayout:
     #: rather than ``installer`` verbatim (see that field's own docstring
     #: for why the two differ).
     enable_command: str
-    #: The companion as daemon manager (ADR 0026): the *unprivileged* argv that reads this platform's service-manager state
-    #: without asking for a password -- ``daemon_status.probe()``'s fallback
-    #: once the control
+    #: The companion as daemon manager (ADR 0026): the *unprivileged* argv
+    #: that reads this platform's service-manager state without asking for a
+    #: password -- ``daemon_status.probe()``'s fallback once the control
     #: channel itself doesn't answer. Not ``status_command`` above, which is
     #: what a human types (and which needs ``sudo``/an elevated shell only
     #: because the *script's* own ``status`` prints the on-disk layout audit,
@@ -483,8 +484,8 @@ def _default_system_root() -> Path | None:
 def system_root() -> Path | None:
     """Where a separated install's root *would* be on this platform, whether
     or not one has been provisioned -- None on a platform privilege
-    separation does not support, which is what makes every other function here a cheap
-    no-op there."""
+    separation does not support, which is what makes every other function
+    here a cheap no-op there."""
     default_root = _default_system_root()
     override = os.environ.get(SYSTEM_ROOT_ENV_VAR)
     if override:
@@ -874,10 +875,10 @@ def audit_layout() -> list[str]:
     ``0700`` (see the layout in this module's docstring).
 
     Empty list on an unseparated install, so ``daemon_main``'s own
-    storage-permissions startup check can call it unconditionally. Best-effort like every other
-    permission check in this codebase: a path that can't be ``stat``'d is
-    skipped rather than reported, since the process doing the checking may
-    legitimately not be able to see it.
+    storage-permissions startup check can call it unconditionally. Best-effort
+    like every other permission check in this codebase: a path that can't be
+    ``stat``'d is skipped rather than reported, since the process doing the
+    checking may legitimately not be able to see it.
     """
     state = separation()
     if state is None:
@@ -1944,17 +1945,16 @@ def owner_membership_pending() -> bool:
     an install with no separation at all is a different problem with a
     different answer (ADR 0003 decision 6's daemon-side gate).
 
-    It is not false merely for an account that is not this install's
-    recorded owner. A second account gets its own isolated principal
-    (``os-<uid>``/``os-<sid>``, ADR 0008) instead of the owner's, and its
-    companion socket cannot be taken over (ADR 0027), so there is nothing
-    for an owner-mismatch to protect against here: any
-    service-group member who has not yet joined is "pending" in exactly the
-    sense the owner always was, and ``companion.py``'s own
+    Whether the account is this install's recorded owner does not matter. A
+    second account gets its own isolated principal (``os-<uid>``/``os-<sid>``,
+    ADR 0008) instead of the owner's, and its companion socket cannot be taken
+    over (ADR 0027), so there is nothing for an owner-mismatch to protect
+    against here: any service-group member who has not yet joined is "pending"
+    in exactly the sense the owner always was, and ``companion.py``'s own
     ``_complete_pending_separation()`` completing ``enable --for-user`` on
-    their behalf hands them their own empty principal, never the owner's.
-    See ADR 0008 ("D2: two identities, not one, per install") for the full
-    account of what changed and why.
+    their behalf hands them their own empty principal, never the owner's. See
+    ADR 0008 ("D2: two identities, not one, per install") for the full
+    reasoning.
     """
     state = separation()
     if state is None:
@@ -2247,14 +2247,13 @@ def complete_per_user_separation(user: str | None = None) -> bool:
         )
         return False
     reset_cache()
-    # The same re-check `_run_full_auto_enable_non_macos()` makes, for the
-    # same reason and with the same
-    # belt-and-braces relationship to the exit code above: returning True
-    # here makes the companion tell somebody to log out and back in, and a
-    # log-out that fixes nothing is worse advice than none. Only a group
-    # that could not be read at all is taken on trust -- the fallback
-    # `owner_membership_pending()` already takes, and for the same reason:
-    # guessing on a platform just failed to interrogate would have the
+    # The same re-check `_run_full_auto_enable_non_macos()` makes, for the same
+    # reason and with the same belt-and-braces relationship to the exit code
+    # above: returning True here makes the companion tell somebody to log out
+    # and back in, and a log-out that fixes nothing is worse advice than none.
+    # Only a group that could not be read at all is taken on trust -- the
+    # fallback `owner_membership_pending()` already takes, and for the same
+    # reason: guessing on a platform just failed to interrogate would have the
     # companion re-prompt at every start.
     members = service_group_members(state.service_group)
     if members is not None and not any(accounts_equal(member, account) for member in members):

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Compute the website's public release-stats.json.
 
-Summing every release asset's `download_count` would count SBOMs (`*.spdx.json`,
-`*.cdx.json`), the org-config scripts (`*.py`), and the sdist/wheel (`*.whl`, `*.tar.gz`), none of
-which are installers a user downloaded. That would inflate the GitHub half of the KPI this repo actually
+Summing every release asset's `download_count` would count SBOMs (`*.spdx.json`, `*.cdx.json`),
+the org-config scripts (`*.py`), and the sdist/wheel (`*.whl`, `*.tar.gz`), none of which are
+installers a user downloaded. That would inflate the GitHub half of the KPI this repo actually
 wants: "PrivacyFence installer downloads" (see docs/downloads-and-release-kpi.md's KPI section).
 
 This script avoids that by reusing `classify_installer()` from `scripts/r2_release.py` -- the same

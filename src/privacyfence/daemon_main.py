@@ -885,7 +885,7 @@ def _maybe_start_web_server(
     # that fixes this misconfiguration, so this is a log line, not a raised
     # ConfigurationError -- web_shell.wrap()'s own banner (StepUpConfig.
     # local_enrollment_banner) is what actually makes this loud for a human
-    # who isn't reading the daemon's own log.
+    # who isn't reading the daemon's own log. See ADR 0069.
     if local_step_up.local_enrollment_banner(has_credentials=has_webauthn_credentials(LOCAL_PRINCIPAL)) is not None:
         logger.warning(
             "step_up.require_passkey is set but no passkey is enrolled yet -- approving decisions and "

@@ -26,8 +26,9 @@ already resolves for the tag): on every channel it prints a `::warning::` per ga
 more; on `stable` specifically, a gap additionally fails this script, which
 `finalize-release` runs as an ordinary step ahead of anything that attaches or publishes
 anything -- so a stable tag with broken or stale autostart coverage never ships.
-Pre-release tags stay ungated on purpose (ADR 0057): that's where a flake is cheapest to absorb, and this is still not a live wait -- a stable tag with a real coverage gap
-fails immediately rather than blocking on a fresh run, so the "off the release's critical path"
+Pre-release tags stay ungated on purpose: that's where a flake is cheapest to absorb. And this is
+still not a live wait -- a stable tag with a real coverage gap fails immediately rather than
+blocking on a fresh run, so the "off the release's critical path"
 property this tier was built around never breaks. One re-run allowance: a run this finds red is
 not necessarily this release's fault -- if a maintainer judges it a flake, re-running that
 workflow's own failed jobs (not this script) updates the same run in place, and the next

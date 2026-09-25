@@ -14,10 +14,9 @@ Actions=Settings;RecoveryCode;ServiceStatus;StartService;RestartService;StopServ
 # (companion.py's own module docstring): there's no persistent Linux tray
 # process for these to attach to, so every action here is one-shot.
 #
-# The four ServiceStatus/StartService/
-# RestartService/StopService actions are this platform's counterpart to
-# the macOS/Windows tray's dynamic status line and Start/Restart/Stop items -- ADR 0002
-# decision 4 rules out a tray icon here, not the affordance itself, so
+# The four ServiceStatus/StartService/RestartService/StopService actions
+# are this platform's counterpart to the macOS/Windows tray's dynamic
+# status line and Start/Restart/Stop items -- ADR 0002 decision 4 rules out a tray icon here, not the affordance itself, so
 # Linux gets the same four actions as menu entries that show a zenity/
 # kdialog dialog instead of updating a menu-bar item in place. Start/Stop
 # are both offered unconditionally, unlike the tray's visibility toggle: a

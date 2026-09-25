@@ -71,9 +71,9 @@ describe("main() end-to-end orchestration", () => {
     assert.equal(result.isError, undefined);
     assert.deepEqual(result.structuredContent, { echoed: true });
 
-    // Token audience separation (ADR 0061), restated on the shim's own side: every
-    // request that reached the fake daemon carried exactly the minted
-    // token, never anything else (no unauthenticated request slipped
+    // Token audience separation (ADR 0061), restated on the shim's own
+    // side: every request that reached the fake daemon carried exactly the
+    // minted token, never anything else (no unauthenticated request slipped
     // through, e.g. from a stray SSE probe).
     assert.ok(daemon.receivedAuthHeaders.length > 0);
     for (const header of daemon.receivedAuthHeaders) {
