@@ -50,7 +50,7 @@ question is answered. The PR says which placeholders are waiting.
 |---|---|---|---|
 | Q1 | ~~Approve the canonical product description, homepage `<title>` and H1.~~ **Answered 2026-09-25:** new wording, H1 and tagline, see [Canonical product description](#canonical-product-description). | — | — |
 | Q2 | ~~Imprint name and address.~~ **Answered 2026-09-25:** name **Andras Takacs**, contact **info@privacyfence.eu**, location **Budapest, Hungary**. No street address: the imprint is email-only by the maintainer's decision. | — | — |
-| Q3 | **GA4 measurement ID** (`G-…`, from M4). | GA going live, not the Wave 0 merge | The consent banner and GA wiring ship with the ID empty and GA disabled; the banner is not shown until an ID is set. Setting the ID later is a one-line PR. |
+| Q3 | ~~GA4 measurement ID.~~ **Answered 2026-09-25: `G-7Z3PFP4XPT`.** Wave 0 uses Google's standard `gtag.js` snippet for this ID, but never as pasted: the site's consent code injects it only after "Accept" (guardrail 13). | — | — |
 | Q4 | **Repository description** for GitHub's About box (M6). Proposed: *"Open-source privacy and approval gateway for AI assistants (MCP): human approval, local PII checks and audit for Gmail, Drive, Slack, Salesforce, Jira and more."* | Nothing in the repo | The proposal. |
 | Q5 | **Cut 4.5.0 stable once Wave 1 has merged?** `/docs/` publishes from the latest stable tag (C4), so the new docs go live only with a stable release that contains them. | `/docs/` going live (Wave 3 can merge without it, see its brief) | Yes: 4.5.0 is the first stable after Wave 1. |
 | Q6 | **Wave 1 as one PR (F3) or three?** One PR is ~15 docs for one review. Three (1a install + platform + how it works; 1b security + organization deployment + configuration; 1c approvals + tools + connector guides) can run as three parallel sessions, each reviewed separately. | How Wave 1 is started | One PR, as decided in F3. The session may use sub-agents internally. |
@@ -69,7 +69,7 @@ blocks waiting for one silently. If a step is missing, it says which one in its 
 | M1 | Before Wave 0 merges | **Cloudflare → Bots:** "Block AI bots" off, and "Managed robots.txt" off (D1, D2). |
 | M2 | Before Wave 0 merges | **Cloudflare → Web Analytics:** off for `privacyfence.eu`, including automatic setup. Otherwise Cloudflare injects its beacon at the edge, alongside GA ([Analytics](#analytics-google-analytics-4-behind-consent)). |
 | M3 | Before Wave 0 merges | **Cloudflare:** Redirect Rule `www` → apex (301). Confirm the GitHub Pages custom domain is the apex (D6). |
-| M4 | Before GA goes live (Q3) | **Google Analytics:** create the GA4 property and web stream. Set data retention to 2 months, and turn off Google Signals, ads personalization and data sharing. Send the measurement ID (Q3). |
+| M4 | Before GA goes live (Q3) | **Google Analytics:** create the GA4 property and web stream. Set data retention to 2 months, and turn off Google Signals, ads personalization and data sharing. Property created and ID sent (Q3, `G-7Z3PFP4XPT`); confirm the settings above. |
 | M5 | Before Wave 0 merges | **Mailbox:** confirm `info@privacyfence.eu` delivers (E5). |
 | M6 | Any time | **GitHub → About:** set the description (Q4), website `https://privacyfence.eu`, and topics `mcp`, `mcp-server`, `claude`, `privacy`, `human-in-the-loop`, `pii`, `ai-security`. |
 | M7 | After Wave 0 deploys | **Search Console:** submit `https://privacyfence.eu/sitemap.xml` and link the GA4 property. |
