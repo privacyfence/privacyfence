@@ -10,14 +10,16 @@ legacy/migration-code removal — were done by the product cleanup plan, now ret
 merged 2026-09-24, first shipped in `v4.5.0a1`; see [What the product cleanup
 changed](#what-the-product-cleanup-changed)). Wave 1 documents that post-cleanup code directly.
 
-It combines three inputs:
+It combines four inputs:
 
 - the external "Website & Docs Strategy" review (2026-09-23);
 - the maintainer's answers to the follow-up questionnaire (2026-09-23);
 - a **source-code audit of every document** in the repo (2026-09-24): each doc's claims checked
   against `src/`, `scripts/`, `installer/`, `debian/`, `mcpb/`, `cloudflare/` and the workflows,
   with file:line evidence. Its findings drive [Wave 1](#wave-1--user-documentation),
-  [Wave 2](#wave-2--contributor-documentation) and, for the code, the product cleanup (retired).
+  [Wave 2](#wave-2--contributor-documentation) and, for the code, the product cleanup (retired);
+- the maintainer's responsive-layout requirement (2026-09-25), decided in
+  [Responsive layout](#responsive-layout).
 
 ## Contents
 
@@ -26,6 +28,7 @@ It combines three inputs:
 - [Audit summary](#audit-summary)
 - [Target documentation set](#target-documentation-set)
 - [Target site](#target-site)
+- [Responsive layout](#responsive-layout) — desktop and mobile, no CSS framework
 - [Guardrails](#guardrails)
 - [Canonical product description](#canonical-product-description-draft-for-review)
 - [Waves](#waves) — order, dependencies, and each wave's scope
@@ -53,7 +56,7 @@ only so a later reader can tell a deliberate choice from a default.
 | B6 | Name the tested clients — **Claude Desktop and Claude Code** on any install, **claude.ai through organization mode only** (local mode listens on localhost; confirmed 2026-09-24) — and say "MCP-compatible" generally. ChatGPT and Gemini are expected in the next version: the client list is kept in one data file so adding them is a one-line change **when they ship, not before**. |
 | C1 | **Python docs generator** (Zensical or MkDocs + Material, chosen in [Wave 3](#wave-3--build-pipeline-and-docs-site)) for `/docs/`; **hand-written HTML** for marketing pages. |
 | C2 | **Stay on GitHub Pages** (behind the existing Cloudflare proxy, see D2). |
-| C3 | Publish **user and operator docs only** — the [published set](#published-docsprivacyfenceeudocs) below. ADRs, contributor docs and `downloads-and-release-kpi.md` stay GitHub-only. |
+| C3 | Publish **user and operator docs only** — the [published set](#published-docs--privacyfenceeudocs) below. ADRs, contributor docs and `downloads-and-release-kpi.md` stay GitHub-only. |
 | C4 | The website's docs come from the **latest stable release tag**, not `main`. |
 | C5 | **Shrink `README.md`** to ~120–150 lines. |
 | C6 | One **canonical product description**, enforced by a **unit test** against README and homepage. |
@@ -78,6 +81,9 @@ only so a later reader can tell a deliberate choice from a default.
 | G1 | **There are no existing users. The docs describe only the current version** — no upgrade paths, no "as of vX", no "no longer", no migration guide, no history. `migration-guide.md` is deleted after its few non-migration facts are moved. |
 | G2 | **Every document is reviewed against the source code** for validity, completeness and clarity, and fixed or merged in Waves 1–2. The goal is a simple, straightforward, coherent doc set for new users. |
 | G3 | **Legacy and migration code is removed** (approved 2026-09-24) — implemented (ADR 0041; G4, Telegram in the PyPI build, is ADR 0040). The docs describe the uninstall rule: `uninstall` / removing the package leaves data in the system root; `uninstall --purge` / purging deletes it ([ADR 0042](adr/0042-uninstall-replaces-disable.md)). |
+| H1 | **Every page is responsive and well aligned on desktop and mobile** (added 2026-09-25): the marketing pages, `/download/` and the rendered `/docs/` alike, from a 320 px phone to a wide desktop. |
+| H2 | **No CSS framework** for the marketing pages: the existing self-hosted `styles.css` is rebuilt into a small token + layout-primitive system on plain modern CSS; `/docs/` gets responsiveness from its generator's theme (C1). Reasoning and rejected alternatives in [Responsive layout](#responsive-layout). |
+| H3 | Responsiveness is **enforced by a browser test** (guardrail 12) from **Wave 0**, so every page added later is born under it. |
 
 ## Documentation principles
 
@@ -152,14 +158,22 @@ removes a finding above; these change what the target docs must cover:
 | **Gmail drafts can append the user's signature**, shown on the card but not write-scanned (#658, ADR 0038). | `approvals-and-policy.md` (PII check exceptions) and the generated `tools-reference.md`. |
 | **Build pre-flight before tagging** (#632, ADR 0030; `CLAUDE.md` and `/cut-release`). | `release-testing.md`'s "real gates", and Wave 2's `CLAUDE.md` dedupe. |
 
+Re-checked again on 2026-09-25 at `7b61b6c1`: two more PRs merged, neither removes a finding.
+
+| Change on `main` | Where the target set absorbs it |
+|---|---|
+| **The `.deb` is amd64 only** (#681, ADR 0044, amending ADR 0018): `debian/control` declares `amd64`, `build_deb.sh` refuses other hosts, `platform-support.md`'s matrix already says so. | `platform-support.md` (the architectures column is now correct at the source; keep it when cutting the page to ~120 lines), `getting-started.md`'s Linux section (no arm64 `.deb`; say what an arm64 Linux user can install instead, after checking whether the PyPI install is supported there), `/download/` and the JSON-LD's platform list. |
+| **Org mode skips old-format registered OAuth clients** with a per-entry warning instead of converting them (#680). | Nothing to document (G1: no upgrade paths). The org guide's troubleshooting must not mention the old format. |
+
 Two consequences for how the waves run:
 
 - **Branch every wave from current `main`**, not from `claude/documentation-refactoring`, which
   only holds this plan and is behind `main`. Waves 1–2 rewrite docs that keep changing under them;
   each wave PR re-reads its target docs on `main` when it starts.
-- **Latest stable is now 4.3.0** (4.4.0's notes are on `main`). Wave 3 still publishes the first
-  stable release that contains Wave 1, so the "plan a release between Wave 1 and Wave 3" note
-  below stands.
+- **Latest stable is now 4.4.0**, and `v4.5.0a1` (the product cleanup) is the current
+  pre-release. Wave 3 still publishes the first stable release that contains Wave 1, so the "plan
+  a release between Wave 1 and Wave 3" note below stands: 4.5.0 is the natural candidate if Wave 1
+  lands before it is cut.
 
 ## Target documentation set
 
@@ -220,7 +234,7 @@ after its surviving content is in the target above and every link to it is updat
 | `/connectors/google-workspace/`, `/slack/`, `/salesforce/`, `/jira-confluence/`, `/telegram/` | hand-written | 5 |
 | `/faq/` | hand-written | 5 |
 | `/download/` | existing page, current stable **pre-rendered** at build | 3 |
-| `/docs/…` | the [published set](#published-docsprivacyfenceeudocs), rendered at the latest stable tag | 3 |
+| `/docs/…` | the [published set](#published-docs--privacyfenceeudocs), rendered at the latest stable tag | 3 |
 | `/privacy/`, `/imprint/` | hand-written | 0 |
 | `/robots.txt`, `/sitemap.xml` | static in wave 0, generated from wave 3 | 0 → 3 |
 | `/llms.txt`, `/llms-full.txt` | generated | 3 |
@@ -229,10 +243,97 @@ Google Workspace is one connector page because it is one OAuth setup (Gmail, Dri
 Calendar, Contacts, Tasks, Apps Script); Jira and Confluence share one because they share
 `atlassian-setup.md`.
 
+## Responsive layout
+
+Requirement H1: every page reads and aligns well on a phone, a tablet and a desktop.
+
+### Where the site stands (measured 2026-09-25)
+
+Both pages rendered in headless Chromium at 320, 360, 390, 768, 1024 and 1440 px wide:
+
+- **No page-level horizontal scroll** at any width; the verify-commands `<code>` on `/download/`
+  overflows only inside its own `overflow-x: auto` box, which is intended.
+- **Sections stack correctly** below 900 px (hero, principle grid, proof sections, privacy and CTA
+  cards). The existing `styles.css` already has two breakpoints (900, 560 px) and `clamp()`
+  headings.
+- **Navigation is the real gap.** Below 900 px every header link except the CTA is
+  `display: none`, with no menu to reach them. That holds on tablets (768 px) too. With four
+  links it is tolerable; the target site has seven destinations (How it works, Security,
+  Enterprise, Connectors, Docs, FAQ, Download), so without a real mobile menu most of the site
+  would be unreachable from the header on a phone.
+- **Tap targets are small**: the header CTA is 38–40 px and the desktop nav links 22 px high,
+  below the 44 × 44 px WCAG 2.5.5 target (the AA-level 2.5.8 minimum is 24 px; we aim for 44).
+- **Breakpoints are page-by-page.** The download page adds a third (720 px). Each new page would
+  add its own rules to one flat file.
+
+### Decision: no CSS framework (H2)
+
+| Option | Why not |
+|---|---|
+| **Tailwind CSS** | Needs a build step with a pinned binary or npm toolchain in `pages.yml`, locked and audited like the other dependency locks, for a site of ~15 hand-written pages. Every page's markup is rewritten into utility classes, so the existing design is redone rather than kept. Utility classes in hand-written HTML are harder for a reviewer (A4) to read than semantic class names. |
+| **Bootstrap 5** | ~25 KB of CSS for the grid and components we would override to keep the current look, and its collapsing navbar needs Bootstrap's JavaScript. The result looks like every other Bootstrap site. |
+| **Pico CSS** / other classless frameworks | Small and JS-free, but they restyle every element. That conflicts with the existing design, and we would spend the effort fighting its defaults rather than using them. |
+| **Plain modern CSS (chosen)** | CSS grid with `auto-fit`/`minmax()`, `clamp()` type and spacing, container queries and `:has()` are Baseline in every browser we target, so they do what a framework's grid did without a dependency. It keeps the "no third-party resources" rule and the current visual design, and adds no build step before Wave 3 has one. |
+
+`/docs/` is not affected by this choice: Material for MkDocs and Zensical are responsive out of
+the box, with a drawer nav, collapsible TOC and fluid tables. Wave 3's generator choice also checks
+mobile nav and wide tables at 360 px. Wave 3 gives the docs theme the site's colour and type
+tokens through its `extra_css` hook, so `/docs/` and the marketing pages read as one site.
+
+If the page count or the design effort outgrows this (for example, a designer joins and wants a
+component library), revisit it with a new ADR. Tailwind's standalone CLI is the likeliest
+successor, because it can run inside Wave 3's `build_site.py` without Node.
+
+### What "responsive" means here
+
+These rules become the stylesheet's header comment. Guardrail 12 checks the measurable ones:
+
+1. **Viewports tested:** 320, 360, 390 (phones), 768 (tablet portrait), 1024 (tablet landscape /
+   small laptop), 1440 (desktop). Portrait and landscape are both covered through the widths.
+2. **No page-level horizontal scroll** at any tested width
+   (`document.documentElement.scrollWidth <= innerWidth`). Wide content (code, tables, diagrams)
+   scrolls inside its own container.
+3. **Every header destination is reachable at every width**: inline links on desktop, a menu
+   button below the nav breakpoint. The menu is a `<details>`/`<summary>` disclosure: it works
+   without JavaScript, can be reached and operated by keyboard, and is announced correctly by
+   screen readers.
+4. **Tap targets ≥ 44 × 44 px** for nav links, buttons and the menu toggle on widths below 1024 px.
+5. **One set of layout primitives**, not per-page media queries: `.shell` (centred max-width
+   container), `.stack` (vertical rhythm), `.cluster` (wrapping inline group), `.grid-auto`
+   (`repeat(auto-fit, minmax(var(--min), 1fr))`), and `.split` (two columns that stack under a
+   container-query threshold). The existing section classes (`hero`, `proof-grid`,
+   `principle-grid`, `privacy-card`, `cta-card`, `download-grid`) are re-expressed on these, keeping
+   their names so the markup barely changes.
+6. **Design tokens on `:root`** for colour, type scale (`clamp()`-based), spacing scale, radius and
+   the two breakpoints (nav collapse at 900 px, compact spacing at 560 px). Wave 3 shares these
+   tokens with the docs theme.
+7. **Images and the SVG diagram scale**: `max-width: 100%` with explicit `width`/`height`
+   attributes (no layout shift). The Wave 4 architecture diagram has a vertical layout below about
+   600 px, either as a second SVG in `<picture>` or with a `viewBox` that reads top-to-bottom,
+   rather than being shrunk to an unreadable width.
+8. **Text measure ≤ ~75 characters** for body copy on desktop; readable without zoom on a 320 px
+   phone (body ≥ 16 px).
+9. **`prefers-reduced-motion`** is honoured (already true); **dark mode** is out of scope for this
+   plan.
+
+### When it is built
+
+| Wave | Responsive work |
+|---|---|
+| **0** | Foundation, because Wave 0 already edits both pages' header and footer and adds two pages (`/privacy/`, `/imprint/`). Rebuild `styles.css` into tokens + primitives (rules 5–6) without changing the desktop design; replace the hidden-links header with the `<details>` menu (rule 3); raise tap targets (rule 4); make the new footer links wrap cleanly. Add **guardrail 12** over every page under `website/`. |
+| **3** | The header and footer become the shared partials `build_site.py` assembles, carrying the Wave 0 menu over unchanged. The docs theme gets the site tokens (`extra_css`), and the generator trial checks mobile nav and table overflow at 360 px. Guardrail 12 runs on the built `_site/` and takes its page list from the build manifest, including a sample of `/docs/` pages (getting-started, tools-reference for its wide tables, the org guide for its long code blocks). |
+| **4–5** | New pages use only the primitives; guardrail 12 covers them automatically through the manifest. The diagram's narrow layout (rule 7) is part of `/how-it-works/`'s definition of done. |
+
+Doing it in Wave 0 rather than bundling it into Wave 4's redesign means the nav problem is fixed
+before the page count grows. Every later wave is then checked against the rules instead of
+retrofitted to them.
+
 ## Guardrails
 
 Each is a static unit test in the style of `tests/unit/test_website_download_cta.py` (no browser,
-runs everywhere). Each wave adds the ones that protect its own work.
+runs everywhere). The exception is guardrail 12: layout can only be measured in a rendering engine,
+so it is a Playwright test that runs wherever `test_download_page.py` already runs. Each wave adds
+the guardrails that protect its own work.
 
 | # | Guardrail | Wave |
 |---|---|---|
@@ -247,6 +348,7 @@ runs everywhere). Each wave adds the ones that protect its own work.
 | 9 | **No dangling doc references**: every `docs/…md` path mentioned anywhere in the repo (code comments, tests, workflows, CLAUDE.md, other docs) exists. | 1 |
 | 10 | **Clients are data**: the supported-clients list lives in one file used by homepage, `/faq/` and JSON-LD. | 4 |
 | 11 | **No claims ADR 0025 rules out**: no website page contains "certified", "compliant with", "SLA" or "guarantee" outside the `/security/` limitations section. | 4 |
+| 12 | **Responsive layout** — the one guardrail that needs a browser: `tests/integration/test_website_layout.py` (`integration` + `browser` markers, same setup and skip posture as `test_download_page.py`, network stubbed) loads every page at the six [tested viewports](#what-responsive-means-here). It asserts no page-level horizontal scroll, every header destination reachable (visible, or visible after opening the menu), tap targets ≥ 44 px below 1024 px, and no element's box extending past the viewport outside a scroll container. It saves a full-page screenshot per page × width as a CI artifact, for the maintainer's review. | 0 (source pages), 3 (built `_site/`) |
 
 Also: no third-party resources on the site apart from the Cloudflare Web Analytics beacon — fonts,
 images and scripts stay self-hosted, as today.
@@ -329,7 +431,10 @@ Unchanged in scope from the first revision, minus the README drift fixes (now in
 - Cloudflare Web Analytics beacon as a visible `<script>` in the repo.
 - Footer on both pages: Privacy · Imprint · GitHub · Apache 2.0 · `info@privacyfence.eu`.
 - `pages.yml` copy step and its guard test updated.
-- **ADR: crawler and training-bot policy.**
+- **Responsive foundation** ([When it is built](#when-it-is-built), Wave 0 row): `styles.css`
+  rebuilt into tokens + layout primitives with the desktop look unchanged, the `<details>` header
+  menu, 44 px tap targets, and **guardrail 12** over `/`, `/download/`, `/privacy/` and `/imprint/`.
+- **ADRs: crawler and training-bot policy; website CSS without a framework.**
 
 Outside the repo (maintainer, ~30 min): Cloudflare → Bots: "Block AI bots" off **and "Managed
 robots.txt" off**; Redirect Rule `www` → apex (301); Web Analytics token; Bing Webmaster import
@@ -337,11 +442,13 @@ from Search Console and sitemap submission in both; confirm `info@privacyfence.e
 record the baseline (3 months of Search Console, download total, stars).
 
 Done when: `curl -A` as GPTBot, OAI-SearchBot, ClaudeBot and Googlebot gets 200 on `/`,
-`/robots.txt`, `/sitemap.xml`; Rich Results Test parses the JSON-LD; the OG card renders.
+`/robots.txt`, `/sitemap.xml`; Rich Results Test parses the JSON-LD; the OG card renders;
+guardrail 12 passes and the maintainer has looked at its 360 px and 1440 px screenshots of every
+page, plus one real phone.
 
 ### Wave 1 — user documentation
 
-Produces the [published set](#published-docsprivacyfenceeudocs). One PR, drafted by Claude,
+Produces the [published set](#published-docs--privacyfenceeudocs). One PR, drafted by Claude,
 reviewed by the maintainer doc by doc.
 
 1. Move every still-current fact out of `migration-guide.md` first (step-up keys and "Turn on"
@@ -382,7 +489,11 @@ process, the docs keep the facts, each links to the other).
 As in the first revision:
 
 - **Generator choice first (half a day):** Zensical, falling back to pinned MkDocs + Material;
-  all transforms happen in our own export step so the generator stays swappable.
+  all transforms happen in our own export step so the generator stays swappable. The trial
+  includes checking mobile nav, the TOC and wide tables at 360 px (H1).
+- **Responsive, shared:** the Wave 0 header/menu and footer become the partials; the docs theme
+  loads the site's tokens via `extra_css`; guardrail 12 moves to the built `_site/` with its page
+  list from the build manifest (see [When it is built](#when-it-is-built)).
 - **`scripts/build_site.py --out _site`**: resolve the latest stable tag (reusing
   `r2_release.py`'s channel logic; `fetch-depth: 0`) · export allowlisted docs at that tag ·
   rewrite outbound links to GitHub blob URLs at that tag · render docs (strict) with the site's
@@ -394,7 +505,7 @@ As in the first revision:
 - **CI:** `pages.yml` runs the script (the existing release → redispatch-to-`main` path refreshes
   docs after each release); a new build-only job on PRs and on `main`/`releases/**` pushes;
   `docs` extra with `requirements/docs.lock.txt`, audited like the other locks.
-- Guardrails 5–7; a `CHANGELOG.md` line; **ADRs:** docs publishing scope, docs generator + docs
+- Guardrails 5–7, and 12 on `_site/`; a `CHANGELOG.md` line; **ADRs:** docs publishing scope, docs generator + docs
   version, hosting.
 
 Done when: `/docs/getting-started/` shows the latest stable's text; `/download/` shows the current
@@ -408,7 +519,10 @@ version without JavaScript; the sitemap lists docs pages and both search console
 - **`/how-it-works/`**: the SVG diagram — AI client → MCP (the `.mcpb` shim for Claude Desktop, or
   HTTP `/mcp` directly for Claude Code and organization mode) → PrivacyFence (policy → approval →
   PII check → audit; credentials inside) → connectors → services — then one read and one write
-  walked through with the regenerated screenshots (Wave 1).
+  walked through with the regenerated screenshots (Wave 1). The diagram has a vertical layout
+  under about 600 px ([rule 7](#what-responsive-means-here)).
+- Every new page is built only from the Wave 0 layout primitives. Guardrail 12 covers it through
+  the build manifest.
 - **`/security/`**: business-language summary following `security-and-compliance.md`'s sections,
   each linking its anchor; closes with "What PrivacyFence does not claim" (ADR 0025).
   Guardrail 11.
@@ -441,11 +555,13 @@ note whether the answers match the canonical description and the current install
 
 ## ADRs this plan creates
 
-Next free numbers when each PR lands (0039–0043 were taken by the product cleanup; 0044+ as of 2026-09-24).
+Next free numbers when each PR lands (0039–0043 were taken by the product cleanup, 0044 by the
+amd64-only `.deb`; 0045+ as of 2026-09-25).
 
 | ADR | Wave |
 |---|---|
 | Crawler and training-bot policy: allow all | 0 |
+| Website CSS: responsive on plain modern CSS, no framework (H2, with the rejected Tailwind/Bootstrap/Pico) | 0 |
 | Which docs are published on privacyfence.eu | 3 |
 | Docs generator, and docs built from the latest stable tag | 3 |
 | Website hosting: GitHub Pages behind the Cloudflare proxy | 3 |
