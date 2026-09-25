@@ -78,7 +78,7 @@ blocks waiting for one silently. If a step is missing, it says which one in its 
 | M9 | After Wave 0 deploys | **Live checks:** Wave 0's post-deploy "Done when" list: bot user agents, Rich Results Test, OG card, GA Realtime only after "Accept", and one real phone. |
 | M10 | Every wave | **Review and merge** each wave's PR. |
 | M11 | After Wave 1 merges | **Fresh install per platform** using only `getting-started.md` and that platform's `install-*.md`. Record it in `release-testing.md`'s manual checks. |
-| M12 | Before the next stable release | **Windows uninstaller:** click through the "Delete PrivacyFence data" checkbox, which has only been compiled in CI ([#674](https://github.com/privacyfence/privacyfence/pull/674)). |
+| M12 | Before the next stable release | **Windows uninstaller:** click through the "Delete PrivacyFence data" checkbox, which has only been compiled in CI ([#674](https://github.com/privacyfence/privacyfence/pull/674)). **Done 2026-09-25** (maintainer confirmed), ahead of 4.5.0. |
 | M13 | After Wave 1 merges (Q5) | **Cut 4.6.0**, the first stable release containing Wave 1, through `/cut-release` or the Actions tab (`release.yml`). A Claude Code on the web container cannot push tags. |
 | M14 | After Wave 3 deploys and M13 | Check that `/docs/getting-started/` shows the released text, and that Search Console accepts the regenerated sitemap. |
 | M15 | Monthly | [Measurement](#measurement), and [#365's gate check](#release-history-page-releases-365) (`curl -s https://downloads.privacyfence.eu/api/stats/downloads`). |
@@ -593,9 +593,9 @@ Doc findings the cleanup PRs recorded and left for Wave 1:
   installer is admin-only ([#671](https://github.com/privacyfence/privacyfence/pull/671)).
 - `TECHNICAL_REFERENCE.md`: says the Start Menu entry opens the web settings UI; since ADR 0031 it
   launches the companion ([#674](https://github.com/privacyfence/privacyfence/pull/674)).
-- The Windows uninstaller's "Delete PrivacyFence data" checkbox has only been compiled in CI; it is
-  in `release-testing.md`'s manual Windows checks and must be clicked through before the next
-  stable release ([#674](https://github.com/privacyfence/privacyfence/pull/674)).
+- The Windows uninstaller's "Delete PrivacyFence data" checkbox was clicked through by hand on
+  2026-09-25 (M12). It stays in `release-testing.md`'s manual Windows checks for every release
+  ([#674](https://github.com/privacyfence/privacyfence/pull/674)).
 
 ### Wave 0 — crawlability, legal, analytics, responsive base
 
