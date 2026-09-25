@@ -14,7 +14,7 @@ is not this suite's business), and `mailto:` is skipped for the same reason -- b
 `raw.githubusercontent.com/privacyfence/privacyfence/main/<path>` URL names a file in the working
 tree, so it is resolved against the checkout exactly like a relative link would be. README.md is
 the reason that matters: it is also the PyPI long description, so its links and images have to be
-absolute to render there (privacyfence/privacyfence#370), and without this they would have dropped
+absolute to render there, and without this they would have dropped
 out of the check above the moment they stopped being relative.
 """
 from __future__ import annotations

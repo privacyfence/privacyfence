@@ -40,8 +40,8 @@ this imports the same ``privacyfence`` package and third-party clients
         after itself instead of accumulating QA-account clutter forever.
 
 Both --check/--record accept ``--report-file PATH`` to also save the printed
-report, ready to paste into a PR description (see ``docs/testing-policy.md``
-§2.1); so does --lifecycle.
+report, ready to paste into a PR description (see ``docs/testing-policy.md``'s
+live-connector layer); so does --lifecycle.
 
 Only reads from ``tests/fixtures/qa_environment.yaml`` -- a small, non-secret
 manifest of your seed artifacts' IDs/keys/tags (see ``docs/connector-qa.md``'s
@@ -1052,7 +1052,7 @@ def check_gmail(record: bool, manifest: dict[str, Any]) -> list[CheckResult]:
     except GmailClientError as exc:
         results.append(CheckResult("gmail", "get_message", seed_message_id, False, str(exc)))
 
-    # The draft tools' signature/send_as source (#643). Account-level, so no
+    # The draft tools' signature/send_as source. Account-level, so no
     # seed artifact: every account has at least its primary address here.
     try:
         with RawCaptureExecute() as cap:
@@ -1549,7 +1549,7 @@ CONNECTOR_CHECKS: dict[str, Callable[[bool, dict[str, Any]], list[CheckResult]]]
 # Static manifest of the tests/fixtures/live/<connector>/*.json file(s) each
 # CONNECTOR_CHECKS entry's own CheckResult(...) calls above are wired to
 # (re-)write in --record mode against the highest-risk read path(s) for
-# that connector (TST-08).
+# that connector.
 # Kept as a plain dict here, independent of ever actually calling a live
 # API, so tests/unit/test_qa_fixture_recorder.py's TestFixturePresence can
 # assert every entry's file(s) exist and are non-empty valid JSON on every
@@ -1643,12 +1643,12 @@ assert set(EXPECTED_FIXTURES) == set(CONNECTOR_CHECKS), (
 # after itself was considered and rejected. lifecycle_confluence() verifies
 # create/get/update only and leaves the page behind; see its own docstring.
 #
-# Calendar is no longer in that "reaches past the boundary" group: issue
-# #415 added a real, gated (popup-approved) calendar_delete_event tool and
-# CalendarClient.delete_event(), so lifecycle_calendar() below now cleans up
+# Calendar is not in that "reaches past the boundary" group: it has a real,
+# gated (popup-approved) calendar_delete_event tool and
+# CalendarClient.delete_event(), so lifecycle_calendar() below cleans up
 # through the same client method a real MCP call would use, not a raw
-# events().delete() service call the way it (and jira/tasks, which still
-# have no such method) still have to.
+# events().delete() service call the way jira/tasks, which have no such
+# method, still have to.
 # ---------------------------------------------------------------------------- #
 
 LIFECYCLE_TAG = "[QATEST-LIFECYCLE]"
@@ -1862,7 +1862,7 @@ def lifecycle_calendar(manifest: dict[str, Any]) -> LifecycleResult:
                 if confirm_note:
                     note = f"{note}; {confirm_note}" if note else confirm_note
 
-    # Issue #415's own round trip, a second and independent check alongside
+    # The recurring-event delete round trip, a second and independent check alongside
     # the plain event above -- see _lifecycle_calendar_recurrence's own
     # docstring for why it's split out and what it does and doesn't cover.
     # Its own cleanup failure folds into cleanup_ok (same meaning as the

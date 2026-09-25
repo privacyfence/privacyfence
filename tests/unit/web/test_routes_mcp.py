@@ -6,9 +6,8 @@ Drives the real ASGI app with the official `mcp` Python client over an
 in-process ASGI transport (httpx2.ASGITransport -- mcp 2.x's client
 transports are written against httpx2, see pyproject.toml's test extra) --
 no real socket. This is
-the in-process equivalent of what P0 validated by hand and of what
-tests/integration/test_bridge_daemon_contract.py does for the bridge, but
-for /mcp directly and without spawning a real process.
+the in-process counterpart of tests/integration/test_mcp_daemon_contract.py,
+without spawning a real process.
 """
 from __future__ import annotations
 
@@ -142,7 +141,7 @@ _WIRE_HEADERS = {"Accept": "application/json, text/event-stream", "Content-Type"
 
 
 # --------------------------------------------------------------------------- #
-# Auth -- §10.3's audience separation starts here: no credential but the
+# Auth -- audience separation starts here: no credential but the
 # right bearer token gets past this layer at all.
 # --------------------------------------------------------------------------- #
 
@@ -163,7 +162,7 @@ class TestAuth:
             pass  # ClientSession.initialize() succeeding is the assertion.
 
     def test_build_mcp_asgi_app_requires_a_token_or_a_verifier(self):
-        # P7: build_mcp_asgi_app grew an alternative to `token` (`verifier`,
+        # build_mcp_asgi_app takes an alternative to `token` (`verifier`,
         # for web/oauth_provider.py's OrgOAuthProvider) -- calling it with
         # neither is a caller bug, not a runtime condition to silently
         # tolerate.
@@ -172,7 +171,7 @@ class TestAuth:
 
 
 # --------------------------------------------------------------------------- #
-# Server instructions (issue #396 Part A) -- the wire-level counterpart of
+# Server instructions -- the wire-level counterpart of
 # tests/integration/test_mcp_daemon_contract.py's real-socket assertion.
 # --------------------------------------------------------------------------- #
 
@@ -191,14 +190,14 @@ class TestServerInstructions:
                     async with ClientSession(read, write) as session:
                         result = await session.initialize()
         assert result.instructions == SERVER_INSTRUCTIONS
-        # Named concretely, per Phase 2's own status tool docstring -- the
+        # Named concretely, per the status tool's own docstring -- the
         # instructions are what tells a client the tool exists and why to
         # call it, not just that an empty tool list means "not set up".
         assert "privacyfence_status" in result.instructions
 
 
 class TestToolsListChangedCapability:
-    """Issue #396 Part C: StreamableHTTPSessionManager drives every session
+    """StreamableHTTPSessionManager drives every session
     with ``init_options=None``, so the runner answering initialize falls back
     to Server.create_initialization_options() with no arguments, and
     NotificationOptions()'s own tools_changed=False default is what a real
@@ -323,7 +322,7 @@ class TestListTools:
         assert META_TOOL_NAMES <= names
 
     async def test_connector_tool_is_advertised_uniformly_read_only(self):
-        # §8.1: every tool -- write tools included -- is advertised
+        # Every tool -- write tools included -- is advertised
         # read-only/non-destructive; the real gate is server-side.
         dispatcher = _dispatcher({"echo": EchoConnector()})
         async with _connected_session(dispatcher) as session:
@@ -434,7 +433,7 @@ class TestCallConnectorTool:
     async def test_two_calls_in_one_session_share_dedupe_state(self):
         # Same MCP session -> same session_key -> the second identical call
         # is served from the completed-result cache instead of re-running
-        # the connector (§6 job 2's coalescing, ported onto session_key).
+        # the connector (retry coalescing, keyed on session_key).
         connector = EchoConnector()
         dispatcher = _dispatcher({"echo": connector})
         async with _connected_session(dispatcher) as session:
@@ -480,7 +479,7 @@ class TestMetaTools:
         assert "disabled" in result.content[0].text
 
     async def test_status_round_trips(self):
-        # issue #396 Phase 2: no provider wired here, so status() falls
+        # No provider wired here, so status() falls
         # back to reporting the one connector this dispatcher can actually
         # see (test_mcp_dispatch.py's TestStatus covers the provider-backed
         # shape in detail) -- this just proves the wire round trip reaches
@@ -493,7 +492,7 @@ class TestMetaTools:
         assert result.structured_content["setup_complete"] is True
 
     async def test_create_upload_slot_round_trips(self, tmp_path, monkeypatch):
-        # Phase 4: privacyfence_create_upload_slot mints a real
+        # privacyfence_create_upload_slot mints a real
         # UploadStagingStore slot for the principal this session resolved
         # to (LOCAL_PRINCIPAL, same as every other meta-tool test here) and
         # returns a capability URL built from *this request's* own base
@@ -518,7 +517,7 @@ class TestMetaTools:
         assert "privacyfence_create_upload_slot" in {t.name for t in tools.tools}
 
     async def test_await_approval_round_trips_to_the_registry(self):
-        # P3: privacyfence_await_approval, reaching the same registry a real
+        # privacyfence_await_approval, reaching the same registry a real
         # deferred approval would have registered into. No registry wired
         # here (no WebApprovalUI in this fixture), so every id comes back
         # "unknown" -- the wire round trip is what this test proves, the

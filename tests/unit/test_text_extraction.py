@@ -301,7 +301,7 @@ class TestPptx:
 
 
 class TestZipBombProtection:
-    """SEC-14: a DOCX/PPTX's word/document.xml or slideN.xml is decompressed
+    """A DOCX/PPTX's word/document.xml or slideN.xml is decompressed
     from an attacker-controlled zip before a human has approved anything --
     a crafted entry that's small on disk but huge once decompressed must not
     be fully read into memory. See _read_zip_member_bounded() and its
@@ -368,7 +368,7 @@ class TestZipBombProtection:
 
 
 class TestXxeProtection:
-    """SEC-14: word/document.xml and slideN.xml are parsed with defusedxml
+    """word/document.xml and slideN.xml are parsed with defusedxml
     rather than xml.etree.ElementTree, so a DOCTYPE declaring entities in an
     attacker-controlled attachment is rejected instead of expanded."""
 

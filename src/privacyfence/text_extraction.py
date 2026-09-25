@@ -65,7 +65,7 @@ _XLSX_MAX_COLS = 20
 # Archive entries listed before truncating (see _extract_archive_markdown).
 _ARCHIVE_MAX_ENTRIES = 200
 
-# SEC-14: cap on bytes decompressed from a single zip member (DOCX/PPTX's
+# Cap on bytes decompressed from a single zip member (DOCX/PPTX's
 # word/document.xml, ppt/slides/slideN.xml) before it's handed to the XML
 # parser. A DOCX/PPTX is a zip archive of attacker-controlled content --
 # gmail.py/drive.py/confluence.py all fetch and extract attachment bytes
@@ -232,7 +232,7 @@ def _read_zip_member_bounded(zf: zipfile.ZipFile, name: str) -> bytes:
     decompressing anything, and the actual bytes read off the stream are
     counted as they arrive and capped the same way -- a crafted entry can't
     rely on an undersold ``ZipInfo.file_size`` to smuggle a bigger payload
-    past the first check alone (SEC-14). Raises _ZipEntryTooLarge rather
+    past the first check alone. Raises _ZipEntryTooLarge rather
     than returning a truncated result, since a truncated XML document isn't
     parseable anyway."""
     info = zf.getinfo(name)

@@ -1,4 +1,4 @@
-"""Guards the Phase 6 cutover: the homepage's primary CTAs point at the download page, and that
+"""Guards that the homepage's primary CTAs point at the download page, and that
 page exists (docs/downloads-and-release-kpi.md).
 
 Deliberately a static test rather than a browser one. tests/integration/test_download_page.py
@@ -21,7 +21,7 @@ from tests.website_site import REPO, WEBSITE, build_site, built_site, read_page
 
 pytestmark = pytest.mark.unit
 
-# The three CTAs Phase 6 repoints: header nav, hero, and the closing call to action.
+# The three primary CTAs: header nav, hero, and the closing call to action.
 CTA_PATTERN = re.compile(r'<a class="(?:nav-cta|button primary)" href="([^"]+)">([^<]*Download[^<]*)</a>')
 
 
@@ -43,8 +43,8 @@ def test_all_three_primary_ctas_point_at_the_download_page():
 
 
 def test_no_primary_cta_still_points_at_github_releases():
-    # The specific regression Phase 6 is: a CTA left on GitHub Releases after the download page
-    # became the primary path. GitHub stays linked for source and docs -- just not as the
+    # The specific regression: a CTA left on GitHub Releases although the download page
+    # is the primary path. GitHub stays linked for source and docs -- just not as the
     # download button.
     for href, label in _ctas():
         assert "github.com" not in href, f"{label.strip()!r} still points at GitHub: {href}"

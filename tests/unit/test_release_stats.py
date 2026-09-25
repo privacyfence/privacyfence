@@ -1,4 +1,4 @@
-"""Tests for scripts/release_stats.py (release-publishing plan Phase 4).
+"""Tests for scripts/release_stats.py.
 
 Imported by file path (importlib), same pattern as tests/unit/test_r2_release.py -- scripts/ isn't
 part of the installed ``privacyfence`` distribution. release_stats.py itself imports

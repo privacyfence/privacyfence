@@ -1,4 +1,4 @@
-"""Cross-language contract test for the .mcpb shim (D11): does the real
+"""Cross-language contract test for the .mcpb shim (ADR 0012): does the real
 Node shim (mcpb/shim/) actually speak Streamable HTTP to the real Python
 ``/mcp`` endpoint?
 

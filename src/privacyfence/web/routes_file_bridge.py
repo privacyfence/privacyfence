@@ -9,13 +9,13 @@ stack (``RequireAuthMiddleware`` / ``AuthContextMiddleware`` /
 ``AuthenticationMiddleware(backend=BearerAuthBackend(verifier))``) around a
 small nested Starlette app, exactly the same shape ``mount_mcp`` already
 uses to keep ``/mcp`` off the main approval-surface app's own middleware
-stack (SEC-06's audience separation: a browser session cookie must never be
+stack (audience separation: a browser session cookie must never be
 accepted here any more than it is on ``/mcp``). The principal for both
 routes always comes from that bearer token via ``principal_from_access_
 token``, never from a cookie or a path parameter.
 
 Also ``PUT /mcp-files/slots/{slot}`` / ``GET /mcp-files/fetch/{token}`` --
-Phase 4's own pair (ADR 0007's "Clients without the bridge" section),
+the capability pair (ADR 0007's "Clients without the bridge" section, ADR 0028),
 reached by any HTTP client, no bearer header (or anything else) required:
 the capability token embedded in the URL is itself the credential. Built by
 ``mount_capability_routes`` below, as plain, unauthenticated ``Route``s --
@@ -145,7 +145,7 @@ async def _get_download(request: Request) -> Response:
 
 
 async def _put_slot(request: Request) -> Response:
-    """Phase 4's unauthenticated upload -- see module docstring. No
+    """The unauthenticated capability upload -- see module docstring. No
     ``principal_from_access_token(get_access_token())`` here at all: this
     route isn't wrapped in the bearer-auth middleware stack in the first
     place (``mount_capability_routes``), so there is no access token to
@@ -167,7 +167,7 @@ async def _put_slot(request: Request) -> Response:
 
 
 async def _get_fetch(request: Request) -> Response:
-    """Phase 4's unauthenticated download -- see module docstring, and
+    """The unauthenticated capability download -- see module docstring, and
     ``_put_slot`` above for why there's no access token to read here
     either."""
     token = _decode_token(request.path_params["token"])
@@ -189,7 +189,7 @@ async def _get_fetch(request: Request) -> Response:
 
 
 def _capability_asgi_app() -> ASGIApp:
-    """The two Phase 4 capability routes as one plain Starlette app, with
+    """The two capability routes as one plain Starlette app, with
     *no* auth middleware around it -- see module docstring."""
     return Starlette(routes=[
         Route("/slots/{slot}", _put_slot, methods=["PUT"]),
@@ -215,7 +215,7 @@ class _FileBridgeRouter:
     class is that mount's own ASGI app: ``/slots`` and ``/fetch`` need no
     auth at all and go straight to the capability app; everything else
     (``/uploads``, ``/downloads``) goes through the bearer-authenticated
-    app exactly as before Phase 4.
+    app.
     """
 
     _NO_AUTH_SEGMENTS = frozenset({"slots", "fetch"})
@@ -256,7 +256,7 @@ def build_file_bridge_asgi_app(
     org mode passes its own ``OrgOAuthProvider`` as ``verifier``.
 
     This is the bearer-authenticated pair (``/uploads``, ``/downloads``)
-    alone -- ``mount_file_bridge`` is what combines it with the Phase 4
+    alone -- ``mount_file_bridge`` is what combines it with the
     capability pair under one ``Mount``; a caller that wants only the
     authenticated app itself (as a handful of existing tests do) still
     gets exactly that from this function, unchanged.
@@ -278,8 +278,8 @@ def mount_file_bridge(
     *, token: str | None = None, verifier: TokenVerifier | None = None,
     resource_metadata_url: AnyHttpUrl | None = None,
 ) -> list[BaseRoute]:
-    """All four file-bridge routes -- Phase 1's bearer-authenticated
-    ``/uploads``/``/downloads`` pair plus Phase 4's unauthenticated
+    """All four file-bridge routes -- the shim's bearer-authenticated
+    ``/uploads``/``/downloads`` pair plus the unauthenticated
     ``/slots``/``/fetch`` capability pair (ADR 0007's "Clients without the
     bridge" section) -- as one ``Mount`` under ``FILE_BRIDGE_PREFIX``. Used
     by local mode's own ``build_app`` alongside ``mount_mcp``'s own route,
@@ -295,7 +295,7 @@ def mount_file_bridge(
 
 
 def mount_capability_routes() -> list[BaseRoute]:
-    """Phase 4's two capability routes alone, as one ``Mount`` under
+    """The two capability routes alone, as one ``Mount`` under
     ``FILE_BRIDGE_PREFIX`` -- no bearer-auth stack at all, unlike
     ``mount_file_bridge``. This is org mode's own mount
     (``_build_org_app``): org mode never mounts ``mount_file_bridge``'s

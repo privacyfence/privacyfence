@@ -15,9 +15,8 @@ OS pick one.
 on **the machine running the PrivacyFence daemon**, not on
 whatever device the person clicking "Authenticate…" is holding -- by default
 (``open_browser=None``) via ``_default_open_browser()``, which asks a running
-companion app (#428 Phase 3, ADR 0002 decision 5) to do it and falls back to
-calling ``webbrowser.open()`` directly when none is running, still the normal
-case today. In ``local`` mode
+companion app (ADR 0002 decision 5) to do it and falls back to
+calling ``webbrowser.open()`` directly when none is running. In ``local`` mode
 that's the same machine by construction (this is the whole assumption `local`
 mode makes), so it works as-is;
 it stops being true the moment a browser tab reaches a `local`-mode daemon from
@@ -26,18 +25,17 @@ settings page says so in its own copy next to a connector's Authenticate button
 (settings_window_html.py's `renderConnectors`) rather than leaving it implicit
 -- a cheap, honest statement of a real limitation beats a silent one.
 
-P8 built the "next step" this
-docstring used to describe here: ``org`` mode doesn't use this module's
+``org`` mode doesn't use this module's
 loopback listener at all. ``web/routes_connect.py``'s ``GET /oauth/start/
 {service}``/``GET /oauth/callback/{service}`` build the same authorize
 URL/exchange the code server-side, against a real public redirect_uri
 (``{issuer_url}/oauth/callback/{service}``), with the browser doing the
 provider round trip instead of a loopback port on this machine. That's
-exactly why ``build_authorize_url``/``exchange_code`` were hoisted out of
-each of slack_client.py/salesforce_client.py/atlassian_oauth.py's own
-``authorize_interactive`` into public, module-level functions (P8): this
-module's ``run_browser_oauth`` is still what drives them in ``local`` mode
-(unchanged, byte-identical), but ``org`` mode calls the same functions
+exactly why ``build_authorize_url``/``exchange_code`` are public,
+module-level functions in each of slack_client.py/salesforce_client.py/
+atlassian_oauth.py rather than private to ``authorize_interactive``: this
+module's ``run_browser_oauth`` is what drives them in ``local`` mode,
+but ``org`` mode calls the same functions
 directly and drives the provider round trip over real HTTP redirects
 instead. Google's equivalent functions live in ``google_oauth.py``, whose
 ``authorize_local()`` drives them through this module's loopback flow too.
@@ -115,11 +113,10 @@ class OAuthLoopbackError(Exception):
 def _default_open_browser(url: str) -> bool:
     """The default ``open_browser`` behind ``run_browser_oauth()`` below --
     ADR 0002 decision 5: try asking a running companion app to open ``url``
-    first (what #428 Phase 4 makes mandatory on Windows, where a
+    first (the only way that works on Windows, where a
     service-hosted daemon can't reach the user's desktop session to open a
     browser itself), and fall back to opening it directly when no companion
-    is running -- still the normal case pre-Phase-4 (the companion isn't
-    autostarted until then), and always the case on Linux, which has no
+    is running -- always the case on Linux, which has no
     persistent companion process to ask (see companion.py's own module
     docstring). Both imports are deferred: this module is imported broadly
     (every local-mode connector's ``authorize_interactive``), so it

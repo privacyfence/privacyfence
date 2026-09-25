@@ -208,7 +208,7 @@ class TelegramConnector(Connector):
         except TelegramClientError as exc:
             raise RuntimeError(str(exc)) from exc
         n = len(messages)
-        # Query is Claude's own input (kept in §1 as identifying context);
+        # Query is Claude's own input (kept in the preview as identifying context);
         # Results (count) and the actual message content are only learned
         # once approved.
         preview = {"Query": query}

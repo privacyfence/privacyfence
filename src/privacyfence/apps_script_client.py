@@ -7,7 +7,7 @@ best-effort read access to the result of a run the user triggered themselves.
 Running a script is deliberately out of scope for this client and for
 PrivacyFence entirely -- see ``connectors/apps_script.py``'s module docstring
 for why. There is no ``run`` method here, and there never should be one added
-without a fresh threat-model discussion (see issue #154's "Non-goals").
+without a fresh threat-model discussion.
 
 The Apps Script API itself has no "list my script projects" endpoint, so
 ``list_projects`` goes through the Drive API instead (standalone script
@@ -15,8 +15,8 @@ projects show up there with mime type
 ``application/vnd.google-apps.script``) -- hence the extra
 ``drive.metadata.readonly`` scope below, kept as narrow as it can be (just
 enough to list/name script projects, not read Drive file content).
-``get_execution_log`` uses the Processes API's ``listScriptProcesses``
-(open question 1(b) in issue #154): status/duration/function name per
+``get_execution_log`` uses the Processes API's ``listScriptProcesses``:
+status/duration/function name per
 recent run, not a full ``console.log`` transcript -- the Apps Script
 editor's "Executions" panel transcript would need the script bound to a
 standard, Cloud-Logging-enabled GCP project plus a `logging.read` scope,
