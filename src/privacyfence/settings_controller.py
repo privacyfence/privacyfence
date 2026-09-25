@@ -249,10 +249,8 @@ def _google_client_config(org_config: dict[str, Any]) -> dict[str, Any]:
 # page writes lands in the on-disk ``auto_accept:`` section (policy.store), the one config section
 # every surface (this page, the approval popup's "Always allow", the MCP propose tool) writes.
 #
-# gate.py's _evaluate_auto_accept checks a rule written here unconditionally, regardless of which
-# engine ``policy.engine`` names authoritative -- see auto_accept.set_policy_v2_store_rules's own
-# docstring for why: a v2-only rule (in particular, anything using one of the three P6-only
-# predicates below) has no v1 shadow to be gated behind.
+# gate.py's _evaluate_auto_accept checks every rule written here; there is one rule engine and
+# no switch between engines.
 # ---------------------------------------------------------------------------- #
 
 
@@ -1094,6 +1092,10 @@ class SettingsController:
             return
 
         self.error = ""
+        # The live connectors were built from the previous bundle's client
+        # credentials and download settings; rebuild them now, or they keep
+        # serving the old values until the next restart.
+        self.refresh_connectors()
 
     def would_pin_new_org_signing_key(self, raw: bytes) -> bool:
         """Read-only precheck for web/routes_settings.py's org_config_

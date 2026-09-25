@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Coverage ratchet (TST-03).
+"""Coverage ratchet.
 
 `pytest`'s own `--cov-report=term-missing` (docs/testing-policy.md, "Layers 1–4: every PR") is
 informational only -- nothing before this script gated a merge on coverage
@@ -17,9 +17,8 @@ still go green. This script is the gate: it reads the `coverage.json` report
 
 MODULE_FLOORS exists because a single overall floor doesn't protect any one
 file -- gate.py is ~2% of this package's statements, so a regression there
-can hide inside the aggregate. The modules listed are the ones Phase 0/1 of
-the remediation plan (SEC-01 through SEC-15) touched or added: the URL/
-scheme allowlist, identity-matching, audit-export, org-config/bundle-trust,
+can hide inside the aggregate. The modules listed are the security-critical
+ones: the URL/scheme allowlist, identity-matching, audit-export, org-config/bundle-trust,
 browser-session and token-lifetime, privacy-filter fail-closed, secure-write,
 OIDC-discovery-trust, MCP-boundary-error-taxonomy, and per-principal-cap
 code paths.
@@ -67,20 +66,20 @@ OVERALL_FLOOR = 95.1
 # relative, matching coverage.json's "files" keys exactly (pytest run from
 # REPO_ROOT, as CI and pre_release_check.py both do).
 MODULE_FLOORS: dict[str, float] = {
-    # SEC-01: shared href-scheme allowlist and its two callers.
+    # Shared href-scheme allowlist and its two callers.
     "src/privacyfence/url_safety.py": 100.0,
     "src/privacyfence/email_markdown.py": 99.0,
     "src/privacyfence/markdown_to_html.py": 95.0,
     # Core gate/auto-accept/audit path.
     "src/privacyfence/gate.py": 91.0,
-    "src/privacyfence/auto_accept.py": 94.0,  # SEC-02 identity rules live here
-    "src/privacyfence/audit_log.py": 95.0,  # SEC-03 formula-injection guard
-    "src/privacyfence/approvals.py": 92.0,  # SEC-15 per-principal cap
+    "src/privacyfence/auto_accept.py": 94.0,  # identity-matching rules live here
+    "src/privacyfence/audit_log.py": 95.0,  # audit-export formula-injection guard
+    "src/privacyfence/approvals.py": 92.0,  # per-principal pending-approval cap
     "src/privacyfence/pii_detector.py": 98.0,
-    # SEC-04: org-config fail-closed load path.
+    # Org-config fail-closed load path.
     "src/privacyfence/org_mode.py": 100.0,
     "src/privacyfence/daemon_main.py": 96.0,
-    # SEC-05: org bundle trust.
+    # Org bundle trust.
     "src/privacyfence/org_bundle_signing.py": 98.0,
     # 91.0, not the ~93.2% the rest of this module would suggest: whether
     # coverage sees _resolve_names_async()'s done() callback body (fired
@@ -88,24 +87,24 @@ MODULE_FLOORS: dict[str, float] = {
     # own thread) depends on that thread's scheduling relative to the test
     # finishing -- observed at both 93.18% (this floor's laptop/local runs)
     # and 92.87% (CI, same commit) across otherwise-identical runs. A real
-    # fix is a deterministic wait on that thread rather than a wider floor
-    # (TST-11); until then
+    # fix is a deterministic wait on that thread rather than a wider floor;
+    # until then
     # this floor carries enough headroom not to flake red on that one line.
     "src/privacyfence/settings_controller.py": 91.0,
-    # SEC-06/SEC-12/SEC-13: bootstrap flow, session and token lifetimes.
+    # Bootstrap flow, session and token lifetimes.
     "src/privacyfence/web/oauth_provider.py": 99.0,
     "src/privacyfence/web/org_session.py": 100.0,
     "src/privacyfence/web/session_auth.py": 100.0,
-    # #402: the only place org-mode bearer material is written to disk. Every
+    # The only place org-mode bearer material is written to disk. Every
     # branch here is either a credential going out or a damaged-file path that
     # has to fail closed, so this one earns a full floor rather than a high
     # one.
     "src/privacyfence/web/sealed_refresh_store.py": 100.0,
-    # SEC-07: privacy-filter fail-closed load path.
+    # Privacy-filter fail-closed load path.
     "src/privacyfence/privacy_filter.py": 100.0,
-    # SEC-09: atomic, permission-safe credential/config writes.
+    # Atomic, permission-safe credential/config writes.
     "src/privacyfence/secure_files.py": 100.0,
-    # #428 Phase 4: the module every process consults to decide where the
+    # The module every process consults to decide where the
     # human-authority files live and which account is supposed to own them.
     # A gap here doesn't fail loudly -- it resolves the *un*separated layout
     # on an install that thinks it is separated, which reads as "the policy
@@ -113,7 +112,7 @@ MODULE_FLOORS: dict[str, float] = {
     # 100 only because of the platform branches this repo's Linux CI cannot
     # execute (the pwd lookups a Windows build skips entirely).
     "src/privacyfence/privilege_separation.py": 99.0,
-    # #428 Phase 4 (B5c): the Windows half of the same decision. NTFS ACLs
+    # The Windows half of the same decision. NTFS ACLs
     # are the only thing standing between the agent and the policy/passkey/
     # audit-key files there -- POSIX modes do not exist on that platform --
     # so a gap in the mask arithmetic below means the audit stops reporting a
@@ -128,31 +127,31 @@ MODULE_FLOORS: dict[str, float] = {
     # its initial 81.0 by the owner/OWNER RIGHTS resolution that first real
     # Windows run made necessary -- all of it pure, all of it tested.)
     "src/privacyfence/windows_acl.py": 83.0,
-    # SEC-11: OIDC discovery trust validation.
+    # OIDC discovery trust validation.
     "src/privacyfence/org_identity.py": 100.0,
     "src/privacyfence/web/routes_org_identity.py": 99.0,
-    # SEC-10: safe-error taxonomy at the MCP boundary.
+    # Safe-error taxonomy at the MCP boundary.
     "src/privacyfence/safe_errors.py": 100.0,
     "src/privacyfence/web/routes_mcp.py": 100.0,
     # CSRF/Origin/step-up auth for write approvals. Raised from 96.0 by
-    # Phase 0's enrollment gate and its own tests -- the largest single block
+    # the passkey enrollment gate and its own tests -- the largest single block
     # of new branches this module has taken on, and the one it would be worst
     # to let rot.
     "src/privacyfence/web/routes_security.py": 97.0,
     "src/privacyfence/webauthn_stepup.py": 98.0,
-    # Phase 1.1: this module decides whether a passkey is required at all --
+    # This module decides whether a passkey is required at all --
     # an install's single most consequential security default, and now a
     # packaging-dependent one. Small enough that the overall floor would
     # never notice it rotting, which is exactly what this list is for.
     "src/privacyfence/step_up_config.py": 99.0,
-    # #400: org mode's settings surface. It authorizes on Principal.is_admin
-    # and, since C3e, rewrites the install-wide privacy/PII policy for every
+    # Org mode's settings surface. It authorizes on Principal.is_admin
+    # and rewrites the install-wide privacy/PII policy for every
     # principal -- the same class of thing as the fail-closed load path
     # privacy_filter.py above is pinned at 100 for, just on the write side.
     "src/privacyfence/web/org_install_policy.py": 100.0,
-    # #428 B10: the daemon's own session-minting interface (MINT/QUIT) and
+    # The daemon's own session-minting interface (MINT/QUIT) and
     # the companion's OPEN channel share this module's accept-loop plumbing,
-    # including the peer-uid gate B10 added. 61.0, not a number in the
+    # including the peer-uid gate. 61.0, not a number in the
     # nineties like the rest of this file's IPC-adjacent modules, because
     # most of what's uncovered here is the Windows named-pipe half of
     # _LineProtocolServer -- exercised for real by the platform-windows job
@@ -160,21 +159,21 @@ MODULE_FLOORS: dict[str, float] = {
     # windows_acl.py's own floor documents above. Without a floor at all, a
     # regression in the POSIX half this CI run *does* exercise -- the
     # peer-uid check included -- was invisible to the gate. Raised from 61.0
-    # by Phase 0's CONFIRM ENROLL command and the three platform dialogs
+    # by the CONFIRM ENROLL command and the three platform dialogs
     # behind it: the POSIX-reachable half of all of that is tested, so the
-    # ratchet should hold it. Raised again from 66.0 by Phase 1's ENROLLMENT/
-    # RECOVERY/SHOW RECOVERY commands and Phase 2's attested mints -- MINT
+    # ratchet should hold it. Raised again from 66.0 by the ENROLLMENT/
+    # RECOVERY/SHOW RECOVERY commands and the attested mints -- MINT
     # COMPANION/MINT CONSOLE, their CONFIRM MINT/CONFIRM SIGNIN call-backs,
     # SHOW, and the client helpers for all of them -- every one of which this
     # run drives against real servers on both sides.
     "src/privacyfence/web/control_channel.py": 75.0,
     # Was 81.0, then 83.0 (ADR 0003 decision 3's _complete_pending_
-    # separation()), then 86.0 (Phase 1.2's first-run enrollment offer and
-    # 1.3's recovery-code action). Each of those left _run_tray() -- macOS/
+    # separation()), then 86.0 (the first-run enrollment offer and the
+    # recovery-code action). Each of those left _run_tray() -- macOS/
     # Windows only, guarded on sys.platform -- as nearly all of what was
     # uncovered, on the reasoning that this Linux-only run has no tray icon
-    # to drive. Merging Phases 1 and 2 is what retired that reasoning: both
-    # had added behaviour *inside* that function (the recovery-code item,
+    # to drive. That reasoning stopped holding once behaviour was added
+    # *inside* that function (the recovery-code item,
     # the attested _open_path), so the untested block was no longer just the
     # loop. tests/unit/test_companion.py's TestTrayLoop stubs pystray/Pillow
     # at the deferred import _run_tray does itself and drives the menu, the

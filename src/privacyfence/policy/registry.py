@@ -1,30 +1,27 @@
-"""The tool registry -- P1 of the policy v2 redesign.
+"""The tool registry.
 
 One row per tool, joining `auto_accept.TOOL_TO_GATE` and `auto_accept.TOOL_TO_OPERATION` with the
-two columns neither table carries: which v2 *verb* a tool performs, and what kind of object a
-rule's scope is measured against when it governs that verb (`ScopeSubject`). Both tables stay the
-source of truth for gate and operation key -- this module is provably a superset of them
-(`test_registry.py` asserts the join is exact) and adds nothing that changes what gets auto-
-accepted today. In particular:
+two columns neither table carries: which *verb* a tool performs, and what kind of object a rule's
+scope is measured against when it governs that verb (`ScopeSubject`). Both tables stay the source
+of truth for gate and operation key -- this module is provably a superset of them (`test_registry.py`
+asserts the join is exact). In particular:
 
 - `gmail.create_filter`, `gmail.update_filter`, `slack.create_group_chat`,
   `apps_script.read_content`, `apps_script.write_content` and `apps_script.read_execution_log`
-  were the three operation groups v1 had no way to configure at all (F5): no entry in the
-  per-operation rule tables, and no capability in the grant model either. They get a verb and a
-  scope subject here like every other governed tool, which is what made them configurable once the
-  engine read this registry instead of those tables. As of P9 that is no longer future tense --
-  `policy/catalogue.py` offers `apps_script.project` (read), `gmail.configure` (configure) and
-  `slack.share_anything` (share), and P7's write-time validation is what keeps a rule naming a verb
-  its scope cannot govern from being stored under any of them.
+  are the operation groups the old per-operation rule tables and the grant model had no way to
+  configure at all. They get a verb and a scope subject here like every other governed tool, which
+  is what makes them configurable: `policy/catalogue.py` offers `apps_script.project` (read),
+  `gmail.configure` (configure) and `slack.share_anything` (share), and the catalogue's write-time
+  validation keeps a rule naming a verb its scope cannot govern from being stored under any of them.
 - Three operation keys are shared by tools that perform two different verbs:
   `calendar.create_modify_event` (create vs. update), `slack.read_messages` and
   `telegram.read_chat_messages` (read vs. search, depending on whether the call returns one
   conversation or a search's worth of results). `operation_verbs()` reports every verb any tool
-  registers under a given operation key, precisely so a later migration of a v1 rule keyed on one
-  of these expands to *every* verb here -- expanding to only the first would silently narrow what
-  the rule allows.
+  registers under a given operation key, so anything that expands a rule keyed on one of these
+  expands to *every* verb here -- expanding to only the first would silently narrow what the rule
+  allows.
 
-Nothing in `privacyfence` outside `tests/` consumes this module yet.
+`policy/propose.py` derives which operation keys a (scope, verb) pair reaches from this registry.
 """
 from __future__ import annotations
 
@@ -37,7 +34,7 @@ GATES: frozenset[str] = frozenset({"auto", "review", "popup"})
 
 
 class Verb(str, Enum):
-    """The eighteen v2 verbs (redesign proposal, "Operation catalogue"), grouped by family below."""
+    """The eighteen verbs a rule can allow, grouped by family below."""
 
     READ = "read"
     DOWNLOAD = "download"
@@ -75,10 +72,10 @@ class ScopeSubject(str, Enum):
 
     Most verbs measure a single item, but a handful quantify over more than one -- `search`
     requires every result to be in scope, `move` requires both the source and the destination, and
-    `draft` requires every recipient. These are exactly the cases F3 (a sandbox-folder grant
-    auto-approving `drive_move_file` out of the sandbox because only the source was checked) and F7
-    (the `approved_channel`/`approved_channel_all_results` twin-predicate duplication) come from --
-    naming the quantifier here is what stops them recurring.
+    `draft` requires every recipient. These are the cases that go wrong when a selector checks only
+    one of the objects -- a folder grant approving a move out of the folder because only the source
+    was checked, or a channel rule needing a twin predicate to cover a search. This column records
+    the quantifier; it is metadata, and each scope selector is what actually enforces it.
     """
 
     ITEM = "item"
@@ -184,9 +181,8 @@ TOOL_TO_VERB: dict[str, Verb] = {
     "calendar_create_out_of_office": Verb.CREATE,
     "calendar_set_working_location": Verb.UPDATE,
     "calendar_set_event_visibility": Verb.SHARE,
-    # calendar.set_color has no listed verb in the redesign proposal's operation catalogue -- it
-    # changes one attribute of an existing event, same shape as calendar.working_location, so it
-    # gets the same verb pending an explicit decision in a later phase.
+    # calendar.set_color changes one attribute of an existing event, same shape as
+    # calendar.working_location, so it gets the same verb.
     "calendar_set_event_color": Verb.UPDATE,
     "calendar_delete_event": Verb.DELETE,
     "salesforce_get_record": Verb.READ,
@@ -253,8 +249,8 @@ TOOL_REGISTRY: dict[str, ToolRegistryEntry] = _build_registry()
 def operation_verbs(operation: str) -> frozenset[Verb]:
     """Every verb any tool performs under `operation` key.
 
-    More than one member means a v1 rule keyed on `operation` must expand to every verb here when
-    migrated to v2 -- see the module docstring's note on `calendar.create_modify_event`,
+    More than one member means a rule keyed on `operation` must expand to every verb here -- see
+    the module docstring's note on `calendar.create_modify_event`,
     `slack.read_messages` and `telegram.read_chat_messages`.
     """
     return frozenset(

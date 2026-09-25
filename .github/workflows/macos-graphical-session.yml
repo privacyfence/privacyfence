@@ -1,6 +1,6 @@
 name: macOS graphical-session autostart
 
-# B19 (privacyfence/privacyfence#374): the third leg of the same coverage
+# docs/testing-policy.md's layer 6 (packaged artifact): the third leg of the same coverage
 # linux-graphical-session.yml/windows-graphical-session.yml already give their own
 # platforms -- a real graphical-session/login-equivalent environment actually
 # starting the packaged app via the OS's own autostart mechanism, not a source-tree
@@ -14,7 +14,7 @@ name: macOS graphical-session autostart
 # tests.yml's per-PR jobs -- same reasoning as the Linux/Windows workflows: this is
 # the most expensive tier in this repo's whole test taxonomy by design, so it's too
 # heavy to run on every PR or sit on an actual release's critical path the way a
-# failure in build.yml's own packaged DMG smoke test (TST-15) correctly does.
+# failure in build.yml's own packaged DMG smoke test correctly does.
 # Scheduled instead on packaging-related `main` changes, a weekly
 # cadence (an hour after windows-graphical-session.yml's own Monday slot, same
 # reasoning -- spread the heavier scheduled jobs across the runner pool), and by
@@ -87,7 +87,7 @@ jobs:
         # --sign/NOTARIZE_PROFILE stay entirely optional for exactly this case.
         run: bash scripts/build_dmg.sh
 
-      - name: Run macOS graphical-session/autostart test (B19)
+      - name: Run macOS graphical-session/autostart test
         run: pytest tests/integration/test_macos_graphical_session_autostart.py -v
 
       # test_macos_pkg_install.py's own real proof: `sudo installer -pkg
@@ -99,7 +99,7 @@ jobs:
       - name: Run macOS pkg install test
         run: pytest tests/integration/test_macos_pkg_install.py -v
 
-      # docs/testing-policy.md's Phase 10: same tests/
+      # Same tests/
       # diagnostics.py capture as linux-graphical-session.yml/windows-graphical-
       # session.yml's own steps -- same reasoning (a flaky/scheduled tier still
       # needs to be diagnosable from CI, not just tellable apart from a real

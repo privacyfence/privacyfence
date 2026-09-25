@@ -1,6 +1,6 @@
 """Shared Google OAuth 2.0 helper for both modes.
 
-Org mode (P8): ``web/routes_connect.py``'s routes call ``authorize_url``/
+Org mode: ``web/routes_connect.py``'s routes call ``authorize_url``/
 ``exchange_code`` directly, against a public redirect_uri, because a remote
 browser (a phone, say) can't have PrivacyFence open a local port and a local
 browser window on its own behalf -- see ``oauth_loopback.py``'s own module
@@ -16,9 +16,8 @@ separated install reaches no desktop session and opens nothing.
 
 ``google_auth_oauthlib.flow.Flow`` is the lower-level counterpart of
 ``InstalledAppFlow`` that takes an explicit ``redirect_uri`` instead of
-managing a loopback listener itself -- exactly the plan document's own
-words for this phase ("Google's InstalledAppFlow becomes google_auth_
-oauthlib.flow.Flow with an explicit redirect_uri"). ``Flow`` auto-generates
+managing a loopback listener itself, which is what both modes need.
+``Flow`` auto-generates
 its own PKCE ``code_verifier``/``code_challenge`` pair (see its own
 ``authorization_url()``), so unlike the Slack/Salesforce/Atlassian helpers
 this module has no ``code_challenge`` parameter of its own to plumb through
@@ -115,8 +114,8 @@ def _accept_granted_superset(flow: Flow, exc: Warning, *, requested: list[str]) 
     A wider grant still reaches Google legitimately -- most often because
     one OAuth client serves both org mode's OIDC sign-in and its connectors,
     so ``openid``/``userinfo.*`` ride along on every connector exchange.
-    That is a deployment's choice to make (see docs/org-mode-setup-guide.md
-    §4.2), not something this function should reject.
+    That is a deployment's choice to make (see docs/org-mode-setup-guide.md's
+    "Connector apps"), not something this function should reject.
 
     ``exc`` carries the already-parsed token oauthlib refused to return
     (``exc.token``) and the granted scopes (``exc.new_scope``), so nothing

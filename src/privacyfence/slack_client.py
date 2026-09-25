@@ -415,6 +415,11 @@ class SlackClient:
         self._user_cache: dict[str, SlackUser] = {}
         self._channel_name_cache: dict[str, str] = {}
         self._channel_is_mpim_cache: dict[str, bool] = {}
+        # IM channel id -> the other participant's user id ("" for a conversation that is not an
+        # IM). An IM's participants never change, so this needs no expiry.
+        self._im_counterpart_cache: dict[str, str] = {}
+        # auth.test's user_id, cached once a lookup succeeds; "" until then.
+        self._own_user_id = ""
 
         # Weekly on-disk snapshots (see _ensure_user_directory/
         # _ensure_channel_directory and refresh_user_directory/
@@ -473,6 +478,7 @@ class SlackClient:
             ) from exc
         team = response.get("team", "unknown workspace")
         user = response.get("user", "unknown bot")
+        self._own_user_id = str(response.get("user_id") or "") or self._own_user_id
         logger.info("Connected to Slack workspace %r as %r", team, user)
         return team
 
@@ -1457,6 +1463,50 @@ class SlackClient:
             is_mpim = False
         self._channel_is_mpim_cache[channel_id] = is_mpim
         return is_mpim
+
+    def own_user_id(self) -> str:
+        """The authenticated user's own Slack id, from auth.test. Best-effort (never raises): a
+        failed lookup returns "" and is not cached, so the next call tries again."""
+        if self._own_user_id:
+            return self._own_user_id
+        try:
+            response = self._client.auth_test()
+        except SlackApiError as exc:
+            logger.debug("Could not resolve own Slack user id: %s", exc)
+            return ""
+        self._own_user_id = str(response.get("user_id") or "")
+        return self._own_user_id
+
+    def resolve_is_self_dm(self, channel_id: str) -> bool:
+        """Whether `channel_id` is the authenticated user's DM with themselves: an IM whose other
+        participant is auth.test's own user id, or that user id itself (chat.postMessage accepts
+        a user id and delivers to the DM with that user).
+
+        Every IM's id starts with "D", so the prefix alone cannot tell the self-DM from a DM with
+        anyone else. This answer decides whether a "my own DM" rule auto-accepts a read or a send,
+        so anything that cannot be confirmed -- no own id, a lookup error, a non-IM -- reads as
+        False.
+        """
+        if not channel_id:
+            return False
+        own = self.own_user_id()
+        if not own:
+            return False
+        if channel_id == own:
+            return True
+        if not channel_id.startswith("D"):
+            return False
+        counterpart = self._im_counterpart_cache.get(channel_id)
+        if counterpart is None:
+            try:
+                response = self._client.conversations_info(channel=channel_id)
+            except SlackApiError as exc:
+                logger.debug("Could not resolve IM counterpart for %s: %s", channel_id, exc)
+                return False
+            channel = response.get("channel") or {}
+            counterpart = str(channel.get("user") or "") if channel.get("is_im") else ""
+            self._im_counterpart_cache[channel_id] = counterpart
+        return counterpart == own
 
     def _resolve_user_name(self, user_id: str) -> str:
         """Best-effort user display-name lookup (cached, never raises). Falls

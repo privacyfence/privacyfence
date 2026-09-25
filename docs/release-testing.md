@@ -150,7 +150,15 @@ On a real desktop Ubuntu, not a server or container.
    The daemon has no desktop session, so the flow goes through the `privacyfence-companion --serve`
    process the XDG autostart entry starts; if that entry did not take, the daemon looks healthy while
    authentication has no way to reach you. CI covers the daemon's own autostart, not this one.
-5. **Remove and purge**: `sudo apt remove privacyfence`, reinstall, and the connector is still signed
+5. **Passkey enrollment**, every stable release, and whenever `webauthn_stepup.py` or the
+   `/security` page changed: on the Passkeys page the companion opens after login, add a passkey in
+   **Chrome** and again in **Firefox**, each time once with a USB security key and once with a
+   phone over the browser's QR-code (hybrid) flow. Each enrollment completes, asks for the key's PIN
+   or the phone's unlock, and the new passkey then approves a gated write. Most Linux desktops have
+   no built-in authenticator, so this is the only proof a Linux user can enroll the passkey that
+   step-up asks for by default
+   ([ADR 0055](adr/0055-step-up-passkey-enrollment-accepts-any-authenticator.md)).
+6. **Remove and purge**: `sudo apt remove privacyfence`, reinstall, and the connector is still signed
    in (`/var/lib/privacyfence` is kept); `sudo apt purge privacyfence`, and `/var/lib/privacyfence`
    and the `privacyfence` account are gone.
 

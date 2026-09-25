@@ -50,7 +50,7 @@ jobs:
 
       - name: Install Python dependencies
         # `test` extra (not just `dev`) so the packaged smoke test below --
-        # tests/integration/test_macos_packaged_smoke.py, TST-15 -- has
+        # tests/integration/test_macos_packaged_smoke.py -- has
         # pytest/pytest-timeout/playwright available; `mcp` (the client it
         # and the shim fixture need) is already a runtime dependency.
         #
@@ -62,7 +62,7 @@ jobs:
 
       # tests/integration/test_macos_packaged_smoke.py drives a real headless
       # Chromium page against the packaged app's own approval UI -- same
-      # browser test_browser_smoke.py (TST-06) already needs in tests.yml,
+      # browser test_browser_smoke.py already needs in tests.yml,
       # just installed here too since this workflow doesn't share that job.
       - name: Install Playwright browsers
         run: playwright install chromium
@@ -203,7 +203,7 @@ jobs:
       # shim, and drives one real Allow/Deny round trip through a real
       # headless browser against the real served approval UI. A failure here
       # fails this job before the DMG reaches R2/GitHub Releases below.
-      - name: Run packaged smoke test (TST-15)
+      - name: Run packaged smoke test
         run: pytest tests/integration/test_macos_packaged_smoke.py -v
 
       # tests/diagnostics.py's own capture (environment info, an installed-file manifest, and any
@@ -285,7 +285,7 @@ jobs:
   # job's own comment gives. Each of `build`/`build-windows`/`build-deb`/`sbom` only uploads its
   # own workflow artifact; `finalize-release` below is the one place that downloads all four and
   # attaches them to the tag's GitHub Release, so the release either gets everything or nothing --
-  # see that job's own comment for why (privacyfence/privacyfence#373).
+  # see that job's own comment for why.
   build-windows:
     runs-on: windows-latest
     permissions:
@@ -323,7 +323,7 @@ jobs:
 
       - name: Install Python dependencies
         # `test` extra (not just `dev`) so the packaged smoke test below --
-        # tests/integration/test_windows_packaged_smoke.py, Phase 6.2 -- has
+        # tests/integration/test_windows_packaged_smoke.py -- has
         # pytest/pytest-timeout available; `mcp` (the client it needs) is
         # already a runtime dependency.
         #
@@ -360,7 +360,7 @@ jobs:
       #   ESIGNER_PASSWORD       — SSL.com account password
       #   ESIGNER_CREDENTIAL_ID  — eSigner credential ID for the enrolled cert
       #   ESIGNER_TOTP_SECRET    — eSigner TOTP secret (base32), for headless OTP generation
-      # Supersedes the original Phase 5.1 default of a portable Authenticode .pfx
+      # Supersedes the earlier default of a portable Authenticode .pfx
       # (WINDOWS_CERTIFICATE/WINDOWS_CERTIFICATE_PWD): CA/B Forum's June 2023 key-storage
       # rules mean SSL.com no longer issues code-signing certs as exportable .pfx files at
       # all -- the private key lives only on a FIPS token or in SSL.com's eSigner cloud
@@ -452,7 +452,7 @@ jobs:
         shell: pwsh
         run: ./scripts/build_installer.ps1
 
-      # docs/testing-policy.md's Phase 6 item 6.2: the one place the actual packaged
+      # docs/testing-policy.md's layer 6 (packaged artifact): the one place the actual packaged
       # artifact -- not a source checkout, not a dev install -- gets exercised at all on Windows.
       # A real silent install (schtasks-registered autostart task included), the real installed
       # daemon started and driven through a daemon/MCP/approval/audit round trip, then a real
@@ -461,7 +461,7 @@ jobs:
       # install -- service, ACLs, group membership, companion task -- with no `enable` call from
       # the test, and a failed separation failing Setup rather than shipping quietly. A failure
       # here fails this job before the installer reaches R2/GitHub Releases below.
-      - name: Run packaged installer smoke test (Phase 6.2)
+      - name: Run packaged installer smoke test
         run: pytest tests/integration/test_windows_packaged_smoke.py -v
 
       # Same tests/diagnostics.py capture as the `build` job's identically-named step --
@@ -563,7 +563,7 @@ jobs:
       # directly (see that module's "Why a --target install, not the .deb"
       # docstring section for why it doesn't need the .deb specifically),
       # so it doesn't need to wait on PyInstaller.
-      - name: Run org-mode Ubuntu release smoke test (TST-16)
+      - name: Run org-mode Ubuntu release smoke test
         env:
           PRIVACYFENCE_RUN_RELEASE_SMOKE_TESTS: "1"
         run: pytest tests/integration/test_org_ubuntu_release_smoke.py -v
@@ -599,7 +599,7 @@ jobs:
       # install-over-install. Needs root for dpkg -- `ubuntu-latest`'s default `runner` user has
       # passwordless sudo (see that test module's own `_can_install_packages` skip condition). A
       # failure here fails this job before the .deb reaches R2/GitHub Releases below.
-      - name: Run packaged .deb lifecycle test (Phase 6.3)
+      - name: Run packaged .deb lifecycle test
         run: pytest tests/integration/test_deb_packaged_lifecycle.py -v
 
       # Same tests/diagnostics.py capture as the `build`/`build-windows` jobs' own
@@ -750,7 +750,7 @@ jobs:
   # `build-windows` failing on notarization after `build` had already published the DMG) left a
   # public GitHub Release carrying only some of a stable release's files, even though `needs`
   # below already meant R2 correctly refused to promote that same release to "latest". This job
-  # closes that asymmetry (privacyfence/privacyfence#373): every artifact-producing job only
+  # closes that asymmetry: every artifact-producing job only
   # uploads a *workflow* artifact (`actions/upload-artifact`, not `action-gh-release`) now, and
   # this job downloads all of them and does the one `action-gh-release` call itself, after
   # `needs:` has already proven all four jobs succeeded -- so the GitHub Release is as atomic as
@@ -773,10 +773,9 @@ jobs:
     needs: [build, build-windows, build-deb, sbom]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    # Needs `contents: write` now (unlike before privacyfence/privacyfence#373, when this job only
-    # read the repo and talked to R2): it's the one place that calls action-gh-release, to attach
+    # Needs `contents: write` because it's the one place that calls action-gh-release, to attach
     # the complete artifact set (or, on a pre-release tag, to create the asset-less release entry).
-    # `actions: read` is new for privacyfence/privacyfence#374's coverage-check step below -- it
+    # `actions: read` is for the graphical-session coverage-check step below -- it
     # only reads the three graphical-session workflows' own run history, never writes anything via
     # the Actions API.
     permissions:
@@ -793,9 +792,8 @@ jobs:
 
       # Same lightweight resolution the `sbom` job uses: read the tag-derived version straight
       # from setuptools_scm rather than `pip install -e .`-ing the package just to import
-      # __version__, which this job has no other use for. Channel is needed here too now (unlike
-      # before privacyfence/privacyfence#373): it decides whether the GitHub Release below gets
-      # the full artifact set or stays asset-less.
+      # __version__, which this job has no other use for. Channel is needed here too: it decides
+      # whether the GitHub Release below gets the full artifact set or stays asset-less.
       - name: Determine version and release channel
         id: release
         run: |
@@ -807,8 +805,8 @@ jobs:
           echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
           echo "Finalizing version=$VERSION channel=$CHANNEL"
 
-      # privacyfence/privacyfence#374, options 1 ("Report, don't gate") and 3 ("Gate stable tags
-      # only"): linux-graphical-session.yml, windows-graphical-session.yml and
+      # Reports a coverage gap on every channel and gates only stable tags on it:
+      # linux-graphical-session.yml, windows-graphical-session.yml and
       # macos-graphical-session.yml -- the only automated coverage for the daemon starting itself
       # at login -- run on packaging-related `main` pushes, weekly, and on demand, never on a tag
       # push and never as a `needs:` of this job, since this tier's own runtime cost must not sit

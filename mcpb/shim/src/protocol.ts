@@ -4,8 +4,8 @@
  *
  * - <data dir>/mcp_url   -- written by WebServer.start() once the
  *   embedded HTTP server is actually bound, cleared on stop(). The direct
- *   successor of ipc.py's PORT_FILE (see bridge/src/protocol.ts) for a
- *   client that talks to /mcp instead of the old IPC socket.
+ *   successor of the old IPC socket's port file, for a client that talks
+ *   to /mcp instead.
  *
  * ``<data dir>`` mirrors paths.py's ``data_dir()``: ``~/.privacyfence`` on
  * POSIX, ``%LOCALAPPDATA%\PrivacyFence`` on Windows (not the same dotfile
@@ -169,8 +169,8 @@ export const MCP_URL_FILE = path.join(handoffDir(), "mcp_url");
  * ADR 0008 (docs/adr/0008-one-principal-per-os-user.md, D3): the address of
  * the daemon's control channel -- the same one companion.py already speaks
  * ``MINT``/``MINT COMPANION``/``STATUS``/``QUIT`` over (web/control_channel.
- * py) -- ported to TypeScript for the first time, because Phase 3 gives this
- * shim its own reason to open a connection there: minting its own ``MINT
+ * py) -- ported to TypeScript, because minting MCP tokens per OS account
+ * gives this shim its own reason to open a connection there: minting its own ``MINT
  * MCP`` token (see controlChannel.ts). Every function below is a line-for-line port of that
  * module's own address-resolution functions, kept in this file rather than
  * controlChannel.ts because it is pure path arithmetic with the exact same

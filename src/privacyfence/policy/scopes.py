@@ -1,23 +1,21 @@
-"""Scope selectors -- P2 of the policy v2 redesign.
+"""Scope selectors.
 
-A scope answers "which resources" (the redesign proposal's §04 Scope catalogue): an **identity**
-scope names a specific resource (a folder, a sender address, a Jira project); an **attribute**
-scope names a property that selects a set (every file you own, a domain, a channel kind). This
-module holds a `ScopeSelector` for each of the redesign proposal's 35 scope-bound predicates --
-`policy/conditions.py` holds the other 12, which narrow a scope already matched rather than
-selecting resources on their own.
+A scope answers "which resources": an **identity** scope names a specific resource (a folder, a
+sender address, a Jira project); an **attribute** scope names a property that selects a set (every
+file you own, a domain, a channel kind). This module holds a `ScopeSelector` for each scope-bound
+predicate -- `policy/conditions.py` holds the conditions, which narrow a scope already matched
+rather than selecting resources on their own.
 
-Several predicates collapse onto one v2 scope type because they were always the same selector
-wearing a different name for each verb that happened to need it (F1: `approved_folder`,
-`approved_sandbox_folder` and `move_within_approved_folders` are the *same function* -- see
-`_approved_folder_matches` below, reused three times) -- but `SCOPE_SELECTORS` is keyed by
-**predicate name**, one entry per `auto_accept.AutoAcceptEvaluator._rule_*` method, not by scope
-type. That is what makes each entry directly, individually testable against its old counterpart:
-`test_scopes.py` asserts every selector here agrees with its `_rule_*` counterpart on every
-fixture, so this module changes nothing about what gets auto-accepted today. A selector's
-`.scope_type` records where it lands (`policy/scopes.py`'s counterpart of the predicate catalogue's
-"v2 home" column); `scope_type_to_predicates()` inverts that for anything that wants to walk a
-scope type's full predicate set instead.
+Several predicates share one scope type because they were always the same selector wearing a
+different name for each verb that happened to need it (`approved_folder` and
+`approved_sandbox_folder` are the *same function* -- see `_approved_folder_matches` below;
+`move_within_approved_folders` reuses it for the source and also checks the move's destination)
+-- but `SCOPE_SELECTORS` is keyed by **predicate name**, not by scope type. That is what makes each
+entry directly, individually testable against the predicate it replaced: `test_scopes.py` asserts
+every selector here agrees with its frozen counterpart in `tests/unit/policy/_v1_reference.py` on
+every fixture. A selector's `.scope_type` records which scope type it belongs to;
+`scope_type_to_predicates()` inverts that for anything that wants to walk a scope type's full
+predicate set instead.
 
 `label_name_allowlist` genuinely serves two scope types (`gmail.label` for
 `gmail.add_label`/`remove_label`/`create_label`, `contacts.label` for
@@ -25,25 +23,21 @@ scope type's full predicate set instead.
 its `.scope_type` is a tuple of both rather than picking one arbitrarily.
 
 `always_allow` covers three operation keys spanning two connectors (`gmail.create_draft`,
-`calendar.out_of_office`, `calendar.working_location`) with no resource identity to check at all
-(see D4 in the redesign proposal: model it as an explicit, honestly-unconditional "anything in this
-connector" scope rather than hiding it behind a rule name). Its `.scope_type` is the literal
-`"<connector>.anything"` placeholder the proposal itself uses -- resolving that to a concrete
-`gmail.anything`/`calendar.anything` per rule is config-authoring work, not something this
-module's `matches()` needs to know.
+`calendar.out_of_office`, `calendar.working_location`) with no resource identity to check at all,
+so it is modelled as an explicit, honestly-unconditional "anything in this connector" scope rather
+than hidden behind a rule name. Its `.scope_type` is the literal `"<connector>.anything"`
+placeholder -- resolving that to a concrete `gmail.anything`/`calendar.anything` per rule is
+config-authoring work, not something this module's `matches()` needs to know.
 
-Two scope types the redesign proposal's §04 catalogue adds -- `drive.file` and
-`apps_script.project` -- have no v1 predicate at all (apps_script's tools were previously
-ungovernable, F5; no existing rule ever names one specific file by id rather than a folder). They
-get a selector here too, under `NEW_SCOPE_SELECTORS` rather than `SCOPE_SELECTORS`, since there is
-no old `_rule_*` counterpart for `test_scopes.py` to check them against -- their own tests just
-exercise `matches()` directly. P6 adds two more to the same table for the same reason,
-`gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that make
-`gmail.create_filter`/`update_filter`/`slack.create_group_chat` (F5's remaining three operation
-keys) configurable from the Auto-accept Settings page; see their own comment below for why they
-are not simply more `always_allow` rules.
+Scope types with no old predicate to be checked against live in `NEW_SCOPE_SELECTORS` rather than
+`SCOPE_SELECTORS`, and their own tests exercise `matches()` directly: `drive.file` (no rule ever
+named one specific file by id rather than a folder), `apps_script.project` (Apps Script's tools had
+no scope at all), and `gmail.anything`/`slack.anything` -- the honestly-unconditional scopes that
+make `gmail.create_filter`/`update_filter`/`slack.create_group_chat` configurable from the
+Auto-accept Settings page; see their own comment below for why they are not simply more
+`always_allow` rules.
 
-``policy.engine.evaluate``/``preflight`` are what consume this module in production, since P3.
+``policy.engine.evaluate``/``preflight`` are what consume this module in production.
 """
 from __future__ import annotations
 
@@ -56,7 +50,7 @@ from ..auto_accept import ReviewContext, _address_of, _domain_of, _file_from
 
 class ScopeKind(str, Enum):
     """Identity scopes name a specific resource; attribute scopes name a property that selects a
-    set of resources (see this module's docstring and the redesign proposal's §04)."""
+    set of resources (see this module's docstring)."""
 
     IDENTITY = "identity"
     ATTRIBUTE = "attribute"
@@ -65,12 +59,11 @@ class ScopeKind(str, Enum):
 class ResolvesFrom(str, Enum):
     """Whether a scope can be decided from call arguments alone, or needs the fetched item.
 
-    Mirrors `auto_accept.ARGS_ONLY_RULES`/`DATA_DEPENDENT_RULES` -- read off those two sets below,
-    not duplicated by hand (F6). Note that the *same* v2 scope type can carry selectors with
-    different `resolves_from`: `drive.folder`'s item-scoped predicates (`approved_folder`) need the
-    fetched file's own parent, but its container-scoped predicate (`parent_folder_allowlist`, which
-    governs an upload whose file doesn't exist yet) can only ever read the destination out of
-    `ctx.args`. `resolves_from` is a property of the *predicate*, not of the scope type name alone.
+    The *same* scope type can carry selectors with different `resolves_from`: `drive.folder`'s
+    item-scoped predicates (`approved_folder`) need the fetched file's own parent, but its
+    container-scoped predicate (`parent_folder_allowlist`, which governs an upload whose file
+    doesn't exist yet) can only ever read the destination out of `ctx.args`. `resolves_from` is a
+    property of the *predicate*, not of the scope type name alone.
     """
 
     ARGS = "args"
@@ -79,9 +72,8 @@ class ResolvesFrom(str, Enum):
 
 @dataclass(frozen=True)
 class ScopeSelector:
-    """One scope-bound predicate: a name, its v2 scope type, its kind, where it resolves from, and
-    how it's checked. `matches` has the same `(value, ctx) -> bool` shape as the
-    `AutoAcceptEvaluator._rule_*` method it replicates.
+    """One scope-bound predicate: a name, its scope type, its kind, where it resolves from, and
+    how it's checked (`matches(value, ctx) -> bool`).
     """
 
     predicate: str
@@ -99,8 +91,10 @@ def _values_of(value: Any) -> list[Any]:
 
 
 def _dm_with_myself_matches(_value: Any, ctx: ReviewContext) -> bool:
-    cid = ctx.args.get("channel_id", "") or ""
-    return cid.startswith("D")
+    # Every IM id starts with "D", so the channel id cannot tell the self-DM from a DM with anyone
+    # else. The Slack connector resolves the IM's counterpart against the signed-in user and passes
+    # the verdict; a call that carries no verdict must not match.
+    return ctx.args.get("is_self_dm") is True
 
 
 def _group_dm_matches(_value: Any, ctx: ReviewContext) -> bool:
@@ -186,6 +180,19 @@ def _approved_folder_matches(value: Any, ctx: ReviewContext) -> bool:
     f = _file_from(ctx.raw_data)
     parents = getattr(f, "parent_ids", []) or []
     return bool(set(parents) & allowed)
+
+
+def _move_within_approved_folders_matches(value: Any, ctx: ReviewContext) -> bool:
+    """A move stays inside the approved set only if it both starts and ends there: checking the
+    source alone would let a folder grant auto-approve moving a file out of that folder into any
+    folder the account can write to."""
+    if not _approved_folder_matches(value, ctx):
+        return False
+    raw = ctx.raw_data
+    destination = ctx.args.get("destination_folder_id") or (
+        raw.get("destination_folder_id") if isinstance(raw, dict) else ""
+    )
+    return bool(destination) and destination in set(_values_of(value))
 
 
 def _parent_folder_allowlist_matches(value: Any, ctx: ReviewContext) -> bool:
@@ -341,7 +348,7 @@ def _approved_chats_all_results_matches(value: Any, ctx: ReviewContext) -> bool:
     return bool(items) and all(str(getattr(m, "chat_id", None)) in allowed for m in items)
 
 
-# ── Generic (no resource identity to scope to -- see D4 and the module docstring) ───────────────
+# ── Generic (no resource identity to scope to -- see the module docstring) ─────────────────────
 
 
 def _always_allow_matches(_value: Any, _ctx: ReviewContext) -> bool:
@@ -409,12 +416,9 @@ SCOPE_SELECTORS: dict[str, ScopeSelector] = {
         predicate="approved_sandbox_folder", scope_type="drive.folder", kind=ScopeKind.IDENTITY,
         resolves_from=ResolvesFrom.FETCHED, matches=_approved_folder_matches,
     ),
-    # F3: checks only the file's *current* parent, same as approved_folder -- not the move's
-    # destination. Reproducing that gap exactly is this phase's job (P2 is behavior-preserving);
-    # fixing it is D1's own, separately-decided PR (see the redesign proposal).
     "move_within_approved_folders": ScopeSelector(
         predicate="move_within_approved_folders", scope_type="drive.folder", kind=ScopeKind.IDENTITY,
-        resolves_from=ResolvesFrom.FETCHED, matches=_approved_folder_matches,
+        resolves_from=ResolvesFrom.FETCHED, matches=_move_within_approved_folders_matches,
     ),
     "parent_folder_allowlist": ScopeSelector(
         predicate="parent_folder_allowlist", scope_type="drive.folder", kind=ScopeKind.IDENTITY,
@@ -496,7 +500,7 @@ SCOPE_SELECTORS: dict[str, ScopeSelector] = {
 
 
 def scope_type_to_predicates() -> dict[str, tuple[str, ...]]:
-    """Invert `SCOPE_SELECTORS`: every v2 scope type -> the predicate names that land under it,
+    """Invert `SCOPE_SELECTORS`: every scope type -> the predicate names that land under it,
     in `SCOPE_SELECTORS`' own iteration order. A selector whose `.scope_type` is a tuple (today,
     only `label_name_allowlist`) is filed under each of its scope types.
     """
@@ -508,14 +512,13 @@ def scope_type_to_predicates() -> dict[str, tuple[str, ...]]:
     return {scope_type: tuple(predicates) for scope_type, predicates in by_type.items()}
 
 
-# ── New scope types with no v1 predicate (redesign proposal §04) ────────────────────────────────
+# ── Scope types with no old predicate ───────────────────────────────────────────────────────────
 #
-# Neither type is reachable by any tool today -- drive.file names one specific file by id, which no
-# existing rule does (every Drive rule scopes by folder or by attribute); apps_script.project is
-# what makes the three previously-ungovernable Apps Script operation keys (F5) configurable at all.
-# There is no old `_rule_*` counterpart for either, so they live here rather than in
-# `SCOPE_SELECTORS`, and their own tests exercise `matches()` directly instead of an equivalence
-# check.
+# drive.file names one specific file by id, which no other rule does (every Drive rule scopes by
+# folder or by attribute); apps_script.project is what makes the three Apps Script operation keys
+# configurable at all. There is no old predicate to check either against, so they live here rather
+# than in `SCOPE_SELECTORS`, and their own tests exercise `matches()` directly instead of an
+# equivalence check.
 
 
 def _drive_file_matches(value: Any, ctx: ReviewContext) -> bool:
@@ -533,11 +536,11 @@ def _apps_script_project_matches(value: Any, ctx: ReviewContext) -> bool:
     return ctx.args.get("script_id", "") in allowed
 
 
-# P6: the two remaining F5 operation groups -- `gmail.create_filter`/`update_filter` and
-# `slack.create_group_chat` -- have no resource identity to scope to at all (propose.py's own
-# module docstring already explains why: a filter's/group chat's *subject* is "the account"/"the
-# audience", not an item any `ScopeSelector` here can name). They are honestly-unconditional scopes
-# in the same D4 sense `always_allow` is -- but deliberately their own predicates, distinct from
+# `gmail.create_filter`/`update_filter` and `slack.create_group_chat` have no resource identity to
+# scope to at all (propose.py's own module docstring explains why: a filter's/group chat's
+# *subject* is "the account"/"the audience", not an item any `ScopeSelector` here can name). They
+# are honestly-unconditional scopes in the same sense `always_allow` is -- but deliberately their
+# own predicates, distinct from
 # `always_allow`, rather than reusing it: `always_allow` already carries three `PROPOSABLE_SCOPES`
 # entries (Gmail drafting, two calendar conditions) whose declared verbs (`draft`, `read`) would
 # make `describe.rule_verbs` wrongly filter a `configure`/`share` rule down to nothing (it credits a

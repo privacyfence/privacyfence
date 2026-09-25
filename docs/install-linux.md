@@ -64,9 +64,10 @@ Linux has no tray icon. The **PrivacyFence** entry in your Applications menu is 
 
 From a terminal, `privacyfence-companion --action=open-settings` opens Settings. After you log back
 in, the companion opens the **Passkeys** page until you have added a passkey; follow
-[the first approval](getting-started.md#your-first-approval) from there. The passkey has to come
-from an authenticator your browser offers as built into the device; PrivacyFence does not ask
-the browser for a USB security key.
+[the first approval](getting-started.md#your-first-approval) from there. Most Linux desktops have
+no passkey authenticator built in, so use what your browser offers instead: a USB or NFC security
+key with a PIN, or your phone, by scanning the QR code the browser shows. Any of them works,
+as long as it asks for your PIN, fingerprint or face.
 
 ## Connect Claude Code
 
@@ -92,7 +93,7 @@ Streamable HTTP MCP client takes the same URL and header. To give Claude Code a 
 | The service keeps failing | `journalctl -u privacyfence-daemon -e` shows why. |
 | A connector sign-in never opens a browser page | The `--serve` companion is not running in your session. Log out and back in, or run `privacyfence-companion --serve &`. |
 | A first passkey enrollment is refused, naming `zenity`/`kdialog` | `sudo apt install zenity`. |
-| Adding a passkey fails with "no built-in passkey authenticator ready to use" | Your browser offers no built-in passkey authenticator on this machine. Use a browser that does. |
+| Adding a passkey fails with "no built-in passkey authenticator ready to use" | The browser's prompt was closed before a security key or phone was used. Try again, and pick a security key or your phone in it. |
 | You cannot use the Applications-menu entry | `privacyfence-app --print-sign-in-link` prints a one-time link; the companion asks you to confirm it before it can approve anything. |
 
 Check the whole install with `status`, and repair it with `enable`:

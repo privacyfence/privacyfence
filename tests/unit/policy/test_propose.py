@@ -282,6 +282,21 @@ class TestProposalsAgainstTheV1Tables:
         ctx = make_ctx(connector="drive", tool="drive_write_file_content", args={"file_id": "f2"}, raw_data=orphan)
         assert propose.proposals_for("drive_write_file_content", ctx) == []
 
+    def test_a_move_proposal_names_both_the_source_and_the_destination_folder(self):
+        ctx = _drive_ctx("drive_move_file", file_id="f1", destination_folder_id="D9")
+        move = next(p for p in propose.proposals_for("drive_move_file", ctx)
+                    if p.scope.id == "move_within_approved_folders")
+        assert move.value == ["D9", "FOLDER1"]
+        assert scopes.SCOPE_SELECTORS["move_within_approved_folders"].matches(move.value, ctx) is True
+
+    def test_a_move_with_no_destination_or_no_source_folder_is_not_proposed(self):
+        no_destination = _drive_ctx("drive_move_file", file_id="f1")
+        orphan = make_ctx(connector="drive", tool="drive_move_file", args={"destination_folder_id": "D9"},
+                          raw_data={"file": SimpleNamespace(id="f2", parent_ids=[], owners=[])})
+        for ctx in (no_destination, orphan):
+            assert [p for p in propose.proposals_for("drive_move_file", ctx)
+                    if p.scope.id == "move_within_approved_folders"] == []
+
     def test_a_selector_that_raises_is_a_non_match_not_a_crash(self, monkeypatch):
         boom = scopes.ScopeSelector(
             predicate="approved_folder", scope_type="drive.folder", kind=scopes.ScopeKind.IDENTITY,
@@ -357,7 +372,7 @@ class TestNarrowestVerbFirst:
 
     def test_mutually_exclusive_attributes_do_not_widen_into_each_other(self):
         """"My own DM" must never offer "…and every group DM" as a widening of itself."""
-        ctx = make_ctx(connector="slack", args={"channel_id": "D123"},
+        ctx = make_ctx(connector="slack", args={"channel_id": "D123", "is_self_dm": True},
                        raw_data=[SimpleNamespace(channel_id="D123", is_private=True, files=[])])
         dm = next(p for p in propose.proposals_for("slack_get_channel_history", ctx)
                   if p.scope.id == "dm_with_myself")

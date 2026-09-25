@@ -14,9 +14,9 @@ authenticator**:
   *absence*, so ``require_user_verification=True`` (which reads exactly this
   bit) is satisfied by a key that has never been near a human. See
   webauthn_stepup.py's own "five things" list, which says so.
-- ``authenticator_attachment=platform`` and ``exclude_credentials`` are
-  requested in the registration options and ignored here, because both are
-  enforced by a cooperating browser and this is not one.
+- ``exclude_credentials`` is sent in the registration options and ignored
+  here, because only a cooperating browser enforces it and this is not one.
+  Registration asks for no particular attachment, and none could be checked.
 
 So this class cannot be "fixed" and is not a bug in py_webauthn -- it is the
 shape of the threat model, which is why the control that actually binds is a

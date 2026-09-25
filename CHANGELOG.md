@@ -65,6 +65,80 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and their SHA-256 checksums, and a link to its release notes. It works without JavaScript. The
   download page's "All releases" link and the site footer point to it.
 
+### Security
+
+- **An auto-accept rule for your own Slack DM matched every one-to-one DM.** `dm_with_myself` and
+  `send_to_myself` checked only that the channel was a DM, so reads of, and messages to, a DM with
+  anyone else went through without a card. They now match only your DM with yourself, as Slack
+  reports it; a DM PrivacyFence cannot confirm as yours asks as before.
+
+- **A Drive folder rule for moves checked only the folder a file was moved out of.**
+  `move_within_approved_folders` auto-approved moving a file out of an approved folder to anywhere
+  else. A move now auto-accepts only when both the current folder and the destination are in the
+  rule, and an "Always allow" offered for a move names both folders.
+
+### Changed
+
+- **You can now add a passkey with a security key or your phone, not only one built into the
+  computer.** The Security page used to ask the browser for a built-in authenticator only (Touch
+  ID, Windows Hello), which most Linux desktops don't have, so with passkey step-up on by default
+  a Linux user could be left unable to approve anything. The browser now also offers a USB or NFC
+  security key, or your phone over its QR-code flow. Whatever you use still has to check your PIN,
+  fingerprint or face. See [ADR 0055](docs/adr/0055-step-up-passkey-enrollment-accepts-any-authenticator.md).
+
+- **The Windows installer now refuses anything but 64-bit x64 Windows.** It used to install on
+  32-bit and arm64 Windows too, which are not supported: on Windows 11 on arm64 it ran under
+  emulation, and elsewhere it installed in 32-bit mode, where the service could not start. See
+  [ADR 0054](docs/adr/0054-the-windows-installer-refuses-anything-but-native-x64.md).
+
+### Fixed
+
+- The `not_shared_drive` condition read Drive's "shared with someone" flag, so it rejected My
+  Drive files you had shared and let files in a shared drive through. It now holds only for files
+  that are not in a shared drive.
+
+- Installing or updating an organization config bundle from Settings now takes effect straight
+  away: connectors that were already running, and the tools they offer to AI clients, switch to
+  the new bundle's settings without a restart.
+
+- In organization mode, connecting Slack from the Connect page now requests the Slack scopes the
+  administrator set in the bundle (`--slack-scopes`) instead of always requesting the defaults.
+
+- `build_org_bundle.py` now gives the correct install steps for an organization-mode bundle (copy
+  it to the server and restart; Settings has no install button in that mode). It also lists the
+  step-up redirect URI (`/oauth/stepup/callback`) alongside the two sign-in URIs, prints each
+  configured connector's `/oauth/callback/<service>` URI, and includes Apps Script in its Google
+  options heading.
+
+- Google connector credential errors (Gmail, Drive, Calendar, Contacts, Tasks) no longer tell you
+  to re-run PrivacyFence with a command-line flag: `--oauth-setup` never existed, and the
+  per-connector OAuth flags are refused on a packaged install. They now tell you to authenticate
+  or reconnect the connector from Settings (Connectors), or from `/connect` in org mode.
+
+- On macOS, the message after `uninstall` no longer tells you to re-run a script the uninstall
+  just deleted. It now says to install PrivacyFence again, then run `uninstall --purge`.
+
+- On macOS, privilege-separation errors now give the full
+  `sudo /Applications/PrivacyFenceApp.app/Contents/Resources/scripts/macos_privilege_separation.sh …`
+  command, not a path that only works inside a source checkout.
+
+- The Windows `status` check and the install audit now say what an unreadable handoff directory
+  actually breaks: the companion app and the MCP extension cannot find the daemon. The old wording
+  blamed the MCP token.
+
+- `scripts/verify_audit_log.py`'s examples now name the real audit log directory
+  (`<data>/authority/logs/audit`) and show the separated-install paths with `sudo`.
+
+- The nginx configuration in the organization deployment guide now works on the nginx 1.24 that
+  Ubuntu 24.04 ships: it enables HTTP/2 with `listen 443 ssl http2` instead of an `http2 on;` line
+  that nginx 1.24 rejects.
+
+### Removed
+
+- The seeded `settings.yaml` no longer contains `policy.engine: v1`, a setting nothing has read
+  since the old rule evaluator was removed. An existing copy of the key is still ignored and can
+  be deleted.
+
 ## [4.6.1] — 2026-09-25
 
 ### Added

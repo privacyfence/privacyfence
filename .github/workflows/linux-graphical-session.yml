@@ -27,7 +27,7 @@ on:
       - 'debian/**'
       - 'resources/linux/**'
       - 'scripts/build_deb.sh'
-      # #428 Phase 4 (B5b): build_deb.sh installs this next to the daemon as
+      # build_deb.sh installs this next to the daemon as
       # /usr/sbin/privacyfence-privilege-separation, along with the two unit
       # templates it renders -- so a change to either is a change to what
       # the .deb ships, and the packaged smoke test below is the only thing
@@ -78,10 +78,10 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
         run: bash scripts/build_deb.sh
 
-      - name: Run Linux graphical-session/autostart test (Phase 7, P7.2)
+      - name: Run Linux graphical-session/autostart test
         run: pytest tests/integration/test_linux_graphical_session_autostart.py -v
 
-      # docs/testing-policy.md's Phase 10: same tests/
+      # Same tests/
       # diagnostics.py capture as tests.yml/build.yml's own steps -- this
       # module carries `pytest.mark.packaged`, and its own $HOME (systemd
       # --user login-equivalent session) lives under each test's own

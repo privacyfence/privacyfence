@@ -75,7 +75,7 @@ jobs:
           set -euo pipefail
           workflow_id="build.yml"
           poll_interval_s=30
-          # build.yml's `build` job alone (DMG + notarization + TST-15) has run well past ten
+          # build.yml's `build` job alone (DMG + notarization + packaged smoke test) has run well past ten
           # minutes before; leave real headroom rather than risk a flaky timeout on release day.
           max_wait_s=$((60 * 60))
           start=$(date +%s)
@@ -248,7 +248,7 @@ jobs:
   # channel) -- this is where *every* channel's sdist/wheel actually lands, stable included: R2 is
   # the one archive that has everything, same as build.yml's DMG/SBOM uploads. It only needs the
   # `build` job's artifact and version/channel output, not a successful PyPI publish. It does,
-  # like the two PyPI jobs, still wait on `wait_for_build` (Phase 6.4): R2 is meant to be a
+  # like the two PyPI jobs, still wait on `wait_for_build`: R2 is meant to be a
   # complete record of what a tag actually shipped, not a place a broken build's bits land anyway
   # just because nothing public depends on them.
   publish-r2:

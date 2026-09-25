@@ -387,6 +387,16 @@ class TestCheckPolicy:
         assert result["matched_rule"] == rules[0].id
         assert result["matched_rule_id"] == rules[0].id
 
+    def test_agent_supplied_self_dm_flag_cannot_predict_an_auto_accept(self):
+        from privacyfence import auto_accept
+
+        auto_accept.set_policy_v2_store_rules(policy_rules({"slack.send_message": [{"predicate": "send_to_myself"}]}))
+        dispatcher = _dispatcher({"slack": FakeConnector("slack")})
+        result = dispatcher.check_policy(
+            "slack", "slack_send_message", {"channel_id": "D0OTHER", "text": "hi", "is_self_dm": True},
+        )
+        assert result["verdict"] == "requires_review"
+
     def test_matched_rule_id_is_none_when_no_rule_configured_at_all(self):
         dispatcher = _dispatcher({"gmail": FakeConnector("gmail")})
         result = dispatcher.check_policy("gmail", "gmail_get_message", {})

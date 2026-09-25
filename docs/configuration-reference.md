@@ -202,12 +202,6 @@ is not shown on an organization server.
 |---|---|---|---|---|
 | `agent_overrides.<client name>` | string | none | not set (commented out) | Label an MCP client whose handshake name PrivacyFence does not recognise as a known AI system. The value is an AI system id such as `claude-code` or `claude` (the ids the **Audit Log** shows); an unknown id is ignored with a warning. It relabels only: the entry is still recorded as claimed (`client_info`, *Not verified*). Local mode only; needs a restart. See [How PrivacyFence works](how-it-works.md#which-ai-system-is-asking). |
 
-### Keys the daemon does not read
-
-| Key | Seeded | Note |
-|---|---|---|
-| `policy.engine` | `v1` | Present in the seeded file; ignored. Every call is evaluated against the `auto_accept` section. |
-
 ## Organization config bundle (org_config.json)
 
 Build the bundle with `scripts/build_org_bundle.py` (Python standard library only; `--sign-key`
