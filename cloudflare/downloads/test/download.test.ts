@@ -23,8 +23,8 @@ async function call(path: string, init?: RequestInit): Promise<Response> {
   return response;
 }
 
-// The Worker edge-caches these routes, and the Cache API (like R2 here) outlives each test: every
-// test starts without the responses an earlier one left behind.
+// The Worker edge-caches these routes, and the Cache API is shared by every test in this file
+// (see setup.ts): every test starts without the responses an earlier one left behind.
 const CACHED_PATHS = [
   "/api/releases",
   "/api/releases/history",
@@ -208,8 +208,8 @@ interface HistoryBody {
   releases: { version: string; channel: string; artifacts: { id: string; kind: string }[] }[];
 }
 
-// R2 writes here outlive the test (the Cache API does too, see beforeEach below), so an object a
-// test adds is removed again whatever the outcome.
+// Storage is shared by every test in this file (see setup.ts), so an object a test adds is removed
+// again whatever the outcome.
 async function withTemporaryObject(key: string, body: string, check: () => Promise<void>): Promise<void> {
   await env.RELEASES.put(key, body);
   try {
@@ -391,7 +391,7 @@ describe("metadata routes", () => {
 });
 
 describe("GET /api/stats/downloads", () => {
-  it("returns an aggregate shape even with no downloads yet in this test's isolated storage", async () => {
+  it("returns the aggregate shape", async () => {
     const response = await call("/api/stats/downloads");
     expect(response.status).toBe(200);
     const body = (await response.json()) as { total: number; by_channel: object; by_platform: unknown[] };

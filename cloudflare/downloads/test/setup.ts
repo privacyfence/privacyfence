@@ -1,11 +1,16 @@
 /**
- * Runs once before the suite and seeds R2/D1 with the hand-written fixtures under
+ * Runs before each test file and seeds R2/D1 with the hand-written fixtures under
  * test/fixtures/ -- deliberately hand-written fixtures rather than real release metadata, so the
  * suite never depends on production infrastructure (docs/downloads-and-release-kpi.md).
  *
- * `isolatedStorage` (the vitest-pool-workers default) snapshots storage after setupFiles run and
- * resets every test back to that snapshot, so seeding once here is enough -- no test can see
- * another test's D1 counter writes or R2 mutations.
+ * Storage is isolated per test file, not per test. Each file starts from this seed with empty
+ * R2, D1 and Cache API storage, but within a file every test sees what earlier tests wrote: D1
+ * counter increments, R2 puts and deletes, and responses the Worker edge-cached. (This
+ * @cloudflare/vitest-pool-workers version has no per-test `isolatedStorage`.) So a test must not
+ * assume fixture state an earlier test in its file could have changed:
+ *  - counter assertions compare a before/after delta, never an absolute total;
+ *  - a test that changes R2 puts it back (download.test.ts's `withTemporaryObject`, `withoutObject`);
+ *  - download.test.ts clears the edge-cached /api/releases* responses before every test.
  */
 import { applyD1Migrations, env } from "cloudflare:test";
 
