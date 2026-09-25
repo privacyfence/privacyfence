@@ -11,7 +11,9 @@ landed in `40f45600`, merged as [#218](https://github.com/privacyfence/privacyfe
 [#406](https://github.com/privacyfence/privacyfence/issues/406)). Local mode's decide-time step-up
 landed in `87361dce` ([#469](https://github.com/privacyfence/privacyfence/pull/469)), and its
 `require_passkey` hard fail in `2fc760aa` ([#471](https://github.com/privacyfence/privacyfence/pull/471)),
-both under [#426](https://github.com/privacyfence/privacyfence/issues/426).
+both under [#426](https://github.com/privacyfence/privacyfence/issues/426). The org-mode batch
+refusal below is decided but not yet implemented, tracked in
+https://github.com/privacyfence/privacyfence/issues/741.
 
 ## Context
 
@@ -43,7 +45,10 @@ For a single approving decision that `step_up.scope` covers:
   options (`--step-up-require-passkey`, `--idp-step-up-acr-value`).
 
 Only single decisions get the IdP fallback. Batch step-up (ADR 0065) and sensitive settings
-actions (ADR 0034) are passkey-only in both modes. Sensitive settings actions are gated only when
+actions (ADR 0034) are passkey-only in both modes. With `require_passkey` off and nothing enrolled,
+a batch follows its mode's single-decision rule: local mode applies it without step-up, and org
+mode refuses it with a `400` and applies nothing, so org mode has no path that releases an
+approving decision without a ceremony. Sensitive settings actions are gated only when
 `require_passkey` is on.
 
 ## Alternatives considered

@@ -10,7 +10,8 @@ binder work: `4dcc1b4b` ([#505](https://github.com/privacyfence/privacyfence/pul
 ([#512](https://github.com/privacyfence/privacyfence/pull/512)). The server-minted `batch_id`
 followed in `94960763` ([#516](https://github.com/privacyfence/privacyfence/pull/516)). The design
 note that recorded it was deleted in `f5b57380`: read it with
-`git show f5b57380^:docs/approval-list-ui-ux.md`.
+`git show f5b57380^:docs/approval-list-ui-ux.md`. Implemented except the org-mode refusal of a
+batch with nothing enrolled, tracked in https://github.com/privacyfence/privacyfence/issues/741.
 
 ## Context
 
@@ -48,9 +49,12 @@ card, with its own passkey ceremony, was the stall the approval binder set out t
   assertion per item. A deny-only batch is unaffected either way.
 - **Batch step-up never offers an IdP fallback, in either mode.** `batch_step_up_response`
   returns a 428 with passkey options, or a 403 naming `/security` when `require_passkey` is on and
-  nothing is enrolled. With `require_passkey` off and nothing enrolled it returns `None`, and the
-  batch is applied without step-up. That is local mode's single-decision fall-through, and here it
-  applies in org mode too.
+  nothing is enrolled. With `require_passkey` off and nothing enrolled, the two modes differ, each
+  matching its own single-decision path (ADR 0066). Local mode returns `None` and applies the batch
+  without step-up, the same evadable fall-through as a single decision. Org mode refuses the batch
+  with a `400` (`batch_step_up_unavailable`) and applies nothing, because an org-mode approving
+  decision is never released without a ceremony; the message sends the human to `/security` to
+  enroll a passkey, or to each item's card, where IdP re-authentication is offered.
 
 ## Alternatives considered
 
@@ -66,6 +70,11 @@ card, with its own passkey ceremony, was the stall the approval binder set out t
   would mean weakening the CSP for looks. Details instead renders the metadata-only preview from
   `GET /api/approvals/{id}/preview` with `textContent`.
 
+- **Offer IdP re-authentication for a batch in org mode.** Rejected: the IdP attempt carries one
+  approval, the start route takes its parameters from the query string, and a batch would need a
+  server-held pending set so the redirect cannot widen it. It would also stretch a ceremony that a
+  password manager's autofill can complete (ADR 0066) over many approvals at once.
+
 ## Consequences
 
 - One assertion establishes that a verified human approved this exact set. It does not establish
@@ -75,8 +84,9 @@ card, with its own passkey ceremony, was the stall the approval binder set out t
   only be approved on their own card.
 - An audit entry's `batch_id` groups decisions only when one verified ceremony actually covered
   them. A client cannot make unrelated decisions look like one human action.
-- In org mode with `require_passkey` off, a single decision is never released without step-up
-  (ADR 0066), but a batch with nothing enrolled is. `require_passkey` closes both.
+- In org mode an approver with nothing enrolled cannot approve from the list. They approve each
+  item on its card, or enroll a passkey. With `require_passkey` off, neither a single decision nor a
+  batch is released without a ceremony.
 
 ## Verification
 
@@ -85,7 +95,9 @@ card, with its own passkey ceremony, was the stall the approval binder set out t
   `test_a_client_supplied_batch_id_is_never_recorded_verbatim`) and `TestBatchStepUp` (set
   binding, flipped results, replay, `require_passkey`, and both `per_item` cases).
 - `tests/unit/web/test_routes_org_approvals.py`: `TestBatchStepUp`
-  (`test_no_assertion_offers_a_428_with_no_idp_url`).
+  (`test_no_assertion_offers_a_428_with_no_idp_url`). The org-mode refusal of a batch with nothing
+  enrolled replaces `test_require_passkey_off_with_nothing_enrolled_lets_it_through_with_no_idp_link`
+  when it is implemented.
 
 ## Related
 

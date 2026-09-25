@@ -5,7 +5,10 @@
 Accepted (recorded retroactively on 2026-09-25; decided around 2026-08-28 in
 `docs/https-connector-refactor-plan.md` §5.4 and decision row D3, read it with
 `git show 96cd5af4^:docs/https-connector-refactor-plan.md`, and implemented in `36c5b7ce`,
-merged in [#188](https://github.com/privacyfence/privacyfence/pull/188)). Implemented.
+merged in [#188](https://github.com/privacyfence/privacyfence/pull/188)). Implemented for the
+ledger path only. The hold-window path, write-only coalescing and the collected-outcome expiry
+audit below are decided but not yet implemented, tracked in
+https://github.com/privacyfence/privacyfence/issues/739.
 
 ## Context
 
@@ -28,10 +31,25 @@ The answer depends on the gate:
   entry marks it `ledger_consumed`, removes it from `_by_key` and `_pending`, and returns it. A
   second identical write, even within the TTL, goes back through the gate and gets its own approval.
   One approval never performs two writes.
+- **Single-use holds on every path that releases a write.** A decision reaches its caller either
+  through the ledger (a re-issued call) or directly, when the human decides within the hold window
+  while the original call is still waiting in `wait_async`. The second path consumes the entry
+  exactly as `consume_ledger()` does, so a write decided inside the hold window cannot be replayed
+  by an identical write afterwards.
+- **Identical writes share one approval only while nobody is waiting on it.** A write re-issued
+  after it returned `approval_pending` coalesces onto the outstanding approval, which is how a
+  deferred write collects its decision. A second identical write that arrives while another call
+  is still waiting on that approval is refused, and nothing is released for it. Reads coalesce
+  whenever an identical approval is outstanding, however many calls are waiting.
 - **Reads (`gate_kind == "review"`) replay until the ledger TTL.** An identical re-read finds the
   same entry and reuses it until `ledger_expires_at` (`decided_at + ledger_ttl`, default
   `DEFAULT_LEDGER_TTL_SECONDS` = 5 minutes, configurable as `web.approvals.ledger_ttl_seconds`).
   Re-reading data a human has already released discloses nothing new.
+
+`expired` in the audit log means a decided outcome that no call ever collected. An entry whose
+outcome reached a caller, through the hold window or the ledger (a replayed read included), is
+removed silently when its TTL lapses; the release is already on record as that approval's own
+row.
 
 In both cases the entry is bound to the principal, connector, tool and canonical arguments. It
 cannot be redirected to another call, another argument set or another principal. It replays
@@ -46,14 +64,22 @@ whatever was decided, whether that was an approval or a denial.
 - **Make reads single-use too.** Every retry of an identical read (a client reconnecting, an agent
   re-fetching what it just fetched) would prompt the human again for content they have just
   released, which adds friction without protecting anything.
+- **Never coalesce writes.** Every re-issue of a deferred write would open a new card, and a
+  deferred write could never collect the decision the human already made.
+- **Give a concurrent identical write its own card.** The ledger holds one approval per
+  `(principal, canonical key)`, and the human would face two cards they cannot tell apart, where
+  approving both performs the write twice.
+- **Audit a replayed read's lapse under a new decision name.** It adds audit vocabulary that
+  records nothing new: the release is already audited when the decision is made.
 
 ## Consequences
 
 - Repeating a write needs a second approval, or a standing auto-accept rule that covers it.
-- A ledger entry that lapses is removed and audited as `expired` by `gate.py`'s expiry sweep
-  (`pop_expired_ledger_events()`), which skips entries marked `ledger_consumed`. Only a write's
-  release sets that mark, so a read entry is audited `expired` when its TTL lapses even if it was
-  replayed in the meantime.
+- An agent that fires the same write twice in parallel gets one result and one refusal. Retrying
+  after the first call returns is unaffected.
+- A ledger entry that lapses uncollected is removed and audited as `expired` by `gate.py`'s expiry
+  sweep (`pop_expired_ledger_events()`), so an `expired` row always means nothing was released on
+  that approval.
 - The TTL is the only limit on read replay. Raising `ledger_ttl_seconds` widens the replay window
   for reads and does not change writes.
 
