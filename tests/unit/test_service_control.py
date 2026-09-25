@@ -34,8 +34,12 @@ def separated(monkeypatch, tmp_path):
 
 
 class TestNotEligibleToElevate:
-    def test_an_unseparated_install_never_shells_out(self, monkeypatch):
+    def test_an_unseparated_install_never_shells_out(self, monkeypatch, tmp_path):
+        script = tmp_path / "macos_privilege_separation.sh"
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
         monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+        monkeypatch.setattr(privilege_separation, "marker_unreadable", lambda: False)
+        monkeypatch.setattr(privilege_separation, "installer_script_path", lambda: script)
         monkeypatch.setattr(
             service_control.subprocess, "run", lambda *a, **k: pytest.fail("must not run anything")
         )
@@ -43,7 +47,24 @@ class TestNotEligibleToElevate:
         ok, detail = service_control.run_elevated("start")
 
         assert ok is False
-        assert "not privilege-separated" in detail
+        assert "isn't set up on this machine" in detail
+        # Names the command that finishes the install, with this install's
+        # own script -- not a dead end.
+        assert f"sudo {shlex.quote(str(script))} enable" in detail
+
+    def test_an_unreadable_marker_is_still_a_separated_install(self, monkeypatch, separated):
+        # A separated root whose mode drifted to 0700 hides its own marker
+        # from the logged-in user. That is not an unseparated install, and
+        # Start/Restart/Stop must still reach the service.
+        monkeypatch.setattr(privilege_separation, "current_platform", lambda: "darwin")
+        monkeypatch.setattr(privilege_separation, "is_enabled", lambda: False)
+        monkeypatch.setattr(privilege_separation, "marker_unreadable", lambda: True)
+        monkeypatch.setattr(service_control.subprocess, "run", lambda *a, **k: _result(returncode=0))
+
+        ok, detail = service_control.run_elevated("restart")
+
+        assert ok is True
+        assert "restarted" in detail
 
     def test_no_provisioning_script_refuses(self, monkeypatch):
         monkeypatch.setattr(privilege_separation, "is_enabled", lambda: True)

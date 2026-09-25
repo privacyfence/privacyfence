@@ -43,6 +43,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The companion no longer says a separated install "is not privilege-separated".** Whenever
+  the daemon wrote a file directly into its data directory (`/Library/Application
+  Support/PrivacyFence` on macOS, `/var/lib/privacyfence` on Linux), it also tightened that
+  directory from `0711` to `0700`. Your own account could then no longer look inside, so the
+  menu-bar companion took the install for an unseparated one and refused **Start**, **Restart**
+  and **Stop**. The directory now keeps the mode the installer gave it. If it is already wrong,
+  the next write puts it back. On an install that really has no background service yet, those
+  items now show the command that finishes setting it up instead of a dead end.
+
 ## [4.6.0] — 2026-09-25
 
 ### Added
