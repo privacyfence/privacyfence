@@ -80,7 +80,7 @@ def test_docs_source_at_a_ref_reads_that_ref():
             ["git", "show", "HEAD:docs/README.md"], cwd=REPO, capture_output=True, text=True, check=True
         ).stdout
     )
-    assert head.read("docs/does-not-exist.md") is None
+    assert head.read("no/such/file.txt") is None
     assert head.kind("docs/adr") == "tree"
     assert head.kind("docs/README.md") == "blob"
     assert head.kind("nope") is None
