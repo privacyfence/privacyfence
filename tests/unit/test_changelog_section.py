@@ -107,10 +107,10 @@ class TestSection:
             changelog_section.section(SAMPLE, "9.9.9")
 
     def test_duplicate_headings_for_the_same_version_raise(self):
-        # The B9 trap: 4.0.0's section was opened early, so following CLAUDE.md's "rename
-        # [Unreleased]" step literally produces a *second* ## [4.0.0]. Without this guard the
-        # parser matched the first heading, stopped at the next ##, emitted whichever half came
-        # first and exited 0 -- a green build shipping half the notes.
+        # The duplicate-heading trap (ADR 0023): if a version's section was opened early, following
+        # CLAUDE.md's "rename [Unreleased]" step literally produces a *second* ## [4.0.0]. Without
+        # this guard the parser would match the first heading, stop at the next ##, emit whichever
+        # half came first and exit 0 -- a green build shipping half the notes.
         duplicated = (
             "# Changelog\n\n"
             "## [4.0.0] — 2026-09-16\n\n- the entries the release PR just renamed\n\n"
@@ -194,7 +194,7 @@ class TestMain:
         assert "Upgrading from 3.x" in capsys.readouterr().out
 
     def test_populated_unreleased_exits_non_zero_rather_than_dropping_the_cycle(self, capsys, tmp_path):
-        # The other half of the B9/B10 trap. Doing only the "correct its date" half of CLAUDE.md's
+        # The other half of the duplicate-heading trap. Doing only the "correct its date" half of CLAUDE.md's
         # release step leaves one correct [2.1.0] heading with the whole cycle stranded above it:
         # the duplicate guard sees nothing wrong, and the release ships without any of it.
         path = tmp_path / "CHANGELOG.md"

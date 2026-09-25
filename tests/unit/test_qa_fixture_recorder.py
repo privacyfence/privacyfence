@@ -1957,7 +1957,7 @@ class TestLifecycleCalendar:
         assert result.cleanup_ok is None  # nothing was ever created
 
     def test_recurring_event_is_also_created_and_cleaned_up(self, monkeypatch):
-        # Issue #415's own round trip, alongside the plain event above.
+        # The recurring-event delete round trip, alongside the plain event above.
         fake = _FakeCalendarClient()
         monkeypatch.setattr(recorder, "_build_calendar_client", lambda: fake)
 
