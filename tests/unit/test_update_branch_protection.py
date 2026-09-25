@@ -376,3 +376,16 @@ class TestRequiredChecksList:
             "reports as its own GitHub check and must be listed, and a listed check that no longer "
             "runs never reports at all, which blocks every merge"
         )
+
+    def test_website_build_is_required_and_runs_on_every_pull_request(self):
+        """`website-build` is the check website-build.yml's job reports. A rename, or a `paths:`
+        filter on its `pull_request` trigger, would leave a required check that never reports."""
+        assert "website-build" in ubp.REQUIRED_STATUS_CHECKS
+        workflow_path = _SCRIPT_PATH.parents[1] / ".github" / "workflows" / "website-build.yml"
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        names = [job.get("name") for job in workflow["jobs"].values()]
+        assert names == ["website-build"], f"website-build.yml's job names changed: {names}"
+        # PyYAML reads the bare `on:` key as boolean True.
+        triggers = workflow[True]
+        assert "pull_request" in triggers
+        assert not (triggers["pull_request"] or {}).get("paths"), "a paths: filter would wedge PRs"
