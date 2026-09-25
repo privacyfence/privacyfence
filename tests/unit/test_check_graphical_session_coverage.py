@@ -1,4 +1,4 @@
-"""Tests for scripts/check_graphical_session_coverage.py (privacyfence/privacyfence#374).
+"""Tests for scripts/check_graphical_session_coverage.py.
 
 Imported by file path (importlib), same pattern as tests/unit/test_release_stats.py -- scripts/
 isn't part of the installed ``privacyfence`` distribution.
@@ -26,7 +26,7 @@ class TestEvaluate:
 
         assert message is not None
         assert "no completed run at all" in message
-        assert "#374" in message
+        assert "docs/testing-policy.md" in message
 
     def test_run_not_an_ancestor_warns(self):
         run = _run()
@@ -215,8 +215,7 @@ class TestMain:
         assert "GH_TOKEN" in capsys.readouterr().err
 
     def test_exits_zero_with_warnings_when_no_channel_given(self, monkeypatch, capsys):
-        # No --channel at all (the flag's own default, "") -- same as this script's behavior
-        # before privacyfence/privacyfence#374's option 3 landed.
+        # No --channel at all (the flag's own default, "") -- report only, never gate.
         monkeypatch.setenv("GH_TOKEN", "test-token")
         monkeypatch.setattr(
             check_graphical_session_coverage,
@@ -232,7 +231,7 @@ class TestMain:
         assert "::warning::something is stale" in capsys.readouterr().out
 
     def test_exits_zero_with_warnings_on_a_pre_release_channel(self, monkeypatch, capsys):
-        # Option 3's whole point: pre-release tags stay ungated -- a flake there is cheap.
+        # Pre-release tags stay ungated on purpose -- a flake there is cheap.
         monkeypatch.setenv("GH_TOKEN", "test-token")
         monkeypatch.setattr(
             check_graphical_session_coverage,
@@ -248,7 +247,7 @@ class TestMain:
         assert "::warning::something is stale" in capsys.readouterr().out
 
     def test_fails_with_warnings_on_the_stable_channel(self, monkeypatch, capsys):
-        # Option 3: a stable tag is the one case a coverage gap actually blocks the release.
+        # A stable tag is the one case a coverage gap actually blocks the release.
         monkeypatch.setenv("GH_TOKEN", "test-token")
         monkeypatch.setattr(
             check_graphical_session_coverage,
@@ -264,7 +263,7 @@ class TestMain:
         out = capsys.readouterr().out
         assert "::warning::something is stale" in out
         assert "::error::" in out
-        assert "#374" in out
+        assert "docs/testing-policy.md" in out
 
     def test_prints_a_clean_summary_with_no_warnings(self, monkeypatch, capsys):
         monkeypatch.setenv("GH_TOKEN", "test-token")

@@ -4,14 +4,9 @@
 # package gets onto PyPI in the first place).
 #
 # ================================================================
-# The specific blocker this comment used to describe -- `daemon_main.
-# run_app()` unconditionally ending with `from .menu_bar import
-# run_menu_bar; run_menu_bar(...)`, and `menu_bar.py` doing a bare `import
-# rumps` (macOS AppKit) at module scope with no platform guard -- is fixed
-# as of P10, decision D6: menu_bar.py and the rest of the native AppKit UI
-# layer are deleted outright, not merely guarded, and run_app() now ends
-# by blocking on a plain threading.Event (see that module's own
-# `_wait_for_shutdown`).
+# The daemon has no native AppKit UI layer to import: `daemon_main.
+# run_app()` ends by blocking on a plain threading.Event (see that module's
+# own `_wait_for_shutdown`), not by entering a macOS menu-bar run loop.
 # `rumps`/`pyobjc-framework-*` are optional extras now (pyproject.toml's
 # `macos-native` group) that this install path never pulls in.
 #
@@ -41,7 +36,7 @@
 # or a dedicated venv).
 #
 # This unit runs the daemon as you, which is also who the AI client it
-# governs runs as -- issue #428's whole subject.
+# governs runs as -- the weakness privilege separation exists to close.
 # `sudo scripts/linux_privilege_separation.sh enable` runs it as a *system*
 # unit instead (installer/linux/privacyfence-daemon.service.tmpl,
 # /etc/systemd/system/privacyfence-daemon.service) under a dedicated
